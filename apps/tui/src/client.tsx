@@ -764,7 +764,6 @@ interface ClientTransportValue {
   connectionState: () => ConnectionState | undefined
   waitForTransportReady: Effect.Effect<void>
   isReconnecting: () => boolean
-  connectionGeneration: () => number
   // eslint-disable-next-line effect/noNullish -- UI transport exposes null when no issue is present.
   connectionIssue: () => string | null
   extensionHealth: () => ExtensionHealthSnapshot
@@ -882,6 +881,14 @@ interface ClientAgentValue {
   // Agent state setters (for local errors only)
   // eslint-disable-next-line effect/noNullish -- UI callers pass null to clear a local error.
   setError: (error: string | null) => void
+  /**
+   * The last extension notice (`ClientShell.notify`). It sits beside the
+   * turn status, not in it: a notice leaves a running turn running and a
+   * standing error standing. The next notice replaces it; a new turn or a
+   * session change clears it.
+   */
+  notice: () => Option.Option<string>
+  setNotice: (message: string) => void
   /** Run a fallible call; a failure lands formatted in the error line and stops there. */
   surfaceError: <A, R>(effect: Effect.Effect<A, UiError, R>) => Effect.Effect<void, never, R>
 }
@@ -1054,6 +1061,7 @@ export function ClientProvider(props: ClientProviderProps) {
     resolvedReasoningLevel: Option.none(),
   })
   const [sessionMetrics, setSessionMetrics] = createSignal<SessionMetrics>(EMPTY_SESSION_METRICS)
+  const [notice, setNoticeState] = createSignal<Option.Option<string>>(Option.none())
 
   const [connectionState, setConnectionState] = createSignal<Option.Option<ConnectionState>>(
     Option.fromNullishOr(runtime.lifecycle.getState()),
@@ -1096,6 +1104,7 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedReasoningLevel: Option.none(),
     })
     setSessionMetrics(EMPTY_SESSION_METRICS)
+    setNoticeState(Option.none())
     clearConnectionIssue()
     if (input.clearExtensionHealth) setExtensionHealth(EMPTY_EXTENSION_HEALTH)
   }
@@ -1274,6 +1283,10 @@ export function ClientProvider(props: ClientProviderProps) {
     const lifecycle = reduceAgentLifecycle(event)
     const status = Option.fromNullishOr(lifecycle.status)
     if (Option.isSome(status)) setAgentStore({ status: status.value })
+    // A user message starts the next turn; the notice from before it is spent.
+    if (event._tag === "MessageReceived" && event.message.role === "user") {
+      setNoticeState(Option.none())
+    }
   }
 
   const applySessionMetadataEvent = (event: EventEnvelope["event"]): void => {
@@ -1343,13 +1356,6 @@ export function ClientProvider(props: ClientProviderProps) {
     waitForTransportReady: runtime.lifecycle.waitForReady,
     isReconnecting,
     extensionHealth,
-    connectionGeneration: () => {
-      const state = connectionState()
-      if (Option.isNone(state)) return 0
-      if (state.value._tag === "Connected") return state.value.generation
-      if (state.value._tag === "Reconnecting") return state.value.generation
-      return 0
-    },
     connectionIssue: connectionIssueValue,
     setConnectionIssue,
     onExtensionStateChanged: eventHub.onExtensionStateChanged,
@@ -1624,6 +1630,8 @@ export function ClientProvider(props: ClientProviderProps) {
       }
       setAgentStore({ status: AgentStatus.cases.Idle.make({}) })
     },
+    notice,
+    setNotice: (message) => setNoticeState(Option.some(message)),
     surfaceError: (effect) =>
       effect.pipe(
         Effect.asVoid,

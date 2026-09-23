@@ -1,10 +1,11 @@
-import { Deferred, Effect, Option } from "effect"
+import { Deferred, Effect, Option, type Scope } from "effect"
 import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
 import type {
   AnyExtensionClientModule,
   BorderLabelPosition,
   ClientContributions,
   ClientRuntime,
+  ClientRuntimeServices,
   ClientShellDefinition,
   ClientShellTransportDefinition,
 } from "../src/extensions/client-facets"
@@ -19,8 +20,7 @@ export interface ClientExtensionHarnessOptions {
   readonly transport?: ClientShellTransportDefinition
   /** Shell callbacks a test wants to observe; the rest stay no-ops. */
   readonly shell?: Partial<ClientShellDefinition>
-  // eslint-disable-next-line effect/noNullish -- Test harness mirrors ClientTransport's optional callback.
-  readonly currentSession?: () => ActiveClientSession | undefined
+  readonly currentSession?: () => Option.Option<ActiveClientSession>
   readonly activeSession?: ActiveClientSessionRef
   readonly requestDeferred?: Deferred.Deferred<unknown, never>
   readonly requestEffect?: () => Effect.Effect<unknown, Error>
@@ -58,7 +58,10 @@ export const makeClientTestTransport = (
   return {
     client,
     runtime,
-    currentSession: opts.currentSession ?? (() => opts.activeSession?.value),
+    currentSession: Option.getOrElse(
+      Option.fromUndefinedOr(opts.currentSession),
+      () => () => Option.fromNullishOr(opts.activeSession?.value),
+    ),
     onExtensionStateChanged: () => () => {},
     onSessionEvent: (cb) => {
       opts.sessionEventSubscribers?.add(cb)
@@ -81,7 +84,6 @@ export const makeClientExtensionRuntime = (
       home: "/tmp/test-home",
     })),
     shell: {
-      run: <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromise(effect),
       cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
         Effect.runFork(effect)
       },
@@ -104,6 +106,19 @@ export const runClientExtensionSetupWithRuntime = (
     Effect.ensuring(Effect.promise(() => runtime.dispose())),
   )
 }
+
+/**
+ * Build something that yields the client services, on a test runtime that the
+ * surrounding scope disposes. The shell's `cast` forks as the host's does.
+ */
+export const provideClientServices = <A>(
+  effect: Effect.Effect<A, never, ClientRuntimeServices>,
+  opts: ClientExtensionHarnessOptions = {},
+): Effect.Effect<A, never, Scope.Scope> =>
+  Effect.acquireRelease(
+    Effect.sync(() => makeClientExtensionRuntime(opts)),
+    (runtime) => Effect.promise(() => runtime.dispose()),
+  ).pipe(Effect.flatMap((runtime) => Effect.promise(() => runtime.runPromise(effect))))
 
 export const findBorderLabel = (
   contributions: ClientContributions,

@@ -261,6 +261,7 @@ const sendToFork = (parentBranchId: string, fork: OpenFork, question: string) =>
       return { ...current, replying: true, error: Option.none() }
     })
     yield* ctx.Session.send({
+      delivery: "turn",
       sessionId: fork.sessionId,
       branchId: fork.branchId,
       content: question,

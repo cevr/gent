@@ -113,15 +113,9 @@ import { useExtensionUI } from "./extensions/host"
 /**
  * Session shell — what the TUI carries into the session it booted with.
  *
- * There used to be a router here: a reducer, a history stack, a subscriber
- * set, and two route tags. Only one of those tags ever changed at runtime.
- * The branch picker was never navigated to; the bootstrap built it once and
- * nothing pushed it again, so the history stack was always empty and `back`
- * always returned false.
- *
- * The fact the router was really carrying — which session and branch show —
- * belongs to `ClientProvider`, where `switchSession` writes it and `session()`
- * reads it. What is left over is the startup prompt.
+ * Which session and branch show belongs to `ClientProvider`, where
+ * `switchSession` writes it and `session()` reads it. The shell carries the
+ * startup prompt.
  *
  * The prompt belongs to the session the startup flags named, on whichever
  * branch of it the reader ends up: picking a branch in the boot picker
@@ -575,7 +569,6 @@ type SessionOverlayState =
   | { readonly _tag: "auth"; readonly enforceAuth: boolean }
   | { readonly _tag: "model" }
   | { readonly _tag: "reasoning" }
-  | { readonly _tag: "extension"; readonly overlayId: string }
   /**
    * The branch picker. The boot flow is the only thing that opens it, so
    * escape quits: a reader who never chose a branch has nowhere to fall back
@@ -625,7 +618,6 @@ const SessionUiEvent = Schema.TaggedUnion({
   OpenMermaid: {},
   OpenAuth: { enforceAuth: Schema.Boolean },
   OpenSettingsPicker: { picker: Schema.Literals(["model", "reasoning"]) },
-  OpenExtensionOverlay: { overlayId: Schema.String },
   OpenBranches: { branches: Schema.Array(Branch) },
   CloseOverlay: {},
   PromptSearch: { event: PromptSearchEventSchema },
@@ -686,13 +678,6 @@ export function transitionSessionUi(
         state: {
           ...state,
           overlay: { _tag: event.picker },
-        },
-        effects: [],
-      }),
-      OpenExtensionOverlay: (event): SessionUiTransitionResult => ({
-        state: {
-          ...state,
-          overlay: { _tag: "extension", overlayId: event.overlayId },
         },
         effects: [],
       }),
@@ -1094,12 +1079,11 @@ export function usePromptHistory(): PromptHistory {
  * The live pick history behind the composer's autocomplete ranking.
  *
  * One store serves every prefix and every session. The value lives in
- * `autocomplete-frecency-store.ts` rather than here, because two surfaces
+ * the frecency store in `autocomplete.ts` rather than here, because two surfaces
  * record picks — this hook for `/` commands, and the `$` skills extension —
  * and a cache owned by one of them goes stale the moment the other writes.
- * That is not hypothetical: it is the bug this hook used to have. A snapshot
- * loaded once and never refreshed was serialized back over the file on every
- * `/` pick, erasing whatever `$` had written in between.
+ * A snapshot loaded once and written back on every `/` pick would erase
+ * whatever `$` wrote in between.
  *
  * So this hook keeps no store of its own. It reads the shared snapshot for
  * ranking and delegates every write to `recordFrecencyPick`, which folds the
@@ -1189,12 +1173,11 @@ function createPromptSearchController(params: {
 interface SessionCommandRegistryProps {
   readonly client: ClientContextValue
   readonly command: {
-    readonly commands: Accessor<readonly Command[]>
-    readonly register: (commands: Command[]) => () => void
     readonly openPalette: () => void
   }
   readonly ext: {
-    readonly commands: Accessor<readonly Command[]>
+    readonly commands: Accessor<ReadonlyArray<Command>>
+    readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
     readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
   }
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
@@ -1269,7 +1252,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     category: "Session",
     slash: "new",
     aliases: ["clear"],
-    slashPriority: 0,
     onSelect: () => props.client.createSession(),
   },
   {
@@ -1278,7 +1260,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     description: "Forget which commands and skills you pick most (/frecency-reset)",
     category: "Session",
     slash: "frecency-reset",
-    slashPriority: 0,
     onSelect: props.resetFrecency,
   },
   {
@@ -1286,7 +1267,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     title: "Open Sessions",
     category: "Session",
     slash: "sessions",
-    slashPriority: 0,
     onSelect: () => props.command.openPalette(),
   },
   {
@@ -1294,7 +1274,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     title: "Create Branch",
     category: "Session",
     slash: "branch",
-    slashPriority: 0,
     onSelect: () => {
       props.cast(props.client.surfaceError(props.client.createBranch()))
     },
@@ -1304,7 +1283,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     title: "Fork from Message",
     category: "Session",
     slash: "fork",
-    slashPriority: 0,
     onSelect: props.openForkPicker,
   },
   {
@@ -1313,7 +1291,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     description: "Pick the reasoning level for this session (/think <level>, /think default)",
     category: "Session",
     slash: "think",
-    slashPriority: 0,
     onSelect: props.openReasoningPicker,
     onSlash: (args) => {
       const level = args.trim().toLowerCase()
@@ -1346,7 +1323,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     description: "Pick the model for this session (/model <id or name>, /model default)",
     category: "Session",
     slash: "model",
-    slashPriority: 0,
     onSelect: props.openModelPicker,
     onSlash: (args) => {
       const query = args.trim()
@@ -1381,27 +1357,15 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     title: "Manage API Keys",
     category: "Session",
     slash: "auth",
-    slashPriority: 0,
     onSelect: props.openAuth,
   },
 ]
 
 const createSessionCommandRegistry = (props: SessionCommandRegistryProps): void => {
-  const unsubBuiltins = props.command.register(createSessionBuiltins(props))
-  let unsubExtCommands: Option.Option<() => void> = Option.none()
+  props.ext.setSessionCommands(createSessionBuiltins(props))
 
   createEffect(() => {
-    if (Option.isSome(unsubExtCommands)) unsubExtCommands.value()
-    const cmds = props.ext.commands()
-    if (cmds.length > 0) {
-      unsubExtCommands = Option.some(props.command.register([...cmds]))
-    } else {
-      unsubExtCommands = Option.none()
-    }
-  })
-
-  createEffect(() => {
-    const allCommands = props.command.commands()
+    const allCommands = props.ext.commands()
     props.ext.setDynamicAutocomplete([
       {
         prefix: "/",
@@ -1415,8 +1379,7 @@ const createSessionCommandRegistry = (props: SessionCommandRegistryProps): void 
   })
 
   onCleanup(() => {
-    unsubBuiltins()
-    if (Option.isSome(unsubExtCommands)) unsubExtCommands.value()
+    props.ext.setSessionCommands([])
     props.ext.setDynamicAutocomplete([])
   })
 }
@@ -2420,37 +2383,23 @@ export function createSessionController(props: {
     shutdownLog("exit.shutdown-signal")
     env.shutdown()
   }
-  const ESC_DOUBLE_TAP_MS = 1_000
-  let lastEscTime = 0
-  const handleEsc = (): boolean => {
-    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
-    if (now - lastEscTime < ESC_DOUBLE_TAP_MS) {
-      exit()
-      return true
-    }
-    lastEscTime = now
-    return false
+  // Escape twice within a second quits. The first press arms the quit (and
+  // clears a draft); a keybind, an interrupt, or any other use of escape
+  // disarms it.
+  const QUIT_WINDOW_MS = 1_000
+  let quitArmedAt = Option.none<number>()
+  const disarmQuit = () => {
+    quitArmedAt = Option.none()
   }
-  const QUIT_CHAIN_WINDOW_MS = 1_000
-  let quitArmed: Option.Option<{ id: string; at: number }> = Option.none()
-  const quitChain = {
-    trigger: (id: string, actions?: { first?: () => void; second: () => void }) => {
-      const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
-      const isSecond = Option.exists(
-        quitArmed,
-        (armed) => armed.id === id && now - armed.at < QUIT_CHAIN_WINDOW_MS,
-      )
-      if (isSecond) {
-        quitArmed = Option.none()
-        actions?.second()
-        return
-      }
-      quitArmed = Option.some({ id, at: now })
-      actions?.first?.()
-    },
-    reset: () => {
-      quitArmed = Option.none()
-    },
+  const pressQuit = (first: () => void) => {
+    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
+    if (Option.exists(quitArmedAt, (at) => now - at < QUIT_WINDOW_MS)) {
+      disarmQuit()
+      exit()
+      return
+    }
+    quitArmedAt = Option.some(now)
+    first()
   }
   const history = usePromptHistory()
   const frecency = useAutocompleteFrecency()
@@ -2590,16 +2539,6 @@ export function createSessionController(props: {
     if (isBlockingAuthGate(authGateState()) && uiState().overlay._tag !== "auth") {
       dispatchSessionUi(SessionUiEvent.cases.OpenAuth.make({ enforceAuth: true }))
     }
-  })
-
-  // Wire extension overlay dispatch to session UI state
-  ext.setOverlayDispatch(
-    (id) => dispatchSessionUi(SessionUiEvent.cases.OpenExtensionOverlay.make({ overlayId: id })),
-    () => dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({})),
-  )
-
-  ext.setSwitchSessionDispatch((input) => {
-    client.switchSession(input.sessionId, input.branchId, input.name)
   })
 
   ext.setActivityProvider(() => {
@@ -2825,7 +2764,7 @@ export function createSessionController(props: {
 
   const onSlashCommand = (cmd: string, args: string): Effect.Effect<void> =>
     Effect.sync(() => {
-      const result = executeSlashCommand(cmd, args, command.commands())
+      const result = executeSlashCommand(cmd, args, ext.commands())
       Option.match(Option.fromNullishOr(result.error), {
         onNone: () => {},
         onSome: (error) => client.setError(error),
@@ -2898,7 +2837,7 @@ export function createSessionController(props: {
   }
 
   const handleInterrupt = () => {
-    quitChain.reset()
+    disarmQuit()
     if (uiState().overlay._tag !== "none") {
       exit()
       return
@@ -2919,60 +2858,50 @@ export function createSessionController(props: {
   }
 
   useScopedKeyboard((event) => {
-    if (command.handleKeybind(event)) return true
+    // A keybind between two escapes is a different gesture, so it disarms the quit.
+    if (command.handleKeybind(event, ext.commands())) {
+      disarmQuit()
+      return true
+    }
     if (event.ctrl === true && event.name === "c") {
       handleInterrupt()
       return true
     }
     if (uiState().overlay._tag !== "none") return false
 
-    const clearComposer = () => {
-      onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
-    }
-
-    const handleQuitKey = (chainId: string) => {
-      if (interactionState().draft.length > 0) {
-        quitChain.trigger(chainId, { first: clearComposer, second: exit })
-        return
-      }
-      quitChain.trigger(chainId, {
-        first: () => {
-          handleEsc()
-        },
-        second: exit,
-      })
-    }
-
     if (event.name === "escape") {
       if (uiState().transcriptExpanded && !command.paletteOpen()) {
         dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
-        quitChain.reset()
+        disarmQuit()
         return true
       }
       if (command.paletteOpen()) {
         command.closePalette()
-        quitChain.reset()
+        disarmQuit()
         return true
       }
       if (uiState().disclosure !== "collapsed") {
         dispatchSessionUi(SessionUiEvent.cases.CollapseDisclosure.make({}))
-        quitChain.reset()
+        disarmQuit()
         return true
       }
 
       if (client.isStreaming()) {
         client.steer(SteerCommandInput.cases.Cancel.make({}))
-        quitChain.reset()
+        disarmQuit()
         return true
       }
 
-      handleQuitKey("escape")
+      pressQuit(() => {
+        if (interactionState().draft.length === 0) return
+        onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
+      })
       return true
     }
 
     if (event.ctrl === true && event.name === "r") {
       promptSearch.open()
-      quitChain.reset()
+      disarmQuit()
       return true
     }
 

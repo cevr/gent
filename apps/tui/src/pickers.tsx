@@ -243,11 +243,6 @@ export function PromptSearchPalette(props: PromptSearchPaletteProps) {
  * Branch picker — one docked pane for choosing which loop of a session to
  * resume.
  *
- * It used to be a route, and a router existed to reach it. Nothing ever
- * navigated to that route: the bootstrap built it once, so the history stack
- * behind it was always empty and escape could only quit. The pane keeps the
- * behaviour and drops the router.
- *
  * The session underneath is already mounted on its active branch, so the pane
  * only has to say which branch to switch to. It opens at boot when the resumed
  * session has more than one branch, and on `/branches` after that. While it is

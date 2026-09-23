@@ -1,15 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import {
-  Cause,
-  DateTime,
-  Effect,
-  FileSystem,
-  Option,
-  Path,
-  Predicate,
-  Schedule,
-  Schema,
-} from "effect"
+import { DateTime, Effect, FileSystem, Option, Path, Predicate, Schedule, Schema } from "effect"
 import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core-internal/domain/ids"
 import {
@@ -22,6 +12,8 @@ import {
   clientContributions,
   type ClientContributions,
   type ClientEffect,
+  type ClientRuntime,
+  type ClientRuntimeServices,
   ClientSetupError,
   type ClientShellTransportDefinition,
   ClientTransport,
@@ -29,8 +21,6 @@ import {
   type ExtensionClientModule,
   interactionRendererContribution,
   NoActiveSessionError,
-  overlayContribution,
-  type OverlayProps,
   rendererContribution,
   type WidgetComponent,
   widgetContribution,
@@ -38,11 +28,12 @@ import {
 import {
   loadTuiExtensions as _loadTuiExtensions,
   type LoadedTuiExtension,
+  type ResolvedTuiExtensions,
+  resolveCommands,
   resolveTuiExtensions,
   runAutocompleteContributions,
 } from "../../src/extensions/loader-boundary"
 import type { ToolRenderer, ToolRendererProps } from "../../src/tool-renderers"
-import type { HeadlessToolRenderer } from "../../src/headless"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous filesystem fixture setup is a test boundary.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
@@ -70,6 +61,10 @@ import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 
 // ── ../extensions-resolve.test ──────────────────────────────────────────────
 
+/** The commands a load resolves to, before the session and the server add theirs. */
+const commandsOf = (resolved: ResolvedTuiExtensions) =>
+  resolveCommands(resolved.commandSources).commands
+
 const make = (
   id: string,
   scope: "builtin" | "user" | "project",
@@ -80,16 +75,11 @@ const renderer =
   (label: string): ToolRenderer =>
   (_props: ToolRendererProps) =>
     label
-const headless =
-  (label: string): HeadlessToolRenderer =>
-  () =>
-    Option.some(label)
 
 const widget =
   (label: string): WidgetComponent =>
   () =>
     label
-const overlay = (label: string) => (_props: OverlayProps) => label
 const absent = Option.getOrUndefined(Option.none())
 const toolProps: ToolRendererProps = {
   toolCall: {
@@ -112,7 +102,6 @@ const interactionProps = {
   }),
   resolve: () => {},
 }
-const overlayProps: OverlayProps = { open: true, onClose: () => {} }
 describe("resolveTuiExtensions", () => {
   test("client contribution constructors enforce slot-specific component contracts", () => {
     const good = widgetContribution({
@@ -124,8 +113,8 @@ describe("resolveTuiExtensions", () => {
     widgetContribution({
       id: "bad-widget",
       slot: "below-input",
-      // @ts-expect-error — widgets receive no props; overlays own open/onClose props
-      component: (_props: OverlayProps) => "bad",
+      // @ts-expect-error — widgets receive no props
+      component: (_props: { readonly open: boolean }) => "bad",
     })
     expect(good.widgets?.[0]?.id).toBe("typed-widget")
   })
@@ -141,35 +130,6 @@ describe("resolveTuiExtensions", () => {
     expect(Option.isSome(bashRenderer)).toBe(true)
     if (Option.isNone(bashRenderer)) return
     expect(bashRenderer.value(toolProps)).toBe("project")
-  })
-
-  test("headless renderer surfaces use the same renderer scope precedence", () => {
-    const resolved = resolveTuiExtensions([
-      make(
-        "builtin-tools",
-        "builtin",
-        rendererContribution(["bash"], renderer("builtin"), { headless: headless("builtin") }),
-      ),
-      make(
-        "project-tools",
-        "project",
-        rendererContribution(["bash"], renderer("project"), { headless: headless("project") }),
-      ),
-    ])
-
-    const resolvedRenderer = Option.getOrElse(
-      Option.fromNullishOr(resolved.headlessRenderers.get("bash")),
-      () => headless("missing"),
-    )
-    expect(
-      resolvedRenderer({
-        toolName: "bash",
-        status: "running",
-        input: Option.none(),
-        output: Option.none(),
-        summary: Option.none(),
-      }),
-    ).toEqual(Option.some("project"))
   })
 
   test("widgets stay user-ordered by priority after scope resolution", () => {
@@ -234,8 +194,9 @@ describe("resolveTuiExtensions", () => {
       ),
     ])
 
-    const oldCommand = resolved.commands.find((command) => command.id === "cmd-old")
-    const newCommand = resolved.commands.find((command) => command.id === "cmd-new")
+    const { commands } = resolveCommands(resolved.commandSources)
+    const oldCommand = commands.find((command) => command.id === "cmd-old")
+    const newCommand = commands.find((command) => command.id === "cmd-new")
 
     expect(newCommand?.slash).toBe("deploy")
     expect(newCommand?.keybind).toBe("ctrl+k")
@@ -261,33 +222,6 @@ describe("resolveTuiExtensions", () => {
     if (Option.isNone(defaultRenderer) || Option.isNone(askRenderer)) return
     expect(defaultRenderer.value(interactionProps)).toBe("default")
     expect(askRenderer.value(interactionProps)).toBe("project-ask")
-  })
-
-  test("overlay surfaces use scope precedence and same-scope collisions still fail loudly", () => {
-    const resolved = resolveTuiExtensions([
-      make(
-        "builtin-overlay",
-        "builtin",
-        overlayContribution({ id: "modal", component: overlay("builtin") }),
-      ),
-      make(
-        "project-overlay",
-        "project",
-        overlayContribution({ id: "modal", component: overlay("project") }),
-      ),
-    ])
-
-    const modal = Option.fromNullishOr(resolved.overlays.get("modal"))
-    expect(Option.isSome(modal)).toBe(true)
-    if (Option.isNone(modal)) return
-    expect(modal.value(overlayProps)).toBe("project")
-
-    expect(() =>
-      resolveTuiExtensions([
-        make("a", "user", overlayContribution({ id: "dup", component: overlay("a") })),
-        make("b", "user", overlayContribution({ id: "dup", component: overlay("b") })),
-      ]),
-    ).toThrow(/Same-scope TUI overlay collision/)
   })
 
   test("border labels remain collected and priority sorted", () => {
@@ -344,21 +278,70 @@ describe("resolveTuiExtensions", () => {
     expect(resolved.autocompleteItems.map((entry) => entry.prefix)).toEqual(["$", "/", "@"])
   })
 
-  test("same-scope command collisions still fail loudly", () => {
-    expect(() =>
-      resolveTuiExtensions([
-        make(
-          "a",
-          "builtin",
-          clientCommandContribution({ id: "x", title: "A", onSelect: () => {} }),
-        ),
-        make(
-          "b",
-          "builtin",
-          clientCommandContribution({ id: "x", title: "B", onSelect: () => {} }),
-        ),
-      ]),
-    ).toThrow(/Same-scope TUI command collision/)
+  test("a same-scope command collision keeps the first command and records the second", () => {
+    const resolved = resolveTuiExtensions([
+      make("a", "builtin", clientCommandContribution({ id: "x", title: "A", onSelect: () => {} })),
+      make(
+        "b",
+        "builtin",
+        clientCommandContribution({ id: "y", title: "B", slash: "same", onSelect: () => {} }),
+      ),
+      make(
+        "c",
+        "builtin",
+        clientCommandContribution({ id: "x", title: "C", slash: "other", onSelect: () => {} }),
+      ),
+      make(
+        "d",
+        "builtin",
+        clientCommandContribution({ id: "z", title: "D", slash: "same", onSelect: () => {} }),
+      ),
+    ])
+    const { commands, failures } = resolveCommands(resolved.commandSources)
+    expect(commands.map((command) => command.title)).toEqual(["A", "B"])
+    expect(failures.map((failure) => failure.id)).toEqual(["c", "d"])
+  })
+
+  test("a command that loses its slash leaves the keybind with its earlier owner", () => {
+    const resolved = resolveTuiExtensions([
+      make(
+        "core",
+        "builtin",
+        clientCommandContribution({
+          id: "new",
+          title: "New",
+          keybind: "ctrl+n",
+          onSelect: () => {},
+        }),
+      ),
+      make(
+        "a",
+        "user",
+        clientCommandContribution({
+          id: "a-taken",
+          title: "A",
+          slash: "taken",
+          onSelect: () => {},
+        }),
+      ),
+      make(
+        "b",
+        "user",
+        clientCommandContribution({
+          id: "b-both",
+          title: "B",
+          keybind: "ctrl+n",
+          slash: "taken",
+          onSelect: () => {},
+        }),
+      ),
+    ])
+    const { commands, failures } = resolveCommands(resolved.commandSources)
+    const byTitle = new Map(commands.map((command) => [command.title, command]))
+    expect(byTitle.get("New")?.keybind).toBe("ctrl+n")
+    expect(byTitle.get("A")?.slash).toBe("taken")
+    expect(byTitle.has("B")).toBe(false)
+    expect(failures.map((failure) => failure.id)).toEqual(["b"])
   })
 })
 
@@ -462,6 +445,7 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
         }),
       )
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
+      expect(result.failures.map((failure) => failure.id)).toEqual(["@test/broken"])
     }),
   )
   // Regression lock — discovered (not pre-imported) modules with an
@@ -536,13 +520,7 @@ const { ListThingsRpc } = defineRequests(ExtensionId.make("@test/autocomplete"),
     execute: () => Effect.succeed([]),
   }),
 })
-type FakeSession =
-  | {
-      sessionId: SessionId
-      branchId: BranchId
-    }
-  // eslint-disable-next-line effect/noNullish -- fake transport mirrors the SDK's absent session callback.
-  | undefined
+type FakeSession = Option.Option<{ sessionId: SessionId; branchId: BranchId }>
 const makeFakeTransport = (
   opts: {
     readonly currentSession?: () => FakeSession
@@ -553,10 +531,11 @@ const makeFakeTransport = (
   makeClientTestTransport({
     currentSession:
       opts.currentSession ??
-      (() => ({
-        sessionId: SessionId.make("sess-1"),
-        branchId: BranchId.make("branch-1"),
-      })),
+      (() =>
+        Option.some({
+          sessionId: SessionId.make("sess-1"),
+          branchId: BranchId.make("branch-1"),
+        })),
     requestEffect: opts.requestEffect,
     requestReply: opts.requestReply ?? [],
   })
@@ -579,8 +558,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
           Effect.gen(function* () {
             const t = yield* ClientTransport
             // Touch the transport so the test proves the service resolved.
-            const session = t.currentSession()
-            expect(session).toBeDefined()
+            expect(Option.isSome(t.currentSession())).toBe(true)
             return [
               { id: filter, label: `got:${filter}` },
             ] satisfies ReadonlyArray<AutocompleteItem>
@@ -599,7 +577,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
   )
   it.live("transport.request fails with NoActiveSessionError when no session active", () =>
     Effect.gen(function* () {
-      const transport = makeFakeTransport({ currentSession: () => absent })
+      const transport = makeFakeTransport({ currentSession: () => Option.none() })
       const runtime = makeTestRuntime(transport)
       const exit = yield* Effect.promise(() => runRuntimeExitBoundary(runtime, listThings))
       expect(exit._tag).toBe("Failure")
@@ -615,7 +593,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
     Effect.gen(function* () {
       // One broken contribution must not empty the popup for the rest, so the
       // helper names it to the caller's log and returns its rows as none.
-      const transport = makeFakeTransport({ currentSession: () => absent })
+      const transport = makeFakeTransport({ currentSession: () => Option.none() })
       const runtime = makeTestRuntime(transport)
       const contribution: AutocompleteContribution = {
         prefix: "$",
@@ -693,10 +671,9 @@ describe("autocomplete Effect items() through ClientTransport", () => {
           }),
         ),
       )
-      expect(resolved.currentSession()).toEqual({
-        sessionId: SessionId.make("sess-1"),
-        branchId: BranchId.make("branch-1"),
-      })
+      expect(resolved.currentSession()).toEqual(
+        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
+      )
       expect("run" in resolved).toBe(false)
       expect("cast" in resolved).toBe(false)
       yield* Effect.promise(() => runtime.dispose())
@@ -799,10 +776,8 @@ const skillItemsFor = (
 ): Effect.Effect<ReadonlyArray<string>> =>
   Effect.gen(function* () {
     const runtime = makeClientExtensionRuntime({
-      currentSession: () => ({
-        sessionId: SessionId.make("sess-1"),
-        branchId: BranchId.make("branch-1"),
-      }),
+      currentSession: () =>
+        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
       requestReply: names.map((name) => ({
         name,
         description: `The ${name} skill`,
@@ -938,10 +913,8 @@ const skillsHarness = (home: string, names: ReadonlyArray<string>) =>
       // every run would share one file in /tmp and the assertion below would
       // pass on a previous run's pick.
       workspace: { cwd: home, home },
-      currentSession: () => ({
-        sessionId: SessionId.make("sess-1"),
-        branchId: BranchId.make("branch-1"),
-      }),
+      currentSession: () =>
+        Option.some({ sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }),
       requestReply: names.map((name) => ({
         name,
         description: `The ${name} skill`,
@@ -1033,10 +1006,6 @@ describe("skills autocomplete records and reads pick history", () => {
  * discovery, override precedence, disabled gating, invalid-file tolerance,
  * overlay state, autocomplete visibility, and startup with an active session.
  */
-class ExtensionIntegrationTestError extends Schema.TaggedError<ExtensionIntegrationTestError>()(
-  "ExtensionIntegrationTestError",
-  { message: Schema.String, cause: Schema.optional(Schema.Unknown) },
-) {}
 const throwOnAccess = (label: string): never =>
   Effect.runSync(Effect.die(`unexpected transport call in pure load test: ${label}`))
 const stubClient = new Proxy(createMockClient(), {
@@ -1052,9 +1021,6 @@ const stubRuntime = new Proxy(createMockRuntime(), {
   get: (_target, method) => () => throwOnAccess(`runtime.${String(method)}`),
 })
 
-const runTestShellEffect = <A, E>(_effect: Effect.Effect<A, E, never>): Promise<A> =>
-  stubRuntime.run(_effect)
-
 const castTestShellEffect = <A, E>(effect: Effect.Effect<A, E, never>): void => {
   Effect.runFork(effect)
 }
@@ -1063,19 +1029,21 @@ const testRuntime = makeClientRuntime({
   transport: {
     client: stubClient,
     runtime: stubRuntime,
-    currentSession: () => Option.getOrUndefined(Option.none()),
+    currentSession: () => Option.none(),
     onExtensionStateChanged: () => () => {},
     onSessionEvent: () => () => {},
   },
   workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
-  shell: { run: runTestShellEffect, cast: castTestShellEffect },
+  shell: { cast: castTestShellEffect },
 })
+/** Run the loader on a client runtime, the stub one unless the test gives its own. */
 const loadTuiExtensions = (
-  opts: Omit<Parameters<typeof _loadTuiExtensions>[0], "runtime"> & {
-    runtime?: Parameters<typeof _loadTuiExtensions>[0]["runtime"]
-  },
-): ReturnType<typeof _loadTuiExtensions> =>
-  _loadTuiExtensions({ ...opts, runtime: opts.runtime ?? testRuntime })
+  opts: Parameters<typeof _loadTuiExtensions>[0] & { readonly runtime?: ClientRuntime },
+): Promise<ResolvedTuiExtensions> =>
+  runRuntimeEffectBoundary<ResolvedTuiExtensions, never, ClientRuntimeServices>(
+    opts.runtime ?? testRuntime,
+    _loadTuiExtensions(opts),
+  )
 const TEST_DIR = join(import.meta.dir, "../../.tmp-ext-integration")
 const encodeTrustGrant = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ trustedProjects: Schema.Array(Schema.String) })),
@@ -1102,7 +1070,6 @@ import {
   defineClientExtension,
   clientContributions,
   clientCommandContribution,
-  overlayContribution,
   rendererContribution,
   widgetContribution,
 } from "../../../src/extensions/client-facets"
@@ -1112,7 +1079,6 @@ export default defineClientExtension("@test/custom-read", {
     rendererContribution(["my_custom_tool"], () => "custom-tool-renderer"),
     widgetContribution({ id: "test-widget", slot: "below-messages", priority: 50, component: () => "test-widget" }),
     clientCommandContribution({ id: "test-cmd", title: "Test Command", category: "test", onSelect: () => {} }),
-    overlayContribution({ id: "test-overlay", component: (_props) => "test-overlay" }),
   )),
 })`,
     )
@@ -1173,28 +1139,46 @@ describe("loadTuiExtensions", () => {
       expect(resolved.renderers.has("read")).toBe(true)
       expect(resolved.renderers.has("bash")).toBe(true)
       expect(resolved.interactionRenderers.has("handoff")).toBe(true)
-      expect(resolved.commands.some((command) => command.id === "plan.create")).toBe(false)
+      expect(commandsOf(resolved).some((command) => command.id === "plan.create")).toBe(false)
       rmSync(emptyUser, { recursive: true, force: true })
       rmSync(emptyProject, { recursive: true, force: true })
     }),
   )
-  it.scopedLive(
-    "user extensions can add visible renderer, widget, command, and overlay surfaces",
-    () =>
-      Effect.gen(function* () {
-        yield* integrationFixture
-        const resolved = yield* Effect.promise(() =>
-          loadTuiExtensions({
-            builtins: builtinClientModules,
-            userDir: USER_DIR,
-            projectDir: join(TEST_DIR, "no-project"),
-          }),
-        )
-        expect(resolved.renderers.has("my_custom_tool")).toBe(true)
-        expect(resolved.widgets.some((widget) => widget.id === "test-widget")).toBe(true)
-        expect(resolved.commands.some((command) => command.id === "test-cmd")).toBe(true)
-        expect(resolved.overlays.has("test-overlay")).toBe(true)
-      }),
+  it.scopedLive("disabling @gent/interaction-tools drops the handoff renderer with its tool", () =>
+    Effect.gen(function* () {
+      yield* integrationFixture
+      const emptyUser = join(TEST_DIR, "empty-user-handoff")
+      const emptyProject = join(TEST_DIR, "empty-project-handoff")
+      mkdirSync(emptyUser, { recursive: true })
+      mkdirSync(emptyProject, { recursive: true })
+      const resolved = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: builtinClientModules,
+          userDir: emptyUser,
+          projectDir: emptyProject,
+          disabled: ["@gent/interaction-tools"],
+        }),
+      )
+      expect(resolved.interactionRenderers.has("handoff")).toBe(false)
+      expect(resolved.interactionRenderers.has("ask-user")).toBe(false)
+      rmSync(emptyUser, { recursive: true, force: true })
+      rmSync(emptyProject, { recursive: true, force: true })
+    }),
+  )
+  it.scopedLive("user extensions can add visible renderer, widget, and command surfaces", () =>
+    Effect.gen(function* () {
+      yield* integrationFixture
+      const resolved = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: builtinClientModules,
+          userDir: USER_DIR,
+          projectDir: join(TEST_DIR, "no-project"),
+        }),
+      )
+      expect(resolved.renderers.has("my_custom_tool")).toBe(true)
+      expect(resolved.widgets.some((widget) => widget.id === "test-widget")).toBe(true)
+      expect(commandsOf(resolved).some((command) => command.id === "test-cmd")).toBe(true)
+    }),
   )
   it.scopedLive(
     "discovery ignores hidden and test-only files but still loads prebuilt modules deterministically",
@@ -1208,7 +1192,7 @@ describe("loadTuiExtensions", () => {
             projectDir: PROJECT_DIR,
           }),
         )
-        const commandIds = resolved.commands.map((command) => command.id)
+        const commandIds = commandsOf(resolved).map((command) => command.id)
         expect(commandIds).toContain("prebuilt")
         expect(commandIds).not.toContain("hidden")
         expect(commandIds).not.toContain("internal")
@@ -1284,7 +1268,7 @@ export default {
       expect(resolved.renderers.has("read")).toBe(false)
       expect(resolved.renderers.has("bash")).toBe(false)
       expect(resolved.interactionRenderers.has("handoff")).toBe(true)
-      expect(resolved.commands.some((command) => command.id === "plan.create")).toBe(false)
+      expect(commandsOf(resolved).some((command) => command.id === "plan.create")).toBe(false)
       rmSync(disabledDir, { recursive: true, force: true })
     }),
   )
@@ -1302,10 +1286,13 @@ export default {
         }),
       )
       expect(resolved.renderers.has("read")).toBe(true)
+      expect(resolved.failures).toEqual([
+        { id: join(badDir, "bad.client.ts"), reason: "missing id" },
+      ])
       rmSync(badDir, { recursive: true, force: true })
     }),
   )
-  it.scopedLive("same-scope collisions still fail through the public load path", () =>
+  it.scopedLive("a same-scope collision drops the later contribution and keeps every builtin", () =>
     Effect.gen(function* () {
       yield* integrationFixture
       const collisionDir = join(TEST_DIR, "collision-tool")
@@ -1328,19 +1315,21 @@ export default defineClientExtension("@test/b", {
   setup: Effect.succeed(rendererContribution(["my_tool"], () => "b")),
 })`,
       )
-      const exit = yield* Effect.tryPromise({
-        try: () =>
-          loadTuiExtensions({
-            builtins: builtinClientModules,
-            userDir: collisionDir,
-            projectDir: join(TEST_DIR, "no-project"),
-          }),
-        catch: (cause) => new ExtensionIntegrationTestError({ message: String(cause), cause }),
-      }).pipe(Effect.exit)
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") {
-        expect(String(Cause.squash(exit.cause))).toContain("Same-scope TUI renderer collision")
-      }
+      const resolved = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: builtinClientModules,
+          userDir: collisionDir,
+          projectDir: join(TEST_DIR, "no-project"),
+        }),
+      )
+      expect(resolved.renderers.has("read")).toBe(true)
+      expect(resolved.renderers.has("bash")).toBe(true)
+      const myTool = Option.fromNullishOr(resolved.renderers.get("my_tool"))
+      if (Option.isNone(myTool)) return yield* Effect.die("expected my_tool renderer")
+      expect(myTool.value(toolProps)).toBe("a")
+      expect(resolved.failures).toHaveLength(1)
+      expect(resolved.failures[0]?.id).toBe("@test/b")
+      expect(resolved.failures[0]?.reason).toContain('renderer "my_tool"')
       rmSync(collisionDir, { recursive: true, force: true })
     }),
   )
@@ -1370,10 +1359,11 @@ export default defineClientExtension("@test/b", {
       transport: {
         client: createMockClient({ extension: { request: () => Effect.void } }),
         runtime: createMockRuntime(),
-        currentSession: () => ({
-          sessionId: SessionId.make("test-session-id"),
-          branchId: BranchId.make("test-branch-id"),
-        }),
+        currentSession: () =>
+          Option.some({
+            sessionId: SessionId.make("test-session-id"),
+            branchId: BranchId.make("test-branch-id"),
+          }),
         onExtensionStateChanged: () => () => {},
         onSessionEvent: () => () => {},
       },
@@ -1408,17 +1398,14 @@ export default defineClientExtension("@test/b", {
   })
 })
 describe("session UI state", () => {
-  test("extension overlays replace the current overlay and close cleanly", () => {
+  test("a picker replaces the current overlay and closes cleanly", () => {
     const withMermaid = transitionSessionUi(SessionUiState.initial(), { _tag: "OpenMermaid" })
-    const withExtension = transitionSessionUi(withMermaid.state, {
-      _tag: "OpenExtensionOverlay",
-      overlayId: "my-ext:panel",
+    const withPicker = transitionSessionUi(withMermaid.state, {
+      _tag: "OpenSettingsPicker",
+      picker: "model",
     })
-    const closed = transitionSessionUi(withExtension.state, { _tag: "CloseOverlay" })
-    expect(withExtension.state.overlay).toEqual({
-      _tag: "extension",
-      overlayId: "my-ext:panel",
-    })
+    const closed = transitionSessionUi(withPicker.state, { _tag: "CloseOverlay" })
+    expect(withPicker.state.overlay).toEqual({ _tag: "model" })
     expect(closed.state.overlay).toEqual({ _tag: "none" })
   })
 })

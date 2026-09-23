@@ -518,6 +518,92 @@ describe("a start nobody waits for", () => {
     12_000,
   )
 
+  it.live(
+    "a private row whose child answers after an upgrade wakes no one",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const gate = yield* Deferred.make<boolean>()
+          const harness = yield* harnessWithHome(
+            startThenEnd("secret extraction", Deferred.await(gate).pipe(Effect.asVoid)),
+          )
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate this task")
+          const running = yield* waitFor(
+            harness.registryOf(branchId).pipe(Effect.orElseSucceed(() => [])),
+            (entries) => entries.length === 1 && entries[0]?.submitted === true,
+            5_000,
+            "the child is admitted",
+          )
+          const [row] = running
+          if (Predicate.isUndefined(row)) return yield* Effect.die("no registry row")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "the parent ended its turn",
+          )
+          // A `read_session` child an older binary started, still mid-turn at the upgrade.
+          yield* harness.writeRegistry(branchId, [{ ...row, private: true }])
+          yield* Deferred.succeed(gate, true)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId: row.sessionId, branchId: row.branchId }),
+            (child) =>
+              child.runtime._tag === "Idle" &&
+              messageTexts(child.messages).includes("secret extraction"),
+            5_000,
+            "the child answered and ended its turn",
+          )
+          const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+          expect(completionMessages(snapshot.messages)).toHaveLength(0)
+          const [kept] = yield* harness.registryOf(branchId)
+          expect(kept?.delivered).toBe(false)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "a private row an older binary left undelivered is removed on reconcile, never delivered",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* harnessWithHome(startThenEnd("secret extraction"))
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate this task")
+          yield* afterCompletion(harness)
+          // The row an older binary wrote for a `read_session` child whose waiter died after its answer.
+          const [done] = yield* harness.registryOf(branchId)
+          if (Predicate.isUndefined(done)) return yield* Effect.die("no registry row")
+          yield* harness.writeRegistry(branchId, [
+            {
+              ...Struct.omit(done, ["completed", "preview", "usage"]),
+              private: true,
+              delivered: false,
+            },
+          ])
+          yield* sendPrompt(harness, "anything new?")
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).filter((text) => text === "read it").length >= 2,
+            8_000,
+            "the parent answered its second prompt",
+          )
+          // One completion and one answer per prompt: the private child woke no one.
+          expect(completionMessages(snapshot.messages)).toHaveLength(1)
+          expect(messageTexts(snapshot.messages).filter((text) => text === "read it")).toHaveLength(
+            2,
+          )
+          expect(yield* harness.registryOf(branchId)).toEqual([])
+          const sessions = yield* client.session.list()
+          expect(sessions.some((session) => session.id === done.sessionId)).toBe(false)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
   test("a registry row an older binary wrote, private and claimed, still decodes", () => {
     // The bytes an older binary wrote: a private extraction child its waiter still claimed.
     const row = Schema.decodeSync(registryCodec)(

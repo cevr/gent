@@ -298,7 +298,8 @@ const deliverCompletion = (
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const text = latestAssistantText(yield* childMessages(entry))
-    yield* ctx.Session.queueFollowUp({
+    yield* ctx.Session.send({
+      delivery: "queue",
       ...parent,
       sourceId: childCompletionSourceId(entry.requestId),
       // A parent with no prior turn still gets to read the completion.
@@ -349,6 +350,7 @@ const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     yield* ctx.Session.send({
+      delivery: "turn",
       sessionId: entry.sessionId,
       branchId: entry.branchId,
       content: childTaskText(ctx.sessionId, entry.prompt),
@@ -364,8 +366,8 @@ const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
  * Bring the current branch's registry up to date without a hook: a start
  * whose prompt never reached the child is re-sent, a finished child whose
  * completion never landed (the process died between the receipt and the
- * hook) is delivered now. Called from the parent's turn and its listing
- * tools.
+ * hook) is delivered now, and a private row is removed with its session,
+ * never delivered. Called from the parent's turn and its listing tools.
  */
 const reconcile = Effect.fn("Delegate.reconcile")(function* () {
   const ctx = yield* ExtensionContext
@@ -374,6 +376,12 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
     Effect.gen(function* () {
       let next = entries
       for (const entry of entries) {
+        // Private rows come only from files written before the goal option was removed.
+        if (entry.private) {
+          yield* ctx.Session.delete(entry.sessionId).pipe(Effect.ignore)
+          next = next.filter((current) => current.requestId !== entry.requestId)
+          continue
+        }
         if (entry.delivered) continue
         if (!entry.submitted) {
           yield* submitStart(entry, Option.none())
@@ -498,8 +506,7 @@ const stopChild = (entry: DelegateEntry) =>
         return replaceEntry(entries, settled(current, { interrupted: true }, Option.none(), ""))
       })
       .pipe(Effect.ignore)
-    yield* ctx.Session.steer({
-      _tag: "Cancel",
+    yield* ctx.Session.stop({
       sessionId: entry.sessionId,
       branchId: entry.branchId,
       requestId: RequestId.make(`delegate-stop:${entry.sessionId}`),
@@ -530,6 +537,7 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
       const entry = entries.find(
         (row) =>
           !row.delivered &&
+          !row.private &&
           row.sessionId === input.sessionId &&
           startMessageId(row.requestId) === input.messageId,
       )
@@ -684,8 +692,7 @@ export const CancelChild = tool({
     const ctx = yield* ExtensionContext
     const entry = yield* ownedChild(params.requestId)
     if (Predicate.isUndefined(entry.completed)) {
-      yield* ctx.Session.steer({
-        _tag: "Cancel",
+      yield* ctx.Session.stop({
         sessionId: entry.sessionId,
         branchId: entry.branchId,
         requestId: RequestId.make(`delegate-cancel:${params.requestId}`),

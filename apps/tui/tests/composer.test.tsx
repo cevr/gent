@@ -29,7 +29,6 @@ import { useExtensionUI } from "../src/extensions/host"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { useScopedKeyboard } from "../src/terminal"
 import type { AutocompleteItem } from "../src/extensions/client-facets"
-import { useCommand } from "../src/commands"
 import { rankAutocompleteItems } from "../src/autocomplete"
 
 // ── shell.test ──────────────────────────────────────────────────────────────
@@ -729,9 +728,9 @@ describe("AutocompletePopup renderer", () => {
 
 /** The commands that reproduce the `/ag` ordering problem in the live registry. */
 function RegisterCommandsGhost() {
-  const command = useCommand()
+  const ui = useExtensionUI()
   onMount(() => {
-    command.register([
+    ui.setSessionCommands([
       { id: "message.fork", title: "Fork from Message", slash: "fork", onSelect: () => {} },
       { id: "auth.manage", title: "Manage API Keys", slash: "auth", onSelect: () => {} },
       { id: "agents.view", title: "Agents", slash: "agents", onSelect: () => {} },
@@ -744,14 +743,13 @@ function RegisterCommandsGhost() {
 /** The `/` contribution, ranked exactly as the session registry ranks it. */
 function ContributeGhost() {
   const ui = useExtensionUI()
-  const command = useCommand()
   ui.setDynamicAutocomplete([
     {
       prefix: "/",
       title: "Commands",
       items: (filter: string) =>
         rankAutocompleteItems(
-          command.commands().flatMap((c) =>
+          ui.commands().flatMap((c) =>
             Option.match(Option.fromNullishOr(c.slash), {
               onNone: () => [],
               onSome: (slash) => [{ id: slash, label: `/${slash}`, description: c.title }],
@@ -926,9 +924,9 @@ interface Dispatched {
  * and two that take an optional argument (`/model`, `/think`).
  */
 function RegisterCommandsSlashEnter() {
-  const command = useCommand()
+  const ui = useExtensionUI()
   onMount(() => {
-    command.register([
+    ui.setSessionCommands([
       // `slashAutocompleteItems` keeps registration order — it does no
       // relevance sorting — so row 0 under a filter is the earliest-registered
       // match. These two carry `ag` in their titles, not their slash names,
@@ -975,7 +973,6 @@ function RegisterCommandsSlashEnter() {
 /** Contributes the `/` popup the composer completes against, plus `@` files. */
 function ContributeSlashEnter() {
   const ui = useExtensionUI()
-  const command = useCommand()
   ui.setDynamicAutocomplete([
     {
       prefix: "/",
@@ -984,7 +981,7 @@ function ContributeSlashEnter() {
       // lists `/fork` ("Fork from Message") and `/auth` ("Manage API Keys")
       // ahead of `/agents`.
       items: (filter: string) =>
-        command.commands().flatMap((c) =>
+        ui.commands().flatMap((c) =>
           Option.match(Option.fromNullishOr(c.slash), {
             onNone: () => [],
             onSome: (slash) => {

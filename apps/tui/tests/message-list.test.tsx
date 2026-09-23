@@ -578,7 +578,7 @@ const compactionMessage = (): ListMessage => ({
 function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: boolean }) {
   const extensionUI = useExtensionUI()
   return (
-    <Show when={!extensionUI.loading()} fallback={<text>loading renderers</text>}>
+    <Show when={extensionUI.renderers().size > 0} fallback={<text>loading renderers</text>}>
       <MessageList
         items={props.items}
         disclosure="collapsed"
@@ -1221,7 +1221,7 @@ describe("FX transcript treatment", () => {
           () => {
             const extensionUI = useExtensionUI()
             return (
-              <Show when={!extensionUI.loading()}>
+              <Show when={extensionUI.renderers().size > 0}>
                 <MessageList
                   items={items}
                   disclosure={disclosure()}

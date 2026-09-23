@@ -25,9 +25,9 @@ import {
   ClientShell,
   ClientTransport,
   defineClientExtension,
+  type ActiveExtensionSession,
   type ExtensionAgentDetail,
-  makeClientSessionQuery,
-  type OverlayProps,
+  sessionQuery,
   widgetContribution,
 } from "./client-facets"
 
@@ -37,9 +37,9 @@ import {
  * Subagent tray — one line above the composer.
  *
  * It reports how many loops hang off the current session while the agents pane
- * is closed, so a reader sees delegated work without opening anything. The pane
- * in `agents-view.client.tsx` owns the controller and the projection; this file
- * only reads and renders.
+ * is closed, so a reader sees delegated work without opening anything. The
+ * `@gent/agents-view` server half projects the rows; this file reads and
+ * renders them.
  *
  * @module
  */
@@ -166,8 +166,6 @@ export function SubagentTray(props: { controller: AgentsController }) {
  * loop, live or stored, grouped by section and nested under its parent. The
  * server owns the projection, so this file only renders and navigates.
  *
- * Replaces the former `session-tree.tsx` overlay: this shows every loop rather
- * than one session's descendants, adds liveness, and is keyed per branch.
  * Filtering and cursor movement belong to `SelectList`.
  *
  * @module
@@ -178,13 +176,13 @@ const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
 /**
  * Rows plus the load state, held in the setup closure.
  *
- * The overlay component remounts on every open, so anything that must survive
- * a close lives here instead. See `btw.client.tsx` for the same split.
+ * The tray and the pane read the same rows, so they live here rather than in
+ * either component.
  */
 interface AgentsController {
   readonly rows: () => ReadonlyArray<AgentRowEntry>
   /** The loop the shell is currently on, so the pane can mark and preselect it. */
-  readonly current: () => Option.Option<{ sessionId: string; branchId: string }>
+  readonly current: () => Option.Option<ActiveExtensionSession>
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: (query: string) => void
@@ -199,9 +197,8 @@ interface AgentsController {
   /** Tell the controller which row is selected, so it can fetch that detail. */
   readonly select: (row: Option.Option<AgentRowEntry>) => void
   /**
-   * Whether the pane is showing. A docked widget is always mounted, unlike the
-   * overlay this replaced, so visibility is controller state rather than
-   * something the overlay registry decides.
+   * Whether the pane is showing. A docked widget is always mounted, so
+   * visibility is controller state.
    */
   readonly open: () => boolean
   readonly setOpen: (open: boolean) => void
@@ -214,60 +211,76 @@ export const makeAgentsController = (
   fetchDetail: (
     key: Pick<AgentRowEntry, "sessionId" | "branchId">,
   ) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
-  cast: (effect: Effect.Effect<void>) => void,
-  current: () => Option.Option<{ sessionId: string; branchId: string }>,
-): AgentsController => {
-  // The pane refetches across session switches — on `current()` changing and on
-  // a 2 s poll — so the keyed query owns the guard that drops a reply for the
-  // session the shell already left.
-  const empty: ReadonlyArray<AgentRowEntry> = []
-  const listing = makeClientSessionQuery({
-    initial: empty,
-    current,
-    cast,
-    fetch: (query: string) => fetchRows(query),
-  })
-  const { value: rows, error, loading, refresh, reload } = listing
-
-  const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
-  // Arrow keys move faster than a round trip, so replies can land out of order.
-  // Only the reply for the row still selected is allowed to win; anything else
-  // would show one row's cost next to another row's name.
-  const [pending, setPending] = createSignal(Option.none<string>())
-
-  const select = (row: Option.Option<AgentRowEntry>) => {
-    // A detail read goes through the loop actor, and an actor read spawns the
-    // entity: asking a stored session what it is doing would make it live.
-    // Only rows that already have a loop are asked.
-    if (Option.isNone(row) || !row.value.live) {
-      setPending(Option.none())
-      setDetail(Option.none())
-      return
+): Effect.Effect<AgentsController, never, ClientTransport | ClientShell | ClientLifecycle> =>
+  Effect.gen(function* () {
+    const transport = yield* ClientTransport
+    const shell = yield* ClientShell
+    // The pane refetches across session switches (on `current()` changing and on
+    // a 2 s poll), so the session query owns the guard that drops a reply for the
+    // session the shell already left.
+    const empty: ReadonlyArray<AgentRowEntry> = []
+    // The filter the reader typed; a reload re-reads under it.
+    let query = ""
+    const listing = yield* sessionQuery({
+      initial: empty,
+      follow: false,
+      fetch: () => fetchRows(query),
+    })
+    const refresh = (next: string): void => {
+      query = next
+      listing.refresh()
     }
-    const key = { sessionId: row.value.sessionId, branchId: row.value.branchId }
-    const token = `${key.sessionId.length}:${key.sessionId}:${key.branchId}`
-    if (Option.contains(pending(), token)) return
-    setPending(Option.some(token))
-    setDetail(Option.none())
-    cast(
-      fetchDetail(key).pipe(
-        Effect.match({
-          // A detail read that fails leaves the line blank rather than
-          // replacing the list with an error: the rows are still correct.
-          onFailure: () => {},
-          onSuccess: (next) => {
-            if (!Option.contains(pending(), token)) return
-            setDetail(Option.some(next))
-          },
-        }),
-      ),
-    )
-  }
 
-  const [open, setOpen] = createSignal(false)
+    const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
+    // Arrow keys move faster than a round trip, so replies can land out of order.
+    // Only the reply for the row still selected is allowed to win; anything else
+    // would show one row's cost next to another row's name.
+    const [pending, setPending] = createSignal(Option.none<string>())
 
-  return { rows, current, error, loading, refresh, reload, detail, select, open, setOpen }
-}
+    const select = (row: Option.Option<AgentRowEntry>) => {
+      // A detail read goes through the loop actor, and an actor read spawns the
+      // entity: asking a stored session what it is doing would make it live.
+      // Only rows that already have a loop are asked.
+      if (Option.isNone(row) || !row.value.live) {
+        setPending(Option.none())
+        setDetail(Option.none())
+        return
+      }
+      const key = { sessionId: row.value.sessionId, branchId: row.value.branchId }
+      const token = `${key.sessionId.length}:${key.sessionId}:${key.branchId}`
+      if (Option.contains(pending(), token)) return
+      setPending(Option.some(token))
+      setDetail(Option.none())
+      shell.cast(
+        fetchDetail(key).pipe(
+          Effect.match({
+            // A detail read that fails leaves the line blank rather than
+            // replacing the list with an error: the rows are still correct.
+            onFailure: () => {},
+            onSuccess: (next) => {
+              if (!Option.contains(pending(), token)) return
+              setDetail(Option.some(next))
+            },
+          }),
+        ),
+      )
+    }
+
+    const [open, setOpen] = createSignal(false)
+
+    return {
+      rows: listing.value,
+      current: transport.currentSession,
+      error: listing.error,
+      loading: listing.loading,
+      refresh,
+      reload: listing.refresh,
+      detail,
+      select,
+      open,
+      setOpen,
+    }
+  })
 
 /** Section headings, with the count each carries. Empty sections are skipped. */
 const SECTION_TITLE = {
@@ -380,16 +393,16 @@ const emptyLabel = (loading: boolean): string => {
   return "no agents"
 }
 
-export function AgentsPane(
-  props: OverlayProps & {
-    controller: AgentsController
-    onSelect: (row: AgentRowEntry) => void
-    /** Show the pane if hidden, hide it if shown. Bound to Ctrl+T. */
-    onToggle: () => void
-    /** Delete a session tree. Bound to Ctrl+X pressed twice on the same row. */
-    onDelete: (row: AgentRowEntry) => void
-  },
-) {
+export function AgentsPane(props: {
+  open: boolean
+  onClose: () => void
+  controller: AgentsController
+  onSelect: (row: AgentRowEntry) => void
+  /** Show the pane if hidden, hide it if shown. Bound to Ctrl+T. */
+  onToggle: () => void
+  /** Delete a session tree. Bound to Ctrl+X pressed twice on the same row. */
+  onDelete: (row: AgentRowEntry) => void
+}) {
   const { theme } = useTheme()
   // The row a first Ctrl+X armed; the second press on it deletes, any other key disarms.
   const [armed, setArmed] = createSignal(Option.none<string>())
@@ -569,7 +582,7 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
     const shell = yield* ClientShell
     const lifecycle = yield* ClientLifecycle
 
-    const controller = makeAgentsController(
+    const controller = yield* makeAgentsController(
       (query) =>
         transport.request(ref(AgentsViewRpc.ListAgents), { query }).pipe(
           Effect.map((reply) => reply.rows),
@@ -577,12 +590,6 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         ),
       (key) =>
         transport.agentDetail(key).pipe(Effect.mapError((error) => ({ message: String(error) }))),
-      shell.cast,
-      () =>
-        Option.map(Option.fromNullishOr(transport.currentSession()), (active) => ({
-          sessionId: active.sessionId,
-          branchId: active.branchId,
-        })),
     )
 
     // A delegate pulse in the current session means its subtree changed.
@@ -622,9 +629,6 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         description: "Show every agent loop, live and stored",
         category: "Session",
         slash: "agents",
-        // `/tree` was the session-tree overlay, which this view replaces: it
-        // shows every loop rather than one session's descendants, adds liveness,
-        // and is keyed per branch. Kept as an alias so the habit still works.
         aliases: ["tree"],
         onSelect: () => {
           controller.setOpen(true)

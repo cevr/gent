@@ -51,6 +51,7 @@ import {
   type ResourceScope,
   sealRuntimeLoadedEffect,
   SessionMutations,
+  SessionSendParams,
   sortExtensionsByScope,
   type SystemPromptInput,
   type ToolPolicyFragment,
@@ -63,6 +64,7 @@ import {
   type InteractionRequestId,
   MessageId,
   ProcessGenerationId,
+  RequestId,
   type RpcId,
   type SessionId,
   type ToolCallId,
@@ -154,6 +156,10 @@ export const provideCurrentHostCtx =
     effect.pipe(Effect.provideService(CurrentExtensionHostContext, hostCtx))
 
 // ── extension-capability-context ────────────────────────────────────────────
+
+// The facade takes typed params, but an extension can still build one mode's
+// fields into another. Decode the type side, so a stray field fails loudly.
+const decodeSessionSend = Schema.decodeUnknownEffect(Schema.toType(SessionSendParams))
 
 const CurrentExtensionCapabilityContext = Context.Reference<Context.Context<never>>(
   "@gent/core/src/runtime/extension-host/CurrentExtensionCapabilityContext",
@@ -2198,6 +2204,15 @@ export const makeExtensionHostContextProvider = (
 
     const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
 
+    // An unnamed target is the run's own branch.
+    const targetIn = (
+      runInfo: MakeExtensionHostContextRunInfo,
+      params: { readonly sessionId?: SessionId; readonly branchId?: BranchId },
+    ) => ({
+      sessionId: params.sessionId ?? runInfo.sessionId,
+      branchId: params.branchId ?? runInfo.branchId,
+    })
+
     const forRun = (runInfo: MakeExtensionHostContextRunInfo): ExtensionHostContext => ({
       sessionId: runInfo.sessionId,
       branchId: runInfo.branchId,
@@ -2276,24 +2291,95 @@ export const makeExtensionHostContextProvider = (
             inWorkspace,
           ),
         send: (params) =>
-          Effect.gen(function* () {
-            if (params.sessionId === runInfo.sessionId && params.branchId === runInfo.branchId) {
-              return yield* new ExtensionServiceError({
-                service: "ExtensionSession",
-                operation: "send",
-                message: "send targets another branch; queue a follow-up on this one",
-              })
-            }
-            yield* requireTarget("send", params)
-            yield* control((loop) => loop.send(params)).pipe(Effect.mapError(sessionError("send")))
-          }).pipe(inWorkspace),
-        steer: (command) =>
-          requireTarget("steer", command).pipe(
-            Effect.andThen(
-              control((loop) => loop.steer(command)).pipe(Effect.mapError(sessionError("steer"))),
+          decodeSessionSend(params, { onExcessProperty: "error" }).pipe(
+            Effect.mapError(
+              (error) =>
+                new ExtensionServiceError({
+                  service: "ExtensionSession",
+                  operation: "send",
+                  message: error.message,
+                }),
+            ),
+            Effect.flatMap((decoded) =>
+              SessionSendParams.match(decoded, {
+                turn: (turn) =>
+                  Effect.gen(function* () {
+                    if (
+                      turn.sessionId === runInfo.sessionId &&
+                      turn.branchId === runInfo.branchId
+                    ) {
+                      return yield* new ExtensionServiceError({
+                        service: "ExtensionSession",
+                        operation: "send",
+                        message:
+                          'a "turn" targets another branch; send this one a "queue" delivery',
+                      })
+                    }
+                    yield* requireTarget("send", turn)
+                    yield* control((loop) =>
+                      loop.send({
+                        sessionId: turn.sessionId,
+                        branchId: turn.branchId,
+                        content: turn.content,
+                        commandId: turn.commandId,
+                        agentOverride: turn.agentOverride,
+                        interactive: turn.interactive,
+                        runSpec: turn.runSpec,
+                        completion: turn.completion,
+                      }),
+                    ).pipe(Effect.mapError(sessionError("send")))
+                  }),
+                queue: (queued) => {
+                  const target = targetIn(runInfo, queued)
+                  return requireTarget("send", target).pipe(
+                    Effect.andThen(
+                      control((loop) =>
+                        loop.queueFollowUp({
+                          ...target,
+                          sourceId: queued.sourceId,
+                          content: queued.content,
+                          metadata: queued.metadata,
+                          wake: queued.wake,
+                        }),
+                      ).pipe(Effect.mapError(sessionError("send"))),
+                    ),
+                  )
+                },
+                steer: (steered) =>
+                  Effect.gen(function* () {
+                    const target = targetIn(runInfo, steered)
+                    yield* requireTarget("send", target)
+                    const requestId = steered.requestId ?? RequestId.make(yield* host.randomId)
+                    yield* control((loop) =>
+                      loop.steer({
+                        _tag: "Interject",
+                        ...target,
+                        requestId,
+                        message: steered.content,
+                        metadata: steered.metadata,
+                        agent: steered.agent,
+                        wake: steered.wake,
+                      }),
+                    ).pipe(Effect.mapError(sessionError("send")))
+                  }),
+              }),
             ),
             inWorkspace,
           ),
+        stop: (params) =>
+          Effect.gen(function* () {
+            const target = targetIn(runInfo, params)
+            yield* requireTarget("stop", target)
+            const requestId = params.requestId ?? RequestId.make(yield* host.randomId)
+            yield* control((loop) =>
+              loop.steer({
+                _tag: "Cancel",
+                ...target,
+                requestId,
+                messageId: params.messageId,
+              }),
+            ).pipe(Effect.mapError(sessionError("stop")))
+          }).pipe(inWorkspace),
         // The subscription does its reads at pull time, so the workspace is
         // pinned on the stream, not on the effect that builds it.
         events: (target) =>
@@ -2307,31 +2393,8 @@ export const makeExtensionHostContextProvider = (
               ),
             ),
           ).pipe(Stream.provideService(CurrentWorkspaceId, workspaceId)),
-        queueFollowUp: (params) => {
-          const target = {
-            sessionId: params.sessionId ?? runInfo.sessionId,
-            branchId: params.branchId ?? runInfo.branchId,
-          }
-          return requireTarget("queueFollowUp", target).pipe(
-            Effect.andThen(
-              control((loop) =>
-                loop.queueFollowUp({
-                  ...target,
-                  sourceId: params.sourceId,
-                  content: params.content,
-                  metadata: params.metadata,
-                  wake: params.wake,
-                }),
-              ).pipe(Effect.mapError(sessionError("queueFollowUp"))),
-            ),
-            inWorkspace,
-          )
-        },
         dequeueFollowUp: (params) => {
-          const target = {
-            sessionId: params.sessionId ?? runInfo.sessionId,
-            branchId: params.branchId ?? runInfo.branchId,
-          }
+          const target = targetIn(runInfo, params)
           return requireTarget("dequeueFollowUp", target).pipe(
             Effect.andThen(
               control((loop) =>

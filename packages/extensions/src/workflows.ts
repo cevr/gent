@@ -92,7 +92,8 @@ const command = (params: {
         const quotedPath = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(
           outputPath,
         )
-        yield* ctx.Session.queueFollowUp({
+        yield* ctx.Session.send({
+          delivery: "queue",
           sourceId: `${params.id}:${yield* ctx.Process.randomId}`,
           content: params.recipe(input.trim(), quotedPath),
         })

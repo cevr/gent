@@ -1230,7 +1230,11 @@ describe("extension command RPCs", () => {
               execute: (input) =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
-                  yield* ctx.Session.queueFollowUp({ sourceId: "test-rpc-request", content: input })
+                  yield* ctx.Session.send({
+                    delivery: "queue",
+                    sourceId: "test-rpc-request",
+                    content: input,
+                  })
                 }).pipe(
                   Effect.mapError(
                     (cause) =>
@@ -1478,7 +1482,8 @@ describe("extension command RPCs", () => {
               execute: (input) =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
-                  yield* ctx.Session.queueFollowUp({
+                  yield* ctx.Session.send({
+                    delivery: "queue",
                     sourceId: "test-warm-request",
                     content: input,
                   })
@@ -1574,7 +1579,8 @@ describe("extension command RPCs", () => {
               execute: (input: string) =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
-                  yield* ctx.Session.queueFollowUp({
+                  yield* ctx.Session.send({
+                    delivery: "queue",
                     sourceId: "test-slash-request",
                     content: input,
                   })
@@ -2001,7 +2007,8 @@ describe("extension command RPCs", () => {
                     const extensionCtx = yield* ExtensionContext
                     const processExit = yield* Effect.exit(extensionCtx.Process.run("echo", ["hi"]))
                     const followUpExit = yield* Effect.exit(
-                      extensionCtx.Session.queueFollowUp({
+                      extensionCtx.Session.send({
+                        delivery: "queue",
                         sourceId: "rpc",
                         content: "queued",
                       }),
