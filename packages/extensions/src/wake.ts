@@ -710,9 +710,9 @@ export const MonitorTool = tool({
   ],
   params: MonitorParams,
   output: MonitorResult,
-  summary: (_input, output) =>
+  summary: (input, output) =>
     summaryWithNote(
-      [`${output.mode} · every ${output.everySeconds}s until ${output.deadline}`],
+      [output.mode, input.command.trim(), `every ${output.everySeconds}s until ${output.deadline}`],
       output.note,
     ),
   execute: Effect.fn("MonitorTool.execute")(function* (params: typeof MonitorParams.Type) {

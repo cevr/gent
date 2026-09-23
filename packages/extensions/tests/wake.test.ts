@@ -126,7 +126,7 @@ describe("wake", () => {
     ).toBe("wake at 2026-09-23T10:00:00.000Z")
   })
 
-  test("a monitor's result reads as its mode, interval, deadline and note, not JSON", () => {
+  test("a monitor's result reads as its mode, command, interval, deadline and note, not JSON", () => {
     const summary = (note: string) =>
       toolResultSummary(
         Option.some(MonitorTool),
@@ -142,10 +142,12 @@ describe("wake", () => {
           },
         },
       )
-    expect(summary("CI finished: read the log")).toBe(
-      "wake · every 60s until 2026-09-23T10:30:00.000Z · CI finished: read the log",
+    expect(summary("read the log")).toBe(
+      "wake · gh run view 1 --exit-status · every 60s until 2026-09-23T10:30:00.000Z · read the log",
     )
-    expect(summary("")).toBe("wake · every 60s until 2026-09-23T10:30:00.000Z")
+    expect(summary("")).toBe(
+      "wake · gh run view 1 --exit-status · every 60s until 2026-09-23T10:30:00.000Z",
+    )
   })
 
   it.live("a due time comes from afterSeconds or an ISO time, never both", () =>
