@@ -4,7 +4,7 @@ import { Match, Option, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
 import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
-import { formatHeadTail, headTail, type OutputCut } from "@gent/core/protocol"
+import { formatHeadTail, headTail, type OutputCut, splitLines } from "@gent/core/protocol"
 import {
   type ActivityOperation,
   CellOperationReceipts,
@@ -22,7 +22,6 @@ import {
   isAbsPath,
   plural,
   shortId,
-  splitLines,
   toolArgSummary,
   type ToolInput,
   truncatePath,
@@ -314,56 +313,49 @@ const outputRows = (text: string, cut: Option.Option<TextCut>): OutputRows =>
   })
 
 /**
- * A cut string's rows. The cut record counts the parts of `split("\n")`, so a
- * final newline's empty part is dropped once the excerpt is placed, as
- * `splitLines` drops it from a whole string.
+ * A cut string's rows. The excerpt is split as any text is, so its lines are
+ * the head's, the marker's, then the `lines - tailLine + 1` tail lines; a head
+ * or tail that kept nothing is absent from it.
  */
 const cutRows = (text: string, cut: TextCut): OutputRows => {
   const { lines, tailLine, chars } = cut
-  const parts = text.split("\n")
+  const parts = splitLines(text)
   const tailCount = lines - tailLine + 1
-  const head = parts.slice(0, Math.max(0, parts.length - tailCount - 1))
-  const tail = parts.slice(parts.length - tailCount)
+  const marker = parts.length - tailCount - 1
+  const head = parts.slice(0, Math.max(0, marker))
+  const tail = parts.slice(marker + 1)
   const headRows = head.map((part, index) => numberedLine(part, index + 1))
   const tailRows = tail.map((part, index) => numberedLine(part, tailLine + index))
-  const placed = (): OutputRows => {
-    if (tailLine === head.length) {
-      const joined = numberedLine(
-        `${head.at(-1) ?? ""} ${truncationMarker(plural(chars, "char"))} ${tail[0] ?? ""}`,
-        tailLine,
-      )
-      return { rows: [...headRows.slice(0, -1), joined, ...tailRows.slice(1)], total: lines }
-    }
-    // Whole lines left out, else only the characters of a line cut in two.
-    const skipped = tailLine - head.length - 1
-    if (skipped === 0) {
-      const gap: WindowedLine = { _tag: "elision", count: chars, unit: "chars" }
-      return { rows: [...headRows, gap, ...tailRows], total: lines }
-    }
-    // The gap counts whole lines, so a head or tail line cut short is marked
-    // on its own row: the gap does not count the characters it lost.
-    const marked = (
-      rows: ReadonlyArray<WindowedLine>,
-      index: number,
-      part: "end" | "start",
-    ): Array<WindowedLine> =>
-      rows.map((row, at) => {
-        if (at !== index || row._tag !== "line") return row
-        return { ...row, part }
-      })
-    let headDrawn: ReadonlyArray<WindowedLine> = headRows
-    if (cut.headCut === true) headDrawn = marked(headRows, headRows.length - 1, "end")
-    let tailDrawn: ReadonlyArray<WindowedLine> = tailRows
-    if (cut.tailCut === true) tailDrawn = marked(tailRows, 0, "start")
-    const gap: WindowedLine = { _tag: "elision", count: skipped, unit: "lines" }
-    return { rows: [...headDrawn, gap, ...tailDrawn], total: lines }
+  if (tailLine === head.length) {
+    const joined = numberedLine(
+      `${head.at(-1) ?? ""} ${truncationMarker(plural(chars, "char"))} ${tail[0] ?? ""}`,
+      tailLine,
+    )
+    return { rows: [...headRows.slice(0, -1), joined, ...tailRows.slice(1)], total: lines }
   }
-  const whole = placed()
-  const last = whole.rows.at(-1)
-  if (last?._tag === "line" && last.text.length === 0) {
-    return { rows: whole.rows.slice(0, -1), total: whole.total - 1 }
+  // Whole lines left out, else only the characters of a line cut in two.
+  const skipped = tailLine - head.length - 1
+  if (skipped === 0) {
+    const gap: WindowedLine = { _tag: "elision", count: chars, unit: "chars" }
+    return { rows: [...headRows, gap, ...tailRows], total: lines }
   }
-  return whole
+  // The gap counts whole lines, so a head or tail line cut short is marked
+  // on its own row: the gap does not count the characters it lost.
+  const marked = (
+    rows: ReadonlyArray<WindowedLine>,
+    index: number,
+    part: "end" | "start",
+  ): Array<WindowedLine> =>
+    rows.map((row, at) => {
+      if (at !== index || row._tag !== "line") return row
+      return { ...row, part }
+    })
+  let headDrawn: ReadonlyArray<WindowedLine> = headRows
+  if (cut.headCut === true) headDrawn = marked(headRows, headRows.length - 1, "end")
+  let tailDrawn: ReadonlyArray<WindowedLine> = tailRows
+  if (cut.tailCut === true) tailDrawn = marked(tailRows, 0, "start")
+  const gap: WindowedLine = { _tag: "elision", count: skipped, unit: "lines" }
+  return { rows: [...headDrawn, gap, ...tailDrawn], total: lines }
 }
 
 /** The lines of the whole output one row stands for. */

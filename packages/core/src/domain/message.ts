@@ -117,8 +117,11 @@ const ToolInteractionFields = {
  * snapshot derives it from the stored events on every read.
  *
  * - `Text`: the excerpt holds the string's head, one marker line, then its
- *   tail. `lines` is the whole string's line count, `tailLine` the 1-based
- *   line its tail starts on, and `chars` the code points left out. Head and
+ *   tail. `lines` is the whole string's line count by the `splitLines` rule
+ *   (a final newline ends the last line), `tailLine` the 1-based line its tail
+ *   starts on, and `chars` the code points left out. A head or tail that keeps
+ *   nothing is left out of the excerpt; a tail that keeps nothing has
+ *   `tailLine` one past the last line. Head and
  *   tail keep whole lines; a piece with no line break is a fragment of the one
  *   line it sits in, so `tailLine` equals the head's last line when the cut
  *   falls inside a single line. `headCut` says the head's last line stops
@@ -131,8 +134,7 @@ const ToolInteractionFields = {
  *
  * A field with no room even for the marker is kept empty, its cut counting
  * all it left out: its tail starts past its end (`tailItem` one past the last
- * item, `tailLine` one past the last line, or the last line itself when that
- * is the empty part after a final newline).
+ * item, `tailLine` one past the last line).
  */
 export const OutputCut = Schema.TaggedUnion({
   Text: {
@@ -892,7 +894,21 @@ const tailWithin = (text: string, budget: number, cost: CodePointCost): string =
   return text.slice(start)
 }
 
-const lineCount = (text: string): number => text.split("\n").length
+/**
+ * A text's lines: a final newline ends the last line and starts none. The one
+ * line rule every count and every cut record uses.
+ */
+export const splitLines = (text: string): Array<string> => {
+  if (text.length === 0) return []
+  return text.replace(/\n$/, "").split("\n")
+}
+
+/** How many lines a text holds, by the {@link splitLines} rule. */
+export const lineCount = (text: string): number => splitLines(text).length
+
+/** The number of the line that starts at `offset`, which follows a line break or is 0. */
+const lineNumberAt = (text: string, offset: number): number =>
+  text.slice(0, offset).split("\n").length
 
 /** The encoded size of a `Text` cut's record, with the widest numbers it can hold. */
 const textCutCost = (field: Option.Option<string>): number =>
@@ -944,8 +960,9 @@ const wholeTailLines = (text: string, tail: string): string => {
 /**
  * `text` whole within `budget`, else its head, the marker line and its tail,
  * with the marker counted. Head and tail keep whole lines; a piece with no
- * line break is cut at code points inside its one line. `None` when not even
- * the marker fits.
+ * line break is cut at code points inside its one line. A piece that keeps
+ * nothing is left out: the excerpt starts at the marker, or ends after it
+ * with `tailLine` one past the last line. `None` when not even the marker fits.
  */
 const excerptWithin = (
   text: string,
@@ -958,14 +975,16 @@ const excerptWithin = (
   const head = wholeHeadLines(text, headWithin(text, Math.floor(room / 2), cost))
   const tail = wholeTailLines(text, tailWithin(text, room - costUpTo(head, cost, Infinity), cost))
   const tailStart = text.length - tail.length
-  let cut: TextCut = {
-    lines: lineCount(text),
-    tailLine: lineCount(text.slice(0, tailStart)),
-    chars: [...text.slice(head.length, tailStart)].length,
-  }
+  const lines = lineCount(text)
+  let tailLine = lines + 1
+  if (tail.length > 0) tailLine = lineNumberAt(text, tailStart)
+  let cut: TextCut = { lines, tailLine, chars: [...text.slice(head.length, tailStart)].length }
   if (head.length > 0 && text.charAt(head.length) !== "\n") cut = { ...cut, headCut: true }
   if (tail.length > 0 && text.charAt(tailStart - 1) !== "\n") cut = { ...cut, tailCut: true }
-  return Option.some({ text: `${head}\n${CUT_MARKER}\n${tail}`, cut: Option.some(cut) })
+  // An empty head is line 1 only when line 1 is empty; else it kept nothing.
+  let excerpt = `${CUT_MARKER}\n${tail}`
+  if (head.length > 0 || text.startsWith("\n")) excerpt = `${head}\n${excerpt}`
+  return Option.some({ text: excerpt, cut: Option.some(cut) })
 }
 
 type Scalar = string | number | boolean
@@ -1122,10 +1141,6 @@ interface CuttableField {
 const textField = (key: string, text: string): CuttableField => {
   const overhead = fieldCost(key, "", encodedTwice) + textCutCost(Option.some(key))
   const lines = lineCount(text)
-  // Emptied, the kept tail is the empty part after a final newline, if any,
-  // so a reader drops that part as it does for any cut string.
-  let tailLine = lines + 1
-  if (text.endsWith("\n")) tailLine = lines
   return {
     key,
     need: overhead + costUpTo(text, encodedTwice, OPERATION_BUDGET),
@@ -1138,7 +1153,12 @@ const textField = (key: string, text: string): CuttableField => {
     emptied: {
       value: "",
       cut: Option.some(
-        OutputCut.cases.Text.make({ field: key, lines, tailLine, chars: [...text].length }),
+        OutputCut.cases.Text.make({
+          field: key,
+          lines,
+          tailLine: lines + 1,
+          chars: [...text].length,
+        }),
       ),
     },
   }

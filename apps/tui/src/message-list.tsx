@@ -11,7 +11,6 @@ import {
   plural,
   previewOutput,
   workingIconFrame,
-  lineCount,
 } from "./utils"
 import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
 import { useTheme } from "./theme"
@@ -54,6 +53,7 @@ import type { MessageRenderer, MessageRowProps } from "./extensions/client-facet
 import {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   type ImagePartProjection,
+  lineCount,
   MODEL_CHANGE_MESSAGE_TYPE,
 } from "@gent/core/protocol"
 import { replaceMermaidBlocks } from "./mermaid"
