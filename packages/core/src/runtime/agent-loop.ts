@@ -2428,26 +2428,12 @@ const buildAgentLoopActorHandlers = (config: {
             yield* ensureTarget(operation)
             yield* markWrite
             const handle = yield* ensureStarted
-            // One read decides all three cases. The mailbox is unbounded, so a
-            // second read could observe a turn that started in between and take
-            // a branch the first read did not test.
-            const phase = yield* handle.inbox.phase
-            if (phase._tag === "WaitingForInteraction") {
-              return yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
-            }
             // A reply to a loop that lost its turn (a restart mid-interaction)
-            // resumes that turn instead; the interaction is answered inside it.
-            if (phase._tag !== "Idle") return
-            const incomplete = yield* handle.incompleteUserTurn
-            if (Option.isNone(incomplete)) return
-            const baseline = yield* waitBaseline(handle)
-            yield* handle.startTurn(incomplete.value).pipe(orCleanup(handle))
-            yield* awaitTurnCompletion(
-              handle,
-              baseline,
-              incomplete.value.message.id,
-              orCleanup(handle),
-            )
+            // needs nothing here: opening the loop resumed that turn, and it
+            // reads the stored answer when it reaches the interaction.
+            const phase = yield* handle.inbox.phase
+            if (phase._tag !== "WaitingForInteraction") return
+            yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
           }).pipe(provideActorWorkspace),
       ),
       DrainQueue: Effect.fn("AgentLoop.DrainQueue")(
@@ -2490,7 +2476,9 @@ const buildAgentLoopActorHandlers = (config: {
             // A read-only request answers while a turn runs; anything else is
             // a side mutation and waits for the permit the turn holds.
             if (rpcRegistry.isReadonly(operation.extensionId, capabilityId)) return yield* run
-            return yield* run.pipe(handle.withSideMutation, Effect.ensuring(drainWake(handle)))
+            // A follow-up the request admitted wakes the loop from
+            // `admitFollowUp`, which forks the drain in the actor scope.
+            return yield* run.pipe(handle.withSideMutation)
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
             provideActorWorkspace,
