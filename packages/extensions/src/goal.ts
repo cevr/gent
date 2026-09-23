@@ -370,93 +370,83 @@ const clearGoal = Effect.gen(function* () {
 
 // ── Turn-after continuation ──
 
+/**
+ * The goal after one turn, and whether the harness drives it on. Every turn
+ * end is charged: an interrupted or failed turn spent its known tokens and
+ * its time too. The known part is charged even when a step's usage is
+ * missing (a step cut short, or a restart).
+ */
+const chargeTurn = (goal: GoalState, input: TurnAfterInput, updatedAt: number): GoalState => ({
+  ...goal,
+  tokensUsed: goal.tokensUsed + input.usage.known.inputTokens + input.usage.known.outputTokens,
+  timeUsedMs: goal.timeUsedMs + input.durationMs,
+  updatedAt,
+})
+
+/** `report` is false only after an interrupt: nothing is logged or queued then. */
+type TurnDecision = { readonly next: GoalState; readonly report: boolean }
+
+const decideAfterTurn = (
+  goal: GoalState,
+  input: TurnAfterInput,
+  updatedAt: number,
+): TurnDecision => {
+  const charged = chargeTurn(goal, input, updatedAt)
+  // A turn that died on a broken stream must not drive the goal on: another
+  // prompt would spend the goal against an answer that never arrived. It
+  // pauses, and the person decides whether to resume.
+  if (input.streamFailed) {
+    return {
+      next: { ...charged, status: "paused", pausedReason: GOAL_PAUSED_STREAM_FAILED },
+      report: true,
+    }
+  }
+  const exhausted = Option.contains(remainingTokens(charged), 0)
+  // The person stopped the turn: nothing wakes the branch again.
+  if (input.interrupted) {
+    if (exhausted) return { next: { ...charged, status: "budget_limited" }, report: false }
+    return { next: charged, report: false }
+  }
+  if (exhausted) return { next: { ...charged, status: "budget_limited" }, report: true }
+  // With a budget and a partial count, the remaining budget is unknown.
+  // Continuing could overspend it, so the goal waits for the person.
+  if (!input.usage.complete && Predicate.isNotUndefined(charged.tokenBudget)) {
+    return {
+      next: { ...charged, status: "paused", pausedReason: GOAL_PAUSED_USAGE_UNKNOWN },
+      report: true,
+    }
+  }
+  return { next: { ...charged, continuationsUsed: charged.continuationsUsed + 1 }, report: true }
+}
+
 const continueGoal = (input: TurnAfterInput) =>
   Effect.gen(function* () {
-    if (input.interrupted) return
     const ctx = yield* ExtensionContext
-    // A turn that died on a broken stream must not drive the goal on. Charging
-    // the budget and queueing another prompt would spend the goal against an
-    // answer that never arrived, so it pauses here and the person decides
-    // whether to resume. This runs before the charge for a reason: pausing
-    // afterwards would leave the queued continuation behind to wake the branch.
-    if (input.streamFailed) {
-      const paused = yield* modifyGoal((current) =>
-        Effect.gen(function* () {
-          if (Option.isNone(current)) return { next: current, result: false }
-          const goal = current.value
-          if (goal.status !== "active") return { next: current, result: false }
-          return {
-            next: Option.some<GoalState>({
-              ...goal,
-              status: "paused",
-              pausedReason: GOAL_PAUSED_STREAM_FAILED,
-              updatedAt: yield* now,
-            }),
-            result: true,
-          }
-        }),
-      )
-      if (!paused) return
-      yield* ctx.State.changed()
-      yield* Effect.logWarning("goal.paused.stream-failed").pipe(
-        Effect.annotateLogs({
-          sessionId: String(input.sessionId),
-          agent: String(input.agentName),
-        }),
-      )
-      return
-    }
-    // The known part is charged even when a step's usage is missing (a step
-    // cut short, or a restart): it is spent either way.
-    const turnTokens = input.usage.known.inputTokens + input.usage.known.outputTokens
     const decision = yield* modifyGoal((current) =>
       Effect.gen(function* () {
         if (Option.isNone(current)) return { next: current, result: Option.none<GoalState>() }
         const goal = current.value
-        // The turn that completed the goal is charged once; nothing continues after it.
+        // The turn that completed the goal is charged once, however it ended;
+        // nothing continues after it.
         if (goal.status === "complete" && goal.finalized !== true) {
-          const finalized: GoalState = {
-            ...goal,
-            tokensUsed: goal.tokensUsed + turnTokens,
-            timeUsedMs: goal.timeUsedMs + input.durationMs,
-            finalized: true,
-            updatedAt: yield* now,
-          }
+          const finalized: GoalState = { ...chargeTurn(goal, input, yield* now), finalized: true }
           return { next: Option.some(finalized), result: Option.none<GoalState>() }
         }
         if (goal.status !== "active") return { next: current, result: Option.none<GoalState>() }
-        const charged: GoalState = {
-          ...goal,
-          tokensUsed: goal.tokensUsed + turnTokens,
-          timeUsedMs: goal.timeUsedMs + input.durationMs,
-          updatedAt: yield* now,
+        const decided = decideAfterTurn(goal, input, yield* now)
+        return {
+          next: Option.some(decided.next),
+          result: Option.liftPredicate(decided.next, () => decided.report),
         }
-        if (Option.contains(remainingTokens(charged), 0)) {
-          const limited: GoalState = { ...charged, status: "budget_limited" }
-          return { next: Option.some(limited), result: Option.some(limited) }
-        }
-        // With a budget and a partial count, the remaining budget is unknown.
-        // Continuing could overspend it, so the goal waits for the person.
-        if (!input.usage.complete && Predicate.isNotUndefined(charged.tokenBudget)) {
-          const paused: GoalState = {
-            ...charged,
-            status: "paused",
-            pausedReason: GOAL_PAUSED_USAGE_UNKNOWN,
-          }
-          return { next: Option.some(paused), result: Option.some(paused) }
-        }
-        const continued: GoalState = {
-          ...charged,
-          continuationsUsed: charged.continuationsUsed + 1,
-        }
-        return { next: Option.some(continued), result: Option.some(continued) }
       }),
     )
     yield* ctx.State.changed()
     if (Option.isNone(decision)) return
     const goal = decision.value
     if (goal.status === "paused") {
-      yield* Effect.logWarning("goal.paused.usage-unknown").pipe(
+      let event = "goal.paused.usage-unknown"
+      if (goal.pausedReason === GOAL_PAUSED_STREAM_FAILED) event = "goal.paused.stream-failed"
+      yield* Effect.logWarning(event).pipe(
         Effect.annotateLogs({ sessionId: String(input.sessionId), goalId: goal.goalId }),
       )
       return

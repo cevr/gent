@@ -1,17 +1,30 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, Exit, FileSystem, Option, PlatformError, Ref, Schema, Stream } from "effect"
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  FileSystem,
+  Option,
+  PlatformError,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
 import {
   finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   textDeltaPart,
   textStep,
+  toolCallPart,
   waitFor,
   createRpcHarness,
   runToolWithCtx,
   testToolContext,
 } from "@gent/core/test-utils"
-import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
+import { BranchId, SessionId, SteerCommand, ToolCallId } from "@gent/core/protocol"
+import { RequestId } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   continuationPrompt,
@@ -332,6 +345,8 @@ describe("goal stream failure", () => {
         expect(Option.map(paused, (goal) => goal.pausedReason)).toEqual(
           Option.some(GOAL_PAUSED_STREAM_FAILED),
         )
+        // The failed turn still spent its time; it is charged like any other turn end.
+        expect(Option.exists(paused, (goal) => goal.timeUsedMs > 0)).toBe(true)
 
         // Creating the goal queues the first continuation, which starts the turn
         // that then fails. The failed turn must not queue a second one: that is
@@ -439,5 +454,137 @@ describe("goal partial usage", () => {
         expect(yield* Ref.get(calls)).toBe(2)
       }).pipe(Effect.timeout("14 seconds")),
     18_000,
+  )
+})
+
+// ── goal/goal-interrupted-turn.test ─────────────────────────────────────────
+
+/**
+ * Every turn end is charged. An interrupted turn spent its known tokens and
+ * its time, and a completing turn that the person interrupts still finalizes
+ * the goal; otherwise the next unrelated turn is charged to it.
+ */
+
+const stalledAfter = (opened: Deferred.Deferred<void>) =>
+  Stream.make(textDeltaPart("working")).pipe(
+    Stream.concat(Stream.fromEffect(Deferred.succeed(opened, void 0)).pipe(Stream.drain)),
+    Stream.concat(Stream.never),
+  )
+
+type StepPart =
+  | ReturnType<typeof textDeltaPart>
+  | ReturnType<typeof finishPart>
+  | ReturnType<typeof toolCallPart>
+
+const interruptedGoalHarness = (firstStep: ReadonlyArray<StepPart>) =>
+  Effect.gen(function* () {
+    const stalled = yield* Deferred.make<void>()
+    const calls = yield* Ref.make(0)
+    const providerLayer = LanguageModelLayers.testStream(() =>
+      Ref.updateAndGet(calls, (n) => n + 1).pipe(
+        Effect.map((call) => {
+          if (call === 1) return Stream.fromIterable<StepPart>(firstStep)
+          return stalledAfter(stalled)
+        }),
+      ),
+    )
+    const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+    const { client, sessionId, branchId } = harness
+    const readGoal = () =>
+      client.extension
+        .request({
+          sessionId,
+          branchId,
+          extensionId: GOAL_EXTENSION_ID,
+          capabilityId: "goal.get",
+          input: {},
+        })
+        .pipe(
+          Effect.map((snapshot) =>
+            Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
+          ),
+        )
+    yield* client.extension.request({
+      sessionId,
+      branchId,
+      extensionId: GOAL_EXTENSION_ID,
+      capabilityId: "goal-command",
+      input: "--budget 1000 Write the pelican poem",
+    })
+    yield* Deferred.await(stalled)
+    yield* client.steer.command({
+      command: SteerCommand.make({
+        _tag: "Cancel",
+        sessionId,
+        branchId,
+        requestId: RequestId.make("interrupt-goal-turn"),
+      }),
+    })
+    yield* waitFor(
+      client.session.getSnapshot({ sessionId, branchId }),
+      (current) => current.runtime._tag === "Idle",
+      5_000,
+      "the interrupted turn ended",
+    )
+    return { ...harness, readGoal, calls }
+  })
+
+describe("goal interrupted turn", () => {
+  it.scopedLive(
+    "an interrupted turn charges its known tokens and queues nothing more",
+    () =>
+      Effect.gen(function* () {
+        const { client, sessionId, branchId, readGoal, calls } = yield* interruptedGoalHarness([
+          textDeltaPart("part one"),
+          finishPart({ finishReason: "length", usage: { inputTokens: 30, outputTokens: 12 } }),
+        ])
+        const charged = yield* waitFor(
+          readGoal(),
+          (goal) =>
+            Option.contains(
+              Option.map(goal, (value) => value.tokensUsed),
+              42,
+            ),
+          5_000,
+          "the interrupted turn is charged",
+        )
+        // The person stopped the turn: the goal stays active and nothing wakes the branch.
+        expect(Option.map(charged, (goal) => goal.status)).toEqual(Option.some("active"))
+        expect(Option.map(charged, (goal) => goal.continuationsUsed)).toEqual(Option.some(0))
+        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        const goalMessages = snapshot.messages.filter(
+          (message) => message.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE,
+        )
+        expect(goalMessages.length).toBe(1)
+        expect(yield* Ref.get(calls)).toBe(2)
+      }).pipe(Effect.timeout("10 seconds")),
+    12_000,
+  )
+
+  it.scopedLive(
+    "a completing turn that is interrupted still finalizes the goal",
+    () =>
+      Effect.gen(function* () {
+        const { readGoal } = yield* interruptedGoalHarness([
+          toolCallPart(
+            "goal",
+            { action: "complete" },
+            { toolCallId: ToolCallId.make("complete-1") },
+          ),
+          finishPart({
+            finishReason: "tool-calls",
+            usage: { inputTokens: 30, outputTokens: 12 },
+          }),
+        ])
+        const finalized = yield* waitFor(
+          readGoal(),
+          (goal) => Option.exists(goal, (value) => value.finalized === true),
+          5_000,
+          "the completed goal is finalized",
+        )
+        expect(Option.map(finalized, (goal) => goal.status)).toEqual(Option.some("complete"))
+        expect(Option.map(finalized, (goal) => goal.tokensUsed)).toEqual(Option.some(42))
+      }).pipe(Effect.timeout("10 seconds")),
+    12_000,
   )
 })
