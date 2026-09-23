@@ -1,5 +1,15 @@
 import { Database } from "bun:sqlite"
-import { Config, Console, DateTime, Effect, FileSystem, Match, Option, Schema } from "effect"
+import {
+  Config,
+  Console,
+  DateTime,
+  Effect,
+  FileSystem,
+  Match,
+  Option,
+  Predicate,
+  Schema,
+} from "effect"
 import {
   classifyLogFile,
   dataPaths,
@@ -186,6 +196,12 @@ export const inspectLogs = (
 /** The doctor's server line, from the SDK's reading of the lock. */
 export const inspectServer = (status: ServerLockStatus): ServerHealth => {
   if (status._tag === "None") return { status: "none", summary: "No shared server." }
+  if (status._tag === "Unnamed") {
+    return {
+      status: "alive",
+      summary: "A process holds the server lock but has not named itself yet (still starting?)",
+    }
+  }
   const { pid, serverId, rpcUrl } = status.entry
   if (status._tag === "Alive") {
     return { status: "alive", summary: `Shared server alive: pid ${pid}, ${serverId}, ${rpcUrl}` }
@@ -451,6 +467,10 @@ const serverStatus = Command.make("status", {}, () =>
       yield* Console.log("No shared server.")
       return
     }
+    if (status._tag === "Unnamed") {
+      yield* Console.log("A process holds the server lock but has not named itself yet.")
+      return
+    }
 
     yield* Console.log("Shared server:\n")
     yield* Console.log(
@@ -481,9 +501,11 @@ const serverStop = Command.make(
       const line = Match.value(result).pipe(
         Match.tagsExhaustive({
           None: () => "No shared server.",
+          Unnamed: () =>
+            "A process holds the server lock but names no PID to signal; nothing was stopped.",
           NotRunning: () => "No live shared server to stop on this host.",
           Removed: ({ entry }) =>
-            `Shared server ${entry.serverId} (PID ${entry.pid}) was not running; removed its lock.`,
+            `Shared server ${entry.serverId} (PID ${entry.pid}) was not running; removed its lock entry.`,
           NotOwned: ({ entry }) =>
             `Skipped PID ${entry.pid} (${entry.serverId}): identity probe failed`,
           Stopped: ({ entry }) =>
@@ -500,21 +522,49 @@ export const server = Command.make("server", {}, () =>
   Console.log("Usage: gent server <status|stop>"),
 ).pipe(Command.withSubcommands([serverStatus, serverStop]))
 
-const readDoctorExtensionHealth = (
+/** How long the doctor waits for a confirmed server to report extension health. */
+const DOCTOR_QUERY_TIMEOUT = "5 seconds"
+
+/**
+ * Ask the shared server for extension health. The doctor runs when something
+ * is wrong, so it confirms the server's identity first and bounds the query:
+ * a holder that does not answer is reported, not waited on.
+ */
+export const readDoctorExtensionHealth = (
   status: ServerLockStatus,
 ): Effect.Effect<ExtensionDoctorHealth> => {
   if (status._tag === "None") return Effect.succeed(extensionHealthUnavailable("No shared server."))
+  if (status._tag === "Unnamed") {
+    return Effect.succeed(extensionHealthUnavailable("The shared server has not named itself yet."))
+  }
   if (status._tag === "Stale") {
     return Effect.succeed(extensionHealthUnavailable("Shared server lock is stale."))
   }
-  return Effect.scoped(
-    Effect.gen(function* () {
-      const bundle = yield* Gent.client(status.entry.rpcUrl, { cwd: process.cwd() })
-      yield* bundle.runtime.lifecycle.waitForReady
-      const snapshot = yield* bundle.client.extension.listStatus({})
-      return extensionHealthFromSnapshot(snapshot)
-    }),
-  ).pipe(Effect.catch((error) => Effect.succeed(extensionHealthError(String(error)))))
+  const { entry } = status
+  return Effect.gen(function* () {
+    if (!(yield* serverLock.probe(entry))) {
+      return extensionHealthUnavailable(
+        `PID ${entry.pid} holds the server lock but does not answer as a gent server at ${entry.rpcUrl}.`,
+      )
+    }
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const bundle = yield* Gent.client(entry.rpcUrl, { cwd: process.cwd() })
+        yield* bundle.runtime.lifecycle.waitForReady
+        const snapshot = yield* bundle.client.extension.listStatus({})
+        return extensionHealthFromSnapshot(snapshot)
+      }),
+    ).pipe(
+      Effect.timeoutOrElse({
+        duration: DOCTOR_QUERY_TIMEOUT,
+        orElse: () =>
+          Effect.succeed(
+            extensionHealthError(`no answer within ${DOCTOR_QUERY_TIMEOUT} from ${entry.rpcUrl}`),
+          ),
+      }),
+      Effect.catch((error) => Effect.succeed(extensionHealthError(String(error)))),
+    )
+  })
 }
 
 export const doctor = Command.make("doctor", {}, () =>
@@ -527,17 +577,30 @@ export const doctor = Command.make("doctor", {}, () =>
   }),
 )
 
+/** A server holds or answers for the database, named or not: the database is in use. */
+const serverHoldsLock = Predicate.or(Predicate.isTagged("Alive"), Predicate.isTagged("Unnamed"))
+
+/** `storage reset` moves the database away, so it refuses while any server uses it. */
+export const refuseResetWhileServing = (
+  home: string,
+): Effect.Effect<void, CliStartupError, FileSystem.FileSystem | GentPlatform> =>
+  Effect.gen(function* () {
+    const status = yield* serverLock
+      .status(home)
+      .pipe(
+        Effect.mapError((error) => new CliStartupError({ message: error.message, cause: error })),
+      )
+    if (!serverHoldsLock(status)) return
+    yield* Console.error("Error: shared server is running. Stop it with `gent server stop` first.")
+    return yield* new CliStartupError({
+      message: "shared server is running; refusing to reset storage",
+    })
+  })
+
 const storageReset = Command.make("reset", {}, () =>
   Effect.gen(function* () {
     const home = yield* readHome
-    if ((yield* serverLock.status(home))._tag === "Alive") {
-      yield* Console.error(
-        "Error: shared server is running. Stop it with `gent server stop` first.",
-      )
-      return yield* new CliStartupError({
-        message: "shared server is running; refusing to reset storage",
-      })
-    }
+    yield* refuseResetWhileServing(home)
 
     const result = yield* resetStorage(home)
     if (result.archived.length === 0) {

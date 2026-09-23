@@ -9,7 +9,7 @@ import {
   childOutcomeWords,
   DelegateRpc,
   readChildCompletionHeadline,
-} from "@gent/extensions/client.js"
+} from "@gent/extensions/client"
 import { useTheme } from "../theme"
 import { ToolFrame, UserRow } from "../ui"
 import { formatUsageStats, type ToolInput } from "../utils"

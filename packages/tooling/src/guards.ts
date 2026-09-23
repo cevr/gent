@@ -3002,7 +3002,7 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
     packageJson: "packages/extensions/package.json",
     alias: "@gent/extensions",
     mustBePrivate: true,
-    entryPoints: [".", "./index.js", "./client", "./client.js"],
+    entryPoints: [".", "./client"],
   },
   {
     packageJson: "packages/sdk/package.json",

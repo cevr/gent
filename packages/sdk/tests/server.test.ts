@@ -7,9 +7,10 @@ import {
   Option,
   Path,
   Predicate,
+  Exit,
   Ref,
   Schema,
-  type Scope,
+  Scope,
 } from "effect"
 import * as ChildProcessSpawnerNs from "effect/unstable/process/ChildProcessSpawner"
 import { dateFromMillis } from "@gent/core/protocol"
@@ -378,12 +379,11 @@ describe("Build Fingerprint", () => {
 })
 
 /**
- * Trap SIGTERM to this process. With `exits`, a trapped SIGTERM marks the pid
- * gone, so the liveness probe that follows sees the server exit; without it,
- * the pid stays alive, as a server that ignores SIGTERM does.
+ * Trap SIGTERM to this process and run `onSigterm` in its place. A server that
+ * exits on SIGTERM releases its kernel lock there; the default ignores it.
  */
 const signalTrap =
-  (exits: boolean) =>
+  (onSigterm: Effect.Effect<void> = Effect.void) =>
   <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<
@@ -393,16 +393,16 @@ const signalTrap =
   > =>
     Effect.gen(function* () {
       const signals: Array<string | number> = []
+      const runSync = Effect.runSyncWith(yield* Effect.context<never>())
       // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
       const originalKill = process.kill
       const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
         if (pid !== process.pid) return originalKill(pid, signal)
         if (signal === "SIGTERM") {
           signals.push(signal)
+          runSync(onSigterm)
           return true
         }
-        // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- the trap keeps process.kill's contract: a gone pid throws ESRCH
-        if (exits && signals.length > 0) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" })
         return originalKill(pid, signal)
       }
       yield* Effect.acquireRelease(
@@ -418,8 +418,19 @@ const signalTrap =
       return { result, signals }
     })
 
-const withSignalTrap = signalTrap(true)
-const withIgnoredSigterm = signalTrap(false)
+const withSignalTrap = signalTrap()
+
+/**
+ * Hold the kernel lock as another server would, in a scope of its own. The
+ * returned effect releases it, as that server's exit does.
+ */
+const holdAsAnotherServer = (home: string) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make()
+    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+    expect(yield* serverLock.hold(home).pipe(Scope.provide(scope))).toBe(true)
+    return { release: Scope.close(scope, Exit.void) }
+  })
 
 describe("Server Lock", () => {
   it.scopedLive(
@@ -536,6 +547,7 @@ describe("Server Lock", () => {
           rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
         })
         yield* serverLock.write(home, entryWithEndpoint)
+        yield* holdAsAnotherServer(home)
 
         const server = yield* Gent.server({
           cwd: `${process.cwd()}/other-workspace`,
@@ -694,15 +706,69 @@ const lockWithIdentity = (
   })
 
 describe("Server Lock Ownership", () => {
-  it.scopedLive("status reads a live pid as alive and a gone pid as stale", () =>
+  /** Start a sqlite server on `home` while the lock names `pid`, which no gent server owns. */
+  const startOverLockNaming = (pid: number) =>
+    Effect.gen(function* () {
+      const home = yield* makeTmpHomeScoped
+      const dbPath = (yield* dataPaths(home)).dbPath
+      const buildFingerprint = yield* (yield* BuildFingerprint).current
+      yield* serverLock.write(
+        home,
+        makeEntry({ pid, dbPath, buildFingerprint, rpcUrl: "http://127.0.0.1:1/rpc" }),
+      )
+      const { result, signals } = yield* Gent.server({
+        cwd: home,
+        state: Gent.state.sqlite({ home }),
+        provider: Gent.provider.mock(),
+      }).pipe(withSignalTrap)
+      expect(result._tag).toBe("Owned")
+      expect(signals).toEqual([])
+      expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).not.toBe("test-server-1")
+    })
+
+  it.scopedLive("a lock whose pid now belongs to another live process does not block startup", () =>
+    provideFs(startOverLockNaming(process.ppid)),
+  )
+
+  it.scopedLive("a lock that names the new process's own pid does not block startup", () =>
+    provideFs(startOverLockNaming(process.pid)),
+  )
+
+  it.scopedLive(
+    "two concurrent starts on one database give one owner and one attached client",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const options = {
+            cwd: home,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }
+          const servers = yield* Effect.all([Gent.server(options), Gent.server(options)], {
+            concurrency: "unbounded",
+          }).pipe(Effect.timeout("20 seconds"))
+          expect(servers.map((server) => server._tag).toSorted()).toEqual(["Attached", "Owned"])
+          expect(servers[0].url).toBe(servers[1].url)
+        }),
+      ),
+    30_000,
+  )
+
+  it.scopedLive("status reads the kernel lock, not the pid the entry names", () =>
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         expect((yield* serverLock.status(home))._tag).toBe("None")
+        // A live pid under a free kernel lock is a server that is gone.
         yield* serverLock.write(home, makeEntry())
-        expect((yield* serverLock.status(home))._tag).toBe("Alive")
-        yield* serverLock.write(home, makeEntry({ pid: 99999999 }))
         expect((yield* serverLock.status(home))._tag).toBe("Stale")
+        const { release } = yield* holdAsAnotherServer(home)
+        expect((yield* serverLock.status(home))._tag).toBe("Alive")
+        yield* serverLock.remove(home, "test-server-1")
+        expect((yield* serverLock.status(home))._tag).toBe("Unnamed")
+        yield* release
+        expect((yield* serverLock.status(home))._tag).toBe("None")
         yield* serverLock.write(home, makeEntry({ hostname: "alien-host" }))
         expect((yield* serverLock.status(home))._tag).toBe("None")
       }),
@@ -722,6 +788,7 @@ describe("Server Lock Ownership", () => {
           const holder = yield* lockWithIdentity(home, makeEntry({ dbPath, buildFingerprint }), {
             pid: 99999999,
           })
+          yield* holdAsAnotherServer(home)
           const { result, signals } = yield* Gent.server({
             cwd: home,
             state: Gent.state.sqlite({ home }),
@@ -735,27 +802,141 @@ describe("Server Lock Ownership", () => {
       ),
   )
 
-  it.scopedLive("a holder still running after SIGTERM blocks a new server", () =>
+  it.scopedLive("a server of another build on the database blocks a new start unsignalled", () =>
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        // Another build on the same database: the resolver must stop it first.
+        // Another build is open on the same database: a TUI, perhaps with a turn in flight.
         const dbPath = (yield* dataPaths(home)).dbPath
         const holder = yield* lockWithIdentity(
           home,
           makeEntry({ dbPath, buildFingerprint: "another-build" }),
           {},
         )
+        yield* holdAsAnotherServer(home)
         const { result, signals } = yield* Gent.server({
           cwd: home,
           state: Gent.state.sqlite({ home }),
           provider: Gent.provider.mock(),
-        }).pipe(Effect.flip, withIgnoredSigterm)
+        }).pipe(Effect.flip, withSignalTrap)
         expect(result._tag).toBe("@gent/core/GentConnectionError")
-        expect(signals).toEqual(["SIGTERM"])
+        expect(result.message).toContain(`PID ${holder.pid}`)
+        expect(result.message).toContain("another-build")
+        expect(result.message).toContain("gent server stop")
+        expect(signals).toEqual([])
         expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
       }),
     ),
+  )
+
+  it.scopedLive(
+    "an older-build server that answers but holds no kernel lock blocks startup unsignalled",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const dbPath = (yield* dataPaths(home)).dbPath
+          // A server from before the kernel lock: it serves its identity but holds no lock.
+          const holder = yield* lockWithIdentity(
+            home,
+            makeEntry({ dbPath, buildFingerprint: "older-build" }),
+            {},
+          )
+          expect((yield* serverLock.status(home))._tag).toBe("Alive")
+          const { result, signals } = yield* Gent.server({
+            cwd: home,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }).pipe(Effect.flip, withSignalTrap)
+          expect(result._tag).toBe("@gent/core/GentConnectionError")
+          expect(result.message).toContain(`PID ${holder.pid}`)
+          expect(result.message).toContain("older-build")
+          expect(signals).toEqual([])
+          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
+        }),
+      ),
+  )
+
+  it.scopedLive(
+    "an identity endpoint that sends headers and never finishes its body is bounded",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const endpoint = yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun endpoint that stalls its body
+              Bun.serve({
+                port: 0,
+                fetch: () =>
+                  new Response(
+                    new ReadableStream({
+                      start: (controller) => controller.enqueue(new TextEncoder().encode("{")),
+                    }),
+                    { headers: { "content-type": "application/json" } },
+                  ),
+              }),
+            ),
+            (server) => Effect.promise(() => server.stop(true)),
+          )
+          const entry = makeEntry({ rpcUrl: `${new URL(endpoint.url).origin}/rpc` })
+          const answered = yield* serverLock.probe(entry).pipe(Effect.timeout("5 seconds"))
+          expect(answered).toBe(false)
+        }),
+      ),
+    10_000,
+  )
+
+  it.scopedLive(
+    "a crashed server's lock is released by the OS, even while its pid is reused",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const paths = yield* dataPaths(home)
+          const buildFingerprint = yield* (yield* BuildFingerprint).current
+          yield* (yield* FileSystem.FileSystem).makeDirectory(paths.dataDir, { recursive: true })
+          // A separate process takes the kernel lock the way a server does, then dies by SIGKILL.
+          const holder = yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              // oxlint-disable-next-line effect/noGlobals -- the crash needs a real second process
+              Bun.spawn(
+                [
+                  process.execPath,
+                  "-e",
+                  `const { Database } = require("bun:sqlite"); globalThis.lock = new Database(process.argv.at(-1), { create: true }); globalThis.lock.exec("BEGIN EXCLUSIVE"); console.log("held"); setInterval(() => {}, 1000)`,
+                  paths.serverKernelLock,
+                ],
+                { stdout: "pipe" },
+              ),
+            ),
+            (child) => Effect.sync(() => child.kill("SIGKILL")),
+          )
+          const firstLine = yield* Effect.promise(() => holder.stdout.getReader().read())
+          expect(new TextDecoder().decode(firstLine.value)).toContain("held")
+          yield* serverLock.write(
+            home,
+            makeEntry({ pid: holder.pid, dbPath: paths.dbPath, buildFingerprint }),
+          )
+          expect((yield* serverLock.status(home))._tag).toBe("Alive")
+
+          holder.kill("SIGKILL")
+          yield* Effect.promise(() => holder.exited)
+          expect((yield* serverLock.status(home))._tag).toBe("Stale")
+          // The pid now names this process, which is alive and serves nothing yet.
+          yield* serverLock.write(
+            home,
+            makeEntry({ pid: process.pid, dbPath: paths.dbPath, buildFingerprint }),
+          )
+          const { result, signals } = yield* Gent.server({
+            cwd: home,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }).pipe(withSignalTrap)
+          expect(result._tag).toBe("Owned")
+          expect(signals).toEqual([])
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
 })
 
@@ -776,7 +957,16 @@ describe("serverLock.stop", () => {
         rpcUrl: `${new URL(endpoint.url).origin}/rpc`,
       })
       yield* serverLock.write(home, locked)
-      return locked
+      const held = yield* holdAsAnotherServer(home)
+      // The server exits: its kernel lock goes, and its endpoint stops answering.
+      const release = held.release.pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            void endpoint.stop(true)
+          }),
+        ),
+      )
+      return { locked, release }
     })
 
   const identityOf = (entry: ServerLockEntry) => ({
@@ -800,11 +990,66 @@ describe("serverLock.stop", () => {
     ),
   )
 
-  it.scopedLive("a gone pid keeps its lock unless the caller asks to remove it", () =>
+  it.scopedLive("stale-entry cleanup never removes the entry a new owner writes", () =>
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        yield* serverLock.write(home, makeEntry({ pid: 99999999 }))
+        const lockPath = (yield* dataPaths(home)).serverLock
+        const base = yield* FileSystem.FileSystem
+        const newOwner = makeEntry({ serverId: "new-owner" })
+        const newOwnerScope = yield* Scope.make()
+        yield* Effect.addFinalizer(() => Scope.close(newOwnerScope, Exit.void))
+        let paused = false
+        let newOwnerTookLock = false
+        // Between the cleanup's read and its removal, a new server tries to own the database.
+        const racing = FileSystem.FileSystem.of({
+          ...base,
+          remove: (path, options) => {
+            if (path !== lockPath || paused) return base.remove(path, options)
+            paused = true
+            return Effect.gen(function* () {
+              if (yield* serverLock.hold(home).pipe(Scope.provide(newOwnerScope))) {
+                newOwnerTookLock = true
+                yield* serverLock.write(home, newOwner)
+              }
+            }).pipe(
+              Effect.orDie,
+              Effect.provideService(FileSystem.FileSystem, base),
+              Effect.andThen(base.remove(path, options)),
+            )
+          },
+        })
+        yield* serverLock.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
+        const result = yield* serverLock
+          .stop(home, { removeStale: true })
+          .pipe(Effect.provideService(FileSystem.FileSystem, racing))
+        expect(result._tag).toBe("Removed")
+        expect(paused).toBe(true)
+        if (newOwnerTookLock) {
+          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe("new-owner")
+        }
+      }),
+    ),
+  )
+
+  it.scopedLive("a held lock that names no pid signals nothing", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        yield* holdAsAnotherServer(home)
+        const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
+        expect(result._tag).toBe("Unnamed")
+        expect(signals).toEqual([])
+      }),
+    ),
+  )
+
+  it.scopedLive("a free kernel lock keeps its entry unless the caller asks to remove it", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        // The pid is this live process: only the kernel lock proves the server gone.
+        yield* serverLock.write(home, makeEntry())
         expect((yield* serverLock.stop(home))._tag).toBe("NotRunning")
         expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
         expect((yield* serverLock.stop(home, { removeStale: true }))._tag).toBe("Removed")
@@ -831,9 +1076,23 @@ describe("serverLock.stop", () => {
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         yield* serverLock.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
+        yield* holdAsAnotherServer(home)
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("NotOwned")
         expect(signals).toEqual([])
+      }),
+    ),
+  )
+
+  it.scopedLive("a confirmed identity that ignores SIGTERM keeps its lock", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        yield* lockWithEndpoint(home, identityOf)
+        const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
+        expect(result._tag).toBe("StillRunning")
+        expect(signals).toEqual(["SIGTERM"])
+        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
       }),
     ),
   )
@@ -842,8 +1101,8 @@ describe("serverLock.stop", () => {
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        yield* lockWithEndpoint(home, identityOf)
-        const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
+        const { release } = yield* lockWithEndpoint(home, identityOf)
+        const { result, signals } = yield* serverLock.stop(home).pipe(signalTrap(release))
         expect(result._tag).toBe("Stopped")
         expect(signals).toEqual(["SIGTERM"])
         expect(Option.isNone(yield* serverLock.read(home))).toBe(true)

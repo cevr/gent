@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema } from "effect"
 import {
   Model,
@@ -18,6 +18,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { BunFileSystem } from "@effect/platform-bun"
 import {
   driverCatalog,
+  freshEnoughAt,
   GoogleExtension,
   MistralExtension,
   modelsDevCatalog,
@@ -439,4 +440,21 @@ describe("models.dev catalog", () => {
       expect(online.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
     }).pipe(Effect.provide(platformLayer)),
   )
+})
+
+describe("freshEnoughAt", () => {
+  // A token in its last minute is refreshed before it goes on the wire.
+  const now = 1_700_000_000_000
+
+  test("true when expiry is more than 60s away", () => {
+    expect(freshEnoughAt(now + 61_000, now)).toBe(true)
+  })
+
+  test("false at exactly the 60s threshold", () => {
+    expect(freshEnoughAt(now + 60_000, now)).toBe(false)
+  })
+
+  test("false when expiry is in the past", () => {
+    expect(freshEnoughAt(now - 1, now)).toBe(false)
+  })
 })

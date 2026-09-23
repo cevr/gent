@@ -10,6 +10,7 @@ import {
   Option,
   Path,
   type PlatformError,
+  Result,
   Schema,
 } from "effect"
 import {
@@ -140,13 +141,14 @@ export const installBundledSkills = Effect.fn("Skills.installBundled")(function*
 const SkillLevel = Schema.Literals(["local", "global"])
 type SkillLevel = typeof SkillLevel.Type
 
-export class Skill extends Schema.Class<Skill>("Skill")({
+export const SkillEntry = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
   filePath: Schema.String,
   content: Schema.String,
   level: SkillLevel,
-}) {}
+})
+export type SkillEntry = typeof SkillEntry.Type
 
 // Skills Service Interface
 //
@@ -157,7 +159,7 @@ export class Skill extends Schema.Class<Skill>("Skill")({
 // resource start, not a method on the read interface.
 
 interface SkillsService {
-  readonly list: Effect.Effect<ReadonlyArray<Skill>>
+  readonly list: Effect.Effect<ReadonlyArray<SkillEntry>>
 }
 
 export class Skills extends Context.Service<Skills, SkillsService>()(
@@ -177,34 +179,54 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
 
-        const loadSkillsFromDir = (
-          dir: string,
-          level: SkillLevel,
-        ): Effect.Effect<Skill[], PlatformError.PlatformError> =>
+        // A skills dir is user-owned and shared across workspaces: one
+        // dangling link or unreadable file must not fail the branch loop.
+        // Each failing path is skipped with a warning.
+        const skipOnError =
+          (target: string) =>
+          <A>(effect: Effect.Effect<A, PlatformError.PlatformError>) =>
+            effect.pipe(
+              Effect.asSome,
+              Effect.catch((error) =>
+                Effect.logWarning("skills: skipped unreadable path").pipe(
+                  Effect.annotateLogs({ path: target, error: String(error) }),
+                  Effect.as(Option.none<A>()),
+                ),
+              ),
+            )
+
+        const loadSkillsFromDir = (dir: string, level: SkillLevel): Effect.Effect<SkillEntry[]> =>
           Effect.gen(function* () {
-            const exists = yield* fs.exists(dir)
+            const exists = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))
             if (!exists) return []
 
-            const entries = yield* fs.readDirectory(dir)
-            const result: Skill[] = []
+            const entries = yield* fs.readDirectory(dir).pipe(skipOnError(dir))
+            if (Option.isNone(entries)) return []
+            const result: SkillEntry[] = []
 
-            for (const entry of entries) {
+            for (const entry of entries.value) {
               const entryPath = path.join(dir, entry)
-              const stat = yield* fs.stat(entryPath)
+              const stat = yield* fs.stat(entryPath).pipe(skipOnError(entryPath))
+              if (Option.isNone(stat)) continue
 
               // A skill is either `<dir>/<name>.md` or `<dir>/<name>/SKILL.md`.
               let filePath = Option.none<string>()
-              if (stat.type === "File" && entry.endsWith(".md")) {
+              if (stat.value.type === "File" && entry.endsWith(".md")) {
                 filePath = Option.some(entryPath)
-              } else if (stat.type === "Directory") {
+              } else if (stat.value.type === "Directory") {
                 const skillPath = path.join(entryPath, "SKILL.md")
-                if (yield* fs.exists(skillPath)) filePath = Option.some(skillPath)
+                const hasSkill = yield* fs.exists(skillPath).pipe(Effect.orElseSucceed(() => false))
+                if (hasSkill) filePath = Option.some(skillPath)
               }
               if (Option.isNone(filePath)) continue
 
-              const parsed = parseSkillFile(yield* fs.readFileString(filePath.value), entry)
+              const text = yield* fs
+                .readFileString(filePath.value)
+                .pipe(skipOnError(filePath.value))
+              if (Option.isNone(text)) continue
+              const parsed = parseSkillFile(text.value, entry)
               if (Option.isSome(parsed)) {
-                result.push(new Skill({ ...parsed.value, filePath: filePath.value, level }))
+                result.push({ ...parsed.value, filePath: filePath.value, level })
               }
             }
 
@@ -229,7 +251,7 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
         // Load every dir at one level, in order; the first dir to name a skill wins.
         const loadLevel = (dirs: ReadonlyArray<string>, level: SkillLevel) =>
           Effect.gen(function* () {
-            const skills: Skill[] = []
+            const skills: SkillEntry[] = []
             const seen = new Set<string>()
             for (const dir of dirs) {
               for (const skill of yield* loadSkillsFromDir(dir, level)) {
@@ -254,11 +276,14 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
           const gitRoot = yield* findGitRoot
           const stopAt = Option.getOrElse(gitRoot, () => options.cwd)
 
+          // A local dir that is also a global dir (a session in the home
+          // directory) is listed once, as global.
           const localDirs: string[] = []
           let current = options.cwd
           while (true) {
             for (const d of SKILL_DIRS) {
-              localDirs.push(path.join(current, d))
+              const dir = path.join(current, d)
+              if (!globalDirs.includes(dir)) localDirs.push(dir)
             }
             if (current === stopAt) break
             const parent = path.dirname(current)
@@ -279,72 +304,93 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
       }),
     )
 
-  static Test = (testSkills: ReadonlyArray<Skill> = []): Layer.Layer<Skills> =>
+  static Test = (testSkills: ReadonlyArray<SkillEntry> = []): Layer.Layer<Skills> =>
     Layer.succeed(Skills, Skills.of({ list: Effect.succeed(testSkills) }))
 }
 
 // Parse skill file with frontmatter
 
+/** The frontmatter keys a skill reads; any other key, or a non-text value, is ignored. */
+const SkillFrontmatter = Schema.Struct({
+  name: Schema.optionalKey(Schema.Unknown),
+  description: Schema.optionalKey(Schema.Unknown),
+})
+const decodeFrontmatter = Schema.decodeUnknownOption(SkillFrontmatter)
+const decodeText = Schema.decodeUnknownOption(Schema.NonEmptyString)
+
+interface SkillHeader {
+  readonly name: Option.Option<string>
+  readonly description: Option.Option<string>
+}
+
+const NO_HEADER: SkillHeader = { name: Option.none(), description: Option.none() }
+
+/** One prompt line: a folded or literal block scalar collapses to single spaces. */
+const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
+
+/** Parse YAML frontmatter; malformed YAML or a non-mapping reads as no header. */
+const parseFrontmatter = (yaml: string): SkillHeader =>
+  Option.match(
+    // oxlint-disable-next-line gent/no-bun-outside-adapter -- Pure YAML parse with no Effect platform service; the cell runtime is full Bun.
+    Result.try(() => Bun.YAML.parse(yaml)).pipe(
+      Result.getSuccess,
+      Option.flatMap(decodeFrontmatter),
+    ),
+    {
+      onNone: () => NO_HEADER,
+      onSome: (raw) => {
+        const text = (field: typeof raw.name) =>
+          decodeText(field).pipe(
+            Option.map(oneLine),
+            Option.filter((line) => line.length > 0),
+          )
+        return { name: text(raw.name), description: text(raw.description) }
+      },
+    },
+  )
+
 export function parseSkillFile(
   content: string,
   filename: string,
 ): Option.Option<{ name: string; description: string; content: string }> {
+  let header = NO_HEADER
+  let body = content
   const lines = content.split("\n")
-
-  // Check for YAML frontmatter
   if (lines[0]?.trim() === "---") {
     const endIndex = lines.findIndex((l, i) => i > 0 && l.trim() === "---")
     if (endIndex > 0) {
-      const frontmatter = lines.slice(1, endIndex).join("\n")
-      const body = lines
+      header = parseFrontmatter(lines.slice(1, endIndex).join("\n"))
+      body = lines
         .slice(endIndex + 1)
         .join("\n")
         .trim()
-
-      // Simple YAML parsing for name and description
-      const nameMatch = frontmatter.match(/^name:\s*(.+)$/m)
-      const descMatch = frontmatter.match(/^description:\s*(.+)$/m)
-
-      const nameValue = Option.fromNullishOr(nameMatch?.[1])
-      const descValue = Option.fromNullishOr(descMatch?.[1])
-      if (Option.isSome(nameValue) && Option.isSome(descValue)) {
-        return Option.some({
-          name: nameValue.value.trim(),
-          description: descValue.value.trim(),
-          content: body,
-        })
-      }
     }
   }
 
-  // No frontmatter - use filename as name
-  const name = filename.replace(/\.md$/, "").replace(/^SKILL$/, filename.replace(/\.md$/, ""))
-
-  // Try to extract description from first paragraph
-  const firstPara = content
-    .split("\n\n")[0]
-    ?.replace(/^#.*\n/, "")
-    .trim()
-
-  return Option.some({
-    name,
-    description: Option.getOrElse(
-      Option.fromNullishOr(firstPara).pipe(Option.map((value) => value.slice(0, 100))),
-      () => `Skill: ${name}`,
+  const name = Option.getOrElse(header.name, () => filename.replace(/\.md$/, ""))
+  // Without a description key, the first body paragraph (minus a heading) describes the skill.
+  const description = header.description.pipe(
+    Option.orElse(() =>
+      Option.fromNullishOr(body.split("\n\n")[0]).pipe(
+        Option.map((paragraph) => oneLine(paragraph.replace(/^#.*(\n|$)/, "")).slice(0, 100)),
+        Option.filter((text) => text.length > 0),
+      ),
     ),
-    content,
-  })
+    Option.getOrElse(() => `Skill: ${name}`),
+  )
+
+  return Option.some({ name, description, content: body })
 }
 
 // Format skills for system prompt
 
-export const formatSkillsForPrompt = (skills: ReadonlyArray<Skill>): string => {
+export const formatSkillsForPrompt = (skills: ReadonlyArray<SkillEntry>): string => {
   if (skills.length === 0) return ""
 
   const globalSkills = skills.filter((s) => s.level === "global")
   const localSkills = skills.filter((s) => s.level === "local")
 
-  const formatList = (list: ReadonlyArray<Skill>): string =>
+  const formatList = (list: ReadonlyArray<SkillEntry>): string =>
     list
       .map(
         (s) =>
@@ -372,9 +418,6 @@ When you see \`$skill-name\`, read the local skill first, or the global skill if
 // ── protocol ────────────────────────────────────────────────────────────────
 
 const SKILLS_EXTENSION_ID = ExtensionId.make("@gent/skills")
-
-export const SkillEntry = Schema.Struct(Skill.fields)
-export type SkillEntry = typeof SkillEntry.Type
 
 export const SkillsRpc = defineRequests(SKILLS_EXTENSION_ID, {
   ListSkills: request({

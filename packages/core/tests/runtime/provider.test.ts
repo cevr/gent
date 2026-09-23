@@ -2,6 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
   Context,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -30,6 +31,7 @@ import {
   AuthInfo,
   AuthMethod,
   type AuthService,
+  serializeAuthStore,
   ListAuthProvidersPayload,
   ModelResolver,
   ProviderAuth,
@@ -241,20 +243,24 @@ const unusedResolution = (): Effect.Effect<ProviderResolution> =>
 
 const authLayer = Layer.succeed(
   Auth,
-  Auth.of({
-    get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
-    set: () => Effect.void,
-    remove: () => Effect.void,
-  }),
+  Auth.of(
+    serializeAuthStore({
+      get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
+      set: () => Effect.void,
+      remove: () => Effect.void,
+    }),
+  ),
 )
 
 const failingReadAuthLayer = Layer.succeed(
   Auth,
-  Auth.of({
-    get: () => Effect.fail(new AuthError({ message: "read failed" })),
-    set: () => Effect.void,
-    remove: () => Effect.void,
-  }),
+  Auth.of(
+    serializeAuthStore({
+      get: () => Effect.fail(new AuthError({ message: "read failed" })),
+      set: () => Effect.void,
+      remove: () => Effect.void,
+    }),
+  ),
 )
 
 const catalogModel = (id: string, releaseDate?: string): Model => {
@@ -386,16 +392,18 @@ describe("model catalog resolution", () => {
     Effect.gen(function* () {
       const oauthLayer = Layer.succeed(
         Auth,
-        Auth.of({
-          get: (providerId) => {
-            if (providerId !== "openai") {
-              return Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>()))
-            }
-            return Effect.succeed(AuthInfo.cases.Api.make({ type: "api", key: "sk-openai" }))
-          },
-          set: () => Effect.void,
-          remove: () => Effect.void,
-        }),
+        Auth.of(
+          serializeAuthStore({
+            get: (providerId) => {
+              if (providerId !== "openai") {
+                return Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>()))
+              }
+              return Effect.succeed(AuthInfo.cases.Api.make({ type: "api", key: "sk-openai" }))
+            },
+            set: () => Effect.void,
+            remove: () => Effect.void,
+          }),
+        ),
       )
       const seen: Array<string> = []
       const registry = yield* loadRegistryWithDrivers(
@@ -578,6 +586,59 @@ describe("Auth", () => {
         const auth = yield* Auth
         expect(yield* auth.get("does-not-exist")).toBeUndefined()
       }).pipe(Effect.provide(Auth.Test())),
+    )
+
+    it.live("an update in flight holds back a set for the same provider", () =>
+      Effect.gen(function* () {
+        const auth = yield* Auth
+        const oauth = (refresh: string) =>
+          AuthInfo.cases.Oauth.make({ type: "oauth", access: "a", refresh, expires: 0 })
+        const storedRefresh = auth.get("openai").pipe(
+          Effect.map((info) =>
+            Option.fromUndefinedOr(info).pipe(
+              Option.flatMap((stored) => {
+                if (stored.type !== "oauth") return Option.none<string>()
+                return Option.some(stored.refresh)
+              }),
+            ),
+          ),
+        )
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const updating = yield* auth
+          .update("openai", () =>
+            Effect.gen(function* () {
+              yield* Deferred.completeWith(entered, Effect.void)
+              yield* Deferred.await(release)
+              const written: readonly [boolean, Option.Option<AuthInfo>] = [
+                true,
+                Option.some(oauth("from-update")),
+              ]
+              return written
+            }),
+          )
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(entered)
+        const setting = yield* auth.set("openai", oauth("from-set")).pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+        expect(yield* storedRefresh).toEqual(Option.some("seed"))
+        yield* Deferred.completeWith(release, Effect.void)
+        yield* Fiber.join(updating)
+        yield* Fiber.join(setting)
+        expect(yield* storedRefresh).toEqual(Option.some("from-set"))
+      }).pipe(
+        Effect.timeout("4 seconds"),
+        Effect.provide(
+          Auth.Test({
+            openai: AuthInfo.cases.Oauth.make({
+              type: "oauth",
+              access: "a",
+              refresh: "seed",
+              expires: 0,
+            }),
+          }),
+        ),
+      ),
     )
   })
 
@@ -857,11 +918,13 @@ const testResolvedProviderAuth = resolveExtensions([
 const testRegistry = ExtensionRegistry.fromResolved(testResolvedProviderAuth)
 const failingAuthStoreLayer = Layer.succeed(
   Auth,
-  Auth.of({
-    get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
-    set: () => Effect.fail(new AuthError({ message: "write failed" })),
-    remove: () => Effect.void,
-  } satisfies AuthService),
+  Auth.of(
+    serializeAuthStore({
+      get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
+      set: () => Effect.fail(new AuthError({ message: "write failed" })),
+      remove: () => Effect.void,
+    }),
+  ),
 )
 describe("ProviderAuth", () => {
   it.live("extension authorize + callback stores credentials", () =>
@@ -966,11 +1029,11 @@ describe("ProviderAuth", () => {
 
 // oxlint-disable-next-line effect/noNullish -- AuthService uses undefined to represent missing credentials.
 const missingAuthInfo: AuthInfo | undefined = undefined
-const testAuthStorage: AuthService = {
+const testAuthStorage: AuthService = serializeAuthStore({
   get: () => Effect.succeed(missingAuthInfo),
   set: () => Effect.void,
   remove: () => Effect.void,
-}
+})
 /** Create a fake upstream model with a stub LanguageModel layer */
 const fakeResolution = (): ProviderResolution =>
   AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))

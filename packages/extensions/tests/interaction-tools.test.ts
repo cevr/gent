@@ -102,6 +102,49 @@ describe("AskUser Tool", () => {
     )
   })
 
+  it.live("an approval without notes answers each question with an empty list", () => {
+    const { ctx } = makeCtx(Effect.succeed({ approved: true }))
+
+    return runToolWithCtx(
+      AskUserTool,
+      { questions: [{ question: "One?" }, { question: "Two?" }, { question: "Three?" }] },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.answers).toEqual([[], [], []])
+      }),
+    )
+  })
+
+  it.live("a decoded answer list is normalized to one list per question", () => {
+    const run = (notes: string) =>
+      runToolWithCtx(
+        AskUserTool,
+        { questions: [{ question: "One?" }, { question: "Two?" }] },
+        makeCtx(Effect.succeed({ approved: true, notes })).ctx,
+      )
+    return Effect.gen(function* () {
+      // A short list is padded with empty answers.
+      expect((yield* run('[["A"]]')).answers).toEqual([["A"], []])
+      // A long list is truncated to the question count.
+      expect((yield* run('[["A"],["B"],["C"]]')).answers).toEqual([["A"], ["B"]])
+    })
+  })
+
+  it.live("free-text notes answer the first question and leave the rest empty", () => {
+    const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "free text" }))
+
+    return runToolWithCtx(
+      AskUserTool,
+      { questions: [{ question: "One?" }, { question: "Two?" }] },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.answers).toEqual([["free text"], []])
+      }),
+    )
+  })
+
   it.live("cancel returns cancelled flag with empty answers", () => {
     const { ctx } = makeCtx(Effect.succeed({ approved: false }))
 
