@@ -934,9 +934,11 @@ describe("Composer submit", () => {
       // The reason says the command ran, so the reader does not run it again.
       const reason = Option.flatMap(client, (c) => Option.fromNullishOr(c.error()))
       expect(Option.exists(reason, (m) => m.includes("ran"))).toBe(true)
-      yield* waitForFrame(setup, (frame) => frame.includes("tu1-out"), "output restored")
+      // The output is as large as a paste, so it comes back as a placeholder.
+      yield* waitForFrame(setup, (frame) => frame.includes("[Pasted ~3 lines"), "output restored")
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, () => sends === 2, "sent again")
+      expect(submitted[1]).toBe(submitted[0])
       expect(submitted[1]).toContain("tu1-out")
       expect(yield* fs.readFileString(`${dir}/count`)).toBe("ran\n")
     }).pipe(Effect.timeout("10 seconds")),

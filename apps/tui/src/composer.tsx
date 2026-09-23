@@ -777,6 +777,12 @@ function useComposerController(): ComposerController {
           mode: sc.interactionState().mode,
         }),
         apply: writeDraft,
+        // A refused text as large as a paste comes back as one: a placeholder
+        // that expands at submit, not the whole text written into the draft.
+        write: (text) => {
+          if (isLargePaste(text)) return paste.createPlaceholder(text)
+          return text
+        },
       }),
     )
   })

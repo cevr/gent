@@ -540,6 +540,8 @@ interface RefusedSubmission {
 interface ComposerLink {
   readonly current: () => ComposerDraft
   readonly apply: (draft: ComposerDraft) => void
+  /** How this composer writes a refused text: a large one as a paste placeholder. */
+  readonly write: (text: string) => string
 }
 
 /**
@@ -563,9 +565,14 @@ interface ComposerMemory {
   readonly history: PromptHistoryStore
 }
 
+/** A refused text and how it was written into the draft. */
+interface WrittenRefusal extends RefusedSubmission {
+  readonly written: string
+}
+
 /** The refused texts the draft starts with, as last written there. */
 interface RefusedBlock {
-  readonly entries: ReadonlyArray<RefusedSubmission>
+  readonly entries: ReadonlyArray<WrittenRefusal>
   readonly shown: string
 }
 
@@ -584,20 +591,24 @@ interface RefusedMerge {
   readonly block: RefusedBlock
 }
 
+const writeAsIs = (text: string): string => text
+
 export const mergeRefused = (
   current: ComposerDraft,
   block: RefusedBlock,
   refused: RefusedSubmission,
+  write: (text: string) => string = writeAsIs,
 ): RefusedMerge => {
+  const added: WrittenRefusal = { ...refused, written: write(refused.text) }
   // The block stands whole: the draft is it, or it and then a separator.
   const kept =
     block.shown.length > 0 &&
     (current.draft === block.shown ||
       current.draft.startsWith(`${block.shown}${REFUSED_SEPARATOR}`))
-  let entries: ReadonlyArray<RefusedSubmission> = [refused]
+  let entries: ReadonlyArray<WrittenRefusal> = [added]
   let typed = current.draft
   if (kept) {
-    entries = [...block.entries, refused].toSorted((a, b) => a.order - b.order)
+    entries = [...block.entries, added].toSorted((a, b) => a.order - b.order)
     typed = current.draft.slice(block.shown.length + REFUSED_SEPARATOR.length)
   }
   const hasTyped = typed.trim().length > 0
@@ -606,7 +617,7 @@ export const mergeRefused = (
     if (shell && !allShell) return `!${text}`
     return text
   }
-  const shown = entries.map((entry) => render(entry.text, entry.shell)).join(REFUSED_SEPARATOR)
+  const shown = entries.map((entry) => render(entry.written, entry.shell)).join(REFUSED_SEPARATOR)
   let draft = shown
   if (hasTyped) draft = `${shown}${REFUSED_SEPARATOR}${render(typed, current.mode === "shell")}`
   let mode: ComposerDraft["mode"] = "editing"
@@ -653,6 +664,8 @@ export function ComposerMemoryProvider(props: ParentProps) {
         current,
         Option.getOrElse(Option.fromUndefinedOr(blocks.get(branchId)), () => EMPTY_REFUSED_BLOCK),
         refused,
+        // A kept draft is stored as text; only a composer on screen holds placeholders.
+        Option.match(live, { onSome: (link) => link.write, onNone: () => writeAsIs }),
       )
       blocks.set(branchId, merged.block)
       Option.match(live, {
