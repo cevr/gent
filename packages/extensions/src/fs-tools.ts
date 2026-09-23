@@ -3,14 +3,12 @@ import {
   Context,
   Effect,
   FileSystem,
-  HashMap,
   Layer,
   Option,
   Path,
   Result,
   Schema,
   type Scope,
-  TxRef,
 } from "effect"
 import picomatch from "picomatch"
 import { FileFinder as NativeFileFinder } from "@ff-labs/fff-bun"
@@ -65,8 +63,6 @@ export class FileIndex extends Context.Service<FileIndex, FileIndexService>()(
 
 type PathMatcher = (path: string) => boolean
 
-type GitignoreCacheRef = TxRef.TxRef<HashMap.HashMap<string, ReadonlyArray<PathMatcher>>>
-
 /** The walk stops with an error past this many files; the caller narrows `path`. */
 const FALLBACK_MAX_FILES = 100_000
 
@@ -107,23 +103,12 @@ const makeFallbackService: Effect.Effect<
 > = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const cacheRef: GitignoreCacheRef = yield* TxRef.make(
-    HashMap.empty<string, ReadonlyArray<PathMatcher>>(),
-  )
-
+  // Read on every listing: one small file, and an edit applies at once.
   const loadGitignore = (cwd: string): Effect.Effect<ReadonlyArray<PathMatcher>> =>
-    Effect.gen(function* () {
-      const cache = yield* TxRef.get(cacheRef)
-      const cached = HashMap.get(cache, cwd)
-      if (cached._tag === "Some") return cached.value
-
-      const patterns = yield* fs.readFileString(path.join(cwd, ".gitignore")).pipe(
-        Effect.map(parseGitignorePatterns),
-        Effect.orElseSucceed((): ReadonlyArray<PathMatcher> => []),
-      )
-      yield* TxRef.update(cacheRef, (m) => HashMap.set(m, cwd, patterns))
-      return patterns
-    })
+    fs.readFileString(path.join(cwd, ".gitignore")).pipe(
+      Effect.map(parseGitignorePatterns),
+      Effect.orElseSucceed((): ReadonlyArray<PathMatcher> => []),
+    )
 
   const scanAllFiles = (cwd: string): Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError> =>
     Effect.gen(function* () {
@@ -227,8 +212,8 @@ const SCAN_TIMEOUT_MS = 5000
  */
 const MAX_FINDERS = 4
 
-// The fff-bun library exposes a synchronous `waitForScan(timeoutMs)` that
-// blocks until the indexer signals completion (or the timeout elapses).
+// fff-bun's `waitForScan(timeoutMs)` resolves once the indexer signals
+// completion, or with false when the timeout elapses.
 const waitForScan = (finder: NativeFileFinder): Effect.Effect<boolean> =>
   Effect.promise(() => finder.waitForScan(SCAN_TIMEOUT_MS)).pipe(
     Effect.map((result) => result.ok && result.value),
@@ -312,54 +297,66 @@ const makeNativeService = (
           }),
       )
 
+    const listUnder = (params: {
+      readonly root: string
+      readonly cwd: string
+    }): Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError> =>
+      Effect.gen(function* () {
+        const finderEntry = yield* acquireFinder(params)
+
+        if (!finderEntry.scanned) {
+          const completed = yield* waitForScan(finderEntry.finder)
+          if (!completed) {
+            return yield* new FileIndexError({
+              message: "scan timed out",
+              cwd: params.cwd,
+            })
+          }
+          finderEntry.scanned = true
+        }
+
+        // Items are relative to the root; keep those under `cwd` and
+        // rebase them onto it.
+        const subtree = path.relative(params.root, params.cwd)
+        let prefix = ""
+        if (subtree.length > 0) prefix = `${subtree}/`
+        const pageSize = 200
+        const allFiles: IndexedFile[] = []
+        let pageIndex = 0
+        let seen = 0
+
+        while (true) {
+          const result = finderEntry.finder.fileSearch("", { pageSize, pageIndex })
+          if (!result.ok) {
+            return yield* new FileIndexError({
+              message: `fileSearch failed: ${result.error}`,
+              cwd: params.cwd,
+            })
+          }
+
+          for (const item of result.value.items) {
+            if (!item.relativePath.startsWith(prefix)) continue
+            const relativePath = item.relativePath.slice(prefix.length)
+            allFiles.push({ path: path.join(params.cwd, relativePath), relativePath })
+          }
+          seen += result.value.items.length
+
+          if (seen >= result.value.totalFiles || result.value.items.length < pageSize) break
+          pageIndex++
+        }
+
+        return allFiles
+      }).pipe(Effect.scoped)
+
     return {
       listFiles: (params) =>
         Effect.gen(function* () {
-          const finderEntry = yield* acquireFinder(params)
-
-          if (!finderEntry.scanned) {
-            const completed = yield* waitForScan(finderEntry.finder)
-            if (!completed) {
-              return yield* new FileIndexError({
-                message: "scan timed out",
-                cwd: params.cwd,
-              })
-            }
-            finderEntry.scanned = true
-          }
-
-          // Items are relative to the root; keep those under `cwd` and
-          // rebase them onto it.
-          const subtree = path.relative(params.root, params.cwd)
-          let prefix = ""
-          if (subtree.length > 0) prefix = `${subtree}/`
-          const pageSize = 200
-          const allFiles: IndexedFile[] = []
-          let pageIndex = 0
-          let seen = 0
-
-          while (true) {
-            const result = finderEntry.finder.fileSearch("", { pageSize, pageIndex })
-            if (!result.ok) {
-              return yield* new FileIndexError({
-                message: `fileSearch failed: ${result.error}`,
-                cwd: params.cwd,
-              })
-            }
-
-            for (const item of result.value.items) {
-              if (!item.relativePath.startsWith(prefix)) continue
-              const relativePath = item.relativePath.slice(prefix.length)
-              allFiles.push({ path: path.join(params.cwd, relativePath), relativePath })
-            }
-            seen += result.value.items.length
-
-            if (seen >= result.value.totalFiles || result.value.items.length < pageSize) break
-            pageIndex++
-          }
-
-          return allFiles
-        }).pipe(Effect.scoped),
+          const files = yield* listUnder(params)
+          if (files.length > 0 || params.root === params.cwd) return files
+          // A shared root does not index its gitignored subtrees (`dist/`,
+          // `node_modules/x`). An explicit target is listed from its own root.
+          return yield* listUnder({ root: params.cwd, cwd: params.cwd })
+        }),
     }
   })
 
@@ -741,6 +738,8 @@ const literalRanges = (content: string, search: string): MatchRange[] => {
 const findNormalizedMatch = (content: string, search: string): Option.Option<MatchResult> => {
   const normalizedContent = normalizeWhitespace(content)
   const normalizedSearch = normalizeWhitespace(search)
+  // A whitespace-only search normalizes to blank lines, which every blank line matches.
+  if (normalizedSearch.trim() === "") return Option.none()
   if (normalizedSearch === search && normalizedContent === content) return Option.none()
   if (!normalizedContent.includes(normalizedSearch)) return Option.none()
 

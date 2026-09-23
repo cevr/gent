@@ -472,11 +472,10 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   addresses "the orchestrator" reaches children too. Parents read child output through `read_session` on the
   returned session/branch IDs. The session is the only copy of a child's
   output; the completion message carries the outcome and a preview.
-- The TUI child view reads the delegate's registry via `DelegateRpc.Children`,
-  scoped to the parent branch. It repaints on the delegate's
-  `ExtensionStateChanged` pulses and hydrates each child's tool calls and stream
-  text from per-child event streams. Core publishes no `AgentRun*` events; the
-  view is delegate-owned state end to end.
+- The TUI agents pane lists children through `AgentsViewRpc.ListAgents` and
+  refreshes on the delegate's `ExtensionStateChanged` pulses, matched by
+  `DELEGATE_EXTENSION_ID`. Completion rows read the completion message's
+  details. Core publishes no `AgentRun*` events.
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
   root depth; a parent at the depth limit cannot spawn. Only spawn edges count:

@@ -19,6 +19,7 @@ import {
   writeFileAtomic,
 } from "../src/fs-tools.js"
 import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
+import { runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 
 // ── fs-tools/read.test ──────────────────────────────────────────────────────
@@ -323,6 +324,13 @@ describe("findMatch", () => {
   test("no match returns none", () => {
     expect(Option.isNone(findMatch("hello world", "xyz"))).toBe(true)
   })
+  test("a whitespace-only oldString does not match blank lines", () => {
+    expect(Option.isNone(findMatch("a\n\nb", "   "))).toBe(true)
+    expect(Option.isNone(findMatch("a\n\n\nb", " \n "))).toBe(true)
+  })
+  test("a whitespace run that exists in the file still matches exactly", () => {
+    expect(Option.getOrThrow(findMatch("a\tb", "\t")).strategy).toBe("exact")
+  })
 })
 // ============================================================================
 // Integration — real file editing
@@ -618,6 +626,28 @@ describe("GrepTool", () => {
     }).pipe(Effect.provide(ToolLayerGrep)),
   )
 
+  it.scopedLive("finds matches in a gitignored directory under the session cwd", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", tmpDir])
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "dist/\n")
+      yield* fs.makeDirectory(`${tmpDir}/dist/sub`, { recursive: true })
+      yield* fs.writeFileString(`${tmpDir}/src.ts`, "const foo = 0")
+      yield* fs.writeFileString(`${tmpDir}/dist/sub/b.js`, "const foo = 1")
+
+      const ctxRepo = testToolContext({ cwd: tmpDir })
+      const whole = yield* runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir }, ctxRepo)
+      expect(whole.matches.map((match) => match.file)).toEqual([`${tmpDir}/src.ts`])
+      const ignored = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "foo", path: `${tmpDir}/dist` },
+        ctxRepo,
+      )
+      expect(ignored.matches.map((match) => match.file)).toEqual([`${tmpDir}/dist/sub/b.js`])
+    }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
+  )
+
   it.scopedLive("searches single file directly", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -696,6 +726,26 @@ describe("FileIndex fallback walk", () => {
     }).pipe(Effect.provide(FallbackLayer)),
   )
 
+  it.scopedLive("an edited .gitignore applies to the next listing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "first.txt")
+      yield* fs.writeFileString(`${tmpDir}/first.txt`, "a")
+      yield* fs.writeFileString(`${tmpDir}/second.txt`, "b")
+
+      const fileIndex = yield* FileIndex
+      const names = fileIndex
+        .listFiles({ root: tmpDir, cwd: tmpDir })
+        .pipe(Effect.map((files) => files.map((f) => f.relativePath)))
+      expect(yield* names).not.toContain("first.txt")
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "second.txt")
+      const after = yield* names
+      expect(after).toContain("first.txt")
+      expect(after).not.toContain("second.txt")
+    }).pipe(Effect.provide(FallbackLayer)),
+  )
+
   it.scopedLive("listFiles returns full file list (no early break)", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -727,33 +777,6 @@ describe("FileIndex fallback walk", () => {
         .pipe(Effect.timeout("5 seconds"))
       expect(files.map((f) => f.relativePath)).toEqual(["src/a.ts"])
     }).pipe(Effect.provide(FallbackLayer)),
-  )
-
-  it.scopedLive("gitignore cache is scoped per layer instance (no cross-instance bleed)", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${tmpDir}/foo.txt`, "x")
-      yield* fs.writeFileString(`${tmpDir}/bar.txt`, "y")
-
-      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "foo.txt")
-      yield* Effect.gen(function* () {
-        const idx = yield* FileIndex
-        yield* idx.listFiles({ root: tmpDir, cwd: tmpDir })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(FallbackLayer), Effect.scoped)
-
-      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "bar.txt")
-      const filesB = yield* Effect.gen(function* () {
-        const idx = yield* FileIndex
-        return yield* idx.listFiles({ root: tmpDir, cwd: tmpDir })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(FallbackLayer), Effect.scoped)
-      const namesB = filesB.map((f) => f.relativePath)
-
-      expect(namesB).toContain("foo.txt")
-      expect(namesB).not.toContain("bar.txt")
-    }).pipe(Effect.provide(PlatformLayerFileIndex)),
   )
 })
 

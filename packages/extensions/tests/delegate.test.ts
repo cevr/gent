@@ -260,7 +260,6 @@ describe("a child's completion", () => {
             private: false,
             submitted: true,
             delivered: true,
-            preview: "pong",
           })
           expect(entry?.completed).toEqual({})
         }).pipe(Effect.timeout("10 seconds")),
@@ -334,21 +333,6 @@ describe("a child's completion", () => {
         expect(tools.filter((name) => name.startsWith("delegate."))).toEqual([])
       }).pipe(Effect.timeout("8 seconds")),
     ),
-  )
-
-  it.live(
-    "a 300-char reply is clipped to one line in the registry",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const harness = yield* harnessWithHome(startThenEnd("p".repeat(300)))
-          yield* sendPrompt(harness, "delegate this task")
-          yield* afterCompletion(harness)
-          const [entry] = yield* harness.registryOf(harness.branchId)
-          expect(entry?.preview).toBe("p".repeat(200) + "…")
-        }).pipe(Effect.timeout("10 seconds")),
-      ),
-    12_000,
   )
 })
 
@@ -514,7 +498,6 @@ describe("a start nobody waits for", () => {
             private: false,
             submitted: true,
             delivered: true,
-            preview: "pong",
           })
           // A clean turn raised no flag; the shape is the same whichever writer recorded it.
           expect(entry?.completed).toEqual({})
@@ -1110,6 +1093,171 @@ describe("a failed completion delivery", () => {
       ),
     15_000,
   )
+
+  it.live(
+    "a recovered completion reports the start turn, not a wake turn that ran before recovery",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const gate = yield* Deferred.make<void>()
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              if (texts.some((text) => text.includes("WAKE-NOTE"))) {
+                return Effect.succeed(reply("LATER-ANSWER"))
+              }
+              if (!promptToolCallIds(options.prompt).includes("arm-wake")) {
+                return Deferred.await(gate).pipe(
+                  Effect.as(
+                    toolStep("wake", { afterSeconds: 0.2, note: "WAKE-NOTE: check" }, "arm-wake"),
+                  ),
+                )
+              }
+              return Effect.succeed(reply("START-ANSWER"))
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate this task")
+          const [row] = yield* waitFor(
+            harness.registryOf(branchId).pipe(Effect.orElseSucceed(() => [])),
+            (entries) => entries.length === 1 && entries[0]?.submitted === true,
+            5_000,
+            "the child is admitted",
+          )
+          if (Predicate.isUndefined(row)) return yield* Effect.die("no registry row")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "the parent ended its turn",
+          )
+          // The start turn's hook delivery fails; the child's wake turn then runs.
+          const fs = yield* FileSystem.FileSystem
+          const file = `${harness.home}/.gent/delegates/${branchId}.json`
+          yield* fs.chmod(file, 0o000)
+          yield* Deferred.succeed(gate, void 0)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId: row.sessionId, branchId: row.branchId }),
+            (child) =>
+              child.runtime._tag === "Idle" &&
+              messageTexts(child.messages).includes("LATER-ANSWER"),
+            6_000,
+            "the child's wake turn ran before recovery",
+          )
+          yield* fs.chmod(file, 0o644)
+          yield* sendPrompt(harness, "anything new?")
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              completionMessages(current.messages).length === 1 && current.runtime._tag === "Idle",
+            8_000,
+            "the next parent turn delivered the completion",
+          )
+          const text = messageTexts(completionMessages(snapshot.messages)).join("")
+          expect(text).toContain("START-ANSWER")
+          expect(text).not.toContain("LATER-ANSWER")
+          expect(completionMessages(snapshot.messages)[0]?.metadata?.details).toMatchObject({
+            tools: [{ name: "wake" }],
+            toolCount: 1,
+          })
+        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("14 seconds")),
+      ),
+    16_000,
+  )
+
+  it.live(
+    "a recovered completion ends before a turn an interjection woke",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const gate = yield* Deferred.make<void>()
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              if (texts.some((text) => text.includes("STEER-NOTE"))) {
+                return Effect.succeed(reply("LATER-ANSWER"))
+              }
+              return Deferred.await(gate).pipe(Effect.as(reply("START-ANSWER")))
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate this task")
+          const [row] = yield* waitFor(
+            harness.registryOf(branchId).pipe(Effect.orElseSucceed(() => [])),
+            (entries) => entries.length === 1 && entries[0]?.submitted === true,
+            5_000,
+            "the child is admitted",
+          )
+          if (Predicate.isUndefined(row)) return yield* Effect.die("no registry row")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "the parent ended its turn",
+          )
+          const fs = yield* FileSystem.FileSystem
+          const file = `${harness.home}/.gent/delegates/${branchId}.json`
+          yield* fs.chmod(file, 0o000)
+          yield* Deferred.succeed(gate, void 0)
+          const child = { sessionId: row.sessionId, branchId: row.branchId }
+          yield* waitFor(
+            client.session.getSnapshot(child),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes("START-ANSWER"),
+            5_000,
+            "the child's start turn ended and its delivery failed",
+          )
+          // An interjection with wake starts the idle child's next turn.
+          yield* client.steer.command({
+            command: SteerCommand.make({
+              _tag: "Interject",
+              ...child,
+              requestId: RequestId.make("steer-idle-child"),
+              message: "STEER-NOTE: one more thing",
+              wake: true,
+            }),
+          })
+          yield* waitFor(
+            client.session.getSnapshot(child),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes("LATER-ANSWER"),
+            5_000,
+            "the woken turn ran before recovery",
+          )
+          yield* fs.chmod(file, 0o644)
+          yield* sendPrompt(harness, "anything new?")
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              completionMessages(current.messages).length === 1 && current.runtime._tag === "Idle",
+            8_000,
+            "the next parent turn delivered the completion",
+          )
+          const text = messageTexts(completionMessages(snapshot.messages)).join("")
+          expect(text).toContain("START-ANSWER")
+          expect(text).not.toContain("LATER-ANSWER")
+        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("14 seconds")),
+      ),
+    16_000,
+  )
 })
 
 describe("delegation guidance", () => {
@@ -1200,9 +1348,109 @@ describe("a forked child", () => {
       ),
     12_000,
   )
+  it.live(
+    "with no answer reports neither the parent's reply nor the parent's calls",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const parentReply = "PARENT-OWN-REPLY"
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            const calls = promptToolCallIds(options.prompt)
+            // The forked child ends every step without writing anything.
+            if (texts.some((text) => text.endsWith(childTask))) {
+              return Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })]))
+            }
+            if (texts.at(-1) === "first") {
+              if (calls.includes("rn-1")) return Effect.succeed(reply(parentReply))
+              return Effect.succeed(toolStep("rename_session", { name: "parent work" }, "rn-1"))
+            }
+            if (texts.at(-1) === "second: fork a child") {
+              if (calls.includes("fork-empty")) return Effect.succeed(reply("started, ending"))
+              return Effect.succeed(
+                toolStep("delegate.start", { todo: childTask, context: "fork" }, "fork-empty"),
+              )
+            }
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "first")
+          yield* waitFor(
+            harness.client.session.getSnapshot({
+              sessionId: harness.sessionId,
+              branchId: harness.branchId,
+            }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes(parentReply),
+            5_000,
+            "the parent's first turn ended",
+          )
+          yield* sendPrompt(harness, "second: fork a child")
+          const snapshot = yield* afterCompletion(harness)
+          const completion = completionMessages(snapshot.messages)[0]
+          expect(messageTexts(completionMessages(snapshot.messages)).join("")).not.toContain(
+            parentReply,
+          )
+          expect(completion?.metadata?.details).toMatchObject({ tools: [], toolCount: 0 })
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
 })
 
 describe("session.send", () => {
+  it.live("a child's message to its parent lands on the branch that owns the child", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const report = "CHILD-REPORT: done"
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          const texts = promptTexts(options.prompt)
+          if (texts.some((text) => text.includes("report upward"))) {
+            if (!promptToolCallIds(options.prompt).includes("send-up")) {
+              return Effect.succeed(
+                toolStep("session.send", { to: "parent", message: report }, "send-up"),
+              )
+            }
+            return Effect.succeed(reply("sent"))
+          }
+          return Effect.succeed(reply("ack"))
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        const { client, sessionId, branchId } = harness
+        const child = yield* client.session.create({
+          cwd: "/tmp",
+          parentSessionId: sessionId,
+          parentBranchId: branchId,
+        })
+        // The person moves the parent to another branch while the child works.
+        const other = yield* client.branch.create({ sessionId, name: "elsewhere" })
+        yield* client.branch.switch({
+          sessionId,
+          fromBranchId: branchId,
+          toBranchId: other.branchId,
+        })
+        yield* client.message.send({ ...child, content: "report upward" })
+        const owning = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) =>
+            current.runtime._tag === "Idle" &&
+            sessionMessages(current.messages).some((message) =>
+              messageTexts([message]).some((text) => text.includes(report)),
+            ),
+          5_000,
+          "the report reached the branch that owns the child",
+        )
+        expect(sessionMessages(owning.messages)).toHaveLength(1)
+        const elsewhere = yield* client.session.getSnapshot({
+          sessionId,
+          branchId: other.branchId,
+        })
+        expect(sessionMessages(elsewhere.messages)).toHaveLength(0)
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
+
   it.live("a parent's message reaches a running child's next model step", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1304,7 +1552,7 @@ describe("session.send", () => {
         expect(asked?.metadata?.details).toMatchObject({ from: { relation: "child" } })
         expect(messageTexts([asked!])[0]).toContain("Message from your child")
         // A question mid-turn must not read as the child being done.
-        expect(messageTexts([asked!])[0]).toContain("This is not its completion")
+        expect(messageTexts([asked!])[0]).toContain("this message is not one")
         // The question was a turn of its own: the parent's last user text before the answer.
         const texts = messageTexts(snapshot.messages)
         expect(texts.indexOf(texts.find((t) => t.includes(question))!)).toBeLessThan(
@@ -1462,6 +1710,11 @@ describe("a child's later turn", () => {
           expect(snapshot.messages.indexOf(completion!)).toBeLessThan(
             snapshot.messages.indexOf(later!),
           )
+          // The completion already landed: the later message must not promise one.
+          const laterText = messageTexts([later!])[0] ?? ""
+          expect(laterText).not.toContain("still running")
+          expect(laterText).not.toContain("arrives as a separate message")
+          expect(laterText).toContain("child-completion message; this message is not one")
           expect(completionMessages(snapshot.messages)).toHaveLength(1)
         }).pipe(Effect.timeout("8 seconds")),
       ),
