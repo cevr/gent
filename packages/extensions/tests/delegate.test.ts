@@ -799,6 +799,63 @@ describe("turn-time reconcile", () => {
   )
 })
 
+describe("a failed completion delivery", () => {
+  it.live(
+    "is delivered on the parent's next turn, although the branch was reconciled in this process",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const gate = yield* Deferred.make<boolean>()
+          const harness = yield* harnessWithHome(
+            startThenEnd("pong", Deferred.await(gate).pipe(Effect.asVoid)),
+          )
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate this task")
+          const [row] = yield* waitFor(
+            harness.registryOf(branchId).pipe(Effect.orElseSucceed(() => [])),
+            (entries) => entries.length === 1 && entries[0]?.submitted === true,
+            5_000,
+            "the child is admitted",
+          )
+          if (Predicate.isUndefined(row)) return yield* Effect.die("no registry row")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "the parent ended its turn",
+          )
+          // The child's receipt cannot reach the registry: its hook delivery fails.
+          const fs = yield* FileSystem.FileSystem
+          const file = `${harness.home}/.gent/delegates/${branchId}.json`
+          yield* fs.chmod(file, 0o000)
+          yield* Deferred.succeed(gate, true)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId: row.sessionId, branchId: row.branchId }),
+            (child) =>
+              child.runtime._tag === "Idle" && messageTexts(child.messages).includes("pong"),
+            5_000,
+            "the child answered and its delivery failed",
+          )
+          yield* fs.chmod(file, 0o644)
+          const [stuck] = yield* harness.registryOf(branchId)
+          expect(stuck?.delivered).toBe(false)
+          yield* sendPrompt(harness, "anything new?")
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              completionMessages(current.messages).length === 1 && current.runtime._tag === "Idle",
+            8_000,
+            "the next parent turn delivered the completion",
+          )
+          expect(completionMessages(snapshot.messages)).toHaveLength(1)
+          const [entry] = yield* harness.registryOf(branchId)
+          expect(entry?.delivered).toBe(true)
+        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+})
+
 describe("delegation guidance", () => {
   it.live(
     "the parent's prompt says how to use children; a child, which cannot delegate, does not get it",

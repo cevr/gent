@@ -502,6 +502,33 @@ describe("GrepTool", () => {
     }).pipe(Effect.provide(ToolLayerGrep)),
   )
 
+  it.scopedLive("a glob with a slash matches paths relative to the search root", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.makeDirectory(`${tmpDir}/src/deep`, { recursive: true })
+      yield* fs.makeDirectory(`${tmpDir}/test`, { recursive: true })
+      yield* fs.writeFileString(`${tmpDir}/top.ts`, "const foo = 1")
+      yield* fs.writeFileString(`${tmpDir}/src/a.ts`, "const foo = 2")
+      yield* fs.writeFileString(`${tmpDir}/src/deep/b.ts`, "const foo = 3")
+      yield* fs.writeFileString(`${tmpDir}/test/c.ts`, "const foo = 4")
+      const namesFor = (glob: string) =>
+        runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir, glob }, ctxGrep).pipe(
+          Effect.map((result) =>
+            result.matches
+              .map((match) => match.file.slice(tmpDir.length + 1))
+              .sort((a, b) => a.localeCompare(b)),
+          ),
+        )
+      expect(yield* namesFor("src/*.ts")).toEqual(["src/a.ts"])
+      expect(yield* namesFor("{src,test}/**/*.ts")).toEqual([
+        "src/a.ts",
+        "src/deep/b.ts",
+        "test/c.ts",
+      ])
+    }).pipe(Effect.provide(ToolLayerGrep)),
+  )
+
   it.scopedLive("searches single file directly", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

@@ -352,6 +352,11 @@ const monitorWork = (
     yield* Effect.logInfo("wake.monitor.armed").pipe(
       Effect.annotateLogs({ wakeId: entry.wakeId, everySeconds: entry.everySeconds }),
     )
+    // Resolved on every arm, not only when stored: a row an older binary wrote
+    // may hold a relative cwd, which must not resolve against the server directory.
+    const ctx = yield* ExtensionContext
+    const path = yield* Path.Path
+    const cwd = path.resolve(ctx.cwd, entry.cwd ?? ".")
     let checks = 0
     let lastOutput = ""
     for (;;) {
@@ -359,18 +364,26 @@ const monitorWork = (
       // A check that blocks (`tail -f`, a dead host) must not hold the monitor
       // past its deadline: the scope close kills the process.
       const budget = Math.max(0, entry.deadline - (yield* Clock.currentTimeMillis))
-      const result = yield* Effect.scoped(
-        runBashCommand(entry.command, Option.fromUndefinedOr(entry.cwd)),
-      ).pipe(
+      // A check cut at the deadline is its own outcome: its empty output must
+      // never be tested against `until` (".*" would match it).
+      const result = yield* Effect.scoped(runBashCommand(entry.command, Option.some(cwd))).pipe(
+        Effect.map((ran) => ({ ...ran, cut: false })),
         Effect.timeoutOrElse({
           duration: Duration.millis(budget),
           orElse: () =>
-            Effect.succeed({ exitCode: 1, stdout: "", stderr: "check still running at deadline" }),
+            Effect.succeed({
+              exitCode: 1,
+              stdout: "",
+              stderr: "check still running at deadline",
+              cut: true,
+            }),
         }),
-        Effect.catch((error) => Effect.succeed({ exitCode: 1, stdout: "", stderr: error.message })),
+        Effect.catch((error) =>
+          Effect.succeed({ exitCode: 1, stdout: "", stderr: error.message, cut: false }),
+        ),
       )
       lastOutput = [result.stdout, result.stderr].filter((text) => text.length > 0).join("\n")
-      if (matches(entry, result)) {
+      if (!result.cut && matches(entry, result)) {
         yield* Effect.logInfo("wake.monitor.matched").pipe(
           Effect.annotateLogs({ wakeId: entry.wakeId, checks }),
         )
@@ -381,7 +394,7 @@ const monitorWork = (
         })
       }
       const now = yield* Clock.currentTimeMillis
-      if (now >= entry.deadline) {
+      if (result.cut || now >= entry.deadline) {
         return yield* queueWake(entry, monitorMessage(entry, "timed-out", checks, lastOutput), {
           outcome: "timed-out",
           note: entry.note,

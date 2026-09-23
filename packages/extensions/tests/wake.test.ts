@@ -762,6 +762,78 @@ describe("monitor command", () => {
   )
 })
 
+describe("monitor recovery and deadline", () => {
+  it.scopedLive(
+    "a stored monitor with a relative cwd re-arms in the session directory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.realPath(yield* makeTempDirectoryScoped("wake-rearm-cwd-"))
+        yield* fs.makeDirectory(`${home}/sub`)
+        yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
+        // A row an older binary stored before the cwd was resolved at arm time.
+        yield* fs.writeFileString(
+          `${home}/.gent/wakes/${branchId}.json`,
+          encodeAlarms([
+            {
+              _tag: "monitor",
+              wakeId: "old-relative",
+              command: "pwd",
+              cwd: "sub",
+              everySeconds: 1,
+              deadline: 60_000,
+              note: "where",
+              cleared: true,
+            },
+          ]),
+        )
+        const queued = yield* Ref.make<ReadonlyArray<string>>([])
+        const fired = yield* Deferred.make<boolean>()
+        const ctx = testLeafContext({ ...contextWith(home, queued, Option.some(fired)), cwd: home })
+        yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
+        yield* Deferred.await(fired)
+        const [message] = yield* Ref.get(queued)
+        expect(message).toContain("matched after")
+        expect(message).toContain(`${home}/sub`)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+        Effect.timeout("8 seconds"),
+      ),
+    10_000,
+  )
+
+  it.scopedLive(
+    "a check still running at the deadline times out, even when until matches anything",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("wake-monitor-hang-until-")
+        const queued = yield* Ref.make<ReadonlyArray<string>>([])
+        const fired = yield* Deferred.make<boolean>()
+        const ctx = contextWith(home, queued, Option.some(fired))
+        yield* runToolWithCtx(
+          MonitorTool,
+          {
+            command: "sleep 30",
+            until: ".*",
+            everySeconds: 1,
+            timeoutSeconds: 1,
+            note: "never returns",
+          },
+          ctx,
+        )
+        yield* TestClock.adjust("1 second")
+        yield* Deferred.await(fired)
+        const [message] = yield* Ref.get(queued)
+        expect(message).toContain("timed out after")
+        expect(message).not.toContain("matched after")
+      }).pipe(
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+        Effect.timeout("8 seconds"),
+      ),
+    10_000,
+  )
+})
+
 describe("wake store", () => {
   it.scopedLive("an alarm is written to the branch file and removed once it fires", () =>
     Effect.gen(function* () {

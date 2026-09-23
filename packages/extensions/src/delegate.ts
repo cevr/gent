@@ -421,41 +421,63 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
 
 /**
  * Branches this process has reconciled on a turn. Reconcile repairs what a
- * crash left, and a crash starts a new process, so a branch's turns need one
- * pass per process; the turnAfter hook delivers every completion after that.
- * Without the gate every model step replays each running child's event log.
+ * crash or a failed hook left; the turnAfter hook delivers every completion
+ * otherwise. So a branch's turns reconcile once per process, and again after
+ * any delivery fails: a failure invalidates every mark, because the failed
+ * hook may not know which parent it was writing to. A generation keeps a
+ * reconcile that raced the failure from marking its branch clean. Without the
+ * gate every model step replays each running child's event log.
  * `delegate.list` and `delegate.children` still reconcile on each call.
  */
 class ReconciledBranches extends Context.Service<
   ReconciledBranches,
   {
+    /** The current generation, read before a reconcile starts. */
+    readonly generation: Effect.Effect<number>
     readonly has: (key: string) => Effect.Effect<boolean>
-    readonly add: (key: string) => Effect.Effect<void>
+    /** Marks the branch only when no failure invalidated the marks since `generation`. */
+    readonly add: (key: string, generation: number) => Effect.Effect<void>
+    readonly invalidate: Effect.Effect<void>
   }
 >()("@gent/extensions/src/delegate/ReconciledBranches") {}
+
+interface ReconciledState {
+  readonly generation: number
+  readonly keys: ReadonlySet<string>
+}
 
 const ReconciledBranchesResource = defineResource({
   id: "@gent/delegate/reconciled-branches",
   scope: "process",
   layer: Layer.effect(
     ReconciledBranches,
-    Effect.map(Ref.make<ReadonlySet<string>>(new Set()), (seen) =>
+    Effect.map(Ref.make<ReconciledState>({ generation: 0, keys: new Set() }), (state) =>
       ReconciledBranches.of({
-        has: (key) => Effect.map(Ref.get(seen), (all) => all.has(key)),
-        add: (key) => Ref.update(seen, (all) => new Set([...all, key])),
+        generation: Effect.map(Ref.get(state), (current) => current.generation),
+        has: (key) => Effect.map(Ref.get(state), (current) => current.keys.has(key)),
+        add: (key, generation) =>
+          Ref.update(state, (current) => {
+            if (current.generation !== generation) return current
+            return { generation, keys: new Set([...current.keys, key]) }
+          }),
+        invalidate: Ref.update(state, (current) => ({
+          generation: current.generation + 1,
+          keys: new Set<string>(),
+        })),
       }),
     ),
   ),
 })
 
-/** The turn-time reconcile: once per branch per process, retried on the next step if it fails. */
+/** The turn-time reconcile: once per branch per process, again after a failed delivery or reconcile. */
 const reconcileOnce = Effect.gen(function* () {
   const ctx = yield* ExtensionContext
   const reconciled = yield* ReconciledBranches
   const key = `${ctx.sessionId}:${ctx.branchId}`
   if (yield* reconciled.has(key)) return
+  const generation = yield* reconciled.generation
   yield* reconcile()
-  yield* reconciled.add(key)
+  yield* reconciled.add(key, generation)
 })
 
 // ── admission ───────────────────────────────────────────────────────────────
@@ -873,6 +895,10 @@ export const DelegateExtension = defineExtension({
         Effect.catchCause((cause) =>
           Effect.logWarning("delegate.completion.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+            // A completion must not be lost: the parent's next turn reconciles again.
+            Effect.andThen(
+              Effect.flatMap(ReconciledBranches, (reconciled) => reconciled.invalidate),
+            ),
           ),
         ),
       ),

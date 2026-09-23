@@ -958,8 +958,9 @@ export const GrepTool = tool({
       )
       const globPattern = params.glob ?? "**/*"
       const matchesGlob = yield* Effect.try({
-        // A slash-free glob (`*.ts`) matches the basename at any depth, as ripgrep's `-g` does.
-        try: () => picomatch(globPattern, { dot: true, basename: true }),
+        // A slash-free glob (`*.ts`) matches the basename at any depth, as ripgrep's `-g` does;
+        // a glob with a slash matches the path relative to the search root.
+        try: () => picomatch(globPattern, { dot: true, basename: !globPattern.includes("/") }),
         catch: (e) =>
           new GrepError({
             message: `Invalid glob pattern: ${e}`,
