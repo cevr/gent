@@ -234,6 +234,25 @@ const joinRelative = (directory: string, entry: string) => {
 }
 
 /**
+ * What a listing does with one path. A symbolic link is never listed or
+ * walked, as ripgrep, git grep and the native index treat it: a directory
+ * link cannot loop, and each file is read once, under its real path.
+ */
+const entryKind = (
+  absolutePath: string,
+): Effect.Effect<"file" | "directory" | "skip", never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const link = yield* fs.readLink(absolutePath).pipe(Effect.option)
+    if (Option.isSome(link)) return "skip"
+    const info = yield* fs.stat(absolutePath).pipe(Effect.option)
+    if (Option.isNone(info)) return "skip"
+    if (info.value.type === "File") return "file"
+    if (info.value.type === "Directory") return "directory"
+    return "skip"
+  })
+
+/**
  * Outside a git work tree, and for an explicitly named ignored target, the
  * walk matches `.gitignore` lines itself. It reads every `.gitignore` from
  * `root` down, as git does: the ones
@@ -273,19 +292,12 @@ const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSys
         }
 
         const files: IndexedFile[] = []
-        // Real paths of the directories already walked: a directory link back
-        // into the tree is skipped instead of walked forever.
-        const visited = new Set<string>()
         const scanDir: (
           absoluteDir: string,
           relativeDir: string,
           inherited: ReadonlyArray<IgnoreRule>,
         ) => Effect.Effect<void, FileIndexError> = (absoluteDir, relativeDir, inherited) =>
           Effect.gen(function* () {
-            const realDir = yield* fs.realPath(absoluteDir).pipe(Effect.option)
-            if (Option.isNone(realDir) || visited.has(realDir.value)) return
-            visited.add(realDir.value)
-
             let dirRules = inherited
             if (relativeDir.length > 0) {
               const dirBase = joinRelative(fromRoot, relativeDir)
@@ -305,9 +317,11 @@ const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSys
               if (entry === ".git") continue
               const relativePath = joinRelative(relativeDir, entry)
               const absPath = path.join(absoluteDir, entry)
-              const info = yield* fs.stat(absPath).pipe(Effect.option)
-              if (Option.isNone(info)) continue
-              const isDirectory = info.value.type === "Directory"
+              const kind = yield* entryKind(absPath).pipe(
+                Effect.provideService(FileSystem.FileSystem, fs),
+              )
+              if (kind === "skip") continue
+              const isDirectory = kind === "directory"
               if (isGitignored(joinRelative(fromRoot, relativePath), isDirectory, dirRules))
                 continue
 
@@ -315,8 +329,6 @@ const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSys
                 yield* scanDir(absPath, relativePath, dirRules)
                 continue
               }
-
-              if (info.value.type !== "File") continue
 
               if (files.length >= FALLBACK_MAX_FILES) {
                 return yield* new FileIndexError({
@@ -537,17 +549,16 @@ const listGitFiles: (
   const relativePaths = [...new Set(listed.value.stdout.split("\0"))].filter(
     (entry) => entry.length > 0,
   )
-  // A deleted tracked file is listed too; a directory is a nested repository
-  // (`vendor/lib/`) or a submodule's gitlink.
+  // A deleted tracked file and a symbolic link are listed too; a directory
+  // is a nested repository (`vendor/lib/`) or a submodule's gitlink.
   const nested = yield* Effect.forEach(
     relativePaths,
     Effect.fnUntraced(function* (entry) {
       const relativePath = entry.replace(/\/$/, "")
       const absolutePath = path.join(cwd, relativePath)
-      const info = yield* fs.stat(absolutePath).pipe(Effect.option)
-      if (Option.isNone(info)) return []
-      if (info.value.type === "File") return [{ path: absolutePath, relativePath }]
-      if (info.value.type !== "Directory") return []
+      const kind = yield* entryKind(absolutePath)
+      if (kind === "skip") return []
+      if (kind === "file") return [{ path: absolutePath, relativePath }]
       // An uninitialized submodule has no `.git` and nothing to list.
       const isRepository = yield* fs
         .exists(path.join(absolutePath, ".git"))

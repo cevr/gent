@@ -1238,6 +1238,29 @@ describe("git decides the listing inside a work tree", () => {
   }
 })
 
+describe("symbolic links", () => {
+  for (const { name, layer } of bothLayers) {
+    for (const { inWorkTree, where } of [
+      { inWorkTree: false, where: "outside a work tree" },
+      { inWorkTree: true, where: "inside a work tree" },
+    ]) {
+      it.scopedLive(`${name}, ${where}: a symbolic link is never listed or walked`, () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const tmpDir = yield* fs.makeTempDirectoryScoped()
+          if (inWorkTree) yield* runProcess("git", ["init", "-q", tmpDir])
+          yield* writeTree(tmpDir, ["real/r.ts", "zeta/z.ts"], {})
+          yield* fs.symlink(`${tmpDir}/real`, `${tmpDir}/alink`)
+          yield* fs.symlink(`${tmpDir}/real/r.ts`, `${tmpDir}/flink.ts`)
+          yield* fs.symlink(`${tmpDir}/zeta`, `${tmpDir}/zeta/loop`)
+
+          expect(yield* listed(tmpDir)).toEqual(["real/r.ts", "zeta/z.ts"])
+        }).pipe(Effect.provide(layer), Effect.timeout("8 seconds")),
+      )
+    }
+  }
+})
+
 describe("an ignored directory with tracked files", () => {
   for (const { name, layer } of [
     { name: "fallback", layer: FallbackLayer },
