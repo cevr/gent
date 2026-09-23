@@ -663,11 +663,12 @@ export const plantInFlightTurn = Effect.fn("test.plantInFlightTurn")(function* (
 
 /** Write a decision to the durable interaction row only, as a reopened database sees it. */
 export const recordInteractionDecision = Effect.fn("test.recordInteractionDecision")(function* (
+  branch: { readonly sessionId: SessionId; readonly branchId: BranchId },
   requestId: InteractionRequestId,
   decision: ApprovalDecision,
 ) {
   const decisionJson = yield* encodeInteractionDecision(decision)
-  yield* (yield* InteractionStorage).decide(requestId, decisionJson)
+  yield* (yield* InteractionStorage).decide(branch, requestId, decisionJson)
 })
 
 /** The durable events one branch has published. */

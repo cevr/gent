@@ -2046,8 +2046,13 @@ export const BashTool = tool({
         metadata: { type: "bash-guardrail", level: risk.level },
       })
       if (!decision.approved) {
+        // A decline in a session no user sees says who can answer instead.
+        const notes = Option.match(Option.fromUndefinedOr(decision.notes), {
+          onNone: () => "",
+          onSome: (text) => `. ${text}`,
+        })
         return {
-          stdout: `Command blocked: ${risk.reason}`,
+          stdout: `Command blocked: ${risk.reason}${notes}`,
           stderr: "",
           exitCode: 1,
           status: "blocked",

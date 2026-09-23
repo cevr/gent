@@ -734,7 +734,12 @@ export const MonitorTool = tool({
         metadata: { type: "bash-guardrail", level: risk.level },
       })
       if (!decision.approved) {
-        return yield* new WakeError({ message: `Command blocked: ${risk.reason}` })
+        // A decline in a session no user sees says who can answer instead.
+        const notes = Option.match(Option.fromUndefinedOr(decision.notes), {
+          onNone: () => "",
+          onSome: (text) => `. ${text}`,
+        })
+        return yield* new WakeError({ message: `Command blocked: ${risk.reason}${notes}` })
       }
     }
     const deadline = now + timeoutSeconds * 1000
