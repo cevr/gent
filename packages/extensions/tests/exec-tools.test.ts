@@ -1480,11 +1480,25 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand("fish -C 'set x 1'").level).toBe("safe")
   })
 
-  test("gh's repo option before the group does not hide a delete", () => {
-    for (const command of ["gh --repo o/r release delete v1", "gh -R o/r repo delete o/r"]) {
+  test("gh's repo option before or after the group does not hide a delete", () => {
+    for (const command of [
+      "gh --repo o/r release delete v1",
+      "gh -R o/r repo delete o/r",
+      "gh release -R o/r delete v1",
+      "gh repo --repo o/r delete",
+      "gh issue --repo=o/r delete 1",
+      "gh release delete-asset v1 a.zip",
+      "gh release -R o/r delete-asset v1 a.zip",
+    ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    expect(classifyBashCommand("gh --repo o/r issue list").level).toBe("safe")
+    for (const command of [
+      "gh --repo o/r issue list",
+      "gh release -R o/r list",
+      "gh release -R o/r upload v1 a.zip",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
   })
 
   test("TRUNCATE without TABLE, and DROP VIEW or INDEX, are destructive", () => {

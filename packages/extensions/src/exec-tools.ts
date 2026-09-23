@@ -2366,6 +2366,7 @@ const GH_DELETES = [
   ...["repo", "release", "gist", "issue", "label", "secret", "variable", "run", "cache"],
   ...["ssh-key", "gpg-key", "codespace", "project"],
 ]
+const GH_REPO_OPTIONS = options("R", "repo")
 const PUBLISH_OPTIONS = "tag access registry otp"
 
 /** `git commit` options whose value is the next word. */
@@ -2510,11 +2511,16 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     "yarn workspace": runner({}, { positionals: 1, head: "yarn" }),
     "twine upload": risky(external("twine upload")),
     ...each(
-      GH_DELETES.map((group) => `gh ${group} delete`),
+      [...GH_DELETES.map((group) => `gh ${group} delete`), "gh release delete-asset"],
       risky(({ resolved }) => destructive(`${resolved.path} (deletes on the remote)`)),
     ),
-    // `-R/--repo` may come before the group: `gh --repo o/r release delete v1`.
-    gh: spec(options("R", "repo")),
+    // `-R/--repo` may come before or after the group: `gh --repo o/r release
+    // delete v1`, `gh release -R o/r delete v1`.
+    gh: spec(GH_REPO_OPTIONS),
+    ...each(
+      GH_DELETES.map((group) => `gh ${group}`),
+      spec(GH_REPO_OPTIONS),
+    ),
     "gh api": spec(
       options("XHfFpt", "method header field raw-field preview template jq input hostname cache"),
       [],
