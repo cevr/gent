@@ -467,7 +467,6 @@ export const ComposerState = {
 export const ComposerEvent = Schema.TaggedUnion({
   EnterInteraction: { interaction: InteractionPresented },
   ResolveInteraction: { result: ApprovalResultSchema },
-  CancelInteraction: {},
   DismissInteraction: { requestId: Schema.String },
 })
 export type ComposerEvent = Schema.Schema.Type<typeof ComposerEvent>
@@ -500,27 +499,11 @@ export function transition(state: ComposerState, event: ComposerEvent): Transiti
     }
   }
 
-  if (event._tag === "CancelInteraction") {
-    if (state._tag !== "interaction") return { state }
-    return cancelInteraction(state.interaction)
-  }
-
   if (state._tag !== "interaction") return { state }
   if (!("requestId" in state.interaction) || state.interaction.requestId !== event.requestId) {
     return { state }
   }
   return { state: ComposerState.idle() }
-}
-
-function cancelInteraction(interaction: ActiveInteraction): TransitionResult {
-  return {
-    state: ComposerState.idle(),
-    effect: {
-      _tag: "DispatchInteractionResult",
-      interaction,
-      result: { approved: false },
-    },
-  }
 }
 
 // ── composer drafts ─────────────────────────────────────────────────────────
@@ -1172,9 +1155,6 @@ function createPromptSearchController(params: {
 
 interface SessionCommandRegistryProps {
   readonly client: ClientContextValue
-  readonly command: {
-    readonly openPalette: () => void
-  }
   readonly ext: {
     readonly commands: Accessor<ReadonlyArray<Command>>
     readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
@@ -1261,13 +1241,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     category: "Session",
     slash: "frecency-reset",
     onSelect: props.resetFrecency,
-  },
-  {
-    id: "session.sessions",
-    title: "Open Sessions",
-    category: "Session",
-    slash: "sessions",
-    onSelect: () => props.command.openPalette(),
   },
   {
     id: "session.branch",
@@ -2721,7 +2694,6 @@ export function createSessionController(props: {
 
   createSessionCommandRegistry({
     client,
-    command,
     ext,
     cast,
     frecency: () => frecency.lookup(),

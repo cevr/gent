@@ -35,6 +35,7 @@ import {
   ProviderAuth,
   retryProviderCall,
   ModelRegistry,
+  modelCatalog,
   finishPart,
   toolCallPart,
 } from "../../src/runtime/provider"
@@ -272,7 +273,7 @@ const makeRegistryLayerWithDrivers = (
   overrideAuthLayer: Layer.Layer<Auth> = authLayer,
 ) =>
   ModelRegistry.Live.pipe(
-    Layer.provide(
+    Layer.provideMerge(
       Layer.mergeAll(
         ExtensionRegistry.fromResolved(
           resolveExtensions([
@@ -297,10 +298,64 @@ const loadRegistryWithDrivers = (
     const context = yield* Layer.build(
       makeRegistryLayerWithDrivers(modelDrivers, overrideAuthLayer),
     )
-    return Context.get(context, ModelRegistry)
+    const raw = Context.get(context, ModelRegistry)
+    const drivers = Context.get(context, ExtensionRegistry)
+    const auth = Context.get(context, Auth)
+    return {
+      raw,
+      list: modelCatalog().pipe(
+        Effect.provideService(ExtensionRegistry, drivers),
+        Effect.provideService(Auth, auth),
+      ),
+      get: (modelId: string) =>
+        raw.get(modelId).pipe(Effect.provideService(ExtensionRegistry, drivers)),
+    }
   })
 
 describe("model catalog resolution", () => {
+  it.scopedLive("reads the drivers of the caller's profile, not the launch profile", () =>
+    Effect.gen(function* () {
+      const launch = yield* loadRegistryWithDrivers([
+        {
+          id: "openai",
+          name: "OpenAI",
+          resolveModel: unusedResolution,
+          listModels: () => Effect.succeed([catalogModel("openai/gpt-5.4")]),
+        },
+      ])
+      const projectProfile = ExtensionRegistry.of({
+        getResolved: () =>
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("project-driver") },
+              scope: "project",
+              sourcePath: "test",
+              contributions: {
+                modelDrivers: [
+                  {
+                    id: "local",
+                    name: "Local",
+                    resolveModel: unusedResolution,
+                    listModels: () => Effect.succeed([catalogModel("local/tiny")]),
+                  },
+                ],
+              },
+            },
+          ]),
+      })
+      const inProject = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Effect.provideService(effect, ExtensionRegistry, projectProfile)
+
+      const found = yield* inProject(launch.raw.get("local/tiny"))
+      const launchModel = yield* inProject(launch.raw.get("openai/gpt-5.4"))
+
+      expect(Option.map(found, (model) => model.id)).toEqual(
+        Option.some(ModelId.make("local/tiny")),
+      )
+      expect(Option.isNone(launchModel)).toBe(true)
+    }),
+  )
+
   it.scopedLive("concatenates the catalog each model driver lists", () =>
     Effect.gen(function* () {
       const registry = yield* loadRegistryWithDrivers([

@@ -23,7 +23,6 @@ import {
   type BranchTreeNode,
   buildLogPaths,
   type ConnectionState,
-  type Session as DomainSession,
   ensureLogDir,
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
@@ -61,7 +60,6 @@ import {
   createSignal,
   on,
   onCleanup,
-  onMount,
   type ParentProps,
 } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -828,7 +826,6 @@ interface ClientSessionValue {
 
   // Sync data fetching helpers (return Effects for caller to run)
   listMessages: Effect.Effect<readonly Message[], GentClientRpcError>
-  listSessions: Effect.Effect<readonly DomainSession[], GentClientRpcError>
   listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
   createBranch: (name?: string) => Effect.Effect<BranchId, GentClientRpcError>
   getBranchTree: Effect.Effect<readonly BranchTreeNode[], GentClientRpcError>
@@ -1023,34 +1020,43 @@ export function ClientProvider(props: ClientProviderProps) {
   const isActive = () => sessionState().status === "active"
   const isLoading = () => sessionState().status === "creating"
 
-  onMount(() => {
-    cast(
-      Effect.all({
-        models: client.model.list(),
-        drivers: client.driver.list(),
-      }).pipe(
-        Effect.tap(({ models, drivers }) =>
-          Effect.sync(() => {
-            const modelsById: Record<string, Model> = {}
-            for (const model of models) modelsById[model.id] = model
-            const agentsByName: Record<string, AgentDefinition> = {}
-            for (const agent of drivers.agents) agentsByName[agent.name] = agent
-            const driverIds = drivers.drivers
-              .filter((driver) => driver._tag === "Model")
-              .map((driver) => driver.id)
-            setModelStore({ modelsById, agentsByName, driverIds })
-          }),
+  // The catalog is the active session's profile: a project model driver
+  // appears once that session is active, a disabled one disappears.
+  let modelCatalogLoadVersion = 0
+  createEffect(
+    on(activeSessionId, (sessionId) => {
+      const version = ++modelCatalogLoadVersion
+      const request = omitUndefined({ sessionId: Option.getOrUndefined(sessionId) })
+      cast(
+        Effect.all({
+          models: client.model.list(request),
+          drivers: client.driver.list(request),
+        }).pipe(
+          Effect.tap(({ models, drivers }) =>
+            Effect.sync(() => {
+              if (version !== modelCatalogLoadVersion) return
+              const modelsById: Record<string, Model> = {}
+              for (const model of models) modelsById[model.id] = model
+              const agentsByName: Record<string, AgentDefinition> = {}
+              for (const agent of drivers.agents) agentsByName[agent.name] = agent
+              const driverIds = drivers.drivers
+                .filter((driver) => driver._tag === "Model")
+                .map((driver) => driver.id)
+              setModelStore({ modelsById, agentsByName, driverIds })
+            }),
+          ),
+          Effect.catchEager((err) =>
+            Effect.sync(() => {
+              if (version !== modelCatalogLoadVersion) return
+              const error = formatError(err)
+              log.error("model.list.failed", { error })
+              setAgentStore({ status: AgentStatus.cases.Error.make({ error }) })
+            }),
+          ),
         ),
-        Effect.catchEager((err) =>
-          Effect.sync(() => {
-            const error = formatError(err)
-            log.error("model.list.failed", { error })
-            setAgentStore({ status: AgentStatus.cases.Error.make({ error }) })
-          }),
-        ),
-      ),
-    )
-  })
+      )
+    }),
+  )
 
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
@@ -1466,8 +1472,6 @@ export function ClientProvider(props: ClientProviderProps) {
       if (Option.isNone(currentSession)) return [] satisfies readonly Message[]
       return yield* client.message.list({ branchId: currentSession.value.branchId })
     }),
-
-    listSessions: client.session.list(),
 
     listBranches: Effect.gen(function* () {
       const currentSession = sessionOption()

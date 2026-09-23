@@ -214,7 +214,11 @@ describe("resolveTuiExtensions", () => {
 
   test("interaction renderers resolve by metadata type with scope precedence", () => {
     const resolved = resolveTuiExtensions([
-      make("builtin-default", "builtin", interactionRendererContribution(widget("default"))),
+      make(
+        "builtin-prompt",
+        "builtin",
+        interactionRendererContribution(widget("prompt"), "prompt"),
+      ),
       make("builtin-ask", "builtin", interactionRendererContribution(widget("ask"), "ask-user")),
       make(
         "project-ask",
@@ -223,12 +227,12 @@ describe("resolveTuiExtensions", () => {
       ),
     ])
 
-    const defaultRenderer = Option.fromNullishOr(resolved.interactionRenderers.get(absent))
+    const defaultRenderer = Option.fromNullishOr(resolved.interactionRenderers.get("prompt"))
     const askRenderer = Option.fromNullishOr(resolved.interactionRenderers.get("ask-user"))
     expect(Option.isSome(defaultRenderer)).toBe(true)
     expect(Option.isSome(askRenderer)).toBe(true)
     if (Option.isNone(defaultRenderer) || Option.isNone(askRenderer)) return
-    expect(defaultRenderer.value(interactionProps)).toBe("default")
+    expect(defaultRenderer.value(interactionProps)).toBe("prompt")
     expect(askRenderer.value(interactionProps)).toBe("project-ask")
   })
 
@@ -476,6 +480,33 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
       expect(result.failures.map((failure) => failure.id)).toEqual(["@test/broken"])
     }),
+  )
+  it.live("a setup that never ends becomes a failure and the others still load", () =>
+    Effect.gen(function* () {
+      const good: ExtensionClientModule = {
+        id: "@test/good-beside-hung",
+        setup: Effect.succeed(
+          autocompleteContribution({
+            prefix: "!",
+            title: "good",
+            items: () => [{ id: "good", label: "good" }],
+          }),
+        ),
+      }
+      const hung: ExtensionClientModule = { id: "@test/hung", setup: Effect.never }
+      const result = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: [good, hung],
+          userDir: "/tmp/u-hung-setup",
+          projectDir: "/tmp/p-hung-setup",
+          loadTimeout: "50 millis",
+          runtime,
+        }),
+      )
+      expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
+      expect(result.failures.map((failure) => failure.id)).toEqual(["@test/hung"])
+      expect(result.failures[0]?.reason).toContain("setup timed out")
+    }).pipe(Effect.timeout("5 seconds")),
   )
   // Regression lock — discovered (not pre-imported) modules with an
   // Effect-valued `setup` must pass `importExtension`'s shape validator.

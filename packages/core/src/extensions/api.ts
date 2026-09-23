@@ -66,6 +66,7 @@ export {
   LoadedArtifactIdentity,
   type SystemPromptInput,
   type TurnAfterInput,
+  type TurnUsage,
 } from "../domain/extension.js"
 export {
   credentialFailureMetadata,

@@ -207,6 +207,60 @@ describe("live Profile", () => {
       }),
     ).pipe(Effect.provide(sharedLayer)))
 
+  test("a user extension that fails to import reaches extension health", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const dir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(path.join(dir, "folder-broken"), { recursive: true })
+        yield* fs.writeFileString(path.join(dir, "broken.ts"), "export const = ;\n")
+        yield* fs.writeFileString(
+          path.join(dir, "folder-broken", "index.ts"),
+          "export const notAnExtension = 1\n",
+        )
+        // An untrusted project directory fails its files the same way.
+        const cwd = path.join(home, "project")
+        const projectDir = path.join(cwd, ".gent", "extensions")
+        yield* fs.makeDirectory(projectDir, { recursive: true })
+        yield* fs.writeFileString(path.join(projectDir, "local.ts"), "export default 1\n")
+        const inputs = { cwd, home, platform: "darwin", extensions: [] }
+
+        const declarations = yield* loadRuntimeProfileDeclarations(inputs)
+        expect(declarations.extensionDeclarations.failed).toEqual([
+          expect.objectContaining({
+            manifest: { id: "broken" },
+            scope: "user",
+            sourcePath: path.join(dir, "broken.ts"),
+            phase: "load",
+          }),
+          expect.objectContaining({
+            manifest: { id: "folder-broken" },
+            scope: "user",
+            phase: "load",
+          }),
+          expect.objectContaining({
+            manifest: { id: "local" },
+            scope: "project",
+            phase: "load",
+            error: expect.stringContaining("not trusted"),
+          }),
+        ])
+
+        // A disabled id silences its file.
+        const quiet = yield* loadRuntimeProfileDeclarations({
+          ...inputs,
+          disabledExtensions: ["broken", "folder-broken", "local"],
+        })
+        expect(quiet.extensionDeclarations.failed).toEqual([])
+
+        // A test root that fails on a failed extension sees the import failure too.
+        const strict = yield* Effect.exit(Effect.scoped(openProfile(inputs)))
+        expect(strict._tag).toBe("Failure")
+      }),
+    ).pipe(Effect.provide(sharedLayer)))
+
   test("live Profile builds a process resource layer once", () =>
     Effect.scoped(
       Effect.gen(function* () {

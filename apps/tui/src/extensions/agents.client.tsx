@@ -331,6 +331,21 @@ const ageFor = (row: AgentRowEntry, now: number): string =>
     onSome: (updatedAt) => formatAge(now - updatedAt),
   })
 
+/**
+ * Marks a session spawned beside its parent's work (a delegate child or a
+ * `/btw` fork), so side work reads apart from a handoff before opening it.
+ */
+const sideThreadMark = (row: AgentRowEntry): string => {
+  if (row.sideThread) return "side thread"
+  return ""
+}
+
+/** One pane row: the left text, padded, and the right column drawn muted. */
+interface RowLine {
+  readonly left: string
+  readonly right: string
+}
+
 /** Marks the loop the shell is on, so a reader can find themselves in the list. */
 const currentMarker = (current: boolean): string => {
   if (current) return "› "
@@ -467,18 +482,29 @@ export function AgentsPane(props: {
     return colorFor(section, selected)
   }
 
-  /** `<marker><indent><glyph> name  ·  activity` padded so the age sits on the right edge. */
-  const rowLine = (row: AgentRowEntry, selected: boolean): string => {
+  /**
+   * `<marker><indent><glyph> name  ·  activity` on the left, padded so the
+   * right column (the side-thread mark, then the age) sits on the right edge.
+   */
+  const rowLine = (row: AgentRowEntry, selected: boolean): RowLine => {
     if (Option.contains(armed(), row.sessionId)) {
-      return "^x again to delete this session and its children"
+      return { left: "^x again to delete this session and its children", right: "" }
     }
-    const age = ageFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))
+    const right = [sideThreadMark(row), ageFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))]
+      .filter((part) => part.length > 0)
+      .join("  ")
     let activity = ""
     if (selected) activity = activityFor(props.controller.detail())
     let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(row.section)} ${nameFor(row)}`
     if (activity.length > 0) left = `${left}  ·  ${activity}`
-    const width = Math.max(0, rowWidth() - age.length - 2)
-    return `${truncate(left, width).padEnd(width)}  ${age}`
+    const width = Math.max(0, rowWidth() - right.length - 2)
+    return { left: `${truncate(left, width).padEnd(width)}  `, right }
+  }
+
+  const rightColor = (row: AgentRowEntry, selected: boolean) => {
+    if (selected || Option.contains(armed(), row.sessionId))
+      return lineColor(row, row.section, selected)
+    return theme.textMuted
   }
 
   const rows = (): ReadonlyArray<SelectListRow<AgentRowEntry>> =>
@@ -509,9 +535,12 @@ export function AgentsPane(props: {
               style={{ fg: lineColor(item.row, section(), selected()) }}
             >
               <span style={{ fg: glyphColorFor(section(), selected()) }}>
-                {rowLine(item.row, selected()).slice(0, 1)}
+                {rowLine(item.row, selected()).left.slice(0, 1)}
               </span>
-              {rowLine(item.row, selected()).slice(1)}
+              {rowLine(item.row, selected()).left.slice(1)}
+              <span style={{ fg: rightColor(item.row, selected()) }}>
+                {rowLine(item.row, selected()).right}
+              </span>
             </text>
           </box>
         )
@@ -620,11 +649,13 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
       }),
       clientCommandContribution({
         id: "agents.view",
-        title: "Agents",
-        description: "Show every agent loop, live and stored",
+        // The one session browser: the palette item, `/sessions`, `/agents` and
+        // `/tree` all open this pane.
+        title: "Sessions",
+        description: "Browse and switch sessions: every agent loop, live and stored",
         category: "Session",
-        slash: "agents",
-        aliases: ["tree"],
+        slash: "sessions",
+        aliases: ["agents", "tree"],
         onSelect: () => {
           controller.setOpen(true)
           controller.refresh("")

@@ -22,7 +22,7 @@ import {
   SessionId,
 } from "@gent/core/protocol"
 import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
-import type { CapabilityRef, DriverRef } from "@gent/core/extensions/api"
+import { omitUndefined, type CapabilityRef, type DriverRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -247,9 +247,16 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
     shellRead(payload, "session.thread", (client) => client.session.thread({ sessionId })),
   listMessages: (branchId) =>
     shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
-  driverList: shellRead(payload, "driver.list", (client) => client.driver.list()),
+  // Drivers belong to the active session's profile: its project drivers count.
+  driverList: Effect.suspend(() =>
+    shellRead(payload, "driver.list", (client) =>
+      client.driver.list(activeSessionPayload(payload)),
+    ),
+  ),
   driverSet: (input) =>
-    shellRead(payload, "driver.set", (client) => client.driver.set(input)).pipe(Effect.asVoid),
+    shellRead(payload, "driver.set", (client) =>
+      client.driver.set({ ...input, ...activeSessionPayload(payload) }),
+    ).pipe(Effect.asVoid),
   driverClear: (input) =>
     shellRead(payload, "driver.clear", (client) => client.driver.clear(input)).pipe(Effect.asVoid),
 })
@@ -335,6 +342,14 @@ const requestExtensionAt = <Input, Output>(
   })
 
 /** One shell RPC read, with its failure named by the RPC it came from. */
+/** `{ sessionId }` of the active session, or `{}` before one exists. */
+const activeSessionPayload = (transport: ClientShellTransport) =>
+  omitUndefined({
+    sessionId: Option.getOrUndefined(
+      Option.map(transport.currentSession(), (session) => session.sessionId),
+    ),
+  })
+
 const shellRead = <A>(
   transport: ClientShellTransport,
   tag: string,
@@ -674,8 +689,8 @@ interface WidgetContribution {
 }
 
 interface InteractionRendererContribution {
-  /** Matches against metadata.type. undefined = default fallback renderer. */
-  readonly metadataType?: string
+  /** Matches `metadata.type`; the host's prompt renderer draws an unmatched interaction. */
+  readonly metadataType: string
   readonly component: InteractionRendererComponent
 }
 
@@ -797,14 +812,8 @@ export const clientCommandContribution = (opts: Command): ClientContributions =>
  */
 export const interactionRendererContribution = (
   component: InteractionRendererComponent,
-  metadataType?: string,
-): ClientContributions => {
-  const renderer = Option.match(Option.fromNullishOr(metadataType), {
-    onNone: () => ({ component }),
-    onSome: (value) => ({ metadataType: value, component }),
-  })
-  return { interactionRenderers: [renderer] }
-}
+  metadataType: string,
+): ClientContributions => ({ interactionRenderers: [{ metadataType, component }] })
 
 export const borderLabelContribution = (opts: BorderLabelContribution): ClientContributions => ({
   borderLabels: [opts],

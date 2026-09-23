@@ -4239,6 +4239,19 @@ describe("cell prompt guidelines", () => {
       )
     }),
   )
+
+  it.effect(
+    "names the compute deadline and sends builds and tests to bash, which stops that clock",
+    () =>
+      Effect.sync(() => {
+        const guidelines = (getToolMetadata(CellTool).promptGuidelines ?? []).join("\n")
+        expect(guidelines).toContain("A cell gets 30 seconds of its own compute")
+        expect(guidelines).toContain(
+          "run builds, test suites, and other long commands through tools.bash({ command, timeout })",
+        )
+        expect(guidelines).not.toContain("Bun.$ and Bun.spawn are for reading: builds, tests")
+      }),
+  )
 })
 
 // ── cell/tool-signatures.test ───────────────────────────────────────────────
