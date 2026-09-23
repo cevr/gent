@@ -1,5 +1,4 @@
 import {
-  Array as Arr,
   Duration,
   Effect,
   FileSystem,
@@ -1024,20 +1023,13 @@ function normalizeWhitespace(s: string): string {
   return normalizeWithOffsets(s).text
 }
 
-type MatchStrategy = "exact" | "unescaped" | "normalized"
-
 interface MatchRange {
   readonly start: number
   readonly end: number
 }
 
-interface MatchResult {
-  strategy: MatchStrategy
-  /** Offset of the first match. */
-  index: number
-  /** Every non-overlapping match, in file order. */
-  ranges: ReadonlyArray<MatchRange>
-}
+/** Every non-overlapping match, in file order; empty when the search misses. */
+type MatchRanges = ReadonlyArray<MatchRange>
 
 /** An offset between a CR and its LF, where no match may start or end. */
 const splitsLineBreak = (content: string, index: number): boolean =>
@@ -1059,12 +1051,12 @@ const literalRanges = (content: string, search: string): MatchRange[] => {
   return ranges
 }
 
-const findNormalizedMatch = (content: string, search: string): Option.Option<MatchResult> => {
+const findNormalizedMatch = (content: string, search: string): MatchRanges => {
   const normalized = normalizeWithOffsets(content)
   const normalizedSearch = normalizeWhitespace(search)
   // A whitespace-only search normalizes to blank lines, which every blank line matches.
-  if (normalizedSearch.trim() === "") return Option.none()
-  if (normalizedSearch === search && normalized.text === content) return Option.none()
+  if (normalizedSearch.trim() === "") return []
+  if (normalizedSearch === search && normalized.text === content) return []
   // Spaces that end the search are text to replace when the line goes on
   // (`"hi"  x`); a match at a line end drops them, as the file has none there.
   const withSearchedSpaces = normalizeWithOffsets(search, true).text
@@ -1081,21 +1073,10 @@ const findNormalizedMatch = (content: string, search: string): Option.Option<Mat
     if (lineEnd === -1) return content.length
     return lineEnd
   }
-  const ranges = found.map((range) => ({
+  return found.map((range) => ({
     start: sourceStart(range.start),
     end: sourceEnd(range.end),
   }))
-  const strategy: MatchStrategy = "normalized"
-  return Option.map(Arr.head(ranges), (first) => ({ strategy, index: first.start, ranges }))
-}
-
-const literalMatch = (
-  strategy: MatchStrategy,
-  content: string,
-  search: string,
-): Option.Option<MatchResult> => {
-  const ranges = literalRanges(content, search)
-  return Option.map(Arr.head(ranges), (first) => ({ strategy, index: first.start, ranges }))
 }
 
 /**
@@ -1138,37 +1119,30 @@ const lineEndingAt = (content: string, index: number): string => {
  * a bare CR) goes through the looser tiers on the file. No match starts or
  * ends between a CR and its LF.
  */
-const findEditMatch = (content: string, oldString: string): Option.Option<MatchResult> => {
+const findEditMatch = (content: string, oldString: string): MatchRanges => {
   if (oldString.includes("\r")) {
-    const exact = literalMatch("exact", content, oldString)
-    if (Option.isSome(exact)) return exact
+    const exact = literalRanges(content, oldString)
+    if (exact.length > 0) return exact
   }
   const view = lineFeedView(content)
-  const viewed = Option.map(
-    findMatch(view.text, oldString.replaceAll("\r\n", "\n")),
-    (match): MatchResult => ({
-      strategy: match.strategy,
-      index: view.toSource(match.index),
-      ranges: match.ranges.map((range) => ({
-        start: view.toSource(range.start),
-        end: view.toSource(range.end),
-      })),
-    }),
-  )
-  if (Option.isSome(viewed) || view.text === content) return viewed
+  const viewed = findMatch(view.text, oldString.replaceAll("\r\n", "\n")).map((range) => ({
+    start: view.toSource(range.start),
+    end: view.toSource(range.end),
+  }))
+  if (viewed.length > 0 || view.text === content) return viewed
   return findMatch(content, oldString)
 }
 
-function findMatch(content: string, oldString: string): Option.Option<MatchResult> {
+function findMatch(content: string, oldString: string): MatchRanges {
   // Tier 1: exact
-  const exact = literalMatch("exact", content, oldString)
-  if (Option.isSome(exact)) return exact
+  const exact = literalRanges(content, oldString)
+  if (exact.length > 0) return exact
 
   // Tier 2: unescape literal \n, \t, \\ in oldString
   const unescaped = unescapeStr(oldString)
   if (unescaped !== oldString) {
-    const unescapedMatch = literalMatch("unescaped", content, unescaped)
-    if (Option.isSome(unescapedMatch)) return unescapedMatch
+    const unescapedMatch = literalRanges(content, unescaped)
+    if (unescapedMatch.length > 0) return unescapedMatch
   }
 
   // Tier 3: normalize whitespace + unicode in both
@@ -1248,17 +1222,15 @@ export const EditTool = tool({
 
         const replaceAll = params.replaceAll === true
 
-        // Try fuzzy match strategy
-        const match = findEditMatch(content, params.oldString)
+        const ranges = findEditMatch(content, params.oldString)
 
-        if (Option.isNone(match)) {
+        if (ranges.length === 0) {
           return yield* new EditError({
             message: "oldString not found in file",
             path: filePath,
           })
         }
 
-        const ranges = match.value.ranges
         const occurrences = ranges.length
 
         if (occurrences > 1 && !replaceAll) {
