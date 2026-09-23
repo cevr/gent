@@ -1,6 +1,7 @@
 import { test } from "bun:test"
 import {
   Cause,
+  ConfigProvider,
   Context,
   Deferred,
   Effect,
@@ -568,6 +569,51 @@ describe("auth.listProviders", () => {
         expect(
           required(yield* client.auth.listProviders({ agentName: AgentName.make("helper") })),
         ).toEqual(["anthropic", "otherprov"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live("a driver whose env credential is set reports the key from env", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const envName = "ANTHROPIC_API_KEY"
+        // The server reads env through the ConfigProvider; this one holds only the key.
+        const envLayer = ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { [envName]: "sk-from-env" } }),
+        )
+        const envDrivers: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/env-drivers") },
+          scope: "builtin",
+          sourcePath: "test",
+          contributions: {
+            modelDrivers: [
+              {
+                id: "anthropic",
+                name: "Anthropic",
+                envCredential: envName,
+                resolveModel: () => Effect.succeed(stubModel),
+              },
+              {
+                id: "otherprov",
+                name: "Other",
+                envCredential: "OTHERPROV_API_KEY",
+                resolveModel: () => Effect.succeed(stubModel),
+              },
+            ],
+          },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({ ...e2ePreset, providerLayer, extensions: [envDrivers] }).pipe(
+            Layer.provide(envLayer),
+          ),
+        )
+        const providers = yield* client.auth.listProviders({})
+        const anthropic = providers.find((entry) => entry.provider === "anthropic")
+        expect(anthropic?.hasKey).toBe(true)
+        expect(anthropic?.source).toBe("env")
+        expect(anthropic?.required).toBe(true)
+        const other = providers.find((entry) => entry.provider === "otherprov")
+        expect(other?.hasKey).toBe(false)
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )

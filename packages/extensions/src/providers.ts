@@ -909,6 +909,7 @@ const makeApiKeyCompatDriver = (params: {
 }): ModelDriverContribution => ({
   id: params.id,
   name: params.name,
+  envCredential: params.envVarName,
   // The driver id is the models.dev provider id, so no mapping is needed.
   listModels: driverListModels(params.catalog, params.id),
   retry: {

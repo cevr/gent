@@ -1,5 +1,6 @@
 import {
   Cause,
+  Config,
   Context,
   Duration,
   Effect,
@@ -120,7 +121,8 @@ type AuthType = typeof AuthType.Type
 
 // ── Auth-guard wire types ───────────────────────────────────────────────
 
-const AuthSource = Schema.Literals(["none", "stored"])
+/** Where a provider's credential comes from: the auth store, or the driver's env variable. */
+const AuthSource = Schema.Literals(["none", "stored", "env"])
 type AuthSource = typeof AuthSource.Type
 
 export const AuthProviderInfo = Schema.Struct({
@@ -283,6 +285,17 @@ export class Auth extends Context.Service<Auth, AuthService>()(
 
 // ── Auth guard ──────────────────────────────────────────────────────────
 
+/** True when the named env variable holds a non-empty value. */
+const envCredentialSet = (name: Option.Option<string>): Effect.Effect<boolean> =>
+  Option.match(name, {
+    onNone: () => Effect.succeed(false),
+    onSome: (envName) =>
+      Config.option(Config.nonEmptyString(envName)).pipe(
+        Effect.map(Option.isSome),
+        Effect.orElseSucceed(() => false),
+      ),
+  })
+
 /**
  * Every registered model driver with its stored auth. A driver is `required`
  * when one of `modelIds` routes to it; the caller resolves those models for
@@ -303,6 +316,12 @@ export const listAuthProviders = Effect.fn("AuthGuard.listProviders")(function* 
     const provider = ProviderId.make(driver.id)
     const storedInfo = yield* auth.get(driver.id)
     if (Predicate.isUndefined(storedInfo)) {
+      // Drivers try a stored credential first, then their env variable.
+      const fromEnv = yield* envCredentialSet(Option.fromUndefinedOr(driver.envCredential))
+      if (fromEnv) {
+        providers.push({ provider, hasKey: true, source: "env", required: required.has(driver.id) })
+        continue
+      }
       providers.push({ provider, hasKey: false, required: required.has(driver.id) })
       continue
     }
