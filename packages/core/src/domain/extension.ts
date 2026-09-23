@@ -45,6 +45,7 @@ import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from 
 import {
   type Branch,
   type Message,
+  extensionMetadata,
   MessageMetadata,
   type Session,
   type SessionAdmission,
@@ -901,14 +902,9 @@ const extensionServicesFromHostContext = (
   const extensionId = Option.getOrElse(extensionIdOption, () => ExtensionId.make("unknown"))
   // Every message a leaf sends names it as the author, whatever the caller
   // set, and never carries the client origin only the server stamps: a turn
-  // it opens in a child session knows no user started it.
-  const send: ExtensionSessionService["send"] = (params) => {
-    const { fromClient: _forged, ...metadata } = Option.getOrElse(
-      Option.fromUndefinedOr(params.metadata),
-      (): MessageMetadata => ({}),
-    )
-    return ctx.Session.send({ ...params, metadata: { ...metadata, extensionId } })
-  }
+  // it opens in a spawned session knows no user started it.
+  const send: ExtensionSessionService["send"] = (params) =>
+    ctx.Session.send({ ...params, metadata: extensionMetadata(extensionId, params.metadata) })
   return Context.empty().pipe(
     Context.add(ExtensionContext, {
       extensionId,

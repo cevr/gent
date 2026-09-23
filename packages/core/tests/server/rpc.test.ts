@@ -975,6 +975,9 @@ const NudgeInput = Schema.Struct({
   label: Schema.String,
   sessionId: Schema.optional(SessionId),
   branchId: Schema.optional(BranchId),
+  /** Marks the sender claims beside the client origin. */
+  customType: Schema.optional(Schema.String),
+  joinedTurn: Schema.optional(Schema.Boolean),
 })
 
 /**
@@ -992,7 +995,11 @@ const makeOriginProbe = () => {
       delivery: "queue",
       sourceId: `nudge:${input.label}`,
       content: input.label,
-      metadata: { fromClient: true },
+      metadata: {
+        fromClient: true,
+        ...(Predicate.isNotUndefined(input.customType) && { customType: input.customType }),
+        ...(Predicate.isNotUndefined(input.joinedTurn) && { joinedTurn: input.joinedTurn }),
+      },
       wake: true,
       sessionId: input.sessionId,
       branchId: input.branchId,
@@ -1634,6 +1641,69 @@ describe("interaction.respondInteraction", () => {
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15_000,
+  )
+
+  it.live(
+    "a client or an extension cannot mark its message as the loop's: joinedTurn and a runtime custom type are removed",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("steer answered"),
+            textStep("runtime-typed nudge answered"),
+            textStep("custom nudge answered"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({ ...e2ePreset, providerLayer, extensions: [makeOriginProbe()] }),
+          )
+          const origin = originClient(client)
+          const top = yield* client.session.create({ cwd: "/tmp" })
+          const stored = (label: string) =>
+            client.session
+              .getSnapshot(top)
+              .pipe(
+                Effect.map((snapshot) =>
+                  snapshot.messages.find((message) =>
+                    message.parts.some((part) => part.type === "text" && part.text === label),
+                  ),
+                ),
+              )
+
+          // A client owns neither mark.
+          yield* client.steer.command({
+            command: {
+              _tag: "Interject",
+              ...top,
+              requestId: RequestId.make("forged-marks"),
+              message: "a steer marked as the loop's",
+              metadata: { joinedTurn: true, customType: "continuation" },
+              wake: true,
+            },
+          })
+          yield* waitForReply({ client, ...top, reply: "steer answered" })
+          const steered = yield* stored("a steer marked as the loop's")
+          expect(steered?.metadata?.fromClient).toBe(true)
+          expect(steered?.metadata?.joinedTurn).toBeUndefined()
+          expect(steered?.metadata?.customType).toBeUndefined()
+
+          // An extension owns its custom types, never the loop's marks.
+          yield* origin.call("nudge", top, {
+            label: "a nudge marked as the loop's",
+            joinedTurn: true,
+            customType: "continuation",
+          })
+          yield* waitForReply({ client, ...top, reply: "runtime-typed nudge answered" })
+          const runtimeTyped = yield* stored("a nudge marked as the loop's")
+          expect(runtimeTyped?.metadata?.extensionId).toBe(originProbeId)
+          expect(runtimeTyped?.metadata?.joinedTurn).toBeUndefined()
+          expect(runtimeTyped?.metadata?.customType).toBeUndefined()
+
+          yield* origin.call("nudge", top, { label: "a custom nudge", customType: "probe-row" })
+          yield* waitForReply({ client, ...top, reply: "custom nudge answered" })
+          expect((yield* stored("a custom nudge"))?.metadata?.customType).toBe("probe-row")
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
 
   it.live(
