@@ -558,12 +558,17 @@ export const stringifyOutput = (value: unknown): string => {
   return Option.getOrElse(tryPrettyStringifyJson(value), () => String(value))
 }
 
-/** One-line tool summary for transcripts and the tool row; ASCII marker for plain terminals. */
-export const clipSummary = (text: string): string => clipChars(text, 100, "...")
+/**
+ * One-line tool summary for transcripts and the tool row: the first line, cut
+ * to 100 characters with an ASCII marker for plain terminals. A multi-line
+ * author summary would break every surface that draws one row per call.
+ */
+export const clipSummary = (text: string): string =>
+  clipChars(text.trim().split("\n")[0]?.trimEnd() ?? "", 100, "...")
 
 // oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
 export const summarizeOutput = (value: unknown): string => {
-  if (Predicate.isString(value)) return clipSummary(value.split("\n")[0] ?? "")
+  if (Predicate.isString(value)) return clipSummary(value)
   return Option.match(tryStringifyJson(value), {
     onNone: () => String(value),
     onSome: clipSummary,

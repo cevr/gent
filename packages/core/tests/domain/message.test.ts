@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import {
+  clipSummary,
   copyMessageToBranch,
   dateFromMillis,
   formatHeadTail,
@@ -146,6 +147,16 @@ describe("message branch copies", () => {
 })
 
 // ── head-tail.test ──────────────────────────────────────────────────────────
+
+describe("tool summary", () => {
+  test("a multi-line author summary keeps its first line", () => {
+    expect(clipSummary("to parent · Question:\n1. Which file?\n2. Which test?")).toBe(
+      "to parent · Question:",
+    )
+    expect(clipSummary("\n  done\n")).toBe("done")
+    expect(clipSummary("y".repeat(150))).toBe(`${"y".repeat(100)}...`)
+  })
+})
 
 describe("headTail", () => {
   test("returns all items when under limit", () => {
