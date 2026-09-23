@@ -10,8 +10,7 @@ import {
   type AnyExtensionClientModule,
   type AutocompleteContribution,
   type AutocompleteItem,
-  type BorderLabelItem,
-  type BorderLabelPosition,
+  type StatusLabelItem,
   type ClientContributions,
   type ClientRuntime,
   type ClientRuntimeServices,
@@ -123,7 +122,7 @@ const discoverTuiExtensions = (opts: {
  * Keyed buckets (renderers by tool name, message renderers by custom type,
  * widgets by id, interaction renderers by metadata type) go through `resolveKeyed`. Commands
  * are passed on as sources: the host adds the session's and the server's and
- * resolves them all under `resolveCommands`. Border labels and autocomplete
+ * resolves them all under `resolveCommands`. Status labels and autocomplete
  * sources are collected in scope order.
  */
 
@@ -148,10 +147,9 @@ export interface ResolvedWidget {
   readonly component: WidgetComponent
 }
 
-export interface ResolvedBorderLabel {
-  readonly position: BorderLabelPosition
+export interface ResolvedStatusLabel {
   readonly priority: number
-  readonly produce: () => ReadonlyArray<BorderLabelItem>
+  readonly produce: () => ReadonlyArray<StatusLabelItem>
 }
 
 export interface ResolvedTuiExtensions {
@@ -162,7 +160,7 @@ export interface ResolvedTuiExtensions {
   /** Each extension's commands, in scope order; `resolveCommands` decides the owners. */
   readonly commandSources: ReadonlyArray<CommandSource>
   readonly interactionRenderers: Map<string, InteractionRendererComponent>
-  readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
+  readonly statusLabels: ReadonlyArray<ResolvedStatusLabel>
   readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
   readonly failures: ReadonlyArray<ClientExtensionFailure>
 }
@@ -408,9 +406,8 @@ export const resolveTuiExtensions = (
       commands: itemsOrEmpty(ext.contributions.commands),
     })),
     interactionRenderers,
-    borderLabels: byPriority(
-      collected((contributions) => contributions.borderLabels).map((contribution) => ({
-        position: contribution.position,
+    statusLabels: byPriority(
+      collected((contributions) => contributions.statusLabels).map((contribution) => ({
         priority: priorityOrDefault(contribution.priority),
         produce: contribution.produce,
       })),

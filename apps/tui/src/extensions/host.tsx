@@ -29,7 +29,7 @@ import {
   type CommandSource,
   loadExtensionUi,
   resolveCommands,
-  type ResolvedBorderLabel,
+  type ResolvedStatusLabel,
   type ResolvedTuiExtensions,
   type ResolvedWidget,
 } from "./loader-boundary"
@@ -83,7 +83,7 @@ interface ExtensionUIContextValue {
   /** The session view supplies its own commands; they resolve at builtin scope. */
   readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
   readonly interactionRenderers: Accessor<Map<string, InteractionRendererComponent>>
-  readonly borderLabels: Accessor<ReadonlyArray<ResolvedBorderLabel>>
+  readonly statusLabels: Accessor<ReadonlyArray<ResolvedStatusLabel>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
   /** Client extensions, or contributions, that did not load. */
   readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
@@ -100,7 +100,7 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   widgets: [],
   commandSources: [],
   interactionRenderers: new Map(),
-  borderLabels: [],
+  statusLabels: [],
   autocompleteItems: [],
   failures: [],
 }
@@ -313,7 +313,7 @@ export function ExtensionUIProvider(props: {
         commands: () => resolvedCommands().commands,
         setSessionCommands,
         interactionRenderers: () => resolved().interactionRenderers,
-        borderLabels: () => resolved().borderLabels,
+        statusLabels: () => resolved().statusLabels,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
         failures: () => [...resolved().failures, ...resolvedCommands().failures],
         setDynamicAutocomplete,

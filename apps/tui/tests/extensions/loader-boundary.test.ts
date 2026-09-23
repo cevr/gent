@@ -7,7 +7,6 @@ import {
   autocompleteContribution,
   type AutocompleteContribution,
   type AutocompleteItem,
-  borderLabelContribution,
   clientCommandContribution,
   clientContributions,
   type ClientContributions,
@@ -25,6 +24,7 @@ import {
   type MessageRowProps,
   NoActiveSessionError,
   rendererContribution,
+  statusLabelContribution,
   type WidgetComponent,
   widgetContribution,
 } from "../../src/extensions/client-facets"
@@ -257,13 +257,12 @@ describe("resolveTuiExtensions", () => {
     ])
   })
 
-  test("border labels remain collected and priority sorted", () => {
+  test("status labels remain collected and priority sorted", () => {
     const resolved = resolveTuiExtensions([
       make(
         "builtin-label",
         "builtin",
-        borderLabelContribution({
-          position: "top-left",
+        statusLabelContribution({
           priority: 30,
           produce: () => [{ text: "30", color: "info" }],
         }),
@@ -272,13 +271,11 @@ describe("resolveTuiExtensions", () => {
         "project-labels",
         "project",
         clientContributions(
-          borderLabelContribution({
-            position: "bottom-left",
+          statusLabelContribution({
             priority: 20,
             produce: () => [{ text: "20", color: "success" }],
           }),
-          borderLabelContribution({
-            position: "top-right",
+          statusLabelContribution({
             priority: 10,
             produce: () => [{ text: "10", color: "warning" }],
           }),
@@ -286,7 +283,7 @@ describe("resolveTuiExtensions", () => {
       ),
     ])
 
-    expect(resolved.borderLabels.map((label) => label.priority)).toEqual([10, 20, 30])
+    expect(resolved.statusLabels.map((label) => label.priority)).toEqual([10, 20, 30])
   })
 
   test("autocomplete contributions stay scope ordered and additive", () => {
@@ -1440,8 +1437,8 @@ export default defineClientExtension("@test/b", {
             runtime: activeSessionRuntime,
           }),
         )
-        const borderPositions = new Set(resolved.borderLabels.map((label) => label.position))
-        expect(borderPositions.has("bottom-right")).toBe(true)
+        // The goal label is the one builtin status label.
+        expect(resolved.statusLabels.map((label) => label.priority)).toEqual([40])
       }).pipe(
         Effect.ensuring(
           Effect.gen(function* () {

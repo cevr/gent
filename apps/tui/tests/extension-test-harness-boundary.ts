@@ -2,7 +2,6 @@ import { Deferred, Effect, Option, type Scope } from "effect"
 import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
 import type {
   AnyExtensionClientModule,
-  BorderLabelPosition,
   ClientContributions,
   ClientRuntime,
   ClientRuntimeServices,
@@ -119,8 +118,3 @@ export const provideClientServices = <A>(
     Effect.sync(() => makeClientExtensionRuntime(opts)),
     (runtime) => Effect.promise(() => runtime.dispose()),
   ).pipe(Effect.flatMap((runtime) => Effect.promise(() => runtime.runPromise(effect))))
-
-export const findBorderLabel = (
-  contributions: ClientContributions,
-  position: BorderLabelPosition,
-) => contributions.borderLabels?.find((entry) => entry.position === position)

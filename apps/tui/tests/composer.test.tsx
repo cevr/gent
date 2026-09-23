@@ -16,7 +16,7 @@ import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { RGBA } from "@opentui/core"
 import {
-  type BorderLabelItem,
+  type StatusRowLabel,
   type ComposerEvent,
   ComposerInteractionState,
   ComposerState,
@@ -352,10 +352,10 @@ describe("paste workflow integration", () => {
  */
 
 const muted = RGBA.fromHex("#888888")
-const label = (text: string): BorderLabelItem => ({ text, color: muted })
+const label = (text: string): StatusRowLabel => ({ text, color: muted })
 
 /** Everything the real row carries, longest-plausible cwd included. */
-const labels: BorderLabelItem[] = [
+const labels: StatusRowLabel[] = [
   label("idle"),
   label("some-very-long-project-name (feature/a-long-branch)"),
   label("Claude Sonnet 5"),

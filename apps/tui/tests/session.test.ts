@@ -3,7 +3,7 @@ import { Effect, FileSystem, Option } from "effect"
 import {
   beginAuthCheck,
   buildContextLabels,
-  buildTopRightLabels,
+  buildModelLabels,
   canNavigateAtCursor,
   clearQueue,
   closeAuthGateState,
@@ -474,9 +474,9 @@ const contextLabels = (
     theme,
   })
 
-describe("buildTopRightLabels", () => {
+describe("buildModelLabels", () => {
   test("empty when no data", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.none(),
       theme,
       debugMode: false,
@@ -485,7 +485,7 @@ describe("buildTopRightLabels", () => {
   })
 
   test("shows thinking level when set", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.some("high"),
       theme,
       debugMode: false,
@@ -496,7 +496,7 @@ describe("buildTopRightLabels", () => {
   })
 
   test("debug mode shows debug label", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.none(),
       theme,
       debugMode: true,
@@ -506,7 +506,7 @@ describe("buildTopRightLabels", () => {
   })
 
   test("carries no context gauge — that anchors to the right edge", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.some("high"),
       theme,
       debugMode: true,
@@ -650,7 +650,7 @@ const contextLabelsOrder = (
 
 describe("effort sits with the model and the gauge anchors right", () => {
   test("reports the effort without the context gauge", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.some("medium"),
       theme: themeOrder,
       debugMode: false,
@@ -659,7 +659,7 @@ describe("effort sits with the model and the gauge anchors right", () => {
   })
 
   test("reports no effort when none is set", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.none(),
       theme: themeOrder,
       debugMode: false,

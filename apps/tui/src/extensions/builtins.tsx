@@ -15,7 +15,6 @@ import { FileFinder, type SearchResult } from "@ff-labs/fff-bun"
 import {
   type AnyExtensionClientModule,
   autocompleteContribution,
-  borderLabelContribution,
   type ClientActivitySnapshot,
   clientCommandContribution,
   clientContributions,
@@ -25,6 +24,7 @@ import {
   messageRendererContribution,
   rendererContribution,
   sessionQuery,
+  statusLabelContribution,
   widgetContribution,
 } from "./client-facets.js"
 import { truncate, truncatePath } from "../utils"
@@ -557,8 +557,8 @@ export const builtinDriver = defineClientExtension("@gent/driver-ui", {
  * Goal status label — transport-only.
  *
  * Reads the branch goal through `GoalRpc.Get` and refreshes on
- * `ExtensionStateChanged` pulses for `@gent/goal`. Renders one bottom-right
- * border label while a goal is pending on the current branch, and collapses
+ * `ExtensionStateChanged` pulses for `@gent/goal`. Renders one
+ * status label while a goal is pending on the current branch, and collapses
  * each goal continuation message to one line.
  */
 
@@ -581,8 +581,7 @@ const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
       messageRendererContribution(GOAL_CONTEXT_MESSAGE_TYPE, () => (
         <CollapsedRow label="↻ goal continuation" />
       )),
-      borderLabelContribution({
-        position: "bottom-right",
+      statusLabelContribution({
         priority: 40,
         produce: () => {
           const goal = snapshot.value().pipe(
@@ -690,7 +689,7 @@ export function ConnectionWidget() {
     ...ext.failures().map((failure) => failure.id),
   ]
   const hasFailedExtensions = () => failedExtensions().length > 0
-  // Reconnecting and the restart count belong to the top-left border label;
+  // Reconnecting and the restart count belong to the status row;
   // this widget draws what the label cannot: issues and failed extensions.
   const visible = () =>
     Option.isSome(connectionIssue()) || Option.isSome(disconnectedReason()) || hasFailedExtensions()

@@ -185,8 +185,8 @@ function useSessionShell(): SessionShellValue {
 
 // ── session labels ──────────────────────────────────────────────────────────
 
-/** One colored label on the composer frame rule. */
-export interface BorderLabelItem {
+/** One colored label on the composer's status row, its color resolved. */
+export interface StatusRowLabel {
   text: string
   color: RGBA
 }
@@ -205,7 +205,7 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
 }
 
 /** `ctx 42%`: percent of the model's input budget. What the projection dropped is in the thread pane. */
-const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): BorderLabelItem => {
+const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): StatusRowLabel => {
   const pct = Math.min(
     100,
     Math.round((context.estimatedTokens / context.contextLimitTokens) * 100),
@@ -216,7 +216,7 @@ const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): Bord
 /**
  * The context gauge alone, for the labels anchored to the right edge.
  *
- * It is split from {@link buildTopRightLabels} because the two halves sit at
+ * It is split from {@link buildModelLabels} because the two halves sit at
  * opposite ends of the row: effort belongs beside the model name, while the
  * gauge belongs with the running total a reader checks at a glance.
  */
@@ -225,7 +225,7 @@ export function buildContextLabels(input: {
   // eslint-disable-next-line effect/noNullish -- this mirrors the optional client snapshot field.
   readonly contextLength: number | undefined
   readonly theme: ThemeColors
-}): BorderLabelItem[] {
+}): StatusRowLabel[] {
   const projection = input.metrics.context
   if (Option.isSome(projection) && projection.value.contextLimitTokens > 0) {
     // The projection is what the model saw; it beats the provider's last usage report.
@@ -248,12 +248,12 @@ export function buildContextLabels(input: {
  * configured, the gauge reports what the session has spent, and the two
  * belong at opposite ends.
  */
-export function buildTopRightLabels(input: {
+export function buildModelLabels(input: {
   readonly reasoningLevel: Option.Option<string>
   readonly theme: ThemeColors
   readonly debugMode: boolean
-}): BorderLabelItem[] {
-  const items: BorderLabelItem[] = []
+}): StatusRowLabel[] {
+  const items: StatusRowLabel[] = []
 
   if (Option.isSome(input.reasoningLevel)) {
     items.push({ text: input.reasoningLevel.value, color: input.theme.info })

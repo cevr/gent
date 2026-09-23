@@ -626,7 +626,7 @@ export const sessionQuery = <A>(opts: {
 //     sort by priority.
 //   - commands: the same rule by id, slash and keybind, applied by the host's
 //     `resolveCommands` over the session's, the extensions' and the server's
-//   - border labels: collected (no winner), sorted by priority
+//   - status labels: collected (no winner), sorted by priority
 //   - autocomplete: collected (no winner), scope-ordered
 
 /** Widget placement slots in the session view */
@@ -700,8 +700,8 @@ interface InteractionRendererContribution {
   readonly component: InteractionRendererComponent
 }
 
-export type BorderLabelPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right"
-export type BorderLabelColor =
+/** A theme color by name, or a resolved one. */
+export type StatusLabelColor =
   | RGBA
   | "warning"
   | "info"
@@ -710,16 +710,19 @@ export type BorderLabelColor =
   | "text"
   | "textMuted"
 
-export interface BorderLabelItem {
+export interface StatusLabelItem {
   readonly text: string
-  readonly color: BorderLabelColor
+  readonly color: StatusLabelColor
 }
 
-interface BorderLabelContribution {
-  readonly position: BorderLabelPosition
+/**
+ * Text on the composer's status row. The row is one line: the host's labels,
+ * then every extension label by priority, then the right-anchored gauge and cost.
+ */
+interface StatusLabelContribution {
   /** Lower = earlier; default 100. */
   readonly priority?: number
-  readonly produce: () => ReadonlyArray<BorderLabelItem>
+  readonly produce: () => ReadonlyArray<StatusLabelItem>
 }
 
 export interface AutocompleteContribution {
@@ -748,7 +751,7 @@ export interface ClientContributions {
   readonly widgets?: ReadonlyArray<WidgetContribution>
   readonly commands?: ReadonlyArray<Command>
   readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
-  readonly borderLabels?: ReadonlyArray<BorderLabelContribution>
+  readonly statusLabels?: ReadonlyArray<StatusLabelContribution>
   readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
 }
 
@@ -781,7 +784,7 @@ export const clientContributions = (
     out.widgets = append(out.widgets, part.widgets)
     out.commands = append(out.commands, part.commands)
     out.interactionRenderers = append(out.interactionRenderers, part.interactionRenderers)
-    out.borderLabels = append(out.borderLabels, part.borderLabels)
+    out.statusLabels = append(out.statusLabels, part.statusLabels)
     out.autocomplete = append(out.autocomplete, part.autocomplete)
   }
 
@@ -821,8 +824,8 @@ export const interactionRendererContribution = (
   metadataType: string,
 ): ClientContributions => ({ interactionRenderers: [{ metadataType, component }] })
 
-export const borderLabelContribution = (opts: BorderLabelContribution): ClientContributions => ({
-  borderLabels: [opts],
+export const statusLabelContribution = (opts: StatusLabelContribution): ClientContributions => ({
+  statusLabels: [opts],
 })
 
 export const autocompleteContribution = (opts: AutocompleteContribution): ClientContributions => ({

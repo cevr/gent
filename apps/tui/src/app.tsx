@@ -36,16 +36,16 @@ import {
 import { collectDiagrams, MermaidViewer } from "./mermaid"
 import { useEnv, useWorkspace } from "./workspace"
 import {
-  type BorderLabelItem,
+  type StatusRowLabel,
   buildContextLabels,
-  buildTopRightLabels,
+  buildModelLabels,
   createSessionController,
   formatCwdGit,
   SessionControllerContext,
 } from "./session"
 import { useExtensionUI } from "./extensions/host"
 import { Auth } from "./auth"
-import type { BorderLabelColor, WidgetSlot } from "./extensions/client-facets.js"
+import type { StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js"
 import { useRenderer } from "@opentui/solid"
 
 // ── boot flow ───────────────────────────────────────────────────────────────
@@ -509,26 +509,29 @@ export function Session(props: SessionProps) {
   })
 
   // Map semantic color names from extensions to resolved theme colors
-  const resolveColor = (color: BorderLabelColor | string): RGBA => {
-    if (Predicate.isString(color)) {
-      const colorMap = {
-        warning: theme.warning,
-        info: theme.info,
-        success: theme.success,
-        primary: theme.primary,
-        text: theme.text,
-        textMuted: theme.textMuted,
-      }
-      const isKnownColor = (name: string): name is keyof typeof colorMap =>
-        Object.hasOwn(colorMap, name)
-      if (isKnownColor(color)) return colorMap[color]
-      return theme.text
+  const resolveColor = (color: StatusLabelColor): RGBA => {
+    if (!Predicate.isString(color)) return color
+    const colorMap = {
+      warning: theme.warning,
+      info: theme.info,
+      success: theme.success,
+      primary: theme.primary,
+      text: theme.text,
+      textMuted: theme.textMuted,
     }
-    return color
+    return colorMap[color]
   }
 
-  const topLeftLabels = (): BorderLabelItem[] => {
-    const items: BorderLabelItem[] = []
+  /** Every extension status label, by priority, after the host's own. */
+  const extensionLabels = (): StatusRowLabel[] =>
+    ext
+      .statusLabels()
+      .flatMap((label) =>
+        label.produce().map((item) => ({ text: item.text, color: resolveColor(item.color) })),
+      )
+
+  const connectionLabels = (): StatusRowLabel[] => {
+    const items: StatusRowLabel[] = []
 
     // Core chrome: connection/restart status
     const conn = client.connectionState()
@@ -538,38 +541,29 @@ export function Session(props: SessionProps) {
       items.push({ text: `restart ${conn.generation}`, color: theme.textMuted })
     }
 
-    // Extension-contributed labels
-    for (const label of ext.borderLabels()) {
-      if (label.position === "top-left") {
-        for (const item of label.produce()) {
-          items.push({ text: item.text, color: resolveColor(item.color) })
-        }
-      }
-    }
-
     return items
   }
 
   /**
    * The running total, rendered last of everything.
    *
-   * Cost used to sit in the top-left group, which put it between the
+   * Cost used to sit in the connection group, which put it between the
    * connection state and the model. It is the one number a reader glances at
    * without reading the rest of the row, so it belongs at the far end where
    * its position is fixed and nothing before it can shift it.
    */
-  const costLabels = (): BorderLabelItem[] => {
+  const costLabels = (): StatusRowLabel[] => {
     const c = client.cost()
     if (c <= 0) return []
     return [{ text: `$${c.toFixed(2)}`, color: theme.textMuted }]
   }
 
-  const topRightLabels = (): BorderLabelItem[] => {
+  const modelLabels = (): StatusRowLabel[] => {
     const model = Option.fromNullishOr(client.modelInfo())
-    const items: BorderLabelItem[] = []
+    const items: StatusRowLabel[] = []
     if (Option.isSome(model)) items.push({ text: model.value.name, color: theme.textMuted })
     return items.concat(
-      buildTopRightLabels({
+      buildModelLabels({
         reasoningLevel: Option.fromNullishOr(client.reasoningLevel()),
         theme,
         debugMode: props.debugMode === true,
@@ -582,16 +576,16 @@ export function Session(props: SessionProps) {
    * total. Both are numbers a reader checks at a glance without reading the
    * row, so they hold their place and the left group truncates instead.
    */
-  const rightAnchoredLabels = (): BorderLabelItem[] =>
+  const rightAnchoredLabels = (): StatusRowLabel[] =>
     buildContextLabels({
       metrics: client.sessionMetrics(),
       contextLength: client.modelInfo()?.contextLength,
       theme,
     }).concat(costLabels())
 
-  const bottomLeftLabels = (): BorderLabelItem[] => {
+  const phaseLabels = (): StatusRowLabel[] => {
     const a = controller.activity()
-    const items: BorderLabelItem[] = []
+    const items: StatusRowLabel[] = []
     if (controller.uiState().transcriptExpanded) {
       items.push({ text: "transcript · Esc to return", color: theme.textMuted })
     }
@@ -621,30 +615,6 @@ export function Session(props: SessionProps) {
       ),
       color: theme.textMuted,
     })
-
-    // Extension-contributed labels
-    for (const label of ext.borderLabels()) {
-      if (label.position === "bottom-left") {
-        for (const item of label.produce()) {
-          items.push({ text: item.text, color: resolveColor(item.color) })
-        }
-      }
-    }
-
-    return items
-  }
-
-  const bottomRightLabels = (): BorderLabelItem[] => {
-    const items: BorderLabelItem[] = []
-
-    // Extension-contributed labels
-    for (const bl of ext.borderLabels()) {
-      if (bl.position === "bottom-right") {
-        for (const item of bl.produce()) {
-          items.push({ text: item.text, color: resolveColor(item.color) })
-        }
-      }
-    }
 
     return items
   }
@@ -713,10 +683,10 @@ export function Session(props: SessionProps) {
 
           <ComposerFrame
             labels={[
-              ...bottomLeftLabels(),
-              ...topLeftLabels(),
-              ...topRightLabels(),
-              ...bottomRightLabels(),
+              ...phaseLabels(),
+              ...connectionLabels(),
+              ...modelLabels(),
+              ...extensionLabels(),
               ...rightAnchoredLabels(),
             ]}
             rightLabels={rightAnchoredLabels().length}
