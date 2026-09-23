@@ -882,7 +882,7 @@ describe("platform duplication guards", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/core/tests/runtime/example.test.ts",
-        "const id = Bun.randomUUIDv7()",
+        "Layer.provide(BunPlatformLive)",
       ),
     ).toEqual([])
   })
@@ -935,230 +935,11 @@ describe("platform duplication guards", () => {
     ])
   })
 
-  test("flags withX effect wrapper helpers", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "export const withThing = <A, E, R>(",
-          "  effect: Effect.Effect<A, E, R>,",
-          "  value: string,",
-          ") => effect.pipe(Effect.annotateLogs({ value }))",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "export const withThing = <A, E, R>(",
-          "  eff: Effect.Effect<A, E, R>,",
-          "  value: string,",
-          ") => eff.pipe(Effect.annotateLogs({ value }))",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "export const provideThing =",
-          "  (value: string) =>",
-          "  <A, E, R>(effect: Effect.Effect<A, E, R>) =>",
-          "    effect.pipe(Effect.annotateLogs({ value }))",
-        ].join("\n"),
-      ),
-    ).toEqual([])
-  })
-
-  test("flags withX callback wrapper helpers", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "const withThing = <A>(",
-          "  use: (thing: Thing) => A,",
-          ") => runtime.runSync(Effect.map(Thing, use))",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "const withConnection = <A>(",
-          "  baseUrl: string,",
-          "  use: (conn: McpConnection) => Effect.Effect<A, ExampleMcpError>,",
-          ") => Effect.acquireUseRelease(acquireConnection(baseUrl), use, releaseConnection)",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/file-index/example.ts",
-        [
-          "const withFallback = (primary: FileIndexService, fallback: FileIndexService): FileIndexService => ({",
-          "  getStatus: (path) => primary.getStatus(path),",
-          "})",
-        ].join("\n"),
-      ),
-    ).toEqual([])
-  })
-
-  test("flags withX wrappers around function invocations", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "yield* withWorkspace(submitTurn(operation))",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(fn(...))` invocation style is banned; call the inner effect and pipe the wrapper (`fn(...).pipe(withX)`).",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "yield* withWorkspace(",
-          "  Effect.gen(function* () {",
-          "    yield* submitTurn(operation)",
-          "  }),",
-          ")",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(fn(...))` invocation style is banned; call the inner effect and pipe the wrapper (`fn(...).pipe(withX)`).",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "yield* submitTurn(operation).pipe(provideWorkspace)",
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "yield* run.pipe(withWideEvent(agentRunBoundary(agentName, sessionId)))",
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "yield* run.pipe(",
-          "  Effect.tap(() => WideEvent.set({ sessionId, branchId })),",
-          "  withWideEvent(WideEventBoundary.rpc('message.send', { requestId })),",
-          ")",
-        ].join("\n"),
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/storage/example.ts",
-        "return yield* sql.withTransaction(saveMessage(message))",
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/openai/codex-transform.ts",
-        "const withBody = rewriteCodexBody(withHeaders(req, headers))",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags withX callback invocations", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "apps/tui/src/platform/path-runtime.ts",
-        "const joined = withPath((path) => path.join(...parts))",
-      ),
-    ).toEqual([
-      {
-        file: "apps/tui/src/platform/path-runtime.ts",
-        line: 1,
-        message:
-          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/example/mcp-bridge.ts",
-        [
-          "withConnection(baseUrl, (conn) =>",
-          "  Effect.tryPromise(() => conn.client.callTool({ name: 'execute' })),",
-          ")",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/extensions/src/example/mcp-bridge.ts",
-        line: 1,
-        message:
-          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "yield* effect.pipe(withWideEvent(WideEventBoundary.rpc('message.send')), Effect.tap(() => log()))",
-      ),
-    ).toEqual([])
-  })
-
   test("does not flag the guard source itself", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/tooling/src/guards.ts",
-        ["const id = Bun.randomUUIDv7()", "Layer.provide(BunPlatformLive)"].join("\n"),
+        "Layer.provide(BunPlatformLive)",
       ),
     ).toEqual([])
   })
@@ -1187,18 +968,13 @@ describe("platform duplication guards", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/core/src/server/rpc.ts",
-        ["export class BranchInfo {}", "const id = Bun.randomUUIDv7()"].join("\n"),
+        "export class BranchInfo {}",
       ),
     ).toEqual([
       {
         file: "packages/core/src/server/rpc.ts",
         line: 1,
         message: "Transport session DTOs mirror domain types",
-      },
-      {
-        file: "packages/core/src/server/rpc.ts",
-        line: 2,
-        message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
       },
     ])
   })
@@ -1221,85 +997,6 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "packages/core/src/server/server-root.ts",
         "const PlatformLayer = Layer.mergeAll(BunCronRuntimeLive, BunGentPlatformLive)",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags deleted Bun.Glob fallback", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "apps/tui/src/utils/example.ts",
-        "const glob = new Bun.Glob(pattern)",
-      ),
-    ).toEqual([
-      {
-        file: "apps/tui/src/utils/example.ts",
-        line: 1,
-        message: "Bun.Glob fallback is deleted; use the FileIndex service",
-      },
-    ])
-  })
-
-  test("flags Bun.randomUUIDv7 outside the platform adapter", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/server/example.ts",
-        "const id = Bun.randomUUIDv7()",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/server/example.ts",
-        line: 1,
-        message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/gent-platform-bun.ts",
-        "const id = Bun.randomUUIDv7()",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags host process and OS facts outside the platform adapter", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "apps/server/src/main.ts",
-        [
-          "const pid = process.pid",
-          "const runtime = process.execPath",
-          "process.kill(pid, 'SIGTERM')",
-          "const hostname = os.hostname()",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "apps/server/src/main.ts",
-        line: 1,
-        message: "Host process facts are adapter-only; use GentPlatform",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 2,
-        message: "Host process facts are adapter-only; use GentPlatform",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 3,
-        message: "Host process facts are adapter-only; use GentPlatform",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 4,
-        message: "Host OS facts are adapter-only; use GentPlatform",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/gent-platform-bun.ts",
-        ["const pid = process.pid", "const home = os.homedir()"].join("\n"),
       ),
     ).toEqual([])
   })

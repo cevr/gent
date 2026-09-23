@@ -1263,22 +1263,6 @@ const referenceExtensionFile = (file: string): boolean =>
 
 const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
   {
-    pattern: /\bBun\.Glob\b/,
-    message: "Bun.Glob fallback is deleted; use the FileIndex service",
-  },
-  {
-    pattern: /\bBun\.randomUUIDv7\b/,
-    message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
-  },
-  {
-    pattern: /\bprocess\.(?:platform|pid|execPath|kill)\b/,
-    message: "Host process facts are adapter-only; use GentPlatform",
-  },
-  {
-    pattern: /\bos\.(?:hostname|homedir|release)\s*\(/,
-    message: "Host OS facts are adapter-only; use GentPlatform",
-  },
-  {
     pattern: /\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\b/,
     message: "Bun platform layers may only be provided by platform roots",
   },
@@ -1302,26 +1286,6 @@ const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
     message: "Reference extensions must not reach out of examples/extensions with relative imports",
   },
 ]
-
-const withEffectWrapperDefinitionPattern = /\b(?:export\s+)?const\s+with[A-Z][A-Za-z0-9_]*\b/
-const effectWrapperArgumentPattern = /:\s*Effect\.Effect\b/
-const withEffectWrapperMessage =
-  "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`"
-const withFunctionInvocationPattern = /(?<![.\w$])with[A-Z][A-Za-z0-9_]*\s*\(/g
-const callbackArgumentPattern =
-  /(?:^|,)\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][A-Za-z0-9_$]*\s*=>)/
-const callbackParameterPattern = /:\s*\([^)]*\)\s*=>/
-const wrappedFunctionInvocationPattern =
-  /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\(/
-const withFunctionInvocationMessage =
-  "`withX(fn(...))` invocation style is banned; call the inner effect and pipe the wrapper (`fn(...).pipe(withX)`)."
-const withCallbackWrapperMessage =
-  "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`."
-
-const hostFactPatternSources = new Set([
-  "\\bprocess\\.(?:platform|pid|execPath|kill)\\b",
-  "\\bos\\.(?:hostname|homedir|release)\\s*\\(",
-])
 
 const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
   {
@@ -1432,17 +1396,8 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
   const patterns = bannedActiveSourcePatterns.filter(
     ({ pattern }) =>
       !(
-        hostFactPatternSources.has(pattern.source) &&
-        !file.startsWith("apps/server/") &&
-        !file.startsWith("packages/sdk/")
-      ) &&
-      !(
-        (file === "packages/core/src/runtime/gent-platform-bun.ts" &&
-          (pattern.source === "\\bBun\\.randomUUIDv7\\b" ||
-            pattern.source === "\\bprocess\\.(?:platform|pid|execPath|kill)\\b" ||
-            pattern.source === "\\bos\\.(?:hostname|homedir|release)\\s*\\(")) ||
-        (platformProviderRootFiles.has(file) &&
-          pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b")
+        platformProviderRootFiles.has(file) &&
+        pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b"
       ),
   )
   if (protectedHostFactFile(file)) patterns.push(...bannedProtectedHostFactPatterns)
@@ -1451,99 +1406,6 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
     patterns.push(...bannedTransportContractPatterns)
   }
   return patterns
-}
-
-const startsInsidePipeCall = (
-  lines: ReadonlyArray<string>,
-  index: number,
-  column: number,
-): boolean => {
-  const currentLine = Option.getOrElse(Option.fromNullishOr(lines[index]), () => "")
-  const prefixWindow = [...lines.slice(0, index), currentLine.slice(0, column)].join("\n")
-  const pipeStart = prefixWindow.lastIndexOf(".pipe(")
-  if (pipeStart === -1) return false
-
-  let depth = 0
-  for (const char of prefixWindow.slice(pipeStart + ".pipe".length)) {
-    if (char === "(") depth++
-    if (char === ")") depth--
-  }
-
-  return depth > 0
-}
-
-const startsByWrappingFunctionInvocation = (
-  lines: ReadonlyArray<string>,
-  index: number,
-  column: number,
-): boolean => {
-  const firstArgumentWindow = [
-    Option.getOrElse(Option.fromNullishOr(lines[index]), () => "").slice(column),
-    ...lines.slice(index + 1, index + 8),
-  ].join("\n")
-
-  return wrappedFunctionInvocationPattern.test(firstArgumentWindow.trimStart())
-}
-
-const startsWithCallbackArgument = (
-  lines: ReadonlyArray<string>,
-  index: number,
-  column: number,
-): boolean => {
-  const callWindow = [
-    Option.getOrElse(Option.fromNullishOr(lines[index]), () => "").slice(column),
-    ...lines.slice(index + 1, index + 8),
-  ]
-    .join("\n")
-    .trimStart()
-
-  return callbackArgumentPattern.test(callWindow)
-}
-
-const declaresCallbackParameter = (declarationWindow: string): boolean => {
-  const firstArrowIndex = declarationWindow.indexOf("=>")
-  let signatureWindow = declarationWindow
-  if (firstArrowIndex !== -1) signatureWindow = declarationWindow.slice(0, firstArrowIndex + 2)
-  return callbackParameterPattern.test(signatureWindow)
-}
-
-const findWrapperViolations = (
-  file: string,
-  lines: ReadonlyArray<string>,
-  line: string,
-  index: number,
-): ReadonlyArray<PlatformDuplicationFinding> => {
-  const findings: PlatformDuplicationFinding[] = []
-  if (withEffectWrapperDefinitionPattern.test(line)) {
-    const declarationWindow = lines.slice(index, index + 8).join("\n")
-    if (effectWrapperArgumentPattern.test(declarationWindow)) {
-      findings.push({ file, line: index + 1, message: withEffectWrapperMessage })
-    }
-    if (declaresCallbackParameter(declarationWindow)) {
-      findings.push({ file, line: index + 1, message: withCallbackWrapperMessage })
-    }
-  }
-
-  withFunctionInvocationPattern.lastIndex = 0
-  let invocationMatch = Option.fromNullishOr(withFunctionInvocationPattern.exec(line))
-  while (Option.isSome(invocationMatch)) {
-    const match = invocationMatch.value
-    const firstArgumentColumn = match.index + match[0].length
-    if (
-      startsByWrappingFunctionInvocation(lines, index, firstArgumentColumn) &&
-      !startsInsidePipeCall(lines, index, match.index)
-    ) {
-      findings.push({ file, line: index + 1, message: withFunctionInvocationMessage })
-    }
-    if (
-      startsWithCallbackArgument(lines, index, firstArgumentColumn) &&
-      !startsInsidePipeCall(lines, index, match.index)
-    ) {
-      findings.push({ file, line: index + 1, message: withCallbackWrapperMessage })
-    }
-    invocationMatch = Option.fromNullishOr(withFunctionInvocationPattern.exec(line))
-  }
-  return findings
 }
 
 export const findPlatformDuplicationViolations = (
@@ -1560,7 +1422,6 @@ export const findPlatformDuplicationViolations = (
   const lines = text.split("\n")
   for (let index = 0; index < lines.length; index++) {
     const line = Option.getOrElse(Option.fromNullishOr(lines[index]), () => "")
-    findings.push(...findWrapperViolations(file, lines, line, index))
     for (const { pattern, message } of patterns) {
       if (pattern.test(line)) {
         findings.push({ file, line: index + 1, message })

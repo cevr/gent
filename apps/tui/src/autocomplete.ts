@@ -257,6 +257,7 @@ export const writeFrecencyStore = (
     // pid names the temp file because a second `gent` may be writing its own
     // at the same instant, and two writers sharing one temp path would
     // corrupt each other rather than merely race.
+    // oxlint-disable-next-line gent/no-bun-outside-adapter -- The pid only names a per-process temp file for the atomic rename below.
     const temp = `${paths.file}.${process.pid}.tmp`
     yield* fs.writeFileString(temp, encodeStore(store))
     yield* Effect.onError(fs.rename(temp, paths.file), () =>

@@ -157,8 +157,29 @@ const CASES: ReadonlyArray<RuleCase> = [
     // valid file lives at `runtime/gent-platform-bun.ts` — the canonical
     // GentPlatform live impl. That path is the only allowlist entry.
     valid: "runtime/gent-platform-bun.ts",
-    // 5 Bun.* member expressions + 3 process host probes
-    expectedCount: 8,
+    // 5 Bun.* member expressions + 4 process host probes + 3 os host facts
+    expectedCount: 12,
+  },
+  {
+    rule: "gent/no-bun-outside-adapter",
+    invalid: "runtime/retired-adapter.ts",
+    valid: "runtime/fallback-adapter.ts",
+    // Bun.Glob and Bun.randomUUIDv7, banned even in an adapter
+    expectedCount: 2,
+  },
+  {
+    rule: "gent/no-bun-outside-adapter",
+    invalid: "packages/sdk/src/host-facts.invalid.ts",
+    valid: "packages/sdk/src/host-facts.valid.ts",
+    // process.platform, process.pid, Bun.spawn: the SDK is not exempt
+    expectedCount: 3,
+  },
+  {
+    rule: "gent/no-bun-outside-adapter",
+    invalid: "apps/server/src/main.ts",
+    valid: "apps/server/src/launch.valid.ts",
+    // process.execPath: the server launcher is not exempt
+    expectedCount: 1,
   },
   {
     rule: "gent/no-hand-rolled-tagged-union",
@@ -185,8 +206,10 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-with-wrapper-call",
     invalid: "no-with-wrapper-call.invalid.ts",
     valid: "no-with-wrapper-call.valid.ts",
-    // Direct withX(innerCall()) + higher-order withX(...)(innerCall())
-    expectedCount: 2,
+    // Calls: withX(innerCall()), withX(...)(innerCall()), withX(innerCall(), arg),
+    // withX(arrow), withX(arg, function). Definitions: an Effect parameter,
+    // a curried Effect parameter, a callback parameter.
+    expectedCount: 8,
   },
   {
     rule: "gent/no-inert-it",
@@ -268,14 +291,6 @@ effectDescribe("custom lint rules", () => {
       const [, validRun] = yield* loadRuns
       expect(validRun.exitCode).toBe(0)
       expect(validRun.report.diagnostics.length).toBe(0)
-    }),
-  )
-
-  it.live("gent/no-bun-outside-adapter allows adapter files", () =>
-    Effect.gen(function* () {
-      const run = yield* runOxlint(["runtime/fallback-adapter.ts"])
-      expect(run.exitCode).toBe(0)
-      expect(countViolations(run.report.diagnostics, "gent/no-bun-outside-adapter")).toBe(0)
     }),
   )
 

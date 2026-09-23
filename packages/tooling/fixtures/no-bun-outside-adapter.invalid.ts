@@ -14,6 +14,12 @@ declare const process: {
   execPath: string
   kill: (pid: number, signal: 0) => void
   platform: string
+  pid: number
+}
+declare const os: {
+  hostname: () => string
+  homedir: () => string
+  release: () => string
 }
 
 export const id = Bun.randomUUIDv7()
@@ -24,3 +30,7 @@ export const hasher = new Bun.CryptoHasher("sha256")
 export const execPath = process.execPath
 export const platform = process.platform
 process.kill(1, 0)
+export const pid = process.pid
+export const host = os.hostname()
+export const homeDir = os.homedir()
+export const release = os.release()
