@@ -215,7 +215,9 @@ describe("PromptRenderer", () => {
         setup.mockInput.pressArrow("down")
         setup.mockInput.pressArrow("down")
         setup.mockInput.pressEnter()
-        yield* waitForFrame(setup, () => results.length > 0, "edited review reply")
+        // The editor is a real `bun` process: its start-up is the wait, so the
+        // bound is wall-clock seconds, not the in-process frame default.
+        yield* waitForFrame(setup, () => results.length > 0, "edited review reply", 10_000)
         expect(results).toEqual([
           { approved: true, notes: "edit", editedContent: "Edited review from the editor\n" },
         ])

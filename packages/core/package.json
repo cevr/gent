@@ -11,7 +11,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots --parallel=3 tests"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-preload.ts --reporter=dots --parallel tests"
   },
   "dependencies": {
     "effect-encore": "catalog:",
