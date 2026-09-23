@@ -17,7 +17,6 @@ import {
   assistantMessageIdForTurn,
   BranchId,
   dateFromMillis,
-  DEFAULT_AGENT_NAME,
   EventEnvelope,
   Message,
   MessageId,
@@ -596,7 +595,7 @@ describe("ClientProvider session lifecycle", () => {
       })
     }),
   )
-  it.live("a new session after resuming another agent's session starts as the default agent", () =>
+  it.live("a new session takes its agent from its snapshot, never from the session before it", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const client = createMockClient({
@@ -631,7 +630,21 @@ describe("ClientProvider session lifecycle", () => {
         () => active.session()?.sessionId === SessionId.make("session-new"),
         "new session active",
       )
-      expect(active.agent()).toBe(DEFAULT_AGENT_NAME)
+      // No guess before the snapshot: a handoff inherits its parent's agent,
+      // so assuming the default would flicker.
+      expect(active.agent()).toBeUndefined()
+      active.applySessionSnapshot({
+        sessionId: SessionId.make("session-new"),
+        branchId: BranchId.make("branch-new"),
+        messages: [],
+        lastEventId: 1,
+        reasoningLevel: absent,
+        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+        agent: AgentName.make("deepwork"),
+        runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+        metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+      })
+      expect(active.agent()).toBe(AgentName.make("deepwork"))
     }),
   )
   it.live("runtime idle clears finishing activity only for the current branch", () =>

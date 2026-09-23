@@ -646,8 +646,8 @@ export function ClientProvider(props: ClientProviderProps) {
     onSome: SessionState.active,
   })
   // The agent startup resolved for the startup session holds until its
-  // snapshot lands. It seeds this session only: a later create or clear
-  // starts as the default agent.
+  // snapshot lands. Past startup a session's snapshot names its agent; with
+  // no session, the default agent is the one a new session gets.
   const initialAgent = Option.orElse(Option.fromNullishOr(props.initialAgent), () =>
     Option.match(initialSession, {
       onNone: () => Option.some(DEFAULT_AGENT_NAME),
@@ -1061,8 +1061,10 @@ export function ClientProvider(props: ClientProviderProps) {
         Effect.tap((result) =>
           Effect.sync(() => {
             // Create always transitions out of a prior session (or from
-            // "none"), so extension health is cleared unconditionally.
-            resetForSession({ agent: Option.some(DEFAULT_AGENT_NAME), clearExtensionHealth: true })
+            // "none"), so extension health is cleared unconditionally. The
+            // session's snapshot names its agent: a handoff inherits its
+            // parent's, so assuming the default would flicker.
+            resetForSession({ agent: Option.none(), clearExtensionHealth: true })
             dispatchSession(
               SessionStateEvent.cases.CreateSucceeded.make({
                 session: {
