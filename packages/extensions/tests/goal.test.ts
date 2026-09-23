@@ -326,8 +326,10 @@ describe("goal stream failure", () => {
           capabilityId: "goal-command",
           input: "Write the pelican poem",
         })
+        // The command queued the first turn, which can fail and pause the
+        // goal before this read: the goal exists, active or already paused.
         const created = yield* readGoal()
-        expect(Option.map(created, (goal) => goal.status)).toEqual(Option.some("active"))
+        expect(Option.isSome(created)).toBe(true)
 
         const paused = yield* waitFor(
           readGoal(),
