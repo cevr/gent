@@ -715,6 +715,56 @@ describe("Auth", () => {
         expect(stillThere).toBe(false)
       }).pipe(Effect.provide(BunServices.layer)),
     )
+
+    // Two stores over one directory stand for two gent processes: each has
+    // its own in-process lock, so only the directory's lock orders them.
+    it.scopedLive("updates from two stores over one directory run one at a time", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const first = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const second = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const counter = (info: Option.Option<AuthInfo>): number =>
+          Option.match(info, {
+            onNone: () => 0,
+            onSome: (found) => {
+              if (found.type !== "api") return 0
+              return Number(found.key)
+            },
+          })
+        const write = (count: number) =>
+          Option.some(AuthInfo.cases.Api.make({ type: "api", key: String(count) }))
+        const firstInside = yield* Deferred.make<boolean>()
+        const secondInside = yield* Deferred.make<boolean>()
+        // The first update holds its read until the second is inside its
+        // own update, or until it is clear the second is kept out.
+        const firstUpdate = yield* first
+          .update("openai", (current) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(firstInside, true)
+              yield* Deferred.await(secondInside).pipe(Effect.timeoutOption("300 millis"))
+              return ["first", write(counter(current) + 1)] satisfies readonly [
+                string,
+                Option.Option<AuthInfo>,
+              ]
+            }),
+          )
+          .pipe(Effect.forkScoped)
+        yield* Deferred.await(firstInside)
+        yield* second.update("openai", (current) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(secondInside, true)
+            return ["second", write(counter(current) + 1)] satisfies readonly [
+              string,
+              Option.Option<AuthInfo>,
+            ]
+          }),
+        )
+        yield* Fiber.join(firstUpdate)
+        // Both increments land: neither update read the value the other replaced.
+        expect(counter(Option.fromUndefinedOr(yield* first.get("openai")))).toBe(2)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
   })
 })
 

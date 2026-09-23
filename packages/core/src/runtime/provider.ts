@@ -4,10 +4,10 @@ import {
   Context,
   Duration,
   Effect,
-  type FileSystem,
+  FileSystem,
   Layer,
   Option,
-  type Path,
+  Path,
   Predicate,
   Random,
   Schedule,
@@ -17,6 +17,7 @@ import {
   Stream,
 } from "effect"
 import { KeyValueStore } from "effect/unstable/persistence"
+import { Database } from "bun:sqlite"
 import {
   AgentName,
   byReleaseDateDesc,
@@ -174,24 +175,35 @@ export interface AuthService extends AuthStoreAccess {
   ) => Effect.Effect<A, E | AuthError>
 }
 
+/** Wraps one provider's store operation in a lock another process also honors. */
+type ProviderLock = (
+  provider: string,
+) => <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E | AuthError>
+
 /**
  * One owner for a credential store: every write for one provider takes that
  * provider's lock. All profiles of a process share the store, and each
  * profile's drivers hold their own caches, so the store is the only place
- * where their writes can be ordered.
+ * where their writes can be ordered. A store on disk is also shared by every
+ * gent process on the machine (a gamut run, a rift binary, a second data
+ * directory); `crossProcess` orders those, inside the in-process lock so one
+ * fiber per process waits on it.
  */
-export const serializeAuthStore = (store: AuthStoreAccess): AuthService => {
+export const serializeAuthStore = (
+  store: AuthStoreAccess,
+  crossProcess: ProviderLock = () => (effect) => effect,
+): AuthService => {
   const locks = new Map<string, Semaphore.Semaphore>()
   const exclusive =
     (provider: string) =>
-    <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+    <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | AuthError> =>
       Effect.suspend(() => {
         let lock = locks.get(provider)
         if (Predicate.isUndefined(lock)) {
           lock = Semaphore.makeUnsafe(1)
           locks.set(provider, lock)
         }
-        return lock.withPermits(1)(effect)
+        return crossProcess(provider)(effect).pipe(lock.withPermits(1))
       })
   return {
     get: store.get,
@@ -208,6 +220,73 @@ export const serializeAuthStore = (store: AuthStoreAccess): AuthService => {
       ),
   }
 }
+
+// ── auth file lock ──────────────────────────────────────────────────────────
+
+/** SQLite reports a lock another connection holds as `SQLITE_BUSY`. */
+const isSqliteBusy = Schema.is(Schema.Struct({ code: Schema.Literal("SQLITE_BUSY") }))
+
+/** Another connection holds the provider's lock file; try again shortly. */
+class AuthLockBusy extends Schema.TaggedError<AuthLockBusy>()("AuthLockBusy", {}) {}
+
+/** A writer polls a busy lock this often, this many times (about 30 seconds). */
+const AUTH_LOCK_POLL = Duration.millis(20)
+const AUTH_LOCK_POLLS = 1500
+
+/**
+ * An exclusive SQLite transaction on one lock file per provider. The OS drops
+ * the lock when its process exits, so a crash never leaves a held lock (the
+ * same kind of lock the server kernel uses). Taking it never blocks the event
+ * loop: a busy file is polled.
+ */
+const fileProviderLock =
+  (lockDirectory: string, pathService: Path.Path, fs: FileSystem.FileSystem): ProviderLock =>
+  (provider) =>
+  (effect) => {
+    const file = pathService.join(lockDirectory, `${encodeURIComponent(provider)}.lock.db`)
+    const lockError = (cause: unknown) =>
+      new AuthError({ message: `Failed to take the auth lock for "${provider}"`, cause })
+    const open = Effect.try({
+      try: () => new Database(file, { create: true }),
+      catch: lockError,
+    })
+    const take = (db: Database) =>
+      Effect.try({
+        try: () => {
+          db.exec("PRAGMA busy_timeout = 0")
+          db.exec("BEGIN EXCLUSIVE")
+        },
+        catch: (cause) => {
+          if (isSqliteBusy(cause)) return new AuthLockBusy()
+          return lockError(cause)
+        },
+      })
+    const close = (db: Database) =>
+      Effect.sync(() => {
+        db.close()
+      })
+    const acquire = fs.makeDirectory(lockDirectory, { recursive: true }).pipe(
+      Effect.mapError(lockError),
+      Effect.andThen(open),
+      Effect.flatMap((db) =>
+        take(db).pipe(
+          Effect.onError(() => close(db)),
+          Effect.as(db),
+        ),
+      ),
+      Effect.retry({
+        while: (error) => error._tag === "AuthLockBusy",
+        schedule: Schedule.spaced(AUTH_LOCK_POLL),
+        times: AUTH_LOCK_POLLS,
+      }),
+      Effect.catchTag("AuthLockBusy", () =>
+        Effect.fail(
+          new AuthError({ message: `Timed out waiting for the auth lock for "${provider}"` }),
+        ),
+      ),
+    )
+    return Effect.acquireUseRelease(acquire, () => effect, close)
+  }
 
 export class Auth extends Context.Service<Auth, AuthService>()(
   "@gent/core/src/runtime/provider/Auth",
@@ -248,18 +327,26 @@ export class Auth extends Context.Service<Auth, AuthService>()(
             Effect.as(undefined),
           )
 
-        return serializeAuthStore({
-          get: (provider) =>
-            store.get(provider).pipe(
-              Effect.map(Option.getOrUndefined),
-              Effect.catchTag("SchemaError", (e) => discardInvalid(provider, e)),
-              Effect.mapError(wrap("Failed to read auth info")),
-            ),
-          set: (provider, info) =>
-            store.set(provider, info).pipe(Effect.mapError(wrap("Failed to persist auth info"))),
-          remove: (provider) =>
-            kv.remove(provider).pipe(Effect.mapError(wrap("Failed to remove auth info"))),
-        })
+        const fs = yield* FileSystem.FileSystem
+        const pathService = yield* Path.Path
+        // A dot directory inside the store: no provider id starts with a dot,
+        // so it never reads as a credential, and it goes with the store.
+        const lockDirectory = pathService.join(directory, ".locks")
+        return serializeAuthStore(
+          {
+            get: (provider) =>
+              store.get(provider).pipe(
+                Effect.map(Option.getOrUndefined),
+                Effect.catchTag("SchemaError", (e) => discardInvalid(provider, e)),
+                Effect.mapError(wrap("Failed to read auth info")),
+              ),
+            set: (provider, info) =>
+              store.set(provider, info).pipe(Effect.mapError(wrap("Failed to persist auth info"))),
+            remove: (provider) =>
+              kv.remove(provider).pipe(Effect.mapError(wrap("Failed to remove auth info"))),
+          },
+          fileProviderLock(lockDirectory, pathService, fs),
+        )
       }),
     ).pipe(Layer.provide(Layer.orDie(KeyValueStore.layerFileSystem(directory))))
 
