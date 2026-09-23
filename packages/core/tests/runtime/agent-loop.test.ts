@@ -5878,7 +5878,8 @@ describe("streaming", () => {
         const agentLoop = yield* makeAgentLoopService
         const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, first)))
         yield* Deferred.await(firstStarted)
-        // A run option keeps each queued turn its own; plain follow-ups batch.
+        // A run option keeps each queued turn its own. Plain follow-ups would
+        // merge, and a merged third message fails with the second by contract.
         const secondFiber = yield* Effect.forkChild(
           Effect.exit(runAgentLoop(agentLoop, second, { interactive: false })),
         )
@@ -5912,6 +5913,156 @@ describe("streaming", () => {
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeLayerWithEventPublisher(providerLayer, failSecondUserMessage)),
       )
+    }),
+  )
+  /**
+   * Two plain follow-ups merge into one queued turn under the first message's
+   * id. The caller of the second message waits for that turn: its content runs
+   * there, and the merge must not read as "already done".
+   */
+  const mergedFollowUpScenario = (params: {
+    readonly label: string
+    readonly failMerged: boolean
+  }) =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make(`merged-${params.label}-session`)
+      const branchId = BranchId.make(`merged-${params.label}-branch`)
+      const first = makeMessage(sessionId, branchId, "first runs")
+      const second = makeMessage(sessionId, branchId, "second merges")
+      const third = makeMessage(sessionId, branchId, "third merges")
+      const firstStarted = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      const log = yield* Ref.make<ReadonlyArray<string>>([])
+      let streamCalls = 0
+      const providerLayer = LanguageModelLayers.testStream(() => {
+        streamCalls += 1
+        const parts = Stream.fromIterable([
+          textDeltaPart("ok"),
+          finishPart({ finishReason: "stop" }),
+        ])
+        if (streamCalls > 1) {
+          return Ref.update(log, (entries) => [...entries, "merged turn streams"]).pipe(
+            Effect.as(parts),
+          )
+        }
+        return Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(gate)
+            }),
+          ).pipe(Stream.flatMap(() => parts)),
+        )
+      })
+      const publisher = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: (event: AgentEvent) => {
+            if (
+              params.failMerged &&
+              event._tag === "MessageReceived" &&
+              event.message.id === second.id
+            ) {
+              return Effect.fail(new EventStoreError({ message: "append failed" }))
+            }
+            return Effect.gen(function* () {
+              return EventEnvelope.make({
+                id: EventId.make(0),
+                event,
+                createdAt: yield* Clock.currentTimeMillis,
+              })
+            })
+          },
+          deliver: () => Effect.void,
+          publish: () => Effect.void,
+        }),
+      )
+      return yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, first)))
+        yield* Deferred.await(firstStarted)
+        const secondFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, second)))
+        yield* waitForOption(
+          () =>
+            agentLoop
+              .getQueue({ sessionId, branchId })
+              .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 1))),
+          "second message queued",
+        )
+        const thirdFiber = yield* Effect.forkChild(
+          runAgentLoop(agentLoop, third).pipe(
+            Effect.ensuring(Ref.update(log, (entries) => [...entries, "third returns"])),
+            Effect.exit,
+          ),
+        )
+        yield* waitForOption(
+          () =>
+            agentLoop
+              .getQueue({ sessionId, branchId })
+              .pipe(
+                Effect.map(
+                  Option.liftPredicate(
+                    (queue) =>
+                      queue.followUp.length === 1 &&
+                      (queue.followUp[0]?.content.includes("third merges") ?? false),
+                  ),
+                ),
+              ),
+          "third message merged into the queued turn",
+        )
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+        yield* Deferred.succeed(gate, undefined)
+        return {
+          first: yield* Fiber.join(firstFiber),
+          second: yield* Fiber.join(secondFiber),
+          third: yield* Fiber.join(thirdFiber),
+          log: yield* Ref.get(log),
+          streamCalls,
+        }
+      }).pipe(
+        Effect.timeout("4 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(makeLayerWithEventPublisher(providerLayer, publisher)),
+      )
+    })
+
+  test("a stored queue row keeps merged ids, and a row written before them still decodes", () => {
+    const codec = Schema.fromJsonString(LoopQueueState)
+    const message = makeMessage(SessionId.make("row-session"), BranchId.make("row-branch"), "a")
+    const merged = MessageId.make("row-merged")
+    const row = Schema.encodeSync(codec)(
+      LoopQueueState.make({
+        steering: [],
+        followUp: [{ message, mergedMessageIds: [merged] }],
+      }),
+    )
+    expect(Schema.decodeSync(codec)(row).followUp[0]?.mergedMessageIds).toEqual([merged])
+    const olderRow = row.replace(/,?"mergedMessageIds":\["row-merged"\]/, "")
+    expect(olderRow).not.toContain("mergedMessageIds")
+    const decoded = Schema.decodeSync(codec)(olderRow)
+    expect(decoded.followUp[0]?.message.id).toBe(message.id)
+    expect(decoded.followUp[0]?.mergedMessageIds).toBeUndefined()
+  })
+
+  it.live("a follow-up merged into a queued turn returns after that turn runs", () =>
+    Effect.gen(function* () {
+      const result = yield* mergedFollowUpScenario({ label: "ran", failMerged: false })
+      expect(result.first._tag).toBe("Success")
+      expect(result.second._tag).toBe("Success")
+      expect(result.third._tag).toBe("Success")
+      expect(result.streamCalls).toBe(2)
+      expect(result.log).toEqual(["merged turn streams", "third returns"])
+    }),
+  )
+
+  it.live("a follow-up merged into a queued turn fails when that turn fails", () =>
+    Effect.gen(function* () {
+      const result = yield* mergedFollowUpScenario({ label: "failed", failMerged: true })
+      expect(result.first._tag).toBe("Success")
+      expect(result.second._tag).toBe("Failure")
+      expect(result.third._tag).toBe("Failure")
+      expect(result.streamCalls).toBe(1)
     }),
   )
   it.live("rolls back turn duration when TurnCompleted append fails", () =>

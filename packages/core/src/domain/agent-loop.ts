@@ -49,6 +49,8 @@ const RunningTurnFields = {
   agentOverride: Schema.optional(AgentName),
   runSpec: Schema.optional(RunSpecSchema),
   interactive: Schema.optional(Schema.Boolean),
+  /** Messages merged into this turn's message; their callers wait for this turn. */
+  mergedMessageIds: Schema.optional(Schema.Array(MessageId)),
 }
 
 // ── Turn types (not persisted in machine state) ──
@@ -193,7 +195,14 @@ type TurnOrigin = {
   readonly agentOverride?: AgentNameType
   readonly runSpec?: typeof RunSpecSchema.Type
   readonly interactive?: boolean
+  readonly mergedMessageIds?: ReadonlyArray<MessageId>
 }
+
+/** Every message a turn carries: its own and any merged into it. */
+export const turnMessageIds = (origin: TurnOrigin): ReadonlyArray<MessageId> => [
+  origin.message.id,
+  ...(origin.mergedMessageIds ?? []),
+]
 
 export const buildRunningState = (
   item: TurnOrigin,
@@ -205,6 +214,7 @@ export const buildRunningState = (
     agentOverride: item.agentOverride,
     runSpec: item.runSpec,
     interactive: item.interactive,
+    mergedMessageIds: item.mergedMessageIds,
   })
 
 export const toWaitingForInteractionState = (params: {
@@ -217,6 +227,7 @@ export const toWaitingForInteractionState = (params: {
     agentOverride: params.state.agentOverride,
     runSpec: params.state.runSpec,
     interactive: params.state.interactive,
+    mergedMessageIds: params.state.mergedMessageIds,
     pendingRequestId: params.pendingRequestId,
   })
 

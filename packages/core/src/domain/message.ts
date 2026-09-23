@@ -905,6 +905,12 @@ export const QueuedTurnItem = Schema.Struct({
    * neighbour; merging would lose the identity the key exists for.
    */
   keyed: Schema.optional(Schema.Boolean),
+  /**
+   * Ids of the other messages merged into this item. Their text rides in
+   * `message`; their callers wait for this item's turn. Optional, so a row
+   * written before merges tracked ids still decodes (it carries none).
+   */
+  mergedMessageIds: Schema.optional(Schema.Array(MessageId)),
 })
 export type QueuedTurnItem = typeof QueuedTurnItem.Type
 
