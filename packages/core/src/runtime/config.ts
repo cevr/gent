@@ -308,8 +308,9 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       const defaultUserConfig = new UserConfig({})
 
       // The last user config that decoded. It stands in for a user file that
-      // stops decoding, and it orders writers. Reads take the files as they
-      // are now, so a hand edit reaches the next read without a restart.
+      // stops decoding, and its lock orders writers and the reads of a changed
+      // user file. Reads take the files as they are now, so a hand edit
+      // reaches the next read without a restart.
       const userConfigRef = yield* SynchronizedRef.make<UserConfig>(new UserConfig({}))
 
       const ensureUserConfig = Effect.gen(function* () {
@@ -400,18 +401,41 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           return yield* Result.match(read, { onSuccess: Effect.succeed, onFailure: Effect.fail })
         })
 
+      // The user file as it is now. An unchanged file answers from the decode
+      // cache without the lock. A changed one is decoded under the writers'
+      // lock, and publishes the snapshot there: reads and writes of the user
+      // file take turns, so the snapshot published last is the file read last,
+      // and a read that raced a write cannot put the older config back.
+      const readUserConfig: Effect.Effect<Result.Result<UserConfig, ConfigLoadError>> = Effect.gen(
+        function* () {
+          const stamp = yield* fileStamp(userConfigPath)
+          const cached = Option.fromUndefinedOr(decodedFiles.get(userConfigPath))
+          if (Option.isSome(cached) && cached.value.stamp === stamp) return cached.value.read
+          return yield* SynchronizedRef.modifyEffect(userConfigRef, (current) =>
+            Effect.result(readConfigFresh(userConfigPath)).pipe(
+              Effect.map((read) => [
+                read,
+                Result.match(read, { onSuccess: (decoded) => decoded, onFailure: () => current }),
+              ]),
+            ),
+          )
+        },
+      )
+
       // Seed the last-decoded user config. A user file that will not decode
       // reads as empty, so a broken file cannot stop a turn. Writes never
       // start from this snapshot: each one reads the user file again and
       // refuses when it does not decode.
-      const loadUserConfig = readConfigFresh(userConfigPath).pipe(
-        Effect.catchEager((error) =>
-          Effect.logWarning("Config load failed — writes refused until it is fixed").pipe(
-            Effect.annotateLogs({ path: userConfigPath, error: error.message }),
-            Effect.as(new UserConfig({})),
-          ),
+      const loadUserConfig = readUserConfig.pipe(
+        Effect.flatMap((read) =>
+          Result.match(read, {
+            onSuccess: () => Effect.void,
+            onFailure: (error) =>
+              Effect.logWarning("Config load failed — writes refused until it is fixed").pipe(
+                Effect.annotateLogs({ path: userConfigPath, error: error.message }),
+              ),
+          }),
         ),
-        Effect.flatMap((userConfig) => SynchronizedRef.set(userConfigRef, userConfig)),
       )
 
       // Replace the user config through a staged sibling, so a reader (or a
@@ -475,13 +499,10 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // does not decode sets nothing.
       const readFresh = Effect.fn("ConfigService.readFresh")(function* (cwd: string) {
         const failures: Array<ConfigLoadError> = []
-        const userRead = yield* Effect.result(readConfigFresh(userConfigPath))
+        const userRead = yield* readUserConfig
         let user: UserConfig
         if (Result.isSuccess(userRead)) {
           user = userRead.success
-          // Publish only a fully decoded snapshot; user config is shared by
-          // every cwd.
-          yield* SynchronizedRef.set(userConfigRef, user)
         } else {
           failures.push(userRead.failure)
           user = yield* SynchronizedRef.get(userConfigRef)
