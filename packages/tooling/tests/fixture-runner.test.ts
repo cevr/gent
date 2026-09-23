@@ -10,15 +10,17 @@
  * needs no CLI flag plumbing.
  *
  * To keep the suite fast, the invalid fixtures are linted in one batched
- * oxlint invocation and the valid fixtures in another. Each per-rule test
- * filters the shared report by `filename` instead of re-spawning oxlint.
+ * oxlint invocation and the valid fixtures in another, once, while the file
+ * registers its tests. Each per-rule test filters the shared report by
+ * `filename` instead of re-spawning oxlint. When a run produces no report, a
+ * single test fails with the reason and the per-rule tests are not registered.
  *
  * @module
  */
 
 import { expect } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Option, Path, Schema } from "effect"
+import { Effect, Exit, FileSystem, Option, Path, Schema } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import {
   runOxlint,
@@ -301,33 +303,11 @@ const CASES: ReadonlyArray<RuleCase> = [
 const INVALID_FIXTURES = [...new Set(CASES.map((c) => c.invalid))]
 const VALID_FIXTURES = [...new Set(CASES.flatMap((c) => c.valid))]
 
-effectDescribe("custom lint rules", () => {
-  // Memoize the two oxlint invocations so each `it.live` test reuses the
-  // result instead of re-spawning oxlint per assertion. Without this,
-  // adding a CASES entry adds 2× per-test runs and pushes the suite
-  // toward the test budget. `Effect.cached` produces a `Effect<Effect<...>>`
-  // — yield once at module init, then reuse the inner effect across tests.
-  type Runs = Effect.Effect<readonly [OxlintRun, OxlintRun], Schema.SchemaError>
-  interface LoadRunsRef {
-    current: Option.Option<Runs>
-  }
-  const loadRunsRef: LoadRunsRef = { current: Option.none() }
-  const loadRuns: Runs = Effect.gen(function* () {
-    const cached = loadRunsRef.current
-    if (Option.isSome(cached)) return yield* cached.value
-    const created = yield* Effect.cached(
-      Effect.all([runOxlint(INVALID_FIXTURES), runOxlint(VALID_FIXTURES)], {
-        concurrency: "unbounded",
-      }),
-    )
-    loadRunsRef.current = Option.some(created)
-    return yield* created
-  })
-
+/** The tests that read the two reports: one pair per rule, then the whole sets. */
+const registerRuleCases = (invalidRun: OxlintRun, validRun: OxlintRun): void => {
   for (const c of CASES) {
     it.live(`${c.rule} fires on invalid fixture`, () =>
-      Effect.gen(function* () {
-        const [invalidRun] = yield* loadRuns
+      Effect.sync(() => {
         // oxlint exits non-zero when ANY fixture has violations — and our
         // invalid set always does, so we just need to assert the per-file
         // diagnostics.
@@ -342,8 +322,7 @@ effectDescribe("custom lint rules", () => {
     )
 
     it.live(`${c.rule} does not fire on valid fixture`, () =>
-      Effect.gen(function* () {
-        const [, validRun] = yield* loadRuns
+      Effect.sync(() => {
         // The valid fixture set should produce zero diagnostics overall;
         // exit-code 0 is the global signal. Per-file: zero violations of
         // this specific rule.
@@ -356,10 +335,9 @@ effectDescribe("custom lint rules", () => {
   }
 
   it.live("every fixture file is linted, so a silent one is a pass on evidence", () =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       // A valid fixture reports nothing either way; only the file count shows
       // that oxlint read it instead of ignoring or missing the path.
-      const [invalidRun, validRun] = yield* loadRuns
       expect(
         [invalidRun.report.number_of_files, validRun.report.number_of_files],
         `stderr:\n${invalidRun.stderr}\n${validRun.stderr}`,
@@ -368,12 +346,35 @@ effectDescribe("custom lint rules", () => {
   )
 
   it.live("valid fixture set passes oxlint cleanly", () =>
-    Effect.gen(function* () {
-      const [, validRun] = yield* loadRuns
+    Effect.sync(() => {
       expect(validRun.exitCode).toBe(0)
       expect(validRun.report.diagnostics.length).toBe(0)
     }),
   )
+}
+
+/**
+ * Both fixture sets, linted once while this file registers its tests. The
+ * per-rule tests exist only when both runs produced a report; otherwise the
+ * one test below reports why, instead of every rule failing on a missing
+ * report.
+ */
+const fixtureRuns = Effect.runSyncExit(
+  Effect.all([runOxlint(INVALID_FIXTURES), runOxlint(VALID_FIXTURES)]),
+)
+
+effectDescribe("custom lint rules", () => {
+  it.live("oxlint reports on both fixture sets", () =>
+    Exit.match(fixtureRuns, {
+      onFailure: (cause) => Effect.failCause(cause),
+      onSuccess: () => Effect.void,
+    }),
+  )
+
+  if (Exit.isSuccess(fixtureRuns)) {
+    const [invalidRun, validRun] = fixtureRuns.value
+    registerRuleCases(invalidRun, validRun)
+  }
 
   it.live("every rule the plugin defines has a positive and a negative fixture", () =>
     Effect.gen(function* () {
