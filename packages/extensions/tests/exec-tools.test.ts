@@ -1421,10 +1421,49 @@ describe("classifyBashCommand", () => {
       "echo 'rm -rf /nonexistent/gent-probe-x' | sudo -i",
       "echo 'rm -rf /nonexistent/gent-probe-x' | su",
       "echo 'rm -rf /nonexistent/gent-probe-x' | doas -s",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | sudo --shell",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | sudo --login",
+      "sudo --shell <<< 'rm -rf /nonexistent/gent-probe-x'",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    for (const command of ["sudo -s", "sudo -i", "su - someone", "echo hi | sudo -s ls"]) {
+    for (const command of [
+      "sudo -s",
+      "sudo -i",
+      "sudo --shell",
+      "su - someone",
+      "echo hi | sudo -s ls",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | sudo --login ls",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("arch, pkexec, unshare, systemd-run and sg run the command after them", () => {
+    const r = "rm -rf /nonexistent/gent-probe-x"
+    for (const command of [
+      `arch -arm64 ${r}`,
+      `arch -arm64e ${r}`,
+      `arch -arch x86_64 -e A=1 ${r}`,
+      `pkexec ${r}`,
+      `pkexec --user root ${r}`,
+      `unshare -r ${r}`,
+      `unshare --map-user 0 --wd /nonexistent/gent-probe-x ${r}`,
+      `systemd-run --user ${r}`,
+      `systemd-run -p Nice=5 --unit x ${r}`,
+      `sg wheel '${r}'`,
+      `sg wheel -c '${r}'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "arch -arm64 ls /nonexistent/gent-probe-x",
+      "pkexec --user root ls",
+      "unshare -r ls",
+      "systemd-run --user ls",
+      "sg wheel 'ls -la'",
+      "sg wheel -c ls",
+    ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
   })

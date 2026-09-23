@@ -1170,6 +1170,8 @@ interface ValueOptions {
   readonly nextWord?: boolean
   /** Letters whose value is only the rest of their cluster, when there is one (`xargs -i%`, `-l`). */
   readonly attached?: string
+  /** A `-name` word is one long option, not a cluster of letters (`arch -arm64`, `-arch x`). */
+  readonly singleDash?: boolean
 }
 
 /** Options that take a value: the letters, and the long names separated by spaces. */
@@ -1237,7 +1239,9 @@ const readLongOption = (
   valued: ValueOptions,
   into: OptionsRead,
 ): number => {
-  const [name = ""] = arg.slice(2).split("=", 1)
+  let dashes = 1
+  if (arg.startsWith("--")) dashes = 2
+  const [name = ""] = arg.slice(dashes).split("=", 1)
   into.longs.push(name)
   const equals = arg.indexOf("=")
   let value = Option.none<OptionValue>()
@@ -1260,7 +1264,9 @@ const readOption = (
   into: OptionsRead,
 ): number => {
   const arg = args[index] ?? ""
-  if (arg.startsWith("--")) return readLongOption(arg, index, valued, into)
+  if (arg.startsWith("--") || valued.singleDash === true) {
+    return readLongOption(arg, index, valued, into)
+  }
   const short = valued.short ?? ""
   const attached = valued.attached ?? ""
   let taken = 0
@@ -1394,7 +1400,8 @@ const valueWord = (words: ReadonlyArray<ShellWord>, value: OptionValue): Option.
  * - `Stdin`: the command after the options runs with its input as arguments
  *   or in its placeholder (`xargs`, `parallel`).
  * - `FindExec`: the command after each of `actions`, up to `;` or `+`.
- * - `InputShell`: with one of the `short` options (any, when empty), and no
+ * - `InputShell`: with one of the `short` or `long` options (any, when both
+ *   are empty), and no
  *   command or script option of the same path, it starts a shell that runs
  *   its input (`sudo -s`, `doas -s`, a bare `su`).
  */
@@ -1409,7 +1416,7 @@ const Run = Schema.TaggedUnion({
   OptionScript: { short: Schema.String, long: Schema.Array(Schema.String), rest: Schema.Boolean },
   Stdin: {},
   FindExec: { actions: Schema.Array(Schema.String) },
-  InputShell: { short: Schema.String },
+  InputShell: { short: Schema.String, long: Schema.Array(Schema.String) },
 })
 type Run = typeof Run.Type
 type CommandFields = Partial<Omit<typeof Run.cases.Command.Type, "_tag">>
@@ -1423,7 +1430,8 @@ const joined = (positionals = 0, take = Number.MAX_SAFE_INTEGER): Run =>
 const optionScript = (short: string, long: ReadonlyArray<string> = [], rest = false): Run =>
   Run.cases.OptionScript.make({ short, long, rest })
 
-const inputShell = (short: string): Run => Run.cases.InputShell.make({ short })
+const inputShell = (short: string, long: ReadonlyArray<string> = []): Run =>
+  Run.cases.InputShell.make({ short, long })
 
 /** How a command path reads the words after it. */
 interface CommandSpec {
@@ -1545,7 +1553,8 @@ const inputShellRuns = (
   run: typeof Run.cases.InputShell.Type,
 ): SegmentRuns => {
   const parsed = parseWords(resolved.words, resolved.spec.valued, "leading")
-  if (run.short !== "" && !hasShort(parsed, ...run.short)) return NO_RUNS
+  const any = run.short === "" && run.long.length === 0
+  if (!any && !hasShort(parsed, ...run.short) && !hasLong(parsed, ...run.long)) return NO_RUNS
   const scripted = resolved.spec.runs.some((other) => {
     if (other._tag === "OptionScript") {
       return hasShort(parsed, ...other.short) || hasLong(parsed, ...other.long)
@@ -2391,7 +2400,7 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         "CDghpRrTtUu",
         "user group close-from chdir host prompt role type command-timeout other-user chroot",
       ),
-      [command(), inputShell("si")],
+      [command(), inputShell("si", ["shell", "login"])],
       rootRmRisk,
     ),
     doas: spec(options("uC"), [command(), inputShell("s")], rootRmRisk),
@@ -2401,6 +2410,23 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       optionScript("S", ["split-string"], true),
     ]),
     exec: runner(options("a")),
+    pkexec: runner(options("", "user")),
+    // macOS `arch -arm64 cmd`, `arch -arch x86_64 -e VAR=v cmd`.
+    arch: runner({ long: ["arch", "e", "d"], singleDash: true }),
+    unshare: runner(
+      options(
+        "SGRw",
+        "setuid setgid root wd propagation map-user map-group map-users map-groups setgroups",
+      ),
+    ),
+    "systemd-run": runner(
+      options(
+        "HMCpuE",
+        "host machine capsule property unit setenv description slice uid gid nice working-directory service-type on-active on-boot on-startup on-unit-active on-unit-inactive on-calendar timer-property path-property socket-property",
+      ),
+    ),
+    // `sg group cmd` and `sg group -c cmd` run the one word as a shell script.
+    sg: spec(options("c"), [joined(1, 1), optionScript("c")]),
     ...each(["nice", "gnice"], runner(options("n", "adjustment"))),
     ionice: runner(options("cnpPu", "class classdata pid pgid uid")),
     ...each(
