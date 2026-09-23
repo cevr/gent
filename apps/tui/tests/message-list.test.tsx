@@ -2190,6 +2190,100 @@ describe("cell frame header", () => {
   )
 })
 
+describe("transcript block spacing", () => {
+  const cellStep = (index: number, command: string, stdout: string): ListMessage => {
+    const toolCall: ToolCall = {
+      id: `cell-${index}`,
+      toolName: "cell",
+      status: "completed",
+      input: { code: `const r = await tools.bash({ command: "${command}" }); r` },
+      summary: absent,
+      output: encodeJson({
+        display: `{ stdout: '${stdout}', stderr: '', exitCode: 0 }`,
+        bindings: ["r"],
+        truncated: false,
+      }),
+      operations: [
+        {
+          id: `op-${index}`,
+          toolName: "bash",
+          status: "completed",
+          input: { command },
+          summary: absent,
+          output: encodeJson({ stdout, stderr: "", exitCode: 0 }),
+        },
+      ],
+    }
+    return {
+      _tag: "regular-message",
+      id: `cell-step-${index}`,
+      role: "assistant",
+      content: "",
+      reasoning: "",
+      images: [],
+      createdAt: index,
+      toolCalls: [toolCall],
+      segments: [{ _tag: "tool-call", toolCall }],
+    }
+  }
+  const answer: ListMessage = {
+    _tag: "regular-message",
+    id: "cell-steps-done",
+    role: "assistant",
+    content: "done",
+    reasoning: "",
+    images: [],
+    createdAt: 9,
+    toolCalls: absent,
+    segments: [{ _tag: "text", content: "done" }],
+  }
+  const items: SessionItem[] = [
+    cellStep(1, "git status --short", ""),
+    cellStep(2, "seq 1 3", "1\\n2\\n3\\n"),
+    cellStep(3, "git log --oneline -1", "497f1c6 ledgerline\\n"),
+    answer,
+  ]
+  const views: ReadonlyArray<{ disclosure: DisclosureLevel; fullDetail: boolean }> = [
+    { disclosure: "collapsed", fullDetail: false },
+    { disclosure: "preview", fullDetail: false },
+    { disclosure: "full", fullDetail: false },
+    { disclosure: "collapsed", fullDetail: true },
+  ]
+  for (const view of views) {
+    it.live(
+      `one blank line separates each block at ${view.disclosure}, full detail ${view.fullDetail}`,
+      () =>
+        Effect.gen(function* () {
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(
+              () => (
+                <MessageList
+                  items={items}
+                  disclosure={view.disclosure}
+                  fullDetail={view.fullDetail}
+                  syntaxStyle={syntaxStyle}
+                  streaming={false}
+                />
+              ),
+              { width: 100, height: 80 },
+            ),
+          )
+          const lines = renderFrame(setup)
+            .split("\n")
+            .map((line) => line.trimEnd())
+          const body = lines.slice(0, lines.findLastIndex((line) => line.length > 0) + 1)
+          const blankRuns = body
+            .join("\n")
+            .split(/[^\n]+/)
+            .map((run) => Math.max(0, run.length - 1))
+            .filter((run) => run > 0)
+          expect(blankRuns).toEqual(Array.from({ length: items.length - 1 }, () => 1))
+          expect(body.findIndex((line) => line.trim() === "done")).toBeGreaterThan(0)
+        }),
+    )
+  }
+})
+
 const GrepToolRenderer = Option.getOrThrow(
   Option.fromUndefinedOr(
     BUILTIN_TOOL_RENDERERS.find((entry) => entry.toolNames.includes("grep"))?.component,
