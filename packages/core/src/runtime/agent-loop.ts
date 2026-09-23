@@ -768,8 +768,7 @@ export const makeLoopInbox = (
           }
         }
 
-        const projectedState = projectRuntimeState(current)
-        if (projectedState._tag !== "Idle" || !canStartTurnNow(current)) {
+        if (!canStartTurnNow(current)) {
           return {
             value: Option.none(),
             next: { ...current, queue: nextQueue },
