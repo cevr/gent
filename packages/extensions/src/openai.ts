@@ -1273,11 +1273,28 @@ const OpenAiReasoningEffort = Schema.Literals([
 type OpenAiReasoningEffort = typeof OpenAiReasoningEffort.Type
 
 /**
+ * The lowest `reasoning.effort` each model family accepts, first match wins,
+ * from the model pages at developers.openai.com/api/docs/models. A request
+ * that names an effort below it fails with HTTP 400. A model none of these
+ * match (GPT-5.1 and later GPT-5 releases) accepts "none".
+ */
+const OPENAI_EFFORT_FLOORS: ReadonlyArray<{
+  readonly pattern: RegExp
+  readonly floor: OpenAiReasoningEffort
+}> = [
+  // Pro tiers accept only "high".
+  { pattern: /-pro(-|$)/, floor: "high" },
+  { pattern: /^gpt-6-astra(-|$)/, floor: "low" },
+  { pattern: /codex|^o\d/, floor: "low" },
+  // The first GPT-5 family starts at "minimal".
+  { pattern: /^gpt-5(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/, floor: "minimal" },
+]
+
+/**
  * The effort a request sends for a gent reasoning hint. OpenAI runs a
  * reasoning model at its default effort when the request names none, so a
- * hint of "none" names the lowest effort the model accepts: "none" on GPT-5.1
- * and later, "minimal" on the first GPT-5 family, "low" on Codex and o-series
- * models, "high" on pro tiers. A model without reasoning gets no effort.
+ * hint of "none" names the lowest effort the model accepts
+ * (`OPENAI_EFFORT_FLOORS`). A model without reasoning gets no effort.
  */
 const openAiReasoningEffort = (
   modelName: string,
@@ -1289,10 +1306,8 @@ const openAiReasoningEffort = (
   return Schema.decodeUnknownOption(OpenAiReasoningEffort)(hint).pipe(
     Option.map((effort) => {
       if (effort !== "none") return effort
-      if (/-pro(-|$)/.test(modelName)) return "high"
-      if (modelName.includes("codex") || /^o\d/.test(modelName)) return "low"
-      if (/^gpt-5(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/.test(modelName)) return "minimal"
-      return effort
+      const floor = OPENAI_EFFORT_FLOORS.find((entry) => entry.pattern.test(modelName))
+      return floor?.floor ?? effort
     }),
   )
 }

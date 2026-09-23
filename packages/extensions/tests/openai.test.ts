@@ -2079,10 +2079,27 @@ describe("OpenAI reasoning hints", () => {
     "a request for no reasoning names the lowest effort the model accepts, on both paths",
     () =>
       Effect.gen(function* () {
-        const reasoningModels = ["gpt-5.4", "gpt-5-mini", "gpt-5.1-codex"]
-        const lowest = [Option.some("none"), Option.some("minimal"), Option.some("low")]
+        // Each floor is the model page's lowest `reasoning.effort` (developers.openai.com/api/docs/models).
+        const reasoningModels = [
+          "gpt-5.4",
+          "gpt-5.6-sol",
+          "gpt-5-mini",
+          "gpt-5.1-codex",
+          "gpt-6-astra",
+        ]
+        const lowest = [
+          Option.some("none"),
+          Option.some("none"),
+          Option.some("minimal"),
+          Option.some("low"),
+          Option.some("low"),
+        ]
         expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), reasoningModels)).toEqual(lowest)
         expect(yield* effortsFor(makeOAuthInfo(), reasoningModels)).toEqual(lowest)
+        // Pro tiers accept only "high", and only through an API key.
+        expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), ["gpt-5-pro"])).toEqual([
+          Option.some("high"),
+        ])
         // A model without reasoning gets no effort at all.
         expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), ["gpt-4.1"])).toEqual([
           Option.none(),
