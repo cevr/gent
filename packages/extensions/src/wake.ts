@@ -329,11 +329,21 @@ const noticeSections = Effect.fn("WakeTool.notices")(function* () {
   ]
 })
 
-/** Drops the notices an answered turn read: those that fired before it started. A later one shows again next turn. */
+/**
+ * Drops the notices an answered turn read: those that fired before it
+ * started, and every `blocked` one, which the turn's own projection made and
+ * showed at once. A later fire shows again next turn. Nothing dropped leaves
+ * the file unwritten.
+ */
 const clearReadNotices = Effect.fn("WakeTool.clearNotices")(function* (turnStartedAt: number) {
   return yield* store.modify((current: ReadonlyArray<WakeEntry>) => {
-    const kept = current.filter((entry) => entry._tag !== "notice" || entry.firedAt > turnStartedAt)
-    return Effect.succeed({ next: kept, result: current.length - kept.length })
+    const kept = current.filter(
+      (entry) =>
+        entry._tag !== "notice" || (entry.outcome !== "blocked" && entry.firedAt > turnStartedAt),
+    )
+    const cleared = current.length - kept.length
+    if (cleared === 0) return Effect.succeed({ next: current, result: 0 })
+    return Effect.succeed({ next: kept, result: cleared })
   })
 })
 
@@ -588,13 +598,14 @@ const storeAndArm = Effect.fn("WakeTool.storeAndArm")(function* (entry: PendingW
   yield* armEntry(entry)
 })
 
-/** Drops entries from the file and interrupts their timers; returns the ids removed. */
+/** Drops entries from the file and interrupts their timers; returns each removed id once. */
 const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEntry) => boolean) {
   const alarms = yield* WakeAlarms
   const removed = yield* store.modify((current: ReadonlyArray<WakeEntry>) =>
     Effect.succeed({
       next: current.filter(keep),
-      result: current.filter((entry) => !keep(entry)).map((entry) => entry.wakeId),
+      // A repeating notify alarm and its unread notices share one id.
+      result: [...new Set(current.filter((entry) => !keep(entry)).map((entry) => entry.wakeId))],
     }),
   )
   // A stored entry may have no timer yet (before the first turn re-arms it); an

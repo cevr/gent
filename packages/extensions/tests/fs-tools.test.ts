@@ -774,6 +774,138 @@ describe("file encodings", () => {
     }),
   )
 
+  // A match never starts or ends between a CR and its LF.
+  const crlfEdits: ReadonlyArray<[string, string, string, string, string]> = [
+    [
+      "a search that starts with LF takes the CR before it",
+      "prev\r\nfoo\r\nnext\r\n",
+      "\nfoo",
+      "\nbar",
+      "prev\r\nbar\r\nnext\r\n",
+    ],
+    [
+      "a line deleted from its LF takes its CR too",
+      "prev\r\nfoo\r\nnext\r\n",
+      "\nfoo",
+      "",
+      "prev\r\nnext\r\n",
+    ],
+  ]
+  for (const [name, before, oldString, newString, after] of crlfEdits) {
+    encodingTest(name, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/crlf.txt`
+        yield* fs.writeFileString(filePath, before)
+        const result = yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString, newString },
+          stubCtx,
+        )
+        expect(result.replacements).toBe(1)
+        expect(yield* fs.readFileString(filePath)).toBe(after)
+      }),
+    )
+  }
+
+  encodingTest("a search that ends between a CR and its LF matches nothing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/crlf.txt`
+      yield* fs.writeFileString(filePath, "a\r\nb\r\n")
+      const failed = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "a\r", newString: "Z" },
+        stubCtx,
+      ).pipe(Effect.flip)
+      expect(failed.message).toBe("oldString not found in file")
+      expect(yield* fs.readFileString(filePath)).toBe("a\r\nb\r\n")
+    }),
+  )
+
+  // [name, file, oldString, newString, replaceAll, count, file after]
+  const lineEndEdits: ReadonlyArray<[string, string, string, string, boolean, number, string]> = [
+    ["a bare-CR file: a middle line edits in place", "a\rb\rc", "b", "B", false, 1, "a\rB\rc"],
+    [
+      "a bare-CR file: a replacement's line breaks take CR",
+      "a\rb\rc",
+      "b",
+      "b1\nb2",
+      false,
+      1,
+      "a\rb1\rb2\rc",
+    ],
+    ["a bare-CR file: replaceAll edits every site", "a\rb\ra", "a", "z", true, 2, "z\rb\rz"],
+    [
+      "a CRLF search that ends at the last CRLF keeps it whole",
+      "x\r\nfoo\r\n",
+      "foo\r\n",
+      "bar\n",
+      false,
+      1,
+      "x\r\nbar\r\n",
+    ],
+    [
+      "an LF search that ends at the last CRLF takes the CR too",
+      "x\r\nfoo\r\n",
+      "foo\n",
+      "bar\n",
+      false,
+      1,
+      "x\r\nbar\r\n",
+    ],
+    [
+      "a line deleted up to the last CRLF leaves no stray CR",
+      "x\r\nfoo\r\n",
+      "foo\n",
+      "",
+      false,
+      1,
+      "x\r\n",
+    ],
+  ]
+  for (const [name, before, oldString, newString, replaceAll, count, after] of lineEndEdits) {
+    encodingTest(name, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/endings.txt`
+        yield* fs.writeFileString(filePath, before)
+        const result = yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString, newString, replaceAll },
+          stubCtx,
+        )
+        expect(result.replacements).toBe(count)
+        expect(yield* fs.readFileString(filePath)).toBe(after)
+      }),
+    )
+  }
+
+  encodingTest("an LF search in a mixed file finds the CRLF sites too", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/mixed.txt`
+      yield* fs.writeFileString(filePath, "a\nb\n--\na\r\nb\r\n")
+      const duplicate = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "a\nb", newString: "X" },
+        stubCtx,
+      ).pipe(Effect.flip)
+      expect(duplicate.message).toContain("found 2 times")
+      const result = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "a\nb", newString: "X\nY", replaceAll: true },
+        stubCtx,
+      )
+      expect(result.replacements).toBe(2)
+      expect(yield* fs.readFileString(filePath)).toBe("X\nY\n--\nX\r\nY\r\n")
+    }),
+  )
+
   // Bytes the decoder can only show as U+FFFD: a rewrite of the text would not
   // give them back.
   const malformed: ReadonlyArray<[string, Uint8Array]> = [
@@ -818,6 +950,40 @@ describe("file encodings", () => {
       }),
     )
   }
+
+  // A lone surrogate has no UTF-8 bytes, and in a UTF-16 file it makes the
+  // next read lossy: write and edit refuse it and leave the file alone.
+  encodingTest("write and edit refuse text with a lone surrogate", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const newPath = `${dir}/new.txt`
+      const created = yield* runToolWithCtx(
+        WriteTool,
+        { path: newPath, content: "x\uD800y" },
+        stubCtx,
+      ).pipe(Effect.flip)
+      expect(created.message).toContain("lone surrogate")
+      expect(yield* fs.exists(newPath)).toBe(false)
+
+      const utf16Path = `${dir}/utf16.txt`
+      const before = utf16File("hello\n", "le")
+      yield* fs.writeFile(utf16Path, before)
+      const written = yield* runToolWithCtx(
+        WriteTool,
+        { path: utf16Path, content: "x\uDC00y" },
+        stubCtx,
+      ).pipe(Effect.flip)
+      expect(written.message).toContain("lone surrogate")
+      const edited = yield* runToolWithCtx(
+        EditTool,
+        { path: utf16Path, oldString: "hello", newString: "x\uD800" },
+        stubCtx,
+      ).pipe(Effect.flip)
+      expect(edited.message).toContain("lone surrogate")
+      expect(Buffer.from(yield* fs.readFile(utf16Path)).equals(before)).toBe(true)
+    }),
+  )
 
   encodingTest("read refuses a binary file", () =>
     Effect.gen(function* () {
