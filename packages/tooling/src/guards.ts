@@ -782,8 +782,8 @@ export const findUnadaptedSeams = (
  * credentials are for another provider.
  *
  * Where core needs a model, it asks the seam that already answers the
- * question -- `resolveDefaultAgentModel` over the registered agents -- and
- * falls back to `DEFAULT_MODEL_ID`, the single declared default.
+ * question -- `resolveAgentModel` for a registered agent -- and falls back to
+ * `DEFAULT_MODEL_ID`, the single declared default.
  *
  * @module
  */
@@ -825,7 +825,7 @@ export const findCoreVendorModelPins = (
     findings.push({
       file,
       line: index + 1,
-      message: `core pins the vendor model ${match.value[0]}; resolve the model through \`resolveDefaultAgentModel\` and \`DEFAULT_MODEL_ID\` instead`,
+      message: `core pins the vendor model ${match.value[0]}; resolve the model through \`resolveAgentModel\` and \`DEFAULT_MODEL_ID\` instead`,
     })
   }
   return findings

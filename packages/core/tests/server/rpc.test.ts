@@ -40,7 +40,14 @@ import {
   toolCallStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { AgentName, DEFAULT_AGENT_NAME, DriverRef } from "../../src/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  DriverRef,
+  ModelId,
+  type ReasoningEffort,
+} from "../../src/domain/agent"
 import { createE2ELayer, createRpcClient, createRpcHarness } from "../../src/test-utils/harness"
 import { e2ePreset } from "../helpers/test-preset"
 import {
@@ -485,7 +492,67 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
     },
   ]
 }
+const authDriversExtension: LoadedExtension = {
+  manifest: { id: ExtensionId.make("@test/auth-drivers") },
+  scope: "builtin",
+  sourcePath: "test",
+  contributions: {
+    modelDrivers: [
+      { id: "anthropic", name: "Anthropic", resolveModel: () => Effect.succeed(stubModel) },
+      { id: "otherprov", name: "Other", resolveModel: () => Effect.succeed(stubModel) },
+    ],
+    agents: [
+      AgentDefinition.make({
+        name: AgentName.make("helper"),
+        model: ModelId.make("otherprov/helper-model"),
+      }),
+    ],
+  },
+}
+
 describe("auth.listProviders", () => {
+  it.live("a session's model override decides the required provider", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({ ...e2ePreset, providerLayer, extensions: [authDriversExtension] }),
+        )
+        const session = yield* client.session.create({ cwd: process.cwd() })
+        const required = (providers: ReadonlyArray<{ provider: string; required: boolean }>) =>
+          providers.filter((entry) => entry.required).map((entry) => entry.provider)
+        expect(
+          required(yield* client.auth.listProviders({ sessionId: session.sessionId })),
+        ).toEqual(["anthropic"])
+        yield* client.session.updateSettings({
+          sessionId: session.sessionId,
+          modelId: ModelId.make("otherprov/model"),
+          reasoningLevel: Option.getOrUndefined(Option.none<ReasoningEffort>()),
+        })
+        expect(
+          required(yield* client.auth.listProviders({ sessionId: session.sessionId })),
+        ).toEqual(["otherprov"])
+        // Without a session the launch default still decides.
+        expect(required(yield* client.auth.listProviders({}))).toEqual(["anthropic"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live("a named agent adds its model's provider; other agents do not", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({ ...e2ePreset, providerLayer, extensions: [authDriversExtension] }),
+        )
+        const required = (providers: ReadonlyArray<{ provider: string; required: boolean }>) =>
+          providers.filter((entry) => entry.required).map((entry) => entry.provider)
+        expect(required(yield* client.auth.listProviders({}))).toEqual(["anthropic"])
+        expect(
+          required(yield* client.auth.listProviders({ agentName: AgentName.make("helper") })),
+        ).toEqual(["anthropic", "otherprov"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
   it.live("returns launch-cwd providers without sessionId", () =>
     Effect.scoped(
       Effect.gen(function* () {

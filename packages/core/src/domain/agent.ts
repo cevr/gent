@@ -206,14 +206,6 @@ export const DEFAULT_MODEL_ID = ModelId.make("anthropic/claude-sonnet-5")
 export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
   agent.model ?? DEFAULT_MODEL_ID
 
-/** Model of the default agent, when it is registered. */
-export const resolveDefaultAgentModel = (
-  agents: ReadonlyArray<AgentDefinition>,
-): Option.Option<ModelId> =>
-  Option.fromUndefinedOr(agents.find((agent) => agent.name === DEFAULT_AGENT_NAME)).pipe(
-    Option.map(resolveAgentModel),
-  )
-
 // ── Runtime driver routing ──
 
 /** Where the resolved driver came from; a config-routed driver is checked against the registry. */
