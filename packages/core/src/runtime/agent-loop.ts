@@ -122,6 +122,7 @@ import {
   resolveTurnProfile as resolveSessionTurnProfile,
   SessionProfileCache,
   type SessionProfileCacheService,
+  sessionWorkingDirectory,
 } from "./extension-host.js"
 import type { ConfigService, RuntimeEnvironment } from "./config.js"
 import type {
@@ -1424,9 +1425,10 @@ const makeAgentLoopBehavior = (
       "branch",
     )
     const branchTools = yield* CurrentBranchToolFeature
+    const branchCwd = yield* sessionWorkingDirectory(sessionId)
     const branchContext = yield* Layer.build(
       Layer.merge(
-        branchTools.branchLayer({ sessionId, branchId, turnInterruption }),
+        branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
         branchResourceLayer,
       ),
     ).pipe(Scope.provide(loopScope))

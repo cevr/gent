@@ -740,12 +740,13 @@ const diagnosticsLimit = 8192
 const diagnosticsHeadLimit = 6144
 
 /** The caller owns an immutable trusted worker artifact and the returned process scope.
- * The worker runs with the host's working directory, environment, and OS permissions,
- * the same authority the bash tool already grants. Protocol frames use dedicated
+ * The worker runs in `cwd`, the session's working directory, with the host's
+ * environment and OS permissions, the same authority the bash tool already grants. Protocol frames use dedicated
  * descriptors so cell code that writes to stdout cannot corrupt them.
  */
 export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
   readonly worker: CellWorker
+  readonly cwd: string
   readonly readinessTimeoutMs?: number
 }) {
   const fs = yield* FileSystem.FileSystem
@@ -777,6 +778,7 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     "/bin/sh",
     ["-c", cellOutputRedirect, "gent-cell", ...argv],
     {
+      cwd: input.cwd,
       stdin: "ignore",
       stdout: "pipe",
       stderr: "ignore",
@@ -1061,6 +1063,7 @@ const KernelStatus = Schema.Literals(["ready", "lost", "closed"])
 /** One worker at a time. Only explicit reset can replace a failed worker. */
 export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   readonly worker: CellWorker
+  readonly cwd: string
   readonly readinessTimeoutMs?: number
   readonly evaluationTimeoutMs?: number
   readonly maximumReplacements?: number
@@ -2021,6 +2024,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
   static Branch = (address: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
+    readonly cwd: string
     readonly turnInterruption: TurnInterruptionStatus
   }) =>
     Layer.unwrap(

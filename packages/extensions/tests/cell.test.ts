@@ -16,7 +16,7 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess } from "effect/unstable/process"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/config.js"
 import { SessionRuntime } from "@gent/core-internal/runtime/session.js"
@@ -181,6 +181,9 @@ import { CompactionExtension } from "../src/compaction.js"
 
 // ── cell/cell-worker-fixture ────────────────────────────────────────────────
 
+/** Where the direct kernel tests run their workers: this package. */
+const packageDirectory = new URL("..", import.meta.url).pathname
+
 export const buildCellWorker = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -291,7 +294,9 @@ describe("recorded cell execution", () => {
         )
         if (!first || !reset || !next || !read) return yield* Effect.die("Missing cells")
         const execution = Context.get(
-          yield* Layer.build(CellExecution.Live({ worker, sessionId, branchId })),
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
           CellExecution,
         )
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
@@ -329,7 +334,9 @@ describe("recorded cell execution", () => {
               Effect.ensuring(Deferred.succeed(stopped, true)),
             ),
         })
-        const context = yield* Layer.build(CellExecution.Live({ worker, sessionId, branchId }))
+        const context = yield* Layer.build(
+          CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+        )
         const cells = Context.get(context, CellExecution)
         const running = yield* cells
           .run(first)
@@ -394,7 +401,9 @@ describe("recorded cell execution", () => {
           call: () => Deferred.succeed(started, true).pipe(Effect.andThen(Effect.never)),
         })
         const open = Effect.gen(function* () {
-          const context = yield* Layer.build(CellExecution.Live({ worker, sessionId, branchId }))
+          const context = yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          )
           return Context.get(context, CellExecution)
         })
         const cells = yield* open
@@ -454,7 +463,9 @@ describe("recorded cell execution", () => {
             ),
         })
         const execution = Context.get(
-          yield* Layer.build(CellExecution.Live({ worker, sessionId, branchId })),
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
           CellExecution,
         )
         const kept = yield* execution.run(keep).pipe(Effect.provideService(CellOperationHost, host))
@@ -509,7 +520,9 @@ describe("recorded cell execution", () => {
             ),
         })
         const execution = Context.get(
-          yield* Layer.build(CellExecution.Live({ worker, sessionId, branchId })),
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
           CellExecution,
         )
         const suspended = yield* execution
@@ -569,7 +582,9 @@ describe("recorded cell execution", () => {
         const result = yield* Effect.scoped(
           Effect.gen(function* () {
             const execution = Context.get(
-              yield* Layer.build(CellExecution.Live({ worker, sessionId, branchId })),
+              yield* Layer.build(
+                CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+              ),
               CellExecution,
             )
             const saved = yield* execution.run(first)
@@ -594,6 +609,7 @@ describe("recorded cell execution", () => {
                 ...worker,
                 scriptPath: path.join(directory, "missing-worker.js"),
               }),
+              cwd: packageDirectory,
               sessionId,
               branchId,
             }),
@@ -640,7 +656,9 @@ describe("recorded cell execution", () => {
             ),
         })
         const execution = Context.get(
-          yield* Layer.build(CellExecution.Live({ worker, sessionId, branchId })),
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
           CellExecution,
         )
         const running = yield* execution
@@ -675,7 +693,13 @@ describe("recorded cell execution", () => {
         if (!first || !next || !crash) return yield* Effect.die("Missing test cell")
         const execution = Context.get(
           yield* Layer.build(
-            CellExecution.Live({ worker, sessionId, branchId, maximumReplacements: 1 }),
+            CellExecution.Live({
+              worker,
+              cwd: packageDirectory,
+              sessionId,
+              branchId,
+              maximumReplacements: 1,
+            }),
           ),
           CellExecution,
         )
@@ -709,7 +733,7 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const artifact = yield* buildCellExecutable
-        const kernel = yield* openCellKernel({ worker: artifact })
+        const kernel = yield* openCellKernel({ worker: artifact, cwd: packageDirectory })
         const host = CellOperationHost.of({
           catalog: hostCatalog("value"),
           call: () => Effect.succeed(21),
@@ -800,7 +824,7 @@ describe("cell worker process", () => {
           }),
         )
         // The launch runs: the namespace in this checkout answers a host call.
-        const kernel = yield* openCellKernel({ worker: launch })
+        const kernel = yield* openCellKernel({ worker: launch, cwd: packageDirectory })
         const host = CellOperationHost.of({
           catalog: hostCatalog("read.file"),
           call: (request) => Effect.succeed(request.name),
@@ -830,14 +854,7 @@ describe("cell worker process", () => {
           `await Bun.write('${marker}', 'ran')\n`,
         )
         yield* fs.writeFileString(path.join(project, ".env"), "GENT_CELL_PROJECT_ENV=loaded\n")
-        // The worker inherits the host working directory; here the host runs in the project.
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-        const inProject = ChildProcessSpawner.make((command) =>
-          spawner.spawn(ChildProcess.setCwd(command, project)),
-        )
-        const kernel = yield* openCellKernel({ worker: yield* cellWorkerLaunch }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, inProject),
-        )
+        const kernel = yield* openCellKernel({ worker: yield* cellWorkerLaunch, cwd: project })
         const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
         const evaluate = (code: string) =>
           kernel.evaluate(code).pipe(Effect.provideService(CellOperationHost, host))
@@ -855,7 +872,10 @@ describe("cell worker process", () => {
     "process output past the display limit keeps its tail, so a trailing error survives",
     () =>
       Effect.gen(function* () {
-        const kernel = yield* openCellKernel({ worker: yield* buildCellWorker })
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+        })
         const host = CellOperationHost.of({ call: () => Effect.succeed(0) })
         // The filler alone exceeds maximumCellDisplayLength, so the buffer must drop
         // something. A head-only policy drops the end, taking the trailing marker with it.
@@ -877,7 +897,10 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
-        const kernel = yield* openCellKernel({ worker: yield* buildCellWorker })
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+        })
         const started = yield* Deferred.make<number>()
         const stopped = yield* Deferred.make<boolean>()
         const host = CellOperationHost.of({
@@ -908,7 +931,10 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const platform = yield* GentPlatform
-        const kernel = yield* openCellKernel({ worker: yield* buildCellWorker })
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+        })
         const started = yield* Deferred.make<number>()
         const stopped = yield* Deferred.make<boolean>()
         const host = CellOperationHost.of({
@@ -945,7 +971,10 @@ describe("cell worker process", () => {
     "retains values after cell errors, uses the current host, and resets explicitly",
     () =>
       Effect.gen(function* () {
-        const kernel = yield* openCellKernel({ worker: yield* buildCellWorker })
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+        })
         const firstHost = CellOperationHost.of({
           catalog: hostCatalog("value"),
           call: () => Effect.succeed(20),
@@ -987,6 +1016,7 @@ describe("cell worker process", () => {
         const platform = yield* GentPlatform
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
+          cwd: packageDirectory,
           evaluationTimeoutMs: 1000,
           maximumReplacements: 1,
         })
@@ -1040,6 +1070,7 @@ describe("cell worker process", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
+          cwd: packageDirectory,
           evaluationTimeoutMs: 400,
           maximumReplacements: 1,
         })
@@ -1071,6 +1102,7 @@ describe("cell worker process", () => {
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
           worker: yield* buildCellWorker,
+          cwd: packageDirectory,
           evaluationTimeoutMs: 1000,
           maximumReplacements: 1,
         })
@@ -1115,7 +1147,11 @@ describe("cell worker process", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const launch = yield* buildCellWorker
-        const kernel = yield* openCellKernel({ worker: launch, maximumReplacements: 1 })
+        const kernel = yield* openCellKernel({
+          worker: launch,
+          cwd: packageDirectory,
+          maximumReplacements: 1,
+        })
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
         const crash = yield* kernel
           .evaluate("process.exit(7)")
@@ -1138,7 +1174,7 @@ describe("cell worker process", () => {
         const launch = yield* buildCellWorker
         const pid = yield* Effect.scoped(
           Effect.gen(function* () {
-            const child = yield* openCellProcess({ worker: launch })
+            const child = yield* openCellProcess({ worker: launch, cwd: packageDirectory })
             const responses = yield* Queue.make<CellResponse>({ capacity: 8 })
             yield* child.responses.pipe(
               Stream.runForEach((response) => Queue.offer(responses, response)),
@@ -1199,7 +1235,7 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const launch = yield* buildCellWorker
-        const child = yield* openCellProcess({ worker: launch })
+        const child = yield* openCellProcess({ worker: launch, cwd: packageDirectory })
         yield* child.stop
         expect(yield* child.isRunning).toBe(false)
         const error = yield* child
@@ -1215,7 +1251,7 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const launch = yield* buildCellWorker
-        const child = yield* openCellProcess({ worker: launch })
+        const child = yield* openCellProcess({ worker: launch, cwd: packageDirectory })
         const next = child.responses.pipe(Stream.take(1), Stream.runCollect)
         expect((yield* next).map((response) => response._tag)).toEqual(["Ready"])
         const forged = "\\u001egent-cell-end forged\\u001e"
@@ -1239,7 +1275,7 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const launch = yield* buildCellWorker
-        const child = yield* openCellProcess({ worker: launch })
+        const child = yield* openCellProcess({ worker: launch, cwd: packageDirectory })
         const next = child.responses.pipe(Stream.take(1), Stream.runCollect)
         expect((yield* next).map((response) => response._tag)).toEqual(["Ready"])
         const waiting = yield* child.takeOutput("one-token").pipe(Effect.exit, Effect.forkScoped)
@@ -1262,7 +1298,7 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const launch = yield* buildCellWorker
-        const child = yield* openCellProcess({ worker: launch })
+        const child = yield* openCellProcess({ worker: launch, cwd: packageDirectory })
         const next = child.responses.pipe(Stream.take(1), Stream.runCollect)
         expect((yield* next).map((response) => response._tag)).toEqual(["Ready"])
         yield* child.send(
@@ -1304,6 +1340,7 @@ describe("cell worker process", () => {
         // rather than at spawn. A death before Ready is still a launch failure.
         const error = yield* openCellProcess({
           worker: CellWorker.cases.Compiled.make({ binaryPath }),
+          cwd: packageDirectory,
           readinessTimeoutMs: 2000,
         }).pipe(Effect.flip)
         expect(error.phase).toBe("launch")
@@ -1318,7 +1355,7 @@ describe("cell worker process", () => {
         // Deterministic half of the ordering guarantee: with stderr folded into
         // stdout there is only one stream to read, so no merge can reorder it.
         const artifact = yield* buildCellExecutable
-        const kernel = yield* openCellKernel({ worker: artifact })
+        const kernel = yield* openCellKernel({ worker: artifact, cwd: packageDirectory })
         const host = CellOperationHost.of({ call: () => Effect.succeed(0) })
         const fds = yield* kernel
           .evaluate(
@@ -1345,6 +1382,7 @@ describe("cell worker process", () => {
         yield* fs.writeFileString(workerPath, "console.error(process.pid); while (true) {}")
         const error = yield* openCellProcess({
           worker: CellWorker.cases.Script.make({ runtimePath: binaryPath, scriptPath: workerPath }),
+          cwd: packageDirectory,
           readinessTimeoutMs: 1000,
         }).pipe(Effect.flip)
         expect(error.phase).toBe("launch")
@@ -2248,6 +2286,47 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
 })
 
 describe("shipped model surface", () => {
+  it.scopedLive(
+    "a cell starts in its session's working directory, not the host's",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const sessionCwd = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "gent-cell-session-" }),
+        )
+        // The host process runs elsewhere, so an inherited working directory shows.
+        expect(yield* fs.realPath(path.resolve("."))).not.toBe(sessionCwd)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "process.cwd()" }),
+          textStep("done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...shippedPreset,
+          providerLayer,
+          cwd: sessionCwd,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "where does the cell run" })
+        const messages = yield* waitFor(
+          client.message.list({ branchId }),
+          (all) =>
+            all.some(
+              (message) =>
+                message.role === "assistant" && messageSingleText(message.parts) === "done",
+            ),
+          10_000,
+          "assistant reply done",
+        )
+        const results = messages
+          .flatMap((message) => message.parts)
+          .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
+        expect(results).toMatchObject([
+          { name: "cell", isFailure: false, result: { display: sessionCwd } },
+        ])
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
+    20000,
+  )
+
   it.scopedLive(
     "advertises only cell and serves builtin host tools inside it",
     () =>

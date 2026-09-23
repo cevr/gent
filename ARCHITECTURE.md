@@ -620,8 +620,11 @@ never launches a stale built worker and needs no build first. The two are the
 `Compiled` and `Script` cases of `CellWorker`. A script worker starts with
 `--config=/dev/null --no-env-file`, the source-run match for the compiled
 worker's disabled bunfig and dotenv autoload, so a project preload or `.env`
-never runs inside the worker. The TUI build sets the compiled-host marker
-`__GENT_COMPILED__` explicitly.
+never runs inside the worker. The worker starts in its session's working
+directory: the loop resolves it once per branch with `sessionWorkingDirectory`
+(the stored session cwd, else the host's, the same rule as
+`ExtensionContext.cwd`) and gives it to the branch-tool layer as `cwd`. The TUI
+build sets the compiled-host marker `__GENT_COMPILED__` explicitly.
 The actor section of `runtime/agent-loop.ts` allocates a child of the actor scope for each loop rebuild.
 It publishes the loop handle before it transfers scope ownership. Failure or
 interruption during construction closes that child immediately.
