@@ -17,6 +17,7 @@ import {
   dataPaths,
   dataPathsIn,
   makeJsonFileLogger,
+  serverLock,
   ServerLockEntry,
   ServerLockStatus,
 } from "@gent/sdk"
@@ -28,6 +29,8 @@ import {
   inspectServer,
   inspectStorage,
   makeDoctorReport,
+  readDoctorExtensionHealth,
+  refuseResetWhileServing,
   resetStorage,
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
@@ -254,6 +257,16 @@ describe("local health", () => {
     expect(server.summary).toBe("Shared server lock is stale: pid 4242, server-1")
   })
 
+  it.live("the doctor reports a lock holder that does not answer instead of waiting for it", () =>
+    Effect.gen(function* () {
+      const health = yield* readDoctorExtensionHealth(
+        ServerLockStatus.cases.Alive.make({ entry: lockEntry }),
+      ).pipe(Effect.timeout("4 seconds"))
+      expect(health.status).toBe("unavailable")
+      expect(health.summary).toContain("4242")
+    }),
+  )
+
   test("no lock reports no shared server", () => {
     expect(inspectServer(absentServer)).toEqual({ status: "none", summary: "No shared server." })
   })
@@ -337,6 +350,40 @@ describe("local health", () => {
         expect(yield* fs.exists(file)).toBe(true)
       }
     }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive(
+    "storage reset refuses while a server without the kernel lock answers for the database",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped()
+        const { hostname } = yield* (yield* GentPlatform).osInfo
+        const identity = { ...lockEntry, hostname, buildFingerprint: "older-build" }
+        const endpoint = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
+            Bun.serve({
+              port: 0,
+              fetch: () =>
+                Response.json({
+                  serverId: identity.serverId,
+                  pid: identity.pid,
+                  hostname: identity.hostname,
+                  dbPath: identity.dbPath,
+                  buildFingerprint: identity.buildFingerprint,
+                }),
+            }),
+          ),
+          (server) => Effect.promise(() => server.stop(true)),
+        )
+        yield* serverLock.write(
+          home,
+          new ServerLockEntry({ ...identity, rpcUrl: `${new URL(endpoint.url).origin}/rpc` }),
+        )
+        const refused = yield* refuseResetWhileServing(home).pipe(Effect.flip)
+        expect(refused._tag).toBe("CliStartupError")
+      }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 
   it.scopedLive("storage reset is idempotent when no db files exist", () =>

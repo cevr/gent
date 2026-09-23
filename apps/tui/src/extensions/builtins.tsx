@@ -44,7 +44,7 @@ import {
   SessionMessageDetails,
   sessionMessageBody,
   SkillsRpc,
-} from "@gent/extensions/client.js"
+} from "@gent/extensions/client"
 import { BUILTIN_TOOL_RENDERERS } from "../tool-renderers"
 import { AskUserRenderer, HandoffRenderer, PromptRenderer } from "../interaction-renderers"
 import builtinAgentsView from "./agents.client"

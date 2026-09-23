@@ -178,7 +178,7 @@ commands      queries/events
 
 Process topology is secondary. Default CLI topology is not.
 
-Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })`. SQLite-backed local clients use one host-local server lock at `~/.gent/server.lock`; workspace routing is carried by the `x-gent-workspace-id` RPC header. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for shared local server, `Gent.client({ url })` for remote.
+Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })`. SQLite-backed local clients share one server per database, decided by the lock files beside `data.db` (see Shared Server Discovery); workspace routing is carried by the `x-gent-workspace-id` RPC header. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for shared local server, `Gent.client({ url })` for remote.
 
 ## Transport Boundary
 
@@ -216,7 +216,7 @@ The app surface is split by concern:
 
 `SessionEvents` and `SessionSubscriptions` are inlined into `server/server.ts` — they are not separate services.
 
-`AppServicesLive` is assembled inline at the top of `packages/core/src/server/server-root.ts` (private to the file — `buildServerRoot` is the only consumer).
+The app services are assembled inline in `buildServerRoot` in `packages/core/src/server/server-root.ts`, from `createDependencies`; no separate app-services layer exists.
 
 `packages/core/src/server/server.ts` owns startup wiring:
 
@@ -249,7 +249,7 @@ The production server uses one live profile owner:
 
 - `runtime/extension-host.ts` owns entries by workspace and canonical cwd. Each
   entry is built once: declarations load, every extension's process resources
-  build into a child of the server scope, and `buildProfileCatalog` stages the
+  build into a child of the server scope, and `buildSessionProfile` stages the
   catalog from that context. An extension whose process resource fails to build
   is reported as failed at the `startup` phase; the rest of the profile stays
   live. There is no reconciler, publication, or admission lease. Test roots
@@ -819,7 +819,7 @@ with its saved input and identity, then stores the original result. It never
 evaluates outer cell source or restores the worker stack. Concurrent or repeated
 resume attempts cannot execute the same waiting operation twice. Initial model
 dispatch does not select this host yet. Saved turn recovery does.
-`CellToolOperationStorage.listForCell` provides the durable recovery input for
+`CellToolOperationStorage.listForToolCall` provides the durable recovery input for
 that integration. It checks workspace, session, branch, and the admitted outer
 call. It returns all operation receipts without granting another execution.
 The branch phase is held in memory; queue storage persists the in-flight item,
@@ -872,7 +872,12 @@ Production rule:
 
 ## Shared Server Discovery
 
-`packages/sdk/src/server.ts` owns shared-server discovery. It stores one host-local identity record at `~/.gent/server.lock`, not one registry file per workspace or database. Clients only attach after probing `/_gent/identity` and matching the full server identity tuple, so stale pidfiles and PID reuse do not signal unrelated processes.
+`packages/sdk/src/server.ts` owns shared-server discovery. Two files sit beside `data.db` in the data directory (`GENT_DATA_DIR`, else `~/.gent`):
+
+- `server.lock.db` is the kernel lock. The owning server holds an exclusive SQLite lock on it (`BEGIN EXCLUSIVE`, `busy_timeout` 0) for the life of its scope. The OS releases it when the process exits. A server is alive exactly when this lock cannot be taken, so a crash, a reboot, or a reused pid cannot leave a live-looking lock, and two concurrent starts give one owner: the other waits for the owner's entry and attaches.
+- `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. An entry whose endpoint confirms the tuple counts as alive even when the kernel lock is free (a server from before the kernel lock), and a start probes it after it takes the lock, before it replaces the entry. `gent server stop` sends SIGTERM only after the same probe; `--all` removes an entry whose kernel lock is free and whose endpoint does not answer, and holds the kernel lock through that removal so a new owner's entry is never deleted.
+
+A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it.
 
 `packages/sdk/src/server.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
 
@@ -913,7 +918,7 @@ Extension shape lives in:
 
 - `packages/core/src/extensions/api.ts` — public authoring surface (`defineExtension` + smart-constructor re-exports)
 - `packages/core/src/domain/extension.ts` — `ExtensionContributions` typed-bucket carrier (core primitives only)
-- `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
+- `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetupServices`)
 - `apps/tui/src/extensions/client-facets.ts` — TUI-owned client facet model
 - `packages/core/src/runtime/extension-host.ts` — server registry
 - `packages/extensions/src/` — shipped extension implementations
@@ -977,19 +982,16 @@ host-owned design. It should expose:
 Everything else is builtin/internal:
 
 - raw runtime host context and hook plumbing (`ExtensionHostContext`,
-  `ToolExecuteInput`, `ProjectionTurnContext`, permission/context message
-  internals);
+  permission/context message internals);
 - storage, event publisher, event store, session mutation services, and
   interaction pending readers;
-- runtime/platform services and helpers (`GentPlatform`, `ToolRunner`,
-  `runProcess`);
+- runtime/platform services (`GentPlatform`, `ToolRunner`);
 - agent loop/session runtime internals and process runners that are only host
   implementation details;
 - raw event/message domain internals that are not part of the serialized
   authoring contract;
 - the extension registry's driver maps and provider auth persistence machinery;
-- test-only helpers such as `getToolEffect`, raw metadata tags, and fixture
-  constructors.
+- test-only helpers such as raw metadata tags and fixture constructors.
 
 Rules:
 
@@ -1105,16 +1107,15 @@ tests/
 
 One test file per source file. No god tests. Names match source owners.
 
-`packages/e2e/tests/` separates fast in-process contracts from slow end-to-end:
+`packages/e2e/tests/` holds only the slow end-to-end suite; in-process contract tests live in each package's `test` task:
 
-- `test` — direct-transport contract tests (in-process, no subprocess)
 - `test:e2e` — PTY TUI tests and focused server-process lifecycle coverage
 
 ### Important files
 
 - `packages/core/src/test-utils/index.ts` — `SequenceRecorder` and the
   recording layers; `baseLocalLayer`, a production-root preset over
-  `makeServerRootLayer` with in-memory SQLite, storage-backed events, debug
+  `buildServerRoot` with in-memory SQLite, storage-backed events, debug
   providers, and test service overrides; `createE2ELayer`, a preset that keeps
   real `ToolRunner.Live`, extension setup/resource startup, event publishing,
   and interaction recovery while expressing test

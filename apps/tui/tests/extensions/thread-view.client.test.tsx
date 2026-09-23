@@ -21,7 +21,7 @@ import {
   windowLabel,
   windowsOf,
 } from "../../src/extensions/thread-view.client"
-import { childTaskText } from "@gent/extensions/client.js"
+import { childTaskText } from "@gent/extensions/client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForRenderedFrame } from "../helpers-boundary"
 

@@ -30,7 +30,7 @@ import {
   ToolCallId,
   projectMessagesWithToolInteractions,
 } from "@gent/core/protocol"
-import { type SessionMessageDetails, sessionMessageText } from "@gent/extensions/client.js"
+import { type SessionMessageDetails, sessionMessageText } from "@gent/extensions/client"
 import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
