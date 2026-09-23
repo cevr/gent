@@ -198,3 +198,93 @@ describe("headless CLI", () => {
     20000,
   )
 })
+
+// ── compiled binary ─────────────────────────────────────────────────────────
+
+/**
+ * A user extension outside the repository, run by the compiled binary. It
+ * imports the authoring entry and the `effect` peers the shipped extensions
+ * import; the binary has no node_modules, so each resolves only because a
+ * loader binds it.
+ */
+const PEERS_PROBE = `
+import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
+import * as OpenAi from "@effect/ai-openai"
+import * as PlatformBun from "@effect/platform-bun"
+import { Effect, Schema } from "effect"
+import * as Sql from "effect/unstable/sql"
+
+export default defineExtension({
+  id: "@user/peers-probe",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    const loaded = [OpenAi, PlatformBun, Sql].every((entry) => Object.keys(entry).length > 0)
+    yield* host.register(
+      "tool",
+      tool({
+        id: "peers_probe",
+        description: "Reports that the peer modules loaded.",
+        params: Schema.Struct({}),
+        output: Schema.Boolean,
+        execute: () => Effect.succeed(loaded),
+      }),
+    )
+  }),
+})
+`
+
+describe("compiled binary", () => {
+  it.scopedLive(
+    "loads a user extension outside the repository that imports the effect peers",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        // `bun run test:e2e` builds the binary first (turbo `dependsOn`).
+        const binary = path.resolve(import.meta.dir, "..", "bin", "gent")
+        expect({ binary, exists: yield* fs.exists(binary) }).toEqual({ binary, exists: true })
+        // The system temp directory: no node_modules above it.
+        const homeDir = yield* makeTempDir
+        const extensionDir = path.join(homeDir, ".gent", "extensions")
+        yield* fs.makeDirectory(extensionDir, { recursive: true })
+        yield* fs.writeFileString(path.join(extensionDir, "peers-probe.ts"), PEERS_PROBE)
+        const env = createWorkerEnv(homeDir, "debug-scripted")
+        yield* seedAuth(env["GENT_AUTH_DIRECTORY"]!)
+        // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
+        const proc = Bun.spawn([binary, "--debug", "-H", "Say hi in 3 words"], {
+          cwd: homeDir,
+          env: { ...makeChildEnv(homeDir, env), GENT_LOG_LEVEL: "debug" },
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const [exitCode, stdout, stderr] = yield* Effect.all(
+          [
+            waitForExit(proc, 15000),
+            Effect.promise(() => new Response(proc.stdout).text()),
+            Effect.promise(() => new Response(proc.stderr).text()),
+          ],
+          { concurrency: "unbounded" },
+        )
+        expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" })
+        expect(stdout).toContain("Latest user message: Say hi in 3 words")
+
+        const logDir = path.join(env["GENT_DATA_DIR"]!, "logs")
+        const serverLogs = (yield* fs.readDirectory(logDir)).filter((name) =>
+          name.endsWith("-server.log"),
+        )
+        const lines = yield* Effect.forEach(serverLogs, (name) =>
+          fs.readFileString(path.join(logDir, name)),
+        )
+        const probeLines = lines
+          .join("\n")
+          .split("\n")
+          .filter((line) => line.includes('"@user/peers-probe"'))
+        // On a failure, the probe's own log lines name the import that failed.
+        const loaded = probeLines.some(
+          (line) => line.includes('"msg":"extension.setup.ok"') && line.includes('"tools":1'),
+        )
+        expect({ loaded, probeLines }).toMatchObject({ loaded: true })
+      }).pipe(Effect.timeout("18 seconds"), Effect.provide(BunServices.layer)),
+    20000,
+  )
+})

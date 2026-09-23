@@ -5,6 +5,7 @@
 
 import { it, test } from "bun:test"
 import { describe, expect, it as effectIt } from "effect-bun-test"
+import * as ebt from "effect-bun-test"
 import { Effect } from "effect"
 
 describe("callable forms", () => {
@@ -23,4 +24,6 @@ describe("callable forms", () => {
   effectIt.effect("effect body on the test-clock runner", () => Effect.void)
 
   effectIt.scoped("scoped effect body on the test-clock runner", () => Effect.void)
+
+  ebt.it.live("a runner reached through a namespace import", () => Effect.void)
 })

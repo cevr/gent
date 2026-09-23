@@ -2741,7 +2741,7 @@ export const CellBranchTools: BranchToolFeature<CellStorageTags> = {
 
 // ── extension ───────────────────────────────────────────────────────────────
 
-export const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
+const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
 
 /**
  * The default model execution surface. When this builtin is registered, a native
@@ -2898,7 +2898,10 @@ const overLimit = (limit: number) => "~".repeat(limit + 1)
 
 /**
  * A local reference's text in one render mode: a cycle or a foreign ref is
- * `object`; any other definition is expanded once per mode and reused.
+ * `object`; any other definition is expanded once per mode and reused. The
+ * cache key leaves out the refs being visited, so a definition first rendered
+ * inside a cycle keeps the `object` it showed for that cycle's ref wherever it
+ * is reused: a shallower text, still valid.
  */
 const expandRef = (
   ref: string,

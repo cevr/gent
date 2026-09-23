@@ -157,8 +157,16 @@ const AUTHORING_ENTRY = /^@gent\/core\/extensions\/(?:api|branch-tools)$/
 const PROTOCOL_ENTRY = /^@gent\/core\/protocol$/
 const TEST_UTILS_ENTRY = /^@gent\/core\/test-utils(?:\/|$)/
 const EXTENSIONS_PACKAGE = /^@gent\/extensions(?:\/|$)/
-/** The TUI host's own Solid contexts: the client provider and the extension host. */
-const TUI_HOST_CONTEXT_PATH = /\/apps\/tui\/src\/(?:client|extensions\/host)(?:\.tsx?|\.js)?$/
+/**
+ * A TUI client extension: a shipped `*.client.*` module or the builtin roster
+ * that lists them. Both author against `@gent/tui/extensions`, as a user
+ * extension does.
+ */
+const TUI_CLIENT_EXTENSION_FILE = /\/apps\/tui\/src\/extensions\/(?:[^/]+\.client|builtins)\.tsx?$/
+/** The builtin roster, the one client module that names its siblings. */
+const TUI_CLIENT_ROSTER_FILE = /\/apps\/tui\/src\/extensions\/builtins\.tsx?$/
+/** The one relative target the roster may name: a sibling client extension. */
+const TUI_CLIENT_EXTENSION_MODULE = /\/apps\/tui\/src\/extensions\/[^/]+\.client(?:\.tsx?|\.js)?$/
 
 /** The module specifier of an import, re-export, or dynamic import. */
 const importSourceOf = (node: AstNode): string | undefined => {
@@ -233,12 +241,34 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
 
 const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
 
-const promiseChainMethodName = (node: AstNode): string | undefined => {
+/** An Effect module: `effect`, its subpaths, and the `@effect/*` packages. */
+const EFFECT_MODULE = /^(?:effect(?:\/.*)?|@effect\/.+)$/
+
+/**
+ * The local names an Effect-module import binds, by name or as a namespace:
+ * `import { Stream } from "effect"`, `import * as Layer from "effect/Layer"`.
+ * Such a receiver's `catch` is a combinator, not a Promise chain; any other
+ * receiver, capitalised or not, may hold a Promise.
+ */
+const effectModuleBindings = (node: AstNode): ReadonlyArray<string> => {
+  if (!EFFECT_MODULE.test(importSourceOf(node) ?? "")) return []
+  return (getNodeArrayField(node, "specifiers") ?? [])
+    .filter(
+      (specifier) =>
+        specifier.type === "ImportSpecifier" || specifier.type === "ImportNamespaceSpecifier",
+    )
+    .map(specifierLocalName)
+}
+
+const promiseChainMethodName = (
+  node: AstNode,
+  effectBindings: ReadonlySet<string>,
+): string | undefined => {
   if (node.type !== "CallExpression") return undefined
   const callee = getNodeField(node, "callee")
   if (callee?.type !== "MemberExpression") return undefined
   const object = getNodeField(callee, "object")
-  if (object?.type === "Identifier" && getStringField(object, "name") === "Effect") {
+  if (object?.type === "Identifier" && effectBindings.has(getStringField(object, "name") ?? "")) {
     return undefined
   }
   const prop = getNodeField(callee, "property")
@@ -266,7 +296,7 @@ const platformBoundaryFilename = (filename: string): boolean => {
   if (/\/runtime\/gent-platform-bun\.ts$/.test(filename)) return true
   if (/-adapter\.tsx?$/.test(filename)) return true
   if (/\/packages\/tooling\/fixtures\//.test(filename)) return false
-  return /\/(?:scripts|packages\/tooling|packages\/e2e|tests)\/|\.test\.tsx?$/.test(filename)
+  return /\/(?:packages\/tooling|packages\/e2e|tests)\/|\.test\.tsx?$/.test(filename)
 }
 
 const HOST_PROCESS_MEMBERS = new Set(["execPath", "kill", "platform", "pid"])
@@ -387,7 +417,7 @@ const hostMemberMessage = (member: {
 }): string | undefined => {
   const suffix = member.property !== undefined ? `.${member.property}` : ""
   if (member.object === "Bun") {
-    return `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). Bun APIs are allowed only in adapter, build script, tooling, and test harness boundaries.`
+    return `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). Bun APIs are allowed only in adapter, tooling, and test harness boundaries.`
   }
   const hostFact =
     (member.object === "process" && HOST_PROCESS_MEMBERS.has(member.property ?? "")) ||
@@ -627,6 +657,21 @@ const createRequireAliasName = (node: AstNode): string | undefined => {
   return getStringField(id, "name")
 }
 
+/** The local name an import specifier binds. */
+const specifierLocalName = (specifier: AstNode): string => {
+  const local = getNodeField(specifier, "local")
+  return (local === undefined ? undefined : getStringField(local, "name")) ?? ""
+}
+
+/** The exported name an `import { x as y }` specifier reads: `x`, identifier or string. */
+const specifierImportedName = (specifier: AstNode): string | undefined => {
+  const imported = getNodeField(specifier, "imported")
+  if (imported === undefined) return undefined
+  return imported.type === "Identifier"
+    ? getStringField(imported, "name")
+    : getStringField(imported, "value")
+}
+
 const plugin: Plugin = {
   meta: {
     name: "gent",
@@ -653,9 +698,13 @@ const plugin: Plugin = {
      *   a relative path; it goes through the entry that publishes the name.
      * - The TUI host (`apps/tui/src/` outside `extensions/`) never reads
      *   `@gent/extensions`. One extension's view belongs in its client
-     *   extension, which reaches the host only through `ClientContext`: a
-     *   TUI client extension never reads the host's Solid contexts
-     *   (`client.tsx`, `extensions/host.tsx`), which a user extension cannot.
+     *   extension, which reaches the TUI only through `@gent/tui/extensions`,
+     *   as a user extension does: a TUI client extension (`*.client.*`)
+     *   names no TUI module by relative path, and the `builtins.tsx` roster
+     *   names only its sibling client extensions.
+     *
+     * Every module form counts: `import`, `export ... from`, `import(...)`
+     * and `typeof import(...)`.
      *
      * Exempt: the two authoring entries themselves, which assemble the public
      * API from core internals, and the TUI's client extension loader, which is
@@ -671,8 +720,8 @@ const plugin: Plugin = {
         if (!extensionFile && !productFile && !outsideCore) return {}
         const tuiExtension = filename.includes("apps/tui/src/extensions/")
         const tuiHost = !tuiExtension && productFile && filename.includes("/apps/tui/src/")
-        const tuiClientExtension =
-          tuiExtension && !filename.endsWith("apps/tui/src/extensions/host.tsx")
+        const tuiClientExtension = TUI_CLIENT_EXTENSION_FILE.test(filename)
+        const tuiClientRoster = TUI_CLIENT_ROSTER_FILE.test(filename)
 
         const extensionMessage = (
           source: string,
@@ -687,8 +736,17 @@ const plugin: Plugin = {
           return `Extensions must import from "@gent/core/extensions/api" or "@gent/core/extensions/branch-tools". Forbidden: "${source}"`
         }
 
-        const report = (node: AstNode) => {
-          const source = importSourceOf(node)
+        /** A client extension names no TUI module by path; the roster names only its siblings. */
+        const clientExtensionMessage = (
+          source: string,
+          resolved: string | undefined,
+        ): string | undefined => {
+          if (!tuiClientExtension || resolved === undefined) return undefined
+          if (tuiClientRoster && TUI_CLIENT_EXTENSION_MODULE.test(resolved)) return undefined
+          return `A client extension reaches the TUI through "@gent/tui/extensions", as a user extension does; only the builtin roster names a sibling client extension by relative path. Forbidden: "${source}"`
+        }
+
+        const report = (node: AstNode, source: string | undefined) => {
           if (source === undefined) return
           const resolved = resolvedRelativeSource(filename, source)
           const readsTestUtils =
@@ -707,25 +765,20 @@ const plugin: Plugin = {
           ) {
             message = `Code outside core reads it through "@gent/core/<entry>", not its source. Forbidden: "${source}"`
           }
-          if (
-            message === undefined &&
-            tuiClientExtension &&
-            resolved !== undefined &&
-            TUI_HOST_CONTEXT_PATH.test(resolved)
-          ) {
-            message = `A client extension reads the host through ClientContext, not its Solid contexts. Forbidden: "${source}"`
-          }
+          if (message === undefined) message = clientExtensionMessage(source, resolved)
           if (message === undefined && tuiHost && EXTENSIONS_PACKAGE.test(source)) {
             message = `The TUI host reads no extension module; move the view into a client extension under apps/tui/src/extensions/. Forbidden: "${source}"`
           }
           if (message !== undefined) context.report({ message, node })
         }
+        const reportSource = (node: AstNode) => report(node, importSourceOf(node))
 
         return {
-          ImportDeclaration: report,
-          ExportNamedDeclaration: report,
-          ExportAllDeclaration: report,
-          ImportExpression: report,
+          ImportDeclaration: reportSource,
+          ExportNamedDeclaration: reportSource,
+          ExportAllDeclaration: reportSource,
+          ImportExpression: reportSource,
+          TSImportType: (node) => report(node, importTypeSourceOf(node)),
         }
       },
     },
@@ -901,21 +954,12 @@ const plugin: Plugin = {
         // Allow tests
         if (/\/tests\//.test(filename)) return {}
         if (/\.test\.tsx?$/.test(filename)) return {}
-        // Allow lint plugin file itself (rule definitions reference the API in messages)
-        if (/\/lint\/[^/]+\.ts$/.test(filename) && !/\/fixtures\//.test(filename)) return {}
 
-        // Effect static methods that exit the Effect world via Promise/fiber
-        // — the boundary contract treats these as edges that must live in
-        // `*-boundary.ts`. `runSync`/`runFork`/`runForkWith` are NOT in this
-        // set: they're Effect-internal (no Promise edge) and used heavily by
-        // Solid signal lanes, PubSub.unbounded eager-build, etc. — adding
-        // them would force a much wider boundary refactor.
-        const EFFECT_RUN_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
-        // Instance methods on a `ManagedRuntime` / `Runtime` that exit via
-        // Promise — same boundary semantics as `Effect.runPromise`. Effect's
-        // `ManagedRuntime` exposes `runPromise{,With,Exit}`; all three are
-        // the Promise edge.
-        const RUNTIME_RUN_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
+        // `RUN_PROMISE_METHODS` are the Promise edges, as `Effect` statics and
+        // as `ManagedRuntime` / `Runtime` instance methods alike.
+        // `runSync`/`runFork`/`runForkWith` are NOT in the set: they're
+        // Effect-internal (no Promise edge) and used heavily by Solid signal
+        // lanes, PubSub.unbounded eager-build, etc.
 
         return {
           CallExpression(node) {
@@ -926,7 +970,7 @@ const plugin: Plugin = {
 
             // Static `Effect.runPromise(...)` / `runPromiseWith` / `runPromiseExit`.
             if (obj.type === "Identifier" && obj.name === "Effect") {
-              if (!EFFECT_RUN_METHODS.has(prop.name)) return
+              if (!RUN_PROMISE_METHODS.has(prop.name)) return
               context.report({
                 message: `\`Effect.${prop.name}\` may only be called inside a \`*-boundary.ts\` file. Move the Promise edge into a boundary module.`,
                 node,
@@ -940,7 +984,7 @@ const plugin: Plugin = {
             // `runtime`, `clientRuntime`, `serverRuntime`, or ends in
             // `Runtime`. Catches both `runtime.runPromise(...)` and
             // `extensionUI.clientRuntime.runPromise(...)`.
-            if (!RUNTIME_RUN_METHODS.has(prop.name)) return
+            if (!RUN_PROMISE_METHODS.has(prop.name)) return
             // Resolve the rightmost identifier of the object expression — this
             // handles both `runtime.runPromise(...)` (Identifier object) and
             // `extensionUI.clientRuntime.runPromise(...)` (nested member chain).
@@ -1111,7 +1155,13 @@ const plugin: Plugin = {
         if (!isTestFilename(filename)) return {}
         if (isTestBoundaryFilename(filename)) return {}
 
+        // Filled as the import declarations are visited, before any call.
+        const effectBindings = new Set<string>()
         return {
+          ImportDeclaration(node) {
+            if (!isAstNode(node)) return
+            for (const name of effectModuleBindings(node)) effectBindings.add(name)
+          },
           CallExpression(node) {
             if (!isAstNode(node)) return
             const callee = getNodeField(node, "callee")
@@ -1133,7 +1183,7 @@ const plugin: Plugin = {
               })
               return
             }
-            const method = promiseChainMethodName(node)
+            const method = promiseChainMethodName(node, effectBindings)
             if (method === undefined) return
             context.report({
               message: `Do not use Promise-chain \`.${method}(...)\` control flow in tests. Import \`it\` from \`effect-bun-test\`; use \`yield*\` in \`Effect.gen\`, \`Effect.all([...])\` for concurrency, and \`Effect.scoped\` / \`it.scopedLive\` for cleanup.`,
@@ -1146,7 +1196,8 @@ const plugin: Plugin = {
 
     /**
      * Bans `Bun.*` references and host process and OS facts everywhere except
-     * platform adapter, build script, tooling, and test harness boundaries.
+     * platform adapter, tooling, and test harness boundaries. The TUI build
+     * script is exempt by its `.oxlintrc.json` override.
      * The `Bun` global is a platform-specific runtime API, and `process.pid`,
      * `process.platform`, `os.hostname()` and the rest are host facts; product
      * code routes both through Effect platform services (`GentPlatform`,
@@ -1156,7 +1207,6 @@ const plugin: Plugin = {
      * Exempt by filename:
      *   - `runtime/gent-platform-bun.ts` (the GentPlatform live impl)
      *   - `*-adapter.ts` / `*-adapter.tsx` files (platform-specific adapters)
-     *   - `**\/scripts/**` (build/dev entrypoints)
      *   - `**\/packages/tooling/**` (CI helpers)
      *   - `**\/packages/e2e/**` (test infrastructure spawning real processes)
      *   - `*.test.ts` and files under `tests/`
@@ -1472,7 +1522,8 @@ const plugin: Plugin = {
      *
      * What is reported: a `CallExpression` whose callee is the identifier
      * bound by an `effect-bun-test` import, under whatever local name that
-     * import gives it. A member call such as `it.live(...)` is the correct
+     * import gives it, or `ns.it` through a namespace import of the package.
+     * A member call such as `it.live(...)` is the correct
      * form and is untouched, and so is a file that never imports `it` from
      * `effect-bun-test` — the `it` from `bun:test` is callable.
      */
@@ -1482,32 +1533,42 @@ const plugin: Plugin = {
         // makes something other than "it". Empty until an import binds it,
         // so a file that never imports from effect-bun-test reports nothing.
         const inertNames = new Set<string>()
+        // `import * as ebt from "effect-bun-test"` makes `ebt.it(...)` the same call.
+        const namespaces = new Set<string>()
+        const inertCallee = (callee: AstNode | undefined): string | undefined => {
+          if (callee?.type === "Identifier") {
+            const name = getStringField(callee, "name")
+            return name !== undefined && inertNames.has(name) ? name : undefined
+          }
+          if (callee?.type !== "MemberExpression") return undefined
+          const object = getNodeField(callee, "object")
+          const property = getNodeField(callee, "property")
+          const namespace =
+            object?.type === "Identifier" ? getStringField(object, "name") : undefined
+          if (namespace === undefined || !namespaces.has(namespace)) return undefined
+          if (property?.type !== "Identifier" || getStringField(property, "name") !== "it") {
+            return undefined
+          }
+          return `${namespace}.it`
+        }
         return {
           ImportDeclaration(node) {
-            if (!isAstNode(node)) return
-            const source = getNodeField(node, "source")
-            if (source === undefined || getStringField(source, "value") !== "effect-bun-test")
-              return
+            if (!isAstNode(node) || importSourceOf(node) !== "effect-bun-test") return
             for (const specifier of getNodeArrayField(node, "specifiers") ?? []) {
-              if (specifier.type !== "ImportSpecifier") continue
-              const imported = getNodeField(specifier, "imported")
-              if (imported === undefined) continue
-              const importedName =
-                imported.type === "Identifier"
-                  ? getStringField(imported, "name")
-                  : getStringField(imported, "value")
-              if (importedName !== "it") continue
-              const local = getNodeField(specifier, "local")
-              const localName = local === undefined ? undefined : getStringField(local, "name")
-              inertNames.add(localName ?? "it")
+              const local = specifierLocalName(specifier)
+              if (specifier.type === "ImportNamespaceSpecifier") namespaces.add(local)
+              if (
+                specifier.type === "ImportSpecifier" &&
+                specifierImportedName(specifier) === "it"
+              ) {
+                inertNames.add(local)
+              }
             }
           },
           CallExpression(node) {
             if (!isAstNode(node)) return
-            const callee = getNodeField(node, "callee")
-            if (callee?.type !== "Identifier") return
-            const name = getStringField(callee, "name")
-            if (name === undefined || !inertNames.has(name)) return
+            const name = inertCallee(getNodeField(node, "callee"))
+            if (name === undefined) return
             context.report({
               message: `\`${name}(...)\` from "effect-bun-test" is not callable — it is the object holding \`${name}.live\`, \`${name}.scopedLive\`, \`${name}.effect\` and \`${name}.scoped\`. Calling it throws while the module loads, so Bun registers none of this file's tests and reports the loss as an error attributed to no test. Use \`test(...)\` from "bun:test" for a synchronous body, or \`${name}.live\` / \`${name}.scopedLive\` for one that returns an Effect.`,
               node,

@@ -1016,7 +1016,7 @@ const childrenSection = (agent: AgentDefinition) => {
 
 /** Child admission and control: start, cancel, and list. */
 export const DelegateExtension = defineExtension({
-  id: "@gent/delegate",
+  id: DELEGATE_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("agent", delegateAgent)

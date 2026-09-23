@@ -13,7 +13,9 @@ import {
   createRpcHarness,
   waitFor,
 } from "@gent/core/test-utils"
-import { WORKFLOWS_EXTENSION_ID } from "../src/workflows.js"
+import { WorkflowsExtension } from "../src/workflows.js"
+
+const WORKFLOWS_EXTENSION_ID = WorkflowsExtension.manifest.id
 import { e2ePreset } from "./helpers/test-preset"
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
