@@ -398,16 +398,20 @@ const deriveAutocomplete = (
   if (prefixes.length === 0) return Option.none()
 
   const escaped = prefixes.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-  const regex = new RegExp(`(?:^|[\\s])([${escaped.join("")}])([^\\s]*)$`)
+  // The filter is a bare run (`@src/a`) or an open quote to the end
+  // (`@"my dir/no`), which a quoted directory row leaves behind.
+  const regex = new RegExp(`(?:^|[\\s])([${escaped.join("")}])("[^"]*|[^\\s]*)$`)
   return Option.fromNullishOr(regex.exec(text)).pipe(
     Option.flatMap((match) =>
       Option.all([Option.fromNullishOr(match[1]), Option.fromNullishOr(match[2])]),
     ),
-    Option.flatMap(([prefix, filter]) => {
+    Option.flatMap(([prefix, typed]) => {
       if (prefix.length === 0) return Option.none()
       // The trigger ends the text, so it starts where the prefix and filter
       // do. Any whitespace before it (a space, a newline, a tab) stays.
-      const triggerPos = text.length - prefix.length - filter.length
+      const triggerPos = text.length - prefix.length - typed.length
+      let filter = typed
+      if (typed.startsWith('"')) filter = typed.slice(1)
 
       if (prefix === "/" && triggerPos !== 0) return Option.none()
       return Option.some({ type: prefix, filter, triggerPos })

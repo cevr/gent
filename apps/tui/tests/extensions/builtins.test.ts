@@ -350,9 +350,17 @@ describe("files popup", () => {
           popup.insertion("issue#12.md"),
           popup.insertion("src/a.ts"),
           popup.insertion("src/"),
+          popup.insertion("my dir/"),
         ]),
       )
-      expect(inserted).toEqual(['@"my notes.md" ', '@"issue#12.md" ', "@src/a.ts ", "@src/"])
+      // A quoted directory leaves its quote open, so the popup keeps going inside it.
+      expect(inserted).toEqual([
+        '@"my notes.md" ',
+        '@"issue#12.md" ',
+        "@src/a.ts ",
+        "@src/",
+        '@"my dir/',
+      ])
     }).pipe(Effect.timeout("10 seconds")),
   )
 

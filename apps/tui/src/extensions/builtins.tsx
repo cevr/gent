@@ -402,9 +402,12 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
           return ranked.map(formatMatch)
         }),
       formatInsertion: (id: string) => {
-        // A directory keeps completing inside itself; a file ends the reference.
-        if (id.endsWith("/")) return formatFileRef(id)
-        return `${formatFileRef(id)} `
+        // A file ends the reference. A directory keeps completing inside
+        // itself, so a quoted one leaves its quote open for the next segment.
+        if (!id.endsWith("/")) return `${formatFileRef(id)} `
+        const ref = formatFileRef(id)
+        if (ref.endsWith('"')) return ref.slice(0, -1)
+        return ref
       },
       onSelect: (id: string, filter: string) => {
         if (id.endsWith("/")) return

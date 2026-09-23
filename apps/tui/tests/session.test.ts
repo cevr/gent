@@ -106,6 +106,25 @@ describe("transitionComposerInteraction", () => {
     expect(skill.autocomplete).toEqual(Option.some({ type: "$", filter: "eff", triggerPos: 4 }))
   })
 
+  // A quoted directory row inserts `@"my dir/` with its quote still open, so
+  // the popup keeps going inside it; the filter is the text after the quote.
+  test("an open quote after a trigger is one filter, spaces included", () => {
+    const next = transitionComposerInteraction(
+      ComposerInteractionState.initial(),
+      { _tag: "DraftChanged", text: 'see @"my dir/no' },
+      testContributions,
+    )
+    expect(next.autocomplete).toEqual(
+      Option.some({ type: "@", filter: "my dir/no", triggerPos: 4 }),
+    )
+    const closed = transitionComposerInteraction(
+      ComposerInteractionState.initial(),
+      { _tag: "DraftChanged", text: 'see @"my notes.md" ' },
+      testContributions,
+    )
+    expect(Option.isNone(closed.autocomplete)).toBe(true)
+  })
+
   test("does not detect unregistered prefix", () => {
     const next = transitionComposerInteraction(
       ComposerInteractionState.initial(),
