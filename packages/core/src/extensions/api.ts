@@ -80,6 +80,7 @@ export type {
   ProviderAuthorizationResult,
   ProviderHints,
   ProviderResolution,
+  StoredOAuthCredentials,
 } from "../domain/driver.js"
 export {
   ActorCommandId,

@@ -9,6 +9,7 @@ import {
   Option,
   Predicate,
   Schema,
+  Semaphore,
   Stream,
   SynchronizedRef,
 } from "effect"
@@ -23,7 +24,12 @@ import {
   makeOpenAICredentialCache,
 } from "../src/openai.js"
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
-import { ProviderAuthError, type ProviderAuthInfo, RequestId } from "@gent/core/extensions/api"
+import {
+  ProviderAuthError,
+  type ProviderAuthInfo,
+  RequestId,
+  type StoredOAuthCredentials,
+} from "@gent/core/extensions/api"
 import {
   FetchHttpClient,
   HttpBody,
@@ -75,18 +81,25 @@ interface IOState {
 const makeIO = (state: IOState): OpenAICredentialIO => ({
   refresh: (rt) => Effect.suspend(() => state.refreshResult(rt)),
 })
-type PersistedCredentials = {
-  access: string
-  refresh: string
-  expires: number
-  accountId?: string
-}
 interface PersistState {
-  lastWritten: Option.Option<PersistedCredentials>
+  lastWritten: Option.Option<StoredOAuthCredentials>
   failNext: boolean | "typed"
 }
-const makeAuthInfo = (state: PersistState, credentials: OpenAICredentials): ProviderAuthInfo => {
-  const persist = (updated: PersistedCredentials) =>
+const toStoredCredentials = (creds: OpenAICredentials): StoredOAuthCredentials => {
+  const fields = { access: creds.access, refresh: creds.refresh, expires: creds.expires }
+  if (Option.isNone(creds.accountId)) return fields
+  return { ...fields, accountId: creds.accountId.value }
+}
+/**
+ * The gent auth store as core runs it: one lock per provider, shared by
+ * every profile. `update` is what a refresh uses; `write` is the sign-in
+ * callback's `ctx.persist`. `failNext` makes the next write fail.
+ */
+const makeFakeAuthStore = (state: PersistState, initial: Option.Option<StoredOAuthCredentials>) => {
+  let stored = initial
+  const writes: Array<StoredOAuthCredentials> = []
+  const lock = Semaphore.makeUnsafe(1)
+  const put = (next: StoredOAuthCredentials) =>
     Effect.suspend(() => {
       if (state.failNext) {
         const failure = state.failNext
@@ -96,21 +109,29 @@ const makeAuthInfo = (state: PersistState, credentials: OpenAICredentials): Prov
         }
         return Effect.die(new Error("simulated persist failure"))
       }
-      state.lastWritten = Option.some(updated)
+      stored = Option.some(next)
+      writes.push(next)
+      state.lastWritten = Option.some(next)
       return Effect.void
     })
-  const base = {
+  const update: NonNullable<ProviderAuthInfo["update"]> = (f) =>
+    Effect.gen(function* () {
+      const pair = yield* f(stored)
+      if (Option.isSome(pair[1])) yield* put(pair[1].value)
+      return pair[0]
+    }).pipe(lock.withPermits(1))
+  const write = (next: StoredOAuthCredentials) => put(next).pipe(lock.withPermits(1))
+  const read = () => stored
+  // The credential a `resolveModel` call receives: the stored one plus `update`.
+  const authInfo = (): ProviderAuthInfo => ({
     type: "oauth",
-    access: credentials.access,
-    refresh: credentials.refresh,
-    expires: credentials.expires,
-    persist,
-  } satisfies ProviderAuthInfo
-  if (Option.isSome(credentials.accountId)) {
-    return { ...base, accountId: credentials.accountId.value }
-  }
-  return base
+    ...Option.getOrThrow(stored),
+    update,
+  })
+  return { update, write, read, authInfo, writes }
 }
+const makeAuthInfo = (state: PersistState, credentials: OpenAICredentials): ProviderAuthInfo =>
+  makeFakeAuthStore(state, Option.some(toStoredCredentials(credentials))).authInfo()
 // A credential cache over a fresh cell.
 const credentialCache = (io: OpenAICredentialIO, authInfo: ProviderAuthInfo) =>
   SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
@@ -119,7 +140,7 @@ const credentialCache = (io: OpenAICredentialIO, authInfo: ProviderAuthInfo) =>
 // TestClock starts at time 0, so `expires` values are absolute offsets.
 const FAR_FUTURE = 10 * 60 * 1000
 const COMPLETE = Option.getOrUndefined(Option.none<void>())
-const EMPTY_PERSISTED_CREDENTIALS = Option.none<PersistedCredentials>()
+const EMPTY_PERSISTED_CREDENTIALS = Option.none<StoredOAuthCredentials>()
 const runWithTestClock = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
   Effect.scoped(eff).pipe(Effect.provide(TestClock.layer()))
 // ── Tests ──
@@ -204,7 +225,6 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
         access: "stale-access",
         refresh: "stale-refresh",
         expires: 0,
-        persist: () => Effect.void,
       }
       const exit = yield* runWithTestClock(
         Effect.gen(function* () {
@@ -2238,7 +2258,6 @@ describe("buildOpenAIModelDriver — token endpoint outage", () => {
           access: "expired-access",
           refresh: "old-refresh",
           expires: 0,
-          persist: () => Effect.void,
         }
         // One attempt of the loop: resolve the model, then send one request.
         const attempt = Effect.gen(function* () {
@@ -2285,7 +2304,6 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
         access: "expired-access",
         refresh: "revoked-refresh",
         expires: 0,
-        persist: () => Effect.void,
       }
       const exit = yield* Effect.gen(function* () {
         const model = yield* driver.resolveModel("gpt-5.4", authInfo)
@@ -2336,7 +2354,6 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
         access: "revoked-access",
         refresh: "revoked-refresh",
         expires: FAR_FUTURE_MS,
-        persist: () => Effect.void,
       }
       const shown = yield* Effect.gen(function* () {
         const model = yield* driver.resolveModel("gpt-5.4", authInfo)
@@ -2397,26 +2414,22 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
     readonly accountId: string
   }
   // The auth store as core holds it: the callback and a refresh write it.
-  const makeStore = () => {
-    let current = Option.none<ProviderAuthInfo>()
-    const persist: NonNullable<ProviderAuthInfo["persist"]> = (updated) =>
-      Effect.sync(() => {
-        current = Option.some({ type: "oauth", ...updated, persist })
-      })
-    return { read: () => Option.getOrThrow(current), persist }
-  }
+  const makeStore = (
+    state: PersistState = { lastWritten: EMPTY_PERSISTED_CREDENTIALS, failNext: false },
+  ) => makeFakeAuthStore(state, Option.none())
   // Complete a sign-in the way core does: the callback persists the tokens.
   const signIn = (
     driver: ReturnType<typeof buildOpenAIModelDriver>,
     pending: PendingCallbacks,
-    persist: NonNullable<ProviderAuthInfo["persist"]>,
+    write: (updated: StoredOAuthCredentials) => Effect.Effect<void, ProviderAuthError>,
+    signedIn: typeof newSignIn = newSignIn,
   ) =>
     Effect.gen(function* () {
       const timeoutFiber = yield* Effect.forkDetach(Effect.never)
       pending.set("sign-in", {
         flow: {
           authorization: { url: "https://auth.openai.com", method: "auto", instructions: "" },
-          callback: () => Effect.succeed(newSignIn),
+          callback: () => Effect.succeed(signedIn),
           cancel: Effect.void,
         },
         close: Effect.void,
@@ -2431,7 +2444,7 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
         persist: (auth) => {
           if (auth.type !== "oauth") return Effect.die("expected an OAuth sign-in")
           const { type: _type, ...updated } = auth
-          return persist(updated)
+          return write(updated)
         },
       })
     })
@@ -2449,8 +2462,8 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
         testCatalogSource(),
       )
       const store = makeStore()
-      yield* signIn(driver, pending, store.persist)
-      const authInfo = store.read()
+      yield* signIn(driver, pending, store.write)
+      const authInfo = store.authInfo()
 
       const fetchState = makeFakeFetchState()
       const fetchLayer = fakeFetchLayer(fetchState, (request) => {
@@ -2479,7 +2492,7 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
       const sent = fetchState.captured[fetchState.captured.length - 1]!
       expect(sent.headers["authorization"]).toBe("Bearer new-access")
       expect(sent.headers["chatgpt-account-id"]).toBe("new-account")
-      const stored = store.read()
+      const stored = Option.getOrThrow(store.read())
       expect(stored.refresh).toBe("new-refresh")
       expect(stored.accountId).toBe("new-account")
     }),
@@ -2506,7 +2519,6 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
         access: "revoked-access",
         refresh: "revoked-refresh",
         expires: 0,
-        persist: () => Effect.void,
       }
       const first = yield* driver
         .resolveModel("gpt-5.4", revoked)
@@ -2515,10 +2527,10 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
       expect(Exit.isFailure(first)).toBe(true)
 
       const store = makeStore()
-      yield* signIn(driver, pending, store.persist)
+      yield* signIn(driver, pending, store.write)
       const tokenPostsBefore = fetchState.captured.length
       yield* Effect.gen(function* () {
-        const model = yield* driver.resolveModel("gpt-5.4", store.read())
+        const model = yield* driver.resolveModel("gpt-5.4", store.authInfo())
         yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
           Effect.provide(Layer.provideMerge(model, fetchLayer)),
@@ -2530,6 +2542,148 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
       expect(after.some((request) => request.url.endsWith("/oauth/token"))).toBe(false)
       expect(after[after.length - 1]!.headers["authorization"]).toBe("Bearer new-access")
     }),
+  )
+
+  // A second profile: its own cell over the same store, as each profile's
+  // extension setup builds one.
+  const secondProfile = (
+    store: ReturnType<typeof makeStore>,
+    refresh: (refreshToken: string) => Effect.Effect<OpenAICredentials, ProviderAuthError>,
+  ) =>
+    Effect.gen(function* () {
+      const cellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      return yield* makeOpenAICredentialCache(cellRef, { refresh }, store.authInfo())
+    })
+  const rotatedFrom = (refreshToken: string): OpenAICredentials => ({
+    access: `rotated-from-${refreshToken}-access`,
+    refresh: `rotated-from-${refreshToken}`,
+    expires: FAR_FUTURE,
+    accountId: Option.none(),
+  })
+  const expiredOldAccount = toStoredCredentials(oldAccount)
+
+  it.live("another profile refreshes the new sign-in and never writes the old account", () =>
+    runWithTestClock(
+      Effect.gen(function* () {
+        const store = makeStore()
+        yield* store.write(expiredOldAccount)
+        const refreshTokens: Array<string> = []
+        const profileB = yield* secondProfile(store, (refreshToken) =>
+          Effect.sync(() => {
+            refreshTokens.push(refreshToken)
+            return rotatedFrom(refreshToken)
+          }),
+        )
+        const cellA = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+          makeDurableCell(oldAccount),
+        )
+        const pending: PendingCallbacks = new Map()
+        const driverA = buildOpenAIModelDriver(cellA, pending, Option.none(), testCatalogSource())
+        // The new sign-in expires inside the freshness margin, so profile B refreshes it.
+        yield* signIn(driverA, pending, store.write, { ...newSignIn, expires: 30_000 })
+
+        const served = yield* profileB.getFresh
+        expect(refreshTokens).toEqual(["new-refresh"])
+        expect(served.refresh).toBe("rotated-from-new-refresh")
+        expect(Option.map(store.read(), (stored) => stored.refresh)).toEqual(
+          Option.some("rotated-from-new-refresh"),
+        )
+        expect(store.writes.map((written) => written.refresh)).toEqual([
+          "old-refresh",
+          "new-refresh",
+          "rotated-from-new-refresh",
+        ])
+      }),
+    ),
+  )
+
+  it.live("a refresh in flight in another profile does not overwrite the sign-in", () =>
+    runWithTestClock(
+      Effect.gen(function* () {
+        const store = makeStore()
+        yield* store.write(expiredOldAccount)
+        const refreshTokens: Array<string> = []
+        const refreshStarted = yield* Deferred.make<void>()
+        const releaseRefresh = yield* Deferred.make<void>()
+        const profileB = yield* secondProfile(store, (refreshToken) =>
+          Effect.gen(function* () {
+            refreshTokens.push(refreshToken)
+            yield* Deferred.completeWith(refreshStarted, Effect.void)
+            yield* Deferred.await(releaseRefresh)
+            return rotatedFrom(refreshToken)
+          }),
+        )
+        const cellA = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+          makeDurableCell(oldAccount),
+        )
+        const pending: PendingCallbacks = new Map()
+        const driverA = buildOpenAIModelDriver(cellA, pending, Option.none(), testCatalogSource())
+
+        const refreshing = yield* Effect.forkChild(profileB.getFresh)
+        yield* Deferred.await(refreshStarted)
+        const signingIn = yield* Effect.forkChild(signIn(driverA, pending, store.write))
+        yield* Effect.yieldNow
+        yield* Effect.yieldNow
+        // The sign-in waits for the refresh that holds the store.
+        expect(Option.map(store.read(), (stored) => stored.refresh)).toEqual(
+          Option.some("old-refresh"),
+        )
+        yield* Deferred.completeWith(releaseRefresh, Effect.void)
+        yield* Fiber.join(refreshing)
+        yield* Fiber.join(signingIn)
+        expect(Option.map(store.read(), (stored) => stored.refresh)).toEqual(
+          Option.some("new-refresh"),
+        )
+
+        // Once its cache lapses, profile B adopts the sign-in without a refresh.
+        yield* TestClock.adjust("31 seconds")
+        const served = yield* profileB.getFresh
+        expect(served.refresh).toBe("new-refresh")
+        expect(served.accountId).toEqual(Option.some("new-account"))
+        expect(refreshTokens).toEqual(["old-refresh"])
+        expect(Option.map(store.read(), (stored) => stored.refresh)).toEqual(
+          Option.some("new-refresh"),
+        )
+      }),
+    ).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("a rotation whose write failed does not land over a later sign-in", () =>
+    runWithTestClock(
+      Effect.gen(function* () {
+        const state: PersistState = { lastWritten: EMPTY_PERSISTED_CREDENTIALS, failNext: false }
+        const store = makeStore(state)
+        yield* store.write(expiredOldAccount)
+        const refreshTokens: Array<string> = []
+        const profileB = yield* secondProfile(store, (refreshToken) =>
+          Effect.sync(() => {
+            refreshTokens.push(refreshToken)
+            return rotatedFrom(refreshToken)
+          }),
+        )
+        // Profile B rotates the old account, and the store write fails.
+        state.failNext = true
+        const failed = yield* Effect.exit(profileB.getFresh)
+        expect(Exit.isFailure(failed)).toBe(true)
+
+        const cellA = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+          makeDurableCell(oldAccount),
+        )
+        const pending: PendingCallbacks = new Map()
+        const driverA = buildOpenAIModelDriver(cellA, pending, Option.none(), testCatalogSource())
+        yield* signIn(driverA, pending, store.write)
+
+        // The retry finds the sign-in, not the credential the rotation replaced.
+        const served = yield* profileB.getFresh
+        expect(served.refresh).toBe("new-refresh")
+        expect(refreshTokens).toEqual(["old-refresh"])
+        expect(store.writes.map((written) => written.refresh)).toEqual([
+          "old-refresh",
+          "new-refresh",
+        ])
+      }),
+    ),
   )
 })
 

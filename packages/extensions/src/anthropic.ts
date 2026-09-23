@@ -1111,7 +1111,7 @@ export const makeAnthropicCredentialCache = (
       expiresAt: (creds) => creds.expiresAt,
       // A keychain miss surfaces as ProviderAuthError; swallowing it
       // turns the miss into a refresh attempt instead of a failure.
-      read: () => Effect.option(read),
+      read: Option.some(() => Effect.option(read)),
       // A refresh failure keeps its own reason (locked keychain, access
       // denied, OAuth 4xx); only a refresh that returns an expired token
       // gets the generic hint.
@@ -1136,7 +1136,7 @@ export const makeAnthropicCredentialCache = (
       // The keychain is the source of truth, and the refresh writes it.
       // The stored `oauth` entry only selects this path; nothing reads its
       // tokens, so a refresh is not written there.
-      writeBack: Option.none(),
+      store: Option.none(),
     })
     return cache
   })

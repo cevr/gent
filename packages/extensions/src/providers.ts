@@ -1,4 +1,5 @@
 import {
+  Cause,
   Clock,
   Config,
   type Context,
@@ -26,7 +27,6 @@ import {
   omitUndefined,
   credentialFailureMetadata,
   ProviderAuthError,
-  type ProviderAuthInfo,
   type ProviderHints,
   ProviderId,
   type ProviderResolution,
@@ -53,18 +53,28 @@ import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
  * and refreshes when nothing usable remains. `SynchronizedRef.modifyEffect`
  * makes concurrent stale calls share one refresh.
  *
- * A provider whose auth store is its only copy passes `writeBack`: a
- * refreshed credential is written there. When that write fails the
- * credential is kept as `PendingPersist`: the caller sees the failure,
- * the rotated refresh token survives, and the next `getFresh` retries the
- * write before serving anything.
+ * The source of truth is one of two kinds:
+ *
+ * - `read`: an external store the provider reads and its refresh writes
+ *   itself (the Claude Code keychain).
+ * - `store`: the gent auth store. Every profile of the process has its own
+ *   cell, but all of them share this store, so the store is the owner of
+ *   the credential. Once the TTL lapses, `getFresh` reads and refreshes
+ *   inside one `store.update`, under the store lock. When the store holds a
+ *   credential other than the held one (a sign-in, or a refresh in another
+ *   profile), the cell adopts it and never refreshes or writes the held
+ *   one. When that write fails the rotated credential is kept as
+ *   `PendingPersist`: the caller sees the failure, the rotated refresh
+ *   token survives, and the next `getFresh` retries the write before
+ *   serving anything, but only while the store still holds the credential
+ *   that the rotation replaced.
  *
  * `invalidate` marks the cell so the next `getFresh` skips the cache
  * but keeps the held credential — its refresh token is the only copy a
  * provider without a keychain has.
  *
- * Providers own their credential schema, IO, and the hooks (`read`,
- * `refresh`, `writeBack`); this module owns the cache.
+ * Providers own their credential schema, IO, and the hooks (`read` or
+ * `store`, `refresh`); this module owns the cache.
  */
 
 const CREDENTIAL_CACHE_TTL_MS = 30_000
@@ -106,7 +116,13 @@ export const CredentialCacheCell = <C>(credentials: Schema.Schema<C>) =>
   Schema.TaggedUnion({
     Empty: {},
     Durable: { creds: credentials, at: Schema.Finite, invalidated: Schema.Boolean },
-    PendingPersist: { creds: credentials, at: Schema.Finite, invalidated: Schema.Boolean },
+    PendingPersist: {
+      creds: credentials,
+      /** The stored credential the rotation replaced; the write lands only over it. */
+      replaces: credentials,
+      at: Schema.Finite,
+      invalidated: Schema.Boolean,
+    },
   })
 export type CredentialCacheCell<C> = ReturnType<typeof CredentialCacheCell<C>>["Type"]
 export type CredentialCacheCellRef<C> = SynchronizedRef.SynchronizedRef<CredentialCacheCell<C>>
@@ -119,7 +135,8 @@ export const EMPTY_CREDENTIAL_CELL = Schema.TaggedStruct("Empty", {}).make({})
  * so a sign-in must write the cell itself: without that, the old account
  * stays in use and its next refresh writes it back over the new one.
  * `write` stores the sign-in; it runs under the cell lock, so a refresh in
- * flight cannot store the old account after it.
+ * flight in this cell cannot store the old account after it. The cells of
+ * other profiles adopt the sign-in from the store (see `CredentialStore`).
  */
 export const replaceHeldCredential = <C, E>(
   credentials: Schema.Schema<C>,
@@ -149,16 +166,19 @@ export interface CredentialCache<C> {
   readonly invalidate: Effect.Effect<void>
 }
 
-type PersistedCredentials = Parameters<NonNullable<ProviderAuthInfo["persist"]>>[0]
-
-/** Write refreshed credentials through `authInfo.persist`, when the store gave one. */
-export const writeBackTo = <C>(
-  authInfo: ProviderAuthInfo,
-  toPersisted: (creds: C) => PersistedCredentials,
-): Option.Option<(creds: C) => Effect.Effect<void, ProviderAuthError>> =>
-  Option.fromNullishOr(authInfo.persist).pipe(
-    Option.map((write) => (creds: C) => write(toPersisted(creds))),
-  )
+/**
+ * The gent auth store as a credential cache sees it. All profiles of the
+ * process share it. `update` runs `f` under the store lock for the
+ * provider and writes the credential `f` returns (none leaves the store as
+ * it is). `same` is true when two credentials are one sign-in at one
+ * rotation (the same refresh token).
+ */
+export interface CredentialStore<C> {
+  readonly update: <A, E>(
+    f: (stored: Option.Option<C>) => Effect.Effect<readonly [A, Option.Option<C>], E>,
+  ) => Effect.Effect<A, E | ProviderAuthError>
+  readonly same: (a: C, b: C) => boolean
+}
 
 interface CredentialCacheConfig<C> {
   /** Provider name used in persist failure messages. */
@@ -169,19 +189,17 @@ interface CredentialCacheConfig<C> {
   readonly seed: Option.Option<C>
   readonly expiresAt: (creds: C) => number
   /**
-   * Source of truth consulted once the cache is older than the TTL.
-   * Receives the cached credential while it is still trusted; a provider
-   * without an external store returns it as-is.
+   * External source of truth consulted once the cache is older than the
+   * TTL. Receives the cached credential while it is still trusted. A
+   * provider whose refresh writes this source itself (the Claude Code
+   * keychain) passes it; a provider on the gent auth store passes `store`.
+   * With neither, the cached credential is served while it is fresh.
    */
-  readonly read: (cached: Option.Option<C>) => Effect.Effect<Option.Option<C>>
-  /** Obtain new credentials. Receives the held credential (its refresh token is the most recently rotated one). */
+  readonly read: Option.Option<(cached: Option.Option<C>) => Effect.Effect<Option.Option<C>>>
+  /** Obtain new credentials. Receives the credential whose refresh token to use. */
   readonly refresh: (held: Option.Option<C>) => Effect.Effect<C, CredentialFailure>
-  /**
-   * Durable write of a refreshed credential; none when nothing reads it
-   * back. A provider whose refresh writes its own source of truth (the
-   * Claude Code keychain) passes none.
-   */
-  readonly writeBack: Option.Option<(creds: C) => Effect.Effect<void, ProviderAuthError>>
+  /** The gent auth store that owns the credential; none when nothing reads it back. */
+  readonly store: Option.Option<CredentialStore<C>>
 }
 
 export const makeCredentialCache = <C>(
@@ -191,8 +209,6 @@ export const makeCredentialCache = <C>(
     const Cell = CredentialCacheCell(config.credentials)
     const durable = (creds: C, at: number, invalidated: boolean): CredentialCacheCell<C> =>
       Cell.cases.Durable.make({ creds, at, invalidated })
-    const pending = (creds: C, at: number): CredentialCacheCell<C> =>
-      Cell.cases.PendingPersist.make({ creds, at, invalidated: false })
 
     // First-touch seed: externally-owned cells may already hold fresher
     // creds from a prior layer build within the same extension instance.
@@ -201,29 +217,52 @@ export const makeCredentialCache = <C>(
       return durable(config.seed.value, 0, false)
     })
 
-    const persist = (creds: C): Effect.Effect<void, ProviderAuthError> => {
-      if (Option.isNone(config.writeBack)) return Effect.void
-      return config.writeBack.value(creds).pipe(
-        Effect.catchDefect((cause) => {
-          let message = String(cause)
-          if (cause instanceof Error) message = cause.message
-          return Effect.fail(
-            new ProviderAuthError({
-              message: `Failed to persist refreshed ${config.label} credentials: ${message}`,
-              cause,
-            }),
-          )
-        }),
-      )
-    }
+    const signedOut = new ProviderAuthError({
+      message: `The ${config.label} sign-in was removed. Sign in again with /auth.`,
+    })
 
-    // A write-back that failed earlier is retried before anything is served.
+    // A store write that died becomes a typed failure that names the write.
+    const persistFailure = <E>(cause: Cause.Cause<E>): E | ProviderAuthError =>
+      Option.getOrElse(Cause.findErrorOption(cause), () => {
+        const defect = Cause.squash(cause)
+        let message = String(defect)
+        if (defect instanceof Error) message = defect.message
+        return new ProviderAuthError({
+          message: `Failed to persist refreshed ${config.label} credentials: ${message}`,
+          cause: defect,
+        })
+      })
+
+    // A write that failed earlier is retried before anything is served,
+    // but only over the credential the rotation replaced. When another
+    // writer changed the store since, its credential wins.
     const settlePending = (
       cell: CredentialCacheCell<C>,
       now: number,
     ): Effect.Effect<CredentialCacheCell<C>, ProviderAuthError> => {
-      if (cell._tag !== "PendingPersist") return Effect.succeed(cell)
-      return persist(cell.creds).pipe(Effect.map(() => durable(cell.creds, now, cell.invalidated)))
+      if (cell._tag !== "PendingPersist" || Option.isNone(config.store)) {
+        return Effect.succeed(cell)
+      }
+      const store = config.store.value
+      return store
+        .update(
+          (
+            stored,
+          ): Effect.Effect<
+            readonly [CredentialCacheCell<C>, Option.Option<C>],
+            ProviderAuthError
+          > => {
+            if (Option.isNone(stored)) return Effect.fail(signedOut)
+            if (store.same(stored.value, cell.replaces)) {
+              return Effect.succeed([
+                durable(cell.creds, now, cell.invalidated),
+                Option.some(cell.creds),
+              ])
+            }
+            return Effect.succeed([durable(stored.value, now, false), Option.none()])
+          },
+        )
+        .pipe(Effect.catchCause((cause) => Effect.fail(persistFailure(cause))))
     }
 
     const trusted = (cell: CredentialCacheCell<C>): Option.Option<C> => {
@@ -231,14 +270,68 @@ export const makeCredentialCache = <C>(
       return Option.none()
     }
 
+    type Step = readonly [Exit.Exit<C, CredentialFailure>, CredentialCacheCell<C>]
+
+    // Read and refresh under the store lock. The store's credential wins
+    // over the held one when they differ: another writer put it there.
+    const fromStore = (
+      store: CredentialStore<C>,
+      current: CredentialCacheCell<C>,
+      now: number,
+    ): Effect.Effect<Step, CredentialFailure> => {
+      let held = Option.none<C>()
+      if (current._tag !== "Empty") held = Option.some(current.creds)
+      let rotated = Option.none<{ readonly creds: C; readonly replaces: C }>()
+      const result = (serve: C, write: Option.Option<C>): readonly [C, Option.Option<C>] => [
+        serve,
+        write,
+      ]
+      return store
+        .update((stored) =>
+          Effect.gen(function* () {
+            if (Option.isNone(stored)) {
+              // Nothing to adopt: a removed sign-in is not written back.
+              if (Option.isSome(held)) return yield* signedOut
+              return result(yield* config.refresh(held), Option.none())
+            }
+            const adopted = Option.isNone(held) || !store.same(stored.value, held.value)
+            let base = stored.value
+            if (!adopted && Option.isSome(held)) base = held.value
+            const trustedBase = adopted || Option.isSome(trusted(current))
+            if (trustedBase && freshEnoughAt(config.expiresAt(base), now)) {
+              return result(base, Option.none())
+            }
+            const refreshed = yield* config.refresh(Option.some(base))
+            rotated = Option.some({ creds: refreshed, replaces: base })
+            return result(refreshed, Option.some(refreshed))
+          }),
+        )
+        .pipe(
+          Effect.exit,
+          Effect.flatMap((exit): Effect.Effect<Step, CredentialFailure> => {
+            if (Exit.isSuccess(exit)) {
+              return Effect.succeed([Exit.succeed(exit.value), durable(exit.value, now, false)])
+            }
+            // The refresh or the read failed: the cell keeps the held
+            // refresh token so a retry can re-attempt with it.
+            if (Option.isNone(rotated)) return Effect.failCause(exit.cause)
+            // The refresh worked but the write failed: keep the rotation.
+            return Effect.succeed([
+              Exit.fail(persistFailure(exit.cause)),
+              Cell.cases.PendingPersist.make({
+                creds: rotated.value.creds,
+                replaces: rotated.value.replaces,
+                at: now,
+                invalidated: false,
+              }),
+            ])
+          }),
+        )
+    }
+
     const getFresh: Effect.Effect<C, CredentialFailure> = SynchronizedRef.modifyEffect(
       config.cellRef,
-      (
-        cell,
-      ): Effect.Effect<
-        readonly [Exit.Exit<C, CredentialFailure>, CredentialCacheCell<C>],
-        CredentialFailure
-      > =>
+      (cell): Effect.Effect<Step, CredentialFailure> =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis
           const current = yield* settlePending(cell, now)
@@ -253,7 +346,11 @@ export const makeCredentialCache = <C>(
             return [Exit.succeed(cached.value), current]
           }
 
-          const fromSource = yield* config.read(cached)
+          if (Option.isSome(config.store)) return yield* fromStore(config.store.value, current, now)
+
+          // Without an external source the cell is the only copy.
+          let fromSource = cached
+          if (Option.isSome(config.read)) fromSource = yield* config.read.value(cached)
           if (Option.isSome(fromSource) && freshEnoughAt(config.expiresAt(fromSource.value), now)) {
             return [Exit.succeed(fromSource.value), durable(fromSource.value, now, false)]
           }
@@ -263,9 +360,7 @@ export const makeCredentialCache = <C>(
           let held = Option.none<C>()
           if (current._tag !== "Empty") held = Option.some(current.creds)
           const refreshed = yield* config.refresh(held)
-          const persisted = Exit.map(yield* Effect.exit(persist(refreshed)), () => refreshed)
-          if (Exit.isFailure(persisted)) return [persisted, pending(refreshed, now)]
-          return [persisted, durable(refreshed, now, false)]
+          return [Exit.succeed(refreshed), durable(refreshed, now, false)]
         }),
     ).pipe(Effect.flatten)
 

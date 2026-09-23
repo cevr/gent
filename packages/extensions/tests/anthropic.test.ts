@@ -2556,7 +2556,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       let storeWrites = 0
       const authInfo: ProviderAuthInfo = {
         type: "oauth",
-        persist: () =>
+        update: () =>
           Effect.suspend(() => {
             storeWrites += 1
             return Effect.die(new Error("auth store unavailable"))

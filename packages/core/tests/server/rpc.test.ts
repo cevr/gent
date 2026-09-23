@@ -32,7 +32,14 @@ import {
 } from "../../src/server/workspace-rpc"
 import { describe, expect, it } from "effect-bun-test"
 import { RpcClient } from "effect/unstable/rpc"
-import { finishPart, textDeltaPart, Auth, AuthError, AuthMethod } from "../../src/runtime/provider"
+import {
+  finishPart,
+  textDeltaPart,
+  Auth,
+  AuthError,
+  AuthMethod,
+  serializeAuthStore,
+} from "../../src/runtime/provider"
 import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
@@ -342,19 +349,23 @@ describe("model context RPC boundary", () => {
 
 const failingAuthStoreLayer = Layer.succeed(
   Auth,
-  Auth.of({
-    get: () => Effect.as(Effect.void, void 0),
-    set: () => Effect.fail(new AuthError({ message: "write failed" })),
-    remove: () => Effect.fail(new AuthError({ message: "delete failed" })),
-  }),
+  Auth.of(
+    serializeAuthStore({
+      get: () => Effect.as(Effect.void, void 0),
+      set: () => Effect.fail(new AuthError({ message: "write failed" })),
+      remove: () => Effect.fail(new AuthError({ message: "delete failed" })),
+    }),
+  ),
 )
 const failingReadAuthStoreLayer = Layer.succeed(
   Auth,
-  Auth.of({
-    get: () => Effect.fail(new AuthError({ message: "read failed" })),
-    set: () => Effect.void,
-    remove: () => Effect.void,
-  }),
+  Auth.of(
+    serializeAuthStore({
+      get: () => Effect.fail(new AuthError({ message: "read failed" })),
+      set: () => Effect.void,
+      remove: () => Effect.void,
+    }),
+  ),
 )
 const stubModel = AiModel.make(
   "test",

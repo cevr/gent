@@ -37,6 +37,7 @@ import {
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthInfo,
+  type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
   type ProviderHints,
 } from "@gent/core/extensions/api"
@@ -56,13 +57,13 @@ import {
   freshCredentials,
   isTransientTokenStatus,
   makeCredentialCache,
+  type CredentialStore,
   makeOpenAiCompatResolution,
   postOAuthForm,
   readOptionalEnv,
   recoverUnauthorized,
   replaceHeldCredential,
   withHeaders,
-  writeBackTo,
 } from "./providers.js"
 import {
   OpenAiClient as OpenAiResponsesClient,
@@ -828,11 +829,12 @@ const allocateOpenAIAuthorization: Effect.Effect<
 /**
  * ChatGPT OAuth (Codex) credentials behind the shared credential cache (`makeCredentialCache` in `providers.ts`).
  *
- * There is no keychain: the initial credentials come from `authInfo` and
- * the cache cell is the sole copy of the rotated refresh token until
- * persist write-back lands. The refresh path therefore always prefers
- * the held credential's refresh token over the bootstrap one — the OAuth
- * server may have revoked the bootstrap token when it issued the rotation.
+ * There is no keychain: the gent auth store owns the credential, and every
+ * profile's cell reads and refreshes through `authInfo.update`. The cell is
+ * the sole copy of a rotated refresh token only while its write is pending.
+ * The refresh path prefers the held credential's refresh token over the
+ * bootstrap one — the OAuth server may have revoked the bootstrap token
+ * when it issued the rotation — unless the store holds another sign-in.
  */
 
 // ── Credential shape (matches AuthOauth) ──
@@ -893,6 +895,45 @@ const seedFromAuthInfo = (authInfo: ProviderAuthInfo): Option.Option<OpenAICrede
   })
 }
 
+const fromStored = (stored: StoredOAuthCredentials): OpenAICredentials => ({
+  access: stored.access,
+  refresh: stored.refresh,
+  expires: stored.expires,
+  accountId: Option.fromNullishOr(stored.accountId),
+})
+
+const toStored = (creds: OpenAICredentials): StoredOAuthCredentials => {
+  const fields = { access: creds.access, refresh: creds.refresh, expires: creds.expires }
+  if (Option.isNone(creds.accountId)) return fields
+  return { ...fields, accountId: creds.accountId.value }
+}
+
+/**
+ * The gent auth store behind `authInfo.update`. Every profile's cell reads
+ * and refreshes through it, so a sign-in or a refresh in one profile is the
+ * credential the others adopt.
+ */
+const openAIStore = (
+  authInfo: ProviderAuthInfo,
+): Option.Option<CredentialStore<OpenAICredentials>> =>
+  Option.map(Option.fromNullishOr(authInfo.update), (update) => ({
+    update: <A, E>(
+      f: (
+        stored: Option.Option<OpenAICredentials>,
+      ) => Effect.Effect<readonly [A, Option.Option<OpenAICredentials>], E>,
+    ) =>
+      update((stored) =>
+        Effect.map(
+          f(Option.map(stored, fromStored)),
+          (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
+            pair[0],
+            Option.map(pair[1], toStored),
+          ],
+        ),
+      ),
+    same: (a, b) => a.refresh === b.refresh,
+  }))
+
 /**
  * The OpenAI credential cache over a cell that outlives one `resolveModel`
  * call. A cell allocated per call would disable the cache and lose the
@@ -909,7 +950,8 @@ export const makeOpenAICredentialCache = (
     cellRef,
     seed: seedFromAuthInfo(authInfo),
     expiresAt: (creds) => creds.expires,
-    read: (cached) => Effect.succeed(cached),
+    // The gent auth store is the source of truth; see `store`.
+    read: Option.none(),
     refresh: (held) => {
       // The held token is the most recently rotated one; the bootstrap
       // `authInfo.refresh` only applies before any rotation.
@@ -933,12 +975,7 @@ export const makeOpenAICredentialCache = (
         })),
       )
     },
-    writeBack: writeBackTo(authInfo, (creds: OpenAICredentials) => ({
-      access: creds.access,
-      refresh: creds.refresh,
-      expires: creds.expires,
-      accountId: Option.getOrUndefined(creds.accountId),
-    })),
+    store: openAIStore(authInfo),
   })
 
 // ── codex transform ─────────────────────────────────────────────────────────
