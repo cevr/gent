@@ -127,7 +127,9 @@ const makeFakeAuthStore = (state: PersistState, initial: Option.Option<StoredOAu
     ...Option.getOrThrow(stored),
     update,
   })
-  return { update, write, read, authInfo, writes }
+  // A second gent process shares the auth files but not this process's lock.
+  const writeFromOtherProcess = put
+  return { update, write, writeFromOtherProcess, read, authInfo, writes }
 }
 const makeAuthInfo = (state: PersistState, credentials: OpenAICredentials): ProviderAuthInfo =>
   makeFakeAuthStore(state, Option.some(toStoredCredentials(credentials))).authInfo()
@@ -2590,6 +2592,47 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
         )
       }),
     ).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("a refresh another process already used adopts that process's rotation", () =>
+    runWithTestClock(
+      Effect.gen(function* () {
+        const store = makeStore()
+        yield* store.write(expiredOldAccount)
+        const refreshTokens: Array<string> = []
+        const profileB = yield* secondProfile(store, (refreshToken) =>
+          Effect.gen(function* () {
+            refreshTokens.push(refreshToken)
+            // The other process won the race: it rotated the token and wrote the files.
+            yield* store.writeFromOtherProcess(toStoredCredentials(rotatedFrom(refreshToken)))
+            return yield* new ProviderAuthError({ message: "refresh_token_reused" })
+          }),
+        )
+        const served = yield* profileB.getFresh
+        expect(served.refresh).toBe("rotated-from-old-refresh")
+        expect(refreshTokens).toEqual(["old-refresh"])
+        // The adopted credential is served from the cell; nothing refreshes again.
+        expect((yield* profileB.getFresh).refresh).toBe("rotated-from-old-refresh")
+        expect(refreshTokens).toEqual(["old-refresh"])
+      }),
+    ),
+  )
+
+  it.live("a refused refresh with no newer stored credential still fails", () =>
+    runWithTestClock(
+      Effect.gen(function* () {
+        const store = makeStore()
+        yield* store.write(expiredOldAccount)
+        const profileB = yield* secondProfile(store, () =>
+          Effect.fail(new ProviderAuthError({ message: "invalid_grant" })),
+        )
+        const failed = yield* Effect.exit(profileB.getFresh)
+        expect(Exit.isFailure(failed)).toBe(true)
+        expect(Option.map(store.read(), (stored) => stored.refresh)).toEqual(
+          Option.some("old-refresh"),
+        )
+      }),
+    ),
   )
 
   it.live("a rotation whose write failed does not land over a later sign-in", () =>
