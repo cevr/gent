@@ -90,7 +90,8 @@ export class InteractionRequestMismatchError extends Schema.TaggedError<Interact
 // Durable interaction record
 // ============================================================================
 
-export const InteractionRequestStatus = Schema.Literals(["pending", "resolved"])
+/** `taken`: its call took the answer and keeps it until the call or its turn ends. */
+export const InteractionRequestStatus = Schema.Literals(["pending", "taken", "resolved"])
 export type InteractionRequestStatus = typeof InteractionRequestStatus.Type
 
 /**
@@ -219,6 +220,8 @@ export interface InteractionStorageConfig {
     decisionJson: string,
   ) => Effect.Effect<void, EventStoreError>
   readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, never>
+  /** Its call took the answer; the row stays open until the call or its turn ends. */
+  readonly take: (requestId: InteractionRequestId) => Effect.Effect<void, never>
 }
 
 interface InteractionServiceConfig {
@@ -256,8 +259,12 @@ interface OpenRequest {
   readonly admitted: boolean
 }
 
-/** An answer a call took. The call takes it again on each later run until it ends. */
+/**
+ * An answer a call took. The call takes it again on each later run until it
+ * ends. Its row stays `taken` in storage, so a restart keeps it too.
+ */
 interface TakenAnswer {
+  readonly requestId: InteractionRequestId
   readonly owner: InteractionOwner
   readonly paramsJson: string
   readonly decision: ApprovalDecision
@@ -374,6 +381,12 @@ export const makeInteractionService = (
     /** The row stops being pending; a call waiting behind it may ask. */
     const settle = (requestId: InteractionRequestId) =>
       config.storage.resolve(requestId).pipe(Effect.andThen(signal))
+
+    /** A kept answer's call ended: its row stops being open. */
+    const release = (entries: ReadonlyArray<TakenAnswer>) =>
+      Effect.forEach(entries, (entry) => config.storage.resolve(entry.requestId), {
+        discard: true,
+      })
 
     /** Settle an answer its owner did not take. */
     const abandon = (key: string, gone: (owner: InteractionOwner) => boolean) =>
@@ -516,7 +529,10 @@ export const makeInteractionService = (
             if (kept.paramsJson === paramsJson) return [Effect.succeedSome(kept.decision), current]
             // The call asks something else here now: forget the old answer.
             const taken = branch.taken.filter((entry) => entry !== kept)
-            return [lookAgain, putBranch(current, key, { ...branch, taken })]
+            return [
+              Effect.as(release([kept]), Option.none()),
+              putBranch(current, key, { ...branch, taken }),
+            ]
           },
         )
       /** An open question nobody answered yet: park on it, in the queue. */
@@ -558,9 +574,10 @@ export const makeInteractionService = (
             ...branch,
             open: Option.none(),
             queue: withoutOwner(branch.queue, asker),
-            taken: [...branch.taken, { owner, paramsJson, decision }],
+            taken: [...branch.taken, { requestId: open.requestId, owner, paramsJson, decision }],
           })
-          return [Effect.as(settle(open.requestId), Option.some(decision)), taken]
+          const keep = config.storage.take(open.requestId).pipe(Effect.andThen(signal))
+          return [Effect.as(keep, Option.some(decision)), taken]
         }
         if (branch.running.has(open.owner.value.toolCallId)) return [wait, current]
         // No running call can take it: settle it and look again.
@@ -616,28 +633,30 @@ export const makeInteractionService = (
       resume: Option.Option<InteractionRequestId>,
     ) {
       const key = contextKey(branchRef)
+      const paramsJson = yield* encodeInteractionParams(params)
       if (Option.isSome(resume)) {
         const selected = resume.value
-        const take = Ref.modify(
-          state,
-          (current): [Effect.Effect<ApprovalDecision, EventStoreError>, InteractionState] => {
-            const decision = current.decisions.get(selected)
-            if (Predicate.isUndefined(decision)) {
-              const unavailable = new EventStoreError({
-                message: "Selected interaction decision is unavailable",
-              })
-              return [Effect.fail(unavailable), current]
-            }
-            const branch = branchOf(current, key)
-            let taken = dropDecision(current, selected)
-            if (Option.exists(branch.open, (open) => open.requestId === selected))
-              taken = putBranch(taken, key, { ...branch, open: Option.none() })
-            return [Effect.as(settle(selected), decision), taken]
-          },
-        )
-        return yield* Effect.uninterruptible(Effect.flatten(take))
+        type Take = Effect.Effect<Option.Option<ApprovalDecision>, EventStoreError>
+        const take = Ref.modify(state, (current): [Take, InteractionState] => {
+          const decision = current.decisions.get(selected)
+          if (Predicate.isUndefined(decision)) {
+            const unavailable = new EventStoreError({
+              message: "Selected interaction decision is unavailable",
+            })
+            return [Effect.fail(unavailable), current]
+          }
+          const branch = branchOf(current, key)
+          const open = Option.filter(branch.open, (value) => value.requestId === selected)
+          let taken = dropDecision(current, selected)
+          if (Option.isSome(open)) taken = putBranch(taken, key, { ...branch, open: Option.none() })
+          // The answer was to another question: settle it, and ask this one.
+          if (Option.exists(open, (value) => value.paramsJson !== paramsJson))
+            return [Effect.as(settle(selected), Option.none()), taken]
+          return [Effect.as(settle(selected), Option.some(decision)), taken]
+        })
+        const taken = yield* Effect.uninterruptible(Effect.flatten(take))
+        if (Option.isSome(taken)) return taken.value
       }
-      const paramsJson = yield* encodeInteractionParams(params)
       const requestId = InteractionRequestId.make(yield* platform.randomId)
       type Claim = Effect.Effect<never, EventStoreError | InteractionPendingError>
       const claim = Ref.modify(state, (current): [Claim, InteractionState] => {
@@ -697,22 +716,36 @@ export const makeInteractionService = (
       endTurn: (branchRef) =>
         Effect.gen(function* () {
           const key = contextKey(branchRef)
-          const open = yield* Ref.modify(
+          const ended = yield* Ref.modify(
             state,
             (
               current,
-            ): [Option.Option<{ open: OpenRequest; answered: boolean }>, InteractionState] => {
+            ): [
+              {
+                readonly open: Option.Option<{ open: OpenRequest; answered: boolean }>
+                readonly taken: ReadonlyArray<TakenAnswer>
+              },
+              InteractionState,
+            ] => {
               const branch = branchOf(current, key)
               const next = putBranch(current, key, { ...emptyBranch, running: branch.running })
               return Option.match(branch.open, {
-                onNone: () => [Option.none(), next],
+                onNone: () => [{ open: Option.none(), taken: branch.taken }, next],
                 onSome: (value) => [
-                  Option.some({ open: value, answered: current.decisions.has(value.requestId) }),
+                  {
+                    open: Option.some({
+                      open: value,
+                      answered: current.decisions.has(value.requestId),
+                    }),
+                    taken: branch.taken,
+                  },
                   dropDecision(next, value.requestId),
                 ],
               })
             },
           )
+          yield* release(ended.taken)
+          const open = ended.open
           if (Option.isNone(open)) return yield* signal
           yield* settle(open.value.open.requestId)
           if (open.value.open.admitted && !open.value.answered)
@@ -742,6 +775,26 @@ export const makeInteractionService = (
           onNone: () => Effect.succeedNone,
           onSome: (json) => decodeInteractionDecision(json).pipe(Effect.option),
         })
+        if (record.status === "taken") {
+          // An answer its call had taken before the restart; the call takes
+          // it again when its step runs again.
+          const owner = Option.fromUndefinedOr(record.owner)
+          if (Option.isNone(owner) || Option.isNone(decision)) {
+            yield* config.storage.resolve(record.requestId)
+            return false
+          }
+          const entry: TakenAnswer = {
+            requestId: record.requestId,
+            owner: owner.value,
+            paramsJson: record.paramsJson,
+            decision: decision.value,
+          }
+          yield* Ref.update(state, (current) => {
+            const branch = branchOf(current, key)
+            return putBranch(current, key, { ...branch, taken: [...branch.taken, entry] })
+          })
+          return false
+        }
         yield* Ref.update(state, (current) => {
           const decided = Option.match(decision, {
             onNone: () => current,
@@ -771,16 +824,16 @@ export const makeInteractionService = (
       // started yet instead of settling that owner's answer. Answers kept by
       // a call that is not in this step are dropped.
       beginStep: (branchRef, callIds) =>
-        Ref.update(state, (current) => {
+        Ref.modify(state, (current): [ReadonlyArray<TakenAnswer>, InteractionState] => {
           const key = contextKey(branchRef)
           const running = new Set(callIds)
           const branch = branchOf(current, key)
-          return putBranch(current, key, {
-            ...branch,
-            running,
-            taken: branch.taken.filter((entry) => running.has(entry.owner.toolCallId)),
-          })
-        }),
+          const stays = (entry: TakenAnswer) => running.has(entry.owner.toolCallId)
+          return [
+            branch.taken.filter((entry) => !stays(entry)),
+            putBranch(current, key, { ...branch, running, taken: branch.taken.filter(stays) }),
+          ]
+        }).pipe(Effect.flatMap(release)),
 
       ownCall: (branchRef, toolCallId) => (self) =>
         Effect.gen(function* () {
@@ -793,21 +846,27 @@ export const makeInteractionService = (
           const ended = Effect.gen(function* () {
             const count = yield* Ref.get(asked)
             const keep = yield* Ref.get(parked)
-            yield* Ref.update(state, (current) => {
-              const branch = branchOf(current, key)
-              const running = new Set(branch.running)
-              running.delete(toolCallId)
-              return putBranch(current, key, {
-                ...branch,
-                running,
-                queue: branch.queue.filter(
-                  (owner) => owner.toolCallId !== toolCallId || owner.occurrence < count,
-                ),
-                taken: branch.taken.filter(
-                  (entry) => keep || entry.owner.toolCallId !== toolCallId,
-                ),
-              })
-            })
+            const stays = (entry: TakenAnswer) => keep || entry.owner.toolCallId !== toolCallId
+            const released = yield* Ref.modify(
+              state,
+              (current): [ReadonlyArray<TakenAnswer>, InteractionState] => {
+                const branch = branchOf(current, key)
+                const running = new Set(branch.running)
+                running.delete(toolCallId)
+                return [
+                  branch.taken.filter((entry) => !stays(entry)),
+                  putBranch(current, key, {
+                    ...branch,
+                    running,
+                    queue: branch.queue.filter(
+                      (owner) => owner.toolCallId !== toolCallId || owner.occurrence < count,
+                    ),
+                    taken: branch.taken.filter(stays),
+                  }),
+                ]
+              },
+            )
+            yield* release(released)
             yield* abandon(key, (owner) => owner.toolCallId === toolCallId)
           })
           return yield* self.pipe(

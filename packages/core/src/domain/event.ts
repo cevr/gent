@@ -204,6 +204,8 @@ export const AgentEvent = Schema.TaggedUnion({
     approved: Schema.Boolean,
     notes: Schema.optional(Schema.String),
     editedContent: Schema.optional(Schema.String),
+    /** The dialog closed with its turn; nobody answered it. */
+    dismissed: Schema.optional(Schema.Literal(true)),
   },
   ErrorOccurred: {
     sessionId: SessionId,

@@ -1691,10 +1691,10 @@ export const createDependencies = (config: DependenciesConfig) => {
       const approvalService = yield* ApprovalService
       const sessionRuntime = yield* SessionRuntime
 
-      const workspaces = yield* interactionStore.listPendingWorkspaces
+      const workspaces = yield* interactionStore.listOpenWorkspaces
       for (const workspaceId of workspaces) {
         yield* Effect.gen(function* () {
-          const pending = yield* interactionStore.listPending()
+          const pending = yield* interactionStore.listOpen()
           if (pending.length === 0) return
 
           let recovered = 0

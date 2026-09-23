@@ -69,6 +69,7 @@ describe("Interaction Request", () => {
     persist: (record) => persistInteraction(is, record),
     decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
     resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+    take: (requestId) => is.take(requestId).pipe(Effect.catchEager(() => Effect.void)),
   })
   const workspaceA = "a".repeat(64)
   const workspaceB = "b".repeat(64)
@@ -102,7 +103,7 @@ describe("Interaction Request", () => {
       expect(error.sessionId).toBe(SessionId.make("s1"))
       expect(error.branchId).toBe(BranchId.make("b1"))
       // Verify persisted to storage
-      const pending = yield* is.listPending()
+      const pending = yield* is.listOpen()
       expect(pending.length).toBe(1)
       expect(pending[0]!.sessionId).toBe(SessionId.make("s1"))
       expect(pending[0]!.branchId).toBe(BranchId.make("b1"))
@@ -124,14 +125,14 @@ describe("Interaction Request", () => {
       yield* ensureStorageParents({ sessionId: record.sessionId, branchId: record.branchId })
       yield* is.persist(record)
       // Verify it's pending
-      const before = yield* is.listPending()
+      const before = yield* is.listOpen()
       expect(before.some((r) => r.requestId === InteractionRequestId.make("req-manual-1"))).toBe(
         true,
       )
       // Resolve it
       yield* is.resolve(InteractionRequestId.make("req-manual-1"))
       // Verify it's no longer pending
-      const after = yield* is.listPending()
+      const after = yield* is.listOpen()
       expect(after.some((r) => r.requestId === InteractionRequestId.make("req-manual-1"))).toBe(
         false,
       )
@@ -169,10 +170,10 @@ describe("Interaction Request", () => {
       yield* is.persist(second).pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
 
       const pendingA = yield* is
-        .listPending()
+        .listOpen()
         .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
       const pendingB = yield* is
-        .listPending()
+        .listOpen()
         .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
 
       expect(pendingA.map((record) => record.requestId)).toEqual([first.requestId])
@@ -182,7 +183,7 @@ describe("Interaction Request", () => {
         .resolve(second.requestId)
         .pipe(Effect.provideService(CurrentWorkspaceId, workspaceA))
       const stillPendingB = yield* is
-        .listPending()
+        .listOpen()
         .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
       expect(stillPendingB.map((record) => record.requestId)).toEqual([second.requestId])
 
@@ -190,7 +191,7 @@ describe("Interaction Request", () => {
         .resolve(second.requestId)
         .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
       const resolvedB = yield* is
-        .listPending()
+        .listOpen()
         .pipe(Effect.provideService(CurrentWorkspaceId, workspaceB))
       expect(resolvedB).toEqual([])
     }).pipe(Effect.provide(storageLive)),
@@ -220,7 +221,7 @@ describe("Interaction Request", () => {
         }),
       )
       expect(duplicate._tag).toBe("Failure")
-      const pending = yield* is.listPending({ sessionId, branchId })
+      const pending = yield* is.listOpen({ sessionId, branchId })
       expect(pending.map((record) => record.requestId)).toEqual([
         InteractionRequestId.make("req-singleton-1"),
       ])
@@ -250,8 +251,8 @@ describe("Interaction Request", () => {
         status: "pending",
         createdAt: 2,
       })
-      const [ownedRow] = yield* is.listPending(owned)
-      const [legacyRow] = yield* is.listPending(legacy)
+      const [ownedRow] = yield* is.listOpen(owned)
+      const [legacyRow] = yield* is.listOpen(legacy)
       expect(ownedRow?.owner).toEqual(owner)
       expect(legacyRow?.requestId).toBe(InteractionRequestId.make("req-legacy"))
       expect(legacyRow?.owner).toBeUndefined()
@@ -293,7 +294,7 @@ describe("Interaction Request", () => {
       }
       expect(presented).toEqual([])
       expect(yield* interaction.pendingRequestId({ sessionId, branchId })).toBeUndefined()
-      const pending = yield* is.listPending({ sessionId, branchId })
+      const pending = yield* is.listOpen({ sessionId, branchId })
       expect(pending.map((record) => record.requestId)).toEqual([
         InteractionRequestId.make("req-existing-pending"),
       ])
@@ -384,7 +385,7 @@ describe("Interaction Request", () => {
       }
       const requestId = error.requestId
       // Verify persisted to SQL
-      const pending = yield* is.listPending()
+      const pending = yield* is.listOpen()
       expect(pending.some((r) => r.requestId === requestId)).toBe(true)
       // Phase 2: simulate restart — create a fresh service instance (no in-memory state)
       const service2 = yield* makeInteractionService({
@@ -404,7 +405,7 @@ describe("Interaction Request", () => {
       expect(result.approved).toBe(true)
       expect(result.notes).toBe("ship it")
       // Verify resolved in storage
-      const afterResolve = yield* is.listPending()
+      const afterResolve = yield* is.listOpen()
       expect(afterResolve.some((r) => r.requestId === requestId)).toBe(false)
     }).pipe(Effect.provide(storageLive)),
   )
@@ -418,7 +419,8 @@ describe("Interaction Request", () => {
 
   it.live("a call that asks two questions takes both answers on its third run", () =>
     Effect.gen(function* () {
-      const storage = callbacksFor(yield* InteractionStorage)
+      const is = yield* InteractionStorage
+      const storage = callbacksFor(is)
       const interaction = yield* makeInteractionService({
         onPresent: () => Effect.void,
         onDismiss: () => Effect.void,
@@ -444,6 +446,8 @@ describe("Interaction Request", () => {
       expect(Option.map(third, (exit) => Exit.isSuccess(exit) && exit.value)).toEqual(
         Option.some("one/two"),
       )
+      // The call ended, so the answers it kept are no longer open.
+      expect(yield* is.listOpen(branch)).toEqual([])
     }).pipe(Effect.provide(storageLive)),
   )
 
@@ -479,7 +483,7 @@ describe("Interaction Request", () => {
       yield* ensureStorageParents(branch)
       const error = yield* Effect.flip(interaction.present({ text: "Approve?" }, branch))
       expect(error._tag).toBe("InteractionOwnerMissingError")
-      expect(yield* is.listPending(branch)).toEqual([])
+      expect(yield* is.listOpen(branch)).toEqual([])
     }).pipe(Effect.provide(storageLive)),
   )
 
@@ -503,7 +507,30 @@ describe("Interaction Request", () => {
       yield* interaction.endTurn(branch)
       expect(dismissed).toEqual([open])
       expect(yield* interaction.pendingRequestId(branch)).toBeUndefined()
-      expect(yield* is.listPending(branch)).toEqual([])
+      expect(yield* is.listOpen(branch)).toEqual([])
+    }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live("a dispatching owner does not take an answer to a changed question", () =>
+    Effect.gen(function* () {
+      const storage = callbacksFor(yield* InteractionStorage)
+      const interaction = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage,
+      })
+      const branch = { sessionId: SessionId.make("s-owned"), branchId: BranchId.make("b-owned") }
+      yield* ensureStorageParents(branch)
+      const ask = (text: string, resume: Option.Option<InteractionRequestId>) =>
+        asCall(
+          interaction,
+          branch,
+        )(interaction.present({ text }, { ...branch, resumeRequestId: resume })).pipe(Effect.exit)
+      const first = yield* pendingId(yield* ask("Delete a.txt?", Option.none()))
+      yield* interaction.storeResolution(first, { approved: true })
+      const second = yield* pendingId(yield* ask("Delete b.txt?", Option.some(first)))
+      expect(second).not.toBe(first)
+      expect(yield* interaction.pendingRequestId(branch)).toBe(second)
     }).pipe(Effect.provide(storageLive)),
   )
 })

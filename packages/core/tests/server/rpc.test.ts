@@ -830,6 +830,12 @@ const approveThroughRejectingOwner = (params: OrderedApprovalParams) =>
     return `${params.label}=rejected`
   })
 
+/** How a dialog closed: dismissed with its turn, or the user's decision. */
+const resolvedAs = (event: { readonly approved: boolean; readonly dismissed?: true }) => {
+  if (event.dismissed === true) return "dismissed"
+  return String(event.approved)
+}
+
 /** The text of every tool result in a snapshot. */
 const toolResultTexts = (messages: ReadonlyArray<Message>) =>
   messages.flatMap((message) =>
@@ -1755,7 +1761,7 @@ describe("interaction.respondInteraction", () => {
           }).pipe(Effect.timeout("8 seconds")),
         )
         const pending = yield* Effect.gen(function* () {
-          return yield* (yield* InteractionStorage).listPending(session)
+          return yield* (yield* InteractionStorage).listOpen(session)
         }).pipe(
           // oxlint-disable-next-line effect/noInlineProvide -- This test reads the closed server's database.
           Effect.provide(
@@ -2010,7 +2016,7 @@ describe("interaction.respondInteraction", () => {
                 if (event._tag === "InteractionResolved")
                   MutableRef.update(seen, (all) => [
                     ...all,
-                    { kind: "resolved", text: String(event.approved), id: event.requestId },
+                    { kind: "resolved", text: resolvedAs(event), id: event.requestId },
                   ])
               }),
             ),
@@ -2078,7 +2084,7 @@ describe("interaction.respondInteraction", () => {
           ).toBe(true)
           expect(MutableRef.get(seen).map((entry) => `${entry.kind}:${entry.text}`)).toEqual([
             "presented:OLD",
-            "resolved:false",
+            "resolved:dismissed",
             "presented:NEW",
             "resolved:true",
           ])
@@ -2096,6 +2102,181 @@ describe("interaction.respondInteraction", () => {
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
+  )
+
+  /**
+   * A call that asks two questions, stopped by a restart once it parks on Q2.
+   * `beforeRestart` runs while no server is up.
+   */
+  const askTwiceAcrossRestart = <E>(params: {
+    readonly dbName: string
+    readonly beforeRestart: (first: {
+      readonly q2: InteractionRequestId
+      readonly dbPath: string
+    }) => Effect.Effect<void, E>
+    readonly answersAfter: ReadonlyArray<string>
+  }) =>
+    Effect.gen(function* () {
+      const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
+      const dbPath = `${tempDir}/${params.dbName}`
+      const extension = orderedApprovalExtension(() =>
+        Effect.gen(function* () {
+          const first = yield* approveAs({ label: "Q1", text: "Proceed one?" })
+          const second = yield* approveAs({ label: "Q2", text: "Proceed two?" })
+          return `${first},${second}`
+        }),
+      )
+      const firstProvider = yield* LanguageModelLayers.sequence([
+        toolCallStep("ordered_approval", { label: "X", text: "Proceed" }),
+      ])
+      const first = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer: firstProvider.layer,
+              extensions: [extension],
+              durableApproval: true,
+              storagePath: dbPath,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const presented = yield* Deferred.make<void>()
+          const answered = yield* answerInOrder({
+            client,
+            sessionId,
+            branchId,
+            answers: ["one"],
+            presented,
+          }).pipe(Effect.forkScoped)
+          yield* client.message.send({ sessionId, branchId, content: "ask two questions" })
+          yield* Fiber.join(answered)
+          const q2 = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filterMap((envelope) => {
+              if (
+                envelope.event._tag === "InteractionPresented" &&
+                envelope.event.text === "Proceed two?"
+              )
+                return Result.succeed(envelope.event.requestId)
+              return Result.failVoid
+            }),
+            Stream.runHead,
+            Effect.flatMap(Effect.fromOption),
+          )
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "WaitingForInteraction",
+            5_000,
+            "parked on Q2 before restart",
+          )
+          const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+          return { sessionId, branchId, q2, lastEventId: snapshot.lastEventId ?? 0 }
+        }).pipe(Effect.timeout("8 seconds")),
+      )
+      yield* params.beforeRestart({ q2: first.q2, dbPath })
+
+      const secondProvider = yield* LanguageModelLayers.sequence([textStep("asked twice")])
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer: secondProvider.layer,
+              extensions: [extension],
+              durableApproval: true,
+              storagePath: dbPath,
+            }),
+          )
+          const shown = MutableRef.make<ReadonlyArray<string>>([])
+          yield* client.session
+            .events({
+              sessionId: first.sessionId,
+              branchId: first.branchId,
+              after: first.lastEventId,
+            })
+            .pipe(
+              Stream.runForEach((envelope) =>
+                Effect.gen(function* () {
+                  if (envelope.event._tag !== "InteractionPresented") return
+                  const event = envelope.event
+                  MutableRef.update(shown, (all) => [...all, event.text])
+                  const index = MutableRef.get(shown).length - 1
+                  const answer = params.answersAfter[index]
+                  if (Predicate.isUndefined(answer)) return
+                  yield* waitFor(
+                    client.session.getSnapshot({
+                      sessionId: first.sessionId,
+                      branchId: first.branchId,
+                    }),
+                    (current) => current.runtime._tag === "WaitingForInteraction",
+                    5_000,
+                    "parked after restart",
+                  )
+                  yield* client.interaction.respondInteraction({
+                    sessionId: first.sessionId,
+                    branchId: first.branchId,
+                    requestId: event.requestId,
+                    approved: true,
+                    notes: answer,
+                  })
+                }),
+              ),
+              Effect.forkScoped,
+            )
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId: first.sessionId,
+            branchId: first.branchId,
+            reply: "asked twice",
+          })
+          return { results: toolResultTexts(snapshot.messages), shown: MutableRef.get(shown) }
+        }).pipe(Effect.timeout("8 seconds")),
+      )
+    })
+
+  it.scopedLive(
+    "a call that asks twice keeps its first answer across a restart",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* askTwiceAcrossRestart({
+          dbName: "gent-ask-twice-restart.db",
+          beforeRestart: () => Effect.void,
+          answersAfter: ["two"],
+        })
+        expect(outcome.shown).toEqual(["Proceed two?"])
+        expect(outcome.results.some((result) => result.includes("Q1=one,Q2=two"))).toBe(true)
+      }),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a call that asks twice takes both answers when the second came before a restart",
+    () =>
+      Effect.gen(function* () {
+        const outcome = yield* askTwiceAcrossRestart({
+          dbName: "gent-ask-twice-answered.db",
+          beforeRestart: (first) =>
+            Effect.gen(function* () {
+              const storage = yield* InteractionStorage
+              const decisionJson = yield* encodeInteractionDecision({
+                approved: true,
+                notes: "two",
+              })
+              yield* storage.decide(first.q2, decisionJson)
+            }).pipe(
+              Effect.provide(
+                SqliteStorage.LiveWithSql(first.dbPath, () => Layer.empty, {}).pipe(
+                  Layer.provide(BunPlatformLive),
+                ),
+              ),
+              Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()),
+            ),
+          answersAfter: [],
+        })
+        expect(outcome.shown).toEqual([])
+        expect(outcome.results.some((result) => result.includes("Q1=one,Q2=two"))).toBe(true)
+      }),
+    20_000,
   )
 })
 

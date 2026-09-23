@@ -1924,6 +1924,7 @@ const makeApprovalInteractionService: Effect.Effect<
         ),
       ),
     resolve: (requestId) => store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
+    take: (requestId) => store.take(requestId).pipe(Effect.catchEager(() => Effect.void)),
     decide: (requestId, decisionJson) =>
       store
         .decide(requestId, decisionJson)
@@ -1946,7 +1947,7 @@ const makeApprovalInteractionService: Effect.Effect<
           metadata: params.metadata,
         }),
       ),
-    // A dialog closed without an answer reads as declined.
+    // A dialog closed without an answer is dismissed, not declined.
     onDismiss: (requestId, ctx) =>
       eventPublisher
         .publish(
@@ -1955,6 +1956,7 @@ const makeApprovalInteractionService: Effect.Effect<
             branchId: ctx.branchId,
             requestId,
             approved: false,
+            dismissed: true,
           }),
         )
         .pipe(

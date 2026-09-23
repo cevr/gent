@@ -1897,7 +1897,7 @@ it.scopedLive(
         expect((yield* operations.get({ cell: cellToolHost, operationId: "2" })).state._tag).toBe(
           "Waiting",
         )
-        expect(yield* (yield* InteractionStorage).listPending(cellToolHost)).toHaveLength(1)
+        expect(yield* (yield* InteractionStorage).listOpen(cellToolHost)).toHaveLength(1)
         if (pending._tag !== "CellToolCallSuspended") return yield* Effect.die(pending)
         const undecided = yield* recoverCellExecution(hostParams).pipe(Effect.flip)
         expect(undecided._tag).toBe("CellToolCallSuspended")
@@ -3442,7 +3442,7 @@ it.scopedLive(
           expect(yield* Ref.get(approvalCalls)).toBe(1)
           expect(yield* Ref.get(nativeCalls)).toBe(0)
           const pending = yield* Effect.gen(function* () {
-            return yield* (yield* InteractionStorage).listPending({ sessionId, branchId })
+            return yield* (yield* InteractionStorage).listOpen({ sessionId, branchId })
           }).pipe(
             Effect.provideContext(context),
             Effect.provideService(CurrentWorkspaceId, workspaceId),
@@ -3957,7 +3957,7 @@ it.live("never leaves an approval behind when its operation link fails", () =>
         yield* storage.suspend(key, requestOperationStorage).pipe(Effect.flip),
       ),
     ).toBe(true)
-    expect(yield* interactions.listPending(cellOperationStorage)).toEqual([])
+    expect(yield* interactions.listOpen(cellOperationStorage)).toEqual([])
     expect((yield* storage.get(key)).state._tag).toBe("Started")
     yield* sql`DROP TRIGGER reject_cell_link`
     expect(
@@ -3965,9 +3965,9 @@ it.live("never leaves an approval behind when its operation link fails", () =>
         yield* storage.suspend(key, requestOperationStorage).pipe(sql.withTransaction, Effect.flip),
       ),
     ).toBe(true)
-    expect(yield* interactions.listPending(cellOperationStorage)).toEqual([])
+    expect(yield* interactions.listOpen(cellOperationStorage)).toEqual([])
     yield* storage.suspend(key, requestOperationStorage)
-    expect(yield* interactions.listPending(cellOperationStorage)).toEqual([requestOperationStorage])
+    expect(yield* interactions.listOpen(cellOperationStorage)).toEqual([requestOperationStorage])
     expect((yield* storage.get(key)).state).toEqual({ _tag: "Waiting", requestId })
   }).pipe(
     Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
