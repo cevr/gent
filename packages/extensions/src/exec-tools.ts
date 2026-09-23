@@ -103,6 +103,7 @@ interface BackgroundBashStorageService {
     key: BackgroundBashJobKeyFields,
     message: string,
   ) => Effect.Effect<void, BackgroundBashStorageError>
+  /** Marks the running jobs an earlier server process started as interrupted. */
   readonly reconcileInterrupted: Effect.Effect<void, BackgroundBashStorageError>
 }
 
@@ -144,11 +145,24 @@ export class BackgroundBashStorage extends Context.Service<
               completed_at INTEGER,
               exit_code INTEGER,
               message TEXT,
+              owner_generation TEXT,
               PRIMARY KEY (session_id, branch_id, tool_call_id)
             )
           `,
           )
           .pipe(Effect.mapError(mapError("Failed to create background bash jobs table")))
+        // A table from before `owner_generation` gets the column; its rows keep NULL.
+        const columns = yield* sql<{ readonly name: string }>`
+          SELECT name FROM pragma_table_info('background_bash_jobs')
+        `.pipe(Effect.mapError(mapError("Failed to read background bash jobs columns")))
+        if (!columns.some((column) => column.name === "owner_generation")) {
+          yield* sql
+            .unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN owner_generation TEXT`)
+            .pipe(Effect.mapError(mapError("Failed to add background bash jobs owner column")))
+        }
+        // The server process that owns the jobs this layer starts: every
+        // profile in one process shares it, a restarted server has another.
+        const generation = yield* Effect.sync(() => String(performance.timeOrigin))
 
         const selectJob = Effect.fn("BackgroundBashStorage.selectJob")(function* (
           key: BackgroundBashJobKeyFields,
@@ -205,7 +219,8 @@ export class BackgroundBashStorage extends Context.Service<
                     command,
                     cwd,
                     status,
-                    started_at
+                    started_at,
+                    owner_generation
                   )
                   VALUES (
                     ${input.sessionId},
@@ -214,7 +229,8 @@ export class BackgroundBashStorage extends Context.Service<
                     ${input.command},
                     ${Option.getOrNull(input.cwd)},
                     'running',
-                    ${startedAt}
+                    ${startedAt},
+                    ${generation}
                   )
                 `
                 return BackgroundBashClaim.cases.Started.make({})
@@ -245,6 +261,7 @@ export class BackgroundBashStorage extends Context.Service<
                   completed_at = ${completedAt},
                   message = 'Background command interrupted by server restart'
               WHERE status = 'running'
+                AND (owner_generation IS NULL OR owner_generation != ${generation})
             `
           }).pipe(
             Effect.mapError(mapError("Failed to reconcile interrupted background bash jobs")),
@@ -307,7 +324,10 @@ interface ShellSegment {
   readonly stdin: Array<ShellWord>
   /** The targets of its output redirections: files it writes. */
   readonly writes: Array<ShellWord>
-  /** The segment that pipes into this one. */
+  /**
+   * The segment whose output this one reads on stdin: the command piped into
+   * it, or into the subshell, group, loop or `if` around it.
+   */
   readonly pipedFrom: Option.Option<ShellSegment>
 }
 
@@ -365,6 +385,10 @@ interface CommandReader {
   readonly heredocs: Array<PendingHeredoc>
   /** The open `case` statements, innermost last. */
   readonly cases: Array<CaseState>
+  /** The stdin of this command list: what the command around a `(…)` or `$(…)` reads. */
+  readonly input: Option.Option<ShellSegment>
+  /** The stdin of each open `{`, `if`, `while`, `until`, `for`, `select` or `case`, innermost last. */
+  readonly compounds: Array<Option.Option<ShellSegment>>
 }
 
 const makeSegment = (pipedFrom: Option.Option<ShellSegment>): ShellSegment => ({
@@ -484,6 +508,21 @@ const readCaseWord = (reader: CommandReader, word: ShellWord): boolean => {
   return false
 }
 
+/** Words that open a compound command whose commands share its stdin, and the words that close one. */
+const COMPOUND_OPENERS = new Set(["{", "if", "while", "until", "for", "select", "case"])
+const COMPOUND_CLOSERS = new Set(["}", "fi", "done", "esac"])
+
+/** A compound command in command position passes its stdin to the commands inside it. */
+const readCompoundWord = (reader: CommandReader, word: ShellWord) => {
+  if (reader.quoted || word.dynamic || reader.segment.words.length > 0) return
+  if (COMPOUND_OPENERS.has(word.text)) reader.compounds.push(reader.segment.pipedFrom)
+  if (COMPOUND_CLOSERS.has(word.text)) reader.compounds.pop()
+}
+
+/** The stdin of a command that no pipe feeds: that of the innermost compound around it. */
+const inheritedInput = (reader: CommandReader): Option.Option<ShellSegment> =>
+  Option.getOrElse(Arr.last(reader.compounds), () => reader.input)
+
 const endWord = (reader: CommandReader) => {
   if (reader.inWord) {
     const word: ShellWord = {
@@ -495,6 +534,7 @@ const endWord = (reader: CommandReader) => {
       dynamic: reader.dynamic,
       pattern: PATTERN_TEXT.test(reader.plain),
     }
+    if (reader.role === "argument") readCompoundWord(reader, word)
     if (reader.role === "argument" && !readCaseWord(reader, word)) reader.segment.words.push(word)
     if (reader.role === "here-string") reader.segment.stdin.push(word)
     if (reader.role === "redirect-target") reader.segment.writes.push(word)
@@ -522,7 +562,7 @@ const endSegment = (reader: CommandReader, piped: boolean) => {
   if (segment.words.length > 0 || segment.stdin.length > 0 || segment.writes.length > 0) {
     reader.source.segments.push(segment)
   }
-  let pipedFrom = Option.none<ShellSegment>()
+  let pipedFrom = inheritedInput(reader)
   if (piped) pipedFrom = Option.some(segment)
   reader.segment = makeSegment(pipedFrom)
 }
@@ -530,10 +570,19 @@ const endSegment = (reader: CommandReader, piped: boolean) => {
 const startsSubstitution = (text: string, index: number) =>
   text.charAt(index) === "`" || (text.charAt(index) === "$" && text.charAt(index + 1) === "(")
 
-/** Read the commands of the `$(...)` or backticks at `index`; returns the index after them. */
-const readSubstitution = (source: ShellSource, index: number): number => {
-  if (source.text.charAt(index) === "`") return readCommands(source, index + 1, Option.some("`"))
-  return readCommands(source, index + 2, Option.some(")"))
+/**
+ * Read the commands of the `$(...)` or backticks at `index`; returns the
+ * index after them. They read the stdin of the command around them, `input`.
+ */
+const readSubstitution = (
+  source: ShellSource,
+  index: number,
+  input: Option.Option<ShellSegment>,
+): number => {
+  if (source.text.charAt(index) === "`") {
+    return readCommands(source, index + 1, Option.some("`"), input)
+  }
+  return readCommands(source, index + 2, Option.some(")"), input)
 }
 
 /**
@@ -552,7 +601,7 @@ function readParameterExpansion(reader: CommandReader, index: number, quoted: bo
     if (char === "\\") {
       at += 2
     } else if (startsSubstitution(text, at)) {
-      at = readSubstitution(reader.source, at)
+      at = readSubstitution(reader.source, at, reader.segment.pipedFrom)
     } else if (char === '"') {
       doubleQuoted = !doubleQuoted
       at++
@@ -591,7 +640,7 @@ const readDoubleQuoted = (reader: CommandReader, from: number): number => {
       addChar(reader, index + 1, true)
       index += 2
     } else if (startsSubstitution(text, index)) {
-      const end = readSubstitution(reader.source, index)
+      const end = readSubstitution(reader.source, index, reader.segment.pipedFrom)
       addRange(reader, index, end, true)
       reader.dynamic = true
       index = end
@@ -681,7 +730,8 @@ const heredocBodyEnd = (text: string, from: number, heredoc: PendingHeredoc) => 
 const readExpansions = (source: ShellSource, from: number, to: number) => {
   for (let index = from; index < to; index++) {
     if (source.text.charAt(index) === "\\") index++
-    else if (startsSubstitution(source.text, index)) index = readSubstitution(source, index) - 1
+    else if (startsSubstitution(source.text, index))
+      index = readSubstitution(source, index, Option.none()) - 1
   }
 }
 
@@ -738,7 +788,7 @@ const readEscape = (reader: CommandReader, index: number): Option.Option<number>
 /** `$(...)` or backticks in a word: the commands run, and the text stays in the word. */
 const readSubstitutionWord = (reader: CommandReader, index: number): Option.Option<number> => {
   if (!startsSubstitution(reader.source.text, index)) return Option.none()
-  const end = readSubstitution(reader.source, index)
+  const end = readSubstitution(reader.source, index, reader.segment.pipedFrom)
   addRange(reader, index, end, false)
   reader.dynamic = true
   return Option.some(end)
@@ -786,8 +836,10 @@ const readSeparator = (reader: CommandReader, index: number): Option.Option<numb
   const char = text.charAt(index)
   const pair = text.slice(index, index + 2)
   if (char === "(") {
+    // A subshell reads the stdin of the command in whose place it stands.
+    const input = reader.segment.pipedFrom
     endSegment(reader, false)
-    return Option.some(readCommands(reader.source, index + 1, Option.some(")")))
+    return Option.some(readCommands(reader.source, index + 1, Option.some(")"), input))
   }
   if (char === "\n") {
     endSegment(reader, false)
@@ -843,7 +895,7 @@ const readRedirection = (reader: CommandReader, index: number): Option.Option<nu
   if (char === "&" && next !== ">") return Option.none()
   if (char !== "<" && char !== ">" && char !== "&") return Option.none()
   if (next === "(" && char !== "&") {
-    const end = readCommands(reader.source, index + 2, Option.some(")"))
+    const end = readCommands(reader.source, index + 2, Option.some(")"), Option.none())
     addRange(reader, index, end, false)
     reader.dynamic = true
     return Option.some(end)
@@ -876,11 +928,16 @@ const readStep = (reader: CommandReader, index: number): number =>
     Option.getOrElse(() => readPlain(reader, index)),
   )
 
-/** Read commands from `from` until an unquoted `stop`; returns the index after it. */
-function readCommands(source: ShellSource, from: number, stop: Option.Option<string>): number {
+/** Read commands from `from` until an unquoted `stop`; returns the index after it. `input` is their stdin. */
+function readCommands(
+  source: ShellSource,
+  from: number,
+  stop: Option.Option<string>,
+  input: Option.Option<ShellSegment>,
+): number {
   const reader: CommandReader = {
     source,
-    segment: makeSegment(Option.none()),
+    segment: makeSegment(input),
     wordText: "",
     wordMap: [],
     wordSafe: [],
@@ -894,6 +951,8 @@ function readCommands(source: ShellSource, from: number, stop: Option.Option<str
     stripTabs: false,
     heredocs: [],
     cases: [],
+    input,
+    compounds: [],
   }
   let index = from
   while (index < source.text.length) {
@@ -916,29 +975,33 @@ function readCommands(source: ShellSource, from: number, stop: Option.Option<str
  * Split `text` into command segments of shell words. The script word gives
  * the source offset and insertion safety of each character. Command substitutions, subshells and
  * process substitutions become segments of their own, because they run.
+ * `input` is the stdin of the script: what the command that runs it reads.
  */
-const parseShell = (script: ShellWord): Array<ShellSegment> => {
+const parseShell = (script: ShellWord, input: Option.Option<ShellSegment>): Array<ShellSegment> => {
   const source: ShellSource = {
     text: script.text,
     map: script.map,
     safe: script.safe,
     segments: [],
   }
-  readCommands(source, 0, Option.none())
+  readCommands(source, 0, Option.none(), input)
   return source.segments
 }
 
 /** A whole command: every character is its own source offset, and every insertion point is safe. */
 const parseCommand = (command: string): Array<ShellSegment> =>
-  parseShell({
-    text: command,
-    map: Array.from({ length: command.length }, (_, index) => index),
-    safe: Array.from({ length: command.length }, () => true),
-    end: command.length,
-    endSafe: true,
-    dynamic: false,
-    pattern: false,
-  })
+  parseShell(
+    {
+      text: command,
+      map: Array.from({ length: command.length }, (_, index) => index),
+      safe: Array.from({ length: command.length }, () => true),
+      end: command.length,
+      endSafe: true,
+      dynamic: false,
+      pattern: false,
+    },
+    Option.none(),
+  )
 
 /** A word made of other text: no source offsets to rewrite, no safe insertion point. */
 const derivedWord = (text: string, dynamic: boolean): ShellWord => ({
@@ -1197,13 +1260,21 @@ interface Prefix {
   readonly positionals: number
   /** An optional name before a `{` compound: `coproc NAME { … }`. */
   readonly named: boolean
+  /**
+   * The command starts after the first of these words, not after the
+   * options: `mise exec node@20 -- cmd`, `nix develop .#x -c cmd`.
+   */
+  readonly after: ReadonlyArray<string>
 }
 
 const prefix = (valued: ValueOptions = {}, positionals = 0, named = false): Prefix => ({
   valued,
   positionals,
   named,
+  after: [],
 })
+
+const runsAfter = (...after: ReadonlyArray<string>): Prefix => ({ ...prefix(), after })
 
 /** `env` options whose value is the next word; `-S` splits its value into the command it runs. */
 const ENV_OPTIONS: ValueOptions = { short: "CPSu", long: ["unset", "chdir", "split-string"] }
@@ -1226,8 +1297,8 @@ const PARALLEL_OPTIONS: ValueOptions = {
 /**
  * Keywords and commands that run the command after them with its own words
  * (`sudo git push`, `if git diff`, `xargs git add`). The word after one is in
- * command position again. Other runners (`setsid`, `flock`, `pnpm exec`) are
- * read by name: see `isUnknownCommand`.
+ * command position again. A command missing here runs nothing the guard
+ * sees: its words are data.
  */
 const WRAPPERS: ReadonlyMap<string, Prefix> = new Map([
   ...["!", "{", "if", "then", "elif", "else", "do", "while", "until", "time"].map(
@@ -1252,14 +1323,32 @@ const WRAPPERS: ReadonlyMap<string, Prefix> = new Map([
   ["busybox", prefix()],
   ["toybox", prefix()],
   ["nohup", prefix()],
+  ["setsid", prefix()],
+  ["chronic", prefix()],
+  ["unbuffer", prefix()],
   ["command", prefix()],
   ["builtin", prefix()],
   ["exec", prefix({ short: "a" })],
-  ["nice", prefix({ short: "n", long: ["adjustment"] })],
+  ...["nice", "gnice"].map((name): readonly [string, Prefix] => [
+    name,
+    prefix({ short: "n", long: ["adjustment"] }),
+  ]),
   ["ionice", prefix({ short: "cnpPu", long: ["class", "classdata", "pid", "pgid", "uid"] })],
-  ["timeout", prefix({ short: "sk", long: ["signal", "kill-after"] }, 1)],
+  ...["timeout", "gtimeout"].map((name): readonly [string, Prefix] => [
+    name,
+    prefix({ short: "sk", long: ["signal", "kill-after"] }, 1),
+  ]),
   ["stdbuf", prefix({ short: "ioe", long: ["input", "output", "error"] })],
   ["caffeinate", prefix({ short: "tw" })],
+  ["flock", prefix({ short: "Ew", long: ["timeout", "conflict-exit-code"] }, 1)],
+  ["strace", prefix({ short: "abeEIoOpPsSuX", long: ["output", "attach", "user", "env"] })],
+  ["ltrace", prefix({ short: "aeFnopsu", long: ["output"] })],
+  ["chroot", prefix({ long: ["userspec", "groups"] }, 1)],
+  ["taskset", prefix({}, 1)],
+  ["runuser", prefix({ short: "gGsu", long: ["group", "supp-group", "shell", "user"] })],
+  // BSD `script [-q] file command…`.
+  ["script", prefix({ short: "cEIOT", long: ["command", "log-in", "log-out", "log-timing"] }, 1)],
+  ["dotenv", prefix({ short: "ecv" })],
   ["xargs", prefix(XARGS_OPTIONS)],
   ["parallel", prefix(PARALLEL_OPTIONS)],
 ])
@@ -1271,8 +1360,85 @@ const SCRIPT_JOINERS: ReadonlyMap<string, Prefix> = new Map([
   ["watch", prefix({ short: "n", long: ["interval"] })],
 ])
 
+/**
+ * Commands whose subcommand runs the command after it: `pnpm exec`, `uv
+ * run`, `nix develop -c`. `valued` reads the options before the subcommand.
+ */
+interface SubcommandRunner {
+  readonly valued: ValueOptions
+  readonly subcommand: string
+  readonly prefix: Prefix
+}
+
+const SUBCOMMAND_RUNNERS: ReadonlyMap<string, ReadonlyArray<SubcommandRunner>> = new Map([
+  [
+    "pnpm",
+    [{ valued: { short: "CF", long: ["filter", "dir"] }, subcommand: "exec", prefix: prefix() }],
+  ],
+  [
+    "npm",
+    [
+      {
+        valued: { short: "w", long: ["workspace", "prefix"] },
+        subcommand: "exec",
+        prefix: prefix(),
+      },
+    ],
+  ],
+  ["yarn", [{ valued: { long: ["cwd"] }, subcommand: "exec", prefix: prefix() }]],
+  [
+    "uv",
+    [
+      {
+        valued: { long: ["directory", "project"] },
+        subcommand: "run",
+        prefix: prefix({ long: ["with", "python", "package", "env-file", "extra", "group"] }),
+      },
+    ],
+  ],
+  ["op", [{ valued: {}, subcommand: "run", prefix: prefix({ long: ["env-file"] }) }]],
+  [
+    "mise",
+    ["exec", "x"].map((subcommand) => ({ valued: {}, subcommand, prefix: runsAfter("--") })),
+  ],
+  ["direnv", [{ valued: {}, subcommand: "exec", prefix: prefix({}, 1) }]],
+  [
+    "nix",
+    ["develop", "shell"].map((subcommand) => ({
+      valued: {},
+      subcommand,
+      prefix: runsAfter("-c", "--command"),
+    })),
+  ],
+])
+
+/** The words a runner wraps, from its own command word, and how it reads them. */
+const runnerOf = (
+  command: ReadonlyArray<ShellWord>,
+): Option.Option<{ readonly words: ReadonlyArray<ShellWord>; readonly spec: Prefix }> => {
+  const name = commandName(command[0]?.text ?? "")
+  const wrapper = Option.fromUndefinedOr(WRAPPERS.get(name))
+  if (Option.isSome(wrapper)) return Option.some({ words: command, spec: wrapper.value })
+  const runners = SUBCOMMAND_RUNNERS.get(name) ?? []
+  return Option.map(
+    Arr.findFirst(runners, (runner) => {
+      const at = 1 + parseWords(command, runner.valued, "leading").end
+      return command[at]?.text === runner.subcommand
+    }),
+    (runner) => {
+      const at = 1 + parseWords(command, runner.valued, "leading").end
+      return { words: command.slice(at), spec: runner.prefix }
+    },
+  )
+}
+
 /** The index of the first word after a prefix's own options and positionals. */
 const prefixEnd = (words: ReadonlyArray<ShellWord>, spec: Prefix): number => {
+  if (spec.after.length > 0) {
+    const at = words.findIndex((word, index) => index > 0 && spec.after.includes(word.text))
+    if (at === -1) return words.length
+    return at + 1
+  }
   let end = 1 + parseWords(words, spec.valued, "leading").end + spec.positionals
   if (spec.named && words[end + 1]?.text === "{") end++
   // No command is named `--`: after the positionals it ends the options (`ssh host -- cmd`).
@@ -1328,92 +1494,42 @@ const envSplitWords = (
 /**
  * One command a segment runs: its words from the command word on. Only a
  * word in command position is a command; the same name as an argument
- * (`grep bash`, `echo git commit`) is data. An `inferred` command is a
- * guarded name found among the words of a command the guard does not know
- * (`pnpm exec rm -rf x`): it is classified, never rewritten.
+ * (`grep bash`, `echo git commit`, `ls rm`) is data.
  */
 interface Invocation {
   readonly segment: ShellSegment
   readonly words: ReadonlyArray<ShellWord>
   /** The `NAME=value` words before it: its environment. */
   readonly assignments: ReadonlyArray<ShellWord>
-  readonly inferred: boolean
 }
 
 const FIND_EXEC_ACTIONS = new Set(["-exec", "-execdir", "-ok", "-okdir"])
 
-/** Commands whose arguments are data: text they print, search for or describe. */
-const DATA_COMMANDS = new Set([
-  ...["echo", "printf", "grep", "egrep", "fgrep", "rg", "ag", "ack", "man", "info", "tldr"],
-  ...["help", "which", "type", "whereis", "whatis", "apropos", "hash", "alias", "case"],
-])
-
-/** Commands whose own words the guard reads: no guarded name among them is a hidden command. */
-const READ_COMMANDS = new Set(["git", "find", "source", ".", "trap"])
-
-/**
- * A name the guard checks: a risky command, a shell or `eval`. Among the
- * words of an unknown command (`pnpm exec`, `uv run`, `nix develop -c`),
- * such a name starts a command it may run.
- */
-const isGuardedName = (name: string) =>
-  COMMAND_RISKS.has(name) ||
-  name.startsWith("mkfs.") ||
-  SHELL_NAMES.has(name) ||
-  FOREIGN_SHELLS.has(name) ||
-  OPTION_SCRIPTS.has(name) ||
-  name === "eval"
-
-/** A command whose words the guard does not read: its words may hold a command it runs. */
-const isUnknownCommand = (name: string) =>
-  !DATA_COMMANDS.has(name) &&
-  !READ_COMMANDS.has(name) &&
-  !WRAPPERS.has(name) &&
-  !SCRIPT_JOINERS.has(name) &&
-  !SHELL_NAMES.has(name) &&
-  !FOREIGN_SHELLS.has(name)
-
-/**
- * The commands `words` runs: the first after env assignments, the one after
- * each wrapper, each `find -exec` command, and, among the words of an
- * unknown command, each tail that starts at a guarded name.
- */
+/** The commands `words` runs: the first after env assignments, the one after each runner, and each `find -exec` command. */
 const collectInvocations = (
   segment: ShellSegment,
   words: ReadonlyArray<ShellWord>,
   into: Array<Invocation>,
-  inferred: boolean,
 ): void => {
   let start = words.findIndex((word) => !ASSIGNMENT.test(word.text))
   if (start === -1) start = words.length
   const command = words.slice(start)
   const assignments = words.slice(0, start)
   if (command.length === 0 && assignments.length === 0) return
-  into.push({ segment, words: command, assignments, inferred })
-  const head = Option.fromUndefinedOr(command[0])
-  if (Option.isNone(head)) return
-  const name = commandName(head.value.text)
-  const wrapper = Option.fromUndefinedOr(WRAPPERS.get(name))
-  if (Option.isSome(wrapper)) {
-    collectInvocations(segment, command.slice(prefixEnd(command, wrapper.value)), into, inferred)
+  into.push({ segment, words: command, assignments })
+  const runner = runnerOf(command)
+  if (Option.isSome(runner)) {
+    const { words: wrapped, spec } = runner.value
+    collectInvocations(segment, wrapped.slice(prefixEnd(wrapped, spec)), into)
     return
   }
-  if (name === "find") {
-    for (const [index, word] of command.entries()) {
-      if (!FIND_EXEC_ACTIONS.has(word.text)) continue
-      const rest = command.slice(index + 1)
-      let end = rest.findIndex((next) => next.text === ";" || next.text === "+")
-      if (end === -1) end = rest.length
-      collectInvocations(segment, rest.slice(0, end), into, inferred)
-    }
-    return
-  }
-  // An inferred tail is itself one of the words scanned here: no second scan.
-  if (inferred || head.value.dynamic || !isUnknownCommand(name)) return
+  if (commandName(command[0]?.text ?? "") !== "find") return
   for (const [index, word] of command.entries()) {
-    if (index > 0 && isGuardedName(commandName(word.text))) {
-      collectInvocations(segment, command.slice(index), into, true)
-    }
+    if (!FIND_EXEC_ACTIONS.has(word.text)) continue
+    const rest = command.slice(index + 1)
+    let end = rest.findIndex((next) => next.text === ";" || next.text === "+")
+    if (end === -1) end = rest.length
+    collectInvocations(segment, rest.slice(0, end), into)
   }
 }
 
@@ -1487,10 +1603,12 @@ const echoRuns = (args: ReadonlyArray<ShellWord>): SegmentRuns => {
  * rebuild, and `-v` prints nothing.
  */
 const printfRuns = (args: ReadonlyArray<ShellWord>): SegmentRuns => {
+  // `-v` is an option only before `--`: `printf -- '-v; …'` prints it.
+  if (args[0]?.text.startsWith("-v") === true) return NO_RUNS
   let rest = args
   if (rest[0]?.text === "--") rest = rest.slice(1)
   const format = Option.fromUndefinedOr(rest[0])
-  if (Option.isNone(format) || format.value.text.startsWith("-v")) return NO_RUNS
+  if (Option.isNone(format)) return NO_RUNS
   const text = format.value.text
   if (text.replaceAll("%%", "").includes("%")) {
     return unreadableRun(`printf output with format directives: ${text}`)
@@ -1500,20 +1618,19 @@ const printfRuns = (args: ReadonlyArray<ShellWord>): SegmentRuns => {
 }
 
 /**
- * The input of a command in `segment`: a here-string, a heredoc body, the
- * text an `echo`/`printf` piped into it prints, or the stdin of a bare `cat`
- * piped into it. The output of any other command, and text a shell expands
- * at run time, cannot be read.
+ * The input of a command in `segment`: a here-string, a heredoc body, or the
+ * text of the `echo`/`printf` whose output it reads. Only those producers
+ * can be read: the output of any other command (`cat`, `tee`, a subshell or
+ * group), and text a shell expands at run time, cannot.
  */
 const segmentInputs = (segment: ShellSegment): SegmentRuns => {
   const runs: Array<SegmentRuns> = [scriptRuns(segment.stdin)]
   if (Option.isSome(segment.pipedFrom)) {
     const from = segment.pipedFrom.value
     const name = commandName(from.words[0]?.text ?? "")
-    // `cat` with no file prints its own stdin: `cat <<EOF | sh`.
-    if (name === "cat" && from.words.length === 1) runs.push(scriptRuns(from.stdin))
-    else if (name === "echo") runs.push(echoRuns(from.words.slice(1)))
+    if (name === "echo") runs.push(echoRuns(from.words.slice(1)))
     else if (name === "printf") runs.push(printfRuns(from.words.slice(1)))
+    else if (name === "") runs.push(unreadableRun("the output of a compound command"))
     else runs.push(unreadableRun(`the output of \`${name}\``))
   }
   const inputs = mergeRuns(runs)
@@ -1866,21 +1983,24 @@ interface CommandView {
 }
 
 /**
- * The commands of `segments` and of the scripts they run, up to `maxDepth`
- * levels deep. A script an inferred command runs is inferred too.
+ * The stdin of a script a command in `segment` runs: the command's own. Its
+ * heredoc or here-string reaches the script through the command, a producer
+ * the guard does not trace.
  */
-const viewCommand = (
-  segments: ReadonlyArray<ShellSegment>,
-  maxDepth: number,
-  inferred: boolean,
-): CommandView => {
+const scriptInput = (segment: ShellSegment): Option.Option<ShellSegment> => {
+  if (segment.stdin.length === 0) return segment.pipedFrom
+  return Option.some(makeSegment(Option.none()))
+}
+
+/** The commands of `segments` and of the scripts they run, up to `maxDepth` levels deep. */
+const viewCommand = (segments: ReadonlyArray<ShellSegment>, maxDepth: number): CommandView => {
   const invocations: Array<Invocation> = []
   const writes: Array<ShellWord> = []
   const unreadable: Array<string> = []
   for (const segment of segments) {
     writes.push(...segment.writes)
     const found: Array<Invocation> = []
-    collectInvocations(segment, segment.words, found, inferred)
+    collectInvocations(segment, segment.words, found)
     invocations.push(...found)
     for (const invocation of found) {
       const runs = invocationRuns(invocation)
@@ -1888,7 +2008,8 @@ const viewCommand = (
       if (runs.scripts.length > 0 && maxDepth <= 0) unreadable.push("scripts nested too deep")
       if (maxDepth <= 0) continue
       for (const script of runs.scripts) {
-        const nested = viewCommand(parseShell(script), maxDepth - 1, invocation.inferred)
+        const input = scriptInput(invocation.segment)
+        const nested = viewCommand(parseShell(script, input), maxDepth - 1)
         invocations.push(...nested.invocations)
         writes.push(...nested.writes)
         unreadable.push(...nested.unreadable)
@@ -2117,15 +2238,69 @@ const rootRmRisk: CommandRisk = (_args, { words }) => {
 }
 
 /**
- * Any operand names the action (`docker image push`, `npm -w pkg publish`,
- * `yarn workspace x npm publish`); words after `--` go to the script it runs.
+ * The command's subcommand is the action: the first word after its leading
+ * options and any group words (`docker image push`, `npm -w pkg publish`,
+ * `yarn workspace x npm publish`). The same word later is an argument:
+ * `docker run alpine push` runs a container.
  */
-const actionRisk =
-  (action: string, reason: string): CommandRisk =>
-  (args) =>
-    Option.filter(Option.some<BashRisk>({ level: "external", reason }), () =>
-      parseArguments(args).operands.includes(action),
+const actionRisk = (
+  action: string,
+  reason: string,
+  valued: ValueOptions = {},
+  groups: ReadonlyMap<string, number> = new Map(),
+): CommandRisk => {
+  const subcommandIs = (args: ReadonlyArray<string>): boolean => {
+    const at = parseArguments(args, valued, "leading").end
+    const word = Option.fromUndefinedOr(args[at])
+    if (Option.isNone(word)) return false
+    const skip = Option.fromUndefinedOr(groups.get(word.value))
+    if (Option.isSome(skip)) return subcommandIs(args.slice(at + 1 + skip.value))
+    return word.value === action
+  }
+  return (args) => {
+    let rest = args
+    // `cargo +nightly publish`: a toolchain before the subcommand.
+    if (rest[0]?.startsWith("+") === true) rest = rest.slice(1)
+    return Option.filter(Option.some<BashRisk>({ level: "external", reason }), () =>
+      subcommandIs(rest),
     )
+  }
+}
+
+const PUBLISH_OPTIONS = ["tag", "access", "registry", "otp"]
+
+/** Package managers: the options before their subcommand that take a value, and the words that group subcommands (`yarn workspace foo npm publish`). */
+const PUBLISHERS: ReadonlyArray<readonly [string, ValueOptions, ReadonlyMap<string, number>]> = [
+  [
+    "npm",
+    { short: "w", long: ["workspace", "prefix", "userconfig", "cache", ...PUBLISH_OPTIONS] },
+    new Map(),
+  ],
+  ["pnpm", { short: "CF", long: ["filter", "dir", ...PUBLISH_OPTIONS] }, new Map()],
+  [
+    "yarn",
+    { long: ["cwd", ...PUBLISH_OPTIONS] },
+    new Map([
+      ["workspace", 1],
+      ["npm", 0],
+    ]),
+  ],
+  ["bun", { short: "F", long: ["cwd", "filter", "config", ...PUBLISH_OPTIONS] }, new Map()],
+  [
+    "cargo",
+    {
+      short: "pZ",
+      long: ["package", "manifest-path", "registry", "token", "config", "index", "color"],
+    },
+    new Map(),
+  ],
+]
+
+/** Docker global options that take a value. */
+const DOCKER_OPTIONS: ValueOptions = {
+  short: "Hcl",
+  long: ["host", "context", "config", "log-level", "tlscacert", "tlscert", "tlskey"],
+}
 
 /** The risk of each command the guard checks, read from its words. */
 const COMMAND_RISKS: ReadonlyMap<string, ReadonlyArray<CommandRisk>> = new Map([
@@ -2145,8 +2320,11 @@ const COMMAND_RISKS: ReadonlyMap<string, ReadonlyArray<CommandRisk>> = new Map([
   ),
   ...riskOf(["sudo", "doas"], rootRmRisk),
   ...riskOf(["psql", "mysql", "mariadb", "sqlite3", "duckdb"], sqlRisk),
-  ...riskOf(["npm", "pnpm", "yarn", "bun", "cargo"], actionRisk("publish", "publishes a package")),
-  ...riskOf(["docker"], actionRisk("push", "docker push")),
+  ...PUBLISHERS.map(([name, valued, groups]): readonly [string, ReadonlyArray<CommandRisk>] => [
+    name,
+    [actionRisk("publish", "publishes a package", valued, groups)],
+  ]),
+  ...riskOf(["docker"], actionRisk("push", "docker push", DOCKER_OPTIONS, new Map([["image", 0]]))),
   ...riskOf(["twine"], actionRisk("upload", "twine upload")),
 ])
 
@@ -2171,7 +2349,7 @@ const RISK_RANK = {
  * read asks, as a destructive command does.
  */
 export function classifyBashCommand(command: string): BashRisk {
-  const view = viewCommand(parseCommand(command), MAX_NESTED_COMMAND_DEPTH, false)
+  const view = viewCommand(parseCommand(command), MAX_NESTED_COMMAND_DEPTH)
   const risks: Array<BashRisk> = [
     ...view.invocations.flatMap(invocationRisks),
     ...view.writes.flatMap((word) => Option.toArray(sensitiveFile(word.text))),
@@ -2317,8 +2495,8 @@ export function injectGitTrailers(cmd: string, sessionId: SessionId): string {
     maxDepth = 0
   }
   const offsets = new Set<number>()
-  for (const invocation of viewCommand(parseCommand(cmd), maxDepth, false).invocations) {
-    if (invocation.inferred || invocationName(invocation) !== "git") continue
+  for (const invocation of viewCommand(parseCommand(cmd), maxDepth).invocations) {
+    if (invocationName(invocation) !== "git") continue
     const texts = invocation.words.map((word) => word.text)
     const at = Option.filter(gitSubcommandIndex(texts), (index) => texts[index] === "commit")
     if (Option.isNone(at)) continue
@@ -2705,8 +2883,9 @@ export const BashTool = tool({
 
 const EXEC_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/exec-tools")
 
-// A job still marked running belongs to a process that is gone: mark it
-// interrupted before the supervisor takes new work.
+// A job still marked running that an earlier server process started belongs
+// to a process that is gone: mark it interrupted before the supervisor takes
+// new work. A job this process runs stays running when another profile builds.
 const ReconcileInterruptedJobs = Layer.effectDiscard(
   Effect.gen(function* () {
     const storage = yield* BackgroundBashStorage

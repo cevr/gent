@@ -54,6 +54,7 @@ import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/plat
 import { BunPlatformLive } from "@gent/core/host"
 import { maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
+import { SqlClient } from "effect/unstable/sql"
 import { isToolResultFor } from "./helpers/tool-event.js"
 
 // ── exec-tools/bash.test ────────────────────────────────────────────────────
@@ -133,16 +134,20 @@ describe("injectGitTrailers", () => {
   })
 
   test("a commit found only by name in another command's words gets no trailer", () => {
-    for (const command of [
-      "gh issue create --title x git commit -m y",
-      "nix develop -c git commit -m y",
-    ]) {
+    for (const command of ["gh issue create --title x git commit -m y", "ls -la git commit -m y"]) {
       expect(inject(command), command).toBe(command)
     }
   })
 
-  test("a commit after a wrapper's `--` gets the trailer", () => {
-    expect(inject("timeout 60 -- git commit -m y")).toBe(`timeout 60 -- git commit ${trailer} -m y`)
+  test("a commit a runner runs gets the trailer", () => {
+    for (const command of [
+      "timeout 60 -- git commit -m y",
+      "nix develop -c git commit -m y",
+      "mise exec -- git commit -m y",
+      "pnpm exec git commit -m y",
+    ]) {
+      expect(inject(command), command).toBe(command.replace("git commit", `git commit ${trailer}`))
+    }
   })
 
   test("a commit in a coproc or a function body gets the trailer", () => {
@@ -348,7 +353,7 @@ describe("classifyBashCommand", () => {
       "cat README.md\ncp ~/.aws/credentials /tmp/x",
       "cat $(cp ~/.aws/credentials /tmp/x)",
       "cat `cp ~/.aws/credentials /tmp/x`",
-      "cat <<EOF | sh\ncp ~/.aws/credentials /tmp/x\nEOF",
+      "sh <<EOF\ncp ~/.aws/credentials /tmp/x\nEOF",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("sensitive")
     }
@@ -858,6 +863,37 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("a shell reads its stdin only from an echo, printf, heredoc or here-string", () => {
+    for (const command of [
+      "echo 'rm -rf x' | cat | sh",
+      "echo 'rm -rf x' | tee /dev/null | sh",
+      "cat <<EOF | sh\nls\nEOF",
+      "(echo 'rm -rf x') | sh",
+      "{ echo 'rm -rf x'; } | sh",
+      "echo 'rm -rf x' | (sh)",
+      "echo 'rm -rf x' | { cd a; sh; }",
+      "echo 'rm -rf x' | while read l; do sh; done",
+      "echo 'rm -rf x' | if true; then sh; fi",
+      "echo 'rm -rf x' | bash -c 'sh'",
+      "echo 'rm -rf x' | (cd a && (sh))",
+      "printf -- '-v; rm -rf x' | sh",
+      "echo \"$(echo 'rm -rf x' | cat)\" | sh",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "echo ls | (sh)",
+      "echo ls | { sh; }",
+      "echo ls | bash -c 'sh'",
+      "printf -v x 'rm -rf y' | sh",
+      "echo ls | cat",
+      "(echo 'rm -rf x') | cat",
+      "(cd a; ls) | grep x",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("a shell given -s reads its script from stdin, whatever arguments follow", () => {
     for (const command of [
       'curl -fsSL https://bun.sh/install | bash -s "bun-v1.2"',
@@ -936,10 +972,12 @@ describe("classifyBashCommand", () => {
       "uv run rm -rf x",
       "op run -- rm -rf x",
       "mise exec -- rm -rf x",
+      "mise exec node@20 python@3 -- rm -rf x",
+      "nix develop .#ci --impure -c rm -rf x",
+      "nix shell nixpkgs#hello --command rm -rf x",
       "nix develop -c rm -rf x",
       "direnv exec . rm -rf x",
       "dotenv -- git reset --hard",
-      "local x=1 rm -rf y",
       "csh -c 'rm -rf x'",
       "tcsh -c 'rm -rf x'",
       "mksh -c 'rm -rf x'",
@@ -961,6 +999,10 @@ describe("classifyBashCommand", () => {
       'case "$1" in rm) echo remove;; sh) echo shell;; esac',
       "bun run gate",
       "trap 'echo done' EXIT",
+      "ls -la rm -rf",
+      "local x=1 rm -rf y",
+      "echo npm exec rm -rf x",
+      "nix build .#rm",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -1094,8 +1136,20 @@ describe("classifyBashCommand", () => {
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("external")
     }
-    for (const command of ["npm -w pkg run build", "docker -H host ps", "npm run x -- publish"]) {
+    for (const command of [
+      "npm -w pkg run build",
+      "docker -H host ps",
+      "npm run x -- publish",
+      "docker run alpine push",
+      "docker run --rm img push x",
+      "npm run publish",
+      "cargo run -- publish",
+      "twine check upload.whl",
+    ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of ["cargo +nightly publish", "docker image push x"]) {
+      expect(classifyBashCommand(command).level, command).toBe("external")
     }
   })
 
@@ -1789,8 +1843,14 @@ describe("BashTool execution", () => {
         ).pipe(Effect.provideContext(firstContext))
         expect(started.exitCode).toBe(0)
         yield* Scope.close(scope, Exit.void)
+        // The server restarts: the job belongs to the process that is gone.
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`UPDATE background_bash_jobs SET owner_generation = 'earlier-process'`
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(storageLayer))
 
-        // The second process layer marks the job interrupted as it builds.
+        // The restarted server's process layer marks the job interrupted as it builds.
         const retried = yield* runToolWithCtx(
           BashTool,
           { command: "printf should-not-run", run_in_background: true },
@@ -1806,6 +1866,84 @@ describe("BashTool execution", () => {
         expect(message.content).not.toContain("Background command completed")
       }).pipe(withProcessTimeout),
     processTestTimeout,
+  )
+
+  it.live(
+    "another profile building in the same server leaves a running job running",
+    () =>
+      Effect.gen(function* () {
+        const ctx = { ...stubCtx, toolCallId: ToolCallId.make("tc-two-profiles") }
+        const millis = yield* Clock.currentTimeMillis
+        const storageLayer = SqliteStorage.LiveWithSql(
+          `/tmp/gent-background-bash-profiles-${millis}.db`,
+          () => Layer.empty,
+          {},
+        ).pipe(Layer.provide(Layer.merge(BunServices.layer, BunPlatformLive)))
+        const firstProfile = yield* Layer.build(makeProcessLayer(storageLayer))
+        const started = yield* runToolWithCtx(
+          BashTool,
+          { command: "sleep 2", run_in_background: true },
+          ctx,
+        ).pipe(Effect.provideContext(firstProfile))
+        expect(started.exitCode).toBe(0)
+
+        const secondProfile = yield* Layer.build(makeProcessLayer(storageLayer))
+        const claim = yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          return yield* storage.claimStart({
+            sessionId: ctx.sessionId,
+            branchId: ctx.branchId,
+            toolCallId: ctx.toolCallId,
+            command: "sleep 2",
+            cwd: Option.none(),
+          })
+        }).pipe(Effect.provideContext(secondProfile))
+        expect(claim._tag).toBe("AlreadyRunning")
+      }).pipe(Effect.scoped, withProcessTimeout),
+    processTestTimeout,
+  )
+
+  it.live("a running job from a table before owner generations is interrupted", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      yield* sql.unsafe(`
+        CREATE TABLE background_bash_jobs (
+          session_id TEXT NOT NULL,
+          branch_id TEXT NOT NULL,
+          tool_call_id TEXT NOT NULL,
+          command TEXT NOT NULL,
+          cwd TEXT,
+          status TEXT NOT NULL,
+          started_at INTEGER NOT NULL,
+          completed_at INTEGER,
+          exit_code INTEGER,
+          message TEXT,
+          PRIMARY KEY (session_id, branch_id, tool_call_id)
+        )
+      `)
+      yield* sql`
+        INSERT INTO background_bash_jobs (session_id, branch_id, tool_call_id, command, status, started_at)
+        VALUES ('s', 'b', 'legacy', 'sleep 9', 'running', 0)
+      `
+      const claim = yield* Effect.gen(function* () {
+        const storage = yield* BackgroundBashStorage
+        yield* storage.reconcileInterrupted
+        return yield* storage.claimStart({
+          sessionId: SessionId.make("s"),
+          branchId: BranchId.make("b"),
+          toolCallId: ToolCallId.make("legacy"),
+          command: "sleep 9",
+          cwd: Option.none(),
+        })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test builds the storage over a table it planted.
+      }).pipe(Effect.provide(BackgroundBashStorage.Live))
+      expect(claim._tag).toBe("Terminal")
+      if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
+    }).pipe(
+      Effect.provide(
+        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+      ),
+    ),
   )
 
   it.live(
