@@ -618,9 +618,18 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
   static readonly Client = Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(
     Layer.provideMerge(Actor.toLayer(AgentLoopActor)),
   )
+  /**
+   * The session runtime with the AgentLoop actor it drives. The actor client,
+   * control, and state stay in the context and in the type: a caller that
+   * builds this layer reaches the same actor the runtime uses.
+   */
   static Live = (config: {
     readonly baseSections: ReadonlyArray<PromptSection>
-  }): Layer.Layer<SessionRuntime, never, SessionRuntimeLayerRequirements> =>
+  }): Layer.Layer<
+    SessionRuntime | Layer.Success<ReturnType<typeof AgentLoopLiveActor>>,
+    never,
+    SessionRuntimeLayerRequirements
+  > =>
     Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(
       // Keep actor support services in the live context. `SessionRuntime`
       // captures actor clients, but the AgentLoop entity manager must remain

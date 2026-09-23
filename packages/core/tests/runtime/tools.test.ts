@@ -54,7 +54,7 @@ import {
 import { messageSingleText } from "../../src/domain/message"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 
-// ── tool-runner.test ────────────────────────────────────────────────────────
+// ── tool runner ──────────────────────────────────────────────────────────────
 
 class ToolProfileToken extends Context.Service<
   ToolProfileToken,
@@ -910,7 +910,7 @@ describe("tool execution", () => {
     }).pipe(Effect.timeout("5 seconds")))
 })
 
-// ── turn-interruption.test ──────────────────────────────────────────────────
+// ── turn interruption ────────────────────────────────────────────────────────
 
 describe("turn interruption", () => {
   it.live("a turn is not interrupted before anything interrupts it", () =>
@@ -953,7 +953,7 @@ describe("turn interruption", () => {
   )
 })
 
-// ── ../extensions/compile-tool-policy.test ──────────────────────────────────
+// ── tool policy compilation ──────────────────────────────────────────────────
 
 describe("compileToolPolicy", () => {
   const makeTool = (name: string): ToolCapability =>

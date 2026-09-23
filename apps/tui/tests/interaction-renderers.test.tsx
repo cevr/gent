@@ -15,7 +15,7 @@ import {
   destroyRenderSetup,
   renderWithProviders,
 } from "./render-harness-boundary"
-import { waitForRenderedFrame } from "./helpers-boundary"
+import { waitForFrame } from "./helpers-boundary"
 import { BunFileSystem } from "@effect/platform-bun"
 import { EnvProvider } from "../src/workspace"
 
@@ -59,8 +59,10 @@ describe("AskUserRenderer", () => {
           { width: 80, height: 24 },
         ),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (f) => f.includes("Pick a color"), "ask-user question"),
+      const frame = yield* waitForFrame(
+        setup,
+        (f) => f.includes("Pick a color"),
+        "ask-user question",
       )
       expect(frame).toContain("Pick a color")
       expect(frame).toContain("Choose your favorite")
@@ -84,12 +86,10 @@ describe("AskUserRenderer", () => {
           { width: 80, height: 24 },
         ),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (f) => f.includes("Do you want to proceed"),
-          "ask-user fallback",
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (f) => f.includes("Do you want to proceed"),
+        "ask-user fallback",
       )
       expect(frame).toContain("Do you want to proceed")
       expect(frame).toContain("Yes")
@@ -116,9 +116,7 @@ describe("HandoffRenderer", () => {
           { width: 80, height: 24 },
         ),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (f) => f.includes("Handoff"), "handoff renderer"),
-      )
+      const frame = yield* waitForFrame(setup, (f) => f.includes("Handoff"), "handoff renderer")
       expect(frame).toContain("Handoff")
       expect(frame).toContain("Ready to hand off")
       expect(frame).toContain("Yes")
@@ -165,13 +163,9 @@ describe("HandoffRenderer", () => {
           },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (f) => f.includes("Handoff"), "handoff renderer"),
-      )
+      yield* waitForFrame(setup, (f) => f.includes("Handoff"), "handoff renderer")
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => created.length === 1, "handoff session request"),
-      )
+      yield* waitForFrame(setup, () => created.length === 1, "handoff session request")
       expect(results).toEqual([{ approved: true }])
       expect(created[0]).toMatchObject({
         parentSessionId: "parent-session",
@@ -220,9 +214,7 @@ describe("PromptRenderer", () => {
         setup.mockInput.pressArrow("down")
         setup.mockInput.pressArrow("down")
         setup.mockInput.pressEnter()
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(setup, () => results.length > 0, "edited review reply"),
-        )
+        yield* waitForFrame(setup, () => results.length > 0, "edited review reply")
         expect(results).toEqual([
           { approved: true, notes: "edit", editedContent: "Edited review from the editor\n" },
         ])
@@ -253,9 +245,7 @@ describe("PromptRenderer", () => {
           { width: 80, height: 24 },
         ),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (f) => f.includes("Code Review"), "prompt renderer"),
-      )
+      const frame = yield* waitForFrame(setup, (f) => f.includes("Code Review"), "prompt renderer")
       expect(frame).toContain("Code Review")
       expect(frame).toContain("Here is the generated code")
       expect(frame).toContain("Yes")

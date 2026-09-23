@@ -13,19 +13,10 @@ export {
   type ActiveInteraction,
   AgentEvent,
   EventEnvelope,
-  EventStoreError,
   type ApprovalResult,
-  ErrorOccurred,
-  EventId,
   InteractionPresented,
-  MessageReceived,
   type QuestionOption,
   QuestionSchema,
-  StreamEnded,
-  StreamStarted,
-  ToolCallStarted,
-  ToolCallSucceeded,
-  TurnCompleted,
 } from "./domain/event.js"
 export {
   type ExtensionScope,
@@ -37,7 +28,6 @@ export { BranchId, MessageId, SessionId, ToolCallId } from "./domain/ids.js"
 export {
   Branch,
   Message,
-  MessagePart,
   MessageSegment,
   OutputCut,
   ProjectedMessage,
@@ -50,8 +40,6 @@ export {
   formatHeadTail,
   headTail,
   projectMessage,
-  projectMessagesWithToolInteractions,
-  toolResultMessageIdForTurn,
 } from "./domain/message.js"
 export {
   type ImagePartProjection,
@@ -61,15 +49,12 @@ export {
 } from "./domain/message.js"
 export { Model, ModelId, ProviderId } from "./domain/agent.js"
 export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "./domain/message.js"
-export { type ModelContextMetrics, type SessionRuntimeState } from "./domain/agent-loop.js"
-export { DriverError, DriverFailureId } from "./domain/driver.js"
-export { SessionRuntimeError } from "./runtime/session.js"
+export { type ModelContextMetrics } from "./domain/agent-loop.js"
 export {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   MODEL_CHANGE_MESSAGE_TYPE,
   windowDetails,
 } from "./runtime/model-context.js"
-export { NotFoundError, ProviderError, StorageError } from "./domain/errors.js"
 export { GentRpcError } from "./server/rpc.js"
 export {
   type GentClientRpcError,
@@ -83,7 +68,6 @@ export {
   ConnectionState,
   CreateSessionInput,
   DriverListResult,
-  ExtensionHealth,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
   GentConnectionError,

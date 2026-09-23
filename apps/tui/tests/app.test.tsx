@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Clock, Deferred, Effect, Exit, Option, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Option, Schema } from "effect"
 import {
   AgentName,
   BranchId,
@@ -39,7 +39,7 @@ import {
 import { onMount } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
-import { waitForRenderedFrame } from "./helpers-boundary"
+import { waitForFrame } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
@@ -407,8 +407,6 @@ describe("resolveInitialState", () => {
 
 // ── app-auth.test ───────────────────────────────────────────────────────────
 
-type AppAuthRenderSetup = Awaited<ReturnType<typeof renderWithProviders>>
-
 class MessageTimeoutError extends Schema.TaggedError<MessageTimeoutError>()("MessageTimeoutError", {
   message: Schema.String,
 }) {}
@@ -429,30 +427,6 @@ const requireClient = (
   return Effect.succeed(context.value)
 }
 
-const waitForMessage = (
-  setup: AppAuthRenderSetup,
-  messages: readonly {
-    readonly content: string
-  }[],
-  content: string,
-  timeoutMs = 2000,
-): Effect.Effect<void, MessageTimeoutError> => {
-  const poll = (startedAt: number): Effect.Effect<void, MessageTimeoutError> =>
-    Effect.gen(function* () {
-      yield* Effect.promise(() => setup.renderOnce())
-      if (messages.some((message) => message.content === content)) return
-      const now = yield* Clock.currentTimeMillis
-      if (now - startedAt >= timeoutMs) {
-        return yield* new MessageTimeoutError({
-          message: `timed out waiting for message: ${content}`,
-        })
-      }
-      // gent/no-sleep: allow render-poll primitive — TUI frame must be re-rendered between observations
-      yield* Effect.sleep("10 millis")
-      return yield* poll(startedAt)
-    })
-  return Clock.currentTimeMillis.pipe(Effect.flatMap(poll))
-}
 function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => void }) {
   const client = useClient()
   onMount(() => {
@@ -563,12 +537,10 @@ describe("App auth gate", () => {
       )
       const clientContext = yield* requireClient(ctx)
       applySnapshotAgent(clientContext, AgentName.make("deepwork"))
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (next) => next.includes("API Keys"),
-          "API Keys after agent switch",
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("API Keys"),
+        "API Keys after agent switch",
       )
       expect(calls.length).toBeGreaterThan(0)
       expect(frame).toContain("API Keys")
@@ -619,12 +591,10 @@ describe("App auth gate", () => {
           },
         }),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (next) => next.includes("API Keys"),
-          "API Keys from initial agent",
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("API Keys"),
+        "API Keys from initial agent",
       )
       // The auth check names the session that is actually mounted. It used to
       // name the route's session instead, which the harness could set to a
@@ -693,16 +663,18 @@ describe("App auth gate", () => {
           },
         ),
       )
-      yield* waitForMessage(setup, sentMessages, startupPrompt)
+      yield* waitForFrame(
+        setup,
+        () => sentMessages.some((message) => message.content === startupPrompt),
+        "sent message",
+      )
       expect(sentMessages).toHaveLength(1)
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
       ctx.value.createSession()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          () => ctx.pipe(Option.exists((value) => value.session()?.sessionId === nextSessionId)),
-          "next session mounted",
-        ),
+      yield* waitForFrame(
+        setup,
+        () => ctx.pipe(Option.exists((value) => value.session()?.sessionId === nextSessionId)),
+        "next session mounted",
       )
       // Several frames for the new session's feed to settle.
       yield* Effect.promise(() => setup.renderOnce())
@@ -732,9 +704,7 @@ describe("App auth gate", () => {
           },
         }),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("ready ·"), "session view"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
       const destroy = setup.renderer.destroy.bind(setup.renderer)
       setup.renderer.destroy = () => {
         shutdowns += 1
@@ -744,13 +714,9 @@ describe("App auth gate", () => {
       // gent/no-sleep: allow a lone escape byte stays in the stdin parser until its timeout flushes it as a key
       yield* Effect.sleep("100 millis")
       setup.mockInput.pressKey("p", { ctrl: true })
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("Commands"), "palette"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Commands"), "palette")
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => !frame.includes("Commands"), "palette closed"),
-      )
+      yield* waitForFrame(setup, (frame) => !frame.includes("Commands"), "palette closed")
       // The quit is disarmed, so this escape only arms it again.
       setup.mockInput.pressEscape()
       // gent/no-sleep: allow the escape must be parsed and handled before the negative assertion
@@ -758,7 +724,7 @@ describe("App auth gate", () => {
       expect(shutdowns).toBe(0)
       // A second escape in the window quits.
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() => waitForRenderedFrame(setup, () => shutdowns > 0, "quit"))
+      yield* waitForFrame(setup, () => shutdowns > 0, "quit")
       setup.renderer.destroy = destroy
       expect(shutdowns).toBe(1)
       setup.renderer.destroy()
@@ -808,9 +774,7 @@ describe("App auth gate", () => {
           },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("Resume: Session A"), "picker"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Resume: Session A"), "picker")
       // `useEnv().shutdown` is a no-op in the harness, so observe the renderer
       // teardown the controller performs alongside it.
       const destroy = setup.renderer.destroy.bind(setup.renderer)
@@ -818,7 +782,7 @@ describe("App auth gate", () => {
         shutdowns += 1
       }
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() => waitForRenderedFrame(setup, () => shutdowns > 0, "quit"))
+      yield* waitForFrame(setup, () => shutdowns > 0, "quit")
       setup.renderer.destroy = destroy
       expect(shutdowns).toBe(1)
       setup.renderer.destroy()
@@ -899,9 +863,7 @@ describe("App auth gate", () => {
           },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (next) => next.includes("Resume: Session A"), "branch picker"),
-      )
+      yield* waitForFrame(setup, (next) => next.includes("Resume: Session A"), "branch picker")
       expect(calls).toEqual([])
 
       // Choosing a branch closes the picker, and only then does the gate run.
@@ -971,8 +933,10 @@ describe("App auth gate", () => {
         },
       ])
       // Auth overlay should appear
-      const authFrame = yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (next) => next.includes("API Keys"), "auth overlay"),
+      const authFrame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("API Keys"),
+        "auth overlay",
       )
       expect(authFrame).toContain("API Keys")
       // Prompt still not sent while auth overlay is open
@@ -1024,9 +988,7 @@ describe("App auth gate", () => {
           initialPrompt: Option.some("must not send"),
         }),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => authChecks > 0, "auth check failure"),
-      )
+      yield* waitForFrame(setup, () => authChecks > 0, "auth check failure")
       // gent/no-sleep: allow real-clock gap so any spurious send fiber has time to surface (negative assertion follows)
       yield* Effect.sleep("20 millis")
       yield* Effect.promise(() => setup.renderOnce())
@@ -1082,7 +1044,11 @@ describe("App auth gate", () => {
           initialPrompt: Option.some("send after retry"),
         }),
       )
-      yield* waitForMessage(setup, sentMessages, "send after retry")
+      yield* waitForFrame(
+        setup,
+        () => sentMessages.some((message) => message.content === "send after retry"),
+        "sent message",
+      )
       expect(authChecks).toBeGreaterThan(1)
       setup.renderer.destroy()
     }),
@@ -1125,18 +1091,14 @@ describe("App auth gate", () => {
           },
         }),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) =>
-            frame.includes("temporary auth lookup failed") && frame.includes("Press r to retry"),
-          "retryable auth error",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) =>
+          frame.includes("temporary auth lookup failed") && frame.includes("Press r to retry"),
+        "retryable auth error",
       )
       setup.mockInput.pressKey("r")
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => !frame.includes("API Keys"), "auth retry resolved"),
-      )
+      yield* waitForFrame(setup, (frame) => !frame.includes("API Keys"), "auth retry resolved")
       expect(authChecks).toBe(3)
       setup.renderer.destroy()
     }),
@@ -1286,12 +1248,10 @@ describe("App auth gate", () => {
           },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Resume: Alpha") && frame.includes("Side (1)"),
-          "branch picker",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Resume: Alpha") && frame.includes("Side (1)"),
+        "branch picker",
       )
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
@@ -1302,50 +1262,48 @@ describe("App auth gate", () => {
       expect(sentMessages).toEqual([])
       initialAuthCheckResolved = true
       yield* Deferred.succeed(initialAuthCheck, void 0)
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
       expect(sentMessages).toEqual([])
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Enter API key for openai"),
-          "openai key input",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Enter API key for openai"),
+        "openai key input",
       )
       yield* Effect.promise(() => setup.mockInput.typeText("sk-test"))
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => !frame.includes("API Keys"), "auth overlay closed"),
-      )
+      yield* waitForFrame(setup, (frame) => !frame.includes("API Keys"), "auth overlay closed")
       expect(hasOpenAiKey).toBe(true)
-      yield* waitForMessage(setup, sentMessages, initialPrompt)
+      yield* waitForFrame(
+        setup,
+        () => sentMessages.some((message) => message.content === initialPrompt),
+        "sent message",
+      )
       expect(sentMessages.find((message) => message.content === initialPrompt)).toMatchObject({
         sessionId: alphaSessionId,
         branchId: betaBranchId,
       })
       yield* Effect.promise(() => setup.mockInput.typeText(historyPrompt))
       setup.mockInput.pressEnter()
-      yield* waitForMessage(setup, sentMessages, historyPrompt)
+      yield* waitForFrame(
+        setup,
+        () => sentMessages.some((message) => message.content === historyPrompt),
+        "sent message",
+      )
       setup.mockInput.pressKey("r", { ctrl: true })
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Prompt Search") && frame.includes(historyPrompt),
-          "prompt search history",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Prompt Search") && frame.includes(historyPrompt),
+        "prompt search history",
       )
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => !frame.includes("Prompt Search"),
-          "prompt search closed",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => !frame.includes("Prompt Search"),
+        "prompt search closed",
       )
       setup.renderer.destroy()
     }),
@@ -1452,33 +1410,25 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("API Keys"), "auth gate")
       applySnapshotAgent(clientContext, AgentName.make("deepwork"))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          () => sessionAuthChecks >= 2,
-          "stale session auth check started",
-        ),
-      )
+      yield* waitForFrame(setup, () => sessionAuthChecks >= 2, "stale session auth check started")
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Enter API key for openai"),
-          "openai key input",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Enter API key for openai"),
+        "openai key input",
       )
       yield* Effect.promise(() => setup.mockInput.typeText("sk-test"))
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => !frame.includes("API Keys"), "auth resolved"),
+      yield* waitForFrame(setup, (frame) => !frame.includes("API Keys"), "auth resolved")
+      yield* waitForFrame(
+        setup,
+        () => sentMessages.some((message) => message.content === initialPrompt),
+        "sent message",
       )
-      yield* waitForMessage(setup, sentMessages, initialPrompt)
       yield* Deferred.succeed(staleSessionCheck, [
         {
           provider: "openai",
@@ -1534,7 +1484,11 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      yield* waitForMessage(setup, sentMessages, initialPrompt)
+      yield* waitForFrame(
+        setup,
+        () => sentMessages.some((message) => message.content === initialPrompt),
+        "sent message",
+      )
       // The server names the session after the first turn. The record is new;
       // the session is the same one.
       clientContext.switchSession(
@@ -1592,11 +1546,13 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      yield* waitForMessage(setup, attempts, initialPrompt)
-      // Nothing else changes: the send itself goes again.
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => attempts.length >= 2, "second send"),
+      yield* waitForFrame(
+        setup,
+        () => attempts.some((message) => message.content === initialPrompt),
+        "sent message",
       )
+      // Nothing else changes: the send itself goes again.
+      yield* waitForFrame(setup, () => attempts.length >= 2, "second send")
       // The send landed; one more mount must not send again.
       clientContext.switchSession(SessionId.make("session-a"), BranchId.make("branch-b"), "A")
       yield* Effect.promise(() => setup.renderOnce())
@@ -1646,9 +1602,7 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => slashCommandCalls >= 1, "slash commands fetched"),
-      )
+      yield* waitForFrame(setup, () => slashCommandCalls >= 1, "slash commands fetched")
       const before = slashCommandCalls
       // The extension-contributed rows belong to the session, not to its name.
       clientContext.switchSession(
@@ -2174,13 +2128,11 @@ describe("debug playground", () => {
               height: 40,
             }),
           )
-          const frame = yield* Effect.promise(() =>
-            waitForRenderedFrame(
-              setup,
-              (text) => text.includes("Review the TUI renderer cleanup"),
-              "seeded transcript",
-              5_000,
-            ),
+          const frame = yield* waitForFrame(
+            setup,
+            (text) => text.includes("Review the TUI renderer cleanup"),
+            "seeded transcript",
+            5_000,
           )
           setup.renderer.destroy()
           expect(frame).toContain("✓ 5 tool calls · 1 read · 1 grep · 1 bash · 1 edit · 1 write")
@@ -2234,18 +2186,14 @@ describe("client extension status", () => {
             Option.fromUndefinedOr(value.commands().find((command) => command.slash === "driver")),
           ),
         )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => Option.isSome(driverCommand()), "driver command loaded"),
-      )
+      yield* waitForFrame(setup, () => Option.isSome(driverCommand()), "driver command loaded")
       const command = driverCommand()
       if (Option.isNone(command)) return yield* Effect.die("driver command not loaded")
       command.value.onSlash?.("")
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (text) => text.includes("Usage: /driver <agent> <driver-id|default>"),
-          "driver usage in the footer",
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (text) => text.includes("Usage: /driver <agent> <driver-id|default>"),
+        "driver usage in the footer",
       )
       expect(frame).toContain("Usage: /driver")
       expect(sentMessages).toEqual([])
