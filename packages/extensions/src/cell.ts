@@ -1670,10 +1670,9 @@ const encodeReceipts = Schema.encodeSync(Schema.Array(CellOperationReceipt))
 
 /**
  * Tools bound for this cell call, by tool id. A receipt reads the author's
- * summary from here; recovery has no bindings and uses the output head.
+ * summary from here; a tool missing from it gets the head of its output.
  */
 type ReceiptTools = ReadonlyMap<string, ResolvedToolCapability>
-const noReceiptTools: ReceiptTools = new Map()
 
 const receiptFor = (operation: CellToolOperation, tools: ReceiptTools): CellOperationReceipt => {
   if (operation.state._tag !== "Completed") {
@@ -2359,6 +2358,34 @@ export const CellTool = tool({
 
 // ── recovery ────────────────────────────────────────────────────────────────
 
+/**
+ * The tools a recovered cell's completed operations were bound to, resolved
+ * the way a resume resolves them. A binding that no longer resolves (the tool
+ * is gone, or its source or schema changed) is left out, so that receipt keeps
+ * the head of its output instead of a summary from a different tool.
+ */
+const recoveredReceiptTools = (
+  params: Pick<Parameters<typeof resumeCellToolOperation>[0], "cell" | "profile">,
+  operations: ReadonlyArray<{ readonly operation: CellToolOperation }>,
+) =>
+  runAgentLoopTurnProfile(params.profile)(
+    Effect.gen(function* () {
+      const tools = new Map<string, ResolvedToolCapability>()
+      for (const { operation } of operations) {
+        if (operation.state._tag !== "Completed") continue
+        const resolved = yield* resolveStoredToolBinding({
+          sessionId: params.cell.sessionId,
+          assistantMessageId: params.cell.assistantMessageId,
+          toolCallId: operation.toolCallId,
+          binding: operation.binding,
+          generationId: params.profile.turnGenerationId,
+        }).pipe(Effect.option)
+        if (Option.isSome(resolved)) tools.set(String(operation.binding.toolId), resolved.value)
+      }
+      return tools satisfies ReceiptTools
+    }),
+  )
+
 /** The branch owner calls this only after cell execution has stopped. No source replay. */
 export const recoverCellExecution = Effect.fn("CellExecution.recover")(function* (
   params: Pick<Parameters<typeof resumeCellToolOperation>[0], "cell" | "profile">,
@@ -2376,7 +2403,11 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
     )
   // A cell stored as completed may have died before its receipts were attached.
   if (outer._tag === "Completed")
-    return yield* withCellOperationReceipts(params.cell, outer.result, noReceiptTools)
+    return yield* withCellOperationReceipts(
+      params.cell,
+      outer.result,
+      yield* recoveredReceiptTools(params, yield* operations.listForToolCall(params.cell)),
+    )
   const records = yield* operations.listForToolCall(params.cell)
   const pending = yield* interactions.listPending(params.cell)
   for (const { key, operation } of records) {
@@ -2402,9 +2433,8 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
   // The receipt shape every client decodes. An operation with no recorded
   // outcome is incomplete; a completed one is read back with context.read.
   const latest = yield* operations.listForToolCall(params.cell)
-  const receipts = encodeReceipts(
-    latest.map(({ operation }) => receiptFor(operation, noReceiptTools)),
-  )
+  const tools = yield* recoveredReceiptTools(params, latest)
+  const receipts = encodeReceipts(latest.map(({ operation }) => receiptFor(operation, tools)))
   const result = Prompt.toolResultPart({
     id: params.cell.toolCallId,
     name: "cell",

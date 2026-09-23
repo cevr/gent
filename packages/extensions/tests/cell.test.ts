@@ -1504,6 +1504,7 @@ describe("cell approvals", () => {
                         output: Schema.Boolean,
                         execute: (mark) =>
                           Ref.update(marks, (values) => [...values, mark]).pipe(Effect.as(true)),
+                        summary: (mark) => `marked ${mark}`,
                       }),
                       tool({
                         id: "approve",
@@ -1588,7 +1589,12 @@ describe("cell approvals", () => {
                 result: {
                   stateLost: true,
                   operations: [
-                    { tool: "mark", outcome: "succeeded", toolCallId: expect.any(String) },
+                    {
+                      tool: "mark",
+                      outcome: "succeeded",
+                      toolCallId: expect.any(String),
+                      summary: "marked before",
+                    },
                     { tool: "approve", outcome: "succeeded", toolCallId: expect.any(String) },
                   ],
                 },
@@ -1989,6 +1995,7 @@ it.scopedLive(
                 params: Schema.Struct({ valid: Schema.Boolean }),
                 output: Schema.Finite,
                 execute: () => Effect.succeed(1),
+                summary: (input, output) => `counted ${output} (valid ${input.valid})`,
               }),
             ],
           },
@@ -2027,7 +2034,8 @@ it.scopedLive(
               toolCallId: expect.any(String),
               tool: "count",
               outcome: "succeeded",
-              summary: expect.any(String),
+              // Recovery resolves the recorded binding, so the author's summary holds.
+              summary: "counted 1 (valid true)",
             },
           ],
         })
