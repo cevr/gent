@@ -5,7 +5,19 @@ import {
   isClientFile,
   SCOPE_PRECEDENCE,
 } from "@gent/core/protocol"
-import { isProjectExtensionDirectoryTrusted, readDisabledExtensions } from "@gent/core/host"
+import {
+  bindBunModules,
+  extensionEntryModules,
+  isProjectExtensionDirectoryTrusted,
+  readDisabledExtensions,
+  type RuntimeModuleSource,
+} from "@gent/core/host"
+import * as ProtocolEntry from "@gent/core/protocol"
+import * as ClientExtensionEntry from "@gent/tui/extensions"
+import * as OpenTuiSolidEntry from "@opentui/solid"
+import { ensureSolidTransformPlugin } from "@opentui/solid/bun-plugin"
+import * as SolidEntry from "solid-js"
+import * as SolidStoreEntry from "solid-js/store"
 import {
   type AnyExtensionClientModule,
   type AutocompleteContribution,
@@ -528,6 +540,30 @@ const setupExtension = (
     withinLoadTimeout(ext.module.id, "setup", timeout),
   )
 
+/**
+ * Bind what a client extension file imports to the modules this process
+ * runs, and compile its JSX as the build compiles the shipped ones. The
+ * compiled binary has no node_modules, so this is the only way a file outside
+ * the repository reaches `@gent/tui/extensions` or Solid. A bound specifier
+ * gives the file the TUI's own instances: one Solid runtime, one ClientContext.
+ * A client file also reads the two authoring entries and `effect`, as a server
+ * extension does, and the client entry `@gent/core/protocol`.
+ */
+const provideClientExtensionModules = Effect.sync(() => ensureSolidTransformPlugin()).pipe(
+  Effect.andThen(
+    bindBunModules(
+      new Map<string, RuntimeModuleSource>([
+        ...extensionEntryModules,
+        ["@gent/core/protocol", () => ProtocolEntry],
+        ["@gent/tui/extensions", () => ClientExtensionEntry],
+        ["@opentui/solid", () => OpenTuiSolidEntry],
+        ["solid-js", () => SolidEntry],
+        ["solid-js/store", () => SolidStoreEntry],
+      ]),
+    ),
+  ),
+)
+
 /** Import module and validate shape — does NOT call setup() */
 function loadExtensionModule(filePath: string) {
   // gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
@@ -590,6 +626,7 @@ export const loadTuiExtensions = (opts: {
       () => EXTENSION_LOAD_TIMEOUT,
     )
     const discovered = yield* discoverTuiExtensions(opts)
+    if (discovered.length > 0) yield* provideClientExtensionModules
     const [importFailures, imported] = yield* Effect.partition(discovered, (entry) =>
       importExtension(entry, timeout),
     )

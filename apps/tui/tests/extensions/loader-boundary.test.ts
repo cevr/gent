@@ -63,6 +63,12 @@ import {
 } from "../../src/autocomplete"
 import { makeClientRuntime } from "../../src/extensions/host"
 import { createMockClient, createMockRuntime } from "../render-harness-boundary"
+import * as EffectEntry from "effect"
+import * as ProtocolEntry from "@gent/core/protocol"
+import * as ClientExtensionEntry from "@gent/tui/extensions"
+import * as SolidEntry from "solid-js"
+import * as SolidStoreEntry from "solid-js/store"
+import * as OpenTuiSolidEntry from "@opentui/solid"
 
 // ── extensions resolve ──────────────────────────────────────────────────────
 
@@ -385,6 +391,17 @@ describe("resolveTuiExtensions", () => {
  */
 
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+/** Each specifier a client extension imports, with the module the TUI runs for it. */
+const clientEntries = {
+  effect: EffectEntry,
+  "@gent/core/protocol": ProtocolEntry,
+  "@gent/tui/extensions": ClientExtensionEntry,
+  "solid-js": SolidEntry,
+  "solid-js/store": SolidStoreEntry,
+  "@opentui/solid": OpenTuiSolidEntry,
+}
+// gent/no-dynamic-imports: allow the test reads the exports of an extension file it wrote
+const importFile = (file: string) => Effect.promise(() => import(file))
 const runtime = makeClientExtensionRuntime()
 describe("loadTuiExtensions Effect setup", () => {
   it.scopedLive("does not import project code until the user grants trust", () =>
@@ -447,6 +464,77 @@ export default {
         { id: "@user/stale-labels", reason: 'unknown contribution "borderLabels"' },
       ])
     }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  // The compiled binary has no node_modules. A client extension outside the
+  // repository resolves its imports, and compiles its JSX, only because the
+  // loader binds them to the modules the TUI runs.
+  it.scopedLive(
+    "a JSX client extension outside the repository imports the public entries and Solid",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        // The system temp directory: no node_modules above it.
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-client-entries-" })
+        const userDir = path.join(root, "home/.gent/extensions")
+        const projectDir = path.join(root, "project/.gent/extensions")
+        yield* fs.makeDirectory(userDir, { recursive: true })
+        const extensionFile = path.join(userDir, "entries.client.tsx")
+        yield* fs.writeFileString(
+          extensionFile,
+          `
+import * as effect from "effect"
+import * as protocol from "@gent/core/protocol"
+import * as tui from "@gent/tui/extensions"
+import * as solid from "solid-js"
+import * as solidStore from "solid-js/store"
+import * as openTuiSolid from "@opentui/solid"
+
+export const bound = {
+  effect,
+  "@gent/core/protocol": protocol,
+  "@gent/tui/extensions": tui,
+  "solid-js": solid,
+  "solid-js/store": solidStore,
+  "@opentui/solid": openTuiSolid,
+}
+
+const Probe = () => {
+  const [label] = solid.createSignal("entries probe")
+  return <text>{label()}</text>
+}
+
+export default tui.defineClientExtension("@user/client-entries", {
+  setup: effect.Effect.succeed(
+    tui.clientContributions(
+      tui.widgetContribution({ id: "entries-probe", slot: "below-input", component: Probe }),
+      tui.clientCommandContribution({ id: "entries-probe", title: "Entries probe", onSelect: () => {} }),
+    ),
+  ),
+})
+`,
+        )
+        const result = yield* loadTuiExtensions({ userDir, projectDir, runtime })
+        expect(result.failures).toEqual([])
+        expect(result.widgets.map((entry) => entry.id)).toContain("entries-probe")
+        expect(
+          result.commandSources.flatMap((source) => source.commands.map((command) => command.id)),
+        ).toContain("entries-probe")
+
+        const bound: object = (yield* importFile(extensionFile)).bound
+        for (const [specifier, entryModule] of Object.entries(clientEntries)) {
+          const imported: object = Reflect.get(bound, specifier)
+          for (const [name, value] of Object.entries(entryModule)) {
+            const same = Reflect.get(imported, name) === value
+            expect({ specifier, name, same }).toEqual({
+              specifier,
+              name,
+              same: true,
+            })
+          }
+        }
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
   )
 
   it.live("Effect setup is run through the runtime; FileSystem is provided", () =>

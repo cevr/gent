@@ -1088,6 +1088,18 @@ privileged.
 
 TUI client extensions may also import shared client data from `@gent/core/protocol`. This exception does not apply to server extension implementations or to nested protocol paths.
 
+The loaders enforce the same contract at runtime. Before a user or project
+extension file is imported, the server loader binds `@gent/core/extensions/api`,
+`@gent/core/extensions/branch-tools`, `effect`, and the `effect/unstable`
+barrels the shipped extensions read (`ai`, `http`, `process`, `sql`) to the
+modules the process already runs (`GentPlatform.bindModules`, a Bun runtime
+plugin). The TUI loader adds `@gent/core/protocol`, `@gent/tui/extensions`,
+`solid-js`, `solid-js/store` and `@opentui/solid`, and compiles client JSX with
+the OpenTUI Solid transform. So an extension outside the repository works in
+the compiled binary, which has no node_modules, and it gets the same Tags and
+Schema classes as a shipped one. No other package resolves: the binary runs
+with `--no-install`, so an unbound specifier is never fetched from npm.
+
 ### Extension API Inventory
 
 `@gent/core/extensions/api` is the extension API. Anything an extension needs

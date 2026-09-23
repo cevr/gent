@@ -92,7 +92,7 @@ import {
   type ProviderAuthInfo,
 } from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { GentPlatform } from "./gent-platform.js"
+import { GentPlatform, type RuntimeModuleSource } from "./gent-platform.js"
 import {
   type ConfigLoadError,
   ConfigService,
@@ -130,6 +130,11 @@ import {
 } from "../storage/storage.js"
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
+import * as EffectEntry from "effect"
+import * as EffectAiEntry from "effect/unstable/ai"
+import * as EffectHttpEntry from "effect/unstable/http"
+import * as EffectProcessEntry from "effect/unstable/process"
+import * as EffectSqlEntry from "effect/unstable/sql"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
 import {
   type Branch,
@@ -1131,6 +1136,45 @@ const extensionDirectories = (
   projectDir: path.join(path.resolve(inputs.cwd), GENT_CONFIG_DIRECTORY, "extensions"),
 })
 
+// Loading — the public entries an extension file imports
+
+/**
+ * The specifiers an extension file imports, each bound to the module this
+ * process already runs. The compiled binary has no node_modules, so without
+ * this an extension outside the repository cannot resolve `effect` or a gent
+ * entry. A bound specifier also gives a user extension the same module
+ * instances as a shipped one: the same Tags and the same Schema classes.
+ *
+ * Only these names resolve: the two authoring entries a shipped extension may
+ * read, and `effect`. `@gent/core/protocol` is a client entry; the TUI binds
+ * it for client files. An internal path such as `@gent/core/host` is not
+ * bound, and it does not resolve outside the repository. The `effect/unstable`
+ * names are the barrels the shipped extensions read; a deep module path under
+ * one does not resolve.
+ *
+ * The gent entries re-export this module, so they are read on first use: a
+ * static import here would evaluate them inside their own import cycle.
+ */
+export const extensionEntryModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
+  string,
+  RuntimeModuleSource
+>([
+  // gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
+  ["@gent/core/extensions/api", () => import("../extensions/api.js")],
+  // gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
+  ["@gent/core/extensions/branch-tools", () => import("../extensions/branch-tools.js")],
+  ["effect", () => EffectEntry],
+  ["effect/unstable/ai", () => EffectAiEntry],
+  ["effect/unstable/http", () => EffectHttpEntry],
+  ["effect/unstable/process", () => EffectProcessEntry],
+  ["effect/unstable/sql", () => EffectSqlEntry],
+])
+
+/** Bind the extension entries before an extension file is imported. */
+const provideExtensionModules: Effect.Effect<void, never, GentPlatform> = GentPlatform.use(
+  (platform) => platform.bindModules(extensionEntryModules),
+)
+
 // Loading — import extension files via Bun native import()
 
 // gent/no-dynamic-imports: allow extension modules are discovered from user/project files at runtime
@@ -1149,6 +1193,7 @@ const loadExtensionFile = Effect.fn("ExtensionLoader.loadExtensionFile")(functio
   file: DiscoveredFile,
 ) {
   const filePath = file.path
+  yield* provideExtensionModules
   const mod = yield* Effect.tryPromise({
     try: () => importExtensionModule(`${filePath}?v=${encodeURIComponent(file.version)}`),
     catch: (err) =>

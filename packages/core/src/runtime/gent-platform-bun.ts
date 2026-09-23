@@ -18,11 +18,45 @@ import { createHash } from "node:crypto"
 import { Effect, Layer, Option, Schema } from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
-import { GentPlatform, SignalError } from "./gent-platform.js"
+import { GentPlatform, type RuntimeModuleSource, SignalError } from "./gent-platform.js"
+
+/** The specifiers bound in this process. Bun keeps a plugin for the process lifetime. */
+const boundModules = new Set<string>()
+
+/**
+ * `GentPlatform.bindModules` on Bun: a runtime plugin serves each specifier
+ * as a virtual module. A Bun host that loads files outside a `GentPlatform`
+ * context, the TUI's client extension loader, calls it directly.
+ */
+export const bindBunModules = Effect.fn("GentPlatform.bindModules")(function* (
+  modules: ReadonlyMap<string, RuntimeModuleSource>,
+) {
+  const added = [...modules].filter(([specifier]) => !boundModules.has(specifier))
+  if (added.length === 0) return
+  yield* Effect.sync(() => {
+    for (const [specifier] of added) boundModules.add(specifier)
+    Bun.plugin({
+      name: "gent-bound-modules",
+      setup: (build) => {
+        for (const [specifier, source] of added) {
+          build.module(specifier, () =>
+            // oxlint-disable-next-line effect/noNewPromise -- Bun reads a virtual module from a promise callback.
+            Promise.resolve(source()).then((exports): Bun.OnLoadResultObject => ({
+              exports: { ...exports },
+              loader: "object",
+            })),
+          )
+        }
+      },
+    })
+  })
+})
 
 export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
   GentPlatform,
   GentPlatform.of({
+    bindModules: bindBunModules,
+
     randomId: Effect.sync(() => Bun.randomUUIDv7()),
 
     osInfo: Effect.sync(() => ({
