@@ -807,15 +807,19 @@ const builtinInteractions = defineClientExtension("@gent/interaction-tools", {
 
 // ── builtin module registry ─────────────────────────────────────────────────
 
-const builtinSkills = defineClientExtension("@gent/skills-ui", {
+export const builtinSkills = defineClientExtension("@gent/skills-ui", {
   setup: Effect.gen(function* () {
-    const { workspace } = yield* ClientContext
+    const { workspace, lifecycle } = yield* ClientContext
     // The store's reads and writes need `FileSystem` and `Path`. `onSelect`
     // is a plain sync callback from the composer with no Effect context of
-    // its own, so the setup captures the services once and forks the write
-    // against them.
+    // its own, so the setup captures the services once. The write runs in the
+    // provider's scope and cannot be cut short, so closing the TUI waits for a
+    // pick made just before it instead of dropping it.
     const storeServices = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
-    const forkStoreWrite = Effect.runForkWith(storeServices)
+    const forkStoreWrite = (write: Effect.Effect<void, never, FileSystem.FileSystem | Path.Path>) =>
+      Effect.runForkWith(storeServices)(
+        lifecycle.scoped(Effect.forkScoped(write, { uninterruptible: true })),
+      )
     return autocompleteContribution({
       prefix: "$",
       title: "Skills",

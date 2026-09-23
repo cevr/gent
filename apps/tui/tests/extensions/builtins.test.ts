@@ -4,11 +4,13 @@ import {
   builtinDriver,
   builtinHerdr,
   builtinFiles,
+  builtinSkills,
   FINDER_PAGE_BUDGET,
   getFileTag,
   makeHerdrReporter,
   rankListed,
 } from "../../src/extensions/builtins"
+import { readFrecencyStore } from "../../src/autocomplete"
 import { BunServices } from "@effect/platform-bun"
 import {
   ConfigProvider,
@@ -955,5 +957,30 @@ describe("Herdr integration", () => {
         expect(result).toBeDefined()
       }
     }).pipe(Effect.provide(contextLayer())),
+  )
+})
+
+describe("skills popup", () => {
+  filesTest("a pick made just before the TUI closes is on disk when it has closed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      yield* Effect.scoped(
+        provideClientServices(
+          Effect.gen(function* () {
+            const contributions = yield* builtinSkills.setup
+            const source = Option.getOrThrow(
+              Option.fromUndefinedOr(contributions.autocomplete?.[0]),
+            )
+            Option.getOrThrow(Option.fromUndefinedOr(source.onSelect))("triage", "tri")
+          }),
+          { workspace: { cwd: home, home } },
+        ),
+      )
+      const stored = yield* readFrecencyStore(home)
+      expect(
+        Option.match(stored, { onNone: () => [], onSome: (store) => Object.keys(store.entries) }),
+      ).toEqual(["$triage"])
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
