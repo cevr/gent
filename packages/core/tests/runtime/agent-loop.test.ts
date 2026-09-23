@@ -1093,6 +1093,37 @@ describe("max turn steps", () => {
   )
 
   /**
+   * The last budgeted step tells the model its tools are gone. The line is
+   * written at that step's boundary, after the step resolved its messages, so
+   * the step itself must read it: no later step exists to show it.
+   */
+  it.live("the last budgeted step reads the step-limit instruction", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        toolCallStep("echo", { text: "first" }),
+        {
+          ...textStep("stopped at the limit"),
+          assertOptions: (options) => {
+            expect(promptText(options.prompt)).toContain("maximum number of steps")
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(agentLoop, userMessage("two steps at most"), {
+          runSpec: makeRunSpec({ overrides: { maxSteps: 2 } }),
+        })
+        yield* controls.assertDone
+        // A failed `assertOptions` fails the stream, not the test: read the outcome.
+        const events = yield* Ref.get(eventsRef)
+        expect(events.some((event) => event._tag === "ErrorOccurred")).toBe(false)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  /**
    * A continuation asks the model for one more step. On the last step of the
    * budget no step follows, so the instruction would stay in the transcript
    * with no answer after it.
@@ -2809,6 +2840,133 @@ const ResumeProbeExtension: LoadedExtension = {
 const openingTurnMessageId = (messages: ReadonlyArray<{ readonly id: string }>) =>
   Option.fromUndefinedOr(messages.map((message) => message.id).find((id) => !id.includes(":")))
 
+// ── model-change notice ─────────────────────────────────────────────────────
+
+interface HoldGate {
+  readonly entered: Deferred.Deferred<void>
+  readonly release: Deferred.Deferred<void>
+}
+
+const holdToolExtension = (gate: HoldGate): LoadedExtension => ({
+  manifest: { id: ExtensionId.make("@test/hold-tool") },
+  scope: "builtin",
+  sourcePath: "test",
+  artifactIdentity: LoadedArtifactIdentity.make("@test/hold-tool@artifact-1"),
+  contributions: {
+    tools: [
+      tool({
+        id: "hold",
+        description: "Hold until the test releases it",
+        params: Schema.Struct({}),
+        output: Schema.Struct({ held: Schema.Boolean }),
+        execute: Effect.fn("hold")(function* () {
+          yield* ExtensionContext
+          yield* Deferred.succeed(gate.entered, void 0)
+          yield* Deferred.await(gate.release)
+          return { held: true }
+        }),
+      }),
+    ],
+  },
+})
+
+describe("model-change notice", () => {
+  it.scopedLive(
+    "a model switch while a tool runs is noticed at the next step, after the tool result",
+    () =>
+      Effect.gen(function* () {
+        const gate: HoldGate = {
+          entered: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        }
+        const nextModel = ModelId.make("custom/next-model")
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("hold", {}),
+          {
+            ...textStep("after the switch"),
+            assertOptions: (options) => {
+              expect(promptText(options.prompt)).toContain(`continues with ${nextModel}]`)
+            },
+          },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensions: [holdToolExtension(gate)],
+        })
+        yield* client.message
+          .send({ sessionId, branchId, content: "hold, then answer" })
+          .pipe(Effect.forkScoped)
+        yield* Deferred.await(gate.entered)
+        // `/model` lands while the tool call has no result yet.
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: nextModel,
+          reasoningLevel: Option.getOrUndefined(Option.none()),
+        })
+        yield* Deferred.succeed(gate.release, void 0)
+        const messages = yield* waitFor(
+          client.message.list({ branchId }),
+          (current) =>
+            current.some((message) =>
+              message.parts.some(
+                (part) => part.type === "text" && part.text === "after the switch",
+              ),
+            ),
+          10_000,
+          "the step after the switch answered",
+        )
+        const resultIndex = messages.findIndex((message) =>
+          message.parts.some((part) => part.type === "tool-result"),
+        )
+        const noticeIndex = messages.findIndex(
+          (message) => message.metadata?.customType === "model-change",
+        )
+        expect(resultIndex).toBeGreaterThanOrEqual(0)
+        // The notice never splits a tool call from its result.
+        expect(noticeIndex).toBeGreaterThan(resultIndex)
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive("a turn under another agent writes no notice, nor does the turn after it", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("default one"),
+        textStep("helper one"),
+        textStep("default again"),
+      ])
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        agents: [...testAgents, helperAgent],
+        providerLayer,
+      })
+      const turn = (content: string, reply: string, agentOverride?: AgentName) =>
+        Effect.gen(function* () {
+          yield* client.message.send({ sessionId, branchId, content, agentOverride })
+          return yield* waitFor(
+            client.message.list({ branchId }),
+            (current) =>
+              current.some((message) =>
+                message.parts.some((part) => part.type === "text" && part.text === reply),
+              ),
+            10_000,
+            `reply: ${reply}`,
+          )
+        })
+      yield* turn("first", "default one")
+      yield* turn("second", "helper one", helperAgent.name)
+      const messages = yield* turn("third", "default again")
+      // The model changed twice, but no one changed the session's model.
+      expect(
+        messages.filter((message) => message.metadata?.customType === "model-change"),
+      ).toHaveLength(0)
+      yield* controls.assertDone
+    }).pipe(Effect.timeout("15 seconds")),
+  )
+})
+
 describe("turn record", () => {
   it.scopedLive(
     "a child-shaped turn recovered after a restart keeps its agent, denied tools and run spec",
@@ -2826,15 +2984,7 @@ describe("turn record", () => {
         type SeenRequest = { readonly tools: ReadonlyArray<string>; readonly prompt: string }
         const seenRequest = (options: LanguageModel.ProviderOptions): SeenRequest => ({
           tools: options.tools.map((entry) => entry.name),
-          prompt: options.prompt.content
-            .flatMap((message) => {
-              if (message.role === "system") return [message.content]
-              return message.content.flatMap((part) => {
-                if (part.type === "text") return [part.text]
-                return []
-              })
-            })
-            .join("\n"),
+          prompt: promptText(options.prompt),
         })
         const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
           createE2ELayer({

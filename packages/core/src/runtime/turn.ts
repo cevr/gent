@@ -144,6 +144,7 @@ import {
   ModelContextCapabilityFailure,
   ModelContextLedger,
   ModelContextProjectionError,
+  modelChangeNotice,
   projectContextWindow,
   projectModelContext,
   toPrompt,
@@ -1649,6 +1650,48 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const toolBindingStorage = yield* ToolCallBindingStorage
     const turnRecordStorage = yield* TurnRecordStorage
     const processLocalReplay = yield* ProcessLocalToolReplay
+    const eventStorage = yield* EventStorage
+
+    /**
+     * Whether a `/model` switch waits for its notice at this step boundary.
+     *
+     * The settings writer only records the choice (`SessionSettingsUpdated`);
+     * the loop writes the notice, so it never lands between a tool call and
+     * its result. A notice is due when a settings change follows the branch's
+     * last settled step and the step about to run uses another model. A turn
+     * under an agent override changes the model with no settings change, so
+     * it writes nothing, as before. The event log is the source; the cursor
+     * only bounds the read to the events since the last settled step.
+     */
+    const settledStepModel = ({ event }: EventEnvelope): Option.Option<ModelIdType> => {
+      if (event._tag !== "StreamEnded") return Option.none()
+      return Option.fromUndefinedOr(event.model)
+    }
+    const lastSettledStep = yield* Ref.make<{
+      readonly cursor: number
+      readonly model: Option.Option<ModelIdType>
+    }>({ cursor: 0, model: Option.none() })
+    const pendingModelChange = Effect.gen(function* () {
+      const known = yield* Ref.get(lastSettledStep)
+      const events = yield* eventStorage.listEvents({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        afterId: known.cursor,
+      })
+      const settledIndex = events.findLastIndex((envelope) =>
+        Option.isSome(settledStepModel(envelope)),
+      )
+      const current = Option.match(Option.fromUndefinedOr(events[settledIndex]), {
+        onNone: () => known,
+        onSome: (envelope) => ({ cursor: envelope.id, model: settledStepModel(envelope) }),
+      })
+      yield* Ref.set(lastSettledStep, current)
+      const settingsChanged = events
+        .slice(settledIndex + 1)
+        .some(({ event }) => event._tag === "SessionSettingsUpdated")
+      if (!settingsChanged) return Option.none<ModelIdType>()
+      return current.model
+    })
     const clearProcessLocalReplayBindings = (assistantMessageId: string) =>
       processLocalReplay.clearBindingsWithPrefix(
         `${scope.sessionId}:${scope.branchId}:${assistantMessageId}:`,
@@ -2636,12 +2679,46 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly currentTurnAgent: AgentNameType
       readonly turnProfile: AgentLoopTurnProfile
     }) {
-      const resolved = yield* resolveForState(params.state, params.turnProfile)
+      const resolvedAtBoundary = yield* resolveForState(params.state, params.turnProfile)
       // `resolveTurnContext` published `ErrorOccurred` and gave up — an unknown
       // agent, most often. The turn produced no answer, so say so rather than
       // publish a `TurnCompleted` no caller can tell from a reply.
-      if (Predicate.isUndefined(resolved)) {
+      if (Predicate.isUndefined(resolvedAtBoundary)) {
         return endStep(params.currentTurnAgent, { unanswered: true })
+      }
+      // A line the loop writes at this boundary, after the messages this step
+      // resolved: the step reads it too. Replay finds it by id, so it is
+      // appended once.
+      let resolved = resolvedAtBoundary
+      const appendBoundaryLine = Effect.fn("AgentLoop.appendBoundaryLine")(function* (
+        message: Message,
+      ) {
+        const persisted = yield* persistMessageReceived({ message })
+        if (resolved.messages.some((existing) => existing.id === persisted.id)) return
+        resolved = { ...resolved, messages: [...resolved.messages, persisted] }
+      })
+      // A `/model` switch lands here, never between a tool call and its
+      // result: the settings writer only records the choice.
+      const previousModel = yield* pendingModelChange.pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("turn.model-change-read-failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+            Effect.as(Option.none<ModelIdType>()),
+          ),
+        ),
+      )
+      if (Option.isSome(previousModel) && previousModel.value !== resolved.modelId) {
+        yield* appendBoundaryLine(
+          modelChangeNotice({
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            turnMessageId: params.state.message.id,
+            step: params.step,
+            previousModelId: previousModel.value,
+            nextModelId: resolved.modelId,
+            createdAt: yield* DateTime.nowAsDate,
+          }),
+        )
       }
 
       const currentTurnAgent = resolved.currentTurnAgent
@@ -2670,8 +2747,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // (`runner/llm.ts:221`).
       const finalStep = params.step === maxSteps
       if (finalStep) {
-        yield* persistMessageReceived({
-          message: Message.cases.regular.make({
+        yield* appendBoundaryLine(
+          Message.cases.regular.make({
             id: finalStepMessageIdForTurn(params.state.message.id),
             sessionId: scope.sessionId,
             branchId: scope.branchId,
@@ -2680,7 +2757,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             createdAt: yield* DateTime.nowAsDate,
             metadata: { customType: "max-steps", details: { step: params.step } },
           }),
-        })
+        )
         yield* Effect.logWarning("turn.max-steps-final").pipe(
           Effect.annotateLogs({ step: params.step, max: maxSteps }),
         )
