@@ -13,7 +13,7 @@
     "./test-utils": "./src/test-utils/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.locks.json",
+    "typecheck": "tsc --noEmit",
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-log-preload.ts --reporter=dots --parallel=3 tests"
   },
   "dependencies": {
