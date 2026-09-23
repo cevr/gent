@@ -57,7 +57,7 @@ You need at most 7 concepts to write a complete extension:
 | 3   | `tool`            | LLM-callable tool (params + execute)                |
 | 4   | `request`         | Extension-to-extension typed RPC                    |
 | 5   | `defineResource`  | Scoped service layer with a stable id               |
-| 6   | `defineAgent`     | Spawnable subagent                                  |
+| 6   | `AgentDefinition` | Agent profile registered under `"agent"`            |
 
 Registration domains: `"tool"`, `"request"`, `"resource"`, `"agent"`,
 `"modelDriver"`, `"externalDriver"`. Hook kinds: `"systemPrompt"`,
@@ -84,7 +84,7 @@ Public authoring surface:
 | Capabilities    | `tool`, `request`, `ref`                                                     |
 | Resources       | `defineResource`                                                             |
 | Hooks           | `host.on(kind, handler)` and hook input/output types                         |
-| Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
+| Agents          | `AgentDefinition`, `AgentName`, `ModelId`, run-spec helpers                  |
 | Stable ids      | `ExtensionId`, `ToolCallId`                                                  |
 | Errors          | capability/provider-auth/agent-run author-facing errors                      |
 | Host facts      | `ExtensionHost.host`                                                         |
@@ -111,9 +111,9 @@ const program = Effect.gen(function* () {
 })
 ```
 
-`ExtensionContext` is the host-owned facade. It exposes session, agent,
+`ExtensionContext` is the host-owned facade. It exposes session,
 interaction, file lock, and state-pulse accessors
-(`Session`, `Agent`, `Interaction`, `FileLock`, `State`)
+(`Session`, `Interaction`, `FileLock`, `State`)
 plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
 `home`. The `FileLock` / `State` facets wrap the host-internal
 `FileLockService` and `ExtensionStatePublisher` so authors
@@ -369,17 +369,23 @@ export default defineExtension({
 
 Setup already runs as an Effect, so a resource that needs host facts reads
 them from the same `host` value (`host.cwd`, `host.home`,
-`host.host.commandCandidates`) before registering; the resource itself should
+`host.host.osInfo`, `host.host.execPath`) before registering; the resource itself should
 still expose the smallest service Tag it needs.
 
 ## Agent
 
 ```ts
-import { defineExtension, defineAgent, ExtensionHost, ModelId } from "@gent/core/extensions/api"
+import {
+  AgentDefinition,
+  AgentName,
+  defineExtension,
+  ExtensionHost,
+  ModelId,
+} from "@gent/core/extensions/api"
 import { Effect } from "effect"
 
-const helper = defineAgent({
-  name: "helper",
+const helper = AgentDefinition.make({
+  name: AgentName.make("helper"),
   description: "Helper for specific tasks",
   model: ModelId.make("anthropic/claude-sonnet-4-6"),
   allowedTools: ["read", "write"],
@@ -404,54 +410,6 @@ The framework validates all loaded extensions before creating the registry:
 
 Cross-scope: higher scope wins silently (project overrides user overrides
 builtin).
-
-## Repairing an Unavailable Resource Owner
-
-Gent does not create a default profile when a durable resource graph for the
-launch directory cannot be reacquired. The graph control plane remains
-available from a server started for another healthy directory with the same
-SQLite database.
-
-```ts
-import { CanonicalCwd, RequestId, ResourceGraphRevision } from "@gent/sdk"
-
-const targetCwd = CanonicalCwd.make("/path/to/failed-project")
-const server =
-  yield *
-  Gent.server({
-    cwd: "/tmp/gent-control",
-    state: Gent.state.sqlite({ dbPath: "/path/to/gent.db" }),
-  })
-const { client } = yield * Gent.client(server, { cwd: String(targetCwd) })
-const status = yield * client.resourceGraph.get({ cwd: targetCwd })
-
-if (status === null) throw new Error("No durable resource graph exists for the target")
-
-// Preview the target declarations without publishing or acquiring resources.
-// The loader supplies the artifact identity. Do not invent source strings or
-// revisions from a package name, path, or file digest.
-const correctedSnapshot = yield * client.resourceGraph.preview({ cwd: targetCwd })
-const receipt =
-  yield *
-  client.resourceGraph.submit({
-    cwd: targetCwd,
-    commandId: RequestId.make("repair-2026-09-06"),
-    expectedRevision: status.desiredRevision,
-    desiredRevision: ResourceGraphRevision.make("profile-repair/1"),
-    snapshot: correctedSnapshot,
-  })
-```
-
-Use the returned `desiredRevision` as `expectedRevision` when submitting a
-corrected snapshot. The target `cwd` selects the workspace header. The control
-server must use the same database. A failed source identity remains visible as
-failed or pending until a valid snapshot is applied. Wait for
-`client.resourceGraph.get({ cwd: targetCwd })` to report `state: "applied"`;
-submission only records and queues the command.
-
-Preview does not publish a catalog or acquire declared resources. It runs trusted
-extension setup to read the declarations. Setup can perform its own effects.
-Preview is not a sandbox or a general side-effect-free operation.
 
 ## In-tree Examples
 
@@ -478,9 +436,8 @@ Preview is not a sandbox or a general side-effect-free operation.
   not a read/write or capability declaration.
 - Runtime services such as `GentPlatform`, `ToolRunner`,
   storage Tags, event stores, and process helpers are not public extension API.
-- Tagged-union variant tags are PascalCase. `ctx.Agent.run` resolves to
-  `AgentRunResult` with `_tag` of `"Success"` or `"Error"`, and extension
-  health reports `"Healthy"`, `"Degraded"`, or `"ActivationFailed"`. An
-  extension written against the earlier lowercase spellings (`"success"`,
-  `"healthy"`, `"activation-failed"`) must be updated; match on the tag through
+- Tagged-union variant tags are PascalCase. Extension health reports
+  `"Healthy"` or `"Degraded"`, and a degraded extension carries
+  `"ActivationFailed"` issues. An extension written against the earlier
+  lowercase spellings (`"healthy"`, `"activation-failed"`) must be updated; match on the tag through
   the exported schema rather than a string literal where possible.

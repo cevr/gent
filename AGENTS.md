@@ -10,7 +10,7 @@ bun run typecheck  # patched TypeScript 7 + Effect diagnostics, must pass clean
 bun run lint       # oxlint (gent custom rules + oxlint-tsgolint type-aware lints)
 bun run test       # Gate tests. NOT bare `bun test` (picks up flaky e2e)
 bun run smoke      # Headless mode smoke test
-bun run clean      # Remove dist and tsbuildinfo files
+bun run clean      # Remove turbo caches (.turbo)
 ```
 
 ## CLI Usage
@@ -44,14 +44,14 @@ bun run --cwd apps/tui dev sessions
 - **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
 - **No `any` casts** - ESLint enforces. Causes type drift bugs. Import the owning type instead of redeclaring it.
 - **Package boundary imports** - Use `@gent/core/extensions/api` for extension authoring. Use `@gent/core/protocol` for shared client schemas, projections, and RPC types. Use `@gent/core/host` for what a host composes (platform, config loader, storage, auth, workspace headers, server root, the scripted model). Use `@gent/core/test-utils` in tests only; product code never imports it. Each entry re-exports only names with a real consumer; a `host` name needs a product caller, so a name only tests read belongs in `test-utils`. A test outside core arranges host state through `test-utils` operations (`captureTurnTools`, `runtimeHostContext`, `plantToolCallBinding`, `plantInFlightTurn`, `recordInteractionDecision`, `storedEvents`, `staticToolBinding`), never through core's own Tags, and never imports `packages/core/src/` by relative path. Core implementation tests import their owning `packages/core/src/` modules by relative path. Files inside `packages/core/src/` also use relative imports.
-- **Extension authority** - Extension leaves receive input/event params only. Use `const ctx = yield* ExtensionContext` for host facades (`Session`, `Agent`, `Interaction`, `FileLock`, `State`) and extension-owned service Tags for private state. Files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`), with `runProcess` for commands, `path.resolve(ctx.cwd, p)` for relative paths, and `writeFileAtomic` (`packages/extensions/src/fs-tools.ts`) for atomic writes; no facet duplicates an Effect platform service. Shipped extensions never import core internals such as `FileLockService` or `ExtensionStatePublisher` — yield the matching `ExtensionContext` facet instead. Every facade verb is uniform: any extension that can yield `ExtensionContext` gets it, including the addressed `Session` verbs (`create`, `send` with its `delivery` mode `turn`/`queue`/`steer`, `stop`, `events`, `delete`, `dequeueFollowUp`). Do not add ctx parameters, read/write/capability grants, or privileged builtin registries; a shipped extension is never more privileged than a user extension (the `gent/core-entry-boundary` oxlint rule in `lint/gent-rules.ts` enforces the import side).
+- **Extension authority** - Extension leaves receive input/event params only. Use `const ctx = yield* ExtensionContext` for host facades (`Session`, `Interaction`, `FileLock`, `State`) and extension-owned service Tags for private state. Files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`), with `runProcess` for commands, `path.resolve(ctx.cwd, p)` for relative paths, and `writeFileAtomic` (`packages/extensions/src/fs-tools.ts`) for atomic writes; no facet duplicates an Effect platform service. Shipped extensions never import core internals such as `FileLockService` or `ExtensionStatePublisher` — yield the matching `ExtensionContext` facet instead. Every facade verb is uniform: any extension that can yield `ExtensionContext` gets it, including the addressed `Session` verbs (`create`, `send` with its `delivery` mode `turn`/`queue`/`steer`, `stop`, `events`, `delete`, `dequeueFollowUp`). Do not add ctx parameters, read/write/capability grants, or privileged builtin registries; a shipped extension is never more privileged than a user extension (the `gent/core-entry-boundary` oxlint rule in `lint/gent-rules.ts` enforces the import side).
 - **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
 - **Effect.fn recursive** - For recursive generators, annotate variable type: `const fn: (...) => Effect<A,E,R> = Effect.fn(...)`
 - **Wide event boundaries** - `WideEvent.set()` requires a `withWideEvent` boundary in scope. Import `WideEvent`, `WideEventBoundary`, and `withWideEvent` from `effect-wide-event` directly.
 - **Structured logging** - Use `Effect.logWarning("msg").pipe(Effect.annotateLogs({ error: String(e) }))`. Never pass error as second positional arg to `Effect.logWarning`.
 - **bun:test timeouts bypass Effect finalizers** - Always use `Effect.timeout` inside the Effect, shorter than the bun timeout, so scope finalizers run on timeout.
 - **A failed extension fails the test** - Test roots stop with `Extensions failed to load: <id> (<scope>, <phase>): <reason>`. Fix the extension; set `allowFailedExtensions: true` only in a test about the failure report.
-- **Integration tests: in-process first** - Prefer `Gent.test(baseLocalLayer())` from `@gent/core/test-utils`. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
+- **Integration tests: in-process first** - Prefer `createRpcClient(baseLocalLayer())` or `createRpcHarness(...)` from `@gent/core/test-utils`; `Gent.test` from `@gent/sdk` is for SDK and app tests. Only use subprocess workers for tests that specifically need process isolation (supervisor lifecycle, PTY).
 - **Signal language model for lifecycle assertions** - Use `LanguageModelLayers.signal(reply)` for deterministic per-chunk control (thinking→streaming→idle). `controls.waitForStreamStart` then `controls.emitNext()/emitAll()`. Shared Queue gates all `streamText()` calls — multi-turn tests need multiple `emitAll()` rounds.
 - **`LanguageModelLayers.debug({ delayMs })`** - Replaces old `DebugSlowProvider`. Use `TestClock.layer()` from `effect/testing` + `TestClock.adjust()` to make delays instant in tests.
 - **Test control flow** - Test files must not use `async`/`await`, Promise chains, raw Promise-returning test bodies, or hook cleanup patterns. Use `it.live` / `it.scopedLive`, `Effect.promise` only at real async boundaries, and scoped resources such as `makeTempDirectoryScoped`.
@@ -65,7 +65,7 @@ Read `ARCHITECTURE.md` before implementing. Update when diverging.
 
 Use `effect` skill. Key patterns:
 
-- Services: `Context.Tag` + `Layer.effect`/`Layer.succeed`
+- Services: `Context.Service` + `Layer.effect`/`Layer.succeed`
 - Errors: `Schema.TaggedError`
 - Data: `Schema.Class` with branded IDs
 - Tracing: `Effect.fn` for all service methods

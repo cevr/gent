@@ -1265,19 +1265,10 @@ const activeSourceFile = (file: string): boolean =>
 const referenceExtensionFile = (file: string): boolean =>
   file.startsWith("examples/extensions/") && sourceFile(file)
 
-const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\b/,
-    message: "Bun platform layers may only be provided by platform roots",
-  },
-]
-
-const bannedTransportContractPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /\b(?:SessionInfo|BranchInfo)\b/,
-    message: "Transport session DTOs mirror domain types",
-  },
-]
+const platformLayerPattern: BannedPattern = {
+  pattern: /\b(?:BunPlatformLive|BunGentPlatformLive)\b/,
+  message: "Bun platform layers may only be provided by platform roots",
+}
 
 const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
   {
@@ -1328,17 +1319,9 @@ const bannedLauncherPatterns: ReadonlyArray<BannedPattern> = [
 const launcherFiles = new Set(["apps/server/src/main.ts"])
 
 const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
-  const patterns = bannedActiveSourcePatterns.filter(
-    ({ pattern }) =>
-      !(
-        platformProviderRootFiles.has(file) &&
-        pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b"
-      ),
-  )
+  const patterns: BannedPattern[] = []
+  if (!platformProviderRootFiles.has(file)) patterns.push(platformLayerPattern)
   if (launcherFiles.has(file)) patterns.push(...bannedLauncherPatterns)
-  if (file === "packages/core/src/server/rpc.ts") {
-    patterns.push(...bannedTransportContractPatterns)
-  }
   return patterns
 }
 
@@ -1374,6 +1357,10 @@ export const findPlatformDuplicationViolations = (
  * Each row names what was removed and what replaced it. A row matches a source
  * line, an import specifier's module basename, or the file path itself. The
  * guard source is exempt: the table names every retired surface on purpose.
+ *
+ * Retired `Bun.*` members (`Bun.Glob`, `Bun.randomUUIDv7` outside the platform
+ * adapter) are banned by the `gent/no-bun-outside-adapter` rule in
+ * `lint/gent-rules.ts` instead, because only the AST sees a member access.
  *
  * @module
  */
@@ -1621,6 +1608,20 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     match: /^packages\/sdk\/src\/(?:server-registry|worker-http)\.ts$/,
     scope: "shipped",
     message: "SDK worker registry/http split is deleted; use server lock and server entrypoints",
+  },
+  {
+    on: "line",
+    match: identifiers("BunCronRuntimeLive"),
+    scope: "shipped-and-tests",
+    message:
+      "the cron runtime layer is removed; scheduling belongs to the kernel, and the cell reaches Bun.cron directly",
+  },
+  {
+    on: "line",
+    match: identifiers("SessionInfo", "BranchInfo"),
+    scope: "shipped",
+    message:
+      "the transport session DTOs are removed; the contract carries the domain Session and Branch schemas",
   },
 ]
 

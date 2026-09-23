@@ -12,92 +12,21 @@ Minimal, opinionated agent harness — built on Effect.
 
 ```bash
 bun install
-bun run gate       # typecheck + lint + fmt + build + test
+bun run gate                # typecheck + lint + fmt + build + test
+bun run --cwd apps/tui dev  # TUI
 ```
 
-### Run the TUI
+`gent` runs one server per database. The TUI binary starts a server or
+attaches to the one that already owns the database; `apps/server` is only
+needed for a standalone topology. `GENT_DATA_DIR` names the directory that
+holds `data.db` (default `~/.gent`).
 
-```bash
-bun run --cwd apps/tui dev          # default mode
-bun run --cwd apps/tui dev -p "..." # one-shot prompt → session view
-bun run --cwd apps/tui dev -H "..." # headless: stream to stdout, exit
-bun run --cwd apps/tui dev resume   # resume last session for cwd
-bun run --cwd apps/tui dev sessions # list sessions
-```
+## Where to Read Next
 
-### Run the standalone server
-
-```bash
-bun run --cwd apps/server dev
-```
-
-`gent` defaults to a server-per-DB topology: one server owns the SQLite store
-and accepts multiple clients. The TUI binary embeds a server by default; a
-standalone `apps/server` is only needed for remote topologies.
-
-## Architecture
-
-```
-TUI / SDK / HTTP client
-          │
-          ▼
-   transport contract
-          │
-   ┌──────┴──────┐
-   ▼             ▼
-direct        RPC / HTTP
-adapter        adapter
-          │
-          ▼
-   app services (commands / queries / events)
-          │
-          ▼
-   runtime + platform boundaries
-```
-
-See `ARCHITECTURE.md` for the full noun model (`Server`, `Profile`,
-`SessionRuntime`, `Tool`/`Request`/`Action`, `Resource`, `Reaction`).
-
-## Layout
-
-```
-apps/
-├── tui/        OpenTUI client over the shared transport contract
-└── server/     HTTP + RPC adapter
-
-packages/
-├── core/       domain, storage, providers, runtime, server, extensions/api, test-utils
-├── extensions/ all 27 builtin extensions (imports only @gent/core/extensions/api)
-├── sdk/        direct + RPC transports over one client contract
-├── tooling/    custom oxlint rules, fixtures, build/test diagnostics
-└── e2e/        PTY/transport/supervisor end-to-end tests
-```
-
-`@gent/core` uses subpath exports — no barrels. Import from specific files
-(`@gent/core/domain/event`, `@gent/core/runtime/agent/agent-loop.actor`, etc.).
-
-## Configuration
-
-Data lives under `~/.gent/`:
-
-- `data.db` — SQLite database (sessions, branches, events, interactions, tasks)
-- `auth.json` — auth keys (KeyValueStore-backed)
-- `plans/` — plan files
-
-## Testing
-
-```bash
-bun run test       # ~2-4s product behavior tests
-bun run test:e2e   # ~60-120s PTY + supervisor + worker-http
-bun run gate       # full pre-commit gate
-```
-
-`bun:test` directly (not vitest) — `bun:sqlite` requires the Bun runtime.
-
-## Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for code style, Effect patterns, and
-test conventions.
+- [AGENTS.md](./AGENTS.md) — commands, CLI usage, gotchas, code style, and test conventions.
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — the noun model, invariants, and package structure.
+- [docs/extensions.md](./docs/extensions.md) — the extension authoring guide.
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — how to send a change.
 
 ## License
 

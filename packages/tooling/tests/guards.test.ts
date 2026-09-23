@@ -958,41 +958,6 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
-  test("flags session transport dto names only in the transport contract", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/server/rpc.ts",
-        "export class SessionInfo {}",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/server/rpc.ts",
-        line: 1,
-        message: "Transport session DTOs mirror domain types",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/domain/example.ts",
-        "export class SessionInfo {}",
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/server/rpc.ts",
-        "export class BranchInfo {}",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/server/rpc.ts",
-        line: 1,
-        message: "Transport session DTOs mirror domain types",
-      },
-    ])
-  })
-
   test("flags Bun platform providers outside platform roots", () => {
     expect(
       findPlatformDuplicationViolations(
@@ -1010,7 +975,7 @@ describe("platform duplication guards", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/core/src/server/server-root.ts",
-        "const PlatformLayer = Layer.mergeAll(BunCronRuntimeLive, BunGentPlatformLive)",
+        "const PlatformLayer = Layer.mergeAll(BunGentPlatformLive)",
       ),
     ).toEqual([])
   })
@@ -1161,6 +1126,9 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
   ["packages/core/src/domain/x.ts", "const w = makeFileWriter(fs)", "makeFileWriter"],
   ["packages/core/tests/x.test.ts", "const f = testExtensionFiles()", "testExtensionFiles"],
   ["packages/core/tests/x.test.ts", "const p = testExtensionProcess()", "testExtensionProcess"],
+  ["packages/core/tests/x.test.ts", "Layer.provide(BunCronRuntimeLive)", "BunCronRuntimeLive"],
+  ["packages/core/src/server/rpc.ts", "export class SessionInfo {}", "SessionInfo"],
+  ["packages/core/src/domain/x.ts", "type B = BranchInfo", "BranchInfo"],
 ]
 
 const RETIRED_PATHS: ReadonlyArray<string> = [
