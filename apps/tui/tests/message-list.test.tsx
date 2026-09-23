@@ -2095,6 +2095,58 @@ describe("compact file tool bodies", () => {
   )
 })
 
+const builtinRenderer = (tool: string) =>
+  Option.getOrThrow(
+    Option.fromUndefinedOr(
+      BUILTIN_TOOL_RENDERERS.find((entry) => entry.toolNames.includes(tool))?.component,
+    ),
+  )
+
+describe("cell frame header", () => {
+  it.live("names the ops that ran once there are any, not the verbs its source spells", () =>
+    Effect.gen(function* () {
+      const CellToolRenderer = builtinRenderer("cell")
+      const code =
+        "const [a, b] = await Promise.all([tools.bash({command: 'sleep 2'}), tools.bash({command: 'git checkout HEAD -- a'})])"
+      const header = (operations: ReadonlyArray<ToolCall>) =>
+        Effect.promise(() =>
+          renderWithProviders(
+            () => (
+              <CellToolRenderer
+                expanded={false}
+                toolCall={{
+                  id: "cell-header",
+                  toolName: "cell",
+                  status: "running",
+                  input: { code },
+                  summary: absent,
+                  output: absent,
+                  operations: [...operations],
+                }}
+              />
+            ),
+            { width: 100, height: 12 },
+          ),
+        ).pipe(Effect.map((setup) => renderFrame(setup).split("\n")[0] ?? ""))
+      // No op has run: the source's verbs.
+      expect(yield* header([])).toContain("cell bash ×2")
+      // One op ran: that op, as the group header counts it.
+      const ran = yield* header([
+        {
+          id: "op-sleep",
+          toolName: "bash",
+          status: "running",
+          input: { command: "sleep 2" },
+          summary: absent,
+          output: absent,
+        },
+      ])
+      expect(ran).toContain("cell bash sleep 2")
+      expect(ran).not.toContain("×2")
+    }),
+  )
+})
+
 const GrepToolRenderer = Option.getOrThrow(
   Option.fromUndefinedOr(
     BUILTIN_TOOL_RENDERERS.find((entry) => entry.toolNames.includes("grep"))?.component,

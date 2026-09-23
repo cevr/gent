@@ -1,7 +1,5 @@
 import {
   type ActivityCall,
-  type ActivityOperation,
-  CellOperationReceipts,
   decodeToolOutputOption,
   formatActivityHeader,
   formatCellRowLabel,
@@ -12,7 +10,6 @@ import {
   getString,
   plural,
   previewOutput,
-  toolArgSummary,
   workingIconFrame,
 } from "./utils"
 import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
@@ -43,7 +40,12 @@ import {
 } from "solid-js"
 import type { ScrollBoxRenderable, ScrollbackSurface, SyntaxStyle } from "@opentui/core"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
-import { GenericToolRenderer, RegisteredToolCall, type ToolCall } from "./tool-renderers"
+import {
+  cellOperations,
+  GenericToolRenderer,
+  RegisteredToolCall,
+  type ToolCall,
+} from "./tool-renderers"
 import { useExtensionUI } from "./extensions/host"
 import type { MessageRenderer, MessageRowProps } from "./extensions/client-facets"
 import {
@@ -227,33 +229,6 @@ type HandoffDetails = typeof HandoffDetails.Type
 const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
 
 const PREVIEW_LINES = 20
-
-const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
-  if (status === "completed") return "succeeded"
-  if (status === "error") return "failed"
-  return "running"
-}
-
-/** Calls a cell admitted: live nested calls carry arguments; saved receipts carry tool and outcome. */
-const cellOperations = (call: ToolCall): ReadonlyArray<ActivityOperation> => {
-  const live = Option.fromNullishOr(call.operations)
-  if (Option.isSome(live) && live.value.length > 0) {
-    return live.value.map((operation) => ({
-      tool: operation.toolName,
-      outcome: liveOutcome(operation.status),
-      detail: toolArgSummary(operation.toolName, operation.input),
-    }))
-  }
-  return Option.match(decodeToolOutputOption(CellOperationReceipts, call.output), {
-    onNone: () => [],
-    onSome: (value) =>
-      (value.operations ?? []).map((operation) => ({
-        tool: operation.tool,
-        outcome: operation.outcome,
-        detail: "",
-      })),
-  })
-}
 
 const toActivityCall = (call: ToolCall): ActivityCall => ({
   toolName: call.toolName,

@@ -6,6 +6,7 @@ import { buildSyntaxStyle, useTheme } from "./theme"
 import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
 import { formatHeadTail, headTail, type OutputCut } from "@gent/core/protocol"
 import {
+  type ActivityOperation,
   CellOperationReceipts,
   decodeToolOutput,
   countNoun,
@@ -15,11 +16,13 @@ import {
   formatGenericToolDetail,
   formatGenericToolInput,
   formatGenericToolText,
+  formatOperationLabels,
   formatToolInput,
   getString,
   isAbsPath,
   plural,
   splitLines,
+  toolArgSummary,
   type ToolInput,
   truncatePath,
 } from "./utils"
@@ -603,10 +606,31 @@ interface OperationLine {
   readonly summary: string
 }
 
-const liveOutcome = (status: ToolRendererProps["toolCall"]["status"]): OperationLine["outcome"] => {
+const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
   if (status === "running") return "running"
   if (status === "error") return "failed"
   return "succeeded"
+}
+
+/** Calls a cell admitted: live nested calls carry arguments; saved receipts carry tool and outcome. */
+export const cellOperations = (call: ToolCall): ReadonlyArray<ActivityOperation> => {
+  const live = Option.fromNullishOr(call.operations)
+  if (Option.isSome(live) && live.value.length > 0) {
+    return live.value.map((operation) => ({
+      tool: operation.toolName,
+      outcome: liveOutcome(operation.status),
+      detail: toolArgSummary(operation.toolName, operation.input),
+    }))
+  }
+  return Option.match(decodeToolOutputOption(CellOperationReceipts, call.output), {
+    onNone: () => [],
+    onSome: (value) =>
+      (value.operations ?? []).map((operation) => ({
+        tool: operation.tool,
+        outcome: operation.outcome,
+        detail: "",
+      })),
+  })
 }
 
 function CellToolRenderer(props: ToolRendererProps) {
@@ -615,11 +639,14 @@ function CellToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => decodeToolOutputOption(CellOutputSchema, props.toolCall.output))
   const code = createMemo(() => getString(props.toolCall.input, "code"))
   const codeLines = createMemo(() => code().split("\n"))
-  // The verbs the source spells out; the first code line only when it spells none.
+  // The ops that ran, once there are any, as the header counts them; before
+  // that the verbs the source spells out, else its first line.
   const subtitle = createMemo(() => {
+    const operations = cellOperations(props.toolCall)
     const verbs = describeCellCode(code())
     let first = codeLines()[0] ?? ""
     if (verbs.length > 0) first = verbs.join(" · ")
+    if (operations.length > 0) first = formatOperationLabels(operations)
     if (first.length > 60) return `${first.slice(0, 60)}…`
     return first
   })

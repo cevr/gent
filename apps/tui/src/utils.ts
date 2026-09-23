@@ -672,6 +672,17 @@ export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string
   return parts.join(" · ")
 }
 
+/** The ops a cell ran, in order: each tool with its arguments, a failed one marked, repeats folded. */
+export const formatOperationLabels = (operations: ReadonlyArray<ActivityOperation>): string =>
+  collapseRepeats(
+    operations.map((operation) => {
+      let label = operation.tool
+      if (operation.detail.length > 0) label = `${operation.tool} ${operation.detail}`
+      if (operation.outcome === "failed") label = `✕ ${label}`
+      return label
+    }),
+  ).join(" · ")
+
 /** One-line label for a cell row: its error, else its operations, else its verbs, else its result, else its code. */
 export function formatCellRowLabel(
   call: ActivityCall,
@@ -681,17 +692,7 @@ export function formatCellRowLabel(
   if (call.status === "error" && fallback.error.length > 0) {
     return truncate(fallback.error.split("\n")[0] ?? "", maxLength)
   }
-  if (call.operations.length > 0) {
-    const labels = collapseRepeats(
-      call.operations.map((operation) => {
-        let label = operation.tool
-        if (operation.detail.length > 0) label = `${operation.tool} ${operation.detail}`
-        if (operation.outcome === "failed") label = `✕ ${label}`
-        return label
-      }),
-    )
-    return truncate(labels.join(" · "), maxLength)
-  }
+  if (call.operations.length > 0) return truncate(formatOperationLabels(call.operations), maxLength)
   const verbs = describeCellCode(fallback.code)
   if (verbs.length > 0) return truncate(verbs.join(" · "), maxLength)
   const display = fallback.display.split("\n").find((line) => line.trim().length > 0) ?? ""
