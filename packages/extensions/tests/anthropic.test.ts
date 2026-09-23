@@ -2541,7 +2541,9 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
   const SentReasoning = Schema.fromJsonString(
     Schema.Struct({
       output_config: Schema.optional(Schema.Struct({ effort: Schema.String })),
-      thinking: Schema.optional(Schema.Struct({ type: Schema.String })),
+      thinking: Schema.optional(
+        Schema.Struct({ type: Schema.String, display: Schema.optional(Schema.String) }),
+      ),
       temperature: Schema.optional(Schema.Finite),
     }),
   )
@@ -2610,8 +2612,16 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
       expect(yield* sentFor("claude-sonnet-4-6", "minimal")).toEqual({ effort: "low" })
       expect(yield* sentFor("claude-sonnet-4-6", "medium")).toEqual({ effort: "medium" })
       expect(yield* sentFor("claude-sonnet-4-6", "none")).toBeUndefined()
-      // The request schema has no `xhigh`: it sends `high`.
-      expect(yield* sentFor("claude-sonnet-5", "xhigh")).toEqual({ effort: "high" })
+      // The effort page lists `xhigh` for these; the 4.6 models do not take it.
+      for (const model of [
+        "claude-sonnet-5",
+        "claude-opus-5-5",
+        "claude-opus-4-7",
+        "claude-fable-5-1",
+      ]) {
+        expect(yield* sentFor(model, "xhigh")).toEqual({ effort: "xhigh" })
+      }
+      expect(yield* sentFor("claude-sonnet-4-6", "xhigh")).toEqual({ effort: "max" })
     }),
   )
 
@@ -2642,11 +2652,36 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
       ]) {
         expect((yield* sentOnBothPaths(model, { reasoning: "high" })).thinking).toEqual({
           type: "adaptive",
+          display: "summarized",
         })
       }
       // Extended-thinking-only models reject adaptive thinking with a 400.
       for (const model of ["claude-opus-4-5", "claude-haiku-4-5", "claude-sonnet-4-5"]) {
         expect((yield* sentOnBothPaths(model, { reasoning: "high" })).thinking).toBeUndefined()
+      }
+    }),
+  )
+
+  // These families default to `display: "omitted"`: thinking blocks stream with
+  // empty text unless the request asks for the summary.
+  it.live("a model that thinks gets the thinking summary on either auth path", () =>
+    Effect.gen(function* () {
+      const summarized = { type: "adaptive", display: "summarized" }
+      // Thinking on by default: with a hint and without one.
+      for (const model of [
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "claude-opus-5-5",
+        "claude-fable-5-1",
+        "claude-mythos-5",
+      ]) {
+        expect((yield* sentOnBothPaths(model, { reasoning: "max" })).thinking).toEqual(summarized)
+        expect((yield* sentOnBothPaths(model, {})).thinking).toEqual(summarized)
+      }
+      // Thinking off by default: only a hint turns it on.
+      for (const model of ["claude-opus-4-8", "claude-opus-4-7"]) {
+        expect((yield* sentOnBothPaths(model, { reasoning: "max" })).thinking).toEqual(summarized)
+        expect((yield* sentOnBothPaths(model, {})).thinking).toBeUndefined()
       }
     }),
   )
