@@ -553,6 +553,12 @@ describe("AgentsViewExtension via RPC", () => {
             ...parent,
           })
 
+          // A child may name only its parent session.
+          const sessionOnly = yield* harness.client.session.create({
+            cwd: "/tmp/session-only",
+            parentSessionId: harness.sessionId,
+          })
+
           const { reply } = yield* requestRows(harness, {})
           const rowFor = (sessionId: string) =>
             reply.rows.find((row) => row.sessionId === sessionId)
@@ -563,6 +569,7 @@ describe("AgentsViewExtension via RPC", () => {
           expect(spawnedRow?.section).toBe("inactive")
           expect(handoffRow?.live).toBe(false)
           expect(spawnedRow?.sideThread).toBe(true)
+          expect(rowFor(sessionOnly.sessionId)?.sideThread).toBe(true)
           expect(handoffRow?.sideThread).toBe(false)
           expect(rowFor(harness.sessionId)?.sideThread).toBe(false)
         }).pipe(Effect.timeout("8 seconds")),
