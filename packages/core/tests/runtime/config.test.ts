@@ -5,6 +5,7 @@ import {
   FileSystem,
   Layer,
   Logger,
+  PlatformError,
   Path,
   Predicate,
   Ref,
@@ -122,12 +123,14 @@ describe("user configuration", () => {
           FileSystem.FileSystem,
           Effect.gen(function* () {
             const realFs = yield* FileSystem.FileSystem
+            // A config write lands as a rename of a staged sibling over the file.
             return FileSystem.makeNoop({
               ...realFs,
-              writeFileString: (filePath, content, options) =>
+              rename: (fromPath, filePath) =>
                 Effect.gen(function* () {
                   if (filePath === path.join(home, ConfigService.CONFIG_RELATIVE)) {
                     yield* Ref.update(observedConfigWrites, (count) => count + 1)
+                    const content = yield* realFs.readFileString(fromPath)
                     const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(UserConfig))(
                       content,
                     ).pipe(Effect.catchEager(() => Effect.succeed(new UserConfig({}))))
@@ -144,7 +147,7 @@ describe("user configuration", () => {
                       )
                     }
                   }
-                  yield* realFs.writeFileString(filePath, content, options)
+                  yield* realFs.rename(fromPath, filePath)
                 }),
             })
           }),
@@ -368,6 +371,131 @@ describe("user configuration", () => {
           expect(yield* fs.readFileString(userConfigPath)).toEqual(broken)
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    /** A live service over `home`, with `fsLayer` in place of the real file system. */
+    const liveConfigAt = (
+      cwd: string,
+      home: string,
+      fsLayer: Layer.Layer<FileSystem.FileSystem> = BunServices.layer,
+    ) =>
+      ConfigService.Live.pipe(
+        Layer.provide(Layer.mergeAll(fsLayer, Path.layer, RuntimeEnvironment.Live({ cwd, home }))),
+      )
+
+    const decodeUserConfig = Schema.decodeEffect(Schema.fromJsonString(UserConfig))
+
+    it.scopedLive("a write without a fresh read keeps a valid edit made after startup", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          // The user grants trust by hand while gent runs; nothing reads it yet.
+          yield* fs.writeFileString(userConfigPath, encodeJson({ trustedProjects: ["/keep/me"] }))
+          yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
+          const persisted = yield* decodeUserConfig(yield* fs.readFileString(userConfigPath))
+          expect(persisted.trustedProjects).toEqual(["/keep/me"])
+          expect(persisted.driverOverrides?.[AgentName.make("main")]).toEqual(
+            DriverRef.make({ id: "anthropic" }),
+          )
+          // The write also refreshes the snapshot reads use.
+          expect((yield* cfg.get()).trustedProjects).toEqual(["/keep/me"])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive("a write without a fresh read refuses a config broken after startup", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          const broken = '{"trustedProjects":["/keep/me"],}'
+          yield* fs.writeFileString(userConfigPath, broken)
+          const setOutcome = yield* Effect.exit(
+            cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" })),
+          )
+          expect(setOutcome._tag).toBe("Failure")
+          const clearOutcome = yield* Effect.exit(cfg.clearDriverOverride(AgentName.make("main")))
+          expect(clearOutcome._tag).toBe("Failure")
+          expect(yield* fs.readFileString(userConfigPath)).toEqual(broken)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive("a user config fixed after a broken start accepts writes at once", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+        yield* fs.writeFileString(userConfigPath, '{"trustedProjects":["/keep/me"],}')
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* fs.writeFileString(userConfigPath, encodeJson({ trustedProjects: ["/keep/me"] }))
+          yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
+          const persisted = yield* decodeUserConfig(yield* fs.readFileString(userConfigPath))
+          expect(persisted.trustedProjects).toEqual(["/keep/me"])
+          expect(Object.keys(persisted.driverOverrides ?? {})).toEqual(["main"])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive("a write that cannot reach the disk fails and leaves the file whole", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const original = encodeJson({ trustedProjects: ["/keep/me"] })
+        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+        yield* fs.writeFileString(userConfigPath, original)
+        // Every write fails, the way a full disk or a read-only home does.
+        const denied = (method: string, target: string) =>
+          Effect.fail(
+            PlatformError.systemError({
+              _tag: "PermissionDenied",
+              module: "FileSystem",
+              method,
+              pathOrDescriptor: target,
+            }),
+          )
+        const failingWrites = Layer.effect(
+          FileSystem.FileSystem,
+          Effect.gen(function* () {
+            const realFs = yield* FileSystem.FileSystem
+            return FileSystem.makeNoop({
+              ...realFs,
+              writeFileString: (target) => denied("writeFileString", target),
+              rename: (_from, target) => denied("rename", target),
+            })
+          }),
+        ).pipe(Layer.provide(BunServices.layer))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          const outcome = yield* Effect.exit(
+            cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" })),
+          )
+          expect(outcome._tag).toBe("Failure")
+          expect(yield* fs.readFileString(userConfigPath)).toEqual(original)
+          // A failed write leaves the snapshot as it was.
+          expect((yield* cfg.get()).driverOverrides).toBeUndefined()
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home, failingWrites)))
       }).pipe(Effect.provide(BunServices.layer)),
     )
 

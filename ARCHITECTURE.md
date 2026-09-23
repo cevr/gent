@@ -92,7 +92,9 @@ updates this list in the same commit.
     No `ExtensionContext` facet duplicates an Effect platform service; the
     facets are host authority only (`Session`, `Interaction`,
     `FileLock`, `State`). An atomic write has one owner, `writeFileAtomic` in
-    `packages/extensions/src/fs-tools.ts`. Host facts core cannot get from
+    `packages/core/src/runtime/gent-platform.ts`; core config, extensions
+    (through `@gent/core/extensions/api`) and the TUI (through
+    `@gent/core/host`) all call it. Host facts core cannot get from
     Effect (OS info, executable path, home directory) stay on `GentPlatform`.
     The TUI session controller owns screen state, views render and dispatch;
     app-specific UI facets live at the app edge. Receipts:
@@ -660,7 +662,13 @@ cannot evaluate; the branch interrupt flag also stops later calls in that turn.
 Inner calls a cell admits publish the ordinary tool events with a
 `parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact
 receipts (`tool`, `outcome`, `summary`) to the saved cell result whenever a cell
-made inner calls, so the transcript keeps effects visible after reload. The TUI
+made inner calls, so the transcript keeps effects visible after reload. A
+receipt summary, like the `summary` on a terminal tool event, comes from the
+tool's optional `summary(input, output)` over wire values when the tool has one
+(read, write, edit, grep and bash do); otherwise, or when it throws, the head of
+the output. Recovery resolves each completed operation's recorded binding the
+way a resume does; a binding that no longer resolves keeps the head of the
+output. The TUI
 nests live inner calls under the cell, counts them in the compact tree, and shows
 receipts in the `cell` renderer. The headless runner indents nested calls.
 

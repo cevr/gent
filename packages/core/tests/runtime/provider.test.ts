@@ -36,6 +36,7 @@ import {
   ModelResolver,
   ProviderAuth,
   retryProviderCall,
+  ModelCatalogRecord,
   ModelRegistry,
   modelCatalog,
   finishPart,
@@ -285,6 +286,7 @@ const makeRegistryLayerWithDrivers = (
           ]),
         ),
         overrideAuthLayer,
+        ModelCatalogRecord.Live,
       ),
     ),
   )
@@ -300,12 +302,17 @@ const loadRegistryWithDrivers = (
     const raw = Context.get(context, ModelRegistry)
     const drivers = Context.get(context, ExtensionRegistry)
     const auth = Context.get(context, Auth)
+    const catalogRecord = Context.get(context, ModelCatalogRecord)
+    const catalog = modelCatalog().pipe(
+      Effect.provideService(ExtensionRegistry, drivers),
+      Effect.provideService(Auth, auth),
+      Effect.provideService(ModelCatalogRecord, catalogRecord),
+    )
     return {
       raw,
-      list: modelCatalog().pipe(
-        Effect.provideService(ExtensionRegistry, drivers),
-        Effect.provideService(Auth, auth),
-      ),
+      catalog,
+      lastFailures: catalogRecord.lastFailures(drivers.getResolved()),
+      list: Effect.map(catalog, (listed) => listed.models),
       get: (modelId: string) =>
         raw.get(modelId).pipe(Effect.provideService(ExtensionRegistry, drivers)),
     }
@@ -431,7 +438,7 @@ describe("model catalog resolution", () => {
     }),
   )
 
-  it.scopedLive("fails closed when a model driver returns a malformed catalog", () =>
+  it.scopedLive("a malformed catalog is left out and reported; other drivers still list", () =>
     Effect.gen(function* () {
       const malformed = catalogModel("openai/broken")
       Reflect.set(malformed, "name", 42)
@@ -442,18 +449,26 @@ describe("model catalog resolution", () => {
           resolveModel: unusedResolution,
           listModels: () => Effect.succeed([malformed]),
         },
+        {
+          id: "openai",
+          name: "OpenAI",
+          resolveModel: unusedResolution,
+          listModels: () => Effect.succeed([catalogModel("openai/gpt-5.4")]),
+        },
       ])
 
-      const error = yield* Effect.flip(registry.list)
+      const catalog = yield* registry.catalog
 
-      expect(error._tag).toBe("DriverError")
-      if (error._tag === "DriverError") {
-        expect(error.reason).toContain("returned an invalid model catalog")
-      }
+      expect(catalog.models.map((model) => model.id)).toEqual([ModelId.make("openai/gpt-5.4")])
+      expect(catalog.failures).toHaveLength(1)
+      expect(catalog.failures[0]?.driverId).toBe("malformed-driver")
+      expect(catalog.failures[0]?.error).toContain("returned an invalid model catalog")
     }),
   )
 
-  it.scopedLive("fails closed when the auth lookup fails before a driver lists", () =>
+  // An auth store that cannot be read is not one driver's catalog problem: the
+  // catalog and a turn's model lookup fail as auth errors, not as UnknownModel.
+  it.scopedLive("an auth store read failure fails the catalog and get as an auth error", () =>
     Effect.gen(function* () {
       let listed = false
       const registry = yield* loadRegistryWithDrivers(
@@ -465,20 +480,20 @@ describe("model catalog resolution", () => {
             listModels: () =>
               Effect.sync(() => {
                 listed = true
-                return []
+                return [catalogModel("auth-driver/one")]
               }),
           },
         ],
         failingReadAuthLayer,
       )
 
-      const error = yield* Effect.flip(registry.list)
+      const catalogError = yield* Effect.flip(registry.catalog)
+      const getError = yield* Effect.flip(registry.get("auth-driver/one"))
 
-      expect(error._tag).toBe("ProviderAuthError")
       expect(listed).toBe(false)
-      if (error._tag === "ProviderAuthError") {
-        expect(error.message).toContain('Failed to read auth for provider "auth-driver"')
-      }
+      expect(catalogError._tag).toBe("ProviderAuthError")
+      expect(catalogError.message).toContain('Failed to read auth for provider "auth-driver"')
+      expect(getError._tag).toBe("ProviderAuthError")
     }),
   )
 
@@ -526,6 +541,39 @@ describe("model catalog resolution", () => {
 
       expect(Option.isSome(found)).toBe(true)
       expect(Option.isNone(missing)).toBe(true)
+    }),
+  )
+
+  // A turn reads its model through `get`; one unreachable driver must not stop it.
+  it.scopedLive("get still resolves a model while another driver's catalog fails", () =>
+    Effect.gen(function* () {
+      const registry = yield* loadRegistryWithDrivers([
+        {
+          id: "local",
+          name: "Local server",
+          resolveModel: unusedResolution,
+          listModels: () => Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434")),
+        },
+        {
+          id: "openai",
+          name: "OpenAI",
+          resolveModel: unusedResolution,
+          listModels: () => Effect.succeed([catalogModel("openai/gpt-5.4")]),
+        },
+      ])
+
+      expect(Option.isNone(yield* registry.lastFailures)).toBe(true)
+      const found = yield* registry.get("openai/gpt-5.4")
+
+      expect(Option.map(found, (model) => model.id)).toEqual(
+        Option.some(ModelId.make("openai/gpt-5.4")),
+      )
+      // The turn's lookup records the failure health reads.
+      expect(
+        Option.map(yield* registry.lastFailures, (failures) =>
+          failures.map((failure) => failure.driverId),
+        ),
+      ).toEqual(Option.some(["local"]))
     }),
   )
 })
@@ -681,6 +729,56 @@ describe("Auth", () => {
         const stillThere = yield* fs.exists(`${dir}/openai`)
         expect(stillThere).toBe(false)
       }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    // Two stores over one directory stand for two gent processes: each has
+    // its own in-process lock, so only the directory's lock orders them.
+    it.scopedLive("updates from two stores over one directory run one at a time", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const first = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const second = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const counter = (info: Option.Option<AuthInfo>): number =>
+          Option.match(info, {
+            onNone: () => 0,
+            onSome: (found) => {
+              if (found.type !== "api") return 0
+              return Number(found.key)
+            },
+          })
+        const write = (count: number) =>
+          Option.some(AuthInfo.cases.Api.make({ type: "api", key: String(count) }))
+        const firstInside = yield* Deferred.make<boolean>()
+        const secondInside = yield* Deferred.make<boolean>()
+        // The first update holds its read until the second is inside its
+        // own update, or until it is clear the second is kept out.
+        const firstUpdate = yield* first
+          .update("openai", (current) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(firstInside, true)
+              yield* Deferred.await(secondInside).pipe(Effect.timeoutOption("300 millis"))
+              return ["first", write(counter(current) + 1)] satisfies readonly [
+                string,
+                Option.Option<AuthInfo>,
+              ]
+            }),
+          )
+          .pipe(Effect.forkScoped)
+        yield* Deferred.await(firstInside)
+        yield* second.update("openai", (current) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(secondInside, true)
+            return ["second", write(counter(current) + 1)] satisfies readonly [
+              string,
+              Option.Option<AuthInfo>,
+            ]
+          }),
+        )
+        yield* Fiber.join(firstUpdate)
+        // Both increments land: neither update read the value the other replaced.
+        expect(counter(Option.fromUndefinedOr(yield* first.get("openai")))).toBe(2)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
     )
   })
 })

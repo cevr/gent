@@ -1,4 +1,4 @@
-import { Context, Effect, Option, Predicate, Schema } from "effect"
+import { Context, Effect, Option, Predicate, Result, Schema } from "effect"
 import {
   ExtensionId,
   type ExtensionId as ExtensionIdType,
@@ -8,6 +8,7 @@ import {
   ToolId,
 } from "./ids.js"
 import * as AiTool from "effect/unstable/ai/Tool"
+import { clipSummary, summarizeOutput } from "./message.js"
 
 // ── prompt ──────────────────────────────────────────────────────────────────
 
@@ -410,6 +411,9 @@ interface GentToolMetadata<
   readonly output: Schema.Encoder<unknown, never>
   // oxlint-disable-next-line effect/noUnknownParameters -- The toolkit decodes wire inputs; the factory validates the decoded value.
   readonly effect: (input: unknown) => Effect.Effect<Output, Error, never>
+  /** The author's one-line result summary over wire values; see `ToolInput.summary`. */
+  // oxlint-disable-next-line effect/noUnknownParameters -- Stored results are wire values; the author's typed function reads them.
+  readonly summary?: (input: unknown, output: unknown) => string
 }
 
 // oxlint-disable-next-line effect/noNullish -- The metadata annotation is absent on native tools outside the Gent factory.
@@ -495,6 +499,29 @@ export const getToolMetadata = <Input, Output, Error>(
 
 export const getToolId = (tool: ToolCapability): ToolId => getToolMetadata(tool).id
 
+/**
+ * The one-line summary of a tool result: the tool's own `summary` for a
+ * success when it has one, otherwise the head of the output. A throwing
+ * author summary falls back, so a summary can never fail a call.
+ */
+export const toolResultSummary = (
+  tool: Option.Option<ToolCapability>,
+  // oxlint-disable-next-line effect/noUnknownParameters -- Tool input is the wire value the model sent.
+  input: unknown,
+  result: { readonly isFailure: boolean; readonly result: unknown },
+): string => {
+  const fallback = () => summarizeOutput(result.result)
+  if (result.isFailure) return fallback()
+  const summarize = Option.flatMap(tool, (found) =>
+    Option.fromUndefinedOr(getToolMetadata(found).summary),
+  )
+  if (Option.isNone(summarize)) return fallback()
+  return Option.match(Result.getSuccess(Result.try(() => summarize.value(input, result.result))), {
+    onNone: fallback,
+    onSome: clipSummary,
+  })
+}
+
 /** Prompt text for extension-owned tool catalogs, without execution metadata. */
 export const getToolPrompt = (
   tool: ToolCapability,
@@ -542,6 +569,15 @@ export interface ToolInput<
   readonly execute: (
     params: Schema.Schema.Type<Params>,
   ) => Effect.Effect<Schema.Schema.Type<Output>, Error, Deps>
+  /**
+   * One line that says what a successful call did, e.g. `exit 0, 12 lines`.
+   * It is the summary on the tool's terminal event, on a cell's operation
+   * receipt, and on every row a client draws from those, including after a
+   * reload. It reads the wire values: the input as the model sent it and the
+   * output as `output` encoded it. Without it (or when it throws), the head
+   * of the output is the summary.
+   */
+  readonly summary?: (input: Params["Encoded"], output: Output["Encoded"]) => string
 }
 
 /**
@@ -576,6 +612,16 @@ export const tool = <
     },
   }
   Object.assign(metadata, declarationsOf(input))
+  const summarize = input.summary
+  if (Predicate.isNotUndefined(summarize)) {
+    // Stored values are wire values; the tool's own schemas check them
+    // before the author's typed function reads them.
+    const decodeInput = Schema.decodeUnknownSync(Schema.toEncoded(input.params))
+    const decodeOutput = Schema.decodeUnknownSync(Schema.toEncoded(input.output))
+    const summary: GentToolMetadata["summary"] = (wireInput, wireOutput) =>
+      summarize(decodeInput(wireInput), decodeOutput(wireOutput))
+    Object.assign(metadata, { summary })
+  }
 
   const native = AiTool.dynamic(input.id, {
     description: input.description,

@@ -137,7 +137,26 @@ export interface SessionStorageService {
   // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
   readonly listSessions: Effect.Effect<ReadonlyArray<Session>, StorageError>
-  readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
+  /**
+   * Each write sets only the columns it names, so two writers that touch
+   * different fields of one session (a rename and a `/model` switch) never
+   * restore each other's old value.
+   */
+  readonly renameSession: (
+    id: SessionId,
+    name: string,
+    updatedAt: Date,
+  ) => Effect.Effect<void, StorageError>
+  readonly updateSessionSettings: (
+    id: SessionId,
+    settings: Pick<Session, "modelId" | "reasoningLevel">,
+    updatedAt: Date,
+  ) => Effect.Effect<void, StorageError>
+  readonly setActiveBranch: (
+    id: SessionId,
+    branchId: BranchId,
+    updatedAt: Date,
+  ) => Effect.Effect<void, StorageError>
   /**
    * Deletes the session and every descendant, returning the full set of
    * session ids the cascade actually removed. Callers use the returned set
@@ -233,13 +252,28 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
           }),
         ).pipe(Effect.mapError(storageError("Failed to list sessions"))),
 
-        updateSession: Effect.fn("SessionStorage.updateSession")(
-          function* (session) {
+        renameSession: Effect.fn("SessionStorage.renameSession")(
+          function* (id, name, updatedAt) {
             const workspaceId = yield* CurrentWorkspaceId
-            yield* sql`UPDATE sessions SET name = ${toSqlNull(session.name)}, model_id = ${toSqlNull(session.modelId)}, reasoning_level = ${toSqlNull(session.reasoningLevel)}, active_branch_id = ${toSqlNull(session.activeBranchId)}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id} AND workspace_id = ${workspaceId}`
-            return session
+            yield* sql`UPDATE sessions SET name = ${name}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId}`
           },
-          Effect.mapError(storageError("Failed to update session")),
+          Effect.mapError(storageError("Failed to rename session")),
+        ),
+
+        updateSessionSettings: Effect.fn("SessionStorage.updateSessionSettings")(
+          function* (id, settings, updatedAt) {
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* sql`UPDATE sessions SET model_id = ${toSqlNull(settings.modelId)}, reasoning_level = ${toSqlNull(settings.reasoningLevel)}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId}`
+          },
+          Effect.mapError(storageError("Failed to update session settings")),
+        ),
+
+        setActiveBranch: Effect.fn("SessionStorage.setActiveBranch")(
+          function* (id, branchId, updatedAt) {
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* sql`UPDATE sessions SET active_branch_id = ${branchId}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId}`
+          },
+          Effect.mapError(storageError("Failed to set active branch")),
         ),
 
         deleteSession: Effect.fn("SessionStorage.deleteSession")(

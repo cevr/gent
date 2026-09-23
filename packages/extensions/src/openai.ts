@@ -1375,6 +1375,7 @@ export const buildOpenAIModelDriver = (
 ): ModelDriverContribution => ({
   id: "openai",
   name: "OpenAI",
+  envCredential: "OPENAI_API_KEY",
   retry: {
     ...DEFAULT_RETRY_POLICY,
     // An accepted request can still end with an error event inside the stream; OpenAI names its code.

@@ -140,7 +140,7 @@ describe("Sessions", () => {
         updatedAt: FIXED_NOW,
       })
       yield* sessions.createSession(session)
-      yield* sessions.updateSession(new Session({ ...session, name: "Updated" }))
+      yield* sessions.renameSession(session.id, "Updated", FIXED_NOW)
       const retrieved = yield* sessions.getSession(SessionId.make("update-test"))
       expect(retrieved?.name).toBe("Updated")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),

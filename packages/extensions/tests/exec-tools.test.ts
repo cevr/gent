@@ -48,6 +48,7 @@ import {
   SqliteStorage,
 } from "@gent/core/test-utils"
 import { shippedPreset } from "./helpers/test-preset.js"
+import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunPlatformLive } from "@gent/core/host"
 import { maximumModelToolResultChars } from "@gent/core/extensions/api"
@@ -555,6 +556,20 @@ const onQueue =
     return record({ sourceId: params.sourceId, content: params.content }).pipe(Effect.asVoid)
   }
 const now = dateFromMillis(0)
+
+describe("BashTool summary", () => {
+  test("names the exit code and the printed line count", () => {
+    const summary = (stdout: string, stderr: string, exitCode: number) =>
+      toolResultSummary(
+        Option.some(BashTool),
+        { command: "make" },
+        { isFailure: false, result: { stdout, stderr, exitCode } },
+      )
+    expect(summary("a\nb\n", "warn\n", 0)).toBe("exit 0 · 3 lines")
+    expect(summary("", "", 2)).toBe("exit 2 · 0 lines")
+    expect(summary("one", "", 0)).toBe("exit 0 · 1 line")
+  })
+})
 
 describe("BashTool execution", () => {
   it.live(

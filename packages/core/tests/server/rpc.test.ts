@@ -1,6 +1,7 @@
 import { test } from "bun:test"
 import {
   Cause,
+  ConfigProvider,
   Context,
   Deferred,
   Effect,
@@ -56,7 +57,9 @@ import {
   AgentName,
   DEFAULT_AGENT_NAME,
   DriverRef,
+  Model,
   ModelId,
+  ProviderId,
   type ReasoningEffort,
 } from "../../src/domain/agent"
 import { createE2ELayer, createRpcClient, createRpcHarness } from "../../src/test-utils/harness"
@@ -566,6 +569,51 @@ describe("auth.listProviders", () => {
         expect(
           required(yield* client.auth.listProviders({ agentName: AgentName.make("helper") })),
         ).toEqual(["anthropic", "otherprov"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live("a driver whose env credential is set reports the key from env", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const envName = "ANTHROPIC_API_KEY"
+        // The server reads env through the ConfigProvider; this one holds only the key.
+        const envLayer = ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { [envName]: "sk-from-env" } }),
+        )
+        const envDrivers: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/env-drivers") },
+          scope: "builtin",
+          sourcePath: "test",
+          contributions: {
+            modelDrivers: [
+              {
+                id: "anthropic",
+                name: "Anthropic",
+                envCredential: envName,
+                resolveModel: () => Effect.succeed(stubModel),
+              },
+              {
+                id: "otherprov",
+                name: "Other",
+                envCredential: "OTHERPROV_API_KEY",
+                resolveModel: () => Effect.succeed(stubModel),
+              },
+            ],
+          },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({ ...e2ePreset, providerLayer, extensions: [envDrivers] }).pipe(
+            Layer.provide(envLayer),
+          ),
+        )
+        const providers = yield* client.auth.listProviders({})
+        const anthropic = providers.find((entry) => entry.provider === "anthropic")
+        expect(anthropic?.hasKey).toBe(true)
+        expect(anthropic?.source).toBe("env")
+        expect(anthropic?.required).toBe(true)
+        const other = providers.find((entry) => entry.provider === "otherprov")
+        expect(other?.hasKey).toBe(false)
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -3279,6 +3327,118 @@ describe("extension command RPCs", () => {
                 error: "setup boom",
               },
             ])
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+    }),
+  )
+  it.live("a failing driver catalog leaves model.list working and shows in extension health", () =>
+    Effect.gen(function* () {
+      const catalogDrivers: LoadedExtension = {
+        manifest: { id: ExtensionId.make("@test/catalog-drivers") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          modelDrivers: [
+            {
+              id: "local",
+              name: "Local server",
+              resolveModel: () => Effect.succeed(stubModel),
+              listModels: () => Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434")),
+            },
+            {
+              id: "working",
+              name: "Working",
+              resolveModel: () => Effect.succeed(stubModel),
+              listModels: () =>
+                Effect.succeed([
+                  Model.make({
+                    id: ModelId.make("working/one"),
+                    name: "One",
+                    provider: ProviderId.make("working"),
+                  }),
+                ]),
+            },
+          ],
+        },
+      }
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            const { client } = yield* createRpcClient(
+              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [catalogDrivers] }),
+            )
+            const models = yield* client.model.list({})
+            expect(models.map((model) => model.id)).toContain(ModelId.make("working/one"))
+            const status = yield* client.extension.listStatus({})
+            expect(status._tag).toBe("Degraded")
+            if (status._tag !== "Degraded") return
+            const degraded = status.degradedExtensions.find(
+              (extension) => extension.manifest.id === "@test/catalog-drivers",
+            )
+            expect(degraded?.issues).toEqual([
+              {
+                _tag: "ModelCatalogFailed",
+                driverId: "local",
+                error: "connect ECONNREFUSED 127.0.0.1:11434",
+              },
+            ])
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+    }),
+  )
+  // Health reads the failures the last catalog run recorded; it does not run
+  // every driver's catalog again on each read.
+  it.live("extension health reports the last catalog run without listing again", () =>
+    Effect.gen(function* () {
+      let localCalls = 0
+      const catalogDrivers: LoadedExtension = {
+        manifest: { id: ExtensionId.make("@test/catalog-count") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          modelDrivers: [
+            {
+              id: "local",
+              name: "Local server",
+              resolveModel: () => Effect.succeed(stubModel),
+              listModels: () =>
+                Effect.suspend(() => {
+                  localCalls += 1
+                  return Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434"))
+                }),
+            },
+          ],
+        },
+      }
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            const { client } = yield* createRpcClient(
+              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [catalogDrivers] }),
+            )
+            // No run yet: health runs the catalog once, then reads that record.
+            const first = yield* client.extension.listStatus({})
+            const second = yield* client.extension.listStatus({})
+            expect(localCalls).toBe(1)
+            yield* client.model.list({})
+            expect(localCalls).toBe(2)
+            const third = yield* client.extension.listStatus({})
+            expect(localCalls).toBe(2)
+            for (const status of [first, second, third]) {
+              expect(status._tag).toBe("Degraded")
+              if (status._tag !== "Degraded") continue
+              expect(status.degradedExtensions.flatMap((extension) => extension.issues)).toEqual([
+                {
+                  _tag: "ModelCatalogFailed",
+                  driverId: "local",
+                  error: "connect ECONNREFUSED 127.0.0.1:11434",
+                },
+              ])
+            }
           }).pipe(Effect.timeout("4 seconds")),
         ),
       )

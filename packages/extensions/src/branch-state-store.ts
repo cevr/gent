@@ -13,8 +13,7 @@
  * and writes its parent's record.
  */
 import { Effect, FileSystem, Option, Path, Schema } from "effect"
-import { type BranchId, ExtensionContext } from "@gent/core/extensions/api"
-import { writeFileAtomic } from "./fs-tools.js"
+import { type BranchId, ExtensionContext, writeFileAtomic } from "@gent/core/extensions/api"
 
 interface BranchStateStoreInput<A, E> {
   /** Span prefix, e.g. `GoalStore`. */

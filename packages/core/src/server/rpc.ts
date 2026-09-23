@@ -23,7 +23,7 @@ import {
 } from "../domain/ids.js"
 import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
-import { ConfigLoadError } from "../runtime/config.js"
+import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
 import { SessionRuntimeError } from "../runtime/session.js"
 import {
   AuthAuthorization,
@@ -65,6 +65,7 @@ export class ExtensionProtocolError extends Schema.TaggedError<ExtensionProtocol
 
 export const GentRpcError = Schema.Union([
   ConfigLoadError,
+  ConfigWriteError,
   StorageError,
   SessionRuntimeError,
   ProviderError,
@@ -287,6 +288,11 @@ const ExtensionManifestInfo = Schema.Struct({
 export const ExtensionHealthIssue = Schema.Union([
   Schema.TaggedStruct("ActivationFailed", {
     phase: ExtensionActivationPhase,
+    error: Schema.String,
+  }),
+  /** A model driver of this extension could not list its models; they are left out. */
+  Schema.TaggedStruct("ModelCatalogFailed", {
+    driverId: Schema.String,
     error: Schema.String,
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))

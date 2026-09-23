@@ -441,23 +441,38 @@ export function ConnectionWidget() {
     if (health._tag === "Degraded") return health.degradedExtensions
     return []
   }
+  // Each failed extension with its reason: an id alone ("config") does not
+  // say which file broke or why.
   const failedExtensions = () => [
-    ...degradedExtensions()
-      .filter((extension) => extension.issues.some((issue) => issue._tag === "ActivationFailed"))
-      .map((extension) => extension.manifest.id),
-    ...ext.failures().map((failure) => failure.id),
+    ...degradedExtensions().flatMap((extension) =>
+      extension.issues
+        .filter((issue) => issue._tag === "ActivationFailed")
+        .map((issue) => `${extension.manifest.id}: ${issue.error}`),
+    ),
+    ...ext.failures().map((failure) => `${failure.id}: ${failure.reason}`),
   ]
+  const unavailableCatalogs = () =>
+    degradedExtensions().flatMap((extension) =>
+      extension.issues
+        .filter((issue) => issue._tag === "ModelCatalogFailed")
+        .map((issue) => `${issue.driverId}: ${issue.error}`),
+    )
   const hasFailedExtensions = () => failedExtensions().length > 0
   // Reconnecting and the restart count belong to the status row;
   // this widget draws what the label cannot: issues and failed extensions.
+  const hasUnavailableCatalogs = () => unavailableCatalogs().length > 0
   const visible = () =>
-    Option.isSome(connectionIssue()) || Option.isSome(disconnectedReason()) || hasFailedExtensions()
+    Option.isSome(connectionIssue()) ||
+    Option.isSome(disconnectedReason()) ||
+    hasFailedExtensions() ||
+    hasUnavailableCatalogs()
   const accent = () => {
-    if (hasFailedExtensions()) return theme.warning
+    if (hasFailedExtensions() || hasUnavailableCatalogs()) return theme.warning
     return theme.error
   }
   const subtitle = () => {
     if (hasFailedExtensions()) return "extension activation degraded"
+    if (hasUnavailableCatalogs()) return "some models unavailable"
     if (Option.isSome(disconnectedReason())) return "runtime unavailable"
     return Option.getOrElse(connectionIssue(), () => "")
   }
@@ -481,10 +496,27 @@ export function ConnectionWidget() {
           </Show>
           <Show when={hasFailedExtensions()}>
             <text>
-              <span style={{ fg: theme.text }}>
-                failed extensions: {failedExtensions().join(", ")}
-              </span>
+              <span style={{ fg: theme.text }}>failed extensions:</span>
             </text>
+            <For each={failedExtensions()}>
+              {(line) => (
+                <text paddingLeft={2}>
+                  <span style={{ fg: theme.textMuted }}>{line}</span>
+                </text>
+              )}
+            </For>
+          </Show>
+          <Show when={hasUnavailableCatalogs()}>
+            <text>
+              <span style={{ fg: theme.text }}>model catalogs that did not load:</span>
+            </text>
+            <For each={unavailableCatalogs()}>
+              {(line) => (
+                <text paddingLeft={2}>
+                  <span style={{ fg: theme.textMuted }}>{line}</span>
+                </text>
+              )}
+            </For>
           </Show>
         </box>
       </box>

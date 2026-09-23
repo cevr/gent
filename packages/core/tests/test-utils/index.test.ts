@@ -21,8 +21,9 @@ const sessionOnlyLayer = (sessions: Ref.Ref<ReadonlyMap<SessionId, Session>>) =>
       Ref.update(sessions, (map) => new Map(map).set(session.id, session)).pipe(Effect.as(session)),
     getSession: (id) => Ref.get(sessions).pipe(Effect.map((map) => map.get(id))),
     listSessions: Ref.get(sessions).pipe(Effect.map((map) => [...map.values()])),
-    updateSession: (session) =>
-      Ref.update(sessions, (map) => new Map(map).set(session.id, session)).pipe(Effect.as(session)),
+    renameSession: () => Effect.void,
+    updateSessionSettings: () => Effect.void,
+    setActiveBranch: () => Effect.void,
     deleteSession: (id) =>
       Ref.modify(sessions, (map) => {
         const next = new Map(map)
