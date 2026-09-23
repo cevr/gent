@@ -231,7 +231,8 @@ export const findUnadmittedChildSessionWriters = (
     const end = text.indexOf("})", start)
     if (end === -1) continue
     const literal = text.slice(start, end)
-    if (!/\bparentSessionId:/.test(literal)) continue
+    // A field (`parentSessionId: x`) or a shorthand (`parentSessionId,`).
+    if (!/\bparentSessionId\s*(?:[:,]|$)/.test(literal)) continue
     // The admission must run before the write, in the same top-level
     // declaration. A whole-file escape let one admission anywhere in a
     // 700-line file cover every writer in it.
@@ -1509,9 +1510,10 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * nothing and either invents the file or picks a neighbour.
  *
  * Scope is the four files an agent is told to read: `CLAUDE.md` and
- * `AGENTS.md` at the root, `apps/tui/AGENTS.md`, and `ARCHITECTURE.md`. The
- * root pair are two copies of the same document rather than one file behind a
- * symlink, so both are read and a stale path in either is reported.
+ * `AGENTS.md` at the root, `apps/tui/AGENTS.md`, and `ARCHITECTURE.md`. Today
+ * `CLAUDE.md` is a symlink to `AGENTS.md`; the guard runner skips symlinks, so
+ * the document is read once, and a `CLAUDE.md` that becomes a file of its own
+ * is read as one.
  *
  * What is read: text in backticks that starts with one of the five source
  * roots — `packages/`, `apps/`, `plans/`, `testbeds/`, `examples/`. Backticks
@@ -1654,8 +1656,11 @@ export const findSteeringFilePaths = (
 
 const TUI_SOURCE = /^apps\/tui\/src\//
 
-/** Opens a reactive scope: Solid re-runs what follows when its reads change. */
-const TRACKING_OPENER = /\b(?:createEffect|createMemo|createResource|on)\(/
+/**
+ * Opens a reactive scope: Solid re-runs what follows when its reads change.
+ * A member call such as `emitter.on(` is a listener, not Solid's `on`.
+ */
+const TRACKING_OPENER = /(?<![.\w])(?:createEffect|createMemo|createResource|on)\(/
 
 /** The record accessor. `sessionIdentity`/`activeSessionId` are the narrowed ones. */
 const RECORD_READ = /(?<!current)\.session\(\)/i

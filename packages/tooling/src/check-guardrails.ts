@@ -36,6 +36,23 @@ const trackedFileNames = Effect.promise(() =>
   Bun.$`git ls-files --cached --others --exclude-standard`.text(),
 ).pipe(Effect.map((output) => output.split("\n").filter((file) => file.length > 0)))
 
+/**
+ * Tracked symlinks (git mode 120000). A symlink is not a second file: its
+ * target is read under its own name, so reading the link too would report
+ * every finding twice.
+ */
+const trackedSymlinks = Effect.promise(() => Bun.$`git ls-files --stage`.text()).pipe(
+  Effect.map(
+    (output) =>
+      new Set(
+        output
+          .split("\n")
+          .filter((row) => row.startsWith("120000 "))
+          .map((row) => row.slice(row.indexOf("\t") + 1)),
+      ),
+  ),
+)
+
 const readTrackedFile = Effect.fn("Tooling.readTrackedFile")(function* (file: string) {
   const source = Bun.file(file)
   if (!(yield* Effect.promise(() => source.exists()))) return Option.none()
@@ -111,6 +128,7 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
 
 const program = Effect.gen(function* () {
   const trackedFiles = yield* trackedFileNames
+  const symlinks = yield* trackedSymlinks
   const textFiles = yield* Effect.forEach(
     trackedFiles
       // The steering files are Markdown and the hook is YAML; both join the
@@ -119,7 +137,7 @@ const program = Effect.gen(function* () {
         (file) =>
           /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file) || file === HOOK_FILE,
       )
-      .filter((file) => !file.includes("/dist/")),
+      .filter((file) => !file.includes("/dist/") && !symlinks.has(file)),
     readTrackedFile,
     { concurrency: 32 },
   )

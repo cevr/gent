@@ -283,6 +283,25 @@ describe("child-session depth guard", () => {
     expect(findings).toHaveLength(1)
   })
 
+  test("flags a writer that names parentSessionId by shorthand", () => {
+    for (const literal of [
+      "new Session({ id, parentSessionId, createdAt: now })",
+      "new Session({\n  id,\n  parentSessionId\n})",
+    ]) {
+      expect(
+        findUnadmittedChildSessionWriters("packages/core/src/server/server.ts", literal),
+      ).toHaveLength(1)
+    }
+  })
+
+  test("ignores a row that only names a longer field", () => {
+    const findings = findUnadmittedChildSessionWriters(
+      "packages/core/src/server/server.ts",
+      "new Session({ id, parentSessionIdHint: x })",
+    )
+    expect(findings).toEqual([])
+  })
+
   test("ignores a root session row", () => {
     const findings = findUnadmittedChildSessionWriters(
       "packages/core/src/server/server.ts",
@@ -1280,6 +1299,13 @@ describe("TUI session identity guard", () => {
     expect(findTuiSessionIdentityReads(FILE_TUI_IDENTITY, text)[0]?.message).toContain(
       "sessionIdentity()",
     )
+  })
+
+  test("an emitter's `.on(` is not a reactive scope", () => {
+    const text = ['  emitter.on("change", () => {', "    render(client.session())", "  })"].join(
+      "\n",
+    )
+    expect(linesOfTuiIdentity(text)).toEqual([])
   })
 
   test("flags the record read in a createEffect body", () => {
