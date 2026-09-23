@@ -36,7 +36,7 @@ import {
   Model,
   type ModelDriverContribution,
   ProviderAuthError,
-  type ProviderAuthInfo,
+  type UpdateStoredOAuth,
   type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
   type ProviderHints,
@@ -60,6 +60,7 @@ import {
   type CredentialStore,
   makeOpenAiCompatResolution,
   postOAuthForm,
+  apiKeyFrom,
   readOptionalEnv,
   recoverUnauthorized,
   replaceHeldCredential,
@@ -832,9 +833,6 @@ const allocateOpenAIAuthorization: Effect.Effect<
  * There is no keychain: the gent auth store owns the credential, and every
  * profile's cell reads and refreshes through `authInfo.update`. The cell is
  * the sole copy of a rotated refresh token only while its write is pending.
- * The refresh path prefers the held credential's refresh token over the
- * bootstrap one — the OAuth server may have revoked the bootstrap token
- * when it issued the rotation — unless the store holds another sign-in.
  */
 
 // ── Credential shape (matches AuthOauth) ──
@@ -883,18 +881,6 @@ const realIO: OpenAICredentialIO = {
     ),
 }
 
-const seedFromAuthInfo = (authInfo: ProviderAuthInfo): Option.Option<OpenAICredentials> => {
-  const access = Option.getOrElse(Option.fromNullishOr(authInfo.access), () => "")
-  const refresh = Option.getOrElse(Option.fromNullishOr(authInfo.refresh), () => "")
-  if (access.length === 0 && refresh.length === 0) return Option.none()
-  return Option.some({
-    access,
-    refresh,
-    expires: Option.getOrElse(Option.fromNullishOr(authInfo.expires), () => 0),
-    accountId: Option.fromNullishOr(authInfo.accountId),
-  })
-}
-
 const fromStored = (stored: StoredOAuthCredentials): OpenAICredentials => ({
   access: stored.access,
   refresh: stored.refresh,
@@ -913,53 +899,48 @@ const toStored = (creds: OpenAICredentials): StoredOAuthCredentials => {
  * and refreshes through it, so a sign-in or a refresh in one profile is the
  * credential the others adopt.
  */
-const openAIStore = (
-  authInfo: ProviderAuthInfo,
-): Option.Option<CredentialStore<OpenAICredentials>> =>
-  Option.map(Option.fromNullishOr(authInfo.update), (update) => ({
-    update: <A, E>(
-      f: (
-        stored: Option.Option<OpenAICredentials>,
-      ) => Effect.Effect<readonly [A, Option.Option<OpenAICredentials>], E>,
-    ) =>
-      update((stored) =>
-        Effect.map(
-          f(Option.map(stored, fromStored)),
-          (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
-            pair[0],
-            Option.map(pair[1], toStored),
-          ],
-        ),
+const openAIStore = (update: UpdateStoredOAuth): CredentialStore<OpenAICredentials> => ({
+  update: <A, E>(
+    f: (
+      stored: Option.Option<OpenAICredentials>,
+    ) => Effect.Effect<readonly [A, Option.Option<OpenAICredentials>], E>,
+  ) =>
+    update((stored) =>
+      Effect.map(
+        f(Option.map(stored, fromStored)),
+        (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
+          pair[0],
+          Option.map(pair[1], toStored),
+        ],
       ),
-    same: (a, b) => a.refresh === b.refresh,
-  }))
+    ),
+  same: (a, b) => a.refresh === b.refresh,
+})
 
 /**
  * The OpenAI credential cache over a cell that outlives one `resolveModel`
  * call. A cell allocated per call would disable the cache and lose the
- * rotated refresh token.
+ * rotated refresh token. `update` is the stored sign-in's store access.
  */
 export const makeOpenAICredentialCache = (
   cellRef: CredentialCacheCellRef<OpenAICredentials>,
   io: OpenAICredentialIO,
-  authInfo: ProviderAuthInfo,
+  update: UpdateStoredOAuth,
 ): Effect.Effect<CredentialCache<OpenAICredentials>> =>
   makeCredentialCache({
     label: "OpenAI",
     credentials: OpenAICredentials,
     cellRef,
-    seed: seedFromAuthInfo(authInfo),
     expiresAt: (creds) => creds.expires,
     // The gent auth store is the source of truth; see `store`.
     read: Option.none(),
+    // `held` is the stored credential, or the rotation the cell still holds.
     refresh: (held) => {
-      // The held token is the most recently rotated one; the bootstrap
-      // `authInfo.refresh` only applies before any rotation.
       const refreshToken = held.pipe(
         Option.map((creds) => creds.refresh),
-        Option.orElse(() => Option.fromNullishOr(authInfo.refresh)),
+        Option.filter((token) => token.length > 0),
       )
-      if (Option.isNone(refreshToken) || refreshToken.value.length === 0) {
+      if (Option.isNone(refreshToken)) {
         return Effect.fail(
           new ProviderAuthError({
             message: "ChatGPT OAuth credentials are unavailable. Sign in again with /auth.",
@@ -975,7 +956,7 @@ export const makeOpenAICredentialCache = (
         })),
       )
     },
-    store: openAIStore(authInfo),
+    store: Option.some(openAIStore(update)),
   })
 
 // ── codex transform ─────────────────────────────────────────────────────────
@@ -1449,23 +1430,20 @@ export const buildOpenAIModelDriver = (
       // Stored OAuth — handle inline with token refresh. The ChatGPT Codex
       // backend speaks the Responses shape, so the OAuth path uses
       // @effect/ai-openai instead of the chat-completions compat adapter.
-      if (Option.isSome(auth) && auth.value.type === "oauth") {
+      if (Option.isSome(auth) && auth.value._tag === "Oauth") {
         const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
         if (!isOpenAIOAuthModel(modelName)) {
           return yield* new ProviderAuthError({
             message: `Model "${modelName}" not available with ChatGPT OAuth`,
           })
         }
-        const creds = yield* makeOpenAICredentialCache(credentialCellRef, realIO, auth.value)
+        const creds = yield* makeOpenAICredentialCache(credentialCellRef, realIO, auth.value.update)
         yield* checkCredentials(creds)
         return AiModel.make("openai", modelName, makeOauthOpenAILayer(modelName, config, creds))
       }
 
       // Stored API key takes precedence over env var
-      let apiKey = envApiKey
-      if (Option.isSome(auth) && auth.value.type === "api") {
-        apiKey = Option.fromNullishOr(auth.value.key)
-      }
+      const apiKey = apiKeyFrom(auth, envApiKey)
 
       if (Option.isSome(apiKey)) {
         const config = buildOpenAiCompatConfig(Option.fromNullishOr(hints))
@@ -1498,7 +1476,7 @@ export const buildOpenAIModelDriver = (
       Effect.map((models) => {
         // When OAuth is active, filter to allowed models + zero pricing
         const auth = Option.fromNullishOr(authInfo)
-        if (Option.isNone(auth) || auth.value.type !== "oauth") return models
+        if (Option.isNone(auth) || auth.value._tag !== "Oauth") return models
         return models
           .filter((model) => {
             const parts = model.id.split("/", 2)

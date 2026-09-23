@@ -38,7 +38,7 @@ import {
   DEFAULT_RETRY_POLICY,
   type PersistAuth,
   ProviderAuthError,
-  type ProviderAuthInfo,
+  ProviderAuthInfo,
   type ProviderHints,
   type RetryPolicy,
   type StoredOAuthCredentials,
@@ -505,13 +505,8 @@ const toProviderAuthInfo = (
   providerId: string,
   info: AuthInfo,
 ): ProviderAuthInfo => {
-  if (info.type === "api") return { type: "api", key: info.key }
-  return {
-    type: "oauth",
-    access: info.access,
-    refresh: info.refresh,
-    expires: info.expires,
-    accountId: info.accountId,
+  if (info.type === "api") return ProviderAuthInfo.cases.Api.make({ key: info.key })
+  return ProviderAuthInfo.cases.Oauth.make({
     update: <A, E>(
       f: (
         stored: Option.Option<StoredOAuthCredentials>,
@@ -537,7 +532,7 @@ const toProviderAuthInfo = (
             ),
           ),
         ),
-  }
+  })
 }
 
 /** The OAuth fields of a stored credential; none for an API key. */

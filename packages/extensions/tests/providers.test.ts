@@ -14,7 +14,7 @@ import {
   Model,
   type ModelDriverContribution,
   ModelId,
-  type ProviderAuthInfo,
+  ProviderAuthInfo,
   ProviderId,
 } from "@gent/core/extensions/api"
 import {
@@ -37,10 +37,7 @@ import { encodeExternalJson } from "./helpers/external-wire.js"
 
 // ── openai-compatible-providers.test ────────────────────────────────────────
 
-const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
-  type: "api",
-  key,
-})
+const makeApiAuthInfo = (key: string): ProviderAuthInfo => ProviderAuthInfo.cases.Api.make({ key })
 
 const chatHappyResponse = (model: string) => ({
   status: 200,

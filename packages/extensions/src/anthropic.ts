@@ -50,6 +50,7 @@ import {
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
+  apiKeyFrom,
   readOptionalEnv,
   recoverUnauthorized,
   withHeaders,
@@ -1106,7 +1107,6 @@ export const makeAnthropicCredentialCache = (
       label: "Anthropic",
       credentials: ClaudeCredentials,
       cellRef,
-      seed: Option.none(),
       expiresAt: (creds) => creds.expiresAt,
       // A keychain miss surfaces as ProviderAuthError; swallowing it
       // turns the miss into a refresh attempt instead of a failure.
@@ -2022,7 +2022,7 @@ export const buildAnthropicModelDriver = (
       // Precedence, the same as OpenAI: stored Claude Code sign-in, then
       // stored API key, then ANTHROPIC_API_KEY. A user who chooses Claude
       // Code in /auth is not billed on a shell API key.
-      if (Option.isSome(auth) && auth.value.type === "oauth") {
+      if (Option.isSome(auth) && auth.value._tag === "Oauth") {
         // The credential cache and the beta cache are built over the
         // extension-closure-owned cells, so cross-request beta learning and
         // credential reuse survive. The credentials are checked before the
@@ -2036,10 +2036,7 @@ export const buildAnthropicModelDriver = (
         )
       }
 
-      let apiKey = envApiKey
-      if (Option.isSome(auth) && auth.value.type === "api") {
-        apiKey = Option.fromNullishOr(auth.value.key)
-      }
+      const apiKey = apiKeyFrom(auth, envApiKey)
       if (Option.isSome(apiKey)) {
         return AiModel.make(
           "anthropic",

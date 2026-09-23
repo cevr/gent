@@ -27,6 +27,7 @@ import {
   omitUndefined,
   credentialFailureMetadata,
   ProviderAuthError,
+  type ProviderAuthInfo,
   type ProviderHints,
   ProviderId,
   type ProviderResolution,
@@ -185,8 +186,6 @@ interface CredentialCacheConfig<C> {
   readonly label: string
   readonly credentials: Schema.Schema<C>
   readonly cellRef: CredentialCacheCellRef<C>
-  /** Credentials placed in the cell at build time when it is still empty. */
-  readonly seed: Option.Option<C>
   readonly expiresAt: (creds: C) => number
   /**
    * External source of truth consulted once the cache is older than the
@@ -205,17 +204,10 @@ interface CredentialCacheConfig<C> {
 export const makeCredentialCache = <C>(
   config: CredentialCacheConfig<C>,
 ): Effect.Effect<CredentialCache<C>> =>
-  Effect.gen(function* () {
+  Effect.sync(() => {
     const Cell = CredentialCacheCell(config.credentials)
     const durable = (creds: C, at: number, invalidated: boolean): CredentialCacheCell<C> =>
       Cell.cases.Durable.make({ creds, at, invalidated })
-
-    // First-touch seed: externally-owned cells may already hold fresher
-    // creds from a prior layer build within the same extension instance.
-    yield* SynchronizedRef.update(config.cellRef, (cell) => {
-      if (cell._tag !== "Empty" || Option.isNone(config.seed)) return cell
-      return durable(config.seed.value, 0, false)
-    })
 
     const signedOut = new ProviderAuthError({
       message: `The ${config.label} sign-in was removed. Sign in again with /auth.`,
@@ -860,6 +852,19 @@ type OpenAiCompatConfig = Required<Parameters<typeof OpenAiLanguageModel.layer>[
 export const readOptionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
   Config.option(Config.nonEmptyString(name)).pipe(Effect.orElseSucceed(() => Option.none()))
 
+/** The API key a driver sends: a stored key first, then its env variable. */
+export const apiKeyFrom = (
+  authInfo: Option.Option<ProviderAuthInfo>,
+  envApiKey: Option.Option<string>,
+): Option.Option<string> =>
+  authInfo.pipe(
+    Option.flatMap((auth) => {
+      if (auth._tag === "Api") return Option.some(auth.key)
+      return Option.none()
+    }),
+    Option.orElse(() => envApiKey),
+  )
+
 /** Sampling limits every OpenAI-compatible driver sends; reasoning effort is the driver's own mapping. */
 export const buildOpenAiCompatConfig = (
   hints: Option.Option<ProviderHints>,
@@ -914,8 +919,7 @@ const makeApiKeyCompatDriver = (params: {
   },
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {
-      let apiKey = params.envApiKey
-      if (authInfo?.type === "api") apiKey = Option.fromNullishOr(authInfo.key)
+      const apiKey = apiKeyFrom(Option.fromUndefinedOr(authInfo), params.envApiKey)
       if (Option.isNone(apiKey)) {
         return yield* new ProviderAuthError({
           message: `${params.name} credentials unavailable: no stored API key or ${params.envVarName} env var`,

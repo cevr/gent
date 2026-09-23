@@ -85,10 +85,10 @@ import {
 } from "../../src/domain/ids"
 import { dateFromMillis, Session, Branch, messagePartsDisplayText } from "../../src/domain/message"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import type {
-  ModelDriverContribution,
+import {
+  type ModelDriverContribution,
   ProviderAuthInfo,
-  ProviderResolution,
+  type ProviderResolution,
 } from "../../src/domain/driver"
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
 import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
@@ -1003,7 +1003,9 @@ describe("driver resolution", () => {
         makeExt("auth-ext", "builtin", { modelDrivers: [driverA, driverB] }),
       ])
       yield* listModelCatalog(resolved.modelDrivers, (driverId) => {
-        if (driverId === "auth-a") return Effect.succeed({ type: "api", key: "secret-a" })
+        if (driverId === "auth-a") {
+          return Effect.succeed(ProviderAuthInfo.cases.Api.make({ key: "secret-a" }))
+        }
         return Effect.succeed(Option.getOrUndefined(Option.none<ProviderAuthInfo>()))
       })
       // Each driver's listModels should have been called with the auth from resolveAuth(its id)
@@ -1012,7 +1014,9 @@ describe("driver resolution", () => {
       if (Option.isNone(authAEntry)) return
       expect(Option.isSome(authAEntry.value.auth)).toBe(true)
       if (Option.isNone(authAEntry.value.auth)) return
-      expect(authAEntry.value.auth.value.key).toBe("secret-a")
+      expect(authAEntry.value.auth.value).toEqual(
+        ProviderAuthInfo.cases.Api.make({ key: "secret-a" }),
+      )
       const authBEntry = Option.fromUndefinedOr(seenAuth.find((s) => s.driverId === "auth-b"))
       expect(Option.isSome(authBEntry)).toBe(true)
       if (Option.isNone(authBEntry)) return

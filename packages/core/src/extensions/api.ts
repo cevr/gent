@@ -72,15 +72,16 @@ export {
   credentialFailureMetadata,
   DEFAULT_RETRY_POLICY,
   ProviderAuthError,
+  ProviderAuthInfo,
 } from "../domain/driver.js"
 export { type ApprovalDecision, InteractionPendingError } from "../domain/interaction.js"
 export type {
   ModelDriverContribution,
-  ProviderAuthInfo,
   ProviderAuthorizationResult,
   ProviderHints,
   ProviderResolution,
   StoredOAuthCredentials,
+  UpdateStoredOAuth,
 } from "../domain/driver.js"
 export {
   ActorCommandId,

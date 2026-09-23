@@ -64,7 +64,7 @@ import {
 import {
   type ExtensionHostService,
   ProviderAuthError,
-  type ProviderAuthInfo,
+  ProviderAuthInfo,
 } from "@gent/core/extensions/api"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
@@ -1998,16 +1998,12 @@ const buildAnthropicModelDriver = (
     ? [CredentialCell, BetaCell, EnvApiKey]
     : never
 ) => buildAnthropicModelDriverLive(...args, testPlatform, testCatalogSource())
-const makeOAuthInfo = (): ProviderAuthInfo => ({
-  type: "oauth",
-  access: "test-access",
-  refresh: "test-refresh",
-  expires: FUTURE_MS,
-})
-const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
-  type: "api",
-  key,
-})
+// The Claude Code path reads the keychain, never the gent store.
+const makeOAuthInfo = (): ProviderAuthInfo =>
+  ProviderAuthInfo.cases.Oauth.make({
+    update: () => Effect.die(new Error("the Claude Code path never reads the gent store")),
+  })
+const makeApiAuthInfo = (key: string): ProviderAuthInfo => ProviderAuthInfo.cases.Api.make({ key })
 /**
  * Anthropic's `BetaMessage` happy-path response. `LanguageModel.generateText`
  * parses this into a successful result so tests stay on the success branch
@@ -2447,14 +2443,13 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       // Nothing reads the stored Claude Code tokens: a store that cannot be
       // written must not fail a refresh that worked.
       let storeWrites = 0
-      const authInfo: ProviderAuthInfo = {
-        type: "oauth",
+      const authInfo = ProviderAuthInfo.cases.Oauth.make({
         update: () =>
           Effect.suspend(() => {
             storeWrites += 1
             return Effect.die(new Error("auth store unavailable"))
           }),
-      }
+      })
       const model = yield* driver
         .resolveModel("claude-opus-4-6", authInfo)
         // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.

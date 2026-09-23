@@ -414,7 +414,7 @@ describe("model catalog resolution", () => {
             resolveModel: unusedResolution,
             listModels: (auth) =>
               Effect.sync(() => {
-                if (auth?.type === "api") seen.push(`openai:${auth.key}`)
+                if (auth?._tag === "Api") seen.push(`openai:${auth.key}`)
                 return [catalogModel("openai/gpt-5.4")]
               }),
           },
