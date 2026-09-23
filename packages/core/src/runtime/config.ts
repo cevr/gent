@@ -367,22 +367,23 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           }),
         )
 
-      const readConfigFile = (filePath: string) =>
-        readConfigText(filePath).pipe(
-          Effect.tap((content) => warnRetiredOverrides(filePath, content)),
-          Effect.flatMap((content) => Schema.decodeEffect(UserConfigJson)(content)),
-        )
+      const loadError = (filePath: string) => (cause: unknown) =>
+        new ConfigLoadError({ path: filePath, message: String(cause) })
 
-      const decodeConfigFile = (filePath: string): Effect.Effect<UserConfig, ConfigLoadError> =>
-        readConfigFile(filePath).pipe(
-          Effect.mapError(
-            (cause) => new ConfigLoadError({ path: filePath, message: String(cause) }),
-          ),
+      const decodeConfigText = (
+        filePath: string,
+        content: string,
+      ): Effect.Effect<UserConfig, ConfigLoadError> =>
+        warnRetiredOverrides(filePath, content).pipe(
+          Effect.andThen(Schema.decodeEffect(UserConfigJson)(content)),
+          Effect.mapError(loadError(filePath)),
         )
 
       // The decoded read of each file, kept while its stat (mtime, size and
       // inode) is the same, so a turn does not read and decode unchanged files. A
-      // changed or new file is read at once; a missing one reads as empty.
+      // changed or new file is read at once; a missing one reads as empty. Only
+      // a decode is kept: a read that failed (EMFILE, a permission changed and
+      // back) is tried again on the next call, since the stat need not change.
       const decodedFiles = new Map<
         string,
         { readonly stamp: string; readonly read: Result.Result<UserConfig, ConfigLoadError> }
@@ -402,7 +403,8 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
               onFailure: Effect.fail,
             })
           }
-          const read = yield* Effect.result(decodeConfigFile(filePath))
+          const content = yield* readConfigText(filePath).pipe(Effect.mapError(loadError(filePath)))
+          const read = yield* Effect.result(decodeConfigText(filePath, content))
           decodedFiles.set(filePath, { stamp, read })
           return yield* Result.match(read, { onSuccess: Effect.succeed, onFailure: Effect.fail })
         })

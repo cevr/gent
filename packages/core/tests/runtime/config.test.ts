@@ -971,6 +971,28 @@ describe("user configuration", () => {
       expect(override.id).toBe(expectedId)
     }
 
+    // A read that failed is not a decode: the stat does not change when a
+    // permission comes back, so the next read must try the file again.
+    it.scopedLive("a project config read that failed is tried again, not cached", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const { live, projectA } = yield* makeLive
+        const projectConfig = path.join(projectA, ".gent", "config.json")
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* fs.chmod(projectConfig, 0o000)
+          const unreadable = yield* cfg.getFresh(projectA)
+          expect(unreadable.failures.map((failure) => failure.path)).toEqual([projectConfig])
+          yield* fs.chmod(projectConfig, 0o644)
+          const readable = yield* cfg.getFresh(projectA)
+          expect(readable.failures).toEqual([])
+          expectDriverOverride(readable.config, "cowork", "projectA-driver")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive("launch-cwd reads the launch-cwd project config", () =>
       Effect.gen(function* () {
         const { live } = yield* makeLive
