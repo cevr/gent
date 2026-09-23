@@ -632,6 +632,8 @@ const makeSessionMutationsService: Effect.Effect<
     if (Option.isNone(effective)) return
     const agent = effective.value
     const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(input.cwd)).pipe(
+      // The agent roster is resolved data; the lease ends with the read.
+      Effect.scoped,
       Effect.provideService(ExtensionRegistry, launchRegistry),
       // The profile cache joins the context only when the server wired one.
       Effect.updateContext((context: Context.Context<never>) =>
@@ -960,7 +962,10 @@ export const SessionMutationsLive = Layer.effect(SessionMutations, makeSessionMu
 
 // ── rpc-handlers ────────────────────────────────────────────────────────────
 
-/** The registry serving a cwd: its profile's when a profile cache is wired, else the launch registry. */
+/**
+ * The registry serving a cwd: its profile's when a profile cache is wired, else
+ * the launch registry. The caller's scope holds the profile's lease.
+ */
 const resolveRegistryForCwd = Effect.fn("SessionQueries.resolveRegistryForCwd")(function* (
   cwd: Option.Option<string>,
 ) {
@@ -1026,7 +1031,10 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
 
   // The footer shows what the next turn would use; resolving it here keeps
   // the precedence (session > config > agent) in one place with the turn.
-  const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(session.cwd))
+  // The agent roster is resolved data; the lease ends with the read.
+  const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(session.cwd)).pipe(
+    Effect.scoped,
+  )
   const configService = yield* ConfigService
   const config = yield* configService.get(session.cwd)
   const agent = sessionAgentDefinition({
@@ -1220,9 +1228,10 @@ const RpcHandlers = GentRpcs.toLayer(
           ),
       })
 
+    // The caller's scope holds the profile's lease while it reads the registry.
     const resolveSessionRegistry = (
       sessionId: Option.Option<string>,
-    ): Effect.Effect<ExtensionRegistryService> =>
+    ): Effect.Effect<ExtensionRegistryService, never, Scope.Scope> =>
       sessionCwd(sessionId).pipe(
         Effect.flatMap(resolveRegistryForCwd),
         Effect.provideService(ExtensionRegistry, extensionRegistry),
@@ -1362,7 +1371,7 @@ const RpcHandlers = GentRpcs.toLayer(
             Effect.provideService(ModelCatalogRecord, catalogRecord),
           )
           return catalog.models
-        }),
+        }).pipe(Effect.scoped),
 
       "driver.list": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
@@ -1382,7 +1391,7 @@ const RpcHandlers = GentRpcs.toLayer(
             overrides,
             agents,
           })
-        }),
+        }).pipe(Effect.scoped),
 
       "driver.set": ({ agentName, driver, sessionId }: SetDriverOverrideInput) =>
         Effect.gen(function* () {
@@ -1397,7 +1406,7 @@ const RpcHandlers = GentRpcs.toLayer(
             }
           }
           yield* configService.setDriverOverride(agentName, driver)
-        }),
+        }).pipe(Effect.scoped),
 
       "driver.clear": ({ agentName }: ClearDriverOverrideInput) =>
         configService.clearDriverOverride(agentName),
@@ -1445,7 +1454,7 @@ const RpcHandlers = GentRpcs.toLayer(
             Effect.provideService(Auth, authStore),
             Effect.mapError((error) => authPersistenceError("read", "*", error)),
           )
-        }),
+        }).pipe(Effect.scoped),
 
       "auth.setKey": ({ provider, key }: SetAuthKeyInput) =>
         authStore
@@ -1507,7 +1516,7 @@ const RpcHandlers = GentRpcs.toLayer(
             [...resolved.extensionStatuses, ...configStatuses],
             catalogFailuresByExtension(resolved, failures),
           )
-        }),
+        }).pipe(Effect.scoped),
 
       "extension.request": ({
         sessionId,
@@ -1558,7 +1567,7 @@ const RpcHandlers = GentRpcs.toLayer(
                 capabilityId: command.capabilityId,
               }),
           )
-        }),
+        }).pipe(Effect.scoped),
 
       // ----------------------------------------------------------------------
       // Runtime status

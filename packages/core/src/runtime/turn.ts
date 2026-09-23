@@ -1327,16 +1327,6 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       .pipe(Effect.provideService(ExtensionRegistry, extensionRegistry))
   })
   const { driverId, contextModelId } = resolved.modelDriver
-  const modelRequest: ResolveModelRequest = {
-    modelId: resolved.modelId,
-    hints: {
-      temperature: resolved.temperature,
-      reasoning: resolved.reasoning,
-      cacheKey: params.sessionId,
-    },
-    driverId: Option.getOrUndefined(driverId),
-  }
-
   const retryPolicy = yield* driverRetryPolicy(driverId)
 
   const modelRegistry = yield* ModelRegistry
@@ -1347,6 +1337,17 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         modelId: contextModelId,
       }),
     })
+  }
+  const modelRequest: ResolveModelRequest = {
+    modelId: resolved.modelId,
+    hints: {
+      temperature: resolved.temperature,
+      reasoning: resolved.reasoning,
+      cacheKey: params.sessionId,
+      // The driver reads the catalog's word on reasoning, not the model name.
+      supportsReasoning: modelOption.value.reasoning,
+    },
+    driverId: Option.getOrUndefined(driverId),
   }
   // The agent's own window wins over the catalog: config or a run override can shrink it.
   const contextLimit = Option.getOrUndefined(
@@ -1673,7 +1674,7 @@ type AgentLoopTurnExecutionContext = {
   readonly branchId: BranchId
   readonly resolveTurnProfile: (run: {
     readonly interactive: boolean
-  }) => Effect.Effect<AgentLoopTurnProfile>
+  }) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption

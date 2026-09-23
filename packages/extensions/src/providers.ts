@@ -6,6 +6,7 @@ import {
   Effect,
   Exit,
   FileSystem,
+  Hash,
   Layer,
   Option,
   Path,
@@ -590,6 +591,25 @@ export const postOAuthForm = (
     ),
   )
 
+// ── reasoning effort ────────────────────────────────────────────────────────
+
+/**
+ * The effort a request names for a hint: the lowest level the model accepts
+ * at or above `level`, else the highest it accepts. `order` ranks every level
+ * lowest first; `accepts` is the model's own list, in the same order. A model
+ * that accepts nothing gets none.
+ */
+export const effortAtOrAbove = <Level extends string>(
+  order: ReadonlyArray<Level>,
+  accepts: ReadonlyArray<Level>,
+  level: Level,
+): Option.Option<Level> => {
+  const rank = order.indexOf(level)
+  return Option.fromUndefinedOr(accepts.find((each) => order.indexOf(each) >= rank)).pipe(
+    Option.orElse(() => Option.fromUndefinedOr(accepts.at(-1))),
+  )
+}
+
 // ── models.dev catalog ──────────────────────────────────────────────────────
 
 /**
@@ -602,8 +622,8 @@ export const postOAuthForm = (
  *
  * One load per home directory. `Effect.cached` memoizes it, so several drivers
  * listing at once share one read and at most one fetch. There is no background
- * refresh: a cache older than a day refetches on the next load, and a failed
- * fetch serves whatever the disk still holds. A load that finds neither a
+ * refresh: a cache older than a day, or written in another format, refetches
+ * on the next load, and a failed fetch serves whatever the disk still holds. A load that finds neither a
  * cache nor a reachable host returns nothing and forgets its memo, so the next
  * call tries again instead of serving an empty catalog for the whole process.
  */
@@ -615,10 +635,7 @@ const FETCH_TIMEOUT_MS = 10_000
 const EMPTY_MODELS = [] satisfies ReadonlyArray<Model>
 
 const JsonSchema = Schema.fromJsonString(Schema.Json)
-const CachedModelsJson = Schema.fromJsonString(Schema.Array(Model))
 const decodeJson = Schema.decodeUnknownOption(JsonSchema)
-const decodeCachedModels = Schema.decodeUnknownOption(CachedModelsJson)
-const encodeCachedModels = Schema.encodeSync(CachedModelsJson)
 
 const ModelsDevCost = Schema.Struct({
   input: Schema.Finite,
@@ -636,9 +653,43 @@ const ModelsDevModel = Schema.Struct({
   release_date: Schema.optional(Schema.String),
   /** False for embedding, image and other models the agent loop cannot drive. */
   tool_call: Schema.optional(Schema.Boolean),
+  reasoning: Schema.optional(Schema.Boolean),
 })
 type ModelsDevModel = typeof ModelsDevModel.Type
 const decodeModelsDevModel = Schema.decodeUnknownOption(ModelsDevModel)
+
+/**
+ * The format of the disk cache, derived from the two shapes that decide what
+ * a cached catalog holds: the models.dev entry the parser reads and the
+ * `Model` it writes. A build that parses a new field, or adds one to `Model`,
+ * gets a new format, so a cache an older build wrote refetches at once
+ * instead of serving models without that field for up to a day.
+ */
+const CACHE_FORMAT = (
+  Hash.string(
+    Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))([
+      Schema.toJsonSchemaDocument(ModelsDevModel),
+      Schema.toJsonSchemaDocument(Model),
+    ]),
+  ) >>> 0
+).toString(16)
+
+/**
+ * The cache file: the catalog and the format that wrote it. A bare array is a
+ * file from a build before the format stamp; it still decodes, so an offline
+ * load can serve it.
+ */
+const CachedCatalog = Schema.Struct({ format: Schema.String, models: Schema.Array(Model) })
+const CachedCatalogJson = Schema.fromJsonString(Schema.Union([CachedCatalog, Schema.Array(Model)]))
+const decodeCachedCatalog = Schema.decodeUnknownOption(CachedCatalogJson)
+const encodeCachedCatalog = Schema.encodeSync(CachedCatalogJson)
+
+interface DiskCatalog {
+  readonly models: ReadonlyArray<Model>
+  /** True when this build's format wrote the file. */
+  readonly current: boolean
+}
+const NO_DISK_CATALOG: DiskCatalog = { models: EMPTY_MODELS, current: false }
 
 const parsePricing = (value: ModelsDevModel["cost"]): Option.Option<ModelPricing> =>
   Option.fromUndefinedOr(value).pipe(
@@ -685,6 +736,7 @@ const parseModelsDev = (data: Schema.Json): ReadonlyArray<Model> => {
             contextLength: Option.getOrUndefined(contextLength),
             pricing: Option.getOrUndefined(pricing),
             releaseDate: Option.getOrUndefined(releaseDate),
+            reasoning: modelValue.reasoning,
           }),
         }),
       )
@@ -699,14 +751,20 @@ const readCachedModels = Effect.fn("ModelsDev.readCache")(
   function* (cachePath: string) {
     const fs = yield* FileSystem.FileSystem
     const exists = yield* fs.exists(cachePath)
-    if (!exists) return EMPTY_MODELS
+    if (!exists) return NO_DISK_CATALOG
     const content = yield* fs
       .readFileString(cachePath)
       .pipe(Effect.catchEager(() => Effect.succeed("")))
-    if (content.trim().length === 0) return EMPTY_MODELS
-    return Option.getOrElse(decodeCachedModels(content), () => EMPTY_MODELS)
+    if (content.trim().length === 0) return NO_DISK_CATALOG
+    return Option.match(decodeCachedCatalog(content), {
+      onNone: () => NO_DISK_CATALOG,
+      onSome: (cached): DiskCatalog => {
+        if (!("format" in cached)) return { models: cached, current: false }
+        return { models: cached.models, current: cached.format === CACHE_FORMAT }
+      },
+    })
   },
-  Effect.catchEager(() => Effect.succeed(EMPTY_MODELS)),
+  Effect.catchEager(() => Effect.succeed(NO_DISK_CATALOG)),
 )
 
 const writeCachedModels = Effect.fn("ModelsDev.writeCache")(
@@ -714,7 +772,7 @@ const writeCachedModels = Effect.fn("ModelsDev.writeCache")(
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const text = yield* Effect.try({
-      try: () => encodeCachedModels(models),
+      try: () => encodeCachedCatalog({ format: CACHE_FORMAT, models }),
       catch: () => "",
     })
     if (text.length === 0) return
@@ -765,11 +823,12 @@ const loadCatalog = Effect.fn("ModelsDev.load")(function* (home: string) {
   const cachePath = path.join(home, CACHE_RELATIVE)
   const disk = yield* readCachedModels(cachePath)
   const stale = yield* isCacheStale(cachePath)
-  if (disk.length > 0 && !stale) return disk
+  if (disk.models.length > 0 && disk.current && !stale) return disk.models
 
   const remote = yield* fetchRemoteModels()
-  // A failed or empty fetch keeps whatever the disk still holds; stale is fine.
-  if (remote.length === 0) return disk
+  // A failed or empty fetch keeps whatever the disk still holds: stale, or
+  // in an older format, is better than no catalog.
+  if (remote.length === 0) return disk.models
   yield* writeCachedModels(cachePath, remote)
   return remote
 })

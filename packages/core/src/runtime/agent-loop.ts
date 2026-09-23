@@ -1223,7 +1223,7 @@ type AgentLoopBehavior = {
   /** The profile for one run; `interactive` says whether a user can answer in it. */
   resolveTurnProfile: (run: {
     readonly interactive: boolean
-  }) => Effect.Effect<AgentLoopTurnProfile>
+  }) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
   /**
    * Branch-lifetime services: the cell kernel, the model context ledger, and
    * every extension Resource declared with `scope: "branch"`. Extension leaves
@@ -1428,8 +1428,12 @@ const makeAgentLoopBehavior = (
     const branchContext = Effect.gen(function* () {
       const built = yield* Ref.get(branchResources)
       if (Option.isSome(built)) return built.value
-      // Resources are built once for the branch; no turn's origin reaches them.
-      const profile = yield* resolveTurnProfile({ interactive: true })
+      // The branch's Resources are built over this profile's services, so
+      // the loop holds its lease until the branch closes. No turn's origin
+      // reaches them.
+      const profile = yield* resolveTurnProfile({ interactive: true }).pipe(
+        Scope.provide(loopScope),
+      )
       return yield* Effect.uninterruptible(
         Layer.build(
           buildResourceLayer(profile.turnExtensionRegistry.getResolved().extensions, "branch"),
@@ -1519,7 +1523,10 @@ const makeAgentLoopBehavior = (
           keepAlive(true),
           () =>
             branchContext.pipe(
-              Effect.flatMap((context) => runTurn(state).pipe(Effect.provideContext(context))),
+              // The turn's profile lease ends with the turn.
+              Effect.flatMap((context) =>
+                runTurn(state).pipe(Effect.provideContext(context), Effect.scoped),
+              ),
             ),
           () => keepAlive(false),
         ),
@@ -2483,6 +2490,8 @@ const buildAgentLoopActorHandlers = (config: {
             // `admitFollowUp`, which forks the drain in the actor scope.
             return yield* run.pipe(handle.withSideMutation)
           }).pipe(
+            // The request's profile lease ends with the request.
+            Effect.scoped,
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
             provideActorWorkspace,
           ),

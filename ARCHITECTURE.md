@@ -246,7 +246,16 @@ validates declarations, and loads the core prompt sections. It does not build
 Resource layers. Trusted setup can still perform its own effects; this is not a
 sandbox boundary.
 
-`SessionProfileCache` builds one profile per (workspace, cwd). It builds every
+`SessionProfileCache` builds one profile per (workspace, cwd, set of
+extensions the config leaves active or failed). Each resolve reads the config as
+it is now, so an edit to `disabledExtensions` reaches the next turn and the next
+session without a restart; a list that leaves the same extensions, such as one
+that names an unknown id, finds the profile already built. `resolve` takes a
+lease in the caller's scope: a turn and an extension request hold it until they
+end, a branch loop holds it while its branch Resources live, and a query holds
+it for its read. The newest profile of a (workspace, cwd) stays cached; a
+superseded one closes its scope, and with it its process resources, when its
+last lease is released. It builds every
 extension's process-scope resources in resolution order, each in its own child
 scope, and reports an extension whose layer fails as failed at the startup
 phase. `buildSessionProfile` then stages the `ExtensionRegistry` and the base
@@ -256,7 +265,8 @@ separate activation implementation.
 
 The production server uses one live profile owner:
 
-- `runtime/extension-host.ts` owns entries by workspace and canonical cwd. Each
+- `runtime/extension-host.ts` owns entries by workspace, canonical cwd and
+  disabled list. Each
   entry is built once: declarations load, every extension's process resources
   build into a child of the server scope, and `buildSessionProfile` stages the
   catalog from that context. An extension whose process resource fails to build
@@ -927,7 +937,7 @@ Explicit platform/runtime seams:
 
 ### FileIndex (fs-tools)
 
-Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, cached finders per search root under `~/.gent/fff`) and a per-call fallback. Inside a git work tree the fallback runs `git ls-files --cached --others --exclude-standard`, so every git exclude source applies. Elsewhere it walks the `FileSystem` and reads each `.gitignore` from the search root down by gitignore(5); a test checks that matcher against real git. The matcher walk also lists an explicitly named gitignored target, so such a target never creates a finder or evicts the root finder. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept, and there is no `ExtensionContext.Files` facet: tools yield `FileSystem` and `Path`.
+Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag and one listing rule: an ignore authority decides which files grep may read. Inside a git work tree the authority is git: `git ls-files -z -t --cached --others --exclude-standard` below the search path, so every git exclude source applies; a sparse checkout's skip-worktree entries are dropped before the 100,000-file bound, and a name that is not valid UTF-8 is counted in grep's `unreadable` field. Outside a work tree a `FileSystem` walk reads each `.gitignore` from the search root down by gitignore(5); a test checks that matcher against real git. An ignored target named explicitly (`dist/`) is walked from its own root. No listing follows a symbolic link. grep skips binary files (a NUL byte in the first 8 KB) and cuts a line over 500 characters around the match. The extension registers the index as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept, and there is no `ExtensionContext.Files` facet: tools yield `FileSystem` and `Path`.
 
 App entrypoints bind concrete Bun/OS behavior:
 

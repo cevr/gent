@@ -13,6 +13,7 @@ import {
   Predicate,
   Ref,
   Schema,
+  Scope,
   Stream,
   Schema as S,
 } from "effect"
@@ -611,6 +612,120 @@ describe("session profile resolution", () => {
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
+  // A profile is derived from its cwd and the config's disabled list; an edit
+  // to the list must reach the next session without a restart.
+  it.scopedLive("a disabledExtensions edit reaches the next resolve without a restart", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const kept = markerExtension("@gent/test-session-profile/kept-live", "live")
+      const toggled = defineExtension({
+        id: "@gent/test-session-profile/toggled",
+        setup: Effect.void,
+      })
+      const projectConfig = path.join(launch, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      const ids = (profile: SessionProfile) =>
+        profile.resolved.extensions.map((extension) => String(extension.manifest.id))
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const before = yield* cache.resolve(launch)
+        expect(ids(before)).toEqual([
+          "@gent/test-session-profile/kept-live",
+          "@gent/test-session-profile/toggled",
+        ])
+        yield* fs.writeFileString(
+          projectConfig,
+          '{"disabledExtensions":["@gent/test-session-profile/toggled"]}',
+        )
+        const disabled = yield* cache.resolve(launch)
+        expect(ids(disabled)).toEqual(["@gent/test-session-profile/kept-live"])
+        // The same list again is the same profile, not a rebuild.
+        expect(yield* cache.resolve(launch)).toBe(disabled)
+        yield* fs.writeFileString(projectConfig, "{}")
+        expect(yield* cache.resolve(launch)).toBe(before)
+      }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept, toggled] })),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("f".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // Each edit to the list derives a new profile. The one it replaces holds
+  // process resources, so it closes when its last user lets go.
+  it.scopedLive("an edited disabledExtensions list retires the profile it replaced", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const open = yield* Ref.make(0)
+      const tracked = defineExtension({
+        id: "@gent/test-session-profile/tracked",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: "@gent/test-session-profile/tracked/marker",
+              scope: "process",
+              layer: Layer.effect(
+                SessionProfileResourceMarker,
+                Effect.acquireRelease(
+                  Ref.update(open, (count) => count + 1),
+                  () => Ref.update(open, (count) => count - 1),
+                ).pipe(Effect.as(SessionProfileResourceMarker.of({ value: "tracked" }))),
+              ),
+            }),
+          )
+        }),
+      })
+      const toggles = ["a", "b", "c", "d"].map((name) =>
+        defineExtension({ id: `@gent/test-session-profile/toggle-${name}`, setup: Effect.void }),
+      )
+      const projectConfig = path.join(launch, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      const disable = (ids: ReadonlyArray<string>) =>
+        fs.writeFileString(projectConfig, encodeJson({ disabledExtensions: ids }))
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        // A turn that resolved the second profile is still running.
+        const runningTurn = yield* Scope.make()
+        for (const [index, toggle] of toggles.entries()) {
+          yield* disable([toggle.manifest.id])
+          if (index === 1) {
+            yield* cache.resolve(launch).pipe(Scope.provide(runningTurn))
+            continue
+          }
+          yield* Effect.scoped(cache.resolve(launch))
+        }
+        // The current profile and the one the running turn holds.
+        expect(yield* Ref.get(open)).toBe(2)
+        yield* Scope.close(runningTurn, Exit.void)
+        expect(yield* Ref.get(open)).toBe(1)
+
+        // An id no extension has leaves the same extensions active: no new profile.
+        const current = yield* Effect.scoped(cache.resolve(launch))
+        yield* disable([
+          "@gent/test-session-profile/toggle-d",
+          "@gent/test-session-profile/unknown",
+        ])
+        expect(yield* Effect.scoped(cache.resolve(launch))).toBe(current)
+        expect(yield* Ref.get(open)).toBe(1)
+      }).pipe(
+        Effect.timeout("20 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [tracked, ...toggles] })),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("2".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   it.scopedLive("releases a partially built profile when its build is interrupted", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -751,7 +866,7 @@ describe("resolveTurnProfile", () => {
       }).pipe(Effect.provide(testLayer), Effect.scoped)
     }).pipe(Effect.provide(BunPlatformLive)),
   )
-  it.live("falls back to host deps and defaults when no session profile is available", () =>
+  it.scopedLive("falls back to host deps and defaults when no session profile is available", () =>
     Effect.gen(function* () {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-default",
@@ -784,7 +899,7 @@ describe("resolveTurnProfile", () => {
       }).pipe(Effect.provide(testLayer))
     }),
   )
-  it.live("preserves storage lookup failures when fallback is disabled", () =>
+  it.scopedLive("preserves storage lookup failures when fallback is disabled", () =>
     Effect.gen(function* () {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-fail",
@@ -821,7 +936,7 @@ describe("resolveTurnProfile", () => {
       }).pipe(Effect.provide(testLayer))
     }),
   )
-  it.live("prefers the profile registry and its drivers over fallback defaults", () =>
+  it.scopedLive("prefers the profile registry and its drivers over fallback defaults", () =>
     Effect.gen(function* () {
       const profileResolved = resolveExtensions([
         {
