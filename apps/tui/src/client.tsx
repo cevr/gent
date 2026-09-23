@@ -866,11 +866,6 @@ export function ClientProvider(props: ClientProviderProps) {
     const unsubscribe = runtime.lifecycle.subscribe((nextState) => {
       const connectionDetails: Record<string, string | number> = {}
       if ("generation" in nextState) connectionDetails["generation"] = nextState.generation
-      if ("reason" in nextState) connectionDetails["reason"] = nextState.reason
-      if ("pid" in nextState) {
-        const pid = Option.fromNullishOr(nextState.pid)
-        if (Option.isSome(pid)) connectionDetails["pid"] = pid.value
-      }
       log.info("connection.state", {
         tag: nextState._tag,
         ...connectionDetails,

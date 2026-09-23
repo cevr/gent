@@ -375,15 +375,11 @@ export class GentConnectionError extends Schema.TaggedError<GentConnectionError>
 export const ConnectionState = Schema.Union([
   Schema.TaggedStruct("Connecting", {}),
   Schema.TaggedStruct("Connected", {
-    pid: Schema.optional(Schema.Finite),
     generation: Schema.Finite,
   }),
   Schema.TaggedStruct("Reconnecting", {
     attempt: Schema.Finite,
     generation: Schema.Finite,
-  }),
-  Schema.TaggedStruct("Disconnected", {
-    reason: Schema.String,
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ConnectionState = Schema.Schema.Type<typeof ConnectionState>
@@ -391,7 +387,6 @@ export type ConnectionState = Schema.Schema.Type<typeof ConnectionState>
 export interface GentLifecycle {
   readonly getState: () => ConnectionState
   readonly subscribe: (listener: (state: ConnectionState) => void) => () => void
-  readonly restart: Effect.Effect<void, GentConnectionError>
   readonly waitForReady: Effect.Effect<void>
 }
 

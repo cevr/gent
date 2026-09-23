@@ -1704,7 +1704,6 @@ const createMutableRuntime = (initialState: ConnectionState) => {
           listeners.delete(listener)
         }
       },
-      restart: Effect.void,
       waitForReady: Effect.void,
     },
   }

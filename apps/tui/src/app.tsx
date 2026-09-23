@@ -423,14 +423,6 @@ export function ConnectionWidget() {
   const client = useClient()
   const ext = useExtensionUI()
   const { theme } = useTheme()
-  const disconnectedReason = () => {
-    const state = Option.fromNullishOr(client.connectionState())
-    if (Option.isNone(state)) return Option.none<string>()
-    if (state.value._tag !== "Disconnected" || state.value.reason === "stopped") {
-      return Option.none<string>()
-    }
-    return Option.some(state.value.reason)
-  }
   const connectionIssue = () => Option.fromNullishOr(client.connectionIssue())
   const degradedExtensions = () => {
     const health = client.extensionHealth()
@@ -458,10 +450,7 @@ export function ConnectionWidget() {
   // this widget draws what the label cannot: issues and failed extensions.
   const hasUnavailableCatalogs = () => unavailableCatalogs().length > 0
   const visible = () =>
-    Option.isSome(connectionIssue()) ||
-    Option.isSome(disconnectedReason()) ||
-    hasFailedExtensions() ||
-    hasUnavailableCatalogs()
+    Option.isSome(connectionIssue()) || hasFailedExtensions() || hasUnavailableCatalogs()
   const accent = () => {
     if (hasFailedExtensions() || hasUnavailableCatalogs()) return theme.warning
     return theme.error
@@ -469,7 +458,6 @@ export function ConnectionWidget() {
   const subtitle = () => {
     if (hasFailedExtensions()) return "extension activation degraded"
     if (hasUnavailableCatalogs()) return "some models unavailable"
-    if (Option.isSome(disconnectedReason())) return "runtime unavailable"
     return Option.getOrElse(connectionIssue(), () => "")
   }
   return (
@@ -483,11 +471,6 @@ export function ConnectionWidget() {
           <Show when={Option.isSome(connectionIssue())}>
             <text>
               <span style={{ fg: theme.text }}>{Option.getOrUndefined(connectionIssue())}</span>
-            </text>
-          </Show>
-          <Show when={Option.isSome(disconnectedReason())}>
-            <text>
-              <span style={{ fg: theme.text }}>{Option.getOrUndefined(disconnectedReason())}</span>
             </text>
           </Show>
           <Show when={hasFailedExtensions()}>

@@ -39,9 +39,6 @@ const staticLifecycle = (state: ConnectionState): GentLifecycle => ({
     listener(state)
     return () => {}
   },
-  restart: Effect.fail(
-    new GentConnectionError({ message: "restart not supported on this transport" }),
-  ),
   waitForReady: Effect.void,
 })
 
@@ -158,11 +155,6 @@ const connectWs = (
           listeners.delete(listener)
         }
       },
-      restart: Effect.fail(
-        new GentConnectionError({
-          message: "restart not supported — WS transport reconnects automatically",
-        }),
-      ),
       waitForReady: Effect.callback<void>((resume, signal) => {
         if (currentState._tag === "Connected") {
           resume(Effect.void)

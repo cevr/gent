@@ -181,7 +181,6 @@ export const createMockRuntime = (): GentRuntime => ({
       listener(ConnectionState.cases.Connected.make({ generation: 0 }))
       return () => {}
     },
-    restart: Effect.void,
     waitForReady: Effect.void,
   },
 })
