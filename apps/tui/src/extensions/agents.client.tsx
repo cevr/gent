@@ -5,6 +5,7 @@ import { type AgentRowEntry, AgentsViewRpc, DelegateRpc } from "@gent/extensions
 import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"
 import { formatAge, formatDuration, truncate, workingIconFrame } from "../utils"
+import { textWidth } from "../text-width-adapter"
 import {
   ChromePanel,
   decoration,
@@ -99,7 +100,24 @@ const nameFor = (row: AgentRowEntry): string =>
  * nothing else, with what the child is doing now when the server reports it
  * (`· running bash`, or its last streamed line). Past the cap the rest
  * collapse into one count line.
+ *
+ * A child's name is often its whole task text. The activity keeps up to half
+ * the row and the name is cut to what is left, so a long task never pushes
+ * what the child is doing off the row.
  */
+const trayText = (row: AgentRowEntry, width: number): string => {
+  const head = "working · "
+  return Option.fromUndefinedOr(row.activity).pipe(
+    Option.map((activity) => {
+      const doing = truncate(activity, Math.floor(width / 2))
+      const nameWidth = width - textWidth(head) - textWidth(" · ") - textWidth(doing)
+      return `${head}${truncate(nameFor(row), nameWidth)} · ${doing}`
+    }),
+    Option.getOrElse(() => `${head}${nameFor(row)}`),
+    (text) => truncate(text, width),
+  )
+}
+
 export const trayLines = (
   running: ReadonlyArray<AgentRowEntry>,
   width: number,
@@ -107,12 +125,7 @@ export const trayLines = (
   const shown = running.slice(0, TRAY_MAX_ROWS)
   const lines = shown.map((row) => ({
     pulse: true,
-    text: truncate(
-      [`working · ${nameFor(row)}`, ...Option.toArray(Option.fromUndefinedOr(row.activity))].join(
-        " · ",
-      ),
-      width,
-    ),
+    text: trayText(row, width),
   }))
   const rest = running.length - shown.length
   if (rest > 0) lines.push({ pulse: false, text: `+${rest} more working` })

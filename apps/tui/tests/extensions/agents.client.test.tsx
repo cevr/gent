@@ -869,6 +869,19 @@ describe("trayLines", () => {
       expect(trayLines([busy], 60)[0]?.text).toBe("working · delegate: a task · running bash")
     }),
   )
+  it.live("a long task name leaves room for what the child is doing", () =>
+    Effect.sync(() => {
+      const busy = {
+        ...child("a", "running", "root"),
+        name: "Run this shell command exactly: sleep 5; echo step one; sleep 40; echo finished",
+        activity: "running bash",
+      }
+      const text = trayLines([busy], 80)[0]?.text ?? ""
+      expect(text.endsWith(" · running bash")).toBe(true)
+      expect(text.startsWith("working · Run this shell")).toBe(true)
+      expect(text.length).toBeLessThanOrEqual(80)
+    }),
+  )
 })
 
 describe("Subagent tray", () => {
