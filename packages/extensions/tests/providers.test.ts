@@ -40,7 +40,6 @@ import {
 import { encodeExternalJson } from "./helpers/external-wire.js"
 import {
   AnthropicPlatform,
-  type BetaExclusions,
   buildAnthropicModelDriver,
   type ClaudeCredentials,
 } from "../src/anthropic.js"
@@ -355,7 +354,6 @@ describe("models.dev catalog", () => {
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
             EMPTY_CREDENTIAL_CELL,
           ),
-          yield* Ref.make<BetaExclusions>(new Map()),
           Option.none(),
           AnthropicPlatform.of({ platform: "darwin", home, env: {} }),
           { home, platform },

@@ -1,5 +1,4 @@
 import {
-  Array as Arr,
   Duration,
   Effect,
   FileSystem,
@@ -625,6 +624,10 @@ const decodeText = (bytes: Uint8Array): Option.Option<Omit<FileText, "lossy">> =
 const lossyWriteMessage = (verb: string, file: FileText) =>
   `Cannot ${verb} this file: it holds bytes that are not valid ${file.encoding}, and writing the text back would replace them with U+FFFD. Convert the file to valid ${file.encoding} first.`
 
+/** Why text with half a UTF-16 pair is not written: no encoding stores it as text. */
+const loneSurrogateMessage = (verb: string) =>
+  `Cannot ${verb} this file: the new text holds a lone surrogate (half of a UTF-16 pair), which UTF-8 cannot store and a UTF-16 file cannot read back. Send whole characters.`
+
 /** UTF-16 code units in the given byte order, after the byte order mark. */
 const encodeUtf16 = (text: string, littleEndian: boolean): Uint8Array => {
   const bytes = new Uint8Array(2 + text.length * 2)
@@ -846,6 +849,9 @@ export const WriteTool = tool({
     const path = yield* Path.Path
 
     const filePath = path.resolve(ctx.cwd, params.path)
+    if (!params.content.isWellFormed()) {
+      return yield* new WriteError({ message: loneSurrogateMessage("write"), path: filePath })
+    }
     const write = (bytes: Uint8Array) =>
       Effect.gen(function* () {
         if (params.atomic === true) return yield* writeFileAtomic(filePath, bytes)
@@ -1024,38 +1030,40 @@ function normalizeWhitespace(s: string): string {
   return normalizeWithOffsets(s).text
 }
 
-type MatchStrategy = "exact" | "unescaped" | "normalized"
-
 interface MatchRange {
   readonly start: number
   readonly end: number
 }
 
-interface MatchResult {
-  strategy: MatchStrategy
-  /** Offset of the first match. */
-  index: number
-  /** Every non-overlapping match, in file order. */
-  ranges: ReadonlyArray<MatchRange>
-}
+/** Every non-overlapping match, in file order; empty when the search misses. */
+type MatchRanges = ReadonlyArray<MatchRange>
+
+/** An offset between a CR and its LF, where no match may start or end. */
+const splitsLineBreak = (content: string, index: number): boolean =>
+  content.charAt(index - 1) === "\r" && content.charAt(index) === "\n"
 
 const literalRanges = (content: string, search: string): MatchRange[] => {
   const ranges: MatchRange[] = []
   if (search.length === 0) return ranges
   let from = content.indexOf(search)
   while (from !== -1) {
-    ranges.push({ start: from, end: from + search.length })
-    from = content.indexOf(search, from + search.length)
+    const end = from + search.length
+    if (splitsLineBreak(content, from) || splitsLineBreak(content, end)) {
+      from = content.indexOf(search, from + 1)
+      continue
+    }
+    ranges.push({ start: from, end })
+    from = content.indexOf(search, end)
   }
   return ranges
 }
 
-const findNormalizedMatch = (content: string, search: string): Option.Option<MatchResult> => {
+const findNormalizedMatch = (content: string, search: string): MatchRanges => {
   const normalized = normalizeWithOffsets(content)
   const normalizedSearch = normalizeWhitespace(search)
   // A whitespace-only search normalizes to blank lines, which every blank line matches.
-  if (normalizedSearch.trim() === "") return Option.none()
-  if (normalizedSearch === search && normalized.text === content) return Option.none()
+  if (normalizedSearch.trim() === "") return []
+  if (normalizedSearch === search && normalized.text === content) return []
   // Spaces that end the search are text to replace when the line goes on
   // (`"hi"  x`); a match at a line end drops them, as the file has none there.
   const withSearchedSpaces = normalizeWithOffsets(search, true).text
@@ -1072,21 +1080,10 @@ const findNormalizedMatch = (content: string, search: string): Option.Option<Mat
     if (lineEnd === -1) return content.length
     return lineEnd
   }
-  const ranges = found.map((range) => ({
+  return found.map((range) => ({
     start: sourceStart(range.start),
     end: sourceEnd(range.end),
   }))
-  const strategy: MatchStrategy = "normalized"
-  return Option.map(Arr.head(ranges), (first) => ({ strategy, index: first.start, ranges }))
-}
-
-const literalMatch = (
-  strategy: MatchStrategy,
-  content: string,
-  search: string,
-): Option.Option<MatchResult> => {
-  const ranges = literalRanges(content, search)
-  return Option.map(Arr.head(ranges), (first) => ({ strategy, index: first.start, ranges }))
 }
 
 /**
@@ -1113,49 +1110,61 @@ const lineFeedView = (content: string): LineFeedView => {
   }
 }
 
-/** The line break the line at `index` ends with; the last line takes the one before it. */
-const lineEndingAt = (content: string, index: number): string => {
-  let lineEnd = content.indexOf("\n", index)
-  if (lineEnd === -1) lineEnd = content.lastIndexOf("\n", index - 1)
-  if (lineEnd > 0 && content.charAt(lineEnd - 1) === "\r") return "\r\n"
-  return "\n"
+/** The break at `at`: CRLF, a bare CR or LF. */
+const breakAt = (content: string, at: number): string => {
+  if (content.charAt(at) === "\n") return "\n"
+  if (content.charAt(at + 1) === "\n") return "\r\n"
+  return "\r"
 }
 
 /**
- * Match the file as written first, so a search that names its line endings
- * touches only the lines that have them. A search the file misses is tried on
- * the LF view, where line endings never decide a match; one the view misses
- * too (typed with a bare CR) goes through the looser tiers on the file.
+ * The line break the line at `index` ends with (CRLF, a bare CR or LF); the
+ * last line takes the one before it, and a file with none takes LF.
  */
-const findEditMatch = (content: string, oldString: string): Option.Option<MatchResult> => {
-  const exact = literalMatch("exact", content, oldString)
-  if (Option.isSome(exact)) return exact
-  const view = lineFeedView(content)
-  const viewed = Option.map(
-    findMatch(view.text, oldString.replaceAll("\r\n", "\n")),
-    (match): MatchResult => ({
-      strategy: match.strategy,
-      index: view.toSource(match.index),
-      ranges: match.ranges.map((range) => ({
-        start: view.toSource(range.start),
-        end: view.toSource(range.end),
-      })),
-    }),
+const lineEndingAt = (content: string, index: number): string => {
+  const next = content.slice(index).search(/[\r\n]/)
+  if (next !== -1) return breakAt(content, index + next)
+  const before = Math.max(
+    content.lastIndexOf("\n", index - 1),
+    content.lastIndexOf("\r", index - 1),
   )
-  if (Option.isSome(viewed) || view.text === content) return viewed
+  if (before === -1) return "\n"
+  if (content.charAt(before) === "\n" && content.charAt(before - 1) === "\r") return "\r\n"
+  return breakAt(content, before)
+}
+
+/**
+ * A search that names a CR is matched on the file as written first, so it
+ * touches only the lines that have that ending. Every other search, and one
+ * the file misses, is matched on the LF view, where line endings never decide
+ * a match and every CRLF site counts. A search the view misses too (typed with
+ * a bare CR) goes through the looser tiers on the file. No match starts or
+ * ends between a CR and its LF.
+ */
+const findEditMatch = (content: string, oldString: string): MatchRanges => {
+  if (oldString.includes("\r")) {
+    const exact = literalRanges(content, oldString)
+    if (exact.length > 0) return exact
+  }
+  const view = lineFeedView(content)
+  const viewed = findMatch(view.text, oldString.replaceAll("\r\n", "\n")).map((range) => ({
+    start: view.toSource(range.start),
+    end: view.toSource(range.end),
+  }))
+  if (viewed.length > 0 || view.text === content) return viewed
   return findMatch(content, oldString)
 }
 
-function findMatch(content: string, oldString: string): Option.Option<MatchResult> {
+function findMatch(content: string, oldString: string): MatchRanges {
   // Tier 1: exact
-  const exact = literalMatch("exact", content, oldString)
-  if (Option.isSome(exact)) return exact
+  const exact = literalRanges(content, oldString)
+  if (exact.length > 0) return exact
 
   // Tier 2: unescape literal \n, \t, \\ in oldString
   const unescaped = unescapeStr(oldString)
   if (unescaped !== oldString) {
-    const unescapedMatch = literalMatch("unescaped", content, unescaped)
-    if (Option.isSome(unescapedMatch)) return unescapedMatch
+    const unescapedMatch = literalRanges(content, unescaped)
+    if (unescapedMatch.length > 0) return unescapedMatch
   }
 
   // Tier 3: normalize whitespace + unicode in both
@@ -1235,17 +1244,15 @@ export const EditTool = tool({
 
         const replaceAll = params.replaceAll === true
 
-        // Try fuzzy match strategy
-        const match = findEditMatch(content, params.oldString)
+        const ranges = findEditMatch(content, params.oldString)
 
-        if (Option.isNone(match)) {
+        if (ranges.length === 0) {
           return yield* new EditError({
             message: "oldString not found in file",
             path: filePath,
           })
         }
 
-        const ranges = match.value.ranges
         const occurrences = ranges.length
 
         if (occurrences > 1 && !replaceAll) {
@@ -1258,6 +1265,9 @@ export const EditTool = tool({
         let replaced: ReadonlyArray<MatchRange> = ranges.slice(0, 1)
         if (replaceAll) replaced = ranges
         const newContent = spliceRanges(content, replaced, params.newString)
+        if (!newContent.isWellFormed()) {
+          return yield* new EditError({ message: loneSurrogateMessage("edit"), path: filePath })
+        }
         const replacements = replaced.length
 
         // The file keeps the encoding and byte order mark it was read in.
