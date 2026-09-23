@@ -121,6 +121,31 @@ describe("wake", () => {
         note: "stand up",
       }),
     ).toBe("notify at 2026-09-23T10:00:00.000Z · every 60s · stand up")
+    expect(
+      summary({ wakeId: "w3", dueAt: "2026-09-23T10:00:00.000Z", mode: "wake", note: "" }),
+    ).toBe("wake at 2026-09-23T10:00:00.000Z")
+  })
+
+  test("a monitor's result reads as its mode, interval, deadline and note, not JSON", () => {
+    const summary = (note: string) =>
+      toolResultSummary(
+        Option.some(MonitorTool),
+        { command: "gh run view 1 --exit-status", note },
+        {
+          isFailure: false,
+          result: {
+            wakeId: "m1",
+            everySeconds: 60,
+            deadline: "2026-09-23T10:30:00.000Z",
+            mode: "wake",
+            note,
+          },
+        },
+      )
+    expect(summary("CI finished: read the log")).toBe(
+      "wake · every 60s until 2026-09-23T10:30:00.000Z · CI finished: read the log",
+    )
+    expect(summary("")).toBe("wake · every 60s until 2026-09-23T10:30:00.000Z")
   })
 
   it.live("a due time comes from afterSeconds or an ISO time, never both", () =>
