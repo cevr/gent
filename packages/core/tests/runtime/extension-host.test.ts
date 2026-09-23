@@ -8,10 +8,13 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Logger,
+  MutableRef,
   Option,
   Path,
   Predicate,
   Ref,
+  References,
   Schema,
   Scope,
   Stream,
@@ -407,6 +410,8 @@ const makeCacheLayer = (params: {
   readonly extensions: ReadonlyArray<GentExtension>
   /** Only for a test about a failing extension. */
   readonly allowFailedExtensions?: boolean
+  /** Wraps the config service the cache reads, for a test that orders its reads. */
+  readonly wrapConfig?: (live: ConfigService["Service"]) => ConfigService["Service"]
 }) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: params.cwd,
@@ -414,10 +419,20 @@ const makeCacheLayer = (params: {
   })
   // The config service and environment are outputs too, so a test reads
   // config health from the same instance the cache builds profiles with.
-  const configLive = ConfigService.Live.pipe(
+  const baseConfigLive = ConfigService.Live.pipe(
     Layer.provide(BunServices.layer),
     Layer.provideMerge(runtimeEnvironmentLive),
   )
+  const configLive = Option.match(Option.fromUndefinedOr(params.wrapConfig), {
+    onNone: () => baseConfigLive,
+    onSome: (wrap) =>
+      Layer.merge(
+        Layer.effect(ConfigService, Effect.map(Effect.service(ConfigService), wrap)).pipe(
+          Layer.provide(baseConfigLive),
+        ),
+        runtimeEnvironmentLive,
+      ),
+  })
   return SessionProfileCache.Live({
     failOnExtensionFailure: params.allowFailedExtensions !== true,
     home: params.home,
@@ -722,6 +737,140 @@ describe("session profile resolution", () => {
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [tracked, ...toggles] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("2".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A resolve interrupted right after its build stored the profile: the
+  // entry, its lease and `current` are one step, so the profile still
+  // retires when a later edit supersedes it.
+  it.scopedLive("a resolve interrupted after its build still retires the profile it built", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const open = yield* Ref.make<ReadonlyArray<string>>([])
+      const toggles = ["a", "b"].map((name) =>
+        defineExtension({
+          id: `@gent/test-session-profile/held-${name}`,
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: `@gent/test-session-profile/held-${name}/marker`,
+                scope: "process",
+                layer: Layer.effect(
+                  SessionProfileResourceMarker,
+                  Effect.acquireRelease(
+                    Ref.update(open, (names) => [...names, name]),
+                    () => Ref.update(open, (names) => names.filter((entry) => entry !== name)),
+                  ).pipe(Effect.as(SessionProfileResourceMarker.of({ value: name }))),
+                ),
+              }),
+            )
+          }),
+        }),
+      )
+      const projectConfig = path.join(launch, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      const disable = (ids: ReadonlyArray<string>) =>
+        fs.writeFileString(projectConfig, encodeJson({ disabledExtensions: ids }))
+      // The interrupt lands on the first profile's build log, the last step
+      // of its build.
+      const interrupted = MutableRef.make(false)
+      const interruptAfterBuild = Logger.make(({ message, fiber }) => {
+        let rendered = String(message)
+        if (Array.isArray(message)) rendered = message.join(" ")
+        if (!rendered.includes("session-profile.initialized") || MutableRef.get(interrupted)) return
+        MutableRef.set(interrupted, true)
+        fiber.interruptUnsafe()
+      })
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        yield* disable(["@gent/test-session-profile/held-a"])
+        const first = yield* Effect.scoped(cache.resolve(launch)).pipe(Effect.forkChild)
+        expect(Exit.hasInterrupts(yield* Fiber.await(first))).toBe(true)
+        expect(yield* Ref.get(open)).toEqual(["b"])
+        yield* disable(["@gent/test-session-profile/held-b"])
+        yield* Effect.scoped(cache.resolve(launch))
+        expect(yield* Ref.get(open)).toEqual(["a"])
+      }).pipe(
+        Effect.timeout("10 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(
+          Layer.mergeAll(
+            makeCacheLayer({ cwd: launch, home, extensions: toggles }),
+            Logger.layer([interruptAfterBuild]),
+            Layer.succeed(References.MinimumLogLevel, "Info"),
+          ),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("3".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A resolve that read the config before an edit takes the place lock
+  // after the resolve that read the edit: it must not make the older
+  // profile current again and retire the newer one.
+  it.scopedLive("a config read before an edit cannot put the older profile back", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const toggles = ["a", "b"].map((name) =>
+        defineExtension({ id: `@gent/test-session-profile/order-${name}`, setup: Effect.void }),
+      )
+      const projectConfig = path.join(launch, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      const disable = (ids: ReadonlyArray<string>) =>
+        fs.writeFileString(projectConfig, encodeJson({ disabledExtensions: ids }))
+      // The first config read waits, after it read, until the test lets it go.
+      const firstRead = yield* Deferred.make<void>()
+      const letGo = yield* Deferred.make<void>()
+      const reads = MutableRef.make(0)
+      const holdFirstRead = (live: ConfigService["Service"]): ConfigService["Service"] => ({
+        ...live,
+        getFresh: (cwd) =>
+          live.getFresh(cwd).pipe(
+            Effect.tap(() => {
+              MutableRef.update(reads, (count) => count + 1)
+              if (MutableRef.get(reads) !== 1) return Effect.void
+              return Deferred.succeed(firstRead, void 0).pipe(Effect.andThen(Deferred.await(letGo)))
+            }),
+          ),
+      })
+      const ids = (profile: SessionProfile) =>
+        profile.resolved.extensions.map((extension) => String(extension.manifest.id))
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        yield* disable(["@gent/test-session-profile/order-a"])
+        const older = yield* Effect.scoped(cache.resolve(launch)).pipe(Effect.forkChild)
+        yield* Deferred.await(firstRead)
+        yield* disable(["@gent/test-session-profile/order-b"])
+        const newer = yield* Effect.scoped(cache.resolve(launch)).pipe(Effect.forkChild)
+        // A resolve that reads outside the lock finishes here, before the
+        // older read goes on; one that reads under the lock waits behind it.
+        // Only the unfixed order depends on this wait, so it cannot flake
+        // the fixed one.
+        yield* Fiber.await(newer).pipe(Effect.timeout("500 millis"), Effect.ignore)
+        yield* Deferred.succeed(letGo, void 0)
+        expect(ids(yield* Fiber.join(older))).toEqual(["@gent/test-session-profile/order-b"])
+        const newerProfile = yield* Fiber.join(newer)
+        expect(ids(newerProfile)).toEqual(["@gent/test-session-profile/order-a"])
+        // The edit read last stays current: the next resolve reuses it.
+        expect(yield* Effect.scoped(cache.resolve(launch))).toBe(newerProfile)
+      }).pipe(
+        Effect.timeout("10 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(
+          makeCacheLayer({ cwd: launch, home, extensions: toggles, wrapConfig: holdFirstRead }),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("4".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
   )

@@ -1736,6 +1736,9 @@ export interface SessionProfileCacheService {
   readonly resolve: (cwd: string) => Effect.Effect<SessionProfile, never, ScopeType.Scope>
 }
 
+/** Makes a region of an uninterruptible effect interruptible (`Effect.uninterruptibleMask`). */
+type Restore = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+
 /** One (workspace, cwd) place: at most one current profile, one build lock. */
 const placeKey = (workspaceId: WorkspaceId, cwd: string): string =>
   [workspaceId, cwd].join("\u0000")
@@ -1893,43 +1896,51 @@ export class SessionProfileCache extends Context.Service<
           extensions: config.extensions,
         })
 
+        /**
+         * Build a profile into a new scope. The caller runs this where it
+         * cannot be interrupted; only the build itself (`restore`) can be,
+         * and an interrupted or failed build closes its scope.
+         */
         const buildProfile = (
           cwd: string,
           fresh: FreshConfig,
           declarations: RuntimeProfileDeclarations,
+          restore: Restore,
         ) =>
           Effect.gen(function* () {
             const profileScope = yield* Scope.fork(serverScope)
-            const profile = yield* Effect.gen(function* () {
-              const started = yield* startProcessResources(
-                declarations.extensionDeclarations.active,
-                platformServicesContext,
-                profileScope,
-              )
-              // A config failure is not part of the profile: health reads it
-              // live (`configHealthStatuses`), so it clears when the file is
-              // fixed. A root that fails on any failure still sees it here.
-              const resolved = resolveExtensions(started.active, [
-                ...declarations.extensionDeclarations.failed,
-                ...started.failed,
-              ])
-              const buildFailures = [
-                ...fresh.failures.map((failure) =>
-                  configLoadFailure(pathSvc, config.home, failure),
-                ),
-                ...resolved.failedExtensions,
-              ]
-              if (config.failOnExtensionFailure && buildFailures.length > 0) {
-                return yield* Effect.die(describeFailedExtensions(buildFailures))
-              }
-              return yield* buildSessionProfile({
-                cwd,
-                resolved,
-                coreSections: declarations.coreSections,
-                resourceContext: started.context,
-                generationId,
-              })
-            }).pipe(
+            const profile = yield* restore(
+              Effect.gen(function* () {
+                const started = yield* startProcessResources(
+                  declarations.extensionDeclarations.active,
+                  platformServicesContext,
+                  profileScope,
+                )
+                // A config failure is not part of the profile: health reads it
+                // live (`configHealthStatuses`), so it clears when the file is
+                // fixed. A root that fails on any failure still sees it here.
+                const resolved = resolveExtensions(started.active, [
+                  ...declarations.extensionDeclarations.failed,
+                  ...started.failed,
+                ])
+                const buildFailures = [
+                  ...fresh.failures.map((failure) =>
+                    configLoadFailure(pathSvc, config.home, failure),
+                  ),
+                  ...resolved.failedExtensions,
+                ]
+                if (config.failOnExtensionFailure && buildFailures.length > 0) {
+                  return yield* Effect.die(describeFailedExtensions(buildFailures))
+                }
+                return yield* buildSessionProfile({
+                  cwd,
+                  resolved,
+                  coreSections: declarations.coreSections,
+                  resourceContext: started.context,
+                  generationId,
+                })
+              }),
+            ).pipe(
               Effect.provideService(Scope.Scope, profileScope),
               // A failed or interrupted build releases everything it acquired.
               Effect.onError((cause) => Scope.close(profileScope, Exit.failCause(cause))),
@@ -1937,23 +1948,36 @@ export class SessionProfileCache extends Context.Service<
             return { profile, scope: profileScope }
           })
 
-        /** The profile for a raw list: aliased, found by its extensions, or built. */
-        const entryFor = (place: string, list: string, cwd: string, fresh: FreshConfig) =>
+        /**
+         * The profile for a raw list: aliased, found by its extensions, or
+         * built. It runs where it cannot be interrupted, so an entry it
+         * stores is always leased by the caller; only the reads and the build
+         * (`restore`) can be interrupted, and they store nothing.
+         */
+        const entryFor = (
+          place: string,
+          list: string,
+          cwd: string,
+          fresh: FreshConfig,
+          restore: Restore,
+        ) =>
           Effect.gen(function* () {
             const aliased = Option.flatMap(Option.fromNullishOr(aliases.get(list)), (key) =>
               Option.fromNullishOr(entries.get(key)),
             )
             if (Option.isSome(aliased)) return aliased.value
-            const declarations = yield* loadRuntimeProfileDeclarations(
-              effectiveInputs(inputsFor(cwd), fresh.config),
-            ).pipe(Effect.provideContext(platformServicesContext))
+            const declarations = yield* restore(
+              loadRuntimeProfileDeclarations(effectiveInputs(inputsFor(cwd), fresh.config)).pipe(
+                Effect.provideContext(platformServicesContext),
+              ),
+            )
             const key = profileKey(place, declarations.extensionDeclarations)
             const found = Option.fromNullishOr(entries.get(key))
             if (Option.isSome(found)) {
               aliases.set(list, key)
               return found.value
             }
-            const built = yield* buildProfile(cwd, fresh, declarations).pipe(Effect.orDie)
+            const built = yield* buildProfile(cwd, fresh, declarations, restore).pipe(Effect.orDie)
             const entry: ProfileEntry = { key, place, ...built }
             entries.set(key, entry)
             aliases.set(list, key)
@@ -2003,30 +2027,34 @@ export class SessionProfileCache extends Context.Service<
             const workspaceId = yield* CurrentWorkspaceId
             const callerScope = yield* Scope.Scope
             const canonicalCwd = pathSvc.resolve(cwd)
-            const fresh = yield* configService.getFresh(canonicalCwd)
             const place = placeKey(workspaceId, canonicalCwd)
-            const list = listKey(
-              place,
-              effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
-            )
             const lock = yield* lockFor(place)
-            const { entry, retired } = yield* Effect.gen(function* () {
-              const entry = yield* entryFor(place, list, canonicalCwd, fresh)
-              // The lease and its release are registered together, or not at all.
-              yield* Effect.uninterruptible(
-                Effect.gen(function* () {
-                  leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
-                  yield* Scope.addFinalizer(callerScope, release(entry, lock))
-                }),
-              )
-              const previous = Option.fromNullishOr(current.get(place))
-              current.set(place, entry.key)
-              const retired = Option.flatMap(
-                Option.filter(previous, (key) => key !== entry.key),
-                retireIfUnused,
-              )
-              return { entry, retired }
-            }).pipe(lock.withPermits(1))
+            // Finding or building the entry, its lease, and `current` are one
+            // step no interrupt can split: an entry stored without its lease
+            // and not current would never retire. Only the reads and the
+            // build inside it (`restore`) can be interrupted.
+            const { entry, retired } = yield* Effect.uninterruptibleMask((restore) =>
+              Effect.gen(function* () {
+                // The config is read under the place lock, so resolves set
+                // `current` in the order they read it: a read from before an
+                // edit cannot put the older profile back.
+                const fresh = yield* restore(configService.getFresh(canonicalCwd))
+                const list = listKey(
+                  place,
+                  effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
+                )
+                const entry = yield* entryFor(place, list, canonicalCwd, fresh, restore)
+                leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
+                yield* Scope.addFinalizer(callerScope, release(entry, lock))
+                const previous = Option.fromNullishOr(current.get(place))
+                current.set(place, entry.key)
+                const retired = Option.flatMap(
+                  Option.filter(previous, (key) => key !== entry.key),
+                  retireIfUnused,
+                )
+                return { entry, retired }
+              }),
+            ).pipe(lock.withPermits(1))
             yield* closeRetired(retired)
             return entry.profile
           })
