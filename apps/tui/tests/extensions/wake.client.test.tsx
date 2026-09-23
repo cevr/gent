@@ -1,9 +1,15 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Option } from "effect"
+import { Effect, Option, Queue } from "effect"
 import { createSignal } from "solid-js"
-import type { WakePendingType } from "@gent/extensions/client"
-import { formatRemaining, WakeTray, wakeTrayLines } from "../../src/extensions/wake.client"
+import { WAKE_EXTENSION_ID, type WakePendingType } from "@gent/extensions/client"
+import { BranchId, SessionId } from "@gent/core/extensions/api"
+import wakeExtension, {
+  formatRemaining,
+  WakeTray,
+  wakeTrayLines,
+} from "../../src/extensions/wake.client"
+import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 
@@ -130,5 +136,55 @@ describe("Wake tray", () => {
       setValue(Option.some({ now: 1_000_000, entries: [] }))
       yield* waitForFrame(setup, () => !renderFrame(setup).includes("alarm in"), "tray hidden")
     }),
+  )
+})
+
+// ── wake tray reads ─────────────────────────────────────────────────────────
+
+describe("wake tray reads", () => {
+  // An alarm set or fired changes the tray at once: the server pulses
+  // `@gent/wake`, and the tray reads its entries again on that pulse.
+  it.scopedLive("a wake state pulse reads the pending entries again", () =>
+    Effect.gen(function* () {
+      const session = { sessionId: SessionId.make("s"), branchId: BranchId.make("s-branch") }
+      const reads = yield* Queue.unbounded<void>()
+      const pulses = new Set<
+        (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void
+      >()
+      const pulse = (extensionId: string) => {
+        for (const cb of pulses) cb({ ...session, extensionId })
+      }
+      const options = {
+        currentSession: () => Option.some(session),
+        requestEffect: () =>
+          Queue.offer(reads, void 0).pipe(
+            Effect.as({ now: 0, entries: [] } satisfies WakePendingType),
+          ),
+      }
+      yield* provideClientServices(
+        Effect.gen(function* () {
+          yield* wakeExtension.setup
+          // The tray follows its session, so it reads once as it mounts.
+          yield* Queue.take(reads)
+          pulse("@gent/other")
+          pulse(WAKE_EXTENSION_ID)
+          yield* Queue.take(reads)
+          // One read per wake pulse; another extension's pulse reads nothing.
+          expect(yield* Queue.size(reads)).toBe(0)
+        }).pipe(Effect.orDie),
+        {
+          ...options,
+          transport: {
+            ...makeClientTestTransport(options),
+            onExtensionStateChanged: (cb) => {
+              pulses.add(cb)
+              return () => {
+                pulses.delete(cb)
+              }
+            },
+          },
+        },
+      )
+    }).pipe(Effect.timeout("4 seconds")),
   )
 })

@@ -96,6 +96,37 @@ export const decodeToolOutputOption = <T>(schema: Schema.Decoder<T, never>, inpu
 export const decodeToolOutput = <T>(schema: Schema.Decoder<T, never>, input: ToolInput) =>
   Option.getOrUndefined(decodeToolOutputOption(schema, input))
 
+interface BashOutput {
+  readonly stdout: string
+  readonly stderr: string
+  readonly exitCode: number
+  /**
+   * `blocked`: the guardrail asked and the user said no, so the command never
+   * ran. `background`: it runs on past the call. Neither has a real exit code.
+   */
+  readonly status: Option.Option<"blocked" | "background">
+}
+
+const BashOutputSchema = Schema.Struct({
+  stdout: Schema.optional(Schema.String),
+  stderr: Schema.optional(Schema.String),
+  exitCode: Schema.Finite,
+  status: Schema.optional(Schema.Literals(["blocked", "background"])),
+})
+
+/**
+ * The one bash result decoder: a row's header, its count and its body read
+ * it, and so does the headless printer.
+ */
+export function parseBashOutput(output: ToolInput): Option.Option<BashOutput> {
+  return Option.map(decodeToolOutputOption(BashOutputSchema, output), (decoded) => ({
+    stdout: decoded["stdout"] ?? "",
+    stderr: decoded["stderr"] ?? "",
+    exitCode: decoded["exitCode"],
+    status: Option.fromUndefinedOr(decoded["status"]),
+  }))
+}
+
 /** Extract a string property from an untrusted tool input. */
 export const getString = (input: ToolInput, key: string, fallback = ""): string =>
   Option.getOrElse(

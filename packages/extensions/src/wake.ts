@@ -812,10 +812,15 @@ export const MonitorTool = tool({
     if (params.command.trim().length === 0) {
       return yield* new WakeError({ message: "command is empty" })
     }
-    // The command runs on every check, so it passes the bash guardrail once, here.
+    // One server serves every workspace: resolve against the session's cwd.
+    const cwd = path.resolve(ctx.cwd, params.cwd ?? ".")
+    // The command runs on every check, so it passes the bash guardrail once,
+    // here. As in bash, the question names a directory outside the session.
+    let subject = "This monitor command"
+    if (cwd !== ctx.cwd) subject = `This monitor command (in \`${cwd}\`)`
     const blocked = yield* approveBashCommand(
       params.command,
-      "This monitor command",
+      subject,
       "Allow it to run on every check?",
     )
     if (Option.isSome(blocked)) return yield* new WakeError({ message: blocked.value })
@@ -824,8 +829,7 @@ export const MonitorTool = tool({
     const entry = WakeEntry.cases.monitor.make({
       wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7,
       command: params.command,
-      // One server serves every workspace: resolve against the session's cwd.
-      cwd: path.resolve(ctx.cwd, params.cwd ?? "."),
+      cwd,
       everySeconds,
       deadline,
       note: params.note,

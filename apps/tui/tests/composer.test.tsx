@@ -4,14 +4,20 @@ import {
   AutocompletePopup,
   Composer,
   ComposerFrame,
-  countLines,
   createPasteManager,
   executeShell,
   isLargePaste,
   shellOutputDirectory,
 } from "../src/composer"
-import { Deferred, Effect, FileSystem, Layer, Option } from "effect"
-import { type ActiveInteraction, BranchId, dateFromMillis, SessionId } from "@gent/core/protocol"
+import { ConfigProvider, Deferred, Effect, FileSystem, Layer, Option, Schema } from "effect"
+import {
+  type ActiveInteraction,
+  BranchId,
+  dateFromMillis,
+  type GentClientRpcError,
+  GentRpcError,
+  SessionId,
+} from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { RGBA } from "@opentui/core"
@@ -30,7 +36,7 @@ import {
   renderFrame,
   renderWithProviders as renderHarness,
 } from "./render-harness-boundary"
-import { createSignal, type JSX, onMount } from "solid-js"
+import { createSignal, type JSX, onMount, Show } from "solid-js"
 import { PromptSearchState } from "../src/pickers"
 import { type ClientContextValue, type SessionIdentity, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
@@ -178,15 +184,23 @@ describe("executeShell", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const testDir = yield* fs.makeTempDirectoryScoped()
+      const dataDir = yield* fs.makeTempDirectoryScoped()
       const lineCount = 2500
-      const result = yield* executeShell(`seq 1 ${lineCount} | sed 's/^/line /'`, testDir)
+      // A run with its own data directory spills there, not into the real home.
+      const inDataDir = Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromEnvRecord({ GENT_DATA_DIR: dataDir }),
+      )
+      const result = yield* executeShell(`seq 1 ${lineCount} | sed 's/^/line /'`, testDir).pipe(
+        inDataDir,
+      )
       expect(result.truncated).toBe(true)
 
       // The reader is handed a path, not just a stump of the output.
       const savedPath = yield* Effect.fromOption(result.savedPath)
-      // The spill lives under the gent data directory, not under /tmp/gent.
-      expect(savedPath.startsWith(shellOutputDirectory())).toBe(true)
-      expect(savedPath).not.toContain("/tmp/gent")
+      const directory = yield* shellOutputDirectory().pipe(inDataDir)
+      expect(directory).toBe(`${dataDir}/shell-output`)
+      expect(savedPath.startsWith(directory)).toBe(true)
 
       const saved = yield* fs.readFileString(savedPath)
       // The whole output survives: the head the cap kept and the tail it cut.
@@ -205,26 +219,6 @@ describe("executeShell", () => {
 
 // The paste manager is per-controller: each composer owns its id counter and
 // store, so every test makes its own rather than resetting shared state.
-
-describe("countLines", () => {
-  test("counts single line", () => {
-    expect(countLines("hello")).toBe(1)
-  })
-
-  test("counts multiple lines", () => {
-    expect(countLines("line1\nline2")).toBe(2)
-    expect(countLines("a\nb\nc")).toBe(3)
-    expect(countLines("1\n2\n3\n4\n5")).toBe(5)
-  })
-
-  test("handles empty string", () => {
-    expect(countLines("")).toBe(1)
-  })
-
-  test("handles trailing newline", () => {
-    expect(countLines("line1\nline2\n")).toBe(3)
-  })
-})
 
 describe("isLargePaste", () => {
   test("returns false for short single-line text", () => {
@@ -281,6 +275,12 @@ describe("createPlaceholder", () => {
   test("each manager owns its own id sequence", () => {
     expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted ~3 lines #paste-1]")
     expect(createPasteManager().createPlaceholder("a\nb\nc")).toBe("[Pasted ~3 lines #paste-1]")
+  })
+
+  // The count follows the shared line rule: a final newline ends the last
+  // line and starts none, as every other count in gent reads it.
+  test("a trailing newline does not count as a line", () => {
+    expect(createPasteManager().createPlaceholder("a\nb\nc\n")).toBe("[Pasted ~3 lines #paste-1]")
   })
 })
 
@@ -451,6 +451,8 @@ function Contribute() {
 function TestComposer(props: {
   readonly suspended?: boolean
   readonly onSubmit: (content: string, mode: "queue" | "interject", target: SessionIdentity) => void
+  /** What the send answers; a failure stands for a send the server rejected. */
+  readonly sendResult?: Effect.Effect<void, GentClientRpcError>
   readonly children?: JSX.Element
   readonly composerState?: () => ComposerState
   readonly dispatchComposer?: (event: ComposerEvent) => void
@@ -483,7 +485,10 @@ function TestComposer(props: {
       setInteractionState((current) =>
         transitionComposerInteraction(current, event, ext.autocompleteItems()),
       ),
-    onSubmit: props.onSubmit,
+    onSubmit: (content: string, mode: "queue" | "interject", target: SessionIdentity) =>
+      Effect.sync(() => props.onSubmit(content, mode, target)).pipe(
+        Effect.andThen(props.sendResult ?? Effect.void),
+      ),
     onSlashCommand: (_cmd: string, _args: string) => Effect.void,
     onRestoreQueue: () => {},
     dispatchComposer: props.dispatchComposer ?? (() => {}),
@@ -667,6 +672,11 @@ describe("Composer renderer", () => {
 
 const submitTest = it.scopedLive.layer(testLayer)
 
+const refusedSend = Schema.decodeSync(GentRpcError)({
+  _tag: "InvalidStateError",
+  message: "send refused",
+})
+
 /** A session rooted in `cwd`, as `session.get` returns it. */
 const storedSessionIn = (cwd: string) => ({
   id: SessionId.make("session-elsewhere"),
@@ -797,6 +807,55 @@ describe("Composer submit", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  // A resumed session can be rooted in a directory that is gone. The spawn
+  // fails, and the reader gets the command back with the reason.
+  submitTest("!cmd in a session whose directory is gone restores the draft and shows why", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const launchDir = yield* fs.makeTempDirectoryScoped()
+      const submitted: Array<string> = []
+      let client = Option.none<ClientContextValue>()
+      const CaptureClient = () => {
+        client = Option.some(useClient())
+        return <box />
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <TestComposer onSubmit={(content) => submitted.push(content)}>
+              <CaptureClient />
+            </TestComposer>
+          ),
+          {
+            cwd: launchDir,
+            initialSession: {
+              sessionId: SessionId.make("session-gone"),
+              branchId: BranchId.make("branch-gone"),
+              name: "Gone",
+              modelId: Option.getOrUndefined(Option.none()),
+              reasoningLevel: Option.getOrUndefined(Option.none()),
+              cwd: "/nonexistent/gent-probe-x",
+            },
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* Effect.promise(() => setup.mockInput.typeText("echo hi"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        () =>
+          Option.exists(client, (c) =>
+            Option.exists(Option.fromNullishOr(c.error()), (m) => m.startsWith("Shell:")),
+          ),
+        "error shown",
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("echo hi"), "draft restored")
+      expect(submitted).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   submitTest("a second Enter while !cmd runs neither runs it again nor sends twice", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -827,6 +886,82 @@ describe("Composer submit", () => {
       yield* waitForFrame(setup, () => submitted.length === 1, "submitted")
       expect(submitted).toHaveLength(1)
       expect(yield* fs.readFileString(`${dir}/count`)).toBe("ran\n")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // The draft left the composer at submit. A send the server rejects puts it
+  // back and says why, in the error line rather than as a connection issue.
+  submitTest("a send the server rejects restores the draft and shows the reason", () =>
+    Effect.gen(function* () {
+      let client = Option.none<ClientContextValue>()
+      const CaptureClient = () => {
+        client = Option.some(useClient())
+        return <box />
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <TestComposer
+            onSubmit={() => {}}
+            sendResult={Effect.fail(
+              Schema.decodeSync(GentRpcError)({
+                _tag: "InvalidStateError",
+                message: "send refused",
+              }),
+            )}
+          >
+            <CaptureClient />
+          </TestComposer>
+        )),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("keep me"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        () =>
+          Option.exists(client, (c) =>
+            Option.exists(Option.fromNullishOr(c.error()), (m) => m.includes("send refused")),
+          ),
+        "error shown",
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("keep me"), "draft restored")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // Two sends in flight, both refused, the later one first: neither text is
+  // lost, and the composer holds them in the order they were sent.
+  submitTest("two refused sends both come back, in the order they were sent", () =>
+    Effect.gen(function* () {
+      const firstReply = yield* Deferred.make<void>()
+      const secondReply = yield* Deferred.make<void>()
+      const replies = [firstReply, secondReply]
+      let calls = 0
+      const refused = refusedSend
+      const sendResult = Effect.suspend(() => {
+        const reply = Option.fromUndefinedOr(replies[calls++])
+        if (Option.isNone(reply)) return Effect.fail(refused)
+        return Deferred.await(reply.value).pipe(Effect.andThen(Effect.fail(refused)))
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <TestComposer onSubmit={() => {}} sendResult={sendResult} />),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("first send"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => calls === 1, "first send out")
+      yield* Effect.promise(() => setup.mockInput.typeText("second send"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => calls === 2, "second send out")
+      yield* Deferred.complete(secondReply, Effect.void)
+      yield* waitForFrame(setup, (frame) => frame.includes("second send"), "second back")
+      yield* Deferred.complete(firstReply, Effect.void)
+      const frame = yield* waitForFrame(
+        setup,
+        (text) => text.includes("first send") && text.includes("second send"),
+        "both back",
+      )
+      expect(frame.indexOf("first send")).toBeLessThan(frame.indexOf("second send"))
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -899,6 +1034,52 @@ function KeyProbe(props: { readonly onKey: (name: string) => void }) {
 }
 
 describe("AutocompletePopup renderer", () => {
+  it.live("each open tells the source once, before its first fetch", () =>
+    Effect.gen(function* () {
+      const seen: Array<string> = []
+      const [open, setOpen] = createSignal(true)
+      const [filter, setFilter] = createSignal("src/")
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            const ui = useExtensionUI()
+            ui.setDynamicAutocomplete([
+              {
+                prefix: "@",
+                title: "Files",
+                onOpen: () => seen.push("open"),
+                items: (typed) => {
+                  seen.push(`items ${typed}`)
+                  return [{ id: `${typed}x`, label: `@${typed}x` }]
+                },
+              },
+            ])
+            return (
+              <Show when={open()}>
+                <AutocompletePopup
+                  state={{ type: "@", filter: filter(), triggerPos: 0 }}
+                  onSelect={() => {}}
+                  onComplete={() => {}}
+                  onClose={() => {}}
+                  onGhostChange={() => {}}
+                />
+              </Show>
+            )
+          },
+          { width: 80, height: 24 },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("@src/x"), "first open")
+      setFilter("src/a")
+      yield* waitForFrame(setup, (frame) => frame.includes("@src/ax"), "typed key")
+      setOpen(false)
+      yield* Effect.promise(() => setup.renderOnce())
+      setOpen(true)
+      yield* waitForFrame(setup, (frame) => frame.includes("@src/ax"), "second open")
+      expect(seen).toEqual(["open", "items src/", "items src/a", "open", "items src/a"])
+    }),
+  )
+
   it.live("wraps the cursor at both ends through the shared list", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []
@@ -1091,7 +1272,7 @@ function TestComposerGhost(props: {
       setInteractionState((current) =>
         transitionComposerInteraction(current, event, ext.autocompleteItems()),
       ),
-    onSubmit: (text: string) => props.onSubmit(text),
+    onSubmit: (text: string) => Effect.sync(() => props.onSubmit(text)),
     onSlashCommand: () => Effect.void,
     onRestoreQueue: () => {},
     dispatchComposer: () => {},
@@ -1335,7 +1516,7 @@ function TestComposerSlashEnter(props: {
       setInteractionState((current) =>
         transitionComposerInteraction(current, event, ext.autocompleteItems()),
       ),
-    onSubmit: () => {},
+    onSubmit: () => Effect.void,
     onSlashCommand: (cmd: string, args: string) => {
       props.onSlashCommand(cmd, args)
       return Effect.void

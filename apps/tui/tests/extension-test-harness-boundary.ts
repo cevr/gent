@@ -25,7 +25,8 @@ export interface ClientExtensionHarnessOptions {
   readonly currentSession?: () => Option.Option<ActiveClientSession>
   readonly activeSession?: ActiveClientSessionRef
   readonly requestDeferred?: Deferred.Deferred<unknown, never>
-  readonly requestEffect?: () => Effect.Effect<unknown, Error>
+  /** Answers every extension request; it sees the session the request names. */
+  readonly requestEffect?: (request: ActiveClientSession) => Effect.Effect<unknown, Error>
   readonly requestReply?: unknown
   readonly sessionEventSubscribers?: Set<(envelope: EventEnvelope) => void>
   /**
@@ -57,9 +58,13 @@ export const makeClientTestTransport = (
 ): ClientShellTransport => {
   const client = createMockClient({
     extension: {
-      request: () => {
+      request: (request: ActiveClientSession) => {
         const requestEffect = Option.fromNullishOr(opts.requestEffect)
-        if (Option.isSome(requestEffect)) return requestEffect.value().pipe(Effect.orDie)
+        if (Option.isSome(requestEffect)) {
+          return requestEffect
+            .value({ sessionId: request.sessionId, branchId: request.branchId })
+            .pipe(Effect.orDie)
+        }
         const requestDeferred = Option.fromNullishOr(opts.requestDeferred)
         if (Option.isSome(requestDeferred)) return Deferred.await(requestDeferred.value)
         return Effect.succeed(opts.requestReply)

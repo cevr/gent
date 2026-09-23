@@ -161,7 +161,14 @@ Special prefixes at input start trigger different modes:
 - Type `!` at cursor position 0 → enters shell mode (prompt: `$`)
 - Submit executes command, output shown in chat
 - ESC or backspace at empty input exits shell mode
-- Large output (>2000 lines or 50KB) truncated, full saved to `~/tool-output/`
+- Runs in the session's cwd; a spawn failure (the cwd is gone) is a refused submission (below)
+
+### Refused submissions
+
+- A submit leaves the composer before it is sent. A send the server refuses, or a `!cmd` that cannot spawn, comes back to the draft of the branch it was sent from, with its reason (`ComposerRefusals` in `session.tsx`)
+- None is lost: refused texts come back in send order, ahead of what the reader has typed since. A draft of refused commands only stays in shell mode; a mixed draft writes each command with its `!`
+- A refusal for a session the reader has left waits there: its text joins that branch's kept draft, and its reason (`client.setErrorIn`) shows when the reader returns. The session in view shows neither
+- Large output (>2000 lines or 50KB) truncated, full saved to `shell-output/` in the data directory (`GENT_DATA_DIR`, else `~/.gent`)
 
 ### File References
 

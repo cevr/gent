@@ -6,6 +6,7 @@ import {
   BranchId,
   dateFromMillis,
   DEFAULT_AGENT_NAME,
+  GentRpcError,
   MessageId,
   ProviderId,
   Session,
@@ -47,6 +48,10 @@ import { useExtensionUI } from "../src/extensions/host"
 const absent = Option.getOrUndefined(Option.none())
 const nullValue = Option.getOrNull(Option.none())
 const idleTag = "Idle" satisfies "Idle"
+const refusedInA = Schema.decodeSync(GentRpcError)({
+  _tag: "InvalidStateError",
+  message: "send refused in A",
+})
 const noAuthSource = "none" satisfies "none"
 
 const expectAppBootstrapFailure = (
@@ -293,6 +298,24 @@ describe("resolveInitialState", () => {
           headless: true,
           prompt: Option.none(),
           promptArg: Option.none(),
+        }),
+      )
+      expect(error.reason).toBe("headless-missing-prompt")
+    }),
+  )
+
+  // The composer sends nothing for a blank draft; headless holds the same line.
+  it.live("a whitespace-only headless prompt is a missing prompt", () =>
+    Effect.gen(function* () {
+      const error = yield* expectAppBootstrapFailure(
+        resolveInitialState({
+          client: createMockClient(),
+          cwd: "/tmp",
+          session: Option.none(),
+          continue_: false,
+          headless: true,
+          prompt: Option.none(),
+          promptArg: Option.some(" \n\t "),
         }),
       )
       expect(error.reason).toBe("headless-missing-prompt")
@@ -608,6 +631,95 @@ describe("App auth gate", () => {
       expect(frame).toContain("API Keys")
       setup.renderer.destroy()
     }),
+  )
+  it.live("a send refused after a switch waits in its own session, draft and reason both", () =>
+    Effect.gen(function* () {
+      // The reader sends in A and moves to B before A's server answers. The
+      // refusal belongs to A: B shows none of it, and A has both on return.
+      const sessionA = SessionId.make("session-a")
+      const branchA = BranchId.make("branch-a")
+      const sessionB = SessionId.make("session-b")
+      const branchB = BranchId.make("branch-b")
+      const sentOut = yield* Deferred.make<void>()
+      const answer = yield* Deferred.make<void>()
+      const answered = yield* Deferred.make<void>()
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+        session: {
+          getSnapshot: (input: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+            Effect.succeed({
+              sessionId: input.sessionId,
+              branchId: input.branchId,
+              messages: [],
+              lastEventId: nullValue,
+              reasoningLevel: absent,
+              agent: AgentName.make("cowork"),
+              runtime: { _tag: idleTag, queue: emptyQueueSnapshot() },
+              metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+            }),
+        },
+        message: {
+          send: () =>
+            Deferred.complete(sentOut, Effect.void).pipe(
+              Effect.andThen(Deferred.await(answer)),
+              Effect.andThen(Effect.fail(refusedInA)),
+              Effect.ensuring(Deferred.complete(answered, Effect.void)),
+            ),
+        },
+      })
+      let ctx = Option.none<ClientContextValue>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+            </>
+          ),
+          {
+            client,
+            runtime: createMockRuntime(),
+            initialSession: {
+              id: sessionA,
+              activeBranchId: branchA,
+              name: "Session A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session A")
+      if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
+      const clientCtx = ctx.value
+      yield* Effect.promise(() => setup.mockInput.typeText("keep me in A"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* Deferred.await(sentOut)
+      clientCtx.switchSession(sessionB, branchB, "Session B")
+      yield* waitForFrame(
+        setup,
+        () => Option.exists(clientCtx.sessionIdentity(), (s) => s.sessionId === sessionB),
+        "session B",
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session B view")
+      yield* Deferred.complete(answer, Effect.void)
+      yield* Deferred.await(answered)
+      // A few frames for anything the refusal would draw in B.
+      for (let frame = 0; frame < 3; frame++) {
+        yield* Effect.yieldNow
+        yield* Effect.promise(() => setup.renderOnce())
+      }
+      const inB = renderFrame(setup)
+      expect(inB).not.toContain("send refused in A")
+      expect(inB).not.toContain("keep me in A")
+      expect(clientCtx.error()).toBeNull()
+      clientCtx.switchSession(sessionA, branchA, "Session A")
+      yield* waitForFrame(setup, (frame) => frame.includes("keep me in A"), "draft back in A")
+      yield* waitForFrame(setup, (frame) => frame.includes("send refused in A"), "reason in A")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("the startup prompt belongs to the boot session, not the next one", () =>
     Effect.gen(function* () {
@@ -1912,6 +2024,29 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("failed extensions")
       expect(frame).toContain("@gent/plan")
     }),
+  )
+  // The status row and the activity report read `isReconnecting`, so both
+  // wire states that mean "not connected yet" have to answer true.
+  it.live("isReconnecting follows the connecting and reconnecting states", () =>
+    Effect.gen(function* () {
+      const lifecycle = createMutableRuntime(
+        ConnectionState.cases.Connected.make({ generation: 0 }),
+      )
+      const ReconnectProbe = () => {
+        const client = useClient()
+        return <text>{`reconnecting:${String(client.isReconnecting())}`}</text>
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ReconnectProbe />, { runtime: lifecycle.runtime }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "connected")
+      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "reconnecting")
+      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "reconnected")
+      lifecycle.emit(ConnectionState.cases.Connecting.make({}))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "connecting")
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("ConnectionWidget refreshes extension status after reconnect generation changes", () =>
     Effect.gen(function* () {

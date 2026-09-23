@@ -1000,6 +1000,63 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("a command in any shape of statement, word or redirection asks", () => {
+    const r = "rm -rf /nonexistent/gent-probe-x"
+    for (const command of [
+      // A redirection with no command still runs the commands in its target.
+      `echo $(< <(${r}))`,
+      `echo $(< $(${r}))`,
+      `echo "$(< <(${r}))"`,
+      `x=$(< <(${r}))`,
+      `echo $(<<< $(${r}))`,
+      `echo $(2> $(${r}))`,
+      "echo `< <(" + r + ")`",
+      `cat <(< <(${r}))`,
+      `echo $(< "$(${r})")`,
+      `cat < <(${r})`,
+      `echo x > >(${r})`,
+      `ls &> >(${r})`,
+      `ls >| $(${r})`,
+      `exec 3< <(${r})`,
+      `while read l; do :; done < <(${r})`,
+      `{ ls; } > >(${r})`,
+      `(ls) < <(${r})`,
+      `coproc name { ${r}; }`,
+      `coproc sh -c '${r}'`,
+      `case $(${r}) in a) ;; esac`,
+      `case x in a|$(${r})) :;; esac`,
+      `case x in a) ls ;& b) ${r} ;;& esac`,
+      `local x=$(${r})`,
+      `declare -a a=($(${r}))`,
+      `unset $(${r})`,
+      `a[$(${r})]=1`,
+      `export A=1 B=$(${r})`,
+      `[[ -f x && -n $(${r}) ]]`,
+      `[[ ( -f $(${r}) ) ]]`,
+      `test -n "$(${r})"`,
+      `( (${r}) )`,
+      `$( (${r}) )`,
+      `(( x = $(${r}) ))`,
+      `for ((i=$(${r}); i<1; i++)); do :; done`,
+      `echo $[ $(${r}) ]`,
+      `echo $(( a[$(${r})] ))`,
+      `select x in $(${r}); do :; done`,
+      `echo {a,$(${r})}`,
+      `ls # $(${r})\n${r}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("echo $(> /nonexistent/gent-probe-x/.env)").level).toBe("sensitive")
+    for (const command of [
+      "echo $(< /nonexistent/gent-probe-x/f)",
+      "coproc ls /nonexistent/gent-probe-x",
+      "[[ -f /nonexistent/gent-probe-x ]]",
+      "cat < <(ls /nonexistent/gent-probe-x)",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("a keyword, a runner or a shell that runs a command does not hide it", () => {
     for (const command of [
       "coproc rm -rf x",
@@ -1253,8 +1310,8 @@ describe("classifyBashCommand", () => {
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs env",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs nohup",
       "echo 'rm -rf /nonexistent/gent-probe-x' | xargs timeout 5",
-      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env {}",
-      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env sh -c {}",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env sh -c",
       "echo 'reset --hard' | xargs git",
       "printf 'push --force' | xargs git",
     ]) {
@@ -1264,6 +1321,118 @@ describe("classifyBashCommand", () => {
       "git diff --name-only | xargs git add",
       "echo a b | xargs -n1 echo",
       "echo src | xargs grep -n foo",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a custom xargs replace string stands for the input", () => {
+    for (const command of [
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I % sh -c %",
+      "printf 'reset\\n' | xargs -I % git % --hard",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs --replace=X sh -c X",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -J % sh -c %",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -i% sh -c %",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs --replace sh -c {}",
+      "cat /nonexistent/gent-probe-x | xargs -I % sh -c %",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "echo a | xargs -I % echo %",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I % echo {}",
+      // `-I` passes each line as one argument: git has no `reset --hard` command.
+      "echo 'reset --hard' | xargs -I % git %",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env {}",
+      // parallel quotes each line it passes: `env` gets one argument.
+      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env",
+      "printf 'a b\\n' | xargs -I{} git checkout {}",
+      // Without a replace option, `{}` is text xargs passes as it is.
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs sh -c {}",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("unreadable xargs input that supplies the command through a runner asks", () => {
+    const u = "cat /nonexistent/gent-probe-x |"
+    for (const command of [
+      `${u} xargs env`,
+      `${u} xargs nohup`,
+      `${u} xargs -L1 timeout 5`,
+      `${u} xargs -I{} sudo {}`,
+      `${u} xargs -I{} git {}`,
+      `${u} xargs -I % git -C /nonexistent/gent-probe-x %`,
+      `${u} xargs env git`,
+      `${u} parallel git {}`,
+      `${u} xargs git`,
+      `${u} xargs git checkout`,
+      "parallel :::: /nonexistent/gent-probe-x",
+      "parallel git :::: /nonexistent/gent-probe-x",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      `${u} xargs rm`,
+      `${u} xargs env grep x`,
+      `${u} xargs git add`,
+      `${u} xargs -I{} git -C {} status`,
+      `${u} xargs sudo ls`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("xargs with one word or line per command classifies each command alone", () => {
+    for (const command of [
+      "echo 'a b' | xargs -n1 git checkout",
+      "echo 'a b' | xargs -n 1 git checkout",
+      "echo 'a b' | xargs --max-args=1 git checkout",
+      "printf 'a\\nb\\n' | xargs -L1 git checkout",
+      "printf 'a\\nb\\n' | xargs -I{} git checkout {}",
+      "printf 'a\\nb\\n' | parallel git checkout",
+      "parallel git checkout ::: a b",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of [
+      "echo 'a b' | xargs git checkout",
+      "echo 'a b' | xargs -n2 git checkout",
+      "echo 'a b' | xargs -L1 git checkout",
+      "printf 'x\\n-rf /nonexistent/gent-probe-x\\n' | xargs -L1 rm",
+      // `--max-lines` takes its value only after `=`: `rm` is the command.
+      "xargs --max-lines rm -rf /nonexistent/gent-probe-x",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("xargs input is divided as xargs divides it: quotes, escapes, lines, delimiters", () => {
+    const db = "sqlite3 /nonexistent/gent-probe-x/db.sqlite"
+    for (const command of [
+      `echo "'DROP TABLE t'" | xargs -n1 ${db}`,
+      `echo '"DROP TABLE t"' | xargs -n1 ${db}`,
+      `echo 'DROP\\ TABLE\\ t' | xargs -n1 ${db}`,
+      `echo "x 'DROP TABLE t'" | xargs -L1 ${db}`,
+      `echo "'DROP TABLE t'" | xargs ${db}`,
+      "echo \"'rm -rf /nonexistent/gent-probe-x'\" | xargs -n1 sh -c",
+      "echo \"  'rm -rf /nonexistent/gent-probe-x'\" | xargs -I % sh -c %",
+      "echo \"'-rf' /nonexistent/gent-probe-x\" | xargs -L1 rm",
+      "printf 'rm -rf /nonexistent/gent-probe-x\\nls' | xargs -0 sh -c",
+      "echo 'ls,rm -rf /nonexistent/gent-probe-x' | xargs -d , -n1 sh -c",
+      // Quoting or a delimiter the guard cannot rebuild asks.
+      'echo "\'a" | xargs -n1 git checkout',
+      "echo a | xargs -d '\\x2c' -n1 git checkout",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "echo \"'a b'\" | xargs -n1 git checkout",
+      "echo 'a\\ b' | xargs -n1 git checkout",
+      "echo 'a,b' | xargs -d , -n1 git checkout",
+      "printf 'a b\\n' | xargs -0 git checkout",
+      // xargs runs no shell: `;` in its input is an argument.
+      "echo 'a; rm -rf /nonexistent/gent-probe-x' | xargs echo",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -1288,10 +1457,50 @@ describe("classifyBashCommand", () => {
       "echo 'rm -rf /nonexistent/gent-probe-x' | sudo -i",
       "echo 'rm -rf /nonexistent/gent-probe-x' | su",
       "echo 'rm -rf /nonexistent/gent-probe-x' | doas -s",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | sudo --shell",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | sudo --login",
+      "sudo --shell <<< 'rm -rf /nonexistent/gent-probe-x'",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    for (const command of ["sudo -s", "sudo -i", "su - someone", "echo hi | sudo -s ls"]) {
+    for (const command of [
+      "sudo -s",
+      "sudo -i",
+      "sudo --shell",
+      "su - someone",
+      "echo hi | sudo -s ls",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | sudo --login ls",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("arch, pkexec, unshare, systemd-run and sg run the command after them", () => {
+    const r = "rm -rf /nonexistent/gent-probe-x"
+    for (const command of [
+      `arch -arm64 ${r}`,
+      `arch -arm64e ${r}`,
+      `arch -arch x86_64 -e A=1 ${r}`,
+      `pkexec ${r}`,
+      `pkexec --user root ${r}`,
+      `unshare -r ${r}`,
+      `unshare --map-user 0 --wd /nonexistent/gent-probe-x ${r}`,
+      `systemd-run --user ${r}`,
+      `systemd-run -p Nice=5 --unit x ${r}`,
+      `sg wheel '${r}'`,
+      `sg wheel -c '${r}'`,
+      `sg wheel ${r}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "arch -arm64 ls /nonexistent/gent-probe-x",
+      "pkexec --user root ls",
+      "unshare -r ls",
+      "systemd-run --user ls",
+      "sg wheel 'ls -la'",
+      "sg wheel -c ls",
+    ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
   })
@@ -1308,23 +1517,60 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand("fish -C 'set x 1'").level).toBe("safe")
   })
 
-  test("gh's repo option before the group does not hide a delete", () => {
-    for (const command of ["gh --repo o/r release delete v1", "gh -R o/r repo delete o/r"]) {
+  test("gh's repo option before or after the group does not hide a delete", () => {
+    for (const command of [
+      "gh --repo o/r release delete v1",
+      "gh -R o/r repo delete o/r",
+      "gh release -R o/r delete v1",
+      "gh repo --repo o/r delete",
+      "gh issue --repo=o/r delete 1",
+      "gh release delete-asset v1 a.zip",
+      "gh release -R o/r delete-asset v1 a.zip",
+    ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    expect(classifyBashCommand("gh --repo o/r issue list").level).toBe("safe")
+    for (const command of [
+      "gh --repo o/r issue list",
+      "gh release -R o/r list",
+      "gh release -R o/r upload v1 a.zip",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
   })
 
-  test("TRUNCATE without TABLE, and DROP VIEW or INDEX, are destructive", () => {
+  test("TRUNCATE, any DROP, and DELETE without WHERE are destructive", () => {
     for (const command of [
       "psql -c 'TRUNCATE t'",
       "psql -c 'DROP VIEW v'",
       "psql -c 'DROP INDEX i'",
       "echo 'drop materialized view m' | psql",
+      "psql -c 'DROP FUNCTION f'",
+      "psql -c 'DROP USER u'",
+      "psql -c 'DROP TRIGGER t ON x'",
+      "psql -c 'ALTER TABLE t DROP COLUMN c'",
+      "mysql -e 'ALTER TABLE t DROP c'",
+      "psql -c 'DELETE FROM t'",
+      "sqlite3 db 'delete from t;'",
+      "psql -c 'DELETE FROM a WHERE id = 1; DELETE FROM t'",
+      "echo 'DELETE FROM t' | psql",
+      "psql -c 'DELETE FROM t /* WHERE */'",
+      "psql -c 'DELETE FROM t -- WHERE'",
+      'psql -c "DELETE FROM t -- \' WHERE"',
+      "mysql -e 'DELETE FROM t # WHERE'",
+      "printf 'DELETE FROM t -- x\\nWHERE id = 1' | psql",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    expect(classifyBashCommand("psql -c 'SELECT TRUNCATE(1.5, 1)'").level).toBe("safe")
+    for (const command of [
+      "psql -c 'SELECT TRUNCATE(1.5, 1)'",
+      "psql -c 'DELETE FROM t WHERE id = 1'",
+      "psql -c 'delete from t where id in (1, 2)'",
+      "psql -c \"DELETE FROM t WHERE id = 1; SELECT 'WHERE'\"",
+      "psql -c 'DELETE FROM t WHERE id = 1 -- only one'",
+      "psql -c 'SELECT 1' drop_db",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
   })
 
   test("package runners, fd -x, SQL drops, gh deletes and git config from the environment are read", () => {

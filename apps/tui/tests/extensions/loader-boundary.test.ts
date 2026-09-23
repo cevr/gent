@@ -10,9 +10,7 @@ import {
   clientCommandContribution,
   clientContributions,
   type ClientContributions,
-  type ClientEffect,
   type ClientRuntime,
-  ClientSetupError,
   ClientContext,
   type ClientShellTransport,
   type ClientTransport,
@@ -146,6 +144,20 @@ describe("resolveTuiExtensions", () => {
     expect(Option.isSome(bashRenderer)).toBe(true)
     if (Option.isNone(bashRenderer)) return
     expect(bashRenderer.value(toolProps)).toBe("project")
+  })
+
+  // Same-scope order is code-unit order, as on the server, so both ends pick
+  // the same winner: "@test/Z" sorts before "@test/a" whatever the locale.
+  test("a same-scope collision is won by the id first in code-unit order", () => {
+    const resolved = resolveTuiExtensions([
+      make("@test/a", "user", rendererContribution(["bash"], renderer("lower"))),
+      make("@test/Z", "user", rendererContribution(["bash"], renderer("upper"))),
+    ])
+    const bashRenderer = Option.fromNullishOr(resolved.renderers.get("bash"))
+    expect(Option.isSome(bashRenderer)).toBe(true)
+    if (Option.isNone(bashRenderer)) return
+    expect(bashRenderer.value(toolProps)).toBe("upper")
+    expect(resolved.failures.map((failure) => failure.id)).toEqual(["@test/a"])
   })
 
   test("widgets stay user-ordered by priority after scope resolution", () => {
@@ -602,19 +614,20 @@ export default tui.defineClientExtension("@user/client-entries", {
 
   it.live("Effect setup is run through the runtime; FileSystem is provided", () =>
     Effect.gen(function* () {
-      const fxSetup: ClientEffect<ClientContributions> = Effect.gen(function* () {
-        // Prove we can reach a FileSystem from the runtime.
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        // Touch both services so unused imports don't get optimized away.
-        expect(Predicate.isFunction(fs.readFileString)).toBe(true)
-        expect(Predicate.isFunction(path.join)).toBe(true)
-        return autocompleteContribution({
-          prefix: "!",
-          title: "effect",
-          items: () => [{ id: "y", label: "y" }],
+      const fxSetup: Effect.Effect<ClientContributions, never, FileSystem.FileSystem | Path.Path> =
+        Effect.gen(function* () {
+          // Prove we can reach a FileSystem from the runtime.
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          // Touch both services so unused imports don't get optimized away.
+          expect(Predicate.isFunction(fs.readFileString)).toBe(true)
+          expect(Predicate.isFunction(path.join)).toBe(true)
+          return autocompleteContribution({
+            prefix: "!",
+            title: "effect",
+            items: () => [{ id: "y", label: "y" }],
+          })
         })
-      })
       const ext: ExtensionClientModule = { id: "@test/effect", setup: fxSetup }
       const result = yield* loadTuiExtensions({
         builtins: [ext],
@@ -639,12 +652,7 @@ export default tui.defineClientExtension("@user/client-entries", {
       }
       const broken: ExtensionClientModule = {
         id: "@test/broken",
-        setup: Effect.fail(
-          new ClientSetupError({
-            extensionId: "@test/broken",
-            message: "setup failed",
-          }),
-        ),
+        setup: Effect.die("setup failed"),
       }
       const result = yield* loadTuiExtensions({
         builtins: [good, broken],
@@ -1536,6 +1544,38 @@ export default defineClientExtension("@test/b", {
       expect(resolved.failures[0]?.id).toBe("@test/b")
       expect(resolved.failures[0]?.reason).toContain('renderer "my_tool"')
       rmSync(collisionDir, { recursive: true, force: true })
+    }),
+  )
+  // The server fails every extension that shares an id within a scope; the
+  // client applies the same rule, so neither half of a duplicate loads.
+  it.scopedLive("two files with one id in a scope both fail and neither loads", () =>
+    Effect.gen(function* () {
+      yield* integrationFixture
+      const duplicateDir = join(TEST_DIR, "duplicate-id")
+      mkdirSync(duplicateDir, { recursive: true })
+      for (const name of ["one", "two"]) {
+        writeFileSync(
+          join(duplicateDir, `${name}.client.ts`),
+          `import { Effect } from "effect"
+import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
+
+export default defineClientExtension("@test/dup", {
+  setup: Effect.succeed(rendererContribution(["dup_${name}"], () => "${name}")),
+})`,
+        )
+      }
+      const resolved = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: duplicateDir,
+        projectDir: join(TEST_DIR, "no-project"),
+      })
+      expect(resolved.renderers.has("dup_one")).toBe(false)
+      expect(resolved.renderers.has("dup_two")).toBe(false)
+      expect(resolved.failures).toEqual([
+        { id: "@test/dup", reason: 'Duplicate extension id "@test/dup" in scope "user"' },
+        { id: "@test/dup", reason: 'Duplicate extension id "@test/dup" in scope "user"' },
+      ])
+      rmSync(duplicateDir, { recursive: true, force: true })
     }),
   )
   it.scopedLive("builtin autocomplete sources stay visible", () =>

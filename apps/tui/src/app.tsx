@@ -317,7 +317,7 @@ export const resolveInitialState = (input: {
     const { client, cwd, session, continue_, headless, prompt, promptArg, admission } = input
 
     if (headless) {
-      if (Option.isNone(promptArg) || promptArg.value.length === 0) {
+      if (Option.isNone(promptArg) || promptArg.value.trim().length === 0) {
         return yield* new AppBootstrapError({ reason: "headless-missing-prompt" })
       }
       if (Option.isSome(session)) {
