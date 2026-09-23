@@ -4,7 +4,6 @@ import {
   type AnthropicCredentialIO,
   type AnthropicKeychainEnv,
   AnthropicPlatform,
-  type BetaExclusions,
   buildAnthropicModelDriver as buildAnthropicModelDriverLive,
   buildBillingHeaderValue as buildBillingHeaderValueEffect,
   buildKeychainTransformClient,
@@ -14,7 +13,6 @@ import {
   extractFirstUserMessageText,
   getModelBetas,
   getModelOverride,
-  isLongContextError,
   MODEL_CONFIG,
   parseOAuthResponse,
   SYSTEM_IDENTITY_PREFIX,
@@ -70,33 +68,6 @@ import { testCatalogSource } from "./helpers/catalog-source.js"
 import { createHash } from "node:crypto"
 import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import { AnthropicClient as AnthropicSdkClient, AnthropicLanguageModel } from "@effect/ai-anthropic"
-
-// ── long-context errors ─────────────────────────────────────────────────────
-
-describe("isLongContextError", () => {
-  test("detects extra usage error", () => {
-    expect(isLongContextError("Extra usage is required for long context requests")).toBe(true)
-  })
-
-  test("detects subscription error", () => {
-    expect(
-      isLongContextError("The long context beta is not yet available for this subscription."),
-    ).toBe(true)
-  })
-
-  test("detects errors in JSON", () => {
-    expect(
-      isLongContextError(
-        '{"error": {"message": "Extra usage is required for long context requests"}}',
-      ),
-    ).toBe(true)
-  })
-
-  test("does not match other errors", () => {
-    expect(isLongContextError("Some other error message")).toBe(false)
-    expect(isLongContextError("")).toBe(false)
-  })
-})
 
 // ── payload transforms ──────────────────────────────────────────────────────
 
@@ -590,8 +561,6 @@ const credentialCache = (io: AnthropicCredentialIO) => {
     Effect.provide(Layer.merge(BunServices.layer, platformLayer)),
   )
 }
-// A fresh exclusion Ref per test keeps the tests isolated.
-const buildBetaCache = () => Ref.make<BetaExclusions>(new Map())
 const validCredsIO = (label: string): AnthropicCredentialIO => ({
   read: Effect.succeed(makeCredsKeychain(label)),
   refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
@@ -609,12 +578,11 @@ describe("keychainTransformClient — auth headers", () => {
   it.scopedLive("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
+      const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       yield* runOk(
         wrapped.post("https://api.anthropic.com/v1/messages", {
@@ -628,12 +596,11 @@ describe("keychainTransformClient — auth headers", () => {
   it.scopedLive("removes x-api-key (would otherwise conflict with OAuth Bearer)", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
+      const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       // Simulate the SDK's baseline by injecting x-api-key on the
       // outgoing request. The transform must strip it.
@@ -651,12 +618,11 @@ describe("keychainTransformClient — auth headers", () => {
   it.scopedLive("sets x-app, user-agent, anthropic-dangerous-direct-browser-access", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
+      const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       yield* runOk(
         wrapped.post("https://api.anthropic.com/v1/messages", {
@@ -672,12 +638,11 @@ describe("keychainTransformClient — auth headers", () => {
   it.scopedLive("merges anthropic-beta with model defaults", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
+      const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       // Body declares claude-opus-4-6, which has model-default betas
       // (base set + 1M-context + effort-2025-11-24 from the override).
@@ -705,12 +670,11 @@ describe("keychainTransformClient — auth headers", () => {
         read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
         refresh: () => Effect.fail(new ProviderAuthError({ message: "no refresh token either" })),
       })
-      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
+      const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const exit = yield* Effect.scoped(
         wrapped.post("https://api.anthropic.com/v1/messages", {
@@ -735,13 +699,8 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
   const sendOnce = (responder: (call: number) => Response | TransportFailure) =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = { captured: [], responder }
-      const wrapped = buildKeychainTransformClient(
-        creds,
-        cache,
-        TEST_ENV,
-      )(makeFakeClient(fakeState))
+      const wrapped = buildKeychainTransformClient(creds, TEST_ENV)(makeFakeClient(fakeState))
       const exit = yield* Effect.scoped(
         wrapped.post("https://api.anthropic.com/v1/messages", {
           body: jsonBody({ model: "claude-opus-4-6" }),
@@ -758,181 +717,21 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
       }),
     )
   }
+  it.scopedLive("a long-context 400 reaches the caller after one attempt, betas untouched", () =>
+    Effect.gen(function* () {
+      const body =
+        '{"type":"error","error":{"message":"Extra usage is required for long context requests"}}'
+      const { exit, captured } = yield* sendOnce(() => new Response(body, { status: 400 }))
+      expect(captured).toHaveLength(1)
+      expect(Exit.isSuccess(exit) && exit.value.status).toBe(400)
+      expect(captured[0]!.headers["anthropic-beta"]).toContain("interleaved-thinking-2025-05-14")
+    }),
+  )
   it.scopedLive("a transport failure reaches the caller after one attempt", () =>
     Effect.gen(function* () {
       const { exit, captured } = yield* sendOnce(() => transportFailure("socket hang up"))
       expect(captured).toHaveLength(1)
       expect(Exit.isFailure(exit)).toBe(true)
-    }),
-  )
-})
-describe("keychainTransformClient — long-context beta retry", () => {
-  // Long-context error markers Anthropic returns in the 400 body.
-  // `keychain-transform` matches via `isLongContextError(body)`.
-  const LONG_CONTEXT_BODY =
-    '{"type":"error","error":{"message":"Extra usage is required for long context requests"}}'
-  const NON_LONG_CONTEXT_400 = '{"type":"error","error":{"message":"some other 400"}}'
-  it.scopedLive("400 long-context once → drops one beta → retry succeeds", () =>
-    Effect.gen(function* () {
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: respondFirstWith(
-          new Response(LONG_CONTEXT_BODY, { status: 400 }),
-          new Response("ok", { status: 200 }),
-        ),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* runOk(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
-      )
-      expect(fakeState.captured).toHaveLength(2)
-      expect(response.status).toBe(200)
-      // The retry sent fewer betas than the initial request (one was
-      // recorded as excluded after the 400). Compare beta cardinality.
-      const initialBetas = fakeState.captured[0]!.headers["anthropic-beta"]!.split(",").length
-      const retryBetas = fakeState.captured[1]!.headers["anthropic-beta"]!.split(",").length
-      expect(retryBetas).toBe(initialBetas - 1)
-    }),
-  )
-  it.scopedLive("learning persists into the cache — next request starts pre-narrowed", () =>
-    Effect.gen(function* () {
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: respondFirstWith(
-          new Response(LONG_CONTEXT_BODY, { status: 400 }),
-          new Response("ok", { status: 200 }),
-        ),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      // First request: 400 → retry → 200. Two captures.
-      yield* runOk(
-        wrapped
-          .post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          })
-          .pipe(Effect.orDie),
-      )
-      expect(fakeState.captured).toHaveLength(2)
-      const learnedBetaCount = fakeState.captured[1]!.headers["anthropic-beta"]!.split(",").length
-      // Second request — the cache should already have the previously
-      // rejected beta, so the FIRST attempt sends the narrower set.
-      yield* runOk(
-        wrapped
-          .post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          })
-          .pipe(Effect.orDie),
-      )
-      expect(fakeState.captured).toHaveLength(3)
-      const nextRequestBetas = fakeState.captured[2]!.headers["anthropic-beta"]!.split(",").length
-      expect(nextRequestBetas).toBe(learnedBetaCount)
-    }),
-  )
-  it.scopedLive("learning for one model survives requests to another model", () =>
-    Effect.gen(function* () {
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: respondFirstWith(
-          new Response(LONG_CONTEXT_BODY, { status: 400 }),
-          new Response("ok", { status: 200 }),
-        ),
-      }
-      const wrapped = buildKeychainTransformClient(
-        creds,
-        cache,
-        TEST_ENV,
-      )(makeFakeClient(fakeState))
-      const send = (model: string) =>
-        runOk(wrapped.post("https://api.anthropic.com/v1/messages", { body: jsonBody({ model }) }))
-      // Opus learns: 400, then a narrower retry.
-      yield* send("claude-opus-4-6")
-      const learned = fakeState.captured[1]!.headers["anthropic-beta"]
-      // A child or a summarizer on another model sends in between.
-      yield* send("claude-sonnet-4-6")
-      // Opus starts from what it learned: one request, no second 400.
-      yield* send("claude-opus-4-6")
-      expect(fakeState.captured).toHaveLength(4)
-      expect(fakeState.captured[3]!.headers["anthropic-beta"]).toBe(learned)
-    }),
-  )
-  it.scopedLive("429 with long-context-shaped body passes through without narrowing betas", () =>
-    Effect.gen(function* () {
-      // Long-context layer is 400-only. A 429 whose body happens to match
-      // the long-context marker goes back to the caller untouched: the rate
-      // limit is not beta-related, and the loop owns the 429 retry.
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response(LONG_CONTEXT_BODY, { status: 429 }),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* runOk(
-        wrapped.post("https://api.anthropic.com/v1/messages", {
-          body: jsonBody({ model: "claude-opus-4-6" }),
-        }),
-      )
-      expect(fakeState.captured).toHaveLength(1)
-      expect(response.status).toBe(429)
-      expect((yield* Ref.get(cache)).size).toBe(0)
-    }),
-  )
-  it.scopedLive("non-long-context 400 passes through without retry", () =>
-    Effect.gen(function* () {
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
-      const fakeState: FakeClientState = {
-        captured: [],
-        responder: () => new Response(NON_LONG_CONTEXT_400, { status: 400 }),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* runOk(
-        wrapped
-          .post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          })
-          .pipe(Effect.orDie),
-      )
-      expect(fakeState.captured).toHaveLength(1)
-      expect(response.status).toBe(400)
-    }),
-  )
-  it.scopedLive("exhausted candidates surface terminal 400 (every long-context beta tried)", () =>
-    Effect.gen(function* () {
-      const creds = yield* credentialCache(validCredsIO("k1"))
-      const cache = yield* buildBetaCache()
-      const fakeState: FakeClientState = {
-        captured: [],
-        // Always return long-context 400 — middleware should give up
-        // after exhausting candidates and hand back the 400.
-        responder: () => new Response(LONG_CONTEXT_BODY, { status: 400 }),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* runOk(
-        wrapped
-          .post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          })
-          .pipe(Effect.orDie),
-      )
-      // claude-opus-4-6 emits one long-context beta
-      // (interleaved-thinking-2025-05-14; context-1m is never sent).
-      // Initial attempt + 1 narrowing attempt = 2 captures.
-      expect(fakeState.captured).toHaveLength(2)
-      expect(response.status).toBe(400)
     }),
   )
 })
@@ -959,7 +758,6 @@ describe("keychainTransformClient — 401 recovery", () => {
   it.scopedLive("401 once → invalidate creds → retry succeeds with fresh token", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(togglingCredsIO("stale", "fresh"))
-      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: respondFirstWith(
@@ -967,7 +765,7 @@ describe("keychainTransformClient — 401 recovery", () => {
           new Response("ok", { status: 200 }),
         ),
       }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
+      const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const response = yield* runOk(
         wrapped.post("https://api.anthropic.com/v1/messages", {
@@ -987,14 +785,13 @@ describe("keychainTransformClient — 401 recovery", () => {
     () =>
       Effect.gen(function* () {
         const creds = yield* credentialCache(togglingCredsIO("stale", "still-bad"))
-        const cache = yield* buildBetaCache()
         const fakeState: FakeClientState = {
           captured: [],
           // Both attempts get 401 — the second 401 is a real auth failure
           // (revoked session, missing scope) and must reach the caller.
           responder: () => new Response("auth", { status: 401 }),
         }
-        const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
+        const transform = buildKeychainTransformClient(creds, TEST_ENV)
         const wrapped = transform(makeFakeClient(fakeState))
         const response = yield* runOk(
           wrapped.post("https://api.anthropic.com/v1/messages", {
@@ -1013,7 +810,6 @@ describe("keychainTransformClient — 401 recovery", () => {
       // #2 would re-read and pick up the second token. Asserting both
       // requests use the first token proves the cache survived the 500.
       const creds = yield* credentialCache(togglingCredsIO("first", "second"))
-      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: respondFirstWith(
@@ -1021,7 +817,7 @@ describe("keychainTransformClient — 401 recovery", () => {
           new Response("ok", { status: 200 }),
         ),
       }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
+      const transform = buildKeychainTransformClient(creds, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       const r1 = yield* runOk(
         wrapped.post("https://api.anthropic.com/v1/messages", {
@@ -1057,10 +853,9 @@ describe("keychainTransformClient — credential failure through the SDK", () =>
               return Effect.fail(new ProviderAuthError({ message: "refresh token revoked" }))
             }),
         })
-        const cache = yield* buildBetaCache()
         const state = makeFakeFetchState()
         const clientLayer = AnthropicSdkClient.layer({
-          transformClient: buildKeychainTransformClient(creds, cache, TEST_ENV),
+          transformClient: buildKeychainTransformClient(creds, TEST_ENV),
         }).pipe(Layer.provide(FetchHttpClient.layer))
         const modelLayer = AnthropicLanguageModel.layer({ model: "claude-opus-4-6" }).pipe(
           Layer.provide(clientLayer),
@@ -1643,10 +1438,6 @@ describe("MODEL_CONFIG", () => {
       "context-management-2025-06-27",
     ])
   })
-
-  test("longContextBetas include the 1M-context flag first", () => {
-    expect(MODEL_CONFIG.longContextBetas[0]).toBe("context-1m-2025-08-07")
-  })
 })
 
 describe("getModelOverride", () => {
@@ -1719,17 +1510,6 @@ describe("getModelBetas", () => {
     expect(betas).toEqual(["alpha", "beta", "gamma"])
   })
 
-  test("excluded set drops the listed betas (long-context backoff path)", () => {
-    const betas = getModelBetas(
-      "claude-opus-4-6",
-      Option.none(),
-      Option.some(new Set(["interleaved-thinking-2025-05-14"])),
-    )
-    expect(betas).not.toContain("interleaved-thinking-2025-05-14")
-    // Other betas survive.
-    expect(betas).toContain("oauth-2025-04-20")
-  })
-
   test("does not duplicate add-overrides already present in the base list", () => {
     // Simulate an env that already includes the override-added beta.
     const betas = getModelBetas(
@@ -1738,14 +1518,6 @@ describe("getModelBetas", () => {
     )
     const occurrences = betas.filter((b) => b === "effort-2025-11-24").length
     expect(occurrences).toBe(1)
-  })
-
-  test("filters multiple excluded betas", () => {
-    const excluded = new Set(["interleaved-thinking-2025-05-14", "context-1m-2025-08-07"])
-    const betas = getModelBetas("claude-sonnet-4-6", Option.none(), Option.some(excluded))
-    expect(betas).not.toContain("interleaved-thinking-2025-05-14")
-    expect(betas).not.toContain("context-1m-2025-08-07")
-    expect(betas).toContain("claude-code-20250219")
   })
 })
 
@@ -1816,17 +1588,13 @@ describe("AnthropicPlatform.fromSetup", () => {
  * AnthropicExtension model-driver wiring — extension-level regression
  * coverage for `buildAnthropicModelDriver` / `resolveModel`.
  *
- * The leaf-service suites (`anthropic-credential-service.test.ts`,
- * `anthropic-beta-cache.test.ts`, `anthropic-keychain-transform.test.ts`)
- * cover services in isolation. Those passed even when two HIGH-severity
+ * The leaf-service suites cover services in isolation. Those passed even when two HIGH-severity
  * wiring bugs slipped in:
  *
  *   1. **Cache-Ref lifetime**: `resolveModel` runs once per model resolution.
- *      Allocating
- *      `Ref<CredentialCacheCell>` and `Ref<BetaExclusions>` inside
+ *      Allocating `Ref<CredentialCacheCell>` inside
  *      `makeOauthAnthropicLayer` gave each request a fresh empty
- *      cache — cross-request beta learning + credential reuse were
- *      silently dead.
+ *      cache — credential reuse was silently dead.
  *   2. **API-key path wrapped in keychainClient**: only OAuth should
  *      flow through `keychainClient` (which injects Claude Code OAuth
  *      billing-header system blocks + identity prefix). Extending the
@@ -1837,7 +1605,7 @@ describe("AnthropicPlatform.fromSetup", () => {
  * one real `LanguageModel.generateText` call through each layer with a
  * captured fake `fetch`, then asserts on the outbound request shape.
  * That proves the resolved layer's production wiring uses the
- * test-owned Refs and applies the right keychain transforms (or
+ * test-owned cell and applies the right keychain transforms (or
  * doesn't, on the API-key branch).
  */
 const FUTURE_MS = 1_800_000_000_000
@@ -1849,11 +1617,10 @@ const testPlatform = AnthropicPlatform.of({
 const buildAnthropicModelDriver = (
   ...args: Parameters<typeof buildAnthropicModelDriverLive> extends [
     infer CredentialCell,
-    infer BetaCell,
     infer EnvApiKey,
     ...ReadonlyArray<unknown>,
   ]
-    ? [CredentialCell, BetaCell, EnvApiKey]
+    ? [CredentialCell, EnvApiKey]
     : never
 ) => buildAnthropicModelDriverLive(...args, testPlatform, testCatalogSource())
 // The Claude Code path reads the keychain, never the gent store.
@@ -2032,8 +1799,7 @@ describe("Anthropic chronological context", () => {
             at: yield* Clock.currentTimeMillis,
             invalidated: false,
           })
-          const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-          const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+          const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
           const model = yield* driver.resolveModel("claude-opus-4-6", authInfo)
           for (const mode of ContextMode.literals) {
             const state = makeFakeFetchState()
@@ -2092,13 +1858,12 @@ const JsonRecordSchemaDriver = Schema.fromJsonString(Schema.Record(Schema.String
 type JsonRecordDriver = Schema.Schema.Type<typeof JsonRecordSchemaDriver>
 const parsePayload = (body: string): JsonRecordDriver =>
   Schema.decodeSync(JsonRecordSchemaDriver)(body)
-describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", () => {
+describe("buildAnthropicModelDriver — OAuth path uses the external credential cell", () => {
   it.live("OAuth resolveModel layer reads Bearer from credentialCellRef the test owns", () =>
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+      const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
       // Pre-seed the cred Ref directly (test owns it). If
       // `makeOauthAnthropicLayer` regressed to allocating its own internal
       // Ref per call, the
@@ -2126,14 +1891,13 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       Effect.gen(function* () {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-        const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
         yield* SynchronizedRef.set(credentialCellRef, {
           _tag: "Durable",
           creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
           at: yield* Clock.currentTimeMillis,
           invalidated: false,
         })
-        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+        const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
         const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
         yield* runOne(model, fetchState)
@@ -2153,14 +1917,13 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       Effect.gen(function* () {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-        const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
         yield* SynchronizedRef.set(credentialCellRef, {
           _tag: "Durable",
           creds: { accessToken: "first-token", refreshToken: "r", expiresAt: FUTURE_MS },
           at: yield* Clock.currentTimeMillis,
           invalidated: false,
         })
-        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+        const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
         const model1 = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState1 = makeFakeFetchState()
         yield* runOne(model1, fetchState1)
@@ -2181,34 +1944,6 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
         yield* runOne(model2, fetchState2)
         expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
       }),
-  )
-  it.live("OAuth resolveModel layer reads beta exclusions from betaCellRef the test owns", () =>
-    Effect.gen(function* () {
-      const credentialCellRef =
-        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-      yield* SynchronizedRef.set(credentialCellRef, {
-        _tag: "Durable",
-        creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
-        at: yield* Clock.currentTimeMillis,
-        invalidated: false,
-      })
-      // Pre-seed beta exclusions so the model's interleaved-thinking beta
-      // is NOT sent. If the production beta cache used a fresh internal
-      // Ref, this seeded exclusion wouldn't apply and the header would
-      // include `interleaved-thinking-2025-05-14`.
-      yield* Ref.set(
-        betaCellRef,
-        new Map([["claude-opus-4-6", new Set(["interleaved-thinking-2025-05-14"])]]),
-      )
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
-      const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      const sentBeta = fetchState.captured.at(-1)!.headers["anthropic-beta"] ?? ""
-      expect(sentBeta).not.toContain("interleaved-thinking-2025-05-14")
-      expect(sentBeta).toContain("oauth-2025-04-20")
-    }),
   )
 })
 describe("buildAnthropicModelDriver — refresh token order", () => {
@@ -2238,10 +1973,8 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
         at: 0,
         invalidated: false,
       })
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriverLive(
         credentialCellRef,
-        betaCellRef,
         Option.none(),
         AnthropicPlatform.of({ platform: "linux", home, env: {} }),
         testCatalogSource(),
@@ -2293,10 +2026,8 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       )
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriverLive(
         credentialCellRef,
-        betaCellRef,
         Option.none(),
         AnthropicPlatform.of({ platform: "linux", home, env: {} }),
         testCatalogSource(),
@@ -2346,12 +2077,7 @@ describe("buildAnthropicModelDriver — credential order", () => {
           invalidated: false,
         },
       )
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-      const driver = buildAnthropicModelDriver(
-        credentialCellRef,
-        betaCellRef,
-        Option.some("sk-env-key"),
-      )
+      const driver = buildAnthropicModelDriver(credentialCellRef, Option.some("sk-env-key"))
       const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2364,12 +2090,7 @@ describe("buildAnthropicModelDriver — credential order", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-      const driver = buildAnthropicModelDriver(
-        credentialCellRef,
-        betaCellRef,
-        Option.some("sk-env-key"),
-      )
+      const driver = buildAnthropicModelDriver(credentialCellRef, Option.some("sk-env-key"))
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-stored"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2380,12 +2101,7 @@ describe("buildAnthropicModelDriver — credential order", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-      const driver = buildAnthropicModelDriver(
-        credentialCellRef,
-        betaCellRef,
-        Option.some("sk-env-key"),
-      )
+      const driver = buildAnthropicModelDriver(credentialCellRef, Option.some("sk-env-key"))
       const model = yield* driver.resolveModel("claude-opus-4-6")
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2417,8 +2133,7 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
           invalidated: false,
         },
       )
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+      const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel(modelName, authInfo, hints)
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2681,8 +2396,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
           invalidated: false,
         },
       )
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+      const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo)
       const state = makeFakeFetchState()
       yield* runCachingRequest(model, state, options)
@@ -2727,8 +2441,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+      const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2743,8 +2456,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
       Effect.gen(function* () {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-        const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-        const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+        const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
         const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
         yield* runOne(model, fetchState)
@@ -2756,17 +2468,15 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
         expect(Bun.inspect(payload["system"] ?? "")).not.toContain(SYSTEM_IDENTITY_PREFIX)
       }),
   )
-  it.live("API-key path does not touch the OAuth cache Refs", () =>
+  it.live("API-key path does not touch the OAuth credential cell", () =>
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
-      const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
+      const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       expect(yield* SynchronizedRef.get(credentialCellRef)).toBe(EMPTY_CREDENTIAL_CELL)
-      expect((yield* Ref.get(betaCellRef)).size).toBe(0)
     }),
   )
 })
