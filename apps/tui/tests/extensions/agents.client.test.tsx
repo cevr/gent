@@ -6,7 +6,6 @@ import { BranchId, dateFromMillis, Session, SessionId } from "@gent/core/protoco
 import { type AgentRowEntry, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
 import {
   AgentsPane,
-  countsLabel,
   detailLabel,
   makeAgentsController,
   SubagentTray,
@@ -218,6 +217,68 @@ describe("Agents pane refresh while open", () => {
           ),
         "selected detail after the child finished",
       )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive("a read slower than the poll still lands, and only one read runs at a time", () =>
+    Effect.gen(function* () {
+      let status: "Running" | "Idle" = "Running"
+      let rowsInFlight = 0
+      let detailInFlight = 0
+      let mostRows = 0
+      let mostDetail = 0
+      const listed = (): ReadonlyArray<AgentRowEntry> => [
+        { ...row("child"), status, parentSessionId: parentKey.sessionId },
+      ]
+      // Each read takes several poll periods.
+      const slow = <A,>(read: () => A, count: (delta: number) => number) =>
+        Effect.acquireUseRelease(
+          Effect.sync(() => count(1)),
+          // gent/no-sleep: allow a read slower than the poll is the subject
+          () => Effect.sleep("120 millis").pipe(Effect.map(read)),
+          () => Effect.sync(() => count(-1)),
+        )
+      const pane = makePaneSlot()
+      pane.open("agents.pane")
+      const controller = yield* provideClientServices(
+        makeAgentsController(
+          () =>
+            slow(listed, (delta) => {
+              rowsInFlight += delta
+              mostRows = Math.max(mostRows, rowsInFlight)
+              return rowsInFlight
+            }),
+          () =>
+            slow(
+              () => ({ ...detail(0), status }),
+              (delta) => {
+                detailInFlight += delta
+                mostDetail = Math.max(mostDetail, detailInFlight)
+                return detailInFlight
+              },
+            ),
+          "20 millis",
+        ),
+        { currentSession: () => Option.some(parentKey), shell: { pane } },
+      )
+      controller.refresh("")
+      yield* waitUntil(() => controller.rows().length === 1, "first listing")
+      controller.select(Option.some(listed()[0] ?? row("child")))
+      yield* waitUntil(
+        () => Option.exists(controller.detail(), (value) => value.status === "Running"),
+        "child detail running",
+      )
+      status = "Idle"
+      yield* waitUntil(
+        () => controller.rows().every((entry) => entry.status === "Idle"),
+        "listing after the child finished",
+      )
+      yield* waitUntil(
+        () => Option.exists(controller.detail(), (value) => value.status === "Idle"),
+        "detail after the child finished",
+      )
+      expect(mostRows).toBe(1)
+      expect(mostDetail).toBe(1)
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -940,18 +1001,6 @@ const rows = [
 ]
 
 describe("agents pane counts and detail", () => {
-  it.live("a parent grouped with its running children counts as idle", () =>
-    Effect.sync(() => {
-      const pane = [
-        { ...root("parent", "running"), status: "Idle" },
-        { ...child("a", "running", "parent"), status: "Running" },
-        { ...child("b", "running", "parent"), status: "Running" },
-        root("old", "inactive"),
-      ]
-      expect(countsLabel(pane)).toBe("2 running, 1 idle, 1 inactive")
-    }),
-  )
-
   it.live("a working loop names the turn it is on, not finished turns and time", () =>
     Effect.sync(() => {
       const detail = (
@@ -974,12 +1023,12 @@ describe("agents pane counts and detail", () => {
 })
 
 describe("idle middle parent", () => {
-  // main → A → B. A started B and its own turn ended; only B works. The
-  // server groups main and A with B so the tree stays whole.
+  // main → A → B. A started B and its own turn ended; only B works. Each row
+  // sits in its own state's section, so B is a root of the running section.
   const nested: ReadonlyArray<AgentRowEntry> = [
-    { ...root("main", "running"), status: "Idle", name: "main" },
-    { ...child("a", "running", "main"), status: "Idle", depth: 1 },
-    { ...child("b", "running", "a"), status: "Running", depth: 2 },
+    { ...child("b", "running", "a"), depth: 0 },
+    { ...root("main", "idle"), name: "main" },
+    { ...child("a", "idle", "main"), depth: 1 },
   ]
   const controllerOver = (open: () => boolean) => ({
     rows: () => nested,
@@ -1005,7 +1054,7 @@ describe("idle middle parent", () => {
     }),
   )
 
-  it.live("the pane counts it idle in its title, its heading and its glyph", () =>
+  it.live("the pane counts it idle in its title, its section and its glyph", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
@@ -1025,6 +1074,7 @@ describe("idle middle parent", () => {
       const frame = yield* waitForFrame(setup, (next) => next.includes("Agents"), "pane")
       expect(frame).toContain("1 running, 2 idle, 0 inactive")
       expect(frame).toContain("Running (1)")
+      expect(frame).toContain("Idle (2)")
       // An idle loop draws the still dot; only the working one pulses.
       const lineOf = (name: string) => frame.split("\n").find((line) => line.includes(name)) ?? ""
       expect(lineOf("delegate: a task")).toContain("• delegate: a task")

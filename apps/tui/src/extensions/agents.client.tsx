@@ -26,6 +26,7 @@ import {
   defineClientExtension,
   type ActiveExtensionSession,
   type ExtensionAgentDetail,
+  coalescedRead,
   sessionQuery,
   widgetContribution,
 } from "./client-facets"
@@ -63,17 +64,6 @@ const subtreeRows = (
     }
     pending = pending.filter((row) => !known.has(row.sessionId))
   }
-}
-
-/**
- * What a loop itself is doing. A row's section can differ: a parent is
- * grouped with its running children so the tree stays whole, while its own
- * loop is idle. Every count, glyph and tray line reads this, never the section.
- */
-const ownState = (row: AgentRowEntry): AgentRowEntry["section"] => {
-  if (!row.live) return "inactive"
-  if (Predicate.isUndefined(row.status) || row.status === "Idle") return "idle"
-  return "running"
 }
 
 const TRAY_HINT = "^t agents"
@@ -143,7 +133,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
   const tick = useSpinnerClock()
   const running = () =>
     subtreeRows(props.controller.rows(), props.controller.current()).filter(
-      (row) => ownState(row) === "running",
+      (row) => row.section === "running",
     )
   // Switching sessions changes whose subtree the tray lists; refetch for it.
   createEffect(
@@ -262,27 +252,27 @@ export const makeAgentsController = (
     const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
     // The row the cursor is on, while it has a loop to ask.
     let selected = Option.none<RowKey>()
-    // Arrow keys move faster than a round trip, and a poll re-reads the row
-    // the cursor is on, so replies can land out of order. Only the newest read
-    // may write; anything else would show one row's cost next to another
-    // row's name, or an older turn over a newer one.
-    let generation = 0
-    const readDetail = (key: RowKey) => {
-      const issued = ++generation
-      shell.cast(
-        fetchDetail(key).pipe(
-          Effect.match({
-            // A detail read that fails leaves the line as it is rather than
-            // replacing the list with an error: the rows are still correct.
-            onFailure: () => {},
-            onSuccess: (next) => {
-              if (issued !== generation) return
-              setDetail(Option.some(next))
-            },
-          }),
-        ),
-      )
-    }
+    // One detail read runs at a time, for the row the cursor is on when it
+    // starts. Arrow keys move faster than a round trip, so a reply writes only
+    // while its row is still selected; otherwise it would show one row's cost
+    // next to another row's name.
+    const readDetail = coalescedRead(shell.cast, () =>
+      Option.match(selected, {
+        onNone: () => Effect.void,
+        onSome: (key) =>
+          fetchDetail(key).pipe(
+            Effect.match({
+              // A detail read that fails leaves the line as it is rather than
+              // replacing the list with an error: the rows are still correct.
+              onFailure: () => {},
+              onSuccess: (next) => {
+                if (!Option.exists(selected, (current) => sameKey(current, key))) return
+                setDetail(Option.some(next))
+              },
+            }),
+          ),
+      }),
+    )
 
     const select = (row: Option.Option<AgentRowEntry>) => {
       // A detail read goes through the loop actor, and an actor read spawns the
@@ -290,7 +280,6 @@ export const makeAgentsController = (
       // Only rows that already have a loop are asked.
       if (Option.isNone(row) || !row.value.live) {
         selected = Option.none()
-        generation++
         setDetail(Option.none())
         return
       }
@@ -299,7 +288,7 @@ export const makeAgentsController = (
       if (Option.exists(selected, (current) => sameKey(current, key))) return
       selected = Option.some(key)
       setDetail(Option.none())
-      readDetail(key)
+      readDetail()
     }
 
     /**
@@ -312,12 +301,10 @@ export const makeAgentsController = (
         return
       }
       listing.refresh()
-      const key = selected.pipe(
-        Option.filter((current) =>
-          listing.value().some((row) => row.live && sameKey(row, current)),
-        ),
+      const live = Option.exists(selected, (current) =>
+        listing.value().some((row) => row.live && sameKey(row, current)),
       )
-      if (Option.isSome(key)) readDetail(key.value)
+      if (live) readDetail()
     }
 
     // A delegate pulse in the current session means its subtree changed.
@@ -367,11 +354,7 @@ const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> 
   rows.forEach((row, index) => {
     const previous = rows[index - 1]
     if (Option.isNone(Option.fromNullishOr(previous)) || previous?.section !== row.section) {
-      // A section counts the loops that are in its state themselves: an idle
-      // parent grouped with its running children is not one more running.
-      const count = rows.filter(
-        (entry) => entry.section === row.section && ownState(entry) === row.section,
-      ).length
+      const count = rows.filter((entry) => entry.section === row.section).length
       items.push({ kind: "heading", section: row.section, count })
     }
     items.push({ kind: "row", row, index })
@@ -379,10 +362,10 @@ const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> 
   return items
 }
 
-/** "1 running, 0 idle, 3 inactive" for the pane title: each loop counted by what it does itself. */
-export const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
+/** "1 running, 0 idle, 3 inactive" for the pane title: each loop counted by its section, its own state. */
+const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
   const count = (state: AgentRowEntry["section"]) =>
-    rows.filter((row) => ownState(row) === state).length
+    rows.filter((row) => row.section === state).length
   return `${count("running")} running, ${count("idle")} idle, ${count("inactive")} inactive`
 }
 
@@ -570,7 +553,7 @@ export function AgentsPane(props: {
       .join("  ")
     let activity = ""
     if (selected) activity = activityFor(props.controller.detail())
-    let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(ownState(row))} ${nameFor(row)}`
+    let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(row.section)} ${nameFor(row)}`
     if (activity.length > 0) left = `${left}  ·  ${activity}`
     const width = Math.max(0, rowWidth() - right.length - 2)
     return { left: `${truncate(left, width).padEnd(width)}  `, right }
@@ -578,7 +561,7 @@ export function AgentsPane(props: {
 
   const rightColor = (row: AgentRowEntry, selected: boolean) => {
     if (selected || Option.contains(armed(), row.sessionId))
-      return lineColor(row, ownState(row), selected)
+      return lineColor(row, row.section, selected)
     return theme.textMuted
   }
 
@@ -598,8 +581,7 @@ export function AgentsPane(props: {
           if (selected()) return theme.primary
           return "transparent"
         }
-        // The row draws what its own loop does; its section only places it.
-        const section = () => ownState(item.row)
+        const section = () => item.row.section
         return (
           <box id={id} backgroundColor={background()} paddingLeft={1}>
             {/* One row, one line: the age is right-aligned into the budget, so

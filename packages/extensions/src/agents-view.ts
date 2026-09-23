@@ -169,28 +169,6 @@ export const reconcileAgentRows = (params: {
   return rows
 }
 
-/** Walk a row's ancestor chain, stopping at the root, at an orphan, or at a cycle. */
-const ancestorsOf = (
-  row: AgentRow,
-  byKey: ReadonlyMap<string, AgentRow>,
-): ReadonlyArray<AgentRow> => {
-  const chain: Array<AgentRow> = []
-  const seen = new Set<string>([rowKey(row)])
-  let current = row
-  for (;;) {
-    if (Option.isNone(current.parent)) return chain
-    const parentKey = rowKey(current.parent.value)
-    const parent = Option.fromUndefinedOr(byKey.get(parentKey))
-    // Orphan: parent not loaded. Treat the row as top level rather than hiding it.
-    if (Option.isNone(parent)) return chain
-    // Cycle guard.
-    if (seen.has(parentKey)) return chain
-    seen.add(parentKey)
-    chain.push(parent.value)
-    current = parent.value
-  }
-}
-
 /**
  * Order rows for display: by section, and in each section as a tree. A root,
  * or a row whose parent is in another section, is placed by its last update,
@@ -254,28 +232,6 @@ export const buildRowTree = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<Agent
   return ordered.toSorted((left, right) => sectionRank(left) - sectionRank(right))
 }
 
-/**
- * A busy descendant forces every ancestor to render as running, so a collapsed
- * parent never looks idle while its children work. Cycle-guarded via
- * {@link ancestorsOf}.
- */
-export const propagateRunning = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> => {
-  const byKey = new Map<string, AgentRow>()
-  for (const row of rows) byKey.set(rowKey(row), row)
-
-  const forced = new Set<string>()
-  for (const row of rows) {
-    if (row.section !== "running") continue
-    for (const ancestor of ancestorsOf(row, byKey)) forced.add(rowKey(ancestor))
-  }
-
-  if (forced.size === 0) return rows
-  return rows.map((row) => {
-    if (row.section === "running" || !forced.has(rowKey(row))) return row
-    return { ...row, section: "running" satisfies AgentSection }
-  })
-}
-
 /** Case-insensitive substring match over the fields a reader would search by. */
 export const filterRows = (
   rows: ReadonlyArray<AgentRow>,
@@ -294,11 +250,15 @@ export const filterRows = (
   })
 }
 
-/** Full projection: reconcile, propagate, then order. A query filters after, with `filterRows`. */
+/**
+ * Full projection: reconcile, then order. A row's section is its own loop's
+ * state, so a parent idles in its own section while a child works, and the
+ * child is a root of the running section. A query filters after, with `filterRows`.
+ */
 export const projectAgentRows = (params: {
   readonly live: ReadonlyArray<LiveAgentRow>
   readonly durable: ReadonlyArray<DurableAgentRow>
-}): ReadonlyArray<AgentRow> => buildRowTree(propagateRunning(reconcileAgentRows(params)))
+}): ReadonlyArray<AgentRow> => buildRowTree(reconcileAgentRows(params))
 
 // ── live activity ───────────────────────────────────────────────────────────
 

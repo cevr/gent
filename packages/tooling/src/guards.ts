@@ -1,6 +1,6 @@
 import { Option, Schema } from "effect"
 
-// ── blanket-eslint-disable ──────────────────────────────────────────────────
+// ── a lint directive names its rules ────────────────────────────────────────
 
 export interface BlanketDisableFinding {
   readonly file: string
@@ -50,7 +50,7 @@ export const findBannedEslintDisableBlocks = (
   return findings
 }
 
-// ── core-alias-test-layers ──────────────────────────────────────────────────
+// ── an alternative layer is a real alternative ──────────────────────────────
 
 /**
  * Guard: an alternative layer static must be a real alternative implementation.
@@ -182,7 +182,7 @@ export const findAliasTestLayers = (
   return findings
 }
 
-// ── core-child-session-depth ────────────────────────────────────────────────
+// ── every child-session writer admits the depth ─────────────────────────────
 
 /**
  * Guard: every child-session writer in core admits the nesting depth.
@@ -248,7 +248,7 @@ export const findUnadmittedChildSessionWriters = (
   return findings
 }
 
-// ── core-feature-independence ───────────────────────────────────────────────
+// ── core names no feature built on it ───────────────────────────────────────
 
 /**
  * Guard: core must not name the features built on top of it.
@@ -369,7 +369,7 @@ export const findCoreFeatureIndependenceFindings = (
   return findings
 }
 
-// ── core-identity-encode ────────────────────────────────────────────────────
+// ── a whole-object encode decides no identity ───────────────────────────────
 
 /**
  * Guard: a whole-object JSON encode must not decide identity.
@@ -537,7 +537,7 @@ export const findIdentityEncodes = (
   return findings
 }
 
-// ── core-unadapted-seams ────────────────────────────────────────────────────
+// ── every core seam has a shipped adapter ───────────────────────────────────
 
 /**
  * Guard: every extension seam core declares must have a shipped adapter.
@@ -771,7 +771,7 @@ export const findUnadaptedSeams = (
   return findings
 }
 
-// ── core-vendor-model-pins ──────────────────────────────────────────────────
+// ── core pins no vendor model ───────────────────────────────────────────────
 
 /**
  * Guard: core must not pin a vendor model SKU.
@@ -831,7 +831,7 @@ export const findCoreVendorModelPins = (
   return findings
 }
 
-// ── e2e-fixture-imports ─────────────────────────────────────────────────────
+// ── every e2e test drives a subprocess ──────────────────────────────────────
 
 /**
  * Guard: every e2e test file drives a subprocess.
@@ -869,7 +869,7 @@ export const findE2eFixtureImportFindings = (
   ]
 }
 
-// ── hook-runs-guards ────────────────────────────────────────────────────────
+// ── the pre-commit hook runs the guards ─────────────────────────────────────
 
 /**
  * Guard: the pre-commit hook runs the guards.
@@ -944,7 +944,7 @@ export const findHookWithoutGuards = (
   ]
 }
 
-// ── lint-config-guards ──────────────────────────────────────────────────────
+// ── lint config names nothing that is gone ──────────────────────────────────
 
 /**
  * Guards: the lint config and the environment must not name things that are gone.
@@ -1183,7 +1183,7 @@ export const findReadersWithoutWriters = (
   return findings
 }
 
-// ── platform-duplication-guards ─────────────────────────────────────────────
+// ── no code duplicates an Effect platform service ───────────────────────────
 
 export interface PlatformDuplicationFinding {
   readonly file: string
@@ -1296,7 +1296,7 @@ export const findPlatformDuplicationViolations = (
   return findings
 }
 
-// ── retired-surfaces ────────────────────────────────────────────────────────
+// ── a deleted surface stays deleted ─────────────────────────────────────────
 
 /**
  * Guard: a deleted surface stays deleted.
@@ -1620,7 +1620,7 @@ export const findRetiredSurfaces = (
   return findings
 }
 
-// ── steering-file-paths ─────────────────────────────────────────────────────
+// ── a steering-file path exists ─────────────────────────────────────────────
 
 /**
  * Guard: a repo path named in a steering file must exist.
@@ -1753,7 +1753,7 @@ export const findSteeringFilePaths = (
   return findings
 }
 
-// ── tui-session-identity ────────────────────────────────────────────────────
+// ── an effect tracks no whole session record ────────────────────────────────
 
 /**
  * Guard: a reactive effect must not track the whole session record.
@@ -1840,7 +1840,7 @@ export const findTuiSessionIdentityReads = (
   return findings
 }
 
-// ── suppression-inventory ───────────────────────────────────────────────────
+// ── the approved diagnostics suppressions ───────────────────────────────────
 
 /**
  * The one suppression the linters cannot police: `@effect-diagnostics` comments.
@@ -2054,7 +2054,7 @@ export const findUnusedSuppressionApprovals = (
     return [{ file: entry.file, comment }]
   })
 
-// ── export-consumers ────────────────────────────────────────────────────────
+// ── every export has a consumer ─────────────────────────────────────────────
 
 /**
  * Guard: an export must have a consumer.

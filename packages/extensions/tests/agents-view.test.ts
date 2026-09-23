@@ -16,7 +16,6 @@ import {
   foldActivity,
   type LiveAgentRow,
   projectAgentRows,
-  propagateRunning,
   reconcileAgentRows,
   rowKey,
   sectionOf,
@@ -320,68 +319,36 @@ describe("agents view projection", () => {
     })
   })
 
-  describe("running propagation", () => {
-    test("forces an idle parent to running while a child runs", () => {
-      // A collapsed parent must not look idle while its subagent works.
-      const rows = propagateRunning(
-        reconcileAgentRows({
-          live: [
-            live({ session: "parent", branch: "b", status: "Idle" }),
-            live({ session: "child", branch: "b", status: "Running" }),
-          ],
-          durable: [
-            durable({ session: "parent", branch: "b" }),
-            durable({ session: "child", branch: "b", parentSession: "parent", parentBranch: "b" }),
-          ],
-        }),
-      )
-      expect(find(rows, "parent", "b")?.section).toBe("running")
+  describe("sections by own state", () => {
+    test("an idle middle parent sits in the idle section while its grandchild runs", () => {
+      // main → a → b. a started b and its own turn ended; only b works.
+      const rows = projectAgentRows({
+        live: [
+          live({ session: "main", branch: "b", status: "Idle" }),
+          live({ session: "a", branch: "b", status: "Idle" }),
+          live({ session: "b", branch: "b", status: "Running" }),
+        ],
+        durable: [
+          durable({ session: "main", branch: "b" }),
+          durable({ session: "a", branch: "b", parentSession: "main", parentBranch: "b" }),
+          durable({ session: "b", branch: "b", parentSession: "a", parentBranch: "b" }),
+        ],
+      })
+      expect(rows.map((row) => [row.sessionId, row.section, row.depth])).toEqual([
+        [sid("b"), "running", 0],
+        [sid("main"), "idle", 0],
+        [sid("a"), "idle", 1],
+      ])
     })
 
-    test("propagates through two levels to the grandparent", () => {
-      const rows = propagateRunning(
-        reconcileAgentRows({
-          live: [
-            live({ session: "a", branch: "b", status: "Idle" }),
-            live({ session: "b", branch: "b", status: "Idle" }),
-            live({ session: "c", branch: "b", status: "Running" }),
-          ],
-          durable: [
-            durable({ session: "a", branch: "b" }),
-            durable({ session: "b", branch: "b", parentSession: "a", parentBranch: "b" }),
-            durable({ session: "c", branch: "b", parentSession: "b", parentBranch: "b" }),
-          ],
-        }),
-      )
-      expect(find(rows, "a", "b")?.section).toBe("running")
-    })
-
-    test("leaves an idle parent idle when no descendant runs", () => {
-      const rows = propagateRunning(
-        reconcileAgentRows({
-          live: [
-            live({ session: "parent", branch: "b", status: "Idle" }),
-            live({ session: "child", branch: "b", status: "Idle" }),
-          ],
-          durable: [
-            durable({ session: "parent", branch: "b" }),
-            durable({ session: "child", branch: "b", parentSession: "parent", parentBranch: "b" }),
-          ],
-        }),
-      )
-      expect(find(rows, "parent", "b")?.section).toBe("idle")
-    })
-
-    test("terminates on a cycle", () => {
-      const rows = propagateRunning(
-        reconcileAgentRows({
-          live: [live({ session: "a", branch: "b", status: "Running" })],
-          durable: [
-            durable({ session: "a", branch: "b", parentSession: "b", parentBranch: "b" }),
-            durable({ session: "b", branch: "b", parentSession: "a", parentBranch: "b" }),
-          ],
-        }),
-      )
+    test("a parent cycle still lists every row", () => {
+      const rows = projectAgentRows({
+        live: [live({ session: "a", branch: "b", status: "Running" })],
+        durable: [
+          durable({ session: "a", branch: "b", parentSession: "b", parentBranch: "b" }),
+          durable({ session: "b", branch: "b", parentSession: "a", parentBranch: "b" }),
+        ],
+      })
       expect(rows).toHaveLength(2)
     })
   })
@@ -414,7 +381,7 @@ describe("agents view projection", () => {
   })
 
   describe("full projection", () => {
-    test("reconciles, propagates, and orders in one pass", () => {
+    test("reconciles and orders in one pass", () => {
       const rows = projectAgentRows({
         live: [
           live({ session: "parent", branch: "b", status: "Idle" }),
@@ -433,12 +400,13 @@ describe("agents view projection", () => {
           durable({ session: "gone", branch: "b", name: "old task", updatedAt: 50 }),
         ],
       })
-      expect(rows).toHaveLength(3)
-      // The idle parent was forced running by its child, so both sort first.
-      expect(rows[0]?.section).toBe("running")
-      expect(rows[1]?.section).toBe("running")
-      expect(rows[2]?.section).toBe("inactive")
-      expect(find(rows, "child", "b")?.depth).toBe(1)
+      // Each row sits in its own state's section: the working child first, as
+      // a root there, then its idle parent, then the stored row.
+      expect(rows.map((row) => [row.sessionId, row.section, row.depth])).toEqual([
+        [sid("child"), "running", 0],
+        [sid("parent"), "idle", 0],
+        [sid("gone"), "inactive", 0],
+      ])
     })
 
     test("survives an empty live catalog, as after a restart", () => {
@@ -803,15 +771,10 @@ describe("AgentsViewExtension via RPC", () => {
           const rowOf = (reply: typeof ReplySchema.Type, sessionId: string) =>
             reply.rows.find((row) => row.sessionId === sessionId)
           // Only listings that hide the child, as a pane query that matches the
-          // root alone sends. The busy child forces its root into `running`.
-          const rootOnly = { query: String(harness.sessionId) }
-          const rootRunning = yield* waitFor(
-            requestRows(harness, rootOnly),
-            ({ reply }) => rowOf(reply, harness.sessionId)?.section === "running",
-            5_000,
-            "root running under its child",
-          )
-          expect(rowOf(rootRunning.reply, child.sessionId)).toBeUndefined()
+          // root alone sends.
+          const rootOnly = yield* requestRows(harness, { query: String(harness.sessionId) })
+          expect(rowOf(rootOnly.reply, harness.sessionId)).toBeDefined()
+          expect(rowOf(rootOnly.reply, child.sessionId)).toBeUndefined()
           const chunkPublished = yield* harness.client.session
             .events({ sessionId: child.sessionId, branchId: child.branchId })
             .pipe(

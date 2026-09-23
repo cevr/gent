@@ -207,8 +207,9 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
 
 /**
  * `ctx 42%`: percent of the model's context window. The provider's count of
- * the last step's input includes the system prompt and the tools, which the
- * projection's estimate leaves out, so it wins once a step has reported it.
+ * the projected step's input includes the system prompt and the tools, which
+ * the projection's estimate leaves out, so it wins once that step reports it;
+ * until then (a step still streaming, a model just switched) the estimate reads.
  * What the projection dropped is in the thread pane.
  */
 const projectionLabel = (
