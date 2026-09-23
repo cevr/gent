@@ -480,7 +480,6 @@ describe("concurrency", () => {
           branchId: branch.id,
           prompt: "run serial tools",
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(maxRunning).toBeGreaterThan(1)
       expect(events.length).toBe(4)
@@ -527,7 +526,6 @@ describe("continuation", () => {
         yield* runAgentLoop(agentLoop, makeContMessage("test auto-continue"))
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -541,7 +539,6 @@ describe("continuation", () => {
         yield* runAgentLoop(agentLoop, makeContMessage("text only"))
         expect(yield* controls.callCount).toBe(1)
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -558,7 +555,6 @@ describe("continuation", () => {
         yield* runAgentLoop(agentLoop, makeContMessage("multi-hop"))
         expect(yield* controls.callCount).toBe(4)
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -577,7 +573,6 @@ describe("continuation", () => {
         const events = yield* Ref.get(eventsRef)
         const turnCompleted = events.filter((e) => e._tag === "TurnCompleted")
         expect(turnCompleted.length).toBe(1)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
@@ -636,7 +631,6 @@ describe("continuation", () => {
         expect(resultIndex).toBeGreaterThanOrEqual(0)
         expect(interjectionIndex).toBeGreaterThan(resultIndex)
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
@@ -675,7 +669,6 @@ describe("continuation", () => {
         expect(joined?.metadata?.details).toEqual({ from: "sender" })
         // The turn it joined answered it, so a restart must not answer it again.
         expect(Predicate.isNotUndefined(joined) && isRuntimeUserMessage(joined)).toBe(true)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
@@ -707,7 +700,6 @@ describe("continuation", () => {
         const messages = yield* messageStorage.listMessages(idleBranchId)
         expect(messages.filter((message) => message._tag === "interjection")).toHaveLength(1)
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
@@ -740,7 +732,6 @@ describe("continuation", () => {
         expect(tc).toBeDefined()
         if (Predicate.isUndefined(tc)) return
         expect(tc.interrupted).toBe(true)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
@@ -758,7 +749,6 @@ describe("continuation", () => {
         yield* controls.assertDone
         const events = yield* Ref.get(eventsRef)
         expect(events.filter((e) => e._tag === "TurnCompleted").length).toBe(1)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
@@ -793,7 +783,6 @@ describe("continuation", () => {
         expect(t3).toBeUndefined()
         expect(new Set([a1!.id, a2!.id, a3!.id]).size).toBe(3)
         expect(new Set([t1!.id, t2!.id]).size).toBe(2)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -843,7 +832,6 @@ describe("continuation", () => {
         expect(interruptedTurns.length).toBe(1)
         // Follow-up used the third provider step
         expect(yield* controls.callCount).toBe(3)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
@@ -912,7 +900,6 @@ describe("empty final step", () => {
         // assistant text at all is the failure: the caller cannot tell an empty
         // answer from a successful one.
         expect(assistantTexts.length).toBeGreaterThan(0)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -951,7 +938,6 @@ describe("empty final step", () => {
           (message) => message.metadata?.customType === "continuation",
         )
         expect(continuation?.role).toBe("user")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
     }),
   )
@@ -984,7 +970,6 @@ describe("empty final step", () => {
           // Without the flag every field here reads exactly like a successful
           // turn, and the caller cannot tell "gave up" from "replied".
           expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeRecordingLayer(providerLayer))),
       )
     }),
@@ -1013,7 +998,6 @@ describe("empty final step", () => {
           const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
           expect(turnCompleted.length).toBeGreaterThan(0)
           expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeRecordingLayer(providerLayer))),
       )
     }),
@@ -1090,7 +1074,6 @@ describe("max turn steps", () => {
         // Without the flag this reads as a successful turn with an empty
         // transcript, and headless mode exits 0 on it.
         expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(alwaysToolCalls, eventsRef, [echoTool])))
     }),
   )
@@ -1122,7 +1105,6 @@ describe("max turn steps", () => {
         expect(refused).toHaveLength(1)
         const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
         expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
@@ -1153,7 +1135,6 @@ describe("max turn steps", () => {
         // A failed `assertOptions` fails the stream, not the test: read the outcome.
         const events = yield* Ref.get(eventsRef)
         expect(events.some((event) => event._tag === "ErrorOccurred")).toBe(false)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
@@ -1188,7 +1169,6 @@ describe("max turn steps", () => {
         const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
         expect(turnCompleted.length).toBeGreaterThan(0)
         expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
@@ -1236,7 +1216,6 @@ describe("max turn steps", () => {
         yield* Fiber.join(fiber)
         yield* controls.waitForCall(1)
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }).pipe(Effect.timeout("4 seconds")),
   )
@@ -1268,7 +1247,6 @@ describe("max turn steps", () => {
         const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
         expect(turnCompleted).toHaveLength(1)
         expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(alwaysToolCalls, eventsRef, [echoTool])))
     }),
   )
@@ -1305,7 +1283,6 @@ describe("turn stream lifecycle", () => {
           toolCalls: messagePartsToolCallParts(assistant!.parts),
         }
       }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           makeLayerWithEvents(
             scriptedProvider([
@@ -1408,7 +1385,6 @@ describe("tool projection reconciliation", () => {
           expect(completed?._tag).toBe("TurnCompleted")
           expect(completed?._tag === "TurnCompleted" && completed.usage).toBeUndefined()
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])),
           Effect.timeout("4 seconds"),
         ),
@@ -1481,7 +1457,6 @@ describe("tool projection reconciliation", () => {
           )
           expect(failed).toEqual([])
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])),
           Effect.timeout("4 seconds"),
         ),
@@ -1579,7 +1554,6 @@ describe("tool projection reconciliation", () => {
             // answers instead of failing on the missing one.
             expect(exit._tag).toBe("Success")
           }).pipe(
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])),
             Effect.timeout("4 seconds"),
           ),
@@ -1652,7 +1626,6 @@ describe("tool projection reconciliation", () => {
           expect(result?.parts).toMatchObject([
             { type: "tool-result", id: toolCallId, isFailure: true },
           ])
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool]))),
       )
     }),
@@ -2040,10 +2013,7 @@ describe("native model context projection", () => {
         })
         expect(callIds).toEqual([ToolCallId.make("pair-1"), ToolCallId.make("pair-2")])
         expect(resultIds).toEqual([ToolCallId.make("pair-1"), ToolCallId.make("pair-2")])
-      }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- The provider layer is created by this test.
-        Effect.provide(makeLayer(providerLayer, [readTool])),
-      )
+      }).pipe(Effect.provide(makeLayer(providerLayer, [readTool])))
       yield* run
     }).pipe(Effect.timeout("5 seconds"))
   })
@@ -2174,7 +2144,6 @@ describe("model resolution failure", () => {
           return [event.error]
         })
         expect(shown).toEqual([signInMessage])
-        // oxlint-disable-next-line effect/noInlineProvide -- The layer is built from this test's driver.
       }).pipe(Effect.scoped, Effect.provide(layer))
     }).pipe(Effect.timeout("5 seconds"))
   })
@@ -2226,6 +2195,7 @@ const makeHarness = (
   options: {
     readonly answered?: ReadonlySet<InteractionRequestId>
     readonly sessionAgent?: Effect.Effect<AgentName, AgentLoopError>
+    readonly completeFailedTurn?: (state: RunningState) => Effect.Effect<void>
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -2242,6 +2212,8 @@ const makeHarness = (
         error: Option.none<AgentLoopError>(),
       }),
       startedRef: yield* Ref.make(true),
+      turnSettled: () => Effect.succeed(false),
+      messageStored: () => Effect.succeed(false),
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
@@ -2265,7 +2237,7 @@ const makeHarness = (
       recordTurnFailure: (_cause, messageId) =>
         Ref.update(failedTurns, (ids) => [...ids, String(messageId)]),
       publishEvent: () => Effect.void,
-      completeFailedTurn: () => Effect.void,
+      completeFailedTurn: options.completeFailedTurn ?? (() => Effect.void),
       interactionAnswered: (requestId) => Effect.succeed(answered.has(requestId)),
       runTurn: (state) =>
         Effect.gen(function* () {
@@ -2336,6 +2308,50 @@ describe("a turn whose agent cannot be read", () => {
       expect(yield* Ref.get(harness.ranTurns)).toEqual(["second"])
       yield* Fiber.interrupt(loop)
     }),
+  )
+
+  it.live(
+    "an interrupt while its receipt and hooks run is not held, and spares the next turn",
+    () =>
+      Effect.gen(function* () {
+        const first = queuedItem("first")
+        const second = queuedItem("second")
+        const initial = admitted(first, [second])
+        const reads = yield* Ref.make(0)
+        const hooksStarted = yield* Deferred.make<void>()
+        const releaseHooks = yield* Deferred.make<void>()
+        const harness = yield* makeHarness(initial, {
+          sessionAgent: Ref.getAndUpdate(reads, (count) => count + 1).pipe(
+            Effect.flatMap((count) => {
+              if (count === 0) return Effect.fail(new AgentLoopError({ message: "database busy" }))
+              return Effect.succeed(DEFAULT_AGENT_NAME)
+            }),
+          ),
+          // The failed turn's receipt and `turnAfter` hooks: a hook still runs.
+          completeFailedTurn: () =>
+            Deferred.succeed(hooksStarted, void 0).pipe(
+              Effect.andThen(Deferred.await(releaseHooks)),
+            ),
+        })
+        yield* TxQueue.offer(harness.turnWorkerQueue, initial.state)
+        const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+        yield* Deferred.await(hooksStarted).pipe(Effect.timeout("2 seconds"))
+        // A normal turn's hooks run outside the interrupt permit; so do these.
+        const interrupt = yield* harness.worker
+          .interrupt()
+          .pipe(Effect.timeout("1 second"), Effect.exit)
+        yield* Deferred.succeed(releaseHooks, void 0)
+        expect(interrupt._tag).toBe("Success")
+        yield* Ref.get(harness.ranTurns).pipe(
+          Effect.repeat({ until: (ids) => ids.length > 0, schedule: Schedule.spaced("5 millis") }),
+          Effect.timeout("2 seconds"),
+        )
+        // The interrupt stopped the failed turn, not the one queued behind it.
+        // (The stub turn never settles, so the worker keeps handing it back.)
+        expect((yield* Ref.get(harness.ranTurns))[0]).toBe("second")
+        expect((yield* Ref.get(harness.interruptedTurns))[0]).toBe(false)
+        yield* Fiber.interrupt(loop)
+      }),
   )
 })
 
@@ -2657,6 +2673,42 @@ describe("turn lifecycle hooks", () => {
       expect(yield* Ref.get(calls)).toBe(3)
     }),
   )
+
+  // A defect in the stream fails the turn phase, not the stream: the turn
+  // ends on its failed receipt, and its hooks run as a normal turn's do,
+  // outside the permit an interrupt takes.
+  const phaseFailingProvider = () =>
+    LanguageModelLayers.testStream(() => Effect.succeed(Stream.die("stream defect")))
+
+  // `Session.stop` sends the Cancel and returns, so this guards the path end
+  // to end; the worker test "an interrupt while its receipt and hooks run"
+  // proves the interrupt itself no longer waits for the hooks.
+  it.scopedLive("a phase-failed turn's hook can stop its own branch", () =>
+    Effect.gen(function* () {
+      const stopped = yield* Deferred.make<boolean>()
+      const extension = defineExtension({
+        id: "@gent/test-turn-after-stops-own-branch",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("turnAfter", (input: TurnAfterInput) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Session.stop({}).pipe(Effect.ignore)
+              yield* Deferred.succeed(stopped, input.streamFailed)
+            }),
+          )
+        }),
+      })
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: phaseFailingProvider(),
+        extensionInputs: [...e2ePreset.extensionInputs, extension],
+      })
+
+      yield* client.message.send({ sessionId, branchId, content: "answer me" }).pipe(Effect.exit)
+      expect(yield* Deferred.await(stopped).pipe(Effect.timeout("5 seconds"))).toBe(true)
+    }),
+  )
 })
 
 // ── recovery race ───────────────────────────────────────────────────────────
@@ -2802,7 +2854,6 @@ describe("agent-loop recovery race", () => {
             if (completed._tag === "Some") {
               expect(Exit.isFailure(completed.value)).toBe(true)
             }
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
         )
       }),
@@ -2960,7 +3011,6 @@ describe("agent-loop recovery race", () => {
             yield* Fiber.join(op1)
             yield* Fiber.join(op2)
             yield* Deferred.await(op2Done)
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
         )
       }),
@@ -3507,7 +3557,6 @@ describe("turn record", () => {
               { agent: helperAgent.name, runSpec },
             )
             yield* Deferred.await(firstCalled)
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layerFor(firstProvider)), Effect.timeout("10 seconds")),
         )
 
@@ -3556,7 +3605,6 @@ describe("turn record", () => {
               "the recovered step ended",
             )
             expect(streamModel._tag === "StreamEnded" && streamModel.model).toBe(helperAgent.model)
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layerFor(secondProvider)), Effect.timeout("10 seconds")),
         )
 
@@ -3609,7 +3657,6 @@ describe("turn record", () => {
             )
             yield* Deferred.await(firstCalled)
           }).pipe(
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(layerFor(firstProvider, [...testAgents, helperAgent])),
             Effect.timeout("10 seconds"),
           ),
@@ -3650,7 +3697,6 @@ describe("turn record", () => {
             const completed = events.filter((event) => event._tag === "TurnCompleted")
             expect(completed.every((event) => event.unanswered === true)).toBe(true)
           }).pipe(
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(layerFor(secondProvider, testAgents)),
             Effect.timeout("10 seconds"),
           ),
@@ -3698,7 +3744,6 @@ describe("turn record", () => {
             )
             yield* Deferred.await(entered)
           }).pipe(
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(layerFor(firstProvider.layer, [...testAgents, helperAgent])),
             Effect.timeout("10 seconds"),
           ),
@@ -3736,7 +3781,6 @@ describe("turn record", () => {
               .filter((part) => part.type === "tool-result")
             expect(results).toHaveLength(1)
           }).pipe(
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(layerFor(secondProvider.layer, testAgents)),
             Effect.timeout("10 seconds"),
           ),
@@ -4325,7 +4369,6 @@ describe("agent-loop actor commands", () => {
         yield* Fiber.join(secondFiber)
         expect(entered).toBe(2)
         expect(completed).toBe(2)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
     }),
   )
@@ -4388,7 +4431,6 @@ describe("agent-loop actor commands", () => {
         const result = yield* Fiber.join(requestFiber)
         expect(executed).toBe(true)
         expect(result).toEqual("blocked until turn completes")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
     }),
   )
@@ -4439,7 +4481,6 @@ describe("agent-loop actor commands", () => {
         // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
         yield* Deferred.succeed(streamReleased, undefined)
         yield* Fiber.join(submitFiber)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
     }),
   )
@@ -4495,7 +4536,6 @@ describe("agent-loop actor commands", () => {
         expect(afterTerminate._tag).toBe("Failure")
         // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
         yield* Deferred.succeed(streamReleased, undefined).pipe(Effect.ignore)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -4580,6 +4620,8 @@ describe("wake admission", () => {
           error: Option.none<AgentLoopError>(),
         }),
         startedRef: yield* Ref.make(true),
+        turnSettled: (messageId) => Effect.succeed(messageId === MessageId.make("settled")),
+        messageStored: () => Effect.succeed(false),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),
@@ -4643,6 +4685,26 @@ describe("wake admission", () => {
       (index) => inbox.admit({ message: queuedMessage(`full-${index}`, `item ${index}`) }),
       { discard: true },
     )
+
+  // A replayed follow-up whose turn runs or ran is not a new turn. The running
+  // turn gave up its in-flight slot when it started, so only the phase names it.
+  it.effect("re-admitting the running turn's id queues nothing", () =>
+    withInbox((inbox) =>
+      Effect.gen(function* () {
+        yield* inbox.admit({ message: queuedMessage("busy", "busy (replay)") })
+        expect((yield* inbox.queue).followUp).toEqual([])
+      }),
+    ),
+  )
+
+  it.effect("re-admitting a settled turn's id queues nothing", () =>
+    withInbox((inbox) =>
+      Effect.gen(function* () {
+        yield* inbox.admit({ message: queuedMessage("settled", "settled (replay)") })
+        expect((yield* inbox.queue).followUp).toEqual([])
+      }),
+    ),
+  )
 
   it.effect("a full follow-up queue accepts a retry of a queued id in place", () =>
     withInbox((inbox) =>
@@ -4782,7 +4844,6 @@ describe("queue drain regression", () => {
             expect(queue.inFlight).toBeUndefined()
             expect(queue.followUp).toEqual([])
             expect(queue.steering).toEqual([])
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -4853,7 +4914,6 @@ describe("queue drain regression", () => {
             yield* Fiber.join(firstQueued)
             yield* Fiber.join(secondQueued)
             expect((yield* agentLoop.getQueue({ sessionId, branchId })).followUp).toHaveLength(2)
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(makeLayer())),
         )
         yield* Effect.scoped(
@@ -4861,7 +4921,6 @@ describe("queue drain regression", () => {
             const agentLoop = yield* makeAgentLoopService
             const recovered = yield* agentLoop.getQueue({ sessionId, branchId })
             expect(recovered.followUp.map((item) => item.content)).toEqual(["second", "third"])
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(makeLayer())),
         )
         // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
@@ -4911,7 +4970,6 @@ describe("queue drain regression", () => {
             yield* agentLoop.getState({ sessionId, branchId })
             yield* Deferred.await(providerCalled).pipe(Effect.timeout("4 seconds"))
             expect(yield* Ref.get(providerCalls)).toBe(1)
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -4977,7 +5035,6 @@ describe("queue drain regression", () => {
               Effect.option,
             )
             expect(Option.isNone(called)).toBe(true)
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -5050,7 +5107,6 @@ describe("queue drain regression", () => {
               Effect.option,
             )
             expect(Option.isNone(called)).toBe(true)
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -5119,7 +5175,6 @@ describe("queue drain regression", () => {
               Effect.option,
             )
             expect(Option.isNone(called)).toBe(true)
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )
       }),
@@ -5168,7 +5223,6 @@ describe("queue drain regression", () => {
               Effect.option,
             )
             expect(Option.isNone(called)).toBe(true)
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(makeLayer(providerLayer))),
         )
       }),
@@ -5271,7 +5325,6 @@ describe("queue drain regression", () => {
             // when it did. A crash in that window replays a delivery the message
             // id makes a no-op; the other order loses input the branch accepted.
             expect(yield* Ref.get(transcriptHeldAtDrop)).toStrictEqual(Option.some(true))
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
         )
       }),
@@ -5335,7 +5388,6 @@ describe("queue drain regression", () => {
             expect(queuedExit._tag).toBe("Failure")
             expect((yield* agentLoop.getQueue({ sessionId, branchId })).followUp).toEqual([])
             expect((yield* Ref.get(storedQueueRef)).followUp).toEqual([])
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
         )
         // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
@@ -5461,7 +5513,6 @@ describe("interaction", () => {
           yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
           expect(yield* Ref.get(callCount)).toBe(2)
           yield* Fiber.join(fiber)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -5505,7 +5556,6 @@ describe("interaction", () => {
           yield* Deferred.await(resolution).pipe(Effect.timeout("5 seconds"))
           expect(yield* Ref.get(callCount)).toBe(2)
           yield* Fiber.join(fiber)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -5574,7 +5624,6 @@ describe("interaction", () => {
             expect(
               unrun?.parts.map((part) => part.type === "tool-result" && part.isFailure),
             ).toEqual([true])
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
         )
       }),
@@ -5634,7 +5683,6 @@ describe("interaction", () => {
             { type: "tool-result", isFailure: true, result: { reason: "Interrupted" } },
           ])
           expect(calls).toBe(1)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
       )
     }),
@@ -5689,7 +5737,6 @@ describe("interaction", () => {
               assistantMessageIdForTurn(first.id, 2),
             )
             expect(reply?.parts).toEqual([Prompt.textPart({ text: "after failure" })])
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
         )
       }),
@@ -5724,7 +5771,6 @@ describe("interaction", () => {
           })
           expect(stateAfter._tag).toBe("Idle")
           expect(yield* Ref.get(callCount)).toBe(1)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -5784,7 +5830,6 @@ describe("interaction", () => {
             inputTokens: 10,
             outputTokens: 16,
           })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
       )
     }),
@@ -5821,7 +5866,6 @@ describe("interaction", () => {
           // The branch still projects: a later turn runs to an answer.
           yield* runAgentLoop(agentLoop, makeIntMessage("after the interrupt"))
           expect(yield* Ref.get(callCount)).toBe(1)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
       )
     }),
@@ -5848,7 +5892,6 @@ describe("interaction", () => {
             branchId: intBranchId,
           })
           expect(state._tag).toBe("Idle")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(loopLayer)),
       )
     }),
@@ -5932,7 +5975,6 @@ describe("interaction", () => {
           ).toBeUndefined()
           yield* Fiber.join(fiber)
           expect(Ref.getUnsafe(providerCallsRef)).toBe(2)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -6048,7 +6090,6 @@ describe("interaction", () => {
           yield* Fiber.join(fiber)
           expect(Ref.getUnsafe(providerCalls)).toBe(3)
         })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           .pipe(Effect.provide(layer))
           .pipe(Effect.timeout("2 seconds")),
       )
@@ -6166,7 +6207,6 @@ describe("interaction", () => {
             }
           }
         })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           .pipe(Effect.provide(layer))
           .pipe(Effect.timeout("2 seconds")),
       )
@@ -6279,7 +6319,6 @@ describe("interaction", () => {
             }
           }
         })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           .pipe(Effect.provide(layer))
           .pipe(Effect.timeout("2 seconds")),
       )
@@ -6408,7 +6447,6 @@ describe("interaction", () => {
             expect(nextAssistant.parts).toContainEqual(Prompt.textPart({ text: "next turn works" }))
           }
         })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           .pipe(Effect.provide(layer))
           .pipe(Effect.timeout("2 seconds")),
       )
@@ -6442,7 +6480,6 @@ describe("run completion", () => {
         )
         const state = yield* agentLoop.getState({ sessionId, branchId })
         expect(state._tag).toBe("Idle")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer)))
     }),
   )
@@ -6565,7 +6602,6 @@ describe("streaming", () => {
           expect(statusA).toBeUndefined()
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiberA)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -6628,7 +6664,6 @@ describe("streaming", () => {
             "Idle",
           )
           expect(calls).toBe(2)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -6686,7 +6721,6 @@ describe("streaming", () => {
           yield* Deferred.succeed(gateA, void 0)
           yield* Deferred.succeed(gateB, void 0)
           yield* Fiber.join(fiberB)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -6715,7 +6749,6 @@ describe("streaming", () => {
             .map(({ value }) => value._tag)
           expect(publishedEvents).toContain("StreamStarted")
           expect(publishedEvents).toContain("TurnCompleted")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -6756,7 +6789,6 @@ describe("streaming", () => {
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(exit._tag).toBe("Failure")
         expect(assistant).toBeUndefined()
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
     }),
   )
@@ -6810,7 +6842,6 @@ describe("streaming", () => {
         // The stored duration is the receipt's mark: the turn is complete.
         const stored = yield* messageStorage.getMessage(message.id)
         expect(stored?.turnDurationMs).toBeDefined()
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
     }),
   )
@@ -6854,7 +6885,6 @@ describe("streaming", () => {
         )
         expect(completions).toEqual([expect.objectContaining({ messageId: message.id })])
         expect(completions[0]).not.toHaveProperty("streamFailed", true)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, publisherLayer)))
     }),
   )
@@ -6927,7 +6957,6 @@ describe("streaming", () => {
         expect(streamCalls).toBe(2)
       }).pipe(
         Effect.timeout("4 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeLayerWithEventPublisher(providerLayer, failFirstAssistant)),
       )
     }),
@@ -6976,11 +7005,7 @@ describe("streaming", () => {
           runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "after recovery")),
         )
         expect(submitted._tag).toBe("Success")
-      }).pipe(
-        Effect.timeout("4 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(layer),
-      )
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
   it.live("a queued turn that fails before it starts does not hold the queue", () =>
@@ -7061,7 +7086,6 @@ describe("streaming", () => {
         expect(streamCalls).toBe(2)
       }).pipe(
         Effect.timeout("4 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeLayerWithEventPublisher(providerLayer, failSecondUserMessage)),
       )
     }),
@@ -7179,7 +7203,6 @@ describe("streaming", () => {
       }).pipe(
         Effect.flatMap(body),
         Effect.timeout("4 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeLayer(providerLayer)),
       )
     })
@@ -7328,7 +7351,6 @@ describe("streaming", () => {
                 // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                 yield* Deferred.succeed(aGate, undefined)
                 yield* Deferred.await(xStarted)
-                // oxlint-disable-next-line effect/noInlineProvide -- Each scope is one process lifetime.
               }).pipe(Effect.provide(processLayer(firstProvider))),
             )
             yield* Effect.gen(function* () {
@@ -7357,7 +7379,6 @@ describe("streaming", () => {
                 (yield* messageStorage.listMessages(branchId)).filter((row) => row.role === "user"),
               )
               expect(texts).toEqual(["a", "x", "y", "z"])
-              // oxlint-disable-next-line effect/noInlineProvide -- Each scope is one process lifetime.
             }).pipe(Effect.provide(processLayer(secondProvider)))
           }).pipe(Effect.timeout("8 seconds")),
         )
@@ -7400,7 +7421,6 @@ describe("streaming", () => {
         const user = yield* messageStorage.getMessage(message.id)
         expect(exit._tag).toBe("Failure")
         expect(user?.turnDurationMs).toBeUndefined()
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
     }),
   )
@@ -7503,7 +7523,6 @@ describe("streaming", () => {
           expect(providerCalls[0]!.latestUserText).toBe("first")
           expect(providerCalls[1]!.latestUserText).toBe("steer now")
           expect(providerCalls[2]!.latestUserText).toBe("queued")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -7570,7 +7589,6 @@ describe("streaming", () => {
           expect(secondSnapshot).toEqual(snapshot)
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -7655,7 +7673,6 @@ describe("streaming", () => {
             branchId: BranchId.make("b1"),
           })
           expect(snapshotAfterFailure).toEqual(emptyQueueSnapshot())
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
@@ -7727,7 +7744,6 @@ describe("streaming", () => {
             // The broken step spent tokens nobody reported: the receipt names no
             // total rather than the second step's alone.
             expect(completed[0]?._tag === "TurnCompleted" && completed[0].usage).toBeUndefined()
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef))),
         )
       }),
@@ -7767,7 +7783,6 @@ describe("streaming", () => {
           expect(events.filter((event) => event._tag === "TurnCompleted")).toMatchObject([
             { streamFailed: true },
           ])
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef))),
       )
     }),
@@ -7825,7 +7840,6 @@ describe("streaming", () => {
         expect(completed?._tag === "TurnCompleted" && completed.interrupted).toBe(true)
       }).pipe(
         Effect.timeout("6 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)),
       )
     }),
@@ -7862,7 +7876,6 @@ describe("streaming", () => {
         expect(tags).not.toContain("ErrorOccurred")
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "after retry" })])
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }),
   )
@@ -7915,7 +7928,6 @@ describe("streaming", () => {
             assistantMessageIdForTurn(message.id, 1),
           )
           expect(assistant?.parts).toEqual([Prompt.textPart({ text: "after metadata retry" })])
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
       }),
   )
@@ -7958,7 +7970,6 @@ describe("streaming", () => {
         expect(tags).toContain("TurnCompleted")
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeUndefined()
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }),
   )
@@ -8009,7 +8020,6 @@ describe("streaming", () => {
           expect(continuation?.metadata?.customType).toBe("continuation")
           const second = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 2))
           expect(second?.parts).toEqual([Prompt.textPart({ text: "duplicate answer" })])
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
       }),
   )
@@ -8049,7 +8059,6 @@ describe("streaming", () => {
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)))
     }),
   )
@@ -8272,10 +8281,7 @@ describe("tool binding replay", () => {
             reason: scenario.reason,
           })
           expect(Option.isNone(yield* replay.getBinding(key))).toBe(true)
-        }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- Each scenario owns a production test root with its authored extension.
-          Effect.provide(layer),
-        )
+        }).pipe(Effect.provide(layer))
       }).pipe(Effect.timeout("5 seconds")),
     )
   }
@@ -8347,10 +8353,7 @@ describe("tool binding replay", () => {
           _tag: "ToolBindingReplayError",
           reason: "SourceMismatch",
         })
-      }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- The scenario owns a production test root with its authored extension.
-        Effect.provide(layer),
-      )
+      }).pipe(Effect.provide(layer))
     }).pipe(Effect.timeout("5 seconds")),
   )
 

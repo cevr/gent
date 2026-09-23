@@ -798,6 +798,11 @@ describe("monitor guardrail", () => {
     expect(MonitorTool.readonly).toBe(false)
   })
 
+  test("wake and wake.cancel arm and cancel timers, so they do not claim to be readonly", () => {
+    expect(WakeTool.readonly).toBe(false)
+    expect(CancelTool.readonly).toBe(false)
+  })
+
   it.scopedLive("a flagged command asks once; a denial stores no monitor", () =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("wake-monitor-guard-")

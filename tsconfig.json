@@ -124,6 +124,14 @@
             }
           },
           {
+            "include": ["packages/tooling/src/gent-rules.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "nodeBuiltinImport": "off"
+              }
+            }
+          },
+          {
             "include": ["testbeds/gamut/gamut.ts"],
             "options": {
               "diagnosticSeverity": {
@@ -141,10 +149,8 @@
       "@gent/core/extensions/api": ["./packages/core/src/extensions/api.ts"],
       "@gent/extensions": ["./packages/extensions/src/index.ts"],
       "@gent/sdk": ["./packages/sdk/src/index.ts"],
-      "@gent/core/extensions/api.js": ["./packages/core/src/extensions/api.ts"],
       "@gent/extensions/client": ["./packages/extensions/src/client.ts"],
       "@gent/core/protocol": ["./packages/core/src/protocol.ts"],
-      "@gent/core/protocol.js": ["./packages/core/src/protocol.ts"],
       "@gent/core/host": ["./packages/core/src/host.ts"],
       "@gent/core/test-utils": ["./packages/core/src/test-utils/index.ts"]
     }

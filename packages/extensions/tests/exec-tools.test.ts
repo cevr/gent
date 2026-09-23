@@ -1248,6 +1248,85 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("readable xargs input is read through a runner, and supplies a git subcommand", () => {
+    for (const command of [
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs env",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs nohup",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs timeout 5",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I{} env {}",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | parallel env",
+      "echo 'reset --hard' | xargs git",
+      "printf 'push --force' | xargs git",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "git diff --name-only | xargs git add",
+      "echo a b | xargs -n1 echo",
+      "echo src | xargs grep -n foo",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("printf with only %s directives prints its arguments into the input", () => {
+    expect(
+      classifyBashCommand("printf '%s\\n' -rf /nonexistent/gent-probe-x | xargs rm").level,
+    ).toBe("destructive")
+    expect(classifyBashCommand("printf '%s ' reset --hard | xargs git").level).toBe("destructive")
+    for (const command of [
+      "printf '%s\\n' a b | xargs wc -l",
+      "printf '%s\\n' src/a.ts | xargs -n 50 bunx oxfmt",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a root shell with no command runs its piped input", () => {
+    for (const command of [
+      "echo 'rm -rf /nonexistent/gent-probe-x' | sudo -s",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | sudo -i",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | su",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | doas -s",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of ["sudo -s", "sudo -i", "su - someone", "echo hi | sudo -s ls"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("fish's script options are read", () => {
+    for (const command of [
+      "fish -C 'rm -rf /nonexistent/gent-probe-x'",
+      "fish --init-command 'rm -rf /nonexistent/gent-probe-x'",
+      "fish --init-command='rm -rf /nonexistent/gent-probe-x'",
+      "fish --command='rm -rf /nonexistent/gent-probe-x'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("fish -C 'set x 1'").level).toBe("safe")
+  })
+
+  test("gh's repo option before the group does not hide a delete", () => {
+    for (const command of ["gh --repo o/r release delete v1", "gh -R o/r repo delete o/r"]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("gh --repo o/r issue list").level).toBe("safe")
+  })
+
+  test("TRUNCATE without TABLE, and DROP VIEW or INDEX, are destructive", () => {
+    for (const command of [
+      "psql -c 'TRUNCATE t'",
+      "psql -c 'DROP VIEW v'",
+      "psql -c 'DROP INDEX i'",
+      "echo 'drop materialized view m' | psql",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("psql -c 'SELECT TRUNCATE(1.5, 1)'").level).toBe("safe")
+  })
+
   test("package runners, fd -x, SQL drops, gh deletes and git config from the environment are read", () => {
     for (const command of [
       "npm x -- rm -rf x",
@@ -1610,6 +1689,35 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
+  // Declined, so it never runs; the directory does not exist.
+  it.live(
+    "the question names the directory a leading cd moves the command to",
+    () =>
+      Effect.gen(function* () {
+        const asked = yield* Ref.make<ReadonlyArray<string>>([])
+        const ctx: TestToolContext = {
+          ...stubCtx,
+          Interaction: {
+            ...stubCtx.Interaction,
+            approve: ({ text }) =>
+              Ref.update(asked, (all) => [...all, text]).pipe(Effect.as({ approved: false })),
+          },
+        }
+        yield* provideBun(
+          runToolWithCtx(
+            BashTool,
+            { command: "cd /nonexistent/gent-probe-x && git push --force" },
+            ctx,
+          ),
+        )
+        const prompts = yield* Ref.get(asked)
+        expect(prompts[0]).toContain(
+          "This command (in `/nonexistent/gent-probe-x`) is classified as destructive",
+        )
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
   it.live(
     "keeps a huge command result whole",
     () =>
@@ -1880,7 +1988,6 @@ describe("BashTool execution", () => {
             { exitCode: 0, message: "stored output" },
           )
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(
             Layer.mergeAll(
               storageLayer,
@@ -1893,9 +2000,7 @@ describe("BashTool execution", () => {
           BashTool,
           { command: "printf should-not-run", run_in_background: true },
           ctx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
         expect(retried.exitCode).toBe(0)
 
         const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
@@ -1952,9 +2057,7 @@ describe("BashTool execution", () => {
             run_in_background: true,
           },
           ctx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(makeProcessLayerWithFailingMarkFailed(storageLayer)))
+        ).pipe(Effect.provide(makeProcessLayerWithFailingMarkFailed(storageLayer)))
         expect(result.exitCode).toBe(0)
 
         const followUp = yield* Effect.exit(Deferred.await(sent).pipe(Effect.timeout("250 millis")))
@@ -2011,7 +2114,6 @@ describe("BashTool execution", () => {
         yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient
           yield* sql`UPDATE background_bash_jobs SET owner_generation = 'earlier-process'`
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(storageLayer))
 
         // The restarted server's process layer marks the job interrupted as it builds.
@@ -2019,9 +2121,7 @@ describe("BashTool execution", () => {
           BashTool,
           { command: "printf should-not-run", run_in_background: true },
           ctx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
         expect(retried.exitCode).toBe(0)
 
         const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
@@ -2099,7 +2199,6 @@ describe("BashTool execution", () => {
           command: "sleep 9",
           cwd: Option.none(),
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test builds the storage over a table it planted.
       }).pipe(Effect.provide(BackgroundBashStorage.Live))
       expect(claim._tag).toBe("Terminal")
       if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
@@ -2155,7 +2254,6 @@ describe("BashTool execution", () => {
           expect(second.exitCode).toBe(0)
           // The replay path is synchronous: a Terminal claim queues its notice
           // before `start` returns, so a second entry would already be here.
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makePlatformLayer()))
 
         const all = yield* Ref.get(notices)

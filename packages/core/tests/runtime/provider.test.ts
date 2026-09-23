@@ -692,14 +692,12 @@ describe("Auth", () => {
         const writer = Effect.gen(function* () {
           const auth = yield* Auth
           yield* auth.set("openai", AuthInfo.cases.Api.make({ type: "api", key: "sk-on-disk" }))
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(Auth.Live(dir)))
         yield* writer
 
         const reader = Effect.gen(function* () {
           const auth = yield* Auth
           return yield* auth.get("openai")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(Auth.Live(dir)))
         const fetched = yield* reader
 
@@ -719,7 +717,6 @@ describe("Auth", () => {
         const result = yield* Effect.gen(function* () {
           const auth = yield* Auth
           return yield* auth.get("openai")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(Auth.Live(dir)))
         expect(result).toBeUndefined()
 
@@ -1084,7 +1081,6 @@ describe("ProviderAuth", () => {
         )
         const stored = yield* store.get("openai")
         return { ok: true, stored }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       if (!result.ok) return yield* Effect.die(new Error("auth setup failed"))
       const stored = Option.fromUndefinedOr(result.stored)
@@ -1105,7 +1101,6 @@ describe("ProviderAuth", () => {
       const methods = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
         return yield* auth.listMethods
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(Object.keys(methods)).toContain("openai")
       expect(Object.keys(methods)).toContain("anthropic")
@@ -1122,7 +1117,6 @@ describe("ProviderAuth", () => {
       const exit = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
         return yield* Effect.exit(auth.authorize(SessionId.make("s1"), "persisting", 0))
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -1150,7 +1144,6 @@ describe("ProviderAuth", () => {
             "sk-test-key",
           ),
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -1268,7 +1261,6 @@ describe("Provider model resolution", () => {
       const result = yield* Effect.exit(
         resolveModel({
           model: "custom/gpt-5",
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Success")
@@ -1288,7 +1280,6 @@ describe("Provider model resolution", () => {
           },
         ]),
       ])
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const model = yield* resolveModel({ model: "direct/gpt-5" }).pipe(Effect.provide(layer))
       const result = yield* model.streamText({ prompt: [] }).pipe(Stream.runCollect)
       expect(Array.from(result)).toEqual([expect.objectContaining({ type: "finish" })])
@@ -1300,7 +1291,6 @@ describe("Provider model resolution", () => {
       const result = yield* Effect.exit(
         resolveModel({
           model: "unknown-provider/some-model",
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -1337,7 +1327,6 @@ describe("Provider model resolution", () => {
       const result = yield* Effect.exit(
         resolveModel({
           model: "broken/model",
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -1376,7 +1365,6 @@ describe("Provider model resolution", () => {
       const result = yield* Effect.exit(
         resolveModel({
           model: "auth-missing/model",
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -1413,7 +1401,6 @@ describe("Provider model resolution", () => {
       const result = yield* Effect.exit(
         resolveModel({
           model: "auth-fails/model",
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(result._tag).toBe("Failure")
@@ -1430,7 +1417,6 @@ describe("Provider model resolution", () => {
       ])
       // The turn registry has "shadowed" and must win.
       const turnRegistry = yield* Effect.service(ExtensionRegistry).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           ExtensionRegistry.fromResolved(
             resolveExtensions([makeExt("shadowed", [makeProvider("shadowed", "Shadowed")])]),
@@ -1438,14 +1424,12 @@ describe("Provider model resolution", () => {
         ),
       )
       const launch = yield* Effect.exit(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         resolveModel({ model: "shadowed/some-model" }).pipe(Effect.provide(capturedLayer)),
       )
       expect(launch._tag).toBe("Failure")
       const turn = yield* Effect.exit(
         resolveModel({ model: "shadowed/some-model" }).pipe(
           Effect.provideService(ExtensionRegistry, turnRegistry),
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(capturedLayer),
         ),
       )
@@ -1487,7 +1471,6 @@ describe("Provider model resolution", () => {
         resolveModel({
           model: "primary/foo",
           driverId: "alt",
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
       expect(chosenDriver).toBe("alt")
@@ -1540,7 +1523,6 @@ describe("Provider model resolution", () => {
         model: "tools-live/gpt-5",
         prompt: [],
         tools: [echoCapability],
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(captured).toHaveLength(1)
       const capturedTools = captured[0]
@@ -1633,7 +1615,6 @@ describe("Provider model resolution", () => {
         model: "typed-toolkit-live/gpt-5",
         prompt: [],
         toolkit: typedToolkit,
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(Option.isSome(capturedToolkit)).toBe(true)
       if (Option.isSome(capturedToolkit)) expect(capturedToolkit.value).toBe(typedToolkit)
@@ -1715,7 +1696,6 @@ describe("Provider model resolution", () => {
           ),
         })
         expect(parts.length).toBe(1)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(Option.isSome(capturedPrompt)).toBe(true)
       if (Option.isNone(capturedPrompt)) return

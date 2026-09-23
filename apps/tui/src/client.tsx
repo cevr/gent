@@ -777,9 +777,7 @@ export function ClientProvider(props: ClientProviderProps) {
               for (const model of models) modelsById[model.id] = model
               const agentsByName: Record<string, AgentDefinition> = {}
               for (const agent of drivers.agents) agentsByName[agent.name] = agent
-              const driverIds = drivers.drivers
-                .filter((driver) => driver._tag === "Model")
-                .map((driver) => driver.id)
+              const driverIds = drivers.drivers.map((driver) => driver.id)
               setModelStore({ modelsById, agentsByName, driverIds })
             }),
           ),

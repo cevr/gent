@@ -4,6 +4,7 @@ import {
   defineExtension,
   ExtensionContext,
   ExtensionHost,
+  ExtensionId,
   headTailChars,
   type Message,
   messagePartsDisplayText,
@@ -167,7 +168,7 @@ class SendSessionError extends Schema.TaggedError<SendSessionError>()("SendSessi
   message: Schema.String,
 }) {}
 
-export const SESSION_TOOLS_EXTENSION_ID = "@gent/session-tools"
+export const SESSION_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/session-tools")
 
 /** `metadata.customType` on the interjection `session.send` lands on the receiver. */
 export const SESSION_MESSAGE_TYPE = "session-message"

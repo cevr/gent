@@ -292,19 +292,30 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
           function* (id) {
             const workspaceId = yield* CurrentWorkspaceId
             return yield* Effect.gen(function* () {
+              // The session goes with everything it spawned, and a spawn goes
+              // with its own handoffs. A handoff that continues the deleted
+              // session's thread is the conversation the user kept working in:
+              // it stays, detached from the parent it no longer has.
               const descendantRows = yield* sql<{ id: SessionId }>`
-                  WITH RECURSIVE descendants(id) AS (
-                    SELECT id FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}
-                    UNION
-                    SELECT sessions.id
-                    FROM sessions
-                    JOIN descendants ON sessions.parent_session_id = descendants.id
-                    WHERE sessions.workspace_id = ${workspaceId}
-                  )
+                  WITH RECURSIVE
+                    target(id, thread_id) AS (
+                      SELECT id, thread_id FROM sessions WHERE id = ${id} AND workspace_id = ${workspaceId}
+                    ),
+                    descendants(id) AS (
+                      SELECT id FROM target
+                      UNION
+                      SELECT sessions.id
+                      FROM sessions
+                      JOIN descendants ON sessions.parent_session_id = descendants.id
+                      WHERE sessions.workspace_id = ${workspaceId}
+                        AND sessions.thread_id IS NOT (SELECT thread_id FROM target)
+                    )
                   SELECT id FROM descendants
                 `
               const cascadedIds = descendantRows.map((row) => row.id)
               if (cascadedIds.length === 0) return cascadedIds
+              yield* sql`UPDATE sessions SET parent_session_id = NULL, parent_branch_id = NULL
+                WHERE parent_session_id IN ${sql.in(cascadedIds)} AND id NOT IN ${sql.in(cascadedIds)}`
               // Queues, branches, messages and their chunk links cascade by foreign key.
               yield* sql`DELETE FROM sessions WHERE id IN ${sql.in(cascadedIds)}`
               yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`

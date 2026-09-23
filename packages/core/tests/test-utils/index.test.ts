@@ -47,7 +47,6 @@ describe("ensureStorageParents", () => {
       const sessions = yield* Ref.make<ReadonlyMap<SessionId, Session>>(new Map())
       const sessionId = SessionId.make("session-only")
 
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       yield* ensureStorageParents({ sessionId }).pipe(Effect.provide(sessionOnlyLayer(sessions)))
 
       const stored = yield* Ref.get(sessions)
@@ -95,11 +94,7 @@ describe("extension tool test layer", () => {
         expect(instance.id).toBe(1)
         expect(acquired).toBe(1)
         expect(released).toBe(0)
-      }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- The nested scope is the test boundary whose cleanup is under test.
-        Effect.provide(toolLayer({ extensionInputs: [extension] })),
-        Effect.scoped,
-      )
+      }).pipe(Effect.provide(toolLayer({ extensionInputs: [extension] })), Effect.scoped)
       expect(released).toBe(1)
     }),
   )

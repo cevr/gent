@@ -943,10 +943,8 @@ export const apiKeyFrom = (
     Option.orElse(() => envApiKey),
   )
 
-/** Sampling limits every OpenAI-compatible driver sends; reasoning effort is the driver's own mapping. */
-export const buildOpenAiCompatConfig = (
-  hints: Option.Option<ProviderHints>,
-): OpenAiCompatConfig => {
+/** Sampling limits the chat-completions drivers (Google, Mistral) send. */
+const buildOpenAiCompatConfig = (hints: Option.Option<ProviderHints>): OpenAiCompatConfig => {
   let config: OpenAiCompatConfig = {}
   if (Option.isSome(hints)) {
     const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
@@ -957,7 +955,7 @@ export const buildOpenAiCompatConfig = (
   return config
 }
 
-export const makeOpenAiCompatResolution = (params: {
+const makeOpenAiCompatResolution = (params: {
   readonly provider: string
   readonly modelName: string
   readonly apiKey: string

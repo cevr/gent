@@ -6,6 +6,7 @@ import {
   DateTime,
   Duration,
   Effect,
+  Fiber,
   FiberMap,
   type FileSystem,
   Layer,
@@ -169,12 +170,16 @@ export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
     const running = yield* FiberMap.make<string, void>()
     const schedule: WakeAlarmsService["schedule"] = (wakeId, work) =>
       FiberMap.run(running, wakeId, work, { onlyIfMissing: true }).pipe(Effect.asVoid)
+    // One lookup: the interrupted fiber drops its own key when it ends.
     const cancel: WakeAlarmsService["cancel"] = (wakeId) =>
-      Effect.gen(function* () {
-        if (!(yield* FiberMap.has(running, wakeId))) return false
-        yield* FiberMap.remove(running, wakeId)
-        return true
-      })
+      FiberMap.get(running, wakeId).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeed(false),
+            onSome: (fiber) => Fiber.interrupt(fiber).pipe(Effect.as(true)),
+          }),
+        ),
+      )
     return WakeAlarms.of({
       schedule,
       cancel,
@@ -300,13 +305,10 @@ const noticeSections = Effect.fn("WakeTool.notices")(function* () {
 
 /** Drops the notices an answered turn read: those that fired before it started. A later one shows again next turn. */
 const clearReadNotices = Effect.fn("WakeTool.clearNotices")(function* (turnStartedAt: number) {
-  let cleared = 0
-  yield* modifyWakeEntries((current) => {
+  return yield* store.modify((current: ReadonlyArray<WakeEntry>) => {
     const kept = current.filter((entry) => entry._tag !== "notice" || entry.firedAt > turnStartedAt)
-    cleared = current.length - kept.length
-    return kept
+    return Effect.succeed({ next: kept, result: current.length - kept.length })
   })
-  return cleared
 })
 
 /** The first tick of a repeating alarm that is still ahead of `now`; every missed tick folds into the fire that just happened. */
@@ -326,28 +328,32 @@ type WakeWorkServices =
 
 type WakeWorkError = ExtensionServiceError | PlatformError.PlatformError | WakeError
 
-const alarmWork: (
-  entry: Extract<WakeEntry, { readonly _tag: "alarm" }>,
-) => Effect.Effect<void, WakeWorkError, WakeWorkServices> = (entry) =>
+/** Sleeps to each tick and fires it, in one loop: a repeat's fiber does not grow per tick. */
+const alarmWork = (
+  first: Extract<WakeEntry, { readonly _tag: "alarm" }>,
+): Effect.Effect<void, WakeWorkError, WakeWorkServices> =>
   Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis
-    yield* Effect.logInfo("wake.armed").pipe(
-      Effect.annotateLogs({ wakeId: entry.wakeId, dueInMs: entry.dueAt - now }),
-    )
-    yield* Effect.sleep(Duration.millis(Math.max(0, entry.dueAt - now)))
-    yield* Effect.logInfo("wake.fired").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
-    const firedAt = yield* Clock.currentTimeMillis
-    yield* queueWake(entry, wakeMessage(entry), { outcome: "fired", note: entry.note, firedAt })
-    if (Predicate.isUndefined(entry.everySeconds)) return
-    // The next tick is stored before the timer sleeps again, so a restart in between re-arms it.
-    const next = { ...entry, dueAt: nextDueAt(entry.dueAt, entry.everySeconds, firedAt) }
-    yield* modifyWakeEntries((current) =>
-      current.map((candidate) => {
-        if (candidate.wakeId === entry.wakeId) return next
-        return candidate
-      }),
-    )
-    yield* alarmWork(next)
+    let entry = first
+    for (;;) {
+      const now = yield* Clock.currentTimeMillis
+      yield* Effect.logInfo("wake.armed").pipe(
+        Effect.annotateLogs({ wakeId: entry.wakeId, dueInMs: entry.dueAt - now }),
+      )
+      yield* Effect.sleep(Duration.millis(Math.max(0, entry.dueAt - now)))
+      yield* Effect.logInfo("wake.fired").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
+      const firedAt = yield* Clock.currentTimeMillis
+      yield* queueWake(entry, wakeMessage(entry), { outcome: "fired", note: entry.note, firedAt })
+      if (Predicate.isUndefined(entry.everySeconds)) return
+      // The next tick is stored before the timer sleeps again, so a restart in between re-arms it.
+      const next = { ...entry, dueAt: nextDueAt(entry.dueAt, entry.everySeconds, firedAt) }
+      yield* modifyWakeEntries((current) =>
+        current.map((candidate) => {
+          if (candidate.wakeId === next.wakeId) return next
+          return candidate
+        }),
+      )
+      entry = next
+    }
   })
 
 const matches = (
@@ -549,11 +555,12 @@ const storeAndArm = Effect.fn("WakeTool.storeAndArm")(function* (entry: PendingW
 /** Drops entries from the file and interrupts their timers; returns the ids removed. */
 const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEntry) => boolean) {
   const alarms = yield* WakeAlarms
-  let removed: ReadonlyArray<string> = []
-  yield* modifyWakeEntries((current) => {
-    removed = current.filter((entry) => !keep(entry)).map((entry) => entry.wakeId)
-    return current.filter(keep)
-  })
+  const removed = yield* store.modify((current: ReadonlyArray<WakeEntry>) =>
+    Effect.succeed({
+      next: current.filter(keep),
+      result: current.filter((entry) => !keep(entry)).map((entry) => entry.wakeId),
+    }),
+  )
   // A stored entry may have no timer yet (before the first turn re-arms it); an
   // interrupted timer leaves the file alone, which is why it is cleaned here first.
   yield* Effect.forEach(removed, (wakeId) => alarms.cancel(wakeId), { discard: true })
@@ -627,7 +634,6 @@ const summaryWithNote = (schedule: ReadonlyArray<string>, note: string): string 
 
 export const WakeTool = tool({
   id: "wake",
-  readonly: true,
   description:
     "Set an alarm. When it fires, a wake message carrying your note starts a new turn on this branch. Use it to check on work that runs outside this session (CI, a deploy, a remote job) at a known time instead of polling.",
   promptSnippet: "Schedule a wake-up alarm",
@@ -814,7 +820,6 @@ const CancelResult = Schema.Struct({ cancelled: Schema.Array(Schema.String) })
 
 export const CancelTool = tool({
   id: "wake.cancel",
-  readonly: true,
   description:
     "Cancel a pending alarm or monitor by wakeId, or every pending one on this branch when no id is given. Use it when the thing you were waiting for is already done. A notice still shown to the user is dismissed the same way.",
   promptSnippet: "Cancel a pending alarm or monitor",

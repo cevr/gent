@@ -276,7 +276,6 @@ const currentCacheFormat = Effect.fn("test.currentCacheFormat")(function* () {
   const home = yield* freshHome("format")
   const calls = yield* Ref.make(0)
   yield* modelsDevCatalog(home).pipe(
-    // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
     Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
   )
   const written = yield* fs.readFileString(yield* cachePathIn(home))
@@ -307,7 +306,6 @@ describe("models.dev catalog", () => {
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
 
@@ -338,7 +336,6 @@ describe("models.dev catalog", () => {
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
 
@@ -366,7 +363,6 @@ describe("models.dev catalog", () => {
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
       const reasoningOf = (id: string) =>
@@ -386,7 +382,6 @@ describe("models.dev catalog", () => {
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
 
@@ -412,10 +407,7 @@ describe("models.dev catalog", () => {
       yield* ageCacheTwoDays(cachePath)
       const calls = yield* Ref.make(0)
 
-      const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
-        Effect.provide(failingHttpLayer(calls)),
-      )
+      const models = yield* modelsDevCatalog(home).pipe(Effect.provide(failingHttpLayer(calls)))
 
       expect(yield* Ref.get(calls)).toBe(1)
       expect(models.map((model) => model.id)).toEqual([ModelId.make("openai/gpt-4.1")])
@@ -427,10 +419,7 @@ describe("models.dev catalog", () => {
       const home = yield* freshHome("empty")
       const calls = yield* Ref.make(0)
 
-      const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
-        Effect.provide(failingHttpLayer(calls)),
-      )
+      const models = yield* modelsDevCatalog(home).pipe(Effect.provide(failingHttpLayer(calls)))
 
       expect(models).toEqual([])
     }).pipe(Effect.provide(platformLayer)),
@@ -442,7 +431,6 @@ describe("models.dev catalog", () => {
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
 
@@ -457,7 +445,6 @@ describe("models.dev catalog", () => {
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
 
@@ -474,7 +461,6 @@ describe("models.dev catalog", () => {
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
 
@@ -504,7 +490,6 @@ describe("models.dev catalog", () => {
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
 
@@ -538,7 +523,6 @@ describe("models.dev catalog", () => {
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
 
@@ -553,10 +537,7 @@ describe("models.dev catalog", () => {
       yield* writeCache(home, olderBuildCache)
       const calls = yield* Ref.make(0)
 
-      const models = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
-        Effect.provide(failingHttpLayer(calls)),
-      )
+      const models = yield* modelsDevCatalog(home).pipe(Effect.provide(failingHttpLayer(calls)))
 
       expect(yield* Ref.get(calls)).toBe(1)
       expect(models.map((model) => model.id)).toEqual([ModelId.make("anthropic/claude-opus-5")])
@@ -569,7 +550,6 @@ describe("models.dev catalog", () => {
       const calls = yield* Ref.make(0)
 
       const anthropic = yield* driverCatalog(home, "anthropic").pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
 
@@ -587,7 +567,6 @@ describe("models.dev catalog", () => {
       // for the memo. Without the memo store this test sees 2 calls.
       const gate = yield* Deferred.make<void>()
       const gated = gatedHttpLayer(calls, gate, encodeAnyJson(remotePayload))
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
       const http = Effect.provide(gated)
 
       const both = yield* Effect.forkChild(
@@ -619,7 +598,6 @@ describe("models.dev catalog", () => {
       const offlineCalls = yield* Ref.make(0)
 
       const offline = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(failingHttpLayer(offlineCalls)),
       )
 
@@ -630,7 +608,6 @@ describe("models.dev catalog", () => {
       // an empty catalog for the life of the process.
       const onlineCalls = yield* Ref.make(0)
       const online = yield* modelsDevCatalog(home).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
         Effect.provide(countingHttpLayer(onlineCalls, encodeAnyJson(remotePayload))),
       )
 

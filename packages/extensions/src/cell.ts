@@ -2614,15 +2614,6 @@ const cellToolCallRecovery = Layer.effect(
 // ── storage ─────────────────────────────────────────────────────────────────
 
 /**
- * The cell's storage layers, assembled as one unit.
- *
- * Core's SQLite assembler builds the kernel's tables and takes any extra
- * repositories as a parameter. This is the cell's contribution to that call:
- * the three tables it owns, wired against the same SQL client, so core never
- * names them.
- */
-
-/**
  * The tables the cell owns.
  *
  * Ids continue core's chain rather than starting a new one: one migration
@@ -2676,16 +2667,21 @@ const cellMigrations: FeatureMigrations = {
   }),
 }
 
+/** What the cell's storage installs. Core merges it without naming it. */
+type CellStorageTags = CellStorage | RetainedBindings | ToolCallRecoveryService
+
 /**
- * Build the cell's repositories over an existing SQL client.
+ * The cell's storage layers, assembled as one unit.
+ *
+ * Core's SQLite assembler builds the kernel's tables and takes any extra
+ * repositories as a parameter. This is the cell's contribution to that call:
+ * the three tables it owns, wired against the same SQL client, so core never
+ * names them.
  *
  * `interactionStorage` is passed in rather than rebuilt: operation receipts
  * and interaction records must share one instance, or a suspended approval
  * would be written to a store nothing reads back.
  */
-/** What the cell's storage installs. Core merges it without naming it. */
-type CellStorageTags = CellStorage | RetainedBindings | ToolCallRecoveryService
-
 const cellStorageLayer = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
   interactionStorage: Layer.Layer<InteractionStorage, E, R>,
@@ -2797,7 +2793,7 @@ const CELL_WORK = `# Working in the cell
 - The cell is your persistent control environment. Keep intermediate values in named variables, inspect and transform outputs, and write small helpers. Use it for loops, parsing, and state; call host tools for effects.
 - You solve tasks by writing and running TypeScript in the cell, observing results, and iterating. Batch independent work inside one cell; iterate between cells.
 - Example: \`const run = await tools.bash({ command: "bun test", timeout: 600000 }); const lines = (run.stdout + run.stderr).split("\\n"); const failing = lines.filter((l) => l.includes("(fail)")); ({ exit: run.exitCode, total: failing.length, sample: failing.slice(0, 5) })\` returns the outcome and a sample; lines stays bound for the next cell.
-- To find files, prefer tools.grep({ pattern }) over a raw directory walk: it honours .gitignore and caches the listing.`
+- To find files, prefer tools.grep({ pattern }) over a raw directory walk: it honours .gitignore.`
 
 // ── tool signatures ─────────────────────────────────────────────────────────
 
@@ -2861,17 +2857,23 @@ const renderLiterals = (values: ReadonlyArray<SchemaValue>) => {
 
 /**
  * The definitions a schema's local `#/$defs/X` references name, and the ones
- * being rendered now: a reference back into one of them is a cycle.
+ * being rendered now: a reference back into one of them is a cycle. One render
+ * shares `expanded`: a definition's text is built once per mode and reused, so
+ * a definition reached many times costs one expansion, and each text is kept
+ * only up to `limit`.
  */
 interface SchemaScope {
   readonly defs: JsonSchema.JsonSchema
   readonly visiting: ReadonlySet<string>
+  readonly expanded: Map<string, string>
+  readonly limit: number
 }
 
-const rootScope = (schema: JsonSchema.JsonSchema): SchemaScope => {
-  const defs = schema["$defs"]
-  if (isSchemaNode(defs)) return { defs, visiting: new Set() }
-  return { defs: {}, visiting: new Set() }
+const rootScope = (schema: JsonSchema.JsonSchema, limit: number): SchemaScope => {
+  const found = schema["$defs"]
+  let defs: JsonSchema.JsonSchema = {}
+  if (isSchemaNode(found)) defs = found
+  return { defs, visiting: new Set(), expanded: new Map(), limit }
 }
 
 const LOCAL_REF = "#/$defs/"
@@ -2885,8 +2887,37 @@ const resolveRef = (
   const name = ref.slice(LOCAL_REF.length)
   const target = scope.defs[name]
   if (scope.visiting.has(name) || !isSchemaNode(target)) return Option.none()
-  return Option.some([target, { defs: scope.defs, visiting: new Set([...scope.visiting, name]) }])
+  return Option.some([target, { ...scope, visiting: new Set([...scope.visiting, name]) }])
 }
+
+/**
+ * A text past `limit`, with no ` | ` for a field to split: it keeps every
+ * enclosing type past the limit too, and an inline object drops it as `object`.
+ */
+const overLimit = (limit: number) => "~".repeat(limit + 1)
+
+/**
+ * A local reference's text in one render mode: a cycle or a foreign ref is
+ * `object`; any other definition is expanded once per mode and reused.
+ */
+const expandRef = (
+  ref: string,
+  mode: string,
+  scope: SchemaScope,
+  render: (target: JsonSchema.JsonSchema, inner: SchemaScope) => string,
+): string =>
+  Option.match(resolveRef(ref, scope), {
+    onNone: () => "object",
+    onSome: ([target, inner]) => {
+      const key = `${mode} ${ref}`
+      const known = scope.expanded.get(key)
+      if (Predicate.isNotUndefined(known)) return known
+      let rendered = render(target, inner)
+      if (rendered.length > scope.limit) rendered = overLimit(scope.limit)
+      scope.expanded.set(key, rendered)
+      return rendered
+    },
+  })
 
 /**
  * Whether a call with no argument is valid: the host sends `{}` for it, so the
@@ -2899,10 +2930,11 @@ const acceptsEmptyInput = (schema: JsonSchema.JsonSchema, scope: SchemaScope): b
     return alternatives.some((member) => acceptsEmptyInput(member, scope))
   const ref = schema["$ref"]
   if (Predicate.isString(ref)) {
-    return Option.match(resolveRef(ref, scope), {
-      onNone: () => false,
-      onSome: ([target, inner]) => acceptsEmptyInput(target, inner),
-    })
+    // A cycle or a foreign ref expands to `object`, which is not "true".
+    const accepts = expandRef(ref, "empty", scope, (target, inner) =>
+      String(acceptsEmptyInput(target, inner)),
+    )
+    return accepts === "true"
   }
   if ("const" in schema || "enum" in schema) return false
   const types = strings([schema["type"]].flat())
@@ -2920,12 +2952,7 @@ const outerType = (schema: JsonSchema.JsonSchema, scope: SchemaScope): string =>
   const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
   if (alternatives.length > 0) return union(alternatives.map((member) => outerType(member, scope)))
   const ref = schema["$ref"]
-  if (Predicate.isString(ref)) {
-    return Option.match(resolveRef(ref, scope), {
-      onNone: () => "object",
-      onSome: ([target, inner]) => outerType(target, inner),
-    })
-  }
+  if (Predicate.isString(ref)) return expandRef(ref, "outer", scope, outerType)
   const types = strings([schema["type"]].flat())
   if (types.length === 0) {
     if (isSchemaNode(schema["properties"])) return "object"
@@ -2942,12 +2969,47 @@ const outerTypeName = (schema: JsonSchema.JsonSchema, type: string, scope: Schem
   return `${parenthesize(outerType(items, scope))}[]`
 }
 
-/** A schema's type, or its outer shape when the whole type is past `limit`. */
+/**
+ * The plain kind of a type whose outer shape is still too long: each union
+ * member's kind, every array `unknown[]` and every object `object`. It names at
+ * most the seven kinds, so it always fits.
+ */
+const plainKind = (schema: JsonSchema.JsonSchema, scope: SchemaScope): string => {
+  if ("const" in schema) return literalType(schema["const"])
+  if (Array.isArray(schema["enum"])) return union(schema["enum"].map(literalType))
+  const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
+  if (alternatives.length > 0) {
+    // A kind has no inner ` | `, so a member's kinds split apart and merge with the rest.
+    return union(alternatives.flatMap((member) => plainKind(member, scope).split(" | ")))
+  }
+  const ref = schema["$ref"]
+  if (Predicate.isString(ref)) return expandRef(ref, "plain", scope, plainKind)
+  const types = strings([schema["type"]].flat())
+  if (types.length === 0) {
+    if (isSchemaNode(schema["properties"])) return "object"
+    return "unknown"
+  }
+  return union(
+    types.map((type) => {
+      if (type === "array") return "unknown[]"
+      if (type === "object") return "object"
+      return renderTypeName({}, type, 0, scope)
+    }),
+  )
+}
+
+/**
+ * A schema's type; past `limit`, its outer shape; still past it, its plain kind.
+ * Every definition is expanded at most once per form, so a shared definition
+ * reached at each level of a deep union costs one expansion, not one per path.
+ */
 const boundedSchemaType = (schema: JsonSchema.JsonSchema, limit: number) => {
-  const scope = rootScope(schema)
+  const scope = rootScope(schema, limit)
   const rendered = renderSchemaType(schema, 0, scope)
   if (rendered.length <= limit) return rendered
-  return outerType(schema, scope)
+  const outer = outerType(schema, scope)
+  if (outer.length <= limit) return outer
+  return plainKind(schema, scope)
 }
 
 /**
@@ -2968,10 +3030,9 @@ const renderSchemaType = (
   }
   const ref = schema["$ref"]
   if (Predicate.isString(ref)) {
-    return Option.match(resolveRef(ref, scope), {
-      onNone: () => "object",
-      onSome: ([target, inner]) => renderSchemaType(target, depth, inner),
-    })
+    return expandRef(ref, `type ${depth}`, scope, (target, inner) =>
+      renderSchemaType(target, depth, inner),
+    )
   }
   const declared = schema["type"]
   const types = strings([declared].flat())
@@ -3078,7 +3139,9 @@ export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(
   }
   const inputType = boundedSchemaType(parameters, SIGNATURE_TYPE_LIMIT)
   let input = `input: ${inputType}`
-  if (acceptsEmptyInput(parameters, rootScope(parameters))) input = `input?: ${inputType}`
+  if (acceptsEmptyInput(parameters, rootScope(parameters, SIGNATURE_TYPE_LIMIT))) {
+    input = `input?: ${inputType}`
+  }
   const resultType = boundedSchemaType(result, SIGNATURE_TYPE_LIMIT)
   const signature = `${toolPath(getToolId(tool))}(${input}): Promise<${resultType}>`
   const summary = firstLine(getToolPrompt(tool).promptSnippet ?? tool.description)

@@ -1160,7 +1160,6 @@ describe("keychainTransformClient — credential failure through the SDK", () =>
           Layer.provide(clientLayer),
         )
         const exit = yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
           Effect.provide(
             Layer.provideMerge(
               modelLayer,
@@ -1781,12 +1780,10 @@ describe("supports1mContext", () => {
   test("opus 4.6+ supports 1m", () => {
     expect(supports1mContext("claude-opus-4-6")).toBe(true)
     expect(supports1mContext("claude-opus-4-7")).toBe(true)
-    expect(supports1mContext("claude-opus-5-0")).toBe(true)
   })
 
   test("sonnet 4.6+ supports 1m", () => {
     expect(supports1mContext("claude-sonnet-4-6")).toBe(true)
-    expect(supports1mContext("claude-sonnet-5-0")).toBe(true)
   })
 
   test("opus/sonnet below 4.6 does not", () => {
@@ -1809,6 +1806,9 @@ describe("supports1mContext", () => {
     expect(supports1mContext("claude-sonnet-5")).toBe(false)
     expect(supports1mContext("claude-opus-5")).toBe(false)
     expect(supports1mContext("claude-fable-5-1")).toBe(false)
+    // A 5-family id with a minor version is still a 5-family model.
+    expect(supports1mContext("claude-opus-5-5")).toBe(false)
+    expect(supports1mContext("claude-sonnet-5-0")).toBe(false)
   })
 })
 
@@ -2405,7 +2405,6 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
       })
       const model = yield* driver
         .resolveModel("claude-opus-4-6", makeOAuthInfo())
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
         .pipe(Effect.provide(fetchLayer))
       yield* runOne(model, fetchState)
 
@@ -2468,7 +2467,6 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       })
       const model = yield* driver
         .resolveModel("claude-opus-4-6", authInfo)
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
         .pipe(Effect.provide(fetchLayer))
       yield* runOne(model, fetchState)
 

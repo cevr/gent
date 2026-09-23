@@ -216,7 +216,7 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
         () => {
           fetchCalls += 1
           // The endpoint accepted the socket and went silent: a fetch that never settles.
-          // oxlint-disable-next-line effect/noNewPromise, gent/no-promise-control-flow-in-tests -- The fake implements the Promise-based Fetch contract.
+          // oxlint-disable-next-line effect/noNewPromise -- The fake implements the Promise-based Fetch contract.
           return Promise.race<Response>([])
         },
         { preconnect: () => {} },
@@ -239,10 +239,7 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
           expect(fetchCalls).toBe(1)
           yield* TestClock.adjust("31 seconds")
           return yield* Fiber.join(fiber)
-        }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- The hanging fetch is this operation's HTTP boundary.
-          Effect.provide(Layer.succeed(FetchHttpClient.Fetch, hangingFetch)),
-        ),
+        }).pipe(Effect.provide(Layer.succeed(FetchHttpClient.Fetch, hangingFetch))),
       ).pipe(Effect.timeout("3 seconds"))
       // The timed-out refresh is a failure that passes: resolveModel returns
       // (the request then fails as retryable), and the stored refresh token
@@ -792,9 +789,7 @@ describe("OpenAI credential cache — a shared cell survives rebuilds", () => {
           expect(result.access).toBe("fresh-access")
           expect(refreshCount).toBe(1)
         }),
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(TestClock.layer()), Effect.orDie)
+      ).pipe(Effect.provide(TestClock.layer()), Effect.orDie)
     }),
   )
 })
@@ -1878,50 +1873,28 @@ const makeDurableCell = (creds: OpenAICredentials): CredentialCacheCell<OpenAICr
   invalidated: false,
 })
 const noopCallbacks = () => new Map()
+const openaiResponsesBody = {
+  id: "resp-test-1",
+  object: "response",
+  created_at: 1700000000,
+  model: "gpt-5.4",
+  output: [
+    {
+      id: "msg-test-1",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "ok", annotations: [], logprobs: [] }],
+    },
+  ],
+  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+}
 const openaiResponsesHappyResponse = () => ({
   status: 200,
-  body: encodeExternalJson({
-    id: "resp-test-1",
-    object: "response",
-    created_at: 1700000000,
-    model: "gpt-5.4",
-    output: [
-      {
-        id: "msg-test-1",
-        type: "message",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text: "ok", annotations: [], logprobs: [] }],
-      },
-    ],
-    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-  }),
+  body: encodeExternalJson(openaiResponsesBody),
 })
-const openaiChatHappyResponse = () => ({
-  status: 200,
-  body: encodeExternalJson({
-    id: "chatcmpl-test-1",
-    object: "chat.completion",
-    created: 1700000000,
-    model: "gpt-5.4",
-    choices: [
-      {
-        index: 0,
-        message: { role: "assistant", content: "ok" },
-        finish_reason: "stop",
-      },
-    ],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-  }),
-})
-const responseForRequest = (request: CapturedRequest) => {
-  if (request.url === "https://api.openai.com/v1/chat/completions") {
-    return openaiChatHappyResponse()
-  }
-  return openaiResponsesHappyResponse()
-}
 const runOne = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState) =>
-  oneGenerate(layer, state, responseForRequest).pipe(Effect.orDie)
+  oneGenerate(layer, state, openaiResponsesHappyResponse).pipe(Effect.orDie)
 
 const runStream = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchState) =>
   LanguageModel.streamText({ prompt: "hi" }).pipe(
@@ -1933,12 +1906,10 @@ const runStream = (layer: Parameters<typeof oneGenerate>[0], state: FakeFetchSta
           status: 200,
           headers: { "content-type": "text/event-stream" },
           body: `data: ${encodeExternalJson({
-            id: "chatcmpl-cache",
-            object: "chat.completion.chunk",
-            created: 1700000000,
-            model: "gpt-5.4",
-            choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }],
-          })}\n\ndata: [DONE]\n\n`,
+            type: "response.completed",
+            sequence_number: 0,
+            response: openaiResponsesBody,
+          })}\n\n`,
         })),
       ),
     ),
@@ -1979,7 +1950,7 @@ describe("OpenAI cache routing", () => {
         }
         const keys = yield* Effect.forEach(fetchState.captured, (request) =>
           Effect.gen(function* () {
-            expect(request.url).toBe("https://api.openai.com/v1/chat/completions")
+            expect(request.url).toBe("https://api.openai.com/v1/responses")
             expect(request.headers["authorization"]).toBe("Bearer cache-test-key")
             const body = Option.getOrThrow(Option.fromUndefinedOr(request.body))
             expect(body).not.toContain("previous_response_id")
@@ -2030,16 +2001,11 @@ describe("OpenAI reasoning hints", () => {
     const parsed = Schema.decodeOption(
       Schema.fromJsonString(
         Schema.Struct({
-          reasoning_effort: Schema.optional(Schema.String),
           reasoning: Schema.optional(Schema.Struct({ effort: Schema.String })),
         }),
       ),
     )(body)
-    return Option.flatMap(parsed, (value) =>
-      Option.orElse(Option.fromUndefinedOr(value.reasoning_effort), () =>
-        Option.fromUndefinedOr(value.reasoning?.effort),
-      ),
-    )
+    return Option.flatMap(parsed, (value) => Option.fromUndefinedOr(value.reasoning?.effort))
   }
   const effortsFor = (
     authInfo: ProviderAuthInfo,
@@ -2234,7 +2200,6 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
           )
           expect(pending.has("abandoned")).toBe(false)
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
           Effect.provide(
             fakeFetchLayer(fetchState, () => ({
               status: 200,
@@ -2289,7 +2254,6 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       const page = yield* waitFor(
         HttpClient.get(`http://localhost:1455/auth/callback?${query.toString()}`).pipe(
           Effect.flatMap((response) => response.text),
-          // oxlint-disable-next-line effect/noInlineProvide -- The browser's side of the redirect is this operation's HTTP client.
           Effect.provide(FetchHttpClient.layer),
         ),
         () => true,
@@ -2335,10 +2299,8 @@ describe("buildOpenAIModelDriver — token endpoint outage", () => {
         const attempt = Effect.gen(function* () {
           const model = yield* driver.resolveModel("gpt-5.4", authInfo)
           return yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
             Effect.provide(Layer.provideMerge(model, fetchLayer)),
           )
-          // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
         }).pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit)
 
         const first = yield* attempt
@@ -2379,10 +2341,8 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
       const exit = yield* Effect.gen(function* () {
         const model = yield* driver.resolveModel("gpt-5.4", authInfo)
         return yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
           Effect.provide(Layer.provideMerge(model, fetchLayer)),
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
       }).pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
@@ -2447,12 +2407,7 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
           return yield* Effect.die("the turn ended without an error event")
         }
         return event.value.event.error
-      }).pipe(
-        Effect.timeout("10 seconds"),
-        Effect.scoped,
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake endpoints are this operation's HTTP boundary.
-        Effect.provide(fetchLayer),
-      )
+      }).pipe(Effect.timeout("10 seconds"), Effect.scoped, Effect.provide(fetchLayer))
 
       expect(shown).toBe(
         "ChatGPT sign-in expired: Token refresh failed: 400. Sign in again with /auth.",
@@ -2550,10 +2505,8 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
       yield* Effect.gen(function* () {
         const model = yield* driver.resolveModel("gpt-5.4", authInfo)
         yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
           Effect.provide(Layer.provideMerge(model, fetchLayer)),
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake endpoints are this operation's HTTP boundary.
       }).pipe(Effect.scoped, Effect.provide(fetchLayer))
 
       expect(fetchState.captured.some((request) => request.url.endsWith("/oauth/token"))).toBe(
@@ -2591,7 +2544,6 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
       })
       const first = yield* driver
         .resolveModel("gpt-5.4", revoked)
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
         .pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit)
       expect(Exit.isFailure(first)).toBe(true)
 
@@ -2601,10 +2553,8 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
       yield* Effect.gen(function* () {
         const model = yield* driver.resolveModel("gpt-5.4", store.authInfo())
         yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
           Effect.provide(Layer.provideMerge(model, fetchLayer)),
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake endpoints are this operation's HTTP boundary.
       }).pipe(Effect.scoped, Effect.provide(fetchLayer))
 
       const after = fetchState.captured.slice(tokenPostsBefore)
@@ -3045,10 +2995,74 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
         // SDK injects standard Bearer auth from apiKey
         expect(lastReq.headers["authorization"]).toBe("Bearer sk-test-1234")
         // No Codex backend rewrite on the API-key path
-        expect(lastReq.url).toBe("https://api.openai.com/v1/chat/completions")
+        expect(lastReq.url).toBe("https://api.openai.com/v1/responses")
         // No Codex beta header
         expect(lastReq.headers["openai-beta"]).toBeUndefined()
       }),
+  )
+  it.live(
+    "an API-key request to a reasoning model uses the Responses shape: output cap, no temperature, a reasoning summary",
+    () =>
+      Effect.gen(function* () {
+        const credentialCellRef =
+          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+        const driver = buildOpenAIModelDriver(
+          credentialCellRef,
+          noopCallbacks(),
+          Option.none(),
+          testCatalogSource(),
+        )
+        // The compaction summary's hints (core turn.ts) plus a user-set agent temperature.
+        const model = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), {
+          maxTokens: 768,
+          reasoning: "none",
+          temperature: 0.3,
+        })
+        const fetchState = makeFakeFetchState()
+        yield* runOne(model, fetchState)
+        const request = Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)))
+        expect(request.url).toBe("https://api.openai.com/v1/responses")
+        const body = yield* Schema.decodeEffect(
+          Schema.fromJsonString(
+            Schema.Struct({
+              max_tokens: Schema.optional(Schema.Finite),
+              max_completion_tokens: Schema.optional(Schema.Finite),
+              max_output_tokens: Schema.optional(Schema.Finite),
+              temperature: Schema.optional(Schema.Finite),
+              reasoning_effort: Schema.optional(Schema.String),
+              reasoning: Schema.optional(
+                Schema.Struct({ effort: Schema.String, summary: Schema.String }),
+              ),
+            }),
+          ),
+        )(Option.getOrThrow(Option.fromUndefinedOr(request.body)))
+        expect(body).toEqual({
+          max_output_tokens: 768,
+          reasoning: { effort: "minimal", summary: "auto" },
+        })
+      }),
+  )
+  it.live("an API-key request to a model that does not reason keeps its temperature", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+      )
+      const model = yield* driver.resolveModel("gpt-4.1", makeApiAuthInfo("sk-test-1234"), {
+        temperature: 0.3,
+        supportsReasoning: false,
+      })
+      const fetchState = makeFakeFetchState()
+      yield* runOne(model, fetchState)
+      const body = yield* Schema.decodeEffect(
+        Schema.fromJsonString(Schema.Struct({ temperature: Schema.optional(Schema.Finite) })),
+      )(Option.getOrThrow(Option.fromUndefinedOr(fetchState.captured.at(-1)?.body)))
+      expect(body.temperature).toBe(0.3)
+    }),
   )
   it.live("API-key path does not touch the OAuth credential cell Ref", () =>
     Effect.gen(function* () {

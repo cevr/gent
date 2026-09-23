@@ -6,8 +6,7 @@
   },
   "type": "module",
   "exports": {
-    "./extensions": "./src/extensions.ts",
-    "./extensions.js": "./src/extensions.ts"
+    "./extensions": "./src/extensions.ts"
   },
   "scripts": {
     "dev": "bun --preload @opentui/solid/preload src/main.tsx",

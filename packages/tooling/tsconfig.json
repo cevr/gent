@@ -3,12 +3,6 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": [
-    "src",
-    "tests",
-    "../../lint",
-    "../../testbeds/gamut/gamut.ts",
-    "../../testbeds/gamut/tests"
-  ],
+  "include": ["src", "tests", "../../testbeds/gamut/gamut.ts", "../../testbeds/gamut/tests"],
   "exclude": ["fixtures"]
 }

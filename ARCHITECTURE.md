@@ -24,8 +24,9 @@ check the claim instead of trusting it. A change that breaks an invariant
 updates this list in the same commit.
 
 1. **Effect-native end to end.** No `Promise<` in an extension surface; no
-   `async`/`await` in tests. Receipts: `packages/tooling/src/check-guardrails.ts`,
-   `packages/core/src/extensions/api.ts`.
+   `async`/`await` in tests. Receipts: `packages/core/tests/extensions/api.test.ts`
+   (the extension surface rejects a Promise at compile time) and `.oxlintrc.json`
+   (`effect/noAsyncFunction`, `gent/no-promise-control-flow-in-tests`).
 2. **One actor per (workspace, session, branch).** The agent loop is an
    effect-encore entity; every session mutation crosses its mailbox.
    Receipts: `packages/core/src/runtime/agent-loop.ts`,
@@ -427,9 +428,13 @@ Shape:
 - Every admitted turn ends with exactly one `TurnCompleted`. A turn phase that
   fails (a storage write, a profile resolve) publishes `ErrorOccurred`, then
   `completeFailedTurn` appends the receipt with `streamFailed: true`, and the
-  turn's `turnAfter` hooks run once after it, under the turn's profile. The
-  stored turn duration is the receipt's mark, so a failure after `finalizeTurn`
-  stored it appends no second receipt and runs no second hook. `ErrorOccurred` with `notice: true` is a notice the
+  turn's `turnAfter` hooks run once after it, under the turn's profile. It
+  shares the receipt and hook steps with `finalizeTurn` (`appendTurnReceipt`,
+  `emitTurnAfter` in `turn.ts`). The stored turn duration is the receipt's
+  mark, so a failure after `finalizeTurn` stored it appends no second receipt
+  and runs no second hook. As on a normal turn, the receipt and hooks run
+  outside the interrupt permit; only the hand-over to the next item takes it,
+  so a hook may stop its own branch and a Cancel meanwhile stops this turn. `ErrorOccurred` with `notice: true` is a notice the
   turn goes on past (a compaction that fell back to truncation); a client ends
   the turn on `TurnCompleted`, never on `ErrorOccurred`.
 - New turn-stream start/end receipts include the user-message ID and model-step
@@ -561,7 +566,12 @@ session was spawned and no client opened it. A spawned session
 (`isSpawnedSession`) has a parent and starts its own thread: a delegate child
 or a `/btw` fork. A handoff has a parent too, but it joins the parent's
 thread, so it is the user's own conversation; spawn depth counts the same
-rule. A top-level or handoff session's user watches every turn there, so its
+rule. Deleting a session deletes the same way (`deleteSession`): the session,
+what it spawned and each spawn's own handoffs go; a handoff that continues the
+deleted session's thread stays, detached from its parent, and its runtime is
+not stopped. Child sessions stored before `bded8dce` carry their parent's
+thread, so they read as handoffs: they ask, do not count toward spawn depth,
+and survive a parent delete (accepted in the pass-10 ledger). A top-level or handoff session's user watches every turn there, so its
 wake, monitor, delegate-completion and slash-command turns ask. In a spawned
 session, only a turn a client opened asks (a user who prompts or steers the
 child); a turn its parent's `delegate.start` or `session.send`, a wake or a
@@ -1137,7 +1147,7 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 
 - **Resource** — `defineResource({ id, scope, layer })`. Start work runs in the layer build and disposal is a finalizer in it. Long-lived state has a stable identity and explicit `scope`; resources build in extension resolution order. `scope` is `"process"` (built once per profile, released when the profile scope closes) or `"branch"` (built per branch loop, released when the loop closes). Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/extension.ts` and `buildResourceLayer` in `runtime/extension-host.ts`.
 - **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Interaction`, `FileLock`, `State`); files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`); extension-private authority comes from extension-owned Effect service Tags. The `FileLock` / `State` facets wrap the host-internal `FileLockService` and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability.ts`; `runtime/extension-host.ts` compiles the model, RPC, and slash registries.
-- **Addressed session verbs** — `ExtensionContext.Session` reaches other branches through the same verbs the server uses: `create` (durable-once by `requestId`, optional `historyBranchId` copies the visible rows in, depth admitted by the host), `send` (one user message with a `delivery` mode: `"turn"` starts a turn on another branch with the loop `completion` modes, and the own branch refuses it and points at `"queue"`; `"queue"` is a follow-up keyed by `sourceId`; `"steer"` joins the running turn as an `Interject`), `stop` (writes a `Cancel` steer; `Interrupt` has no writer and only decodes), `events` (replay, then the `StreamSynchronized` marker, then live; `from: "now"` skips the replay and starts at the newest stored event), `delete` (cascade), and `dequeueFollowUp`. `send` and `stop` are a facade over the unchanged actor operations `SubmitDurable`, `QueueFollowUp`, and `Steer`; the raw `SteerCommand` stays on the RPC contract, not in the extension API. The bodies live in the `agent-loop.client` section of `packages/core/src/domain/agent-loop.ts`; `SessionRuntime` and the loop's `sessionControl` both call them, so the facade and the RPC path cannot drift. The verbs are uniform: no extension, shipped or not, holds a grant another lacks. `AgentDefinition.maxModelAttempts` (and the RunSpec override) is the generic per-turn model-attempt budget, reserved durably per turn message id.
+- **Addressed session verbs** — `ExtensionContext.Session` reaches other branches through the same verbs the server uses: `create` (durable-once by `requestId`, optional `historyBranchId` copies the visible rows in, depth admitted by the host), `send` (one user message with a `delivery` mode: `"turn"` starts a turn on another branch with the loop `completion` modes, and the own branch refuses it and points at `"queue"`; `"queue"` is a follow-up keyed by `sourceId`; `"steer"` joins the running turn as an `Interject`), `stop` (writes a `Cancel` steer; `Interrupt` has no writer and only decodes), `events` (replay, then the `StreamSynchronized` marker, then live; `from: "now"` skips the replay and starts at the newest stored event), `delete` (cascade), and `dequeueFollowUp`. `send` and `stop` are a facade over the unchanged actor operations `SubmitDurable`, `QueueFollowUp`, and `Steer`, except that a `queue` or `steer` into the loop's own branch is admitted re-entrantly inside the caller: a client request's grant is read at admission, while the request provably runs, and a send from a context kept past it is an extension send; the raw `SteerCommand` stays on the RPC contract, not in the extension API. The bodies live in the `agent-loop.client` section of `packages/core/src/domain/agent-loop.ts`; `SessionRuntime` and the loop's `sessionControl` both call them, so the facade and the RPC path cannot drift. The verbs are uniform: no extension, shipped or not, holds a grant another lacks. `AgentDefinition.maxModelAttempts` (and the RunSpec override) is the generic per-turn model-attempt budget, reserved durably per turn message id.
 - **Hooks** — `host.on("systemPrompt" | "turnProjection" | "turnAfter", handler)` registers the three runtime hooks; each kind is typed by `ExtensionHookSignatures`. Hooks, tools, and requests all cross one membrane: `provideExtensionLeaf(frame)` in `runtime/extension-host.ts` reads the run's `CurrentExtensionHostContext` and provides `ExtensionContext`; `turnProjection` receives the agent the turn dispatches (`TurnProjectionInput`). Hook handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. `turnAfter` carries `usage: { known, complete }`: the tokens of the steps that reported usable counts, and whether that is the whole turn (`TurnCompleted.usage` carries a total only when it is complete). See `packages/core/src/domain/extension.ts` and `runtime/extension-host.ts`.
 - **Driver** — the `modelDriver` domain takes a `ModelDriverContribution`. Model drivers provide LLM provider layers + auth and list their own catalog (`listModels(auth)`; core concatenates every driver's list and fetches nothing — the shipped drivers read models.dev through the catalog section of `packages/extensions/src/providers.ts`, cached on disk for a day). An agent's `driver` (or a `driverOverrides` config entry) names a model driver; a stored override that names a removed external (ACP) driver decodes as no override and logs one warning per config file. See `packages/core/src/domain/driver.ts`, `domain/agent.ts`, and `runtime/extension-host.ts`.
 

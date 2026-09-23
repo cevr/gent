@@ -136,7 +136,6 @@ describe("tool execution", () => {
               }),
             ),
           )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ echoed: "hello" })
@@ -232,7 +231,6 @@ describe("tool execution", () => {
           hostToolBindings: new Map([["replaceable", hostEntry]]),
         }).pipe(provideCurrentHostCtx(testToolContext({ sessionId, branchId })))
         return { oldTurn, currentTurn, hiddenTurn, hiddenOuterTurn }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       expect(result.oldTurn.result).toEqual({ value: "A" })
@@ -310,7 +308,6 @@ describe("tool execution", () => {
             ),
           )
           .pipe(provideCurrentHostCtx(ctx))
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       expect(result.isFailure).toBe(false)
@@ -368,7 +365,6 @@ describe("tool execution", () => {
               }),
             ),
           )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
       const error = errorFromResult(result)
@@ -420,7 +416,6 @@ describe("tool execution", () => {
               }),
             ),
           )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
       const error = errorFromResult(result)
@@ -489,7 +484,6 @@ describe("tool execution", () => {
               }),
             ),
           )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({
@@ -557,7 +551,6 @@ describe("tool execution", () => {
             ),
             provideCurrentCapabilityContext(erasedCapabilityContext),
           )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ value: "selected-profile" })
@@ -628,7 +621,6 @@ describe("tool execution", () => {
             ),
             provideCurrentCapabilityContext(erasedCapabilityContext),
           )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({ readValue: "read-ok", writeUnavailable: false })
@@ -698,7 +690,6 @@ describe("tool execution", () => {
               }),
             ),
           )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({
@@ -777,7 +768,6 @@ describe("tool execution", () => {
               ),
             ),
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result).toBeInstanceOf(InteractionPendingError)
       expect(result.requestId).toBe(InteractionRequestId.make("req-pending"))
@@ -853,7 +843,6 @@ describe("tool execution", () => {
               }),
             ),
           )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       return summaries
     })

@@ -396,7 +396,6 @@ describe("SessionRuntime", () => {
         expect(
           yield* sessionRuntime.dequeueFollowUp({ ...target, sourceId: "direct-follow-up" }),
         ).toBe(false)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -424,7 +423,6 @@ describe("SessionRuntime", () => {
           branchId,
           requestId: InteractionRequestId.make("req-not-waiting"),
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -503,7 +501,6 @@ describe("SessionRuntime", () => {
         expect(messages[0]?.id).toBe(MessageId.make("message:req-runtime-send-1"))
         expect(messages[0]?.parts).toEqual([Prompt.textPart({ text: "first attempt" })])
         expect(yield* controls.callCount).toBe(1)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -561,7 +558,6 @@ describe("SessionRuntime", () => {
             .map((message) => message.parts.find((part) => part.type === "text")?.text),
         ).toEqual(["first reply", "steer reply", "queued reply"])
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -605,7 +601,6 @@ describe("SessionRuntime", () => {
         expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -662,7 +657,6 @@ describe("SessionRuntime", () => {
           "the next wake settled",
         )
         expect(yield* controls.callCount).toBe(1)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -724,7 +718,6 @@ describe("SessionRuntime", () => {
             (message) => message.role === "user",
           ),
         ).toHaveLength(1)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -778,7 +771,6 @@ describe("SessionRuntime", () => {
           )
           expect(state?._tag).toBe("Idle")
           expect(Ref.getUnsafe(callCount)).toBe(2)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
       }),
   )
@@ -881,7 +873,6 @@ describe("session metrics", () => {
             (e): e is Extract<typeof e, { _tag: "TurnCompleted" }> => e._tag === "TurnCompleted",
           )
         return { streamEndeds, metrics, receipts }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
       expect(result.streamEndeds.length).toBeGreaterThanOrEqual(1)
       // Each turn receipt carries that turn's totals, summed over its steps.
@@ -915,7 +906,6 @@ describe("session metrics", () => {
         })
         const envelopes = yield* events.listEvents({ sessionId, branchId })
         return envelopes.map((e) => e.event).filter((e) => e._tag === "StreamEnded")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
       expect(streamEndeds).toHaveLength(1)
       // The context window already reads `test/priced`; the price must too.
@@ -945,7 +935,6 @@ describe("session metrics", () => {
           .filter(
             (e): e is Extract<typeof e, { _tag: "TurnCompleted" }> => e._tag === "TurnCompleted",
           )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
       expect(result).toHaveLength(1)
       expect(result[0]?.usage).toBeUndefined()
@@ -970,7 +959,6 @@ describe("session metrics", () => {
           .filter((e) => e._tag === "ModelContextProjected")
         const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
         return { projected, metrics }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
       expect(result.projected).toHaveLength(1)
       const context = Option.getOrThrow(Option.fromUndefinedOr(result.metrics.context))
@@ -996,7 +984,6 @@ describe("session metrics", () => {
         const first = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
         const second = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
         return { first, second }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
       // Two reads over the same event log must return the same cost. The cost
       // is frozen on StreamEnded at emit time — changes to pricing or the
@@ -1039,7 +1026,6 @@ describe("session metrics", () => {
           )
         const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
         return { streamEndeds, metrics }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(providerLayer, [unpriced])), Effect.timeout("4 seconds"))
       for (const ev of result.streamEndeds) {
         expect(ev.costUsd).toBeUndefined()

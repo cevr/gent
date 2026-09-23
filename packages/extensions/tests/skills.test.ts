@@ -216,7 +216,6 @@ describe("SkillsExtension via RPC", () => {
       }
       const result = yield* turnProjection.value.hook
         .handler({ agent: builtinAgent })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         .pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie)
 
       const section = Option.flatMap(Option.fromUndefinedOr(result.promptSections), (sections) =>
@@ -304,7 +303,6 @@ describe("bundled skills", () => {
       const names = yield* Effect.gen(function* () {
         const skills = yield* Skills
         return (yield* skills.list).map((skill) => skill.name)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test constructs the real service after acquiring its scoped fixture directories.
       }).pipe(Effect.provide(Skills.Live({ home, cwd })))
       expect(names).toContain("good")
       expect(names).not.toContain("broken")
@@ -326,7 +324,6 @@ describe("bundled skills", () => {
       const levels = yield* Effect.gen(function* () {
         const skills = yield* Skills
         return (yield* skills.list).filter((skill) => skill.name === "mine").map((s) => s.level)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test constructs the real service after acquiring its scoped fixture directories.
       }).pipe(Effect.provide(Skills.Live({ home, cwd: home })))
       expect(levels).toEqual(["global"])
     }).pipe(Effect.provide(BunServices.layer)),
@@ -358,7 +355,6 @@ describe("bundled skills", () => {
           expect(principles.map((skill) => skill.level)).toEqual(["local", "global"])
           expect(principles[0]?.content).toContain("LOCAL-PRINCIPLES")
           expect(principles[1]?.content).toContain("GLOBAL-PRINCIPLES")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test constructs the real service after acquiring its scoped fixture directories.
         }).pipe(Effect.provide(Skills.Live({ home, cwd })))
       }).pipe(Effect.provide(BunServices.layer)),
   )

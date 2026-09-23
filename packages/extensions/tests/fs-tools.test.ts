@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { Cause, Clock, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -324,9 +324,9 @@ const editFile = Effect.fn("test.editFile")(function* (
   const filePath = path.join(dir, "test.txt")
   yield* fs.writeFileString(filePath, content)
   const exit = yield* Effect.exit(
-    runToolWithCtx(EditTool, { path: filePath, ...params }, stubCtx)
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      .pipe(Effect.provide(editLayer)),
+    runToolWithCtx(EditTool, { path: filePath, ...params }, stubCtx).pipe(
+      Effect.provide(editLayer),
+    ),
   )
   let failure = ""
   if (Exit.isFailure(exit)) failure = Cause.pretty(exit.cause)
@@ -462,9 +462,7 @@ describe("EditTool execution", () => {
           EditTool,
           { path: filePath, oldString: search, newString: "done" },
           stubCtx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer))
+        ).pipe(Effect.provide(editLayer))
         expect(result.replacements).toBe(1)
         expect(yield* fs.readFileString(filePath)).toBe("done\n")
       }),
@@ -481,9 +479,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "hello world", newString: "hi there" },
         stubCtx,
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(1)
       expect(result.path).toBe(filePath)
       const content = yield* fs.readFileString(filePath)
@@ -501,9 +497,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
         stubCtx,
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(3)
       const content = yield* fs.readFileString(filePath)
       expect(content).toBe("qux bar qux baz qux\n")
@@ -521,9 +515,7 @@ describe("EditTool execution", () => {
           EditTool,
           { path: filePath, oldString: "not here", newString: "replaced" },
           stubCtx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+        ).pipe(Effect.provide(editLayer)),
       )
       expect(exit._tag).toBe("Failure")
     }),
@@ -536,9 +528,11 @@ describe("EditTool execution", () => {
       const filePath = path.join(dir, "test.txt")
       yield* fs.writeFileString(filePath, "foo bar foo\n")
       const exit = yield* Effect.exit(
-        runToolWithCtx(EditTool, { path: filePath, oldString: "foo", newString: "baz" }, stubCtx)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+        runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "foo", newString: "baz" },
+          stubCtx,
+        ).pipe(Effect.provide(editLayer)),
       )
       expect(exit._tag).toBe("Failure")
     }),
@@ -554,9 +548,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "old", newString: "$$ pid $& $` $' x" },
         stubCtx,
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(editLayer))
       expect(yield* fs.readFileString(filePath)).toBe("echo $$ pid $& $` $' x\n")
     }),
   )
@@ -575,9 +567,7 @@ describe("EditTool execution", () => {
             { path: filePath, oldString: "", newString: "-", replaceAll: true },
             stubCtx,
           ),
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+        ).pipe(Effect.provide(editLayer)),
       )
       expect(exit._tag).toBe("Failure")
       expect(yield* fs.readFileString(filePath)).toBe("abc")
@@ -592,9 +582,11 @@ describe("EditTool execution", () => {
       const original = "foo \nbar\nfoo  \nbar\n"
       yield* fs.writeFileString(filePath, original)
       const exit = yield* Effect.exit(
-        runToolWithCtx(EditTool, { path: filePath, oldString: "foo\nbar", newString: "x" }, stubCtx)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+        runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "foo\nbar", newString: "x" },
+          stubCtx,
+        ).pipe(Effect.provide(editLayer)),
       )
       expect(exit._tag).toBe("Failure")
       expect(yield* fs.readFileString(filePath)).toBe(original)
@@ -611,9 +603,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "foo\nbar", newString: "x", replaceAll: true },
         stubCtx,
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(2)
       expect(yield* fs.readFileString(filePath)).toBe("x\nmid\nx\n")
     }),
@@ -629,12 +619,130 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "line1\\nline2", newString: "merged" },
         stubCtx,
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(1)
       const content = yield* fs.readFileString(filePath)
       expect(content).toBe("merged\n")
+    }),
+  )
+})
+
+// ── file encodings ──────────────────────────────────────────────────────────
+
+/** `text` as a UTF-16 file with its byte order mark. */
+const utf16File = (text: string, order: "le" | "be") => {
+  const littleEndian = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")])
+  if (order === "le") return littleEndian
+  return Buffer.from(littleEndian).swap16()
+}
+
+describe("file encodings", () => {
+  const encodingTest = it.scopedLive.layer(editLayer)
+
+  const orders: ReadonlyArray<"le" | "be"> = ["le", "be"]
+  for (const order of orders) {
+    encodingTest(`read returns the text of a UTF-16 ${order} file`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/utf16.txt`
+        yield* fs.writeFile(filePath, utf16File("hello NEEDLE\nsecond line", order))
+        const result = yield* runToolWithCtx(ReadTool, { path: filePath }, stubCtx)
+        expect(result.content).toBe("1\thello NEEDLE\n2\tsecond line")
+        expect(result.lineCount).toBe(2)
+        expect(result.lossy).toBeUndefined()
+      }),
+    )
+
+    encodingTest(`edit finds text in a UTF-16 ${order} file and keeps its encoding`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/utf16.txt`
+        yield* fs.writeFile(filePath, utf16File("hello NEEDLE\nsecond line\n", order))
+        const result = yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "hello", newString: "goodbye" },
+          stubCtx,
+        )
+        expect(result.replacements).toBe(1)
+        const after = Buffer.from(yield* fs.readFile(filePath))
+        expect(after.equals(utf16File("goodbye NEEDLE\nsecond line\n", order))).toBe(true)
+      }),
+    )
+  }
+
+  encodingTest("edit keeps a UTF-8 byte order mark", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/bom.txt`
+      const bom = Buffer.from([0xef, 0xbb, 0xbf])
+      yield* fs.writeFile(filePath, Buffer.concat([bom, Buffer.from("hello world\n")]))
+      yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "hello", newString: "goodbye" },
+        stubCtx,
+      )
+      const after = Buffer.from(yield* fs.readFile(filePath))
+      expect(after.equals(Buffer.concat([bom, Buffer.from("goodbye world\n")]))).toBe(true)
+    }),
+  )
+
+  // Bytes the decoder can only show as U+FFFD: a rewrite of the text would not
+  // give them back.
+  const malformed: ReadonlyArray<[string, Uint8Array]> = [
+    [
+      "a UTF-16 file with an odd trailing byte",
+      Buffer.concat([utf16File("hello world\n", "le"), Buffer.from([0x41])]),
+    ],
+    [
+      "a UTF-8 file with an invalid byte",
+      Buffer.concat([Buffer.from("hello "), Buffer.from([0xff]), Buffer.from(" world\n")]),
+    ],
+  ]
+  for (const [name, bytes] of malformed) {
+    encodingTest(`${name}: read marks it lossy, and edit and write leave it alone`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/malformed.txt`
+        yield* fs.writeFile(filePath, bytes)
+
+        const read = yield* runToolWithCtx(ReadTool, { path: filePath }, stubCtx)
+        expect(read.lossy).toBe(true)
+        expect(read.content).toContain("�")
+
+        const edit = yield* Effect.exit(
+          runToolWithCtx(
+            EditTool,
+            { path: filePath, oldString: "hello", newString: "goodbye" },
+            stubCtx,
+          ),
+        )
+        expect(Exit.isFailure(edit)).toBe(true)
+        if (Exit.isFailure(edit)) expect(Cause.pretty(edit.cause)).toContain("not valid")
+
+        const write = yield* Effect.exit(
+          runToolWithCtx(WriteTool, { path: filePath, content: read.content }, stubCtx),
+        )
+        expect(Exit.isFailure(write)).toBe(true)
+        if (Exit.isFailure(write)) expect(Cause.pretty(write.cause)).toContain("not valid")
+
+        expect(Buffer.from(yield* fs.readFile(filePath)).equals(Buffer.from(bytes))).toBe(true)
+      }),
+    )
+  }
+
+  encodingTest("read refuses a binary file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/blob.bin`
+      yield* fs.writeFile(filePath, new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01, 0x00]))
+      const exit = yield* Effect.exit(runToolWithCtx(ReadTool, { path: filePath }, stubCtx))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("binary file")
     }),
   )
 })
@@ -788,6 +896,24 @@ describe("GrepTool", () => {
     }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
   )
 
+  it.scopedLive("a target whose name starts with two dots keeps the session's ignore rules", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "*.log\n")
+      yield* fs.makeDirectory(`${tmpDir}/..cache`)
+      yield* fs.writeFileString(`${tmpDir}/..cache/a.log`, "const foo = 0")
+      yield* fs.writeFileString(`${tmpDir}/..cache/b.ts`, "const foo = 1")
+
+      const result = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "foo", path: `${tmpDir}/..cache` },
+        testToolContext({ cwd: tmpDir }),
+      )
+      expect(result.matches.map((match) => match.file)).toEqual([`${tmpDir}/..cache/b.ts`])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+  )
+
   it.scopedLive("a file with a NUL byte in its first 8 KB is binary and skipped", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -808,6 +934,52 @@ describe("GrepTool", () => {
       expect(direct.matches).toEqual([])
     }).pipe(Effect.provide(IndexLayer)),
   )
+
+  // `(x+x+)+y` backtracks exponentially on a run of x with no y after it.
+  // JavaScriptCore gives up on such a line after about a second and reports
+  // no match, even for a line that holds one.
+  it.scopedLive("a backtracking pattern does not stall the server, and a timeout ends it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const slowLine = `${"x".repeat(28)}!`
+      yield* fs.writeFileString(`${tmpDir}/slow.txt`, Array(8).fill(slowLine).join("\n"))
+
+      const started = yield* Clock.currentTimeMillis
+      const result = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "(x+x+)+y", path: tmpDir },
+        ctxGrep,
+      ).pipe(Effect.timeoutOption("300 millis"))
+      const elapsed = (yield* Clock.currentTimeMillis) - started
+      expect(Option.isNone(result)).toBe(true)
+      // On the server thread, the search runs every line to the end before a timeout can act.
+      expect(elapsed).toBeLessThan(1500)
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  // Each line holds a match, but JavaScriptCore stops at its backtrack limit
+  // and reports none. `(?:a|a)*b` is the fastest give-up measured (about 320 ms
+  // on an M-series Mac); `(x+x+)+y` takes 600 ms to a second.
+  const giveUps: ReadonlyArray<[string, string]> = [
+    ["(x+x+)+y", `${"x".repeat(30)}!xxy`],
+    ["(?:a|a)*b", `${"a".repeat(40)}!ab`],
+  ]
+  for (const [pattern, line] of giveUps) {
+    it.scopedLive(`a line ${pattern} gives up on is reported, not dropped`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${tmpDir}/slow.txt`, `plain line\n${line}\n`)
+
+        const result = yield* runToolWithCtx(GrepTool, { pattern, path: tmpDir }, ctxGrep).pipe(
+          Effect.timeout("20 seconds"),
+        )
+        expect(result.matches).toEqual([])
+        expect(result.undecided).toBe(1)
+      }).pipe(Effect.provide(IndexLayer)),
+    )
+  }
 
   it.scopedLive("a long line is cut around the match, and so is its context", () =>
     Effect.gen(function* () {
@@ -1513,10 +1685,7 @@ describe("the git processes behind a listing", () => {
         GIT_INDEX_FILE: `${other}/.git/index`,
       })
 
-      const files = yield* listed(repo).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- The spawner's environment names repositories this test creates.
-        Effect.provide(layerWithSpawner(hook)),
-      )
+      const files = yield* listed(repo).pipe(Effect.provide(layerWithSpawner(hook)))
       expect(files).toEqual([".gitignore", "a.ts"])
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
@@ -1533,11 +1702,7 @@ describe("the git processes behind a listing", () => {
         GrepTool,
         { pattern: "x", path: tmpDir },
         testToolContext({ cwd: tmpDir }),
-      ).pipe(
-        Effect.flip,
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(layerWithSpawner(endless)),
-      )
+      ).pipe(Effect.flip, Effect.provide(layerWithSpawner(endless)))
       expect(failure.message).toContain("more than 100000 files")
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
@@ -1552,11 +1717,7 @@ describe("the git processes behind a listing", () => {
       const hung = fakeLsFiles(`echo started > ${signals}/started; exec sleep 30`)
 
       const listing = yield* Effect.forkChild(
-        listed(tmpDir).pipe(
-          Effect.flip,
-          // oxlint-disable-next-line effect/noInlineProvide -- The fake git signals through a pipe this test creates.
-          Effect.provide(layerWithSpawner(hung)),
-        ),
+        listed(tmpDir).pipe(Effect.flip, Effect.provide(layerWithSpawner(hung))),
       )
       // Reading the pipe returns once git runs, so its timeout is already armed.
       yield* fs.readFileString(`${signals}/started`)

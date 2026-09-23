@@ -62,6 +62,7 @@ import {
   provideCurrentHostCtx,
   resolveExtensions,
   resolveTurnProfile,
+  RunOpener,
   type SessionProfile,
   SessionProfileCache,
   type SessionProfileCacheService,
@@ -70,6 +71,7 @@ import {
   type TurnProfileDefaults,
   validateLoadedExtensions,
   loadRuntimeProfileDeclarations,
+  scanRuntimeProfileExtensions,
   type RuntimeProfileInputs,
 } from "../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
@@ -100,6 +102,7 @@ import {
   messagePartsDisplayText,
 } from "../../src/domain/message"
 import { GentPlatform, writeFileAtomic } from "../../src/runtime/gent-platform"
+import { omitUndefined } from "../../src/domain/guards"
 import {
   type ModelDriverContribution,
   ProviderAuthInfo,
@@ -139,6 +142,7 @@ import {
   LoadedArtifactIdentity,
   registerContributions,
   type SystemPromptInput,
+  sortExtensionsByScope,
   type TurnAfterInput,
   type ExtensionHookHandler,
 } from "../../src/domain/extension"
@@ -509,10 +513,7 @@ describe("session profile resolution", () => {
         expect(again).toBe(profileA)
         expect(profileA.generationId).toBe(profileB.generationId)
         expect(yield* Ref.get(setups)).toBe(2)
-      }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [counted] })),
-      )
+      }).pipe(Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [counted] })))
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
@@ -544,7 +545,6 @@ describe("session profile resolution", () => {
             { sourcePath: projectConfig, scope: "project", phase: "load", status: "failed" },
           ])
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(
             makeCacheLayer({
               cwd: launch,
@@ -588,7 +588,6 @@ describe("session profile resolution", () => {
         ])
         expect(Context.get(profile.layerContext, SessionProfileResourceMarker).value).toBe("live")
       }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           makeCacheLayer({
             cwd: launch,
@@ -627,7 +626,6 @@ describe("session profile resolution", () => {
           ExtensionId.make("@gent/test-session-profile/kept"),
         ])
       }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept, dropped] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("d".repeat(64))),
       )
@@ -670,7 +668,6 @@ describe("session profile resolution", () => {
         yield* fs.writeFileString(projectConfig, "{}")
         expect(yield* cache.resolve(launch)).toBe(before)
       }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept, toggled] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("f".repeat(64))),
       )
@@ -755,7 +752,6 @@ describe("session profile resolution", () => {
         expect(yield* Ref.get(open)).toBe(1)
       }).pipe(
         Effect.timeout("20 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [tracked, ...toggles] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("2".repeat(64))),
       )
@@ -822,7 +818,6 @@ describe("session profile resolution", () => {
         expect(yield* Ref.get(open)).toEqual(["a"])
       }).pipe(
         Effect.timeout("10 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           Layer.mergeAll(
             makeCacheLayer({ cwd: launch, home, extensions: toggles }),
@@ -891,7 +886,6 @@ describe("session profile resolution", () => {
         expect(yield* Effect.scoped(cache.resolve(launch))).toBe(newerProfile)
       }).pipe(
         Effect.timeout("10 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           makeCacheLayer({ cwd: launch, home, extensions: toggles, wrapConfig: holdFirstRead }),
         ),
@@ -953,7 +947,6 @@ describe("session profile resolution", () => {
         expect(yield* resolve).toBe(fixed)
       }).pipe(
         Effect.timeout("15 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           makeCacheLayer({ cwd: launch, home, extensions: [kept], allowFailedExtensions: true }),
         ),
@@ -1056,7 +1049,6 @@ describe("session profile resolution", () => {
           expect(yield* Ref.get(open)).toEqual(["shared-c"])
         }).pipe(
           Effect.timeout("10 seconds"),
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("6".repeat(64))),
         )
@@ -1118,7 +1110,6 @@ describe("session profile resolution", () => {
           expect(profile.resolved.failedExtensions).toEqual([])
           expect(Context.get(profile.layerContext, SessionProfileResourceMarker).value).toBe("live")
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This focused interruption test owns one isolated live cache layer.
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [healthy, blocking] })),
         ),
         Deferred.succeed(releaseStart, void 0).pipe(Effect.asVoid),
@@ -1193,13 +1184,12 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-profile"),
           branchId: BranchId.make("branch-runtime-context-profile"),
-          openedByClient: true,
+          opener: RunOpener.cases.Turn.make({ openedByClient: true }),
           profileCache,
           hostProvider,
           defaults: { baseSections: [] },
         })
         expect(resolved.turnHostCtx.cwd).toBe(secondary)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer), Effect.scoped)
     }).pipe(Effect.provide(BunPlatformLive)),
   )
@@ -1224,7 +1214,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
-          openedByClient: true,
+          opener: RunOpener.cases.Turn.make({ openedByClient: true }),
           hostProvider,
           defaults,
         })
@@ -1232,7 +1222,6 @@ describe("resolveTurnProfile", () => {
         expect(resolved.turnBaseSections).toEqual([
           { id: "default", content: "Default", priority: 1 },
         ])
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
   )
@@ -1260,7 +1249,7 @@ describe("resolveTurnProfile", () => {
           resolveTurnProfile({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            openedByClient: true,
+            opener: RunOpener.cases.Turn.make({ openedByClient: true }),
             hostProvider,
             defaults: { baseSections: [] },
           }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
@@ -1269,7 +1258,6 @@ describe("resolveTurnProfile", () => {
         if (exit._tag === "Success") {
           expect(exit.value.turnHostCtx.cwd).toBe("/tmp/runtime-context-fail")
         }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
   )
@@ -1329,7 +1317,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
-          openedByClient: true,
+          opener: RunOpener.cases.Turn.make({ openedByClient: true }),
           profileCache: fakeProfileCache,
           hostProvider,
           defaults: { baseSections: [] },
@@ -1338,7 +1326,6 @@ describe("resolveTurnProfile", () => {
         expect(resolved.turnHostCtx.cwd).toBe("/tmp/profile-driver-scope")
         expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
         expect(extensionRegistry.getResolved().modelDrivers.has("profile-driver")).toBe(false)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
   )
@@ -1556,6 +1543,12 @@ const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedEx
   scope: "builtin",
   sourcePath: "builtin",
   contributions,
+})
+
+test("extensions of one scope resolve in code-unit order of their ids", () => {
+  // The later extension wins a service conflict; the locale must not pick it.
+  const order = sortExtensionsByScope([makeLoaded("alpha", {}), makeLoaded("Zeta", {})])
+  expect(order.map((extension) => String(extension.manifest.id))).toEqual(["Zeta", "alpha"])
 })
 
 describe("extension activation isolation", () => {
@@ -2007,6 +2000,43 @@ describe("extension activation isolation", () => {
       expect(profile.resolved.failedExtensions[0]?.error).toContain("resource layer boom")
       // The healthy resource stays acquired until the server scope closes.
       expect(released).toBe(0)
+    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+  )
+
+  // Only an interrupt of the resolve stops the build. An extension whose
+  // resource interrupts itself is a failed extension, like any other failure.
+  it.scopedLive("a resource layer that interrupts itself fails only its extension", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const selfInterrupting = defineExtension({
+        id: "self-interrupting",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
+            defineResource({
+              id: "test/self-interrupting",
+              scope: "process",
+              layer: Layer.effectDiscard(Effect.interrupt),
+            }) as never,
+          )
+        }),
+      })
+      const context = yield* Layer.build(
+        SessionProfileCache.Live({
+          failOnExtensionFailure: false,
+          home,
+          platform: "test",
+          extensions: [selfInterrupting],
+        }),
+      )
+      const cache = Context.get(context, SessionProfileCache)
+      const profile = yield* cache.resolve(home).pipe(Effect.timeout("5 seconds"))
+      expect(profile.resolved.failedExtensions).toMatchObject([
+        { manifest: { id: ExtensionId.make("self-interrupting") }, phase: "startup" },
+      ])
     }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
   )
 })
@@ -2747,9 +2777,9 @@ describe("client request origin", () => {
           queueFollowUp: hold,
           dequeueFollowUp: () => Effect.succeed(false),
           send: () => Effect.void,
-          steer: (command) => {
+          steer: (command, clientRequest) => {
             if (command._tag !== "Interject") return Effect.void
-            return hold(command)
+            return hold(omitUndefined({ metadata: command.metadata, clientRequest }))
           },
         },
       })
@@ -2758,7 +2788,7 @@ describe("client request origin", () => {
         sessionId: SESSION_ID,
         branchId: BRANCH_ID,
         interactive: true,
-        clientRequest: Option.some({ grant }),
+        clientRequest: Option.some(grant),
       })
       const sends = Effect.all([
         ctx.Session.send({ delivery: "queue", sourceId: "held", content: "queued" }),
@@ -3114,6 +3144,36 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
         expect(entry).toBeDefined()
         expect(entry?.error).toContain("No GentExtension found")
       }
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
+  // Load order decides which of two same-named services wins, so it must not
+  // follow the locale: `Zeta.ts` sorts before `alpha.ts` by code unit.
+  it.scopedLive("extension files load in code-unit order of their paths", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
+      const dir = yield* fs.makeTempDirectoryScoped({
+        directory: repositoryRoot,
+        prefix: ".tmp-loader-order-",
+      })
+      for (const id of ["alpha", "Zeta"]) {
+        yield* fs.writeFileString(
+          path.join(dir, `${id}.ts`),
+          `import { Effect } from "effect"\nexport default { manifest: { id: "${id}" }, setup: Effect.void }\n`,
+        )
+      }
+
+      const result = yield* discoverExtensions({
+        userDir: dir,
+        projectDir: "/nonexistent-project-dir-loader-test",
+      })
+
+      expect(result.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+        ExtensionId.make("Zeta"),
+        ExtensionId.make("alpha"),
+      ])
     }).pipe(Effect.provide(fsLayer)),
   )
 
@@ -3697,7 +3757,6 @@ describe("ExtensionRegistry", () => {
       const resolved = yield* Effect.gen(function* () {
         const ext = yield* ExtensionRegistry
         return ext.getResolved()
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(ExtensionRegistry.Test()))
       expect(resolved.modelCapabilities.size).toBe(0)
       expect(resolved.agents.size).toBe(0)
@@ -4313,7 +4372,6 @@ describe("session agent", () => {
         ])
         expect(eventTags(calls)).not.toContain("AgentSwitched")
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
     }).pipe(Effect.provide(BunCrypto.layer)),
   )
@@ -4331,7 +4389,6 @@ describe("session agent", () => {
         expect(yield* messageStorage.listMessages(noPrompt.branchId)).toEqual([])
         expect(yield* messageStorage.listMessages(emptyPrompt.branchId)).toEqual([])
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
     }).pipe(Effect.provide(BunCrypto.layer)),
   )
@@ -4884,7 +4941,10 @@ describe("live Profile", () => {
           platform: "darwin",
           extensions: [resourceExtension, validExtension, invalidExtension],
         }
-        const declarations = yield* loadRuntimeProfileDeclarations(inputs)
+        const declarations = yield* loadRuntimeProfileDeclarations(
+          inputs,
+          yield* scanRuntimeProfileExtensions(inputs),
+        )
         expect(events).toEqual([])
         expect(declarations.extensionDeclarations.failed).toContainEqual(
           expect.objectContaining({
@@ -4931,7 +4991,10 @@ describe("live Profile", () => {
         yield* fs.writeFileString(path.join(projectDir, "local.ts"), "export default 1\n")
         const inputs = { cwd, home, platform: "darwin", extensions: [] }
 
-        const declarations = yield* loadRuntimeProfileDeclarations(inputs)
+        const declarations = yield* loadRuntimeProfileDeclarations(
+          inputs,
+          yield* scanRuntimeProfileExtensions(inputs),
+        )
         expect(declarations.extensionDeclarations.failed).toEqual([
           expect.objectContaining({
             manifest: { id: "broken" },
@@ -4953,10 +5016,10 @@ describe("live Profile", () => {
         ])
 
         // A disabled id silences its file.
-        const quiet = yield* loadRuntimeProfileDeclarations({
-          ...inputs,
-          disabledExtensions: ["broken", "folder-broken", "local"],
-        })
+        const quiet = yield* loadRuntimeProfileDeclarations(
+          { ...inputs, disabledExtensions: ["broken", "folder-broken", "local"] },
+          yield* scanRuntimeProfileExtensions(inputs),
+        )
         expect(quiet.extensionDeclarations.failed).toEqual([])
 
         // A test root that fails on a failed extension sees the import failure too.

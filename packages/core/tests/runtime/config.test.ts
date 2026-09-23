@@ -101,7 +101,6 @@ describe("user configuration", () => {
           )
           // The driver write rewrote the file and kept the hand-edited trust.
           expect(persisted.trustedProjects).toEqual(trustedProjects)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -175,7 +174,6 @@ describe("user configuration", () => {
             persistedText,
           )
           expect(Object.keys(persisted.driverOverrides ?? {}).sort()).toEqual([...agents].sort())
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -291,7 +289,6 @@ describe("user configuration", () => {
             expect(persisted).not.toContain('"model"')
             expect(persisted).toContain("@gent/skills")
           }).pipe(
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             Effect.provide(
               Layer.provideMerge(
                 live,
@@ -337,7 +334,6 @@ describe("user configuration", () => {
           // The user's settings are still on disk, byte for byte.
           const after = yield* fs.readFileString(userConfigPath)
           expect(after).toEqual(original)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -369,7 +365,6 @@ describe("user configuration", () => {
           )
           expect(outcome._tag).toBe("Failure")
           expect(yield* fs.readFileString(userConfigPath)).toEqual(broken)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -405,7 +400,6 @@ describe("user configuration", () => {
           )
           // The write also refreshes the snapshot reads use.
           expect((yield* cfg.get()).trustedProjects).toEqual(["/keep/me"])
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -464,7 +458,6 @@ describe("user configuration", () => {
           expect(fallback.driverOverrides?.[AgentName.make("main")]).toEqual(
             DriverRef.make({ id: "anthropic" }),
           )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(liveConfigAt(cwd, home, heldRead)))
       }).pipe(Effect.timeout("10 seconds"), Effect.provide(BunServices.layer)),
     )
@@ -505,7 +498,6 @@ describe("user configuration", () => {
             futureField: { nested: [1, 2] },
             agents: { main: { reasoningEffort: "high", futureOverride: true } },
           })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -544,7 +536,6 @@ describe("user configuration", () => {
           expect(yield* readRaw).toEqual({
             driverOverrides: { helper: { _tag: "Model", id: "openai", futureOption: "kept" } },
           })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -581,7 +572,6 @@ describe("user configuration", () => {
             })
             // The staged file lands beside the target, then renames over it.
             expect(yield* fs.readDirectory(dotfiles)).toEqual(["gent-config.json"])
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(liveConfigAt(cwd, home)))
         }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -604,7 +594,6 @@ describe("user configuration", () => {
           const clearOutcome = yield* Effect.exit(cfg.clearDriverOverride(AgentName.make("main")))
           expect(clearOutcome._tag).toBe("Failure")
           expect(yield* fs.readFileString(userConfigPath)).toEqual(broken)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -625,7 +614,6 @@ describe("user configuration", () => {
           const persisted = yield* decodeUserConfig(yield* fs.readFileString(userConfigPath))
           expect(persisted.trustedProjects).toEqual(["/keep/me"])
           expect(Object.keys(persisted.driverOverrides ?? {})).toEqual(["main"])
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -670,7 +658,6 @@ describe("user configuration", () => {
           expect(yield* fs.readFileString(userConfigPath)).toEqual(original)
           // A failed write leaves the snapshot as it was.
           expect((yield* cfg.get()).driverOverrides).toBeUndefined()
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(liveConfigAt(cwd, home, failingWrites)))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -712,7 +699,6 @@ describe("user configuration", () => {
           )
           expect((yield* cfg.get()).disabledExtensions).toEqual(["y", "z"])
           expect((yield* Ref.get(reads)).slice(before)).toEqual([projectConfigPath])
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(liveConfigAt(cwd, home, countingReads)))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -739,7 +725,6 @@ describe("user configuration", () => {
           // The fresh read and the cached launch read agree: the broken file sets nothing.
           expect(fresh.config.disabledExtensions).toBeUndefined()
           expect((yield* cfg.get()).disabledExtensions).toBeUndefined()
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -869,7 +854,6 @@ describe("user configuration", () => {
             modelId: ModelId.make("openai/gpt-5.6-sol"),
           })
           expect(result.agents?.[AgentName.make("helper")]).toEqual({ reasoningEffort: "minimal" })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -905,7 +889,6 @@ describe("user configuration", () => {
             expect(agents?.[delegate]).toEqual({ maxSteps: 3 })
             expect(agents?.[main]).toEqual({ reasoningEffort: "low" })
           }
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -988,7 +971,6 @@ describe("user configuration", () => {
           const readable = yield* cfg.getFresh(projectA)
           expect(readable.failures).toEqual([])
           expectDriverOverride(readable.config, "cowork", "projectA-driver")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -1000,7 +982,6 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           const result = yield* cfg.get()
           expectDriverOverride(result, "cowork", "launch-driver")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -1012,7 +993,6 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           const result = yield* cfg.get(projectA)
           expectDriverOverride(result, "cowork", "projectA-driver")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -1026,7 +1006,6 @@ describe("user configuration", () => {
           const b = yield* cfg.get(projectB)
           expectDriverOverride(a, "cowork", "projectA-driver")
           expectDriverOverride(b, "cowork", "projectB-driver")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
@@ -1040,7 +1019,6 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           const result = yield* cfg.get(empty)
           expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeUndefined()
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
     )
