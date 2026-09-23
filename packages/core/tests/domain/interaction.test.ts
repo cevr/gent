@@ -788,6 +788,12 @@ describe("Interaction Request", () => {
       expect(yield* interaction.answered(fresh)).toBe(false)
       // Nor did it store an answer: the branch's own reply is the first.
       expect(yield* interaction.storeResolution(branch, fresh, { approved: false })).toBe(true)
+      // Answered and not yet taken, it is still refused elsewhere, and the
+      // refusal does not read out its answer as a retry.
+      const answeredElsewhere = yield* Effect.flip(
+        interaction.storeResolution(other, fresh, { approved: false }),
+      )
+      expect(answeredElsewhere._tag).toBe("InteractionRequestMismatchError")
     }).pipe(Effect.provide(storageLive)),
   )
 
