@@ -518,11 +518,6 @@ type ConnState = typeof ConnState.Type
 const IncomingJsonRpcEnvelope = Schema.Record(Schema.String, Schema.Unknown)
 type IncomingJsonRpcRecord = Schema.Schema.Type<typeof IncomingJsonRpcEnvelope>
 
-type IncomingRequestHandler = (
-  method: string,
-  params: Schema.Schema.Type<typeof Schema.Unknown>,
-) => Effect.Effect<Schema.Schema.Type<typeof Schema.Unknown>, AcpError>
-
 // ── JSON-RPC wire helpers ──
 
 const stringifyJsonRpc = (value: IncomingJsonRpcRecord): string =>
@@ -573,13 +568,10 @@ const decodePromptResponse = (raw: Schema.Schema.Type<typeof Schema.Unknown>) =>
 
 // ── Connection Factory ──
 
-export const makeAcpConnection = (
-  proc: {
-    readonly stdin: Sink.Sink<void, Uint8Array, never, PlatformError>
-    readonly stdout: Stream.Stream<Uint8Array, PlatformError>
-  },
-  incomingRequestHandler?: IncomingRequestHandler,
-) =>
+export const makeAcpConnection = (proc: {
+  readonly stdin: Sink.Sink<void, Uint8Array, never, PlatformError>
+  readonly stdout: Stream.Stream<Uint8Array, PlatformError>
+}) =>
   Effect.gen(function* () {
     const nextIdRef = yield* Ref.make<RequestId>(1)
     const stateRef = yield* Ref.make<ConnState>(
@@ -678,62 +670,43 @@ export const makeAcpConnection = (
         }
       })
 
-    // Handle an incoming request from the agent (e.g. permission)
+    /**
+     * Answer a request the agent sends to the client.
+     *
+     * Every `session/request_permission` is approved with the agent's
+     * `allow_once` option. This is a decision, not a gap: the ACP agent runs
+     * the whole turn as a live subprocess that waits on this reply, and
+     * gent's approval path (`Interaction.approve`) parks the turn cold and
+     * re-runs the tool later. A live JSON-RPC request cannot be parked that
+     * way. The agent runs with the same authority as gent's own tools.
+     * Every other method is answered "not supported".
+     */
     const handleIncomingRequest = (
       method: string,
       reqId: JsonRpcId,
       params: Schema.Schema.Type<typeof Schema.Unknown>,
     ) =>
       Effect.gen(function* () {
-        if (Predicate.isNotUndefined(incomingRequestHandler)) {
-          const result = yield* incomingRequestHandler(method, params).pipe(
-            Effect.map((value) => {
-              if (Predicate.isUndefined(value)) return Option.none()
-              return Option.some(value)
-            }),
-            Effect.catchEager((err: AcpError) =>
-              Effect.gen(function* () {
-                yield* write(encodeErrorResponse(reqId, -32603, err.message))
-                return Option.none()
-              }),
-            ),
-          )
-          if (Option.isSome(result)) {
-            yield* write(encodeResponse(reqId, result.value))
-          }
+        if (method !== "session/request_permission") {
+          yield* write(encodeErrorResponse(reqId, -32601, `Method not supported: ${method}`))
           return
         }
-
-        // Auto-approve permissions (bare mode agents shouldn't ask, but just in case)
-        if (method === "session/request_permission") {
-          const req = yield* Schema.decodeUnknownEffect(RequestPermissionRequest)(params).pipe(
-            Effect.asSome,
-            Effect.catchEager(() => Effect.succeedNone),
-          )
-          if (Option.isSome(req)) {
-            const allowOption = Option.fromNullishOr(
-              req.value.options.find((o) => o.kind === "allow_once"),
-            )
-            let outcome: Schema.Schema.Type<typeof Schema.Unknown>
-            if (Option.isSome(allowOption)) {
-              outcome = {
-                outcome: "selected",
-                optionId: allowOption.value.optionId,
-              }
-            } else {
-              outcome = { outcome: "cancelled" }
-            }
-            yield* write(
-              encodeResponse(reqId, {
-                outcome,
-              }),
-            )
-          } else {
-            yield* write(encodeErrorResponse(reqId, -32602, "Invalid permission request"))
-          }
-        } else {
-          yield* write(encodeErrorResponse(reqId, -32601, `Method not supported: ${method}`))
+        const req = yield* Schema.decodeUnknownEffect(RequestPermissionRequest)(params).pipe(
+          Effect.asSome,
+          Effect.catchEager(() => Effect.succeedNone),
+        )
+        if (Option.isNone(req)) {
+          yield* write(encodeErrorResponse(reqId, -32602, "Invalid permission request"))
+          return
         }
+        const allowOption = Option.fromNullishOr(
+          req.value.options.find((o) => o.kind === "allow_once"),
+        )
+        let outcome: Schema.Schema.Type<typeof Schema.Unknown> = { outcome: "cancelled" }
+        if (Option.isSome(allowOption)) {
+          outcome = { outcome: "selected", optionId: allowOption.value.optionId }
+        }
+        yield* write(encodeResponse(reqId, { outcome }))
       })
 
     // Route a parsed JSON-RPC line
