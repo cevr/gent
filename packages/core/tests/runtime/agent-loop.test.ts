@@ -208,7 +208,6 @@ import * as AiError from "effect/unstable/ai/AiError"
 import { StorageError } from "../../src/domain/errors"
 import { Database } from "bun:sqlite"
 import type { LanguageModel } from "effect/unstable/ai"
-import { narrowR } from "../helpers/effect"
 import { SingleRunner } from "effect/unstable/cluster"
 import { admitChildSessionDepth, getSessionDepth, SessionRuntime } from "../../src/runtime/session"
 import { test } from "bun:test"
@@ -4090,10 +4089,20 @@ const makeRuntimeLayer = (
   const approvalLayer = ApprovalService.Live.pipe(
     Layer.provide(Layer.merge(baseDeps, eventPublisherLayer)),
   )
-  return Layer.provideMerge(
+  const layer = Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
     Layer.mergeAll(baseDeps, eventPublisherLayer, approvalLayer, ProcessLocalToolReplay.Live),
   )
+  // SessionRuntime.Live keeps the AgentLoop actor client in its context but
+  // names only SessionRuntime in its type. The actor-command tests below drive
+  // that client directly, so this one cast adds it and leaves every other
+  // requirement checked.
+  // oxlint-disable-next-line effect/noAs -- the live layer provides the actor client its type omits
+  return layer as Layer.Layer<
+    Layer.Success<typeof layer> | Effect.Services<typeof AgentLoopActor.Context>,
+    Layer.Error<typeof layer>,
+    Layer.Services<typeof layer>
+  >
 }
 
 const createSessionBranch = Effect.gen(function* () {
@@ -4165,7 +4174,7 @@ const requestExtensionViaActor = (input: {
   })
 
 describe("agent-loop actor commands", () => {
-  it.live("side-mutation commands are serialized per session", () =>
+  it.scopedLive("side-mutation commands are serialized per session", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       const firstEntered = yield* Deferred.make<void>()
@@ -4189,39 +4198,37 @@ describe("agent-loop actor commands", () => {
           }),
       })
       const layer = makeRuntimeLayer(providerLayer, [], [blockingRequest])
-      yield* narrowR(
-        Effect.gen(function* () {
-          const { sessionId, branchId } = yield* createSessionBranch
-          const call = (commandId: string, value: string) =>
-            requestExtensionViaActor({
-              sessionId,
-              branchId,
-              commandId: ActorCommandId.make(commandId),
-              capabilityId: "serialize-probe",
-              input: value,
-            })
-          const firstFiber = yield* Effect.forkChild(call("serialize-a", "a"))
-          yield* Deferred.await(firstEntered).pipe(Effect.timeout("5 seconds"))
-          const secondFiber = yield* Effect.forkChild(call("serialize-b", "b"))
-          // The permit is held by the first command, so the second cannot even
-          // enter the capability body until the first releases it.
-          const earlySecond = yield* Fiber.join(secondFiber).pipe(Effect.timeoutOption("1 millis"))
-          expect(earlySecond._tag).toBe("None")
-          expect(entered).toBe(1)
-          expect(completed).toBe(0)
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-          yield* Deferred.succeed(releaseFirst, undefined)
-          yield* Fiber.join(firstFiber)
-          yield* Fiber.join(secondFiber)
-          expect(entered).toBe(2)
-          expect(completed).toBe(2)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
-      )
+      yield* Effect.gen(function* () {
+        const { sessionId, branchId } = yield* createSessionBranch
+        const call = (commandId: string, value: string) =>
+          requestExtensionViaActor({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make(commandId),
+            capabilityId: "serialize-probe",
+            input: value,
+          })
+        const firstFiber = yield* Effect.forkChild(call("serialize-a", "a"))
+        yield* Deferred.await(firstEntered).pipe(Effect.timeout("5 seconds"))
+        const secondFiber = yield* Effect.forkChild(call("serialize-b", "b"))
+        // The permit is held by the first command, so the second cannot even
+        // enter the capability body until the first releases it.
+        const earlySecond = yield* Fiber.join(secondFiber).pipe(Effect.timeoutOption("1 millis"))
+        expect(earlySecond._tag).toBe("None")
+        expect(entered).toBe(1)
+        expect(completed).toBe(0)
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+        yield* Deferred.succeed(releaseFirst, undefined)
+        yield* Fiber.join(firstFiber)
+        yield* Fiber.join(secondFiber)
+        expect(entered).toBe(2)
+        expect(completed).toBe(2)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
     }),
   )
 
-  it.live("a side mutation waits for the active turn mutation owner", () =>
+  it.scopedLive("a side mutation waits for the active turn mutation owner", () =>
     Effect.gen(function* () {
       const streamStarted = yield* Deferred.make<void>()
       const streamReleased = yield* Deferred.make<void>()
@@ -4248,47 +4255,43 @@ describe("agent-loop actor commands", () => {
           }),
       })
       const layer = makeRuntimeLayer(providerLayer, [], [probeRequest])
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const { sessionId, branchId } = yield* createSessionBranch
-          const submitFiber = yield* Effect.forkChild(
-            sessionRuntime.sendUserMessage({
-              sessionId,
-              branchId,
-              content: "hold the turn open",
-            }),
-          )
-          yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
-          const requestFiber = yield* Effect.forkChild(
-            requestExtensionViaActor({
-              sessionId,
-              branchId,
-              commandId: ActorCommandId.make("request-active-owner"),
-              capabilityId: "owner-probe",
-              input: "blocked until turn completes",
-            }),
-          )
-          // The running turn owns the mutation permit, so the side mutation
-          // cannot start until the turn releases it.
-          const earlyRequest = yield* Fiber.join(requestFiber).pipe(
-            Effect.timeoutOption("1 millis"),
-          )
-          expect(earlyRequest._tag).toBe("None")
-          expect(executed).toBe(false)
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-          yield* Deferred.succeed(streamReleased, undefined)
-          yield* Fiber.join(submitFiber)
-          const result = yield* Fiber.join(requestFiber)
-          expect(executed).toBe(true)
-          expect(result).toEqual("blocked until turn completes")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
-      )
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const { sessionId, branchId } = yield* createSessionBranch
+        const submitFiber = yield* Effect.forkChild(
+          sessionRuntime.sendUserMessage({
+            sessionId,
+            branchId,
+            content: "hold the turn open",
+          }),
+        )
+        yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
+        const requestFiber = yield* Effect.forkChild(
+          requestExtensionViaActor({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("request-active-owner"),
+            capabilityId: "owner-probe",
+            input: "blocked until turn completes",
+          }),
+        )
+        // The running turn owns the mutation permit, so the side mutation
+        // cannot start until the turn releases it.
+        const earlyRequest = yield* Fiber.join(requestFiber).pipe(Effect.timeoutOption("1 millis"))
+        expect(earlyRequest._tag).toBe("None")
+        expect(executed).toBe(false)
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+        yield* Deferred.succeed(streamReleased, undefined)
+        yield* Fiber.join(submitFiber)
+        const result = yield* Fiber.join(requestFiber)
+        expect(executed).toBe(true)
+        expect(result).toEqual("blocked until turn completes")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
     }),
   )
 
-  it.live("a read-only request answers while the turn holds the mutation permit", () =>
+  it.scopedLive("a read-only request answers while the turn holds the mutation permit", () =>
     Effect.gen(function* () {
       const streamStarted = yield* Deferred.make<void>()
       const streamReleased = yield* Deferred.make<void>()
@@ -4311,37 +4314,35 @@ describe("agent-loop actor commands", () => {
         execute: (value: string) => Effect.succeed(`read ${value}`),
       })
       const layer = makeRuntimeLayer(providerLayer, [], [readProbe])
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const { sessionId, branchId } = yield* createSessionBranch
-          const submitFiber = yield* Effect.forkChild(
-            sessionRuntime.sendUserMessage({
-              sessionId,
-              branchId,
-              content: "hold the turn open",
-            }),
-          )
-          yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
-          // The turn still owns the permit, and the read does not need it.
-          const result = yield* requestExtensionViaActor({
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const { sessionId, branchId } = yield* createSessionBranch
+        const submitFiber = yield* Effect.forkChild(
+          sessionRuntime.sendUserMessage({
             sessionId,
             branchId,
-            commandId: ActorCommandId.make("request-read-during-turn"),
-            capabilityId: "read-probe",
-            input: "mid-turn",
-          }).pipe(Effect.timeout("2 seconds"))
-          expect(result).toEqual("read mid-turn")
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-          yield* Deferred.succeed(streamReleased, undefined)
-          yield* Fiber.join(submitFiber)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
-      )
+            content: "hold the turn open",
+          }),
+        )
+        yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
+        // The turn still owns the permit, and the read does not need it.
+        const result = yield* requestExtensionViaActor({
+          sessionId,
+          branchId,
+          commandId: ActorCommandId.make("request-read-during-turn"),
+          capabilityId: "read-probe",
+          input: "mid-turn",
+        }).pipe(Effect.timeout("2 seconds"))
+        expect(result).toEqual("read mid-turn")
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+        yield* Deferred.succeed(streamReleased, undefined)
+        yield* Fiber.join(submitFiber)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
     }),
   )
 
-  it.live("TerminateBranch interrupts an active turn while a side mutation is waiting", () =>
+  it.scopedLive("TerminateBranch interrupts an active turn while a side mutation is waiting", () =>
     Effect.gen(function* () {
       const streamStarted = yield* Deferred.make<void>()
       const streamReleased = yield* Deferred.make<void>()
@@ -4363,39 +4364,37 @@ describe("agent-loop actor commands", () => {
         execute: (value: string) => Effect.succeed(value),
       })
       const layer = makeRuntimeLayer(providerLayer, [], [terminateProbe])
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const { sessionId, branchId } = yield* createSessionBranch
-          const submitFiber = yield* Effect.forkChild(
-            sessionRuntime.sendUserMessage({
-              sessionId,
-              branchId,
-              content: "hold the turn open",
-            }),
-          )
-          yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
-          const recordFiber = yield* Effect.forkChild(
-            requestExtensionViaActor({
-              sessionId,
-              branchId,
-              commandId: ActorCommandId.make("request-terminate-owner"),
-              capabilityId: "terminate-probe",
-              input: "blocked until turn completes",
-            }),
-          )
-          const earlyRecord = yield* Fiber.join(recordFiber).pipe(Effect.timeoutOption("1 millis"))
-          expect(earlyRecord._tag).toBe("None")
-          yield* sessionRuntime.terminateSession(sessionId).pipe(Effect.timeout("1 second"))
-          yield* Fiber.join(submitFiber).pipe(Effect.ignore)
-          yield* Fiber.join(recordFiber).pipe(Effect.ignore)
-          const afterTerminate = yield* Effect.exit(getActorState({ sessionId, branchId }))
-          expect(afterTerminate._tag).toBe("Failure")
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-          yield* Deferred.succeed(streamReleased, undefined).pipe(Effect.ignore)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const { sessionId, branchId } = yield* createSessionBranch
+        const submitFiber = yield* Effect.forkChild(
+          sessionRuntime.sendUserMessage({
+            sessionId,
+            branchId,
+            content: "hold the turn open",
+          }),
+        )
+        yield* Deferred.await(streamStarted).pipe(Effect.timeout("5 seconds"))
+        const recordFiber = yield* Effect.forkChild(
+          requestExtensionViaActor({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("request-terminate-owner"),
+            capabilityId: "terminate-probe",
+            input: "blocked until turn completes",
+          }),
+        )
+        const earlyRecord = yield* Fiber.join(recordFiber).pipe(Effect.timeoutOption("1 millis"))
+        expect(earlyRecord._tag).toBe("None")
+        yield* sessionRuntime.terminateSession(sessionId).pipe(Effect.timeout("1 second"))
+        yield* Fiber.join(submitFiber).pipe(Effect.ignore)
+        yield* Fiber.join(recordFiber).pipe(Effect.ignore)
+        const afterTerminate = yield* Effect.exit(getActorState({ sessionId, branchId }))
+        expect(afterTerminate._tag).toBe("Failure")
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+        yield* Deferred.succeed(streamReleased, undefined).pipe(Effect.ignore)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
 })
