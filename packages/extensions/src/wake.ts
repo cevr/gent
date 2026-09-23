@@ -745,7 +745,7 @@ export const MonitorTool = tool({
         metadata: { type: "bash-guardrail", level: risk.level },
       })
       if (!decision.approved) {
-        // A decline in a session no user sees says who can answer instead.
+        // A decline in a turn no user started says how to report it instead.
         const notes = Option.match(Option.fromUndefinedOr(decision.notes), {
           onNone: () => "",
           onSome: (text) => `. ${text}`,

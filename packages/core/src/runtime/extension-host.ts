@@ -2126,11 +2126,15 @@ const facet = <I, S>(tag: Context.Key<I, S>, name: string): Effect.Effect<Facet<
 
 const sessionError = (operation: string) => extensionServiceError("ExtensionSession", operation)
 
-/** The answer to an approval asked in a turn no user started. */
+/**
+ * The answer to an approval asked in a turn no user started. It says how the
+ * request reaches someone, and that no message can grant it, so a child
+ * told "go ahead" does not ask again.
+ */
 const unanswerableApproval: ApprovalDecision = {
   approved: false,
   notes:
-    'Declined: no user sees this session, so no one can approve it here. Ask your parent with session.send to "parent", then end your turn.',
+    "Declined: no user started this turn, so no one can approve it here, and asking again in this turn is declined again. Report the command and why you need it the way this turn reports its result, then end your turn. No message can grant it: whoever reads your report runs the command, or a user prompts this session directly and approves it there.",
 }
 
 /** A pending interaction is the caller's to handle; anything else is a service failure. */

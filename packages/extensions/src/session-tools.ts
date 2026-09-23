@@ -363,7 +363,7 @@ const SESSIONS_SECTION = {
   priority: 14,
   content: `# Sessions
 
-- Sessions talk with session.send: correct a running child, answer a child's question, or ask your parent when you are blocked on a decision. A message wakes an idle session.`,
+- Sessions talk with session.send: correct a running child, answer a child's question, or ask your parent when you are blocked on a decision in a turn whose reply does not return to it (a child's task turn returns its reply as its completion). A message wakes an idle session.`,
 }
 
 export const SessionToolsExtension = defineExtension({

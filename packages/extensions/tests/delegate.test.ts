@@ -461,11 +461,13 @@ describe("a child's completion", () => {
           const child = yield* childOf(harness)
           const childSnapshot = yield* harness.client.session.getSnapshot(child)
           expect(childSnapshot.runtime._tag).toBe("Idle")
-          // The child reads why, and who can answer instead.
+          // The child reads why, how to report it, and that no message grants it.
           expect(resultsOf("bash", childSnapshot.messages)[0]).toMatchObject({
             result: {
               status: "blocked",
-              stdout: expect.stringContaining('Ask your parent with session.send to "parent"'),
+              stdout: expect.stringMatching(
+                /the way this turn reports its result[\s\S]*No message can grant it/,
+              ),
             },
           })
         }).pipe(Effect.timeout("8 seconds")),
@@ -620,12 +622,17 @@ describe("the completion headline", () => {
     ).split("\n")
     expect(source).toContain("Your final reply in this turn is your result")
     expect(source).toContain("do not also send it with session.send")
+    // A question in this turn is the reply too, so the parent is woken once.
+    expect(source).toContain("end it with your question as that reply")
+    expect(source).not.toContain("Use session.send in this turn")
     // A turn the parent's answer starts returns nothing either.
     expect(later).toContain(
-      'Any later turn (a message from your parent, a wake, a monitor, a goal) returns nothing by itself: send its result with session.send to "parent"',
+      'Any later turn (a message from your parent, a wake, a monitor, a goal) returns nothing by itself: send its result or question with session.send to "parent"',
     )
     expect(later).not.toContain("send each one")
-    expect(approvals).toContain("an approval is declined at once: ask the parent with session.send")
+    // A "go ahead" cannot grant an approval, so the child does not ask again.
+    expect(approvals).toContain("no message from your parent can grant it")
+    expect(approvals).toContain("the parent runs it or gives you another way")
     expect(blank).toBe("")
     expect(task).toBe("do it")
   })

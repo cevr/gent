@@ -533,8 +533,11 @@ such a message opens (a child's task from `delegate.start`, a parent's
 has no user watching. Its `approve` declines at once, and the tools that ask
 the user are withheld. A turn a client's prompt opens asks as usual, in any
 session, a delegate child included. The loop reads the fact from the turn's
-opening message, so it survives a restart. The decline's notes say who can
-answer instead; the bash and monitor blocks carry them.
+opening message, so it survives a restart. The decline's notes say to report
+the command the way the turn reports its result (a child's task turn: its
+reply, which its completion carries; a later turn: `session.send`), and that
+no message can grant it: the reader runs the command, or a user prompts the
+session directly. The bash and monitor blocks carry those notes.
 
 An inner call of a dispatching tool (a cell) is the exception: its dispatcher
 cannot replay its source, so the call waits for its answer in place through the

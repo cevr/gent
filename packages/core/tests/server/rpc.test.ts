@@ -1388,7 +1388,7 @@ describe("interaction.respondInteraction", () => {
           expect(opening?.metadata?.extensionId).toBe(probeExtensionId)
           const [declined] = toolResultTexts(nudged.messages)
           expect(declined).toContain('"approved":false')
-          expect(declined).toContain("no user sees this session")
+          expect(declined).toContain("no user started this turn")
           // A client's prompt on the same session is a turn a user watches: it asks.
           yield* client.message.send({ sessionId, branchId, content: "run the probe" })
           const dialog = Array.from(yield* Fiber.join(presented))[0]
