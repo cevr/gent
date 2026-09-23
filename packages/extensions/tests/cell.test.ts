@@ -1584,14 +1584,12 @@ describe("cell approvals", () => {
               expect(results).toHaveLength(1)
               expect(results[0]).toMatchObject({
                 isFailure: true,
+                // Recovered operations use the receipt shape every client decodes.
                 result: {
                   stateLost: true,
                   operations: [
-                    { _tag: "Completed", result: { name: "mark", isFailure: false, result: true } },
-                    {
-                      _tag: "Completed",
-                      result: { name: "approve", isFailure: false, result: approved },
-                    },
+                    { tool: "mark", outcome: "succeeded", toolCallId: expect.any(String) },
+                    { tool: "approve", outcome: "succeeded", toolCallId: expect.any(String) },
                   ],
                 },
               })
@@ -1955,13 +1953,14 @@ it.scopedLive(
         expect(recovered.isFailure).toBe(true)
         expect(recovered.result).toMatchObject({
           stateLost: true,
+          // An operation with no recorded outcome is an incomplete receipt.
           operations: expect.arrayContaining([
             {
-              _tag: "Unknown",
-              operationId: "3",
               toolCallId: (yield* operations.get({ cell: cellToolHost, operationId: "3" }))
                 .toolCallId,
-              toolName: "interrupt",
+              tool: "interrupt",
+              outcome: "incomplete",
+              summary: "",
             },
           ]),
         })
@@ -1970,6 +1969,71 @@ it.scopedLive(
       }).pipe(Effect.provideContext(context))
     }).pipe(Effect.timeout("15 seconds")),
   20000,
+)
+
+it.scopedLive(
+  "a cell completed before a crash comes back with its operation receipts",
+  () =>
+    Effect.gen(function* () {
+      const extensions: ReadonlyArray<LoadedExtension> = [
+        {
+          manifest: { id: ExtensionId.make("recorded-host") },
+          scope: "builtin",
+          sourcePath: "recorded-host",
+          artifactIdentity: LoadedArtifactIdentity.make("recorded-host-source"),
+          contributions: {
+            tools: [
+              tool({
+                id: "count",
+                description: "Count execution",
+                params: Schema.Struct({ valid: Schema.Boolean }),
+                output: Schema.Finite,
+                execute: () => Effect.succeed(1),
+              }),
+            ],
+          },
+        },
+      ]
+      const context = yield* Layer.build(
+        createE2ELayer({
+          agents: [],
+          extensionInputs: [],
+          branchTools: CellBranchTools,
+          extensions,
+          providerLayer: LanguageModelLayers.debug(),
+        }),
+      )
+      yield* Effect.gen(function* () {
+        yield* prepareCell
+        const hostParams = yield* currentHostParams
+        const host = yield* makeCellToolHost(hostParams)
+        expect(yield* host.call(requestToolHost("1", "count"))).toBe(1)
+        // The process stored the cell result and died before the receipts were attached.
+        yield* (yield* CellStorage).executions.complete(
+          cellToolHost,
+          Prompt.toolResultPart({
+            id: cellToolHost.toolCallId,
+            name: "cell",
+            isFailure: false,
+            providerExecuted: false,
+            result: { value: 1 },
+          }),
+        )
+        const recovered = yield* recoverCellExecution(hostParams)
+        expect(recovered.result).toEqual({
+          value: 1,
+          operations: [
+            {
+              toolCallId: expect.any(String),
+              tool: "count",
+              outcome: "succeeded",
+              summary: expect.any(String),
+            },
+          ],
+        })
+      }).pipe(Effect.provideContext(context))
+    }).pipe(Effect.timeout("10 seconds")),
+  12000,
 )
 
 it.scopedLive(
@@ -3094,8 +3158,9 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
   const recovered = yield* Schema.decodeUnknownEffect(
     Schema.Struct({
       operations: Schema.Array(
-        Schema.TaggedStruct("Unknown", {
-          toolName: Schema.Literal("delegate.start"),
+        Schema.Struct({
+          tool: Schema.Literal("delegate.start"),
+          outcome: Schema.Literal("incomplete"),
           toolCallId: ToolCallId,
         }),
       ),
@@ -3432,9 +3497,7 @@ it.scopedLive(
           expect(yield* Ref.get(approvalCalls)).toBe(2)
           expect(outer).toMatchObject({
             result: {
-              operations: [
-                { _tag: "Completed", operationId: "1", result: { isFailure: false, result: true } },
-              ],
+              operations: [{ tool: "approve", outcome: "succeeded", summary: "true" }],
             },
           })
         }

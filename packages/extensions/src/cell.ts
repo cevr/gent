@@ -73,7 +73,6 @@ import {
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
-  ToolId,
   ToolRunner,
   type TurnInterruptionStatus,
 } from "@gent/core/extensions/branch-tools"
@@ -2299,10 +2298,10 @@ export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
 
 // ── tool ────────────────────────────────────────────────────────────────────
 
-/** Declaration only. The turn dispatcher still owns identity, permissions, and execution scope. */
 /** The model-facing name of the cell tool. */
 const CELL_TOOL_ID = "cell"
 
+/** Declaration only. The turn dispatcher still owns identity, permissions, and execution scope. */
 export const CellTool = tool({
   id: CELL_TOOL_ID,
   description: "Run TypeScript in this branch's Bun process. Bindings persist across cells.",
@@ -2343,11 +2342,6 @@ export const CellTool = tool({
 
 // ── recovery ────────────────────────────────────────────────────────────────
 
-const RecoveredOperation = Schema.TaggedUnion({
-  Completed: { operationId: CellToolOperationId, result: Prompt.ToolResultPart },
-  Unknown: { operationId: CellToolOperationId, toolCallId: ToolCallId, toolName: ToolId },
-})
-
 /** The branch owner calls this only after cell execution has stopped. No source replay. */
 export const recoverCellExecution = Effect.fn("CellExecution.recover")(function* (
   params: Pick<Parameters<typeof resumeCellToolOperation>[0], "cell" | "profile">,
@@ -2363,7 +2357,8 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
         Effect.fromOption(() => new StorageError({ message: "Cell has not been admitted" })),
       ),
     )
-  if (outer._tag === "Completed") return outer.result
+  // A cell stored as completed may have died before its receipts were attached.
+  if (outer._tag === "Completed") return yield* withCellOperationReceipts(params.cell, outer.result)
   const records = yield* operations.listForToolCall(params.cell)
   const pending = yield* interactions.listPending(params.cell)
   for (const { key, operation } of records) {
@@ -2386,19 +2381,10 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
       })
     yield* resumeCellToolOperation({ ...params, operationId: key.operationId, requestId })
   }
+  // The receipt shape every client decodes. An operation with no recorded
+  // outcome is incomplete; a completed one is read back with context.read.
   const latest = yield* operations.listForToolCall(params.cell)
-  const outcomes = latest.map(({ key, operation }) => {
-    if (operation.state._tag === "Completed")
-      return RecoveredOperation.cases.Completed.make({
-        operationId: key.operationId,
-        result: operation.state.result,
-      })
-    return RecoveredOperation.cases.Unknown.make({
-      operationId: key.operationId,
-      toolCallId: operation.toolCallId,
-      toolName: operation.binding.toolId,
-    })
-  })
+  const receipts = encodeReceipts(latest.map(({ operation }) => receiptFor(operation)))
   const result = Prompt.toolResultPart({
     id: params.cell.toolCallId,
     name: "cell",
@@ -2408,7 +2394,7 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
       error:
         "The cell worker state was lost. Its source was not replayed. Unrecorded operation effects may have occurred.",
       stateLost: true,
-      operations: outcomes,
+      [CELL_OPERATIONS_KEY]: receipts,
     },
   })
   yield* cells.complete(params.cell, result)
