@@ -1,5 +1,12 @@
 import { Option, Schema } from "effect"
 
+/** What every guard reports: a place in a file, and what is wrong there. */
+export interface Finding {
+  readonly file: string
+  readonly line: number
+  readonly message: string
+}
+
 /** This file: the guards name what they look for, so several scans skip it. */
 const GUARDS_FILE = "packages/tooling/src/guards.ts"
 
@@ -21,53 +28,40 @@ const withoutComments = (text: string): string => text.replace(COMMENT_OR_STRING
 
 // ── a lint directive names its rules ────────────────────────────────────────
 
-export interface BlanketDisableFinding {
-  readonly file: string
-  readonly line: number
-}
-
 /**
  * oxlint honors both spellings, `eslint-disable` and `oxlint-disable`, so each
  * pattern matches both. A blanket directive names no rule; a file-wide
  * directive, written as a block or a line comment, disables its rules to the
  * end of the file or the next enable.
  */
-export const blanketDisableDirective =
+const blanketDisableDirective =
   /(?:\/\*\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:\*\/|--|$))|(?:\/\/\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:--|$))/
 
-export const blockDisableDirective = /(?:\/\*|\/\/)\s*(?:es|ox)lint-disable(?:\s|$)/
+const blockDisableDirective = /(?:\/\*|\/\/)\s*(?:es|ox)lint-disable(?:\s|$)/
 
 const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)(?:\/|\.|\b)/
 
 const isExplicitFixtureFile = (file: string): boolean => fixtureFilePattern.test(file)
 
-export const findBlanketEslintDisables = (
-  file: string,
-  text: string,
-): ReadonlyArray<BlanketDisableFinding> => {
-  const findings: BlanketDisableFinding[] = []
-  const lines = text.split("\n")
-  for (let index = 0; index < lines.length; index++) {
-    if (blanketDisableDirective.test(lines[index] ?? "")) {
-      findings.push({ file, line: index + 1 })
-    }
-  }
-  return findings
-}
+const DISABLE_MESSAGE =
+  "blanket and file-wide lint-disable comments (eslint- or oxlint- spelling) are banned; use line-local suppressions with exact rules"
+
+/** Every line of `text` a directive pattern matches. */
+const directiveLines = (file: string, text: string, directive: RegExp): ReadonlyArray<Finding> =>
+  text.split("\n").flatMap((line, index) => {
+    if (!directive.test(line)) return []
+    return [{ file, line: index + 1, message: DISABLE_MESSAGE }]
+  })
+
+export const findBlanketEslintDisables = (file: string, text: string): ReadonlyArray<Finding> =>
+  directiveLines(file, text, blanketDisableDirective)
 
 export const findBannedEslintDisableBlocks = (
   file: string,
   text: string,
-): ReadonlyArray<BlanketDisableFinding> => {
+): ReadonlyArray<Finding> => {
   if (isExplicitFixtureFile(file)) return []
-  const findings: BlanketDisableFinding[] = []
-  const lines = text.split("\n")
-  for (let index = 0; index < lines.length; index++) {
-    if (blockDisableDirective.test(lines[index] ?? "")) {
-      findings.push({ file, line: index + 1 })
-    }
-  }
-  return findings
+  return directiveLines(file, text, blockDisableDirective)
 }
 
 // ── an alternative layer is a real alternative ──────────────────────────────
@@ -96,13 +90,6 @@ export const findBannedEslintDisableBlocks = (
  *
  * @module
  */
-
-/** An alternative layer static that is an alias of the same service's `Live`. */
-export interface AliasTestLayerFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 /**
  * Shipped source, the same reading `core-retired-reconciler` uses.
@@ -175,13 +162,10 @@ const normalized = (initializer: string): string =>
     .replace(/[;,]+$/, "")
 
 /** Report alternative layer statics whose whole body returns `Live`. */
-export const findAliasTestLayers = (
-  file: string,
-  text: string,
-): ReadonlyArray<AliasTestLayerFinding> => {
+export const findAliasTestLayers = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!SHIPPED_SOURCE.test(file)) return []
 
-  const findings: AliasTestLayerFinding[] = []
+  const findings: Finding[] = []
   const lines = text.split("\n")
   for (const [index, line] of lines.entries()) {
     const member = Option.fromNullishOr(MEMBER_PATTERN.exec(line))
@@ -219,12 +203,6 @@ export const findAliasTestLayers = (
  * @module
  */
 
-export interface ChildSessionDepthFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
 const CORE_SRC = "packages/core/src/"
 const EXEMPT_PREFIXES = [`${CORE_SRC}storage/`, `${CORE_SRC}test-utils/`]
 const SHARED_CHECK = "admitChildSessionDepth"
@@ -243,11 +221,11 @@ const lastDeclarationStart = (text: string): number => {
 export const findUnadmittedChildSessionWriters = (
   file: string,
   text: string,
-): ReadonlyArray<ChildSessionDepthFinding> => {
+): ReadonlyArray<Finding> => {
   if (!file.startsWith(CORE_SRC)) return []
   if (EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix))) return []
 
-  const findings: ChildSessionDepthFinding[] = []
+  const findings: Finding[] = []
   for (const match of text.matchAll(SESSION_LITERAL)) {
     const start = match.index
     const end = text.indexOf("})", start)
@@ -287,15 +265,8 @@ export const findUnadmittedChildSessionWriters = (
  * @module
  */
 
-/** A core source file that imports a feature directory it must not know about. */
-export interface FeatureIndependenceFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
 /** Feature directories under `packages/core/src` that core proper must not import. */
-export const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
+const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
 
 /**
  * SQL table-name prefixes owned by a feature.
@@ -305,7 +276,7 @@ export const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
  * repositories, so a core source file naming one of these is core reaching
  * back into a feature it should not know about.
  */
-export const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
+const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
 
 /**
  * Network hosts owned by a catalog feature, not by the kernel.
@@ -315,7 +286,7 @@ export const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
  * belongs to the driver's extension. A core source file that names one of
  * these hosts is core fetching a feature's data itself.
  */
-export const FEATURE_HOSTS: ReadonlyArray<string> = ["models.dev"]
+const FEATURE_HOSTS: ReadonlyArray<string> = ["models.dev"]
 
 const CORE_SRC_PREFIX = "packages/core/src/"
 
@@ -333,12 +304,12 @@ const TABLE_PATTERN = (prefix: string) => new RegExp(`\\b${prefix}[a-z_]+\\b`)
 export const findCoreFeatureIndependenceFindings = (
   file: string,
   text: string,
-): ReadonlyArray<FeatureIndependenceFinding> => {
+): ReadonlyArray<Finding> => {
   if (!file.startsWith(CORE_SRC_PREFIX)) return []
   const ownSegments = file.slice(CORE_SRC_PREFIX.length).split("/")
   if (FEATURE_DIRECTORIES.some((feature) => ownSegments.includes(feature))) return []
 
-  const findings: Array<FeatureIndependenceFinding> = []
+  const findings: Array<Finding> = []
   for (const [index, line] of text.split("\n").entries()) {
     const specifier = Option.flatMap(Option.fromNullishOr(IMPORT_PATTERN.exec(line)), (match) =>
       Option.fromNullishOr(match[1]),
@@ -401,12 +372,6 @@ export const findCoreFeatureIndependenceFindings = (
  *
  * @module
  */
-
-export interface IdentityEncodeFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 /**
  * Name segments that say the encoded value answers "is this the same thing?".
@@ -508,10 +473,7 @@ const ENCODER_BINDING =
 /** The encoded value being compared, right where it is produced. */
 const COMPARED = /(?:===|!==|\.has\(|\.get\(|\.add\()/
 
-export const findIdentityEncodes = (
-  file: string,
-  text: string,
-): ReadonlyArray<IdentityEncodeFinding> => {
+export const findIdentityEncodes = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!SHIPPED_SOURCE.test(file)) return []
   const lines = text.split("\n")
   const encoders: string[] = []
@@ -523,7 +485,7 @@ export const findIdentityEncodes = (
   }
   if (encoders.length === 0) return []
 
-  const findings: IdentityEncodeFinding[] = []
+  const findings: Finding[] = []
   const callPattern = new RegExp(`\\b(${encoders.join("|")})\\(`, "g")
   for (const [index, line] of lines.entries()) {
     // The binding itself is a declaration, not a use.
@@ -580,13 +542,6 @@ export const findIdentityEncodes = (
  *
  * @module
  */
-
-/** A seam core declares that no shipped extension fills. */
-export interface UnadaptedSeamFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 /** Every seam family core declares now lives in one file; each scan is anchored on its own interface name. */
 const SEAM_DECLARATION_FILE = "packages/core/src/domain/extension.ts"
@@ -725,8 +680,8 @@ const declaredResourceScopes = (text: string): ReadonlyArray<string> => {
 export const findUnadaptedSeams = (
   sources: ReadonlyMap<string, string>,
   adapted: ReadonlySet<string>,
-): ReadonlyArray<UnadaptedSeamFinding> => {
-  const findings: UnadaptedSeamFinding[] = []
+): ReadonlyArray<Finding> => {
+  const findings: Finding[] = []
 
   const report = (
     file: string,
@@ -797,13 +752,6 @@ export const findUnadaptedSeams = (
  * @module
  */
 
-/** A core source file that pins a vendor model SKU. */
-export interface VendorModelPinFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
 /**
  * The one file allowed to name a vendor model: it declares the default that
  * every other core site resolves through.
@@ -819,14 +767,11 @@ const VENDOR_MODEL_PATTERN =
   /["'`](?:anthropic|openai|google|mistral|xai|groq|deepseek)\/[a-z0-9][a-z0-9.-]*["'`]/i
 
 /** Report vendor model SKUs pinned in core source. */
-export const findCoreVendorModelPins = (
-  file: string,
-  text: string,
-): ReadonlyArray<VendorModelPinFinding> => {
+export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!file.startsWith(CORE_SRC_PREFIX)) return []
   if (file === DECLARATION_SITE) return []
 
-  const findings: VendorModelPinFinding[] = []
+  const findings: Finding[] = []
   const lines = text.split("\n")
   for (const [index, line] of lines.entries()) {
     const match = Option.fromNullishOr(VENDOR_MODEL_PATTERN.exec(line))
@@ -850,12 +795,6 @@ export const findCoreVendorModelPins = (
  * fixture runs in-process inside the slow suite, and belongs in the owning
  * package's `tests/` directory instead.
  */
-export interface E2eFixtureImportFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
 const E2E_TEST_FILE = /^packages\/e2e\/tests\/.*\.test\.ts$/
 
 /** An `import` whose module path is one of the two subprocess fixtures. */
@@ -865,7 +804,7 @@ const FIXTURE_IMPORT =
 export const findE2eFixtureImportFindings = (
   file: string,
   text: string,
-): ReadonlyArray<E2eFixtureImportFinding> => {
+): ReadonlyArray<Finding> => {
   if (!E2E_TEST_FILE.test(file)) return []
   if (FIXTURE_IMPORT.test(text)) return []
   return [
@@ -890,12 +829,6 @@ export const findE2eFixtureImportFindings = (
  *
  * @module
  */
-
-export interface HookRunsGuardsFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 export const HOOK_FILE = "lefthook.yml"
 
@@ -938,10 +871,7 @@ const runsGuards = (block: string): boolean =>
     }),
   )
 
-export const findHookWithoutGuards = (
-  file: string,
-  text: string,
-): ReadonlyArray<HookRunsGuardsFinding> => {
+export const findHookWithoutGuards = (file: string, text: string): ReadonlyArray<Finding> => {
   if (file !== HOOK_FILE) return []
   if (runsGuards(preCommitBlock(text))) return []
   return [
@@ -975,12 +905,6 @@ export const findHookWithoutGuards = (
  *
  * @module
  */
-
-export interface LintConfigFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 // ---------------------------------------------------------------------------
 // (a) An override whose files glob matches nothing
@@ -1025,7 +949,7 @@ export const OxlintConfigSchema = Schema.Struct({
   rules: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 })
 
-export type OxlintConfig = typeof OxlintConfigSchema.Type
+type OxlintConfig = typeof OxlintConfigSchema.Type
 
 /** The line an override's glob sits on, for a finding that points at it. */
 const lineOfGlob = (configText: string, glob: string): number => {
@@ -1041,8 +965,8 @@ export const findUnmatchedOverrideGlobs = (
   configText: string,
   config: OxlintConfig,
   trackedFiles: ReadonlyArray<string>,
-): ReadonlyArray<LintConfigFinding> => {
-  const findings: Array<LintConfigFinding> = []
+): ReadonlyArray<Finding> => {
+  const findings: Array<Finding> = []
   for (const override of config.overrides ?? []) {
     for (const glob of override.files ?? []) {
       const matcher = globMatcher(glob)
@@ -1068,8 +992,8 @@ export const findUnenabledPluginRules = (
   pluginFile: string,
   pluginText: string,
   rootRules: ReadonlySet<string>,
-): ReadonlyArray<LintConfigFinding> => {
-  const findings: Array<LintConfigFinding> = []
+): ReadonlyArray<Finding> => {
+  const findings: Array<Finding> = []
   for (const [index, line] of pluginText.split("\n").entries()) {
     const name = Option.flatMap(Option.fromNullishOr(RULE_KEY.exec(line)), (match) =>
       Option.fromNullishOr(match[1]),
@@ -1178,14 +1102,14 @@ const externallySetLine = (sourceTexts: ReadonlyMap<string, string>, name: strin
 export const findReadersWithoutWriters = (
   sourceTexts: ReadonlyMap<string, string>,
   externallySet: ReadonlyMap<string, string> = EXTERNALLY_SET,
-): ReadonlyArray<LintConfigFinding> => {
+): ReadonlyArray<Finding> => {
   const { readers, writers } = collectGentVariableUses(sourceTexts)
   const staleReason = (name: string): Option.Option<string> => {
     if (!readers.has(name)) return Option.some("nothing reads it")
     if (writers.has(name)) return Option.some("the tree sets it")
     return Option.none()
   }
-  const findings: Array<LintConfigFinding> = []
+  const findings: Array<Finding> = []
   for (const [name, uses] of readers) {
     if (writers.has(name) || externallySet.has(name)) continue
     for (const use of uses) {
@@ -1209,12 +1133,6 @@ export const findReadersWithoutWriters = (
 }
 
 // ── no code duplicates an Effect platform service ───────────────────────────
-
-export interface PlatformDuplicationFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 /** Shipped source under `packages/` and `apps/`: not tests, fixtures or build output. */
 const shippedSourceFile = (file: string): boolean =>
@@ -1249,7 +1167,7 @@ const platformProviderRootFiles = new Set([
 export const findPlatformDuplicationViolations = (
   file: string,
   text: string,
-): ReadonlyArray<PlatformDuplicationFinding> => {
+): ReadonlyArray<Finding> => {
   if (!shippedSourceFile(file) || platformProviderRootFiles.has(file)) return []
   return text.split("\n").flatMap((line, index) => {
     if (!PLATFORM_LAYER.test(line)) return []
@@ -1278,12 +1196,6 @@ export const findPlatformDuplicationViolations = (
  *
  * @module
  */
-
-export interface RetiredSurfaceFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 interface RetiredSurface {
   /** `line`: a source line; `import`: an imported module's basename; `path`: the file path. */
@@ -1565,13 +1477,10 @@ const subjectOf = (row: RetiredSurface, line: string): Option.Option<string> => 
 }
 
 /** Every line, import, or path in `file` that brings back a retired surface. */
-export const findRetiredSurfaces = (
-  file: string,
-  text: string,
-): ReadonlyArray<RetiredSurfaceFinding> => {
+export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<Finding> => {
   const rows = RETIRED_SURFACES.filter((row) => inRetiredScope(file, row.scope))
   if (rows.length === 0) return []
-  const findings: Array<RetiredSurfaceFinding> = []
+  const findings: Array<Finding> = []
   for (const row of rows) {
     if (row.on === "path" && row.match.test(file))
       findings.push({ file, line: 1, message: row.message })
@@ -1627,13 +1536,6 @@ export const findRetiredSurfaces = (
  *
  * @module
  */
-
-/** A steering-file reference to a path that `git ls-files` does not list. */
-export interface SteeringFilePathFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 /** The files an agent is told to read before it changes the code. */
 const STEERING_FILES = new Set(["CLAUDE.md", "AGENTS.md", "apps/tui/AGENTS.md", "ARCHITECTURE.md"])
@@ -1693,12 +1595,12 @@ export const findSteeringFilePaths = (
   file: string,
   text: string,
   trackedFiles: ReadonlyArray<string>,
-): ReadonlyArray<SteeringFilePathFinding> => {
+): ReadonlyArray<Finding> => {
   if (!isSteeringFile(file)) return []
 
   const tracked = new Set(trackedFiles)
   const prefixes = directoryPrefixesOf(trackedFiles)
-  const findings: SteeringFilePathFinding[] = []
+  const findings: Finding[] = []
   let inFence = false
   for (const [index, line] of text.split("\n").entries()) {
     if (FENCE.test(line)) {
@@ -1750,12 +1652,6 @@ export const findSteeringFilePaths = (
  * @module
  */
 
-export interface TuiSessionIdentityFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
 const TUI_SOURCE = /^apps\/tui\/src\//
 
 /** Opens a reactive scope: Solid re-runs what follows when its reads change. */
@@ -1771,15 +1667,12 @@ const RECORD_READ = /(?<!current)\.session\(\)/i
  */
 const SCOPE_LINES = 12
 
-export const findTuiSessionIdentityReads = (
-  file: string,
-  text: string,
-): ReadonlyArray<TuiSessionIdentityFinding> => {
+export const findTuiSessionIdentityReads = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!TUI_SOURCE.test(file)) return []
 
   const lines = text.split("\n")
   const reported = new Set<number>()
-  const findings: TuiSessionIdentityFinding[] = []
+  const findings: Finding[] = []
   for (const [index, line] of lines.entries()) {
     if (!TRACKING_OPENER.test(line)) continue
     const openerIndent = line.length - line.trimStart().length
@@ -1819,20 +1712,6 @@ export const findTuiSessionIdentityReads = (
  * approved entry fails the guard, and an approved entry with no matching
  * comment anywhere in the tree fails it too, so the table cannot drift.
  */
-
-export type SuppressionFindingKind = "effect-diagnostics"
-
-export interface SuppressionInventoryFinding {
-  readonly file: string
-  readonly line: number
-  readonly kind: SuppressionFindingKind
-}
-
-/** An approved entry that no suppression comment in the scanned tree matches. */
-export interface UnusedSuppressionApproval {
-  readonly file: string
-  readonly comment: string
-}
 
 /** `next-line` suppresses the following line; `file` suppresses the whole module. */
 type SuppressionScope = "next-line" | "file"
@@ -1988,13 +1867,17 @@ const approvedSuppression = (file: string, text: string): boolean =>
 export const findSuppressionInventoryFindings = (
   file: string,
   text: string,
-): ReadonlyArray<SuppressionInventoryFinding> => {
-  const findings: SuppressionInventoryFinding[] = []
+): ReadonlyArray<Finding> => {
+  const findings: Finding[] = []
   if (DESCRIBES_THE_MARKER.has(file)) return findings
 
   for (const [index, line] of text.split("\n").entries()) {
     if (line.includes(directiveMarker) && !approvedSuppression(file, line)) {
-      findings.push({ file, line: index + 1, kind: "effect-diagnostics" })
+      findings.push({
+        file,
+        line: index + 1,
+        message: `unreviewed ${directiveMarker} suppression; remove it, or approve its exact text in ${GUARDS_FILE}`,
+      })
     }
   }
   return findings
@@ -2006,17 +1889,29 @@ const containsComment = (text: string, comment: string): boolean =>
 /**
  * Whole-tree check: every approved entry must match a comment in its file.
  * `sources` maps each scanned source path to its text; a file missing from
- * the map counts as having no suppressions.
+ * the map counts as having no suppressions. The finding points at the entry.
  */
 export const findUnusedSuppressionApprovals = (
   sources: ReadonlyMap<string, string>,
-): ReadonlyArray<UnusedSuppressionApproval> =>
-  approvedSuppressionEntries.flatMap((entry) => {
+): ReadonlyArray<Finding> => {
+  const entryLines = Option.getOrElse(
+    Option.fromNullishOr(sources.get(GUARDS_FILE)),
+    () => "",
+  ).split("\n")
+  return approvedSuppressionEntries.flatMap((entry) => {
     const comment = approvedComment(entry)
     const source = Option.fromNullishOr(sources.get(entry.file))
     if (Option.exists(source, (text) => containsComment(text, comment))) return []
-    return [{ file: entry.file, comment }]
+    const line = entryLines.findIndex((text) => text.includes(`text: "${entry.text}"`)) + 1
+    return [
+      {
+        file: GUARDS_FILE,
+        line: Math.max(line, 1),
+        message: `approved suppression for ${entry.file} has no matching comment there; drop the entry: ${comment}`,
+      },
+    ]
   })
+}
 
 // ── every export has a consumer ─────────────────────────────────────────────
 
@@ -2063,13 +1958,6 @@ export const findUnusedSuppressionApprovals = (
  *
  * @module
  */
-
-/** A name nothing that may consume it reaches for. */
-export interface ExportConsumerFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 /** One scanned surface: where its names are declared and who may consume them. */
 interface ScannedSurface {
@@ -2240,7 +2128,7 @@ const surfaceOf = (file: string): Option.Option<ScannedSurface> =>
   Option.fromNullishOr(SCANNED_SURFACES.find((surface) => file.startsWith(surface.prefix)))
 
 /** A declared name, and the surface whose rule decides whether it is consumed. */
-export interface Declaration {
+interface Declaration {
   readonly name: string
   readonly line: number
   readonly surface: ScannedSurface
@@ -2803,7 +2691,7 @@ const isNamesake = (
 
 export const findUnconsumedExports = (
   factsByFile: ReadonlyMap<string, ExportFacts>,
-): ReadonlyArray<ExportConsumerFinding> => {
+): ReadonlyArray<Finding> => {
   const declaringFiles = filesDeclaringEachName(factsByFile)
 
   const isConsumed = (file: string, declaration: Declaration): boolean => {
@@ -2831,7 +2719,7 @@ export const findUnconsumedExports = (
     )
   }
 
-  const findings: Array<ExportConsumerFinding> = []
+  const findings: Array<Finding> = []
   for (const [file, facts] of factsByFile) {
     const reported = new Set<string>()
     for (const declaration of facts.declarations) {
@@ -2860,15 +2748,10 @@ export interface PackageJson {
   readonly exports?: Readonly<Record<string, string>>
 }
 
-export interface TsConfigJson {
+interface TsConfigJson {
   readonly compilerOptions?: {
     readonly paths?: Readonly<Record<string, ReadonlyArray<string>>>
   }
-}
-
-export interface PackageSurfaceFinding {
-  readonly path: string
-  readonly message: string
 }
 
 /** One package, the entry points it may expose, and whether it must stay private. */
@@ -2932,12 +2815,13 @@ const entryPointOfPath = (surface: PackageSurface, key: string): Option.Option<s
 const packageFindings = (
   surface: PackageSurface,
   packageJson: PackageJson,
-): ReadonlyArray<PackageSurfaceFinding> => {
-  const findings: Array<PackageSurfaceFinding> = []
+): ReadonlyArray<Finding> => {
+  const findings: Array<Finding> = []
   if (surface.mustBePrivate && packageJson.private !== true) {
     findings.push({
-      path: `${surface.packageJson} private`,
-      message: `${surface.alias} must stay private; it is not a published contract`,
+      file: surface.packageJson,
+      line: 1,
+      message: `private: ${surface.alias} must stay private; it is not a published contract`,
     })
   }
   const allowed = allowedKeys(surface)
@@ -2945,8 +2829,9 @@ const packageFindings = (
   for (const key of Object.keys(Option.getOrElse(exportsMap, () => ({})))) {
     if (allowed.has(key)) continue
     findings.push({
-      path: `${surface.packageJson} exports["${key}"]`,
-      message: `${surface.alias} may only expose its supported entry points: ${[...allowed].join(", ")}`,
+      file: surface.packageJson,
+      line: 1,
+      message: `exports["${key}"]: ${surface.alias} may only expose its supported entry points: ${[...allowed].join(", ")}`,
     })
   }
   return findings
@@ -2955,7 +2840,7 @@ const packageFindings = (
 const pathFindings = (
   surface: PackageSurface,
   tsconfigJson: TsConfigJson,
-): ReadonlyArray<PackageSurfaceFinding> => {
+): ReadonlyArray<Finding> => {
   const allowed = allowedKeys(surface)
   const paths = Option.getOrElse(
     Option.flatMap(Option.fromNullishOr(tsconfigJson.compilerOptions), (options) =>
@@ -2963,14 +2848,15 @@ const pathFindings = (
     ),
     () => ({}),
   )
-  const findings: Array<PackageSurfaceFinding> = []
+  const findings: Array<Finding> = []
   for (const key of Object.keys(paths)) {
     const entryPoint = entryPointOfPath(surface, key)
     if (Option.isNone(entryPoint)) continue
     if (allowed.has(entryPoint.value)) continue
     findings.push({
-      path: `tsconfig.json compilerOptions.paths["${key}"]`,
-      message: `Do not give TypeScript a public-looking ${surface.alias} path for an internal module`,
+      file: "tsconfig.json",
+      line: 1,
+      message: `compilerOptions.paths["${key}"]: Do not give TypeScript a public-looking ${surface.alias} path for an internal module`,
     })
   }
   return findings
@@ -2983,10 +2869,10 @@ const pathFindings = (
 export const findPackageSurfaceFindings = (
   packageJsons: ReadonlyMap<string, PackageJson>,
   tsconfigJson: TsConfigJson,
-): ReadonlyArray<PackageSurfaceFinding> =>
+): ReadonlyArray<Finding> =>
   PACKAGE_SURFACES.flatMap((surface) =>
     Option.match(Option.fromNullishOr(packageJsons.get(surface.packageJson)), {
-      onNone: (): ReadonlyArray<PackageSurfaceFinding> => [],
+      onNone: (): ReadonlyArray<Finding> => [],
       onSome: (packageJson) => [
         ...packageFindings(surface, packageJson),
         ...pathFindings(surface, tsconfigJson),

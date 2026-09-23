@@ -39,7 +39,7 @@ describe("blanket eslint disable checker", () => {
   test("flags blanket file comments", () => {
     expect(
       findBlanketEslintDisables("sample.ts", `/* ${directive} */\nexport const x = 1`),
-    ).toEqual([{ file: "sample.ts", line: 1 }])
+    ).toMatchObject([{ file: "sample.ts", line: 1 }])
   })
 
   test("flags blanket line comments", () => {
@@ -52,7 +52,7 @@ describe("blanket eslint disable checker", () => {
           "export const y = 2",
         ].join("\n"),
       ),
-    ).toEqual([{ file: "sample.ts", line: 2 }])
+    ).toMatchObject([{ file: "sample.ts", line: 2 }])
   })
 
   test("allows rule-named suppressions", () => {
@@ -73,17 +73,17 @@ describe("blanket eslint disable checker", () => {
         "sample.ts",
         `/* ${directive} @typescript-eslint/no-unsafe-type-assertion -- boundary */`,
       ),
-    ).toEqual([{ file: "sample.ts", line: 1 }])
+    ).toMatchObject([{ file: "sample.ts", line: 1 }])
   })
 
   test("flags the oxlint spelling of blanket and block comments", () => {
     const oxDirective = ["oxlint", "disable"].join("-")
-    expect(findBlanketEslintDisables("sample.ts", `// ${oxDirective}-next-line`)).toEqual([
+    expect(findBlanketEslintDisables("sample.ts", `// ${oxDirective}-next-line`)).toMatchObject([
       { file: "sample.ts", line: 1 },
     ])
     expect(
       findBannedEslintDisableBlocks("sample.ts", `/* ${oxDirective} effect/noNullish -- reason */`),
-    ).toEqual([{ file: "sample.ts", line: 1 }])
+    ).toMatchObject([{ file: "sample.ts", line: 1 }])
     expect(
       findBannedEslintDisableBlocks("sample.ts", `// ${oxDirective}-next-line effect/noNullish`),
     ).toEqual([])
@@ -98,7 +98,7 @@ describe("blanket eslint disable checker", () => {
         "sample.ts",
         [`// ${directive} effect/noNullish`, `// ${oxDirective} effect/noNullish`].join("\n"),
       ),
-    ).toEqual([
+    ).toMatchObject([
       { file: "sample.ts", line: 1 },
       { file: "sample.ts", line: 2 },
     ])
@@ -1359,7 +1359,7 @@ describe("suppression inventory guard", () => {
   test("flags effect diagnostics outside reviewed files", () => {
     expect(
       findSuppressionInventoryFindings("sample.ts", `${nextLine} strictEffectProvide:off`),
-    ).toEqual([{ file: "sample.ts", line: 1, kind: "effect-diagnostics" }])
+    ).toMatchObject([{ file: "sample.ts", line: 1 }])
   })
 
   test("allows exact reviewed effect diagnostics independent of line churn", () => {
@@ -1376,17 +1376,17 @@ describe("suppression inventory guard", () => {
   test("flags a different rule in a reviewed file", () => {
     expect(
       findSuppressionInventoryFindings(membraneFile, `${nextLine} strictEffectProvide:off`),
-    ).toEqual([{ file: membraneFile, line: 1, kind: "effect-diagnostics" }])
+    ).toMatchObject([{ file: membraneFile, line: 1 }])
   })
 
   test("approved entry with no matching comment in its file is unused", () => {
     const findings = findUnusedSuppressionApprovals(new Map([[membraneFile, "export {}\n"]]))
-    expect(findings).toContainEqual({ file: membraneFile, comment: membraneComment })
+    expect(messages(findings)).toContainEqual(expect.stringContaining(membraneComment))
   })
 
   test("approved entry whose file is not scanned is unused", () => {
     const findings = findUnusedSuppressionApprovals(new Map())
-    expect(findings).toContainEqual({ file: membraneFile, comment: membraneComment })
+    expect(messages(findings)).toContainEqual(expect.stringContaining(membraneComment))
   })
 
   test("approved entry with a matching comment is not reported", () => {
@@ -1394,8 +1394,8 @@ describe("suppression inventory guard", () => {
       new Map([[membraneFile, `const x = 1\n  ${membraneComment}\nconst y = 2\n`]]),
     )
     expect(
-      findings.filter(
-        (finding) => finding.file === membraneFile && finding.comment === membraneComment,
+      messages(findings).filter(
+        (message) => message.includes(`for ${membraneFile} `) && message.endsWith(membraneComment),
       ),
     ).toEqual([])
   })
@@ -2121,6 +2121,10 @@ const packageSurface = (
   paths: Readonly<Record<string, ReadonlyArray<string>>>,
 ) => findPackageSurfaceFindings(new Map(entries), { compilerOptions: { paths } })
 
+/** The file and the key a package surface finding names, as `<file> <key>`. */
+const pathOf = (finding: { readonly file: string; readonly message: string }): string =>
+  `${finding.file} ${finding.message.split(": ")[0]}`
+
 describe("chained entry points", () => {
   const PROTOCOL_FILE = "packages/core/src/protocol.ts"
   const SDK_INDEX = "packages/sdk/src/index.ts"
@@ -2202,7 +2206,7 @@ describe("package entry points", () => {
           ],
         ],
         { "@gent/core/domain/ids": ["./packages/core/src/domain/ids.ts"] },
-      ).map((finding) => finding.path),
+      ).map(pathOf),
     ).toEqual([
       'packages/core/package.json exports["./domain/ids"]',
       'tsconfig.json compilerOptions.paths["@gent/core/domain/ids"]',
@@ -2217,7 +2221,7 @@ describe("package entry points", () => {
           "@gent/core/protocol/*": ["./packages/core/src/*"],
           "@gent/core/unknown": ["./packages/core/src/domain/ids.ts"],
         },
-      ).map((finding) => finding.path),
+      ).map(pathOf),
     ).toEqual([
       'packages/core/package.json exports["./protocol/*"]',
       'tsconfig.json compilerOptions.paths["@gent/core/protocol/*"]',
@@ -2264,17 +2268,21 @@ describe("package entry points", () => {
       ),
     ).toEqual([
       {
-        path: "packages/extensions/package.json private",
-        message: "@gent/extensions must stay private; it is not a published contract",
+        file: "packages/extensions/package.json",
+        line: 1,
+        message: "private: @gent/extensions must stay private; it is not a published contract",
       },
       {
-        path: 'packages/extensions/package.json exports["./todo-storage"]',
-        message: "@gent/extensions may only expose its supported entry points: ., ./client",
-      },
-      {
-        path: 'tsconfig.json compilerOptions.paths["@gent/extensions/todo-storage"]',
+        file: "packages/extensions/package.json",
+        line: 1,
         message:
-          "Do not give TypeScript a public-looking @gent/extensions path for an internal module",
+          'exports["./todo-storage"]: @gent/extensions may only expose its supported entry points: ., ./client',
+      },
+      {
+        file: "tsconfig.json",
+        line: 1,
+        message:
+          'compilerOptions.paths["@gent/extensions/todo-storage"]: Do not give TypeScript a public-looking @gent/extensions path for an internal module',
       },
     ])
   })
@@ -2300,8 +2308,9 @@ describe("package entry points", () => {
       ),
     ).toEqual([
       {
-        path: 'packages/sdk/package.json exports["./rpcs"]',
-        message: "@gent/sdk may only expose its supported entry points: .",
+        file: "packages/sdk/package.json",
+        line: 1,
+        message: 'exports["./rpcs"]: @gent/sdk may only expose its supported entry points: .',
       },
     ])
   })
