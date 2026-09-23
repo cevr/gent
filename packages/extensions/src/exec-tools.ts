@@ -270,8 +270,6 @@ interface BashRisk {
 const DESTRUCTIVE_PATTERNS: Array<[RegExp, string]> = [
   [/\brm\s+(-\w*[rf]\w*\s+|.*--recursive|.*--force)/, "rm with -r/-f flags"],
   [/\bgit\s+reset\s+--hard\b/, "git reset --hard"],
-  [/\bgit\s+push\s+.*--force\b/, "git push --force"],
-  [/\bgit\s+push\s+-f\b/, "git push -f"],
   [/\bgit\s+clean\b/, "git clean"],
   [/\bgit\s+checkout\s+--?\s/, "git checkout -- (discard changes)"],
   [/\bgit\s+restore\s+--staged\b/, "git restore --staged"],
@@ -293,7 +291,6 @@ const EXTERNAL_PATTERNS: Array<[RegExp, string]> = [
   [/\bwget\b.*\|\s*(ba)?sh\b/, "wget piped to shell"],
   [/\bnpm\s+publish\b/, "npm publish"],
   [/\bdocker\s+push\b/, "docker push"],
-  [/\bgit\s+push\b(?!.*--force)(?!.*-f)/, "git push"],
   [/\bpip\s+upload\b/, "pip upload"],
 ]
 
@@ -322,10 +319,33 @@ const SENSITIVE_PATTERNS: Array<[RegExp, string]> = [
 
 const SAFE_RISK: BashRisk = { level: "safe", reason: "" }
 
+const GIT_PUSH = /\bgit\s+push\b([^;&|\n]*)/g
+const FORCE_PUSH_TOKEN = /^(-f|-[a-zA-Z]*f[a-zA-Z]*|--force.*|\+.+)$/
+
+/**
+ * Each `git push` segment's arguments, split on whitespace. A force flag in
+ * any position, or a `+ref` refspec, makes the push destructive; a branch
+ * name that merely contains `-f` does not.
+ */
+function classifyGitPush(command: string): Option.Option<BashRisk> {
+  let pushes = false
+  for (const match of command.matchAll(GIT_PUSH)) {
+    pushes = true
+    const tokens = (match[1] ?? "").split(/\s+/).filter((token) => token.length > 0)
+    if (tokens.some((token) => FORCE_PUSH_TOKEN.test(token))) {
+      return Option.some({ level: "destructive", reason: "git push --force" })
+    }
+  }
+  if (pushes) return Option.some({ level: "external", reason: "git push" })
+  return Option.none()
+}
+
 export function classifyBashCommand(command: string): BashRisk {
   for (const [pattern, reason] of DESTRUCTIVE_PATTERNS) {
     if (pattern.test(command)) return { level: "destructive", reason }
   }
+  const push = classifyGitPush(command)
+  if (Option.isSome(push)) return push.value
   for (const [pattern, reason] of EXTERNAL_PATTERNS) {
     if (pattern.test(command)) return { level: "external", reason }
   }
@@ -394,18 +414,26 @@ interface BackgroundBashTarget {
   readonly Session: Pick<ExtensionContextService["Session"], "getSession" | "listBranches" | "send">
 }
 
+/** Characters that make bash expand a directory word (`~`, `$VAR`, backticks, globs). */
+const SHELL_EXPANSION = /[~$`*?[{]/
+
 /**
  * Detect `cd dir && cmd` or `cd dir; cmd` and split into cwd + command.
  * Models often emit this despite instructions to use the cwd param.
+ * A directory word that bash would expand is left in the command, so bash
+ * resolves it; only a single-quoted word is always literal.
  */
 export function splitCdCommand(cmd: string): Option.Option<{ cwd: string; command: string }> {
   const match = Option.fromNullishOr(
     cmd.match(/^\s*cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)\s*(.+)$/s),
   )
   if (Option.isNone(match)) return Option.none()
-  const cwd = Option.fromNullishOr(match.value[1]).pipe(
-    Option.orElse(() => Option.fromNullishOr(match.value[2])),
+  const expandable = Option.fromNullishOr(match.value[1]).pipe(
     Option.orElse(() => Option.fromNullishOr(match.value[3])),
+  )
+  if (Option.exists(expandable, (word) => SHELL_EXPANSION.test(word))) return Option.none()
+  const cwd = Option.fromNullishOr(match.value[2]).pipe(
+    Option.orElse(() => expandable),
     Option.getOrElse(() => ""),
   )
   const command = Option.getOrElse(Option.fromNullishOr(match.value[4]), () => "")
@@ -417,13 +445,15 @@ export function splitCdCommand(cmd: string): Option.Option<{ cwd: string; comman
  * Inject --trailer on git commit commands for session traceability.
  */
 export function injectGitTrailers(cmd: string, sessionId: SessionId): string {
-  if (!/\bgit\s+commit\b/.test(cmd)) return cmd
+  const gitCommit = /\bgit\s+commit(?=\s|$)/
+  if (!gitCommit.test(cmd)) return cmd
   if (/--trailer/.test(cmd)) return cmd
-  return cmd.replace(/\bgit\s+commit\b/, `git commit --trailer "Session-Id: ${sessionId}"`)
+  return cmd.replace(gitCommit, `git commit --trailer "Session-Id: ${sessionId}"`)
 }
 
 /**
- * Strip trailing & to prevent background jobs escaping tool control.
+ * Strip a trailing `&` so the whole command does not escape tool control.
+ * An inner `cmd & other` job is not stripped.
  */
 export function stripBackground(cmd: string): string {
   return cmd.replace(/\s*&\s*$/, "")
@@ -432,8 +462,9 @@ export function stripBackground(cmd: string): string {
 const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   const decoder = new TextDecoder()
   let out = ""
-  for (const chunk of chunks) out += decoder.decode(chunk)
-  return out
+  // `stream: true` holds a partial multibyte sequence until the next chunk.
+  for (const chunk of chunks) out += decoder.decode(chunk, { stream: true })
+  return out + decoder.decode()
 }
 
 /**

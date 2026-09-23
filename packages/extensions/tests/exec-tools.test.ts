@@ -75,6 +75,22 @@ describe("splitCdCommand", () => {
   test("plain command → None", () => {
     expect(Option.isNone(splitCdCommand("ls -la"))).toBe(true)
   })
+
+  test("a directory word with shell expansion stays in the command for bash", () => {
+    for (const command of [
+      "cd ~/proj && ls",
+      'cd "$HOME/x" && ls',
+      "cd $DIR; ls",
+      "cd `pwd` && ls",
+      "cd src/* && ls",
+    ]) {
+      expect(Option.isNone(splitCdCommand(command)), command).toBe(true)
+    }
+  })
+
+  test("a single-quoted directory is literal and still splits", () => {
+    expect(splitCdCommand("cd '$x' && ls")).toEqual(Option.some({ cwd: "$x", command: "ls" }))
+  })
 })
 
 describe("injectGitTrailers", () => {
@@ -86,6 +102,11 @@ describe("injectGitTrailers", () => {
 
   test("git push → unchanged", () => {
     const cmd = "git push origin main"
+    expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
+  })
+
+  test("git commit-tree → unchanged", () => {
+    const cmd = "git commit-tree abc -m msg"
     expect(injectGitTrailers(cmd, SessionId.make("sess-123"))).toBe(cmd)
   })
 
@@ -136,6 +157,31 @@ describe("classifyBashCommand", () => {
 
   test("a compound command of read-only segments stays safe", () => {
     expect(classifyBashCommand("cat .env | grep KEY && ls -la secrets").level).toBe("safe")
+  })
+
+  test("a force push is destructive wherever the flag sits", () => {
+    for (const command of [
+      "git push -f",
+      "git push origin main -f",
+      "git push --force origin main",
+      "git push origin main --force-with-lease",
+      "git push origin +main",
+      "git push -uf origin main",
+      "git status && git push origin main -f",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a push of a branch whose name contains -f is external", () => {
+    for (const command of [
+      "git push",
+      "git push origin my-feature",
+      "git push origin fix/x-foo",
+      "git push -u origin main",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("external")
+    }
   })
 
   test("destructive and external patterns win over the read-only exemption", () => {
@@ -367,6 +413,23 @@ const onQueue =
 const now = dateFromMillis(0)
 
 describe("BashTool execution", () => {
+  it.live(
+    "a multibyte character split across output chunks decodes whole",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* provideBun(
+          runToolWithCtx(
+            BashTool,
+            { command: "printf '\\xc3'; sleep 0.2; printf '\\xa9'" },
+            stubCtx,
+          ),
+        )
+
+        expect(result.stdout).toBe("é")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
   it.live(
     "runs a command and returns stdout",
     () =>
