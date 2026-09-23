@@ -5272,7 +5272,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     ReadTool,
-    "- tools.read(input: { path: string; offset?: number; limit?: number }): Promise<{ content: string; path: string; lineCount: number; truncated: boolean; nextOffset?: number }> // Read file contents with line numbers",
+    "- tools.read(input: { path: string; offset?: number; limit?: number }): Promise<{ content: string; path: string; lineCount: number; truncated: boolean; nextOffset?: number; lossy?: true }> // Read file contents with line numbers",
   ],
   [
     WriteTool,

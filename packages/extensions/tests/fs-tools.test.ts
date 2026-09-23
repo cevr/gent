@@ -662,6 +662,7 @@ describe("file encodings", () => {
         const result = yield* runToolWithCtx(ReadTool, { path: filePath }, stubCtx)
         expect(result.content).toBe("1\thello NEEDLE\n2\tsecond line")
         expect(result.lineCount).toBe(2)
+        expect(result.lossy).toBeUndefined()
       }),
     )
 
@@ -699,6 +700,51 @@ describe("file encodings", () => {
       expect(after.equals(Buffer.concat([bom, Buffer.from("goodbye world\n")]))).toBe(true)
     }),
   )
+
+  // Bytes the decoder can only show as U+FFFD: a rewrite of the text would not
+  // give them back.
+  const malformed: ReadonlyArray<[string, Uint8Array]> = [
+    [
+      "a UTF-16 file with an odd trailing byte",
+      Buffer.concat([utf16File("hello world\n", "le"), Buffer.from([0x41])]),
+    ],
+    [
+      "a UTF-8 file with an invalid byte",
+      Buffer.concat([Buffer.from("hello "), Buffer.from([0xff]), Buffer.from(" world\n")]),
+    ],
+  ]
+  for (const [name, bytes] of malformed) {
+    encodingTest(`${name}: read marks it lossy, and edit and write leave it alone`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/malformed.txt`
+        yield* fs.writeFile(filePath, bytes)
+
+        const read = yield* runToolWithCtx(ReadTool, { path: filePath }, stubCtx)
+        expect(read.lossy).toBe(true)
+        expect(read.content).toContain("�")
+
+        const edit = yield* Effect.exit(
+          runToolWithCtx(
+            EditTool,
+            { path: filePath, oldString: "hello", newString: "goodbye" },
+            stubCtx,
+          ),
+        )
+        expect(Exit.isFailure(edit)).toBe(true)
+        if (Exit.isFailure(edit)) expect(Cause.pretty(edit.cause)).toContain("not valid")
+
+        const write = yield* Effect.exit(
+          runToolWithCtx(WriteTool, { path: filePath, content: read.content }, stubCtx),
+        )
+        expect(Exit.isFailure(write)).toBe(true)
+        if (Exit.isFailure(write)) expect(Cause.pretty(write.cause)).toContain("not valid")
+
+        expect(Buffer.from(yield* fs.readFile(filePath)).equals(Buffer.from(bytes))).toBe(true)
+      }),
+    )
+  }
 
   encodingTest("read refuses a binary file", () =>
     Effect.gen(function* () {
@@ -924,22 +970,28 @@ describe("GrepTool", () => {
     }).pipe(Effect.provide(IndexLayer)),
   )
 
-  it.scopedLive("a line the regex engine gives up on is reported, not dropped", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      // This line matches (`xxy` at the end), but the engine stops before it finds it.
-      yield* fs.writeFileString(`${tmpDir}/slow.txt`, `plain y\n${"x".repeat(30)}!xxy\n`)
+  // Each line holds a match, but JavaScriptCore stops at its backtrack limit
+  // and reports none. `(?:a|a)*b` is the fastest give-up measured (about 320 ms
+  // on an M-series Mac); `(x+x+)+y` takes 600 ms to a second.
+  const giveUps: ReadonlyArray<[string, string]> = [
+    ["(x+x+)+y", `${"x".repeat(30)}!xxy`],
+    ["(?:a|a)*b", `${"a".repeat(40)}!ab`],
+  ]
+  for (const [pattern, line] of giveUps) {
+    it.scopedLive(`a line ${pattern} gives up on is reported, not dropped`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${tmpDir}/slow.txt`, `plain line\n${line}\n`)
 
-      const result = yield* runToolWithCtx(
-        GrepTool,
-        { pattern: "(x+x+)+y", path: tmpDir },
-        ctxGrep,
-      ).pipe(Effect.timeout("20 seconds"))
-      expect(result.matches).toEqual([])
-      expect(result.undecided).toBe(1)
-    }).pipe(Effect.provide(IndexLayer)),
-  )
+        const result = yield* runToolWithCtx(GrepTool, { pattern, path: tmpDir }, ctxGrep).pipe(
+          Effect.timeout("20 seconds"),
+        )
+        expect(result.matches).toEqual([])
+        expect(result.undecided).toBe(1)
+      }).pipe(Effect.provide(IndexLayer)),
+    )
+  }
 
   it.scopedLive("a long line is cut around the match, and so is its context", () =>
     Effect.gen(function* () {

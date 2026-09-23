@@ -572,6 +572,12 @@ type TextEncoding = "utf-8" | "utf-8-bom" | "utf-16le" | "utf-16be"
 interface FileText {
   readonly text: string
   readonly encoding: TextEncoding
+  /**
+   * The bytes are not valid in `encoding`: an invalid UTF-8 sequence, an odd
+   * trailing byte or an unpaired surrogate in UTF-16. The decoder put U+FFFD in
+   * their place, so writing `text` back would not give the same bytes.
+   */
+  readonly lossy: boolean
 }
 
 /** ripgrep's rule: a NUL byte in a file's first 8 KB marks it binary. */
@@ -592,9 +598,16 @@ const decodeAfter = (label: string, bytes: Uint8Array, mark: ReadonlyArray<numbe
  * The text of a file, or `None` for a binary one. read, edit and grep all read
  * through this one decoder. A UTF-16 file starts with a byte order mark and
  * holds NUL bytes, so it is decoded before the NUL probe, as ripgrep
- * transcodes it.
+ * transcodes it. The decoder replaces a bad sequence silently; encoding the
+ * text again is the one check that the bytes and the text hold the same file.
  */
-const decodeFileText = (bytes: Uint8Array): Option.Option<FileText> => {
+const decodeFileText = (bytes: Uint8Array): Option.Option<FileText> =>
+  Option.map(decodeText(bytes), (decoded) => ({
+    ...decoded,
+    lossy: !sameBytes(encodeFileText({ ...decoded, lossy: false }), bytes),
+  }))
+
+const decodeText = (bytes: Uint8Array): Option.Option<Omit<FileText, "lossy">> => {
   if (startsWith(bytes, UTF16LE_BOM)) {
     return Option.some({ encoding: "utf-16le", text: decodeAfter("utf-16le", bytes, UTF16LE_BOM) })
   }
@@ -607,6 +620,13 @@ const decodeFileText = (bytes: Uint8Array): Option.Option<FileText> => {
   }
   return Option.some({ encoding: "utf-8", text: decodeAfter("utf-8", bytes, []) })
 }
+
+const sameBytes = (left: Uint8Array, right: Uint8Array) =>
+  left.length === right.length && left.every((byte, index) => byte === right[index])
+
+/** Why a file that does not decode exactly is not rewritten. */
+const lossyWriteMessage = (verb: string, file: FileText) =>
+  `Cannot ${verb} this file: it holds bytes that are not valid ${file.encoding}, and writing the text back would replace them with U+FFFD. Convert the file to valid ${file.encoding} first.`
 
 /** UTF-16 code units in the given byte order, after the byte order mark. */
 const encodeUtf16 = (text: string, littleEndian: boolean): Uint8Array => {
@@ -673,6 +693,8 @@ const ReadResult = Schema.Struct({
   truncated: Schema.Boolean,
   /** The 1-indexed line to pass as `offset` to continue. Absent when the read reached the end. */
   nextOffset: Schema.optional(Schema.Finite),
+  /** Present when the file holds invalid bytes, shown as U+FFFD; edit and write refuse such a file. */
+  lossy: Schema.optional(Schema.Literal(true)),
 })
 
 /** `1 line`, `3 lines`: the counted noun of a one-line tool summary. */
@@ -688,7 +710,7 @@ export const ReadTool = tool({
   id: "read",
   readonly: true,
   description:
-    "Read file contents. Returns numbered lines. Use offset/limit for large files. A truncated result carries nextOffset — pass it back as offset to continue from the next unread line.",
+    "Read file contents. Returns numbered lines. Use offset/limit for large files. A truncated result carries nextOffset — pass it back as offset to continue from the next unread line. A file with bytes that are not valid text shows them as U+FFFD and reports lossy; edit and write refuse that file.",
   promptSnippet: "Read file contents with line numbers",
   params: ReadParams,
   output: ReadResult,
@@ -766,6 +788,7 @@ export const ReadTool = tool({
       // A truncated read names the next unread line so the caller continues
       // without a gap; a complete read leaves the key out entirely.
       ...(truncated && { nextOffset: endIndex + 1 }),
+      ...(decoded.value.lossy && { lossy: true }),
     }
   }),
 })
@@ -830,6 +853,17 @@ export const WriteTool = tool({
       filePath,
       Effect.gen(function* () {
         const dir = path.dirname(filePath)
+
+        // A file that does not decode exactly was shown with U+FFFD in place
+        // of its bad bytes; content built from that read would destroy them.
+        const existing = yield* fs.readFile(filePath).pipe(Effect.option)
+        const existingText = Option.flatMap(existing, decodeFileText)
+        if (Option.isSome(existingText) && existingText.value.lossy) {
+          return yield* new WriteError({
+            message: lossyWriteMessage("overwrite", existingText.value),
+            path: filePath,
+          })
+        }
 
         // Ensure directory exists
         yield* fs.makeDirectory(dir, { recursive: true }).pipe(
@@ -1117,6 +1151,12 @@ export const EditTool = tool({
         if (Option.isNone(decoded)) {
           return yield* new EditError({ message: "Cannot edit a binary file.", path: filePath })
         }
+        if (decoded.value.lossy) {
+          return yield* new EditError({
+            message: lossyWriteMessage("edit", decoded.value),
+            path: filePath,
+          })
+        }
         const content = decoded.value.text
 
         const replaceAll = params.replaceAll === true
@@ -1286,9 +1326,13 @@ const clipLine = (line: string, at: number): string => {
 /**
  * A line whose search runs longer than this and finds nothing is undecided.
  * JavaScriptCore stops a search that backtracks too far and reports no match,
- * with no other signal, so a slow miss may hide a match.
+ * with no other signal, so a slow miss may hide a match. The limit counts
+ * backtracking steps, so a give-up takes a steady time: 320 ms for the
+ * fastest pattern measured, 450 ms to 1 s for most. Load only makes it
+ * slower. A slow real miss counted here costs one number in the result, so
+ * the bound sits far below the fastest give-up.
  */
-const UNDECIDED_LINE_MS = 100
+const UNDECIDED_LINE_MS = 50
 
 /** A grep that runs longer than this fails: its pattern backtracks too much. */
 const GREP_TIME_LIMIT = Duration.seconds(30)
@@ -1335,7 +1379,7 @@ interface LineMatcher {
  * pattern that backtracks for minutes stalls nothing else, and closing the
  * scope ends the thread: a timeout or an interrupt stops the search at once.
  */
-const makeLineMatcher = (regex: RegExp): Effect.Effect<LineMatcher, never, Scope.Scope> =>
+const makeLineMatcher = (regex: RegExp): Effect.Effect<LineMatcher, GrepError, Scope.Scope> =>
   Effect.gen(function* () {
     const pending = new Map<number, (reply: Effect.Effect<MatcherReply, GrepError>) => void>()
     const failAll = (message: string) => {
@@ -1344,35 +1388,43 @@ const makeLineMatcher = (regex: RegExp): Effect.Effect<LineMatcher, never, Scope
       }
       pending.clear()
     }
-    const worker = yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        const url = URL.createObjectURL(new Blob([MATCHER_SOURCE]))
+    // The URL is released on its own, so it is revoked even when the Worker
+    // constructor throws.
+    const url = yield* Effect.acquireRelease(
+      Effect.sync(() => URL.createObjectURL(new Blob([MATCHER_SOURCE]))),
+      (created) => Effect.sync(() => URL.revokeObjectURL(created)),
+    )
+    const thread = yield* Effect.acquireRelease(
+      Effect.try({
         // oxlint-disable-next-line effect/noGlobals -- the regex must run on an OS thread the server can end, and an Effect Worker needs a bundled entry module; this one is a Blob of plain JavaScript.
-        return { url, thread: new Worker(url) }
+        try: () => new Worker(url),
+        catch: (cause) =>
+          new GrepError({
+            message: `grep could not start its matcher: ${String(cause)}`,
+            pattern: regex.source,
+          }),
       }),
-      ({ url, thread }) =>
+      (started) =>
         Effect.sync(() => {
-          thread.terminate()
-          URL.revokeObjectURL(url)
+          started.terminate()
           failAll("grep ended")
         }),
     )
-    worker.thread.onmessage = (event: MessageEvent) => {
+    thread.onmessage = (event: MessageEvent) => {
       const reply = Schema.decodeUnknownOption(MatcherReply)(event.data)
       if (Option.isNone(reply)) return failAll("grep's matcher sent a reply it cannot read")
       const resume = pending.get(reply.value.id)
       pending.delete(reply.value.id)
       resume?.(Effect.succeed(reply.value))
     }
-    worker.thread.onerror = (event: ErrorEvent) =>
-      failAll(`grep's matcher failed: ${event.message}`)
+    thread.onerror = (event: ErrorEvent) => failAll(`grep's matcher failed: ${event.message}`)
     let nextId = 0
     return {
       search: (text, limit) =>
         Effect.callback<MatcherReply, GrepError>((resume) => {
           const id = nextId++
           pending.set(id, resume)
-          worker.thread.postMessage({ id, source: regex.source, flags: regex.flags, text, limit })
+          thread.postMessage({ id, source: regex.source, flags: regex.flags, text, limit })
           return Effect.sync(() => {
             pending.delete(id)
           })
