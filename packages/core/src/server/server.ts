@@ -113,6 +113,7 @@ import {
   Auth,
   AuthApi,
   listAuthProviders,
+  ModelCatalogRecord,
   ModelRegistry,
   ModelResolver,
   modelCatalog,
@@ -1090,6 +1091,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const configService = yield* ConfigService
     const sessionRuntime = yield* SessionRuntime
     const authStore = yield* Auth
+    const catalogRecord = yield* ModelCatalogRecord
     const providerAuth = yield* ProviderAuth
     const extensionRegistry = yield* ExtensionRegistry
     const sessionStorage = yield* SessionStorage
@@ -1280,6 +1282,7 @@ const RpcHandlers = GentRpcs.toLayer(
           const catalog = yield* modelCatalog().pipe(
             Effect.provideService(ExtensionRegistry, registry),
             Effect.provideService(Auth, authStore),
+            Effect.provideService(ModelCatalogRecord, catalogRecord),
           )
           return catalog.models
         }),
@@ -1397,14 +1400,22 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.gen(function* () {
           const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
           const resolved = registry.getResolved()
-          // A catalog failure is a runtime fact, so health reads the catalog now.
-          const catalog = yield* modelCatalog().pipe(
-            Effect.provideService(ExtensionRegistry, registry),
-            Effect.provideService(Auth, authStore),
-          )
+          // Health reads what the last catalog run recorded. Only a profile
+          // whose catalog never ran is listed here, once.
+          const recorded = yield* catalogRecord.lastFailures(resolved)
+          const failures = yield* Option.match(recorded, {
+            onSome: Effect.succeed,
+            onNone: () =>
+              modelCatalog().pipe(
+                Effect.provideService(ExtensionRegistry, registry),
+                Effect.provideService(Auth, authStore),
+                Effect.provideService(ModelCatalogRecord, catalogRecord),
+                Effect.map((catalog) => catalog.failures),
+              ),
+          })
           return buildExtensionHealthSnapshot(
             resolved.extensionStatuses,
-            catalogFailuresByExtension(resolved, catalog.failures),
+            catalogFailuresByExtension(resolved, failures),
           )
         }),
 
@@ -1681,9 +1692,13 @@ export const createDependencies = (config: DependenciesConfig) => {
     ),
     Layer.merge(storageLive, Layer.merge(sessionProfileCacheLive, platformServicesLive)),
   )
+  const modelCatalogRecordLive = ModelCatalogRecord.Live
   const modelRegistryLive =
     config.overrides?.modelRegistryLayer ??
-    Layer.provide(ModelRegistry.Live, Layer.mergeAll(extensionRegistryLive, authLive))
+    Layer.provide(
+      ModelRegistry.Live,
+      Layer.mergeAll(extensionRegistryLive, authLive, modelCatalogRecordLive),
+    )
   const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
@@ -1705,6 +1720,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       authLive,
       providerAuthLive,
       configServiceLive,
+      modelCatalogRecordLive,
       modelRegistryLive,
       extensionRegistryLive,
       fileLockServiceLive,

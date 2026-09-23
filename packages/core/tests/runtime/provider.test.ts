@@ -36,6 +36,7 @@ import {
   ModelResolver,
   ProviderAuth,
   retryProviderCall,
+  ModelCatalogRecord,
   ModelRegistry,
   modelCatalog,
   finishPart,
@@ -285,6 +286,7 @@ const makeRegistryLayerWithDrivers = (
           ]),
         ),
         overrideAuthLayer,
+        ModelCatalogRecord.Live,
       ),
     ),
   )
@@ -300,13 +302,16 @@ const loadRegistryWithDrivers = (
     const raw = Context.get(context, ModelRegistry)
     const drivers = Context.get(context, ExtensionRegistry)
     const auth = Context.get(context, Auth)
+    const catalogRecord = Context.get(context, ModelCatalogRecord)
     const catalog = modelCatalog().pipe(
       Effect.provideService(ExtensionRegistry, drivers),
       Effect.provideService(Auth, auth),
+      Effect.provideService(ModelCatalogRecord, catalogRecord),
     )
     return {
       raw,
       catalog,
+      lastFailures: catalogRecord.lastFailures(drivers.getResolved()),
       list: Effect.map(catalog, (listed) => listed.models),
       get: (modelId: string) =>
         raw.get(modelId).pipe(Effect.provideService(ExtensionRegistry, drivers)),
@@ -557,11 +562,18 @@ describe("model catalog resolution", () => {
         },
       ])
 
+      expect(Option.isNone(yield* registry.lastFailures)).toBe(true)
       const found = yield* registry.get("openai/gpt-5.4")
 
       expect(Option.map(found, (model) => model.id)).toEqual(
         Option.some(ModelId.make("openai/gpt-5.4")),
       )
+      // The turn's lookup records the failure health reads.
+      expect(
+        Option.map(yield* registry.lastFailures, (failures) =>
+          failures.map((failure) => failure.driverId),
+        ),
+      ).toEqual(Option.some(["local"]))
     }),
   )
 })

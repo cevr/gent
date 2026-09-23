@@ -28,7 +28,12 @@ import {
   ProviderId,
 } from "../domain/agent.js"
 import { SessionId, ToolCallId } from "../domain/ids.js"
-import { ExtensionRegistry, listModelCatalog } from "./extension-host.js"
+import {
+  ExtensionRegistry,
+  type ExtensionRegistryService,
+  listModelCatalog,
+  type ModelCatalogFailure,
+} from "./extension-host.js"
 import { causeMessage } from "../domain/guards.js"
 import {
   DEFAULT_RETRY_POLICY,
@@ -766,6 +771,39 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
  */
 export const TEST_MODEL_CONTEXT_LIMIT_TOKENS = 128_000
 
+type ResolvedProfile = ReturnType<ExtensionRegistryService["getResolved"]>
+
+interface ModelCatalogRecordService {
+  /** Keep the failures of the catalog run that just finished for this profile. */
+  readonly record: (
+    profile: ResolvedProfile,
+    failures: ReadonlyArray<ModelCatalogFailure>,
+  ) => Effect.Effect<void>
+  /** The failures of this profile's last catalog run; none when it never ran. */
+  readonly lastFailures: (
+    profile: ResolvedProfile,
+  ) => Effect.Effect<Option.Option<ReadonlyArray<ModelCatalogFailure>>>
+}
+
+/**
+ * The failures of each profile's last catalog run, written where the catalog
+ * runs (a turn's model lookup, `model.list`) and read by extension health, so
+ * a health read never lists every driver again. Keyed weakly by the profile's
+ * resolved extensions: a profile the cache drops takes its record with it.
+ */
+export class ModelCatalogRecord extends Context.Service<
+  ModelCatalogRecord,
+  ModelCatalogRecordService
+>()("@gent/core/src/runtime/provider/ModelCatalogRecord") {
+  static Live: Layer.Layer<ModelCatalogRecord> = Layer.sync(ModelCatalogRecord, () => {
+    const byProfile = new WeakMap<ResolvedProfile, ReadonlyArray<ModelCatalogFailure>>()
+    return ModelCatalogRecord.of({
+      record: (profile, failures) => Effect.sync(() => void byProfile.set(profile, failures)),
+      lastFailures: (profile) => Effect.sync(() => Option.fromUndefinedOr(byProfile.get(profile))),
+    })
+  })
+}
+
 /**
  * Every model the caller's profile can run, newest release first: each model
  * driver's own catalog, read with the auth stored for that driver. Core
@@ -776,8 +814,9 @@ export const TEST_MODEL_CONTEXT_LIMIT_TOKENS = 128_000
  */
 export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* () {
   const authStore = yield* Auth
-  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
-  const catalog = yield* listModelCatalog(modelDrivers, (providerId) =>
+  const catalogRecord = yield* ModelCatalogRecord
+  const profile = (yield* ExtensionRegistry).getResolved()
+  const catalog = yield* listModelCatalog(profile.modelDrivers, (providerId) =>
     authStore.get(providerId).pipe(
       Effect.map((info) =>
         Option.getOrUndefined(
@@ -795,6 +834,7 @@ export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* ()
       ),
     ),
   )
+  yield* catalogRecord.record(profile, catalog.failures)
   return { models: byReleaseDateDesc(catalog.models), failures: catalog.failures }
 })
 
@@ -808,14 +848,16 @@ interface ModelRegistryService {
 export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryService>()(
   "@gent/core/src/runtime/provider/ModelRegistry",
 ) {
-  static Live: Layer.Layer<ModelRegistry, never, Auth> = Layer.effect(
+  static Live: Layer.Layer<ModelRegistry, never, Auth | ModelCatalogRecord> = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
       const authStore = yield* Auth
+      const catalogRecord = yield* ModelCatalogRecord
       return ModelRegistry.of({
         get: (modelId) =>
           modelCatalog().pipe(
             Effect.provideService(Auth, authStore),
+            Effect.provideService(ModelCatalogRecord, catalogRecord),
             Effect.map((catalog) =>
               Option.fromUndefinedOr(catalog.models.find((model) => model.id === modelId)),
             ),

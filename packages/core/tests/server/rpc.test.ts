@@ -2969,6 +2969,61 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+  // Health reads the failures the last catalog run recorded; it does not run
+  // every driver's catalog again on each read.
+  it.live("extension health reports the last catalog run without listing again", () =>
+    Effect.gen(function* () {
+      let localCalls = 0
+      const catalogDrivers: LoadedExtension = {
+        manifest: { id: ExtensionId.make("@test/catalog-count") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          modelDrivers: [
+            {
+              id: "local",
+              name: "Local server",
+              resolveModel: () => Effect.succeed(stubModel),
+              listModels: () =>
+                Effect.suspend(() => {
+                  localCalls += 1
+                  return Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434"))
+                }),
+            },
+          ],
+        },
+      }
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            const { client } = yield* createRpcClient(
+              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [catalogDrivers] }),
+            )
+            // No run yet: health runs the catalog once, then reads that record.
+            const first = yield* client.extension.listStatus({})
+            const second = yield* client.extension.listStatus({})
+            expect(localCalls).toBe(1)
+            yield* client.model.list({})
+            expect(localCalls).toBe(2)
+            const third = yield* client.extension.listStatus({})
+            expect(localCalls).toBe(2)
+            for (const status of [first, second, third]) {
+              expect(status._tag).toBe("Degraded")
+              if (status._tag !== "Degraded") continue
+              expect(status.degradedExtensions.flatMap((extension) => extension.issues)).toEqual([
+                {
+                  _tag: "ModelCatalogFailed",
+                  driverId: "local",
+                  error: "connect ECONNREFUSED 127.0.0.1:11434",
+                },
+              ])
+            }
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+    }),
+  )
   it.live("RPC listSlashCommands lists slash-decorated requests only", () =>
     Effect.gen(function* () {
       const extensionId = ExtensionId.make("@test/public-filter")
