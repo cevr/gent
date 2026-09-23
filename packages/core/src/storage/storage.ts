@@ -62,6 +62,7 @@ import {
   type LoopQueueState as LoopQueueStateType,
   type Message,
   Session,
+  SessionAdmission,
 } from "../domain/message.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import {
@@ -77,6 +78,7 @@ import { BunCrypto } from "@effect/platform-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 
+const encodeSessionAdmission = Schema.encodeEffect(Schema.fromJsonString(SessionAdmission))
 // ── sqlite/owned-tool-call ──────────────────────────────────────────────────
 
 export interface OwnedToolCallAddress extends ToolCallBindingKey {
@@ -203,6 +205,14 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               parent_session_id: toSqlNull(session.parentSessionId),
               parent_branch_id: toSqlNull(session.parentBranchId),
               thread_id: stored.threadId,
+              admission_json: toSqlNull(
+                Option.getOrUndefined(
+                  yield* Option.match(Option.fromUndefinedOr(session.admission), {
+                    onNone: () => Effect.succeedNone,
+                    onSome: (admission) => Effect.asSome(encodeSessionAdmission(admission)),
+                  }),
+                ),
+              ),
               created_at: session.createdAt.getTime(),
               updated_at: session.updatedAt.getTime(),
             })}`
@@ -904,7 +914,7 @@ export class RelationshipStorage extends Context.Service<
             SELECT ${sql.literal(SESSION_COLUMNS)}, 0
             FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
             UNION ALL
-            SELECT s.id, s.name, s.cwd, s.model_id, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.thread_id, s.created_at, s.updated_at, a.depth + 1
+            SELECT s.id, s.name, s.cwd, s.model_id, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.thread_id, s.admission_json, s.created_at, s.updated_at, a.depth + 1
             FROM sessions s
             JOIN ancestors a ON s.id = a.parent_session_id
             WHERE a.depth < 20 AND s.workspace_id = ${workspaceId}

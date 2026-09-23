@@ -41,7 +41,13 @@ import {
 import type { AgentEvent, EventStoreError } from "./event.js"
 import { causeMessage } from "./guards.js"
 import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from "./interaction.js"
-import { type Branch, type Message, MessageMetadata, type Session } from "./message.js"
+import {
+  type Branch,
+  type Message,
+  MessageMetadata,
+  type Session,
+  type SessionAdmission,
+} from "./message.js"
 import type { InvalidStateError, NotFoundError, StorageError } from "./errors.js"
 import type { SessionRuntimeError } from "../runtime/session.js"
 import type {
@@ -740,6 +746,8 @@ export interface ExtensionSessionService {
     readonly parentSessionId?: SessionId
     readonly parentBranchId?: BranchId
     readonly historyBranchId?: BranchId
+    /** What every turn of the new session runs as: agent, run overrides, interactive. */
+    readonly admission?: SessionAdmission
     readonly requestId?: RequestId
   }) => Effect.Effect<
     { readonly sessionId: SessionId; readonly branchId: BranchId },

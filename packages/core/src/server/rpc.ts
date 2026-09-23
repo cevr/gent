@@ -38,6 +38,7 @@ import {
   ProjectedMessage,
   QueueSnapshot,
   Session,
+  SessionAdmission,
   SteerCommand,
 } from "../domain/message.js"
 import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../domain/agent-loop.js"
@@ -99,6 +100,8 @@ export const CreateSessionInput = Schema.Struct({
   historyBranchId: Schema.optional(BranchId),
   /** If provided, sends this message immediately after creation */
   initialPrompt: Schema.optional(Schema.String),
+  /** What every turn of the new session runs as. Fixed at creation. */
+  admission: Schema.optional(SessionAdmission),
   requestId: Schema.optional(RequestId),
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type

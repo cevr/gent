@@ -269,6 +269,7 @@ describe("Sessions", () => {
           "drop_message_search_index",
           "interaction_owner",
           "turn_record_admission",
+          "session_admission",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -302,6 +303,7 @@ describe("Sessions", () => {
           "drop_message_search_index",
           "interaction_owner",
           "turn_record_admission",
+          "session_admission",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))

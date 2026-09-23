@@ -2201,6 +2201,7 @@ export const makeExtensionHostContextProvider = (
               parentSessionId: params.parentSessionId,
               parentBranchId: params.parentBranchId,
               historyBranchId: params.historyBranchId,
+              admission: params.admission,
               requestId: params.requestId,
             }),
           ).pipe(

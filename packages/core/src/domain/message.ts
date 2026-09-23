@@ -381,6 +381,22 @@ export const projectMessage = (
 
 // Session
 
+/**
+ * What every turn of a session runs as: the agent, the run's overrides, and
+ * whether anyone can answer a question. It is fixed when the session is
+ * created, so a later turn -- a wake, a completed background job, a parent's
+ * message -- runs as the session's agent, never as the default one. Every
+ * field is optional: a plain session and a row stored before this existed run
+ * as the default agent, interactively.
+ */
+export const SessionAdmission = Schema.Struct({
+  agent: Schema.optional(AgentName),
+  runSpec: Schema.optional(RunSpecSchema),
+  /** `false` withholds the tools that ask the user. Only `false` is read. */
+  interactive: Schema.optional(Schema.Boolean),
+})
+export type SessionAdmission = typeof SessionAdmission.Type
+
 export class Session extends Schema.Class<Session>("Session")({
   id: SessionId,
   name: Schema.optional(Schema.String),
@@ -401,6 +417,7 @@ export class Session extends Schema.Class<Session>("Session")({
    * session id when the create names none.
    */
   threadId: Schema.optional(SessionId),
+  admission: Schema.optional(SessionAdmission),
   createdAt: DateFromNumber,
   updatedAt: DateFromNumber,
 }) {}
