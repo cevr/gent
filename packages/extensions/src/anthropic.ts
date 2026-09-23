@@ -13,7 +13,6 @@ import {
   Path,
   Predicate,
   Redacted,
-  Ref,
   Schema,
   Stream,
   SynchronizedRef,
@@ -48,7 +47,6 @@ import {
   explainCredentialFailure,
   freshCredentials,
   freshEnoughAt,
-  HttpResponseField,
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
@@ -58,24 +56,16 @@ import {
   withHeaders,
 } from "./providers.js"
 import type { ChildProcessSpawner } from "effect/unstable/process"
-import {
-  FetchHttpClient,
-  Headers,
-  HttpClient,
-  HttpClientRequest,
-  type HttpClientResponse,
-} from "effect/unstable/http"
+import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
-import type { HttpClientError } from "effect/unstable/http/HttpClientError"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { type AiError, Model as AiModel } from "effect/unstable/ai"
 
 // Test seam: only tests read these exports. The model table and its lookups
-// (MODEL_CONFIG, getModelOverride, getModelBetas,
-// BetaExclusions), the billing header (SYSTEM_IDENTITY_PREFIX,
+// (MODEL_CONFIG, getModelOverride, getModelBetas), the billing header (SYSTEM_IDENTITY_PREFIX,
 // extractFirstUserMessageText, computeCch, computeVersionSuffix,
-// buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent,
-// isLongContextError) and the credential parsers (ClaudeCredentials,
+// buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent)
+// and the credential parsers (ClaudeCredentials,
 // updateCredentialBlob, parseOAuthResponse) are pure functions with unit tests.
 // AnthropicKeychainEnv, AnthropicPlatform, AnthropicCredentialIO,
 // makeAnthropicCredentialCache and buildAnthropicModelDriver let a test run the
@@ -105,7 +95,6 @@ interface ModelOverride {
 interface ModelConfig {
   readonly ccVersion: string
   readonly baseBetas: ReadonlyArray<string>
-  readonly longContextBetas: ReadonlyArray<string>
   readonly modelOverrides: Record<string, ModelOverride>
 }
 
@@ -124,11 +113,9 @@ export const MODEL_CONFIG: ModelConfig = {
     "prompt-caching-scope-2026-01-05",
     "context-management-2025-06-27",
   ],
-  // The driver never adds `context-1m`: every 1M-window model has 1M by
-  // default with no beta (platform.claude.com/docs/en/build-with-claude/
-  // context-windows, read 2026-09-23). It stays a backoff candidate for an
-  // ANTHROPIC_BETA_FLAGS list that names it.
-  longContextBetas: ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"],
+  // No `context-1m`: every 1M-window model has 1M by default with no beta
+  // (platform.claude.com/docs/en/build-with-claude/context-windows, read
+  // 2026-09-23).
   modelOverrides: {
     haiku: {
       exclude: ["interleaved-thinking-2025-05-14"],
@@ -172,14 +159,10 @@ const applyModelOverride = (betas: Array<string>, override: Option.Option<ModelO
  * Compose the beta list to send for a given model. Layered:
  *   1. base = `MODEL_CONFIG.baseBetas` (or env-override), comma-split.
  *   2. apply per-model `exclude` / `add` from `getModelOverride`.
- *   3. drop anything in the optional `excluded` set (used by the
- *      long-context backoff path that retries with successive
- *      long-context betas removed).
  */
 export const getModelBetas = (
   modelId: string,
   envBaseBetas: Option.Option<string>,
-  excluded: Option.Option<ReadonlySet<string>> = Option.none(),
 ): ReadonlyArray<string> => {
   const baseRaw = Option.getOrElse(envBaseBetas, () => MODEL_CONFIG.baseBetas.join(","))
   const betas = baseRaw
@@ -188,10 +171,6 @@ export const getModelBetas = (
     .filter((s) => s.length > 0)
 
   applyModelOverride(betas, getModelOverride(modelId))
-
-  if (Option.isSome(excluded) && excluded.value.size > 0) {
-    return betas.filter((beta) => !excluded.value.has(beta))
-  }
   return betas
 }
 
@@ -380,41 +359,6 @@ export const buildBillingHeaderValue = (
     )
   })
 
-// ── beta cache ──────────────────────────────────────────────────────────────
-
-/**
- * Betas the server rejected, by model id. The Ref lives as long as the
- * extension, so turn N+1 does not resend a beta that turn N learned the
- * server rejects, and each model keeps its own learning when requests
- * switch between models (a child or a summarizer on another model).
- * `ANTHROPIC_BETA_FLAGS` is read once at setup, so the learning cannot
- * go stale inside one extension instance.
- */
-export type BetaExclusions = ReadonlyMap<string, ReadonlySet<string>>
-
-const excludedBetas = (
-  exclusions: Ref.Ref<BetaExclusions>,
-  modelId: string,
-): Effect.Effect<ReadonlySet<string>> =>
-  Ref.get(exclusions).pipe(
-    Effect.map((byModel) =>
-      Option.getOrElse(Option.fromNullishOr(byModel.get(modelId)), () => new Set<string>()),
-    ),
-  )
-
-const recordExcludedBeta = (
-  exclusions: Ref.Ref<BetaExclusions>,
-  modelId: string,
-  beta: string,
-): Effect.Effect<void> =>
-  Ref.update(exclusions, (byModel) => {
-    const held = Option.getOrElse(
-      Option.fromNullishOr(byModel.get(modelId)),
-      () => new Set<string>(),
-    )
-    return new Map(byModel).set(modelId, new Set([...held, beta]))
-  })
-
 // ── oauth credentials ───────────────────────────────────────────────────────
 
 export const ClaudeCredentials = Schema.Struct({
@@ -512,24 +456,6 @@ export const parseOAuthResponse = (
 }
 
 // ── oauth anthropic headers ─────────────────────────────────────────────────
-
-export const isLongContextError = (responseBody: string): boolean =>
-  responseBody.includes("Extra usage is required for long context requests") ||
-  responseBody.includes("long context beta is not yet available")
-
-/**
- * Long-context backoff candidates: only the long-context betas that
- * appear in this model's outgoing header, after per-model overrides.
- * A beta the model never sends is never a backoff candidate, and the
- * call site gives each candidate its own retry slot.
- */
-const getLongContextBetasForWith = (
-  modelId: string,
-  currentBetaFlags: Parameters<typeof getModelBetas>[1],
-): ReadonlyArray<string> => {
-  const modelBetas = new Set(getModelBetas(modelId, currentBetaFlags))
-  return MODEL_CONFIG.longContextBetas.filter((beta) => modelBetas.has(beta))
-}
 
 export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 
@@ -1712,53 +1638,13 @@ const claudeCodeClientPath = (
  * live `Ref` cache.
  *
  * The middleware stack, layered outside-in via `pipe`:
- *   - mapRequestEffect (preprocess) — auth + cache-aware headers
- *   - long-context beta retry (inner transformResponse)
+ *   - mapRequestEffect (preprocess) — auth headers
  *   - 401 recovery (outer) — invalidate creds + retry once
  *
  * There is no 429/529/5xx or transport retry here. The SDK maps those to
  * retryable `AiError`s, and the agent loop owns that retry under the
  * driver's policy: it honors `retry-after` and reports each attempt.
- *
- * On the long-context beta retry: the Anthropic API rejects requests
- * that include both `context-1m-2025-08-07` and `interleaved-thinking-
- * 2025-05-14` for some accounts/models with a 400 + a body string
- * containing "Extra usage is required for long context requests" or
- * "long context beta is not yet available". The fix is to retry with
- * one of those betas removed, learning across requests so the next
- * turn doesn't re-include it. The cross-request learning lives in the
- * `BetaExclusions` Ref, keyed by model; this middleware reads from it
- * in `mapRequestEffect` (so the outgoing header reflects what we've
- * learned) and writes to it in the beta-retry `transformResponse` (so
- * the next attempt's preprocess sees the updated set).
  */
-
-// ── Typed errors ──
-
-/**
- * Internal error driving the long-context beta retry. Carries the response
- * so the catch-tag can hand the final 400 back to the caller.
- */
-class LongContextBetaError extends Schema.TaggedError<LongContextBetaError>(
-  "@gent/extensions/src/anthropic/LongContextBetaError",
-)("LongContextBetaError", {
-  response: HttpResponseField,
-}) {}
-
-/**
- * Pick the next long-context beta to drop given the candidates the
- * model actually emits and the set already excluded.
- */
-const pickNextBetaToExclude = (
-  modelId: string,
-  currentBetaFlags: Option.Option<string>,
-  excluded: ReadonlySet<string>,
-): Option.Option<string> => {
-  for (const beta of getLongContextBetasForWith(modelId, currentBetaFlags)) {
-    if (!excluded.has(beta)) return Option.some(beta)
-  }
-  return Option.none()
-}
 
 // ── Helpers ──
 
@@ -1780,27 +1666,18 @@ const requestBodyText = (req: HttpClientRequest.HttpClientRequest): Option.Optio
   return Option.none()
 }
 
-/**
- * Build the OAuth header set for a request. `excluded` holds the betas
- * the server rejected for this model; the beta-retry middleware learns
- * them.
- */
+/** Build the OAuth header set for a request. */
 const buildOauthHeaders = (
   req: HttpClientRequest.HttpClientRequest,
   accessToken: string,
   modelId: string,
   env: AnthropicKeychainEnv,
-  excluded: ReadonlySet<string>,
 ): Headers.Headers => {
   // Start from the SDK's existing headers (preserve `anthropic-version`
   // etc.) but drop `x-api-key` since OAuth uses Bearer.
   let headers = Headers.remove(req.headers, "x-api-key")
 
-  const modelBetas = getModelBetas(
-    modelId,
-    Option.fromNullishOr(env.betaFlags),
-    Option.some(excluded),
-  )
+  const modelBetas = getModelBetas(modelId, Option.fromNullishOr(env.betaFlags))
   const incomingBeta = headers["anthropic-beta"] ?? ""
   const mergedBetas = Array.from(
     new Set([
@@ -1837,7 +1714,6 @@ const buildOauthHeaders = (
 export const buildKeychainTransformClient =
   (
     creds: CredentialCache<ClaudeCredentials>,
-    betaExclusions: Ref.Ref<BetaExclusions>,
     env: AnthropicKeychainEnv,
   ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   (client) =>
@@ -1846,73 +1722,9 @@ export const buildKeychainTransformClient =
         Effect.gen(function* () {
           const fresh = yield* freshCredentials(creds, req)
           const modelId = parseModelIdFromBody(requestBodyText(req))
-          // Read the betas learned to be rejected for this model. On retry,
-          // mapRequestEffect re-runs and reads the updated set — the
-          // beta-retry transformResponse below records the rejected beta
-          // before failing to retry.
-          const excluded = yield* excludedBetas(betaExclusions, modelId)
-          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env, excluded)
+          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env)
           return withHeaders(req, headers)
         }),
-      ),
-      // Long-context beta retry: on 400 with the long-context marker in
-      // the body, record the offending beta into the cache and fail with
-      // LongContextBetaError so Effect.retry re-runs preprocess (which
-      // re-reads the now-larger excluded set) + postprocess. Budget = one
-      // retry slot per long-context candidate the model actually emits.
-      // When candidates exhaust, the catch-tag
-      // folds the terminal 400 back into the success channel.
-      HttpClient.transformResponse((effect) =>
-        effect.pipe(
-          Effect.flatMap(
-            (
-              response,
-            ): Effect.Effect<
-              HttpClientResponse.HttpClientResponse,
-              LongContextBetaError | HttpClientError
-            > => {
-              switch (response.status) {
-                case 400:
-                  return response.text.pipe(
-                    Effect.flatMap((body) => {
-                      if (!isLongContextError(body)) return Effect.succeed(response)
-                      // Body matches: try to record the next beta + retry.
-                      const modelId = parseModelIdFromBody(requestBodyText(response.request))
-                      const betaFlags = env.betaFlags
-                      return excludedBetas(betaExclusions, modelId).pipe(
-                        Effect.flatMap((excluded) => {
-                          const beta = pickNextBetaToExclude(
-                            modelId,
-                            Option.fromNullishOr(betaFlags),
-                            excluded,
-                          )
-                          if (Option.isNone(beta)) return Effect.succeed(response)
-                          return recordExcludedBeta(betaExclusions, modelId, beta.value).pipe(
-                            Effect.flatMap(() =>
-                              Effect.fail(new LongContextBetaError({ response })),
-                            ),
-                          )
-                        }),
-                      )
-                    }),
-                  )
-                default:
-                  return Effect.succeed(response)
-              }
-            },
-          ),
-          // Budget: at most one retry per long-context beta — bounded
-          // because every retry adds one beta to the cache's excluded
-          // set, and `pickNextBetaToExclude` returns `None` once
-          // exhausted (which short-circuits to success above without
-          // re-failing). The numeric `times` is a belt-and-suspenders
-          // bound; the real terminator is the `null` short-circuit.
-          Effect.retry({
-            while: (e) => e._tag === "LongContextBetaError",
-            times: 8,
-          }),
-          Effect.catchTag("LongContextBetaError", (e) => Effect.succeed(e.response)),
-        ),
       ),
       recoverUnauthorized(creds),
     )
@@ -2179,12 +1991,10 @@ const makeApiKeyAnthropicLayer = (modelName: string, request: AnthropicRequest, 
 
 /**
  * OAuth path: builds `AnthropicClient.layer` with `transformClient` set
- * to the keychain transform middleware (auth headers, long-context beta
- * retry, 401 recovery).
+ * to the keychain transform middleware (auth headers, 401 recovery).
  *
- * The credential cell and the beta exclusions are allocated once in the
- * extension setup. Cells allocated per layer build would reset both,
- * killing cross-request beta learning and credential reuse.
+ * The credential cell is allocated once in the extension setup. A cell
+ * allocated per layer build would reset it and kill credential reuse.
  *
  * No `apiKey` is passed — the SDK's apiKey is optional and skips
  * `x-api-key` injection when absent (verified at
@@ -2196,10 +2006,9 @@ const makeOauthAnthropicLayer = (
   modelName: string,
   request: AnthropicRequest,
   creds: CredentialCache<ClaudeCredentials>,
-  betaExclusions: Ref.Ref<BetaExclusions>,
   platform: AnthropicPlatformApi,
 ) => {
-  const keychain = buildKeychainTransformClient(creds, betaExclusions, platform.env)
+  const keychain = buildKeychainTransformClient(creds, platform.env)
   const wrappedClient = anthropicClientLayer(
     request.plan,
     claudeCodeClientPath(creds),
@@ -2217,15 +2026,14 @@ const makeOauthAnthropicLayer = (
 }
 
 /**
- * Build the model-driver contribution given pre-allocated cache cell
- * cells. Extracted from the inline `modelDrivers` factory so tests can
- * inject their own cells and assert that two `resolveModel` calls share
- * the same closure-owned cells (fresh Refs per `resolveModel` would
- * kill cross-request beta learning).
+ * Build the model-driver contribution given the pre-allocated credential
+ * cell. Extracted from the inline `modelDrivers` factory so tests can
+ * inject their own cell and assert that two `resolveModel` calls share
+ * the closure-owned cell (a fresh cell per `resolveModel` would kill
+ * credential reuse).
  */
 export const buildAnthropicModelDriver = (
   credentialCellRef: CredentialCacheCellRef<ClaudeCredentials>,
-  betaExclusions: Ref.Ref<BetaExclusions>,
   envApiKey: Option.Option<string>,
   platform: AnthropicPlatformApi,
   catalog: CatalogSource,
@@ -2250,16 +2058,15 @@ export const buildAnthropicModelDriver = (
       // stored API key, then ANTHROPIC_API_KEY. A user who chooses Claude
       // Code in /auth is not billed on a shell API key.
       if (Option.isSome(auth) && auth.value._tag === "Oauth") {
-        // The credential cache and the beta cache are built over the
-        // extension-closure-owned cells, so cross-request beta learning and
-        // credential reuse survive. The credentials are checked before the
+        // The credential cache is built over the extension-closure-owned
+        // cell, so credential reuse survives. The credentials are checked before the
         // layer exists, so an expired sign-in fails with its own message.
         const creds = yield* buildLiveCredentialCache(credentialCellRef, platform)
         yield* checkCredentials(creds)
         return AiModel.make(
           "anthropic",
           modelName,
-          makeOauthAnthropicLayer(modelName, request, creds, betaExclusions, platform),
+          makeOauthAnthropicLayer(modelName, request, creds, platform),
         )
       }
 
@@ -2350,13 +2157,12 @@ export const AnthropicExtension = defineExtension({
     // through SynchronizedRef.make instead of an unsafe closure escape hatch.
     const credentialCellRef =
       yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-    const betaExclusions = yield* Ref.make<BetaExclusions>(new Map())
 
     const catalog = yield* catalogSource(ctx.home)
 
     yield* ctx.register(
       "modelDriver",
-      buildAnthropicModelDriver(credentialCellRef, betaExclusions, envApiKey, platform, catalog),
+      buildAnthropicModelDriver(credentialCellRef, envApiKey, platform, catalog),
     )
   }),
 })
