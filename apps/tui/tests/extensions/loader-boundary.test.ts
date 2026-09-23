@@ -1179,6 +1179,27 @@ describe("loadTuiExtensions", () => {
       rmSync(emptyProject, { recursive: true, force: true })
     }),
   )
+  it.scopedLive("disabling @gent/interaction-tools drops the handoff renderer with its tool", () =>
+    Effect.gen(function* () {
+      yield* integrationFixture
+      const emptyUser = join(TEST_DIR, "empty-user-handoff")
+      const emptyProject = join(TEST_DIR, "empty-project-handoff")
+      mkdirSync(emptyUser, { recursive: true })
+      mkdirSync(emptyProject, { recursive: true })
+      const resolved = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: builtinClientModules,
+          userDir: emptyUser,
+          projectDir: emptyProject,
+          disabled: ["@gent/interaction-tools"],
+        }),
+      )
+      expect(resolved.interactionRenderers.has("handoff")).toBe(false)
+      expect(resolved.interactionRenderers.has("ask-user")).toBe(false)
+      rmSync(emptyUser, { recursive: true, force: true })
+      rmSync(emptyProject, { recursive: true, force: true })
+    }),
+  )
   it.scopedLive(
     "user extensions can add visible renderer, widget, command, and overlay surfaces",
     () =>

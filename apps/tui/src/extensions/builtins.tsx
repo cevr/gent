@@ -751,6 +751,7 @@ const builtinInteractions = defineClientExtension("@gent/interaction-tools", {
       interactionRendererContribution(PromptRenderer),
       interactionRendererContribution(PromptRenderer, "prompt"),
       interactionRendererContribution(AskUserRenderer, "ask-user"),
+      interactionRendererContribution(HandoffRenderer, "handoff"),
     ),
   ),
 })
@@ -765,12 +766,6 @@ const builtinConnection = defineClientExtension("@gent/connection", {
       priority: 30,
       component: ConnectionWidget,
     }),
-  ),
-})
-
-const builtinHandoff = defineClientExtension("@gent/handoff", {
-  setup: Effect.succeed(
-    clientContributions(interactionRendererContribution(HandoffRenderer, "handoff")),
   ),
 })
 
@@ -842,7 +837,6 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinFiles,
   builtinGoal,
   builtinWake,
-  builtinHandoff,
   builtinHerdr,
   builtinInteractions,
   builtinSkills,

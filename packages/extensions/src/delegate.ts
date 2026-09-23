@@ -364,8 +364,8 @@ const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
  * Bring the current branch's registry up to date without a hook: a start
  * whose prompt never reached the child is re-sent, a finished child whose
  * completion never landed (the process died between the receipt and the
- * hook) is delivered now. Called from the parent's turn and its listing
- * tools.
+ * hook) is delivered now, and a private row is removed with its session,
+ * never delivered. Called from the parent's turn and its listing tools.
  */
 const reconcile = Effect.fn("Delegate.reconcile")(function* () {
   const ctx = yield* ExtensionContext
@@ -374,6 +374,12 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
     Effect.gen(function* () {
       let next = entries
       for (const entry of entries) {
+        // Private rows come only from files written before the goal option was removed.
+        if (entry.private) {
+          yield* ctx.Session.delete(entry.sessionId).pipe(Effect.ignore)
+          next = next.filter((current) => current.requestId !== entry.requestId)
+          continue
+        }
         if (entry.delivered) continue
         if (!entry.submitted) {
           yield* submitStart(entry, Option.none())
@@ -530,6 +536,7 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
       const entry = entries.find(
         (row) =>
           !row.delivered &&
+          !row.private &&
           row.sessionId === input.sessionId &&
           startMessageId(row.requestId) === input.messageId,
       )

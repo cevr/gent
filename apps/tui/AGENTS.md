@@ -167,7 +167,6 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | ----------------------------------------- | ------------------------ | ------------------------------------- |
 | `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers |
 | `@gent/connection`                        | `builtins.tsx`           | Connection status widget              |
-| `@gent/handoff`                           | `builtins.tsx`           | Handoff interaction renderer          |
 | `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup        |
 | `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup   |
 | `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command               |
