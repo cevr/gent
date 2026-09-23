@@ -3011,17 +3011,34 @@ export const findUnconsumedExports = (
 // Package entry points
 // ---------------------------------------------------------------------------
 
-export interface PackageJson {
-  readonly name?: string
-  readonly private?: boolean
-  readonly exports?: Readonly<Record<string, string>>
-}
+const DependencyMap = Schema.Record(Schema.String, Schema.String)
 
-export interface TsConfigJson {
-  readonly compilerOptions?: {
-    readonly paths?: Readonly<Record<string, ReadonlyArray<string>>>
-  }
-}
+/** The workspace manifest fields the package-surface and dependency checks read. */
+export const PackageJsonSchema = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  private: Schema.optional(Schema.Boolean),
+  exports: Schema.optional(DependencyMap),
+  workspaces: Schema.optional(Schema.Array(Schema.String)),
+  scripts: Schema.optional(DependencyMap),
+  dependencies: Schema.optional(DependencyMap),
+  devDependencies: Schema.optional(DependencyMap),
+  optionalDependencies: Schema.optional(DependencyMap),
+  peerDependencies: Schema.optional(DependencyMap),
+  /** The root's shared versions; a manifest takes one with `"catalog:"`. */
+  catalog: Schema.optional(DependencyMap),
+})
+export type PackageJson = typeof PackageJsonSchema.Type
+
+/** The tsconfig fields the paths and dependency checks read. */
+export const TsConfigSchema = Schema.Struct({
+  compilerOptions: Schema.optional(
+    Schema.Struct({
+      paths: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.String))),
+      types: Schema.optional(Schema.Array(Schema.String)),
+    }),
+  ),
+})
+export type TsConfigJson = typeof TsConfigSchema.Type
 
 /** One workspace package, the entry points it exposes, and whether it must stay private. */
 interface PackageSurface {
@@ -3218,4 +3235,194 @@ export const findPackageSurfaceFindings = (
     }),
   )
   return [...unlisted, ...checked, ...pathFindings(tsconfigs)]
+}
+
+// ---------------------------------------------------------------------------
+// Declared dependencies
+// ---------------------------------------------------------------------------
+
+/** The installed manifest fields that say what a dependency offers. */
+export const InstalledPackageSchema = Schema.Struct({
+  bin: Schema.optional(Schema.Union([Schema.String, DependencyMap])),
+  peerDependencies: Schema.optional(DependencyMap),
+})
+export type InstalledPackage = typeof InstalledPackageSchema.Type
+
+/** What an installed dependency offers: the commands it puts on PATH and the peers it asks for. */
+export interface InstalledDependency {
+  readonly bins: ReadonlyArray<string>
+  readonly peers: ReadonlyArray<string>
+}
+
+const isBinPath = Schema.is(Schema.String)
+
+/** Read an installed manifest; a string `bin` is one command named after the package. */
+export const installedDependency = (
+  name: string,
+  installed: InstalledPackage,
+): InstalledDependency => {
+  const bins = Option.match(Option.fromNullishOr(installed.bin), {
+    onNone: (): ReadonlyArray<string> => [],
+    onSome: (bin) => {
+      if (isBinPath(bin)) return name.split("/").slice(-1)
+      return Object.keys(bin)
+    },
+  })
+  return { bins, peers: Object.keys(installed.peerDependencies ?? {}) }
+}
+
+/** One manifest the dependency check reads, and what its dependencies serve. */
+export interface DependencyScope {
+  readonly manifest: string
+  readonly manifestText: string
+  readonly packageJson: PackageJson
+  /**
+   * The tracked files the dependencies serve: the workspace directory, or the
+   * whole tree for the root manifest, whose dependencies every package reaches.
+   */
+  readonly files: ReadonlyMap<string, string>
+  /** The command lines that can run a dependency: package scripts, hooks, CI steps. */
+  readonly commands: ReadonlyArray<string>
+  /** Peers the scope installs for other packages: the root provides every workspace's. */
+  readonly providedPeers: ReadonlySet<string>
+  /** Each declared dependency whose installed manifest could be read. */
+  readonly installed: ReadonlyMap<string, InstalledDependency>
+}
+
+/** The package a module specifier resolves into; a relative path names none. */
+const packageOfSpecifier = (specifier: string): Option.Option<string> => {
+  if (specifier === "bun" || specifier.startsWith("bun:")) return Option.some("bun")
+  if (specifier.startsWith("node:")) return Option.some("node")
+  if (!/^(?:@[\w.-]+\/)?[\w.-]+(?:\/|$)/.test(specifier)) return Option.none()
+  const segments = specifier.split("/")
+  if (specifier.startsWith("@")) return Option.some(segments.slice(0, 2).join("/"))
+  return Option.some(segments.slice(0, 1).join("/"))
+}
+
+/** A module a source file loads: `import`, `export … from`, `import()`, `require()`, a types reference. */
+const SOURCE_SPECIFIER =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*|\bmock\.module\s*\(\s*|<reference\s+types=)["']([^"'\s]+)["']/g
+/** A quoted string in a config file (tsconfig `types`, bunfig `preload`, a lint plugin). */
+const CONFIG_STRING = /["']([^"'\s]+)["']/g
+
+/** A manifest names its own dependencies as keys; only its scripts count, as commands. */
+const dependencyPatternFor = (file: string): Option.Option<RegExp> => {
+  if (/\.[cm]?[jt]sx?$/.test(file)) return Option.some(SOURCE_SPECIFIER)
+  if (/\.(?:jsonc?|toml|ya?ml)$/.test(file) && !/(?:^|\/)package\.json$/.test(file)) {
+    return Option.some(CONFIG_STRING)
+  }
+  return Option.none()
+}
+
+const commandWords = (command: string): ReadonlyArray<string> =>
+  command.split(/[\s"'\\;&|()]+/).filter((word) => word.length > 0)
+
+/** Every package the scope's files load or name. */
+const namedPackages = (scope: DependencyScope): ReadonlySet<string> => {
+  const specifiers = [...scope.files].flatMap(([file, text]) =>
+    Option.toArray(dependencyPatternFor(file)).flatMap((pattern) =>
+      [...text.matchAll(pattern)].map((match) => match[1] ?? ""),
+    ),
+  )
+  // A command word can be a module too: `bun --preload @opentui/solid/preload`.
+  return new Set(
+    [...specifiers, ...scope.commands.flatMap(commandWords)].flatMap((specifier) =>
+      Option.toArray(packageOfSpecifier(specifier)),
+    ),
+  )
+}
+
+/** `@types/x` types `x`; `@types/a__b` types `@a/b`. */
+const typedPackage = (dependency: string): Option.Option<string> => {
+  if (!dependency.startsWith("@types/")) return Option.none()
+  const typed = dependency.slice("@types/".length)
+  if (typed.includes("__")) return Option.some(`@${typed.replace("__", "/")}`)
+  return Option.some(typed)
+}
+
+type DependencyField = "dependencies" | "devDependencies" | "optionalDependencies"
+const DEPENDENCY_FIELDS: ReadonlyArray<DependencyField> = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+]
+
+/**
+ * A declared dependency nothing uses is dead weight that installs, resolves
+ * and audits forever, and nothing else notices it (pass 3 dropped a set once,
+ * pass 14 four more). A dependency is used when a file in its scope loads or
+ * names it, a command runs one of its binaries, it types a used package
+ * (`@types/x`), or it is a peer of a used dependency or of a workspace the
+ * root installs for. `peerDependencies` are the consumer's contract, not a
+ * use, so they are not checked.
+ */
+export const findUnusedDependencies = (
+  scopes: ReadonlyArray<DependencyScope>,
+): ReadonlyArray<Finding> =>
+  scopes.flatMap((scope) => {
+    const declared = DEPENDENCY_FIELDS.flatMap((field) =>
+      Object.keys(scope.packageJson[field] ?? {}).map((name) => ({ field, name })),
+    )
+    const named = namedPackages(scope)
+    const words = new Set(scope.commands.flatMap(commandWords))
+    const installed = (name: string) => Option.fromNullishOr(scope.installed.get(name))
+    const used = new Set(
+      declared
+        .map(({ name }) => name)
+        .filter(
+          (name) =>
+            named.has(name) ||
+            scope.providedPeers.has(name) ||
+            Option.exists(installed(name), ({ bins }) => bins.some((bin) => words.has(bin))) ||
+            Option.exists(typedPackage(name), (typed) => named.has(typed)),
+        ),
+    )
+    // A peer of a used dependency is used through it; follow the chain.
+    const frontier = [...used]
+    while (frontier.length > 0) {
+      const peers = Option.match(installed(frontier.pop() ?? ""), {
+        onNone: (): ReadonlyArray<string> => [],
+        onSome: (dependency) => dependency.peers,
+      })
+      for (const peer of peers) {
+        if (used.has(peer)) continue
+        used.add(peer)
+        frontier.push(peer)
+      }
+    }
+    const lines = scope.manifestText.split("\n")
+    return declared
+      .filter(({ name }) => !used.has(name))
+      .map(({ field, name }) => ({
+        file: scope.manifest,
+        line: lines.findIndex((line) => line.includes(`"${name}":`)) + 1 || 1,
+        message: `${field}["${name}"]: nothing in this package loads it, runs its command or names it in a config; drop it`,
+      }))
+  })
+
+/** A catalog version no manifest takes with `"catalog:"` pins a package nothing installs. */
+export const findUnusedCatalogEntries = (
+  root: { readonly manifest: string; readonly text: string; readonly packageJson: PackageJson },
+  manifests: ReadonlyArray<PackageJson>,
+): ReadonlyArray<Finding> => {
+  const taken = new Set(
+    [root.packageJson, ...manifests].flatMap((manifest) =>
+      [...DEPENDENCY_FIELDS.map((field) => manifest[field]), manifest.peerDependencies]
+        .flatMap((versions) => Object.entries(versions ?? {}))
+        .filter(([, version]) => version.startsWith("catalog:"))
+        .map(([name]) => name),
+    ),
+  )
+  const lines = root.text.split("\n")
+  const catalogStart = lines.findIndex((line) => line.includes(`"catalog": {`))
+  return Object.keys(root.packageJson.catalog ?? {})
+    .filter((name) => !taken.has(name))
+    .map((name) => {
+      const index = lines.findIndex((line, at) => at > catalogStart && line.includes(`"${name}":`))
+      return {
+        file: root.manifest,
+        line: index + 1 || 1,
+        message: `catalog["${name}"]: no manifest takes it with "catalog:"; drop it`,
+      }
+    })
 }

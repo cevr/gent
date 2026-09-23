@@ -23,8 +23,13 @@ import {
   findUnconsumedExports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
+  findUnusedCatalogEntries,
+  findUnusedDependencies,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
+  type DependencyScope,
+  type InstalledPackage,
+  installedDependency,
   isSteeringFile,
   type PackageJson,
   workspaceManifests,
@@ -2953,5 +2958,191 @@ describe("a namesake does not vouch for an export", () => {
       usedElsewhere,
     ])
     expect(findings).toEqual([])
+  })
+})
+
+// ── declared dependencies ──────────────────────────────────────────────────
+
+const dependencyScope = (overrides: Partial<DependencyScope>): DependencyScope => ({
+  manifest: "packages/core/package.json",
+  manifestText: "{}",
+  packageJson: {},
+  files: new Map(),
+  commands: [],
+  providedPeers: new Set(),
+  installed: new Map(),
+  ...overrides,
+})
+
+/** Installed manifests as the runner reads them. */
+const installedMap = (entries: ReadonlyArray<readonly [string, InstalledPackage]>) =>
+  new Map(entries.map(([name, installed]) => [name, installedDependency(name, installed)]))
+
+const unusedNames = (scope: DependencyScope): ReadonlyArray<string> =>
+  findUnusedDependencies([scope]).map((finding) => finding.message.split(": ")[0] ?? "")
+
+describe("a declared dependency must have a use", () => {
+  test("a dependency no file loads is reported at its manifest line", () => {
+    const manifestText = [
+      "{",
+      '  "dependencies": {',
+      '    "effect-encore": "catalog:",',
+      '    "effect-machine": "catalog:"',
+      "  }",
+      "}",
+    ].join("\n")
+    const findings = findUnusedDependencies([
+      dependencyScope({
+        manifestText,
+        packageJson: {
+          dependencies: { "effect-encore": "catalog:", "effect-machine": "catalog:" },
+        },
+        files: new Map([
+          ["packages/core/src/a.ts", 'import { Entity } from "effect-encore/entity"'],
+        ]),
+      }),
+    ])
+    expect(findings).toEqual([
+      {
+        file: "packages/core/package.json",
+        line: 4,
+        message:
+          'dependencies["effect-machine"]: nothing in this package loads it, runs its command or names it in a config; drop it',
+      },
+    ])
+  })
+
+  test("a dynamic import, a require, a re-export and a types reference each count as a load", () => {
+    const names = ["a", "@s/b", "c", "d", "e"]
+    const scope = dependencyScope({
+      packageJson: { devDependencies: Object.fromEntries(names.map((name) => [name, "1"])) },
+      files: new Map([
+        [
+          "packages/core/src/x.ts",
+          [
+            'const a = await import("a")',
+            'const b = require("@s/b/sub")',
+            'export { c } from "c"',
+            '/// <reference types="d" />',
+            'import "e"',
+          ].join("\n"),
+        ],
+      ]),
+    })
+    expect(unusedNames(scope)).toEqual([])
+  })
+
+  test("a config string and a script word count as a use; the manifest's own keys do not", () => {
+    const scope = dependencyScope({
+      packageJson: {
+        devDependencies: { "lint-plugin": "1", "@opentui/solid": "1", ghost: "1" },
+      },
+      files: new Map([
+        ["packages/core/.oxlintrc.json", '{ "jsPlugins": ["lint-plugin/plugin"] }'],
+        ["packages/core/package.json", '{ "devDependencies": { "ghost": "1" } }'],
+      ]),
+      commands: ["bun test --preload @opentui/solid/preload tests"],
+    })
+    expect(unusedNames(scope)).toEqual(['devDependencies["ghost"]'])
+  })
+
+  test("a command a dependency installs counts as a use of it", () => {
+    const scope = dependencyScope({
+      packageJson: { devDependencies: { typescript: "7", "@effect/tsgo": "1", idle: "1" } },
+      commands: ["tsc --noEmit", "lefthook install && effect-tsgo patch"],
+      installed: installedMap([
+        ["typescript", { bin: { tsc: "./bin/tsc" } }],
+        ["@effect/tsgo", { bin: { "effect-tsgo": "./dist/effect-tsgo.cjs" } }],
+        ["idle", { bin: "./bin/idle.js" }],
+      ]),
+    })
+    expect(unusedNames(scope)).toEqual(['devDependencies["idle"]'])
+  })
+
+  test("a string bin is named after the package", () => {
+    const scope = dependencyScope({
+      packageJson: { devDependencies: { "@scope/runner": "1" } },
+      commands: ["runner --fast"],
+      installed: installedMap([["@scope/runner", { bin: "./bin/runner.js" }]]),
+    })
+    expect(unusedNames(scope)).toEqual([])
+  })
+
+  test("@types/x is used when x is loaded, including bun through a bun: import", () => {
+    const scope = dependencyScope({
+      packageJson: {
+        devDependencies: { "@types/bun": "1", "@types/picomatch": "1", "@types/figlet": "1" },
+      },
+      files: new Map([
+        [
+          "packages/core/tests/a.test.ts",
+          'import { test } from "bun:test"\nimport pm from "picomatch"',
+        ],
+      ]),
+    })
+    expect(unusedNames(scope)).toEqual(['devDependencies["@types/figlet"]'])
+  })
+
+  test("a peer of a used dependency is used through it, down the chain", () => {
+    const scope = dependencyScope({
+      packageJson: {
+        dependencies: {
+          "@effect/opentelemetry": "1",
+          "@opentelemetry/api": "1",
+          deep: "1",
+          loose: "1",
+        },
+      },
+      files: new Map([["packages/sdk/src/a.ts", 'import * as Otel from "@effect/opentelemetry"']]),
+      installed: installedMap([
+        ["@effect/opentelemetry", { peerDependencies: { "@opentelemetry/api": "^1" } }],
+        ["@opentelemetry/api", { peerDependencies: { deep: "^1" } }],
+      ]),
+    })
+    expect(unusedNames(scope)).toEqual(['dependencies["loose"]'])
+  })
+
+  test("the root installs the peers its workspaces ask for; peerDependencies themselves are not checked", () => {
+    const scope = dependencyScope({
+      manifest: "package.json",
+      packageJson: {
+        devDependencies: { effect: "catalog:", orphan: "1" },
+        peerDependencies: { unused: "1" },
+      },
+      providedPeers: new Set(["effect"]),
+    })
+    expect(unusedNames(scope)).toEqual(['devDependencies["orphan"]'])
+  })
+})
+
+describe("a catalog entry must be taken", () => {
+  test("an entry no manifest takes with catalog: is reported inside the catalog block", () => {
+    const text = [
+      "{",
+      '  "devDependencies": { "effect": "catalog:" },',
+      '  "catalog": {',
+      '    "effect": "4",',
+      '    "effect-machine": "0.27.0"',
+      "  }",
+      "}",
+    ].join("\n")
+    const findings = findUnusedCatalogEntries(
+      {
+        manifest: "package.json",
+        text,
+        packageJson: {
+          devDependencies: { effect: "catalog:" },
+          catalog: { effect: "4", "effect-machine": "0.27.0" },
+        },
+      },
+      [{ peerDependencies: { effect: "catalog:" } }],
+    )
+    expect(findings).toEqual([
+      {
+        file: "package.json",
+        line: 5,
+        message: 'catalog["effect-machine"]: no manifest takes it with "catalog:"; drop it',
+      },
+    ])
   })
 })
