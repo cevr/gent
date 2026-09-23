@@ -485,7 +485,6 @@ describe("context compaction degrade path", () => {
           branchId: branchIdModelContextDegrade,
         })).metrics
         return { events, durable, metrics }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer), Effect.timeout("8 seconds"))
       expect(yield* controls.callCount).toBe(1)
       // The notice text is the projection's; tests/runtime/agent/turn-window.test.ts reads it.
@@ -1021,7 +1020,6 @@ describe("turn window projection", () => {
           return Effect.succeed(message)
         },
         summaryModel,
-        // oxlint-disable-next-line effect/noInlineProvide -- The compactor and publisher are created by this test.
       }).pipe(Effect.provide(Layer.mergeAll(compactor, publisher.layer)))
 
       expect(compacted).toBe(true)
@@ -1188,7 +1186,6 @@ describe("turn window projection", () => {
           return Effect.succeed(message)
         },
         summaryModel,
-        // oxlint-disable-next-line effect/noInlineProvide -- The compactor and publisher are created by this test.
       }).pipe(Effect.provide(Layer.mergeAll(failingCompactor, publisher.layer)))
 
       expect(compacted).toBe(false)

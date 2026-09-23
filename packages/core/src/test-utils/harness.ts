@@ -138,7 +138,7 @@ const defaultInteraction = (): ExtensionInteractionService => ({
 })
 
 /** The one host platform stub: a darwin box. */
-export const testExtensionHostPlatform = (home: string = "/tmp"): ExtensionHostPlatform => ({
+const testExtensionHostPlatform = (home: string = "/tmp"): ExtensionHostPlatform => ({
   osInfo: {
     platform: "darwin",
     arch: "arm64",
@@ -150,11 +150,11 @@ export const testExtensionHostPlatform = (home: string = "/tmp"): ExtensionHostP
   randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
 })
 
-export const testExtensionFileLock = (): ExtensionFileLockServiceApi => ({
+const testExtensionFileLock = (): ExtensionFileLockServiceApi => ({
   withLock: (_path, effect) => effect,
 })
 
-export const testExtensionState = (): ReturnType<ExtensionStateFacet> => ({
+const testExtensionState = (): ReturnType<ExtensionStateFacet> => ({
   changed: () => Effect.void,
 })
 
@@ -182,9 +182,9 @@ export const testExtensionHostContext = (
  * are presets over it.
  */
 
-export const testEnvironment = { cwd: "/tmp", home: "/tmp", platform: "test" }
+const testEnvironment = { cwd: "/tmp", home: "/tmp", platform: "test" }
 
-export const testIdentity = (dbPath: string = ":memory:") => ({
+const testIdentity = (dbPath: string = ":memory:") => ({
   serverId: "test-server",
   pid: 0,
   hostname: "test-host",

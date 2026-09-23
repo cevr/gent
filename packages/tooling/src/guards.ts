@@ -1,53 +1,142 @@
 import { Option, Schema } from "effect"
 
-// ── a lint directive names its rules ────────────────────────────────────────
-
-export interface BlanketDisableFinding {
+/** What every guard reports: a place in a file, and what is wrong there. */
+export interface Finding {
   readonly file: string
   readonly line: number
+  readonly message: string
+}
+
+/** This file: the guards name what they look for, so several scans skip it. */
+const GUARDS_FILE = "packages/tooling/src/guards.ts"
+
+const blankKeepingLines = (text: string): string => text.replace(/[^\n]/g, " ")
+
+/**
+ * A scanner frame: `IN_TEMPLATE` inside a template's text, otherwise the count
+ * of braces open in that stretch of code (an interpolation closes at 0).
+ */
+const IN_TEMPLATE = -1
+
+/** The end of a quoted string that starts at `start`: its closing quote, or the line end. */
+const quotedEnd = (text: string, start: number): number => {
+  const quote = text[start]
+  let at = start + 1
+  while (at < text.length && text[at] !== quote && text[at] !== "\n") {
+    at += 1 + Number(text[at] === "\\")
+  }
+  return Math.min(at + 1, text.length)
+}
+
+/** The end of the comment that opens at `start` with `opener` (`//` or `/*`). */
+const commentEnd = (text: string, start: number, opener: string): number => {
+  if (opener === "//") {
+    const newline = text.indexOf("\n", start)
+    if (newline === -1) return text.length
+    return newline
+  }
+  const close = text.indexOf("*/", start + 2)
+  if (close === -1) return text.length
+  return close + 2
+}
+
+/** One step inside a template's text: the characters it copies, and the frame change. */
+const templateStep = (text: string, at: number, frames: Array<number>): string => {
+  const pair = text.slice(at, at + 2)
+  if (pair === "${") {
+    frames.push(0)
+    return pair
+  }
+  if (text[at] === "\\") return pair
+  if (text[at] === "`") frames.pop()
+  return text[at] ?? ""
+}
+
+/** A brace or backtick in code: open or close a frame. */
+const trackCodeFrame = (char: string, frames: Array<number>): void => {
+  const top = frames.length - 1
+  const depth = frames[top] ?? 0
+  if (char === "`") frames.push(IN_TEMPLATE)
+  if (char === "{") frames[top] = depth + 1
+  if (char !== "}") return
+  if (depth === 0 && top > 0) frames.pop()
+  else frames[top] = Math.max(depth - 1, 0)
 }
 
 /**
- * oxlint honors both spellings, `eslint-disable` and `oxlint-disable`, so each
- * pattern matches both. A blanket directive names no rule; a block directive
- * disables its rules to the end of the file or the next enable.
+ * Blank the comments in `text`, line count preserved, read left to right so a
+ * `//` inside a string stays a string. Template literals are followed into
+ * their `${}` interpolations, so a comment there is blanked too. With
+ * `blankStrings`, each quoted string becomes `""`; a template's own text is
+ * kept, because an interpolation inside it reads code.
  */
-export const blanketDisableDirective =
+const blankComments = (text: string, blankStrings: boolean): string => {
+  const out: Array<string> = []
+  const frames: Array<number> = [0]
+  let at = 0
+  while (at < text.length) {
+    const char = text[at] ?? ""
+    const pair = text.slice(at, at + 2)
+    let chunk = char
+    let end = at + 1
+    if (frames[frames.length - 1] === IN_TEMPLATE) {
+      chunk = templateStep(text, at, frames)
+      end = at + chunk.length
+    } else if (pair === "//" || pair === "/*") {
+      end = commentEnd(text, at, pair)
+      chunk = blankKeepingLines(text.slice(at, end))
+    } else if (char === '"' || char === "'") {
+      end = quotedEnd(text, at)
+      chunk = text.slice(at, end)
+      if (blankStrings) chunk = '""'
+    } else {
+      trackCodeFrame(char, frames)
+    }
+    out.push(chunk)
+    at = end
+  }
+  return out.join("")
+}
+
+/** The text with comments blanked, line count preserved. */
+const withoutComments = (text: string): string => blankComments(text, false)
+
+// ── a lint directive names its rules ────────────────────────────────────────
+
+/**
+ * oxlint honors both spellings, `eslint-disable` and `oxlint-disable`, so each
+ * pattern matches both. A blanket directive names no rule; a file-wide
+ * directive, written as a block or a line comment, disables its rules to the
+ * end of the file or the next enable.
+ */
+const blanketDisableDirective =
   /(?:\/\*\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:\*\/|--|$))|(?:\/\/\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:--|$))/
 
-export const blockDisableDirective = /\/\*\s*(?:es|ox)lint-disable(?:\s|$)/
+const blockDisableDirective = /(?:\/\*|\/\/)\s*(?:es|ox)lint-disable(?:\s|$)/
 
 const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)(?:\/|\.|\b)/
 
 const isExplicitFixtureFile = (file: string): boolean => fixtureFilePattern.test(file)
 
-export const findBlanketEslintDisables = (
-  file: string,
-  text: string,
-): ReadonlyArray<BlanketDisableFinding> => {
-  const findings: BlanketDisableFinding[] = []
-  const lines = text.split("\n")
-  for (let index = 0; index < lines.length; index++) {
-    if (blanketDisableDirective.test(lines[index] ?? "")) {
-      findings.push({ file, line: index + 1 })
-    }
-  }
-  return findings
-}
+const DISABLE_MESSAGE =
+  "blanket and file-wide lint-disable comments (eslint- or oxlint- spelling) are banned; use line-local suppressions with exact rules"
+
+/** Every line of `text` a directive pattern matches. */
+const directiveLines = (file: string, text: string, directive: RegExp): ReadonlyArray<Finding> =>
+  text.split("\n").flatMap((line, index) => {
+    if (!directive.test(line)) return []
+    return [{ file, line: index + 1, message: DISABLE_MESSAGE }]
+  })
+
+export const findBlanketEslintDisables = (file: string, text: string): ReadonlyArray<Finding> =>
+  directiveLines(file, text, blanketDisableDirective)
 
 export const findBannedEslintDisableBlocks = (
   file: string,
   text: string,
-): ReadonlyArray<BlanketDisableFinding> => {
+): ReadonlyArray<Finding> => {
   if (isExplicitFixtureFile(file)) return []
-  const findings: BlanketDisableFinding[] = []
-  const lines = text.split("\n")
-  for (let index = 0; index < lines.length; index++) {
-    if (blockDisableDirective.test(lines[index] ?? "")) {
-      findings.push({ file, line: index + 1 })
-    }
-  }
-  return findings
+  return directiveLines(file, text, blockDisableDirective)
 }
 
 // ── an alternative layer is a real alternative ──────────────────────────────
@@ -76,13 +165,6 @@ export const findBannedEslintDisableBlocks = (
  *
  * @module
  */
-
-/** An alternative layer static that is an alias of the same service's `Live`. */
-export interface AliasTestLayerFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 /**
  * Shipped source, the same reading `core-retired-reconciler` uses.
@@ -155,13 +237,10 @@ const normalized = (initializer: string): string =>
     .replace(/[;,]+$/, "")
 
 /** Report alternative layer statics whose whole body returns `Live`. */
-export const findAliasTestLayers = (
-  file: string,
-  text: string,
-): ReadonlyArray<AliasTestLayerFinding> => {
+export const findAliasTestLayers = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!SHIPPED_SOURCE.test(file)) return []
 
-  const findings: AliasTestLayerFinding[] = []
+  const findings: Finding[] = []
   const lines = text.split("\n")
   for (const [index, line] of lines.entries()) {
     const member = Option.fromNullishOr(MEMBER_PATTERN.exec(line))
@@ -199,12 +278,6 @@ export const findAliasTestLayers = (
  * @module
  */
 
-export interface ChildSessionDepthFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
 const CORE_SRC = "packages/core/src/"
 const EXEMPT_PREFIXES = [`${CORE_SRC}storage/`, `${CORE_SRC}test-utils/`]
 const SHARED_CHECK = "admitChildSessionDepth"
@@ -223,17 +296,18 @@ const lastDeclarationStart = (text: string): number => {
 export const findUnadmittedChildSessionWriters = (
   file: string,
   text: string,
-): ReadonlyArray<ChildSessionDepthFinding> => {
+): ReadonlyArray<Finding> => {
   if (!file.startsWith(CORE_SRC)) return []
   if (EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix))) return []
 
-  const findings: ChildSessionDepthFinding[] = []
+  const findings: Finding[] = []
   for (const match of text.matchAll(SESSION_LITERAL)) {
     const start = match.index
     const end = text.indexOf("})", start)
     if (end === -1) continue
     const literal = text.slice(start, end)
-    if (!/\bparentSessionId:/.test(literal)) continue
+    // A field (`parentSessionId: x`) or a shorthand (`parentSessionId,`).
+    if (!/\bparentSessionId\s*(?:[:,]|$)/.test(literal)) continue
     // The admission must run before the write, in the same top-level
     // declaration. A whole-file escape let one admission anywhere in a
     // 700-line file cover every writer in it.
@@ -267,15 +341,8 @@ export const findUnadmittedChildSessionWriters = (
  * @module
  */
 
-/** A core source file that imports a feature directory it must not know about. */
-export interface FeatureIndependenceFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
 /** Feature directories under `packages/core/src` that core proper must not import. */
-export const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
+const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
 
 /**
  * SQL table-name prefixes owned by a feature.
@@ -285,7 +352,7 @@ export const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
  * repositories, so a core source file naming one of these is core reaching
  * back into a feature it should not know about.
  */
-export const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
+const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
 
 /**
  * Network hosts owned by a catalog feature, not by the kernel.
@@ -295,14 +362,7 @@ export const FEATURE_TABLE_PREFIXES: ReadonlyArray<string> = ["cell_"]
  * belongs to the driver's extension. A core source file that names one of
  * these hosts is core fetching a feature's data itself.
  */
-export const FEATURE_HOSTS: ReadonlyArray<string> = ["models.dev"]
-
-/**
- * Files allowed to import a feature. Empty, and meant to stay so: a core file
- * that needs a concrete feature should take it as input. Kept as a seam so
- * adding an exemption is a deliberate, reviewed edit rather than a silent one.
- */
-export const ASSEMBLY_SITES: ReadonlyArray<string> = []
+const FEATURE_HOSTS: ReadonlyArray<string> = ["models.dev"]
 
 const CORE_SRC_PREFIX = "packages/core/src/"
 
@@ -315,19 +375,17 @@ const TABLE_PATTERN = (prefix: string) => new RegExp(`\\b${prefix}[a-z_]+\\b`)
  * Find every import in `file` that reaches into a feature directory it is not
  * allowed to know about.
  *
- * Returns nothing for files outside core, for a feature's own sources, and for
- * the assembly sites.
+ * Returns nothing for files outside core and for a feature's own sources.
  */
 export const findCoreFeatureIndependenceFindings = (
   file: string,
   text: string,
-): ReadonlyArray<FeatureIndependenceFinding> => {
+): ReadonlyArray<Finding> => {
   if (!file.startsWith(CORE_SRC_PREFIX)) return []
-  if (ASSEMBLY_SITES.includes(file)) return []
   const ownSegments = file.slice(CORE_SRC_PREFIX.length).split("/")
   if (FEATURE_DIRECTORIES.some((feature) => ownSegments.includes(feature))) return []
 
-  const findings: Array<FeatureIndependenceFinding> = []
+  const findings: Array<Finding> = []
   for (const [index, line] of text.split("\n").entries()) {
     const specifier = Option.flatMap(Option.fromNullishOr(IMPORT_PATTERN.exec(line)), (match) =>
       Option.fromNullishOr(match[1]),
@@ -341,7 +399,7 @@ export const findCoreFeatureIndependenceFindings = (
     findings.push({
       file,
       line: index + 1,
-      message: `core must not import the "${named.value}" feature (${specifier.value}); carry it through an agnostic seam, or add this file to ASSEMBLY_SITES if it assembles an application`,
+      message: `core must not import the "${named.value}" feature (${specifier.value}); carry it through an agnostic seam`,
     })
   }
 
@@ -390,12 +448,6 @@ export const findCoreFeatureIndependenceFindings = (
  *
  * @module
  */
-
-export interface IdentityEncodeFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 /**
  * Name segments that say the encoded value answers "is this the same thing?".
@@ -497,13 +549,8 @@ const ENCODER_BINDING =
 /** The encoded value being compared, right where it is produced. */
 const COMPARED = /(?:===|!==|\.has\(|\.get\(|\.add\()/
 
-export const findIdentityEncodes = (
-  file: string,
-  text: string,
-): ReadonlyArray<IdentityEncodeFinding> => {
+export const findIdentityEncodes = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!SHIPPED_SOURCE.test(file)) return []
-  if (file === "packages/tooling/src/guards.ts") return []
-
   const lines = text.split("\n")
   const encoders: string[] = []
   for (const line of lines) {
@@ -514,7 +561,7 @@ export const findIdentityEncodes = (
   }
   if (encoders.length === 0) return []
 
-  const findings: IdentityEncodeFinding[] = []
+  const findings: Finding[] = []
   const callPattern = new RegExp(`\\b(${encoders.join("|")})\\(`, "g")
   for (const [index, line] of lines.entries()) {
     // The binding itself is a declaration, not a use.
@@ -571,13 +618,6 @@ export const findIdentityEncodes = (
  *
  * @module
  */
-
-/** A seam core declares that no shipped extension fills. */
-export interface UnadaptedSeamFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 /** Every seam family core declares now lives in one file; each scan is anchored on its own interface name. */
 const SEAM_DECLARATION_FILE = "packages/core/src/domain/extension.ts"
@@ -716,8 +756,8 @@ const declaredResourceScopes = (text: string): ReadonlyArray<string> => {
 export const findUnadaptedSeams = (
   sources: ReadonlyMap<string, string>,
   adapted: ReadonlySet<string>,
-): ReadonlyArray<UnadaptedSeamFinding> => {
-  const findings: UnadaptedSeamFinding[] = []
+): ReadonlyArray<Finding> => {
+  const findings: Finding[] = []
 
   const report = (
     file: string,
@@ -788,13 +828,6 @@ export const findUnadaptedSeams = (
  * @module
  */
 
-/** A core source file that pins a vendor model SKU. */
-export interface VendorModelPinFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
 /**
  * The one file allowed to name a vendor model: it declares the default that
  * every other core site resolves through.
@@ -810,14 +843,11 @@ const VENDOR_MODEL_PATTERN =
   /["'`](?:anthropic|openai|google|mistral|xai|groq|deepseek)\/[a-z0-9][a-z0-9.-]*["'`]/i
 
 /** Report vendor model SKUs pinned in core source. */
-export const findCoreVendorModelPins = (
-  file: string,
-  text: string,
-): ReadonlyArray<VendorModelPinFinding> => {
+export const findCoreVendorModelPins = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!file.startsWith(CORE_SRC_PREFIX)) return []
   if (file === DECLARATION_SITE) return []
 
-  const findings: VendorModelPinFinding[] = []
+  const findings: Finding[] = []
   const lines = text.split("\n")
   for (const [index, line] of lines.entries()) {
     const match = Option.fromNullishOr(VENDOR_MODEL_PATTERN.exec(line))
@@ -841,12 +871,6 @@ export const findCoreVendorModelPins = (
  * fixture runs in-process inside the slow suite, and belongs in the owning
  * package's `tests/` directory instead.
  */
-export interface E2eFixtureImportFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
 const E2E_TEST_FILE = /^packages\/e2e\/tests\/.*\.test\.ts$/
 
 /** An `import` whose module path is one of the two subprocess fixtures. */
@@ -856,7 +880,7 @@ const FIXTURE_IMPORT =
 export const findE2eFixtureImportFindings = (
   file: string,
   text: string,
-): ReadonlyArray<E2eFixtureImportFinding> => {
+): ReadonlyArray<Finding> => {
   if (!E2E_TEST_FILE.test(file)) return []
   if (FIXTURE_IMPORT.test(text)) return []
   return [
@@ -881,12 +905,6 @@ export const findE2eFixtureImportFindings = (
  *
  * @module
  */
-
-export interface HookRunsGuardsFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 export const HOOK_FILE = "lefthook.yml"
 
@@ -929,10 +947,7 @@ const runsGuards = (block: string): boolean =>
     }),
   )
 
-export const findHookWithoutGuards = (
-  file: string,
-  text: string,
-): ReadonlyArray<HookRunsGuardsFinding> => {
+export const findHookWithoutGuards = (file: string, text: string): ReadonlyArray<Finding> => {
   if (file !== HOOK_FILE) return []
   if (runsGuards(preCommitBlock(text))) return []
   return [
@@ -955,7 +970,7 @@ export const findHookWithoutGuards = (
  * - An `.oxlintrc.json` override whose `files` glob matches no tracked file.
  *   The override for `packages/sdk/src/supervisor.ts` outlived that file and
  *   kept turning a rule off for nothing.
- * - A rule defined under `lint/` that the root config never enables. Five such
+ * - A rule defined in `gent-rules.ts` that the root config never enables. Five such
  *   rules accumulated; one of them (`no-make-unsafe`) could not be enabled at
  *   all, because shipped code would have failed it.
  * - A `GENT_*` environment variable read in the source with nothing to set it.
@@ -966,12 +981,6 @@ export const findHookWithoutGuards = (
  *
  * @module
  */
-
-export interface LintConfigFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 // ---------------------------------------------------------------------------
 // (a) An override whose files glob matches nothing
@@ -1016,7 +1025,7 @@ export const OxlintConfigSchema = Schema.Struct({
   rules: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 })
 
-export type OxlintConfig = typeof OxlintConfigSchema.Type
+type OxlintConfig = typeof OxlintConfigSchema.Type
 
 /** The line an override's glob sits on, for a finding that points at it. */
 const lineOfGlob = (configText: string, glob: string): number => {
@@ -1032,8 +1041,8 @@ export const findUnmatchedOverrideGlobs = (
   configText: string,
   config: OxlintConfig,
   trackedFiles: ReadonlyArray<string>,
-): ReadonlyArray<LintConfigFinding> => {
-  const findings: Array<LintConfigFinding> = []
+): ReadonlyArray<Finding> => {
+  const findings: Array<Finding> = []
   for (const override of config.overrides ?? []) {
     for (const glob of override.files ?? []) {
       const matcher = globMatcher(glob)
@@ -1055,18 +1064,12 @@ export const findUnmatchedOverrideGlobs = (
 /** `"<name>": {` inside the plugin's `rules` object literal. */
 const RULE_KEY = /^\s{4}"([a-z0-9-]+)":\s*\{/
 
-/**
- * Rules defined in the plugin but deliberately not enabled at the root, each
- * with the reason. An entry here is a claim; prefer deleting the rule.
- */
-const UNENABLED_RULES_WITH_REASON: ReadonlyMap<string, string> = new Map()
-
 export const findUnenabledPluginRules = (
   pluginFile: string,
   pluginText: string,
   rootRules: ReadonlySet<string>,
-): ReadonlyArray<LintConfigFinding> => {
-  const findings: Array<LintConfigFinding> = []
+): ReadonlyArray<Finding> => {
+  const findings: Array<Finding> = []
   for (const [index, line] of pluginText.split("\n").entries()) {
     const name = Option.flatMap(Option.fromNullishOr(RULE_KEY.exec(line)), (match) =>
       Option.fromNullishOr(match[1]),
@@ -1074,7 +1077,6 @@ export const findUnenabledPluginRules = (
     if (Option.isNone(name)) continue
     const rule = name.value
     if (rootRules.has(`gent/${rule}`)) continue
-    if (UNENABLED_RULES_WITH_REASON.has(rule)) continue
     findings.push({
       file: pluginFile,
       line: index + 1,
@@ -1089,8 +1091,9 @@ export const findUnenabledPluginRules = (
 // ---------------------------------------------------------------------------
 
 /**
- * Variables a person or an external launcher supplies, so the tree holds no
- * writer for them by design. Each entry says who sets it.
+ * Variables a person or an external launcher supplies, so production holds no
+ * writer for them by design. Each entry says who sets it. The table is checked
+ * too: an entry nothing reads, or one production sets after all, is reported.
  */
 const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_LOG_LEVEL", "a developer sets this by hand to raise log verbosity"],
@@ -1101,77 +1104,129 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
   ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
   ["GENT_IDLE_TIMEOUT_MS", "the launcher of a shared server sets its idle window"],
+  ["GENT_LINK", "a developer sets this by hand to link the built binary onto PATH"],
 ])
 
-/** `Config.string("GENT_NAME")` and friends -- the shapes that read a variable. */
-const READER = /Config\.[a-zA-Z]+\(\s*["'](GENT_[A-Z0-9_]+)["']/g
+/**
+ * A quoted name is a read wherever it sits -- `Config.string("GENT_X")`, the
+ * last argument of `Config.literals([...], "GENT_X")` on its own line,
+ * `optionalEnv("GENT_X")` or `process.env["GENT_X"]` -- unless it is a record
+ * key or the target of an assignment.
+ */
+const QUOTED_NAME = /["'](GENT_[A-Z0-9_]+)["'](?!\s*:|\]\s*=(?!=))/g
 
-/** Setting a variable: an env record literal, or an assignment into one. */
-const WRITER = /["']?(GENT_[A-Z0-9_]+)["']?\s*[:=]\s*[^=]/g
+/** A direct property read, `process.env.GENT_X` or `Bun.env.GENT_X`, that is not an assignment. */
+const DIRECT_READ = /\b(?:process|Bun)\.env\.(GENT_[A-Z0-9_]+)\b(?!\s*=(?!=))/g
+
+/**
+ * Setting a variable is one of three shapes; any other text that names it,
+ * such as a message saying `GENT_X=1`, sets nothing:
+ *
+ * - a key of an env record: `env: { GENT_X: v }`, `const env = { "GENT_X": v }`,
+ *   the shape a spawned process receives;
+ * - an assignment: `process.env.GENT_X = v`, `Bun.env["GENT_X"] = v`;
+ * - a shell prefix in a package script: `"dev": "GENT_X=1 bun run ..."`.
+ */
+const ENV_RECORD_OPEN = /\benv\s*[:=]\s*\{/g
+const ENV_RECORD_KEY = /(?:^|[{,\s])["']?(GENT_[A-Z0-9_]+)["']?\s*:/g
+const ENV_ASSIGNMENT =
+  /\b(?:process|Bun)\.env(?:\.(GENT_[A-Z0-9_]+)|\[["'](GENT_[A-Z0-9_]+)["']\])\s*=(?!=)/g
+const SCRIPT_PREFIX = /(?:^|[\s"'&;|(])(GENT_[A-Z0-9_]+)=\S/g
+
+/** The text of the record whose `{` sits at `open`, through its matching `}`. */
+const recordAt = (text: string, open: number): string => {
+  let depth = 0
+  for (let at = open; at < text.length; at += 1) {
+    if (text[at] === "{") depth += 1
+    if (text[at] === "}") depth -= 1
+    if (depth === 0) return text.slice(open, at + 1)
+  }
+  return text.slice(open)
+}
+
+/** The names `text` (comments blanked) sets, by the three writer shapes. */
+const namesWritten = (file: string, text: string): ReadonlyArray<string> => {
+  const records = [...text.matchAll(ENV_RECORD_OPEN)].map((match) =>
+    recordAt(text, match.index + match[0].length - 1),
+  )
+  const written = [
+    ...records.flatMap((record) => namesMatching(record, ENV_RECORD_KEY)),
+    ...namesMatching(text, ENV_ASSIGNMENT),
+  ]
+  if (!file.endsWith("package.json")) return written
+  return [...written, ...namesMatching(text, SCRIPT_PREFIX)]
+}
 
 interface VariableUse {
   readonly file: string
   readonly line: number
 }
 
-/** Where each `GENT_*` variable is read, and which ones anything sets. */
-export interface GentVariableUses {
-  readonly readers: ReadonlyMap<string, ReadonlyArray<VariableUse>>
-  readonly writers: ReadonlySet<string>
-}
-
 const isTestFile = (file: string): boolean =>
   /\.test\.[cm]?[jt]sx?$/.test(file) || /(?:^|\/)tests\//.test(file)
 
-/** The names one line reads through `Config.*("GENT_...")`. */
-const readsOn = (line: string): ReadonlyArray<string> =>
-  [...line.matchAll(READER)].flatMap((match) => Option.toArray(Option.fromNullishOr(match[1])))
+/**
+ * Test support: the tests, the e2e fixtures, the core harness, the lint
+ * fixtures and the testbeds, which launch gent the way an operator does. A
+ * write there proves a reader works, not that production supplies
+ * the variable, and a name there is an assertion, not a read.
+ */
+const isTestSupport = (file: string): boolean =>
+  isTestFile(file) ||
+  file.startsWith("packages/e2e/") ||
+  file.startsWith("testbeds/") ||
+  file.includes("/test-utils/") ||
+  file.includes("/fixtures/")
 
-/** The names one line sets, as an env record entry or an assignment. */
-const writesOn = (line: string): ReadonlyArray<string> => {
-  // The read shape also matches the write shape on a `Config.string(...)` line,
-  // so a line that reads is never counted as a line that writes.
-  if (line.includes("Config.")) return []
-  return [...line.matchAll(WRITER)].flatMap((match) =>
-    Option.toArray(Option.fromNullishOr(match[1])),
+/** The name each match captured, in whichever alternative captured it. */
+const namesMatching = (line: string, pattern: RegExp): ReadonlyArray<string> =>
+  [...line.matchAll(pattern)].flatMap((match) =>
+    Option.toArray(Option.firstSomeOf(match.slice(1).map((name) => Option.fromNullishOr(name)))),
   )
-}
 
-/** Every `GENT_*` read and write in the tree, by variable name. */
-export const collectGentVariableUses = (
-  sourceTexts: ReadonlyMap<string, string>,
-): GentVariableUses => {
+/** Where each `GENT_*` variable is read in production, and which ones production sets. */
+const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>) => {
   const readers = new Map<string, Array<VariableUse>>()
   const writers = new Set<string>()
   for (const [file, text] of sourceTexts) {
-    // This finder and its fixtures name variables to describe the finder
-    // itself. Neither file is a call site, so neither is scanned.
-    if (file.startsWith("packages/tooling/src/guards")) continue
-    if (file.startsWith("packages/tooling/tests/guards")) continue
-    // A test may set a variable to drive a reader; that proves the reader
-    // works, not that anything in production supplies it.
-    const skipWrites = isTestFile(file)
-    for (const [index, line] of text.split("\n").entries()) {
-      for (const name of readsOn(line)) {
+    // This finder names variables to describe itself; it is not a call site.
+    if (file === GUARDS_FILE || isTestSupport(file)) continue
+    // A comment that shows `GENT_X=1` documents a variable; it sets nothing.
+    const code = withoutComments(text)
+    for (const [index, line] of code.split("\n").entries()) {
+      for (const name of [
+        ...namesMatching(line, QUOTED_NAME),
+        ...namesMatching(line, DIRECT_READ),
+      ]) {
         const found = readers.get(name) ?? []
         found.push({ file, line: index + 1 })
         readers.set(name, found)
       }
-      if (skipWrites) continue
-      for (const name of writesOn(line)) writers.add(name)
     }
+    for (const name of namesWritten(file, code)) writers.add(name)
   }
   return { readers, writers }
 }
 
+/** The line of an `EXTERNALLY_SET` entry in this file, for a finding that points at it. */
+const externallySetLine = (sourceTexts: ReadonlyMap<string, string>, name: string): number =>
+  Option.getOrElse(Option.fromNullishOr(sourceTexts.get(GUARDS_FILE)), () => "")
+    .split("\n")
+    .findIndex((line) => line.includes(`["${name}",`)) + 1
+
 export const findReadersWithoutWriters = (
   sourceTexts: ReadonlyMap<string, string>,
-): ReadonlyArray<LintConfigFinding> => {
+  externallySet: ReadonlyMap<string, string> = EXTERNALLY_SET,
+): ReadonlyArray<Finding> => {
   const { readers, writers } = collectGentVariableUses(sourceTexts)
-  const findings: Array<LintConfigFinding> = []
+  const staleReason = (name: string): Option.Option<string> => {
+    if (!readers.has(name)) return Option.some("nothing reads it")
+    if (writers.has(name)) return Option.some("the tree sets it")
+    return Option.none()
+  }
+  const findings: Array<Finding> = []
   for (const [name, uses] of readers) {
-    if (writers.has(name)) continue
-    if (EXTERNALLY_SET.has(name)) continue
+    if (writers.has(name) || externallySet.has(name)) continue
     for (const use of uses) {
       findings.push({
         file: use.file,
@@ -1180,52 +1235,30 @@ export const findReadersWithoutWriters = (
       })
     }
   }
+  for (const name of externallySet.keys()) {
+    const stale = staleReason(name)
+    if (Option.isNone(stale)) continue
+    findings.push({
+      file: GUARDS_FILE,
+      line: externallySetLine(sourceTexts, name),
+      message: `\`${name}\` is allowed as operator-set, but ${stale.value}; drop the EXTERNALLY_SET entry`,
+    })
+  }
   return findings
 }
 
 // ── no code duplicates an Effect platform service ───────────────────────────
 
-export interface PlatformDuplicationFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
-interface BannedPattern {
-  readonly pattern: RegExp
-  readonly message: string
-}
-
-const sourceFile = (file: string): boolean =>
-  /^(?:packages|apps|examples\/extensions)\//.test(file) &&
+/** Shipped source under `packages/` and `apps/`: not tests, fixtures or build output. */
+const shippedSourceFile = (file: string): boolean =>
+  /^(?:packages|apps)\//.test(file) &&
   /\.(?:[cm]?[jt]sx?)$/.test(file) &&
-  file !== "packages/tooling/src/guards.ts" &&
+  file !== GUARDS_FILE &&
   !file.includes("/tests/") &&
   !file.includes("/fixtures/") &&
   !file.includes("/dist/")
 
-const activeSourceFile = (file: string): boolean =>
-  /^(?:packages|apps)\//.test(file) && sourceFile(file)
-
-const referenceExtensionFile = (file: string): boolean =>
-  file.startsWith("examples/extensions/") && sourceFile(file)
-
-const platformLayerPattern: BannedPattern = {
-  pattern: /\b(?:BunPlatformLive|BunGentPlatformLive)\b/,
-  message: "Bun platform layers may only be provided by platform roots",
-}
-
-const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /@gent\/extensions\/src\//,
-    message:
-      "Reference extensions must stand alone instead of importing shipped extension internals",
-  },
-  {
-    pattern: /(?:^|\s)from\s+["'](?:\.\.\/){2,}/,
-    message: "Reference extensions must not reach out of examples/extensions with relative imports",
-  },
-]
+const PLATFORM_LAYER = /\b(?:BunPlatformLive|BunGentPlatformLive)\b/
 
 const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform.ts",
@@ -1242,58 +1275,25 @@ const platformProviderRootFiles = new Set([
 ])
 
 /**
- * `apps/server/src/main.ts` is a launcher, not a composition root. It reads
- * the environment and calls `Gent.server`. Reaching for core or a platform
- * layer there rebuilds the second root the SDK server primitive replaced.
+ * Bun platform layers are provided by the platform roots alone. What a
+ * launcher or a reference extension may import is its manifest's business:
+ * the `gent/declared-workspace-imports` lint rule reads it.
  */
-const bannedLauncherPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /@gent\/core\//,
-    message:
-      "The server launcher composes nothing; import @gent/sdk and pass the shape through GentServerOptions",
-  },
-  {
-    pattern: /@gent\/extensions/,
-    message:
-      "The server launcher does not name extensions; Gent.server defaults to the builtin set",
-  },
-  {
-    pattern: /\bbuildServerRoot\b/,
-    message: "The server launcher calls Gent.server, never buildServerRoot",
-  },
-]
-
-const launcherFiles = new Set(["apps/server/src/main.ts"])
-
-const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
-  const patterns: BannedPattern[] = []
-  if (!platformProviderRootFiles.has(file)) patterns.push(platformLayerPattern)
-  if (launcherFiles.has(file)) patterns.push(...bannedLauncherPatterns)
-  return patterns
-}
-
 export const findPlatformDuplicationViolations = (
   file: string,
   text: string,
-): ReadonlyArray<PlatformDuplicationFinding> => {
-  const findings: PlatformDuplicationFinding[] = []
-
-  if (!sourceFile(file)) return findings
-
-  const patterns: BannedPattern[] = []
-  if (activeSourceFile(file)) patterns.push(...patternsForFile(file))
-  if (referenceExtensionFile(file)) patterns.push(...bannedReferenceExtensionPatterns)
-  const lines = text.split("\n")
-  for (let index = 0; index < lines.length; index++) {
-    const line = Option.getOrElse(Option.fromNullishOr(lines[index]), () => "")
-    for (const { pattern, message } of patterns) {
-      if (pattern.test(line)) {
-        findings.push({ file, line: index + 1, message })
-      }
-    }
-  }
-
-  return findings
+): ReadonlyArray<Finding> => {
+  if (!shippedSourceFile(file) || platformProviderRootFiles.has(file)) return []
+  return text.split("\n").flatMap((line, index) => {
+    if (!PLATFORM_LAYER.test(line)) return []
+    return [
+      {
+        file,
+        line: index + 1,
+        message: "Bun platform layers may only be provided by platform roots",
+      },
+    ]
+  })
 }
 
 // ── a deleted surface stays deleted ─────────────────────────────────────────
@@ -1307,16 +1307,10 @@ export const findPlatformDuplicationViolations = (
  *
  * Retired `Bun.*` members (`Bun.Glob`, `Bun.randomUUIDv7` outside the platform
  * adapter) are banned by the `gent/no-bun-outside-adapter` rule in
- * `lint/gent-rules.ts` instead, because only the AST sees a member access.
+ * `gent-rules.ts` instead, because only the AST sees a member access.
  *
  * @module
  */
-
-export interface RetiredSurfaceFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 interface RetiredSurface {
   /** `line`: a source line; `import`: an imported module's basename; `path`: the file path. */
@@ -1575,8 +1569,8 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
 const SHIPPED_AND_TESTS = /^(?:packages|apps)\/(?!tooling\/)[^/]+\/(?:src|tests)\//
 
 const inRetiredScope = (file: string, scope: RetiredSurface["scope"]): boolean => {
-  if (scope === "shipped") return activeSourceFile(file)
-  return SHIPPED_AND_TESTS.test(file) && file !== "packages/tooling/src/guards.ts"
+  if (scope === "shipped") return shippedSourceFile(file)
+  return SHIPPED_AND_TESTS.test(file) && file !== GUARDS_FILE
 }
 
 const importedModule = (line: string): Option.Option<string> =>
@@ -1598,13 +1592,10 @@ const subjectOf = (row: RetiredSurface, line: string): Option.Option<string> => 
 }
 
 /** Every line, import, or path in `file` that brings back a retired surface. */
-export const findRetiredSurfaces = (
-  file: string,
-  text: string,
-): ReadonlyArray<RetiredSurfaceFinding> => {
+export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<Finding> => {
   const rows = RETIRED_SURFACES.filter((row) => inRetiredScope(file, row.scope))
   if (rows.length === 0) return []
-  const findings: Array<RetiredSurfaceFinding> = []
+  const findings: Array<Finding> = []
   for (const row of rows) {
     if (row.on === "path" && row.match.test(file))
       findings.push({ file, line: 1, message: row.message })
@@ -1633,9 +1624,10 @@ export const findRetiredSurfaces = (
  * nothing and either invents the file or picks a neighbour.
  *
  * Scope is the four files an agent is told to read: `CLAUDE.md` and
- * `AGENTS.md` at the root, `apps/tui/AGENTS.md`, and `ARCHITECTURE.md`. The
- * root pair are two copies of the same document rather than one file behind a
- * symlink, so both are read and a stale path in either is reported.
+ * `AGENTS.md` at the root, `apps/tui/AGENTS.md`, and `ARCHITECTURE.md`. Today
+ * `CLAUDE.md` is a symlink to `AGENTS.md`; the guard runner skips symlinks, so
+ * the document is read once, and a `CLAUDE.md` that becomes a file of its own
+ * is read as one.
  *
  * What is read: text in backticks that starts with one of the five source
  * roots — `packages/`, `apps/`, `plans/`, `testbeds/`, `examples/`. Backticks
@@ -1660,13 +1652,6 @@ export const findRetiredSurfaces = (
  *
  * @module
  */
-
-/** A steering-file reference to a path that `git ls-files` does not list. */
-export interface SteeringFilePathFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
 
 /** The files an agent is told to read before it changes the code. */
 const STEERING_FILES = new Set(["CLAUDE.md", "AGENTS.md", "apps/tui/AGENTS.md", "ARCHITECTURE.md"])
@@ -1726,12 +1711,12 @@ export const findSteeringFilePaths = (
   file: string,
   text: string,
   trackedFiles: ReadonlyArray<string>,
-): ReadonlyArray<SteeringFilePathFinding> => {
+): ReadonlyArray<Finding> => {
   if (!isSteeringFile(file)) return []
 
   const tracked = new Set(trackedFiles)
   const prefixes = directoryPrefixesOf(trackedFiles)
-  const findings: SteeringFilePathFinding[] = []
+  const findings: Finding[] = []
   let inFence = false
   for (const [index, line] of text.split("\n").entries()) {
     if (FENCE.test(line)) {
@@ -1783,16 +1768,13 @@ export const findSteeringFilePaths = (
  * @module
  */
 
-export interface TuiSessionIdentityFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
 const TUI_SOURCE = /^apps\/tui\/src\//
 
-/** Opens a reactive scope: Solid re-runs what follows when its reads change. */
-const TRACKING_OPENER = /\b(?:createEffect|createMemo|createResource|on)\(/
+/**
+ * Opens a reactive scope: Solid re-runs what follows when its reads change.
+ * A member call such as `emitter.on(` is a listener, not Solid's `on`.
+ */
+const TRACKING_OPENER = /(?<![.\w])(?:createEffect|createMemo|createResource|on)\(/
 
 /** The record accessor. `sessionIdentity`/`activeSessionId` are the narrowed ones. */
 const RECORD_READ = /(?<!current)\.session\(\)/i
@@ -1804,15 +1786,12 @@ const RECORD_READ = /(?<!current)\.session\(\)/i
  */
 const SCOPE_LINES = 12
 
-export const findTuiSessionIdentityReads = (
-  file: string,
-  text: string,
-): ReadonlyArray<TuiSessionIdentityFinding> => {
+export const findTuiSessionIdentityReads = (file: string, text: string): ReadonlyArray<Finding> => {
   if (!TUI_SOURCE.test(file)) return []
 
   const lines = text.split("\n")
   const reported = new Set<number>()
-  const findings: TuiSessionIdentityFinding[] = []
+  const findings: Finding[] = []
   for (const [index, line] of lines.entries()) {
     if (!TRACKING_OPENER.test(line)) continue
     const openerIndent = line.length - line.trimStart().length
@@ -1850,22 +1829,12 @@ export const findTuiSessionIdentityReads = (
  *
  * The inventory is checked in both directions: a suppression comment with no
  * approved entry fails the guard, and an approved entry with no matching
- * comment anywhere in the tree fails it too, so the table cannot drift.
+ * comment anywhere in the tree fails it too, so the table cannot drift. An
+ * entry states how many identical comments its file holds (`count`, one when
+ * absent), and the guard fails when the file holds more or fewer: a new site
+ * of a reviewed comment is a new suppression and needs its own review. An
+ * entry listed twice fails as well.
  */
-
-export type SuppressionFindingKind = "effect-diagnostics"
-
-export interface SuppressionInventoryFinding {
-  readonly file: string
-  readonly line: number
-  readonly kind: SuppressionFindingKind
-}
-
-/** An approved entry that no suppression comment in the scanned tree matches. */
-export interface UnusedSuppressionApproval {
-  readonly file: string
-  readonly comment: string
-}
 
 /** `next-line` suppresses the following line; `file` suppresses the whole module. */
 type SuppressionScope = "next-line" | "file"
@@ -1875,6 +1844,11 @@ interface ApprovedSuppressionEntry {
   readonly scope: SuppressionScope
   /** Everything after the directive: rule flags and the reason. */
   readonly text: string
+  /**
+   * How many identical comments the file holds; absent means one. The guard
+   * fails when the file holds more or fewer, so a new site asks for review.
+   */
+  readonly count?: number
 }
 
 const directiveMarker = ["@effect", "diagnostics"].join("-")
@@ -1908,11 +1882,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "apps/tui/tests/extensions/loader-boundary.test.ts",
     scope: "next-line",
     text: "nodeBuiltinImport:off",
-  },
-  {
-    file: "apps/tui/tests/extensions/loader-boundary.test.ts",
-    scope: "next-line",
-    text: "nodeBuiltinImport:off",
+    count: 2,
   },
   {
     file: "packages/core/src/server/workspace-rpc.ts",
@@ -1973,6 +1943,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/core/src/runtime/extension-host.ts",
     scope: "next-line",
     text: "anyUnknownInErrorContext:off",
+    count: 8,
   },
   {
     file: "packages/core/src/runtime/extension-host.ts",
@@ -1983,6 +1954,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/extensions/src/openai.ts",
     scope: "next-line",
     text: "strictEffectProvide:off OAuth token endpoint at extension boundary",
+    count: 2,
   },
   {
     file: "packages/extensions/src/openai.ts",
@@ -1998,6 +1970,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/extensions/src/anthropic.ts",
     scope: "next-line",
     text: "strictEffectProvide:off",
+    count: 3,
   },
   {
     file: "packages/extensions/src/providers.ts",
@@ -2011,48 +1984,119 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
  * `@effect-diagnostics` in a pattern, a table entry or a message, so scanning
  * them reports the description of a suppression instead of a suppression.
  */
-const DESCRIBES_THE_MARKER = new Set([
-  "packages/tooling/src/guards.ts",
-  "packages/tooling/tests/guards.test.ts",
-])
+const DESCRIBES_THE_MARKER = new Set([GUARDS_FILE, "packages/tooling/tests/guards.test.ts"])
 
-const approvedSuppression = (file: string, text: string): boolean =>
-  approvedSuppressionEntries.some(
-    (entry) => entry.file === file && approvedComment(entry) === text.trim(),
+const approvedCount = (entry: ApprovedSuppressionEntry): number => entry.count ?? 1
+
+/** How many comments of this exact text the inventory approves in `file`. */
+const approvalsFor = (
+  entries: ReadonlyArray<ApprovedSuppressionEntry>,
+  file: string,
+  comment: string,
+): number =>
+  Option.match(
+    Option.fromNullishOr(
+      entries.find((entry) => entry.file === file && approvedComment(entry) === comment),
+    ),
+    { onNone: () => 0, onSome: approvedCount },
   )
+
+/** A comment past its approved count: never approved, or one site more than approved. */
+const unreviewedMessage = (approved: number, seen: number): string => {
+  if (approved === 0) {
+    return `unreviewed ${directiveMarker} suppression; remove it, or approve its exact text in ${GUARDS_FILE}`
+  }
+  return `${directiveMarker} suppression at a new site: ${GUARDS_FILE} approves ${approved} identical comment(s) here, this is number ${seen}; remove it, or review it and raise the entry's count`
+}
 
 export const findSuppressionInventoryFindings = (
   file: string,
   text: string,
-): ReadonlyArray<SuppressionInventoryFinding> => {
-  const findings: SuppressionInventoryFinding[] = []
+  entries: ReadonlyArray<ApprovedSuppressionEntry> = approvedSuppressionEntries,
+): ReadonlyArray<Finding> => {
+  const findings: Finding[] = []
   if (DESCRIBES_THE_MARKER.has(file)) return findings
 
+  const seenByComment = new Map<string, number>()
   for (const [index, line] of text.split("\n").entries()) {
-    if (line.includes(directiveMarker) && !approvedSuppression(file, line)) {
-      findings.push({ file, line: index + 1, kind: "effect-diagnostics" })
-    }
+    if (!line.includes(directiveMarker)) continue
+    const comment = line.trim()
+    const seen = (seenByComment.get(comment) ?? 0) + 1
+    seenByComment.set(comment, seen)
+    const approved = approvalsFor(entries, file, comment)
+    if (seen <= approved) continue
+    findings.push({ file, line: index + 1, message: unreviewedMessage(approved, seen) })
   }
   return findings
 }
 
-const containsComment = (text: string, comment: string): boolean =>
-  text.split("\n").some((line) => line.trim() === comment)
+const countComment = (text: string, comment: string): number =>
+  text.split("\n").filter((line) => line.trim() === comment).length
 
 /**
  * Whole-tree check: every approved entry must match a comment in its file.
  * `sources` maps each scanned source path to its text; a file missing from
- * the map counts as having no suppressions.
+ * the map counts as having no suppressions. The finding points at the entry.
  */
 export const findUnusedSuppressionApprovals = (
   sources: ReadonlyMap<string, string>,
-): ReadonlyArray<UnusedSuppressionApproval> =>
-  approvedSuppressionEntries.flatMap((entry) => {
+  entries: ReadonlyArray<ApprovedSuppressionEntry> = approvedSuppressionEntries,
+): ReadonlyArray<Finding> => {
+  const entryLines = Option.getOrElse(
+    Option.fromNullishOr(sources.get(GUARDS_FILE)),
+    () => "",
+  ).split("\n")
+  const listed = new Map<string, number>()
+  return entries.flatMap((entry) => {
     const comment = approvedComment(entry)
-    const source = Option.fromNullishOr(sources.get(entry.file))
-    if (Option.exists(source, (text) => containsComment(text, comment))) return []
-    return [{ file: entry.file, comment }]
+    const key = `${entry.file}\n${comment}`
+    const nth = (listed.get(key) ?? 0) + 1
+    listed.set(key, nth)
+    const at = (): number => {
+      const lines = [...entryLines.entries()]
+        .filter(
+          ([index, text]) =>
+            text.includes(`file: "${entry.file}"`) &&
+            entryLines
+              .slice(index, index + 4)
+              .some((next) => next.includes(`text: "${entry.text}"`)),
+        )
+        .map(([index]) => index + 1)
+      return Option.getOrElse(Option.fromNullishOr(lines.at(nth - 1)), () => 1)
+    }
+    if (nth > 1) {
+      return [
+        {
+          file: GUARDS_FILE,
+          line: at(),
+          message: `approved suppression for ${entry.file} is listed twice; one entry counts every identical comment in its file, so drop the duplicate and set its count: ${comment}`,
+        },
+      ]
+    }
+    const present = Option.match(Option.fromNullishOr(sources.get(entry.file)), {
+      onNone: () => 0,
+      onSome: (text) => countComment(text, comment),
+    })
+    const approved = approvedCount(entry)
+    if (present >= approved) return []
+    if (present === 0) {
+      return [
+        {
+          file: GUARDS_FILE,
+          line: at(),
+          message: `approved suppression for ${entry.file} has no matching comment there; drop the entry: ${comment}`,
+        },
+      ]
+    }
+    return [
+      {
+        file: GUARDS_FILE,
+        line: at(),
+        message: `approved suppression for ${entry.file} approves ${approved} identical comments but the file holds ${present}; set the count to ${present}: ${comment}`,
+      },
+    ]
   })
+}
 
 // ── every export has a consumer ─────────────────────────────────────────────
 
@@ -2100,20 +2144,9 @@ export const findUnusedSuppressionApprovals = (
  * @module
  */
 
-/** A name nothing that may consume it reaches for. */
-export interface ExportConsumerFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-  /** `false` for a surface still being read for findings; those warn, not fail. */
-  readonly enforced: boolean
-}
-
 /** One scanned surface: where its names are declared and who may consume them. */
 interface ScannedSurface {
   readonly prefix: string
-  /** Directories inside the prefix whose exports are another surface's business. */
-  readonly exempt: ReadonlyArray<string>
   /** Files whose mentions never count: the declaring package's own source, for an entry point. */
   readonly outsideOf: ReadonlyArray<string>
   /** Whether a test file's mention keeps a name alive. */
@@ -2122,156 +2155,134 @@ interface ScannedSurface {
   readonly ownFileCounts: boolean
   /** The import specifier an entry point is consumed through; `None` for a module surface. */
   readonly specifier: Option.Option<string>
-  /** Whether a finding fails the guardrails or is only reported. */
-  readonly enforced: boolean
 }
 
 const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
   {
     prefix: "packages/core/src/extensions/api.ts",
-    exempt: [],
     outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/extensions/api"),
-    enforced: true,
   },
   {
     prefix: "packages/core/src/extensions/branch-tools.ts",
-    exempt: [],
     outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/extensions/branch-tools"),
-    enforced: true,
   },
   {
     prefix: "packages/core/src/protocol.ts",
-    exempt: [],
     outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/protocol"),
-    enforced: true,
   },
   {
     // A host export exists for the processes that compose a server; a name
     // only tests read is harness setup and belongs behind a test-utils operation.
     prefix: "packages/core/src/host.ts",
-    exempt: [],
     outsideOf: ["packages/core/src/"],
     testsCount: false,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/host"),
-    enforced: true,
   },
   {
     // The test entry point, listed before the harness directory it re-exports.
     prefix: "packages/core/src/test-utils/index.ts",
-    exempt: [],
     outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/test-utils"),
-    enforced: true,
   },
   {
     // Its own surface, listed before `packages/core/src/` so the prefix scan
     // reaches it first. Read with the Schema-aware rule: a layer's config type
     // and a control handle's type sit beside the builder that returns them.
     prefix: "packages/core/src/test-utils/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: true,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     prefix: "packages/core/src/",
-    exempt: ["packages/core/src/extensions/", "packages/core/src/protocol.ts"],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     prefix: "packages/sdk/src/index.ts",
-    exempt: [],
     outsideOf: ["packages/sdk/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/sdk"),
-    enforced: true,
   },
   {
     prefix: "packages/sdk/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     prefix: "packages/extensions/src/client.ts",
-    exempt: [],
     outsideOf: ["packages/extensions/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/extensions/client"),
-    enforced: true,
   },
   {
     prefix: "packages/extensions/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     prefix: "packages/tooling/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: true,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     prefix: "packages/e2e/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: true,
     specifier: Option.none(),
-    enforced: true,
   },
   {
-    // The TUI is a leaf: nothing imports it, so every export it declares is
-    // read from inside `apps/tui` or by its tests, or by nothing at all.
+    // The TUI's one public entry: client extensions author against it, so a
+    // name there needs a reader outside the TUI's own source.
+    prefix: "apps/tui/src/extensions.ts",
+    outsideOf: ["apps/tui/src/"],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.some("@gent/tui/extensions"),
+  },
+  {
+    // Apart from that entry the TUI is a leaf: nothing imports it, so every
+    // export it declares is read from inside `apps/tui` or by its tests, or
+    // by nothing at all.
     prefix: "apps/tui/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
-    enforced: true,
   },
   {
     // The server app is a launcher and a leaf: it reads the environment and
     // calls `Gent.server`. Nothing imports it, so a name it exports is read by
     // its own tests or by nothing at all.
     prefix: "apps/server/src/",
-    exempt: [],
     outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
-    enforced: true,
   },
 ]
 
@@ -2281,16 +2292,38 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
  * An entry here is a claim that the name earns its keep despite having no
  * consumer. Prefer deleting the export.
  */
-const ALLOWLIST: ReadonlyMap<string, string> = new Map()
+const ALLOWLIST: ReadonlyMap<string, string> = new Map([
+  [
+    "formatBranchLabel",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+  [
+    "transition",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+  [
+    "AuthOauth",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+  [
+    "resolveTurnContext",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+  [
+    "resolveTurnSource",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+  [
+    "StepOutcome",
+    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
+  ],
+])
 
 const surfaceOf = (file: string): Option.Option<ScannedSurface> =>
-  Option.filter(
-    Option.fromNullishOr(SCANNED_SURFACES.find((surface) => file.startsWith(surface.prefix))),
-    (surface) => !surface.exempt.some((prefix) => file.startsWith(prefix)),
-  )
+  Option.fromNullishOr(SCANNED_SURFACES.find((surface) => file.startsWith(surface.prefix)))
 
 /** A declared name, and the surface whose rule decides whether it is consumed. */
-export interface Declaration {
+interface Declaration {
   readonly name: string
   readonly line: number
   readonly surface: ScannedSurface
@@ -2477,11 +2510,7 @@ const identifiersIn = (text: string): ReadonlySet<string> =>
  * carries are not consumption; blanking them is what lets an own-file
  * reference be read as one.
  */
-const withoutCommentsAndStrings = (text: string): string =>
-  text
-    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "))
-    .replace(/\/\/.*$/gm, "")
-    .replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g, '""')
+const withoutCommentsAndStrings = (text: string): string => blankComments(text, true)
 
 /** Lines carrying a `@ts-expect-error`, which assert absence rather than use. */
 const expectErrorLines = (lines: ReadonlyArray<string>): ReadonlySet<number> => {
@@ -2653,7 +2682,7 @@ const importsByTarget = (
 /** What one file contributes to the whole-tree answer. */
 export interface ExportFacts {
   readonly declarations: ReadonlyArray<Declaration>
-  /** Every identifier the file mentions anywhere. */
+  /** Every identifier the file mentions outside its comments. */
   readonly identifiers: ReadonlySet<string>
   /** Names imported from a path, keyed by that path's last segment. */
   readonly importsByTarget: ReadonlyMap<string, ReadonlySet<string>>
@@ -2727,7 +2756,7 @@ export const collectExportFacts = (file: string, text: string): ExportFacts => {
   )
   return {
     declarations,
-    identifiers: identifiersIn(text),
+    identifiers: identifiersIn(withoutComments(text)),
     localNames: localNamesIn(text),
     identifiersByLine,
     importsByTarget: importsByTarget(text.split("\n")),
@@ -2852,7 +2881,7 @@ const isNamesake = (
 
 export const findUnconsumedExports = (
   factsByFile: ReadonlyMap<string, ExportFacts>,
-): ReadonlyArray<ExportConsumerFinding> => {
+): ReadonlyArray<Finding> => {
   const declaringFiles = filesDeclaringEachName(factsByFile)
 
   const isConsumed = (file: string, declaration: Declaration): boolean => {
@@ -2880,7 +2909,7 @@ export const findUnconsumedExports = (
     )
   }
 
-  const findings: Array<ExportConsumerFinding> = []
+  const findings: Array<Finding> = []
   for (const [file, facts] of factsByFile) {
     const reported = new Set<string>()
     for (const declaration of facts.declarations) {
@@ -2894,7 +2923,6 @@ export const findUnconsumedExports = (
         file,
         line: declaration.line,
         message: messageFor(file, declaration),
-        enforced: declaration.surface.enforced,
       })
     }
   }
@@ -2910,15 +2938,10 @@ export interface PackageJson {
   readonly exports?: Readonly<Record<string, string>>
 }
 
-export interface TsConfigJson {
+interface TsConfigJson {
   readonly compilerOptions?: {
     readonly paths?: Readonly<Record<string, ReadonlyArray<string>>>
   }
-}
-
-export interface PackageSurfaceFinding {
-  readonly path: string
-  readonly message: string
 }
 
 /** One package, the entry points it may expose, and whether it must stay private. */
@@ -2938,7 +2961,8 @@ interface PackageSurface {
  * clients, `host` serves the processes that compose a server, and
  * `test-utils` serves tests. `@gent/extensions` is the builtin composition
  * package and exposes only its root and `./client`; `@gent/sdk` exposes the
- * stable root client contract and nothing else.
+ * stable root client contract and nothing else. `@gent/tui` is the terminal
+ * app; its one entry, `./extensions`, is the client-extension authoring surface.
  */
 const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
   {
@@ -2947,12 +2971,9 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
     mustBePrivate: false,
     entryPoints: [
       "./extensions/api",
-      "./extensions/api.js",
       "./extensions/branch-tools",
-      "./extensions/branch-tools.js",
       "./host",
       "./protocol",
-      "./protocol.js",
       "./test-utils",
     ],
   },
@@ -2968,7 +2989,18 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
     mustBePrivate: false,
     entryPoints: ["."],
   },
+  {
+    packageJson: "apps/tui/package.json",
+    alias: "@gent/tui",
+    mustBePrivate: false,
+    entryPoints: ["./extensions"],
+  },
 ]
+
+/** The manifests the package-surface check reads, one per surface. */
+export const PACKAGE_SURFACE_MANIFESTS: ReadonlyArray<string> = PACKAGE_SURFACES.map(
+  (surface) => surface.packageJson,
+)
 
 const allowedKeys = (surface: PackageSurface): ReadonlySet<string> => new Set(surface.entryPoints)
 
@@ -2982,12 +3014,13 @@ const entryPointOfPath = (surface: PackageSurface, key: string): Option.Option<s
 const packageFindings = (
   surface: PackageSurface,
   packageJson: PackageJson,
-): ReadonlyArray<PackageSurfaceFinding> => {
-  const findings: Array<PackageSurfaceFinding> = []
+): ReadonlyArray<Finding> => {
+  const findings: Array<Finding> = []
   if (surface.mustBePrivate && packageJson.private !== true) {
     findings.push({
-      path: `${surface.packageJson} private`,
-      message: `${surface.alias} must stay private; it is not a published contract`,
+      file: surface.packageJson,
+      line: 1,
+      message: `private: ${surface.alias} must stay private; it is not a published contract`,
     })
   }
   const allowed = allowedKeys(surface)
@@ -2995,8 +3028,9 @@ const packageFindings = (
   for (const key of Object.keys(Option.getOrElse(exportsMap, () => ({})))) {
     if (allowed.has(key)) continue
     findings.push({
-      path: `${surface.packageJson} exports["${key}"]`,
-      message: `${surface.alias} may only expose its supported entry points: ${[...allowed].join(", ")}`,
+      file: surface.packageJson,
+      line: 1,
+      message: `exports["${key}"]: ${surface.alias} may only expose its supported entry points: ${[...allowed].join(", ")}`,
     })
   }
   return findings
@@ -3005,7 +3039,7 @@ const packageFindings = (
 const pathFindings = (
   surface: PackageSurface,
   tsconfigJson: TsConfigJson,
-): ReadonlyArray<PackageSurfaceFinding> => {
+): ReadonlyArray<Finding> => {
   const allowed = allowedKeys(surface)
   const paths = Option.getOrElse(
     Option.flatMap(Option.fromNullishOr(tsconfigJson.compilerOptions), (options) =>
@@ -3013,14 +3047,15 @@ const pathFindings = (
     ),
     () => ({}),
   )
-  const findings: Array<PackageSurfaceFinding> = []
+  const findings: Array<Finding> = []
   for (const key of Object.keys(paths)) {
     const entryPoint = entryPointOfPath(surface, key)
     if (Option.isNone(entryPoint)) continue
     if (allowed.has(entryPoint.value)) continue
     findings.push({
-      path: `tsconfig.json compilerOptions.paths["${key}"]`,
-      message: `Do not give TypeScript a public-looking ${surface.alias} path for an internal module`,
+      file: "tsconfig.json",
+      line: 1,
+      message: `compilerOptions.paths["${key}"]: Do not give TypeScript a public-looking ${surface.alias} path for an internal module`,
     })
   }
   return findings
@@ -3033,348 +3068,13 @@ const pathFindings = (
 export const findPackageSurfaceFindings = (
   packageJsons: ReadonlyMap<string, PackageJson>,
   tsconfigJson: TsConfigJson,
-): ReadonlyArray<PackageSurfaceFinding> =>
+): ReadonlyArray<Finding> =>
   PACKAGE_SURFACES.flatMap((surface) =>
     Option.match(Option.fromNullishOr(packageJsons.get(surface.packageJson)), {
-      onNone: (): ReadonlyArray<PackageSurfaceFinding> => [],
+      onNone: (): ReadonlyArray<Finding> => [],
       onSome: (packageJson) => [
         ...packageFindings(surface, packageJson),
         ...pathFindings(surface, tsconfigJson),
       ],
     }),
   )
-
-// ---------------------------------------------------------------------------
-// Workspace imports a package does not declare
-// ---------------------------------------------------------------------------
-
-/** The manifest fields that name a workspace package and what it depends on. */
-export interface WorkspaceManifest {
-  readonly name: string
-  readonly dependencies?: Readonly<Record<string, string>>
-  readonly devDependencies?: Readonly<Record<string, string>>
-  readonly peerDependencies?: Readonly<Record<string, string>>
-}
-
-export interface UndeclaredImportFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
-/** The package an `@gent/...` specifier names: `@gent/core/protocol` → `@gent/core`. */
-const WORKSPACE_PACKAGE = /^(@gent\/[a-z0-9-]+)(?:\/.*)?$/
-
-interface SourceToken {
-  readonly kind: "word" | "string" | "punct"
-  readonly value: string
-  readonly line: number
-}
-
-/** After these, a `/` starts a regular expression, not a division. */
-const REGEX_AFTER_WORDS = new Set([
-  "return",
-  "typeof",
-  "case",
-  "do",
-  "else",
-  "in",
-  "of",
-  "new",
-  "delete",
-  "void",
-  "throw",
-  "yield",
-  "await",
-])
-
-const WORD_CHAR = /[A-Za-z0-9_$]/
-
-/** A lexer's cursor: the source, the position, and the tokens read so far. */
-interface Lexer {
-  readonly text: string
-  index: number
-  line: number
-  readonly tokens: Array<SourceToken>
-  /** One entry per open template `${`: the brace depth inside that expression. */
-  readonly templateDepths: Array<number>
-}
-
-const charAt = (lexer: Lexer, offset: number): string => lexer.text.charAt(lexer.index + offset)
-
-const atEnd = (lexer: Lexer): boolean => lexer.index >= lexer.text.length
-
-const CLOSING_PUNCT = new Set([")", "]", "}"])
-
-/** A `/` starts a regular expression unless it follows a value. */
-const regexAllowed = (lexer: Lexer): boolean =>
-  Option.match(Option.fromNullishOr(lexer.tokens.at(-1)), {
-    onNone: () => true,
-    onSome: (previous) => {
-      if (previous.kind === "string") return false
-      if (previous.kind === "word") return REGEX_AFTER_WORDS.has(previous.value)
-      return !CLOSING_PUNCT.has(previous.value)
-    },
-  })
-
-/** Skip template text (just past a backtick or a closing `}`) to its end or a `${`. */
-const skipTemplateText = (lexer: Lexer): void => {
-  while (!atEnd(lexer)) {
-    const char = charAt(lexer, 0)
-    if (char === "\\") {
-      lexer.index += 2
-      continue
-    }
-    if (char === "\n") lexer.line++
-    if (char === "`") {
-      lexer.index++
-      return
-    }
-    if (char === "$" && charAt(lexer, 1) === "{") {
-      lexer.index += 2
-      lexer.templateDepths.push(0)
-      return
-    }
-    lexer.index++
-  }
-}
-
-const skipWhitespace = (lexer: Lexer): boolean => {
-  const char = charAt(lexer, 0)
-  if (!/\s/.test(char)) return false
-  if (char === "\n") lexer.line++
-  lexer.index++
-  return true
-}
-
-const skipLineComment = (lexer: Lexer): boolean => {
-  if (!(charAt(lexer, 0) === "/" && charAt(lexer, 1) === "/")) return false
-  while (!atEnd(lexer) && charAt(lexer, 0) !== "\n") lexer.index++
-  return true
-}
-
-const skipBlockComment = (lexer: Lexer): boolean => {
-  if (!(charAt(lexer, 0) === "/" && charAt(lexer, 1) === "*")) return false
-  lexer.index += 2
-  while (!atEnd(lexer) && !(charAt(lexer, 0) === "*" && charAt(lexer, 1) === "/")) {
-    if (charAt(lexer, 0) === "\n") lexer.line++
-    lexer.index++
-  }
-  lexer.index += 2
-  return true
-}
-
-const skipTemplate = (lexer: Lexer): boolean => {
-  if (charAt(lexer, 0) !== "`") return false
-  lexer.index++
-  skipTemplateText(lexer)
-  return true
-}
-
-/** A quoted string; it ends at an unescaped newline, so a stray quote spoils one line. */
-const readString = (lexer: Lexer): boolean => {
-  const quote = charAt(lexer, 0)
-  if (quote !== "'" && quote !== '"') return false
-  const line = lexer.line
-  let value = ""
-  lexer.index++
-  while (!atEnd(lexer) && charAt(lexer, 0) !== quote && charAt(lexer, 0) !== "\n") {
-    if (charAt(lexer, 0) === "\\") {
-      value += charAt(lexer, 1)
-      lexer.index += 2
-      continue
-    }
-    value += charAt(lexer, 0)
-    lexer.index++
-  }
-  lexer.index++
-  lexer.tokens.push({ kind: "string", value, line })
-  return true
-}
-
-/** A regular expression literal, kept as an empty string token so it names no module. */
-const readRegex = (lexer: Lexer): boolean => {
-  if (charAt(lexer, 0) !== "/" || !regexAllowed(lexer)) return false
-  let inClass = false
-  lexer.index++
-  while (!atEnd(lexer) && charAt(lexer, 0) !== "\n") {
-    const current = charAt(lexer, 0)
-    if (current === "\\") {
-      lexer.index += 2
-      continue
-    }
-    if (current === "/" && !inClass) break
-    if (current === "[") inClass = true
-    if (current === "]") inClass = false
-    lexer.index++
-  }
-  lexer.index++
-  while (WORD_CHAR.test(charAt(lexer, 0))) lexer.index++
-  lexer.tokens.push({ kind: "string", value: "", line: lexer.line })
-  return true
-}
-
-const readWord = (lexer: Lexer): boolean => {
-  if (!WORD_CHAR.test(charAt(lexer, 0))) return false
-  let value = ""
-  while (!atEnd(lexer) && WORD_CHAR.test(charAt(lexer, 0))) {
-    value += charAt(lexer, 0)
-    lexer.index++
-  }
-  lexer.tokens.push({ kind: "word", value, line: lexer.line })
-  return true
-}
-
-/** A `}` that closes a template `${`: resume the template text after it. */
-const closeTemplateExpression = (lexer: Lexer): boolean => {
-  if (charAt(lexer, 0) !== "}" || lexer.templateDepths.at(-1) !== 0) return false
-  lexer.templateDepths.pop()
-  lexer.index++
-  skipTemplateText(lexer)
-  return true
-}
-
-const readPunct = (lexer: Lexer): boolean => {
-  const char = charAt(lexer, 0)
-  const last = lexer.templateDepths.length - 1
-  const depth = lexer.templateDepths[last] ?? 0
-  if (char === "{" && last >= 0) lexer.templateDepths[last] = depth + 1
-  if (char === "}" && last >= 0) lexer.templateDepths[last] = depth - 1
-  lexer.tokens.push({ kind: "punct", value: char, line: lexer.line })
-  lexer.index++
-  return true
-}
-
-/** In order: the first scanner that accepts the current character consumes it. */
-const SCANNERS: ReadonlyArray<(lexer: Lexer) => boolean> = [
-  skipWhitespace,
-  skipLineComment,
-  skipBlockComment,
-  skipTemplate,
-  readString,
-  readRegex,
-  readWord,
-  closeTemplateExpression,
-  readPunct,
-]
-
-/**
- * Tokens of a TypeScript source, with comments, template text, and regular
- * expressions dropped. Only words, string literals, and punctuation remain,
- * which is all an import scan reads.
- */
-const sourceTokens = (text: string): ReadonlyArray<SourceToken> => {
-  const lexer: Lexer = { text, index: 0, line: 1, tokens: [], templateDepths: [] }
-  while (!atEnd(lexer)) SCANNERS.some((scan) => scan(lexer))
-  return lexer.tokens
-}
-
-export interface ModuleReference {
-  readonly specifier: string
-  readonly line: number
-}
-
-const isPunct = (token: Option.Option<SourceToken>, value: string): boolean =>
-  Option.exists(token, (current) => current.kind === "punct" && current.value === value)
-
-/** The string token that names the module for the keyword at `position`, if any. */
-const specifierAt = (
-  tokens: ReadonlyArray<SourceToken>,
-  position: number,
-): Option.Option<SourceToken> => {
-  const tokenAt = (offset: number) => Option.fromNullishOr(tokens[position + offset])
-  const stringAt = (offset: number) =>
-    Option.filter(tokenAt(offset), (token) => token.kind === "string")
-  const keyword = tokens[position]
-  if (keyword?.kind !== "word") return Option.none()
-  // `x.from "…"` and `x.import(…)` are not module syntax; `module.require(…)` is.
-  const member = isPunct(tokenAt(-1), ".")
-  const called = isPunct(tokenAt(1), "(")
-  if (keyword.value === "require" && called) return stringAt(2)
-  if (member) return Option.none()
-  if (keyword.value === "from") return stringAt(1)
-  if (keyword.value !== "import") return Option.none()
-  if (called) return stringAt(2)
-  return stringAt(1)
-}
-
-/**
- * Every module a source names: `import … from`, `export … from`, a bare
- * `import "x"`, `import("x")` (dynamic or in a type), and `require("x")`,
- * including `import type`. Comments and ordinary strings name no module.
- */
-export const moduleReferences = (text: string): ReadonlyArray<ModuleReference> => {
-  const tokens = sourceTokens(text)
-  return tokens.flatMap((_, position) =>
-    Option.match(specifierAt(tokens, position), {
-      onNone: () => [],
-      onSome: (token) => [{ specifier: token.value, line: token.line }],
-    }),
-  )
-}
-
-/** The path a relative specifier names from `file`, or none for a package specifier. */
-const relativeTarget = (file: string, specifier: string): Option.Option<string> => {
-  if (!specifier.startsWith("./") && !specifier.startsWith("../")) return Option.none()
-  const segments = file.split("/").slice(0, -1)
-  for (const part of specifier.split("/")) {
-    if (part === "..") segments.pop()
-    else if (part !== "." && part !== "") segments.push(part)
-  }
-  return Option.some(segments.join("/"))
-}
-
-const declaredWorkspaceNames = (manifest: WorkspaceManifest): ReadonlySet<string> =>
-  new Set([
-    manifest.name,
-    ...Object.keys(manifest.dependencies ?? {}),
-    ...Object.keys(manifest.devDependencies ?? {}),
-    ...Object.keys(manifest.peerDependencies ?? {}),
-  ])
-
-/**
- * A file that imports a workspace package its own manifest does not declare,
- * or reaches across its workspace root with a relative path. Turbo orders and
- * caches tasks by the declared graph, so an undeclared edge lets a cached
- * typecheck replay green after the imported package broke it. Core's test
- * harness once called `@gent/sdk`, which depends on core: a cycle no manifest
- * showed. A relative path into another workspace is the same edge without a
- * name. `manifests` is keyed by package directory (`packages/core`). Fixture
- * trees hold source as data, not imports.
- */
-export const findUndeclaredWorkspaceImports = (
-  manifests: ReadonlyMap<string, WorkspaceManifest>,
-  sourceTexts: ReadonlyMap<string, string>,
-): ReadonlyArray<UndeclaredImportFinding> => {
-  const findings: Array<UndeclaredImportFinding> = []
-  for (const [file, text] of sourceTexts) {
-    if (file.includes("/fixtures/")) continue
-    const owner = Option.fromNullishOr([...manifests].find(([dir]) => file.startsWith(`${dir}/`)))
-    if (Option.isNone(owner)) continue
-    const [dir, manifest] = owner.value
-    const declared = declaredWorkspaceNames(manifest)
-    for (const { specifier, line } of moduleReferences(text)) {
-      const target = relativeTarget(file, specifier)
-      if (Option.isSome(target)) {
-        if (target.value.startsWith(`${dir}/`)) continue
-        findings.push({
-          file,
-          line,
-          message: `reaches \`${specifier}\` across the ${dir} workspace root; import a declared package entry instead`,
-        })
-        continue
-      }
-      const imported = Option.flatMap(
-        Option.fromNullishOr(WORKSPACE_PACKAGE.exec(specifier)),
-        (match) => Option.fromNullishOr(match[1]),
-      )
-      if (Option.isNone(imported) || declared.has(imported.value)) continue
-      findings.push({
-        file,
-        line,
-        message: `imports \`${imported.value}\`, which ${dir}/package.json does not declare; declare it without a cycle, or move the code to a package that does`,
-      })
-    }
-  }
-  return findings
-}

@@ -119,7 +119,6 @@ describe("BuildFingerprint", () => {
           return { fp1, fp2, fp3, statCalls: yield* Ref.get(counter) }
         })
 
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         const result = yield* program.pipe(Effect.provide(buildFp))
 
         // Caching contract: only one underlying stat call, all three fingerprints identical.

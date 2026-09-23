@@ -93,6 +93,20 @@ describe("headless CLI", () => {
     20000,
   )
 
+  // The debug model answers this prompt with two rate limits first
+  // (`retryBudgetFor` in core's provider.ts); the turn retries past them.
+  it.scopedLive(
+    "a turn the debug model rate-limits answers after the retry",
+    () =>
+      Effect.gen(function* () {
+        const { exitCode, stdout, stderr } = yield* runHeadless(["Say hi in 4 words"])
+        expect(stderr).toBe("")
+        expect(exitCode).toBe(0)
+        expect(stdout).toContain("Latest user message: Say hi in 4 words")
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
   it.scopedLive(
     "an unknown --agent fails before any turn runs",
     () =>

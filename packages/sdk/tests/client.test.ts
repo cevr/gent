@@ -102,9 +102,8 @@ describe("sdk client helpers", () => {
 
 /**
  * `Gent.server` is the single server composition root. These tests pin the
- * options `apps/server/src/main.ts` needs from it — a fixed port, a caller
- * server id, and idle shutdown — so the launcher never rebuilds a second
- * root to get them back.
+ * options `apps/server/src/main.ts` needs from it — a fixed port and idle
+ * shutdown — so the launcher never rebuilds a second root to get them back.
  */
 
 const ServerIdentity = Schema.Struct({
@@ -128,7 +127,7 @@ const fetchIdentity = (baseUrl: string) =>
 
 describe("Gent.server options", () => {
   it.live(
-    "binds the requested port and publishes the caller server id",
+    "binds the requested port and publishes its identity",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -137,7 +136,6 @@ describe("Gent.server options", () => {
           const server = yield* Gent.server({
             cwd: dataDir,
             port,
-            serverId: "launcher-owned-id",
             state: Gent.state.memory(),
             provider: Gent.provider.mock(),
           })
@@ -145,7 +143,7 @@ describe("Gent.server options", () => {
           expect(server.url).toBe(`http://127.0.0.1:${port}/rpc`)
 
           const identity = yield* fetchIdentity(`http://127.0.0.1:${port}`)
-          expect(identity.serverId).toBe("launcher-owned-id")
+          expect(identity.serverId.length).toBeGreaterThan(0)
 
           // Registry validation compares the stable identity. A restart-varying
           // field on this route would make every comparison a mismatch.

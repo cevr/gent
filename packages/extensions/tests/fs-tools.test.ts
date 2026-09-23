@@ -324,9 +324,9 @@ const editFile = Effect.fn("test.editFile")(function* (
   const filePath = path.join(dir, "test.txt")
   yield* fs.writeFileString(filePath, content)
   const exit = yield* Effect.exit(
-    runToolWithCtx(EditTool, { path: filePath, ...params }, stubCtx)
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      .pipe(Effect.provide(editLayer)),
+    runToolWithCtx(EditTool, { path: filePath, ...params }, stubCtx).pipe(
+      Effect.provide(editLayer),
+    ),
   )
   let failure = ""
   if (Exit.isFailure(exit)) failure = Cause.pretty(exit.cause)
@@ -462,9 +462,7 @@ describe("EditTool execution", () => {
           EditTool,
           { path: filePath, oldString: search, newString: "done" },
           stubCtx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer))
+        ).pipe(Effect.provide(editLayer))
         expect(result.replacements).toBe(1)
         expect(yield* fs.readFileString(filePath)).toBe("done\n")
       }),
@@ -481,9 +479,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "hello world", newString: "hi there" },
         stubCtx,
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(1)
       expect(result.path).toBe(filePath)
       const content = yield* fs.readFileString(filePath)
@@ -501,9 +497,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
         stubCtx,
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(3)
       const content = yield* fs.readFileString(filePath)
       expect(content).toBe("qux bar qux baz qux\n")
@@ -521,9 +515,7 @@ describe("EditTool execution", () => {
           EditTool,
           { path: filePath, oldString: "not here", newString: "replaced" },
           stubCtx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+        ).pipe(Effect.provide(editLayer)),
       )
       expect(exit._tag).toBe("Failure")
     }),
@@ -536,9 +528,11 @@ describe("EditTool execution", () => {
       const filePath = path.join(dir, "test.txt")
       yield* fs.writeFileString(filePath, "foo bar foo\n")
       const exit = yield* Effect.exit(
-        runToolWithCtx(EditTool, { path: filePath, oldString: "foo", newString: "baz" }, stubCtx)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+        runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "foo", newString: "baz" },
+          stubCtx,
+        ).pipe(Effect.provide(editLayer)),
       )
       expect(exit._tag).toBe("Failure")
     }),
@@ -554,9 +548,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "old", newString: "$$ pid $& $` $' x" },
         stubCtx,
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(editLayer))
       expect(yield* fs.readFileString(filePath)).toBe("echo $$ pid $& $` $' x\n")
     }),
   )
@@ -575,9 +567,7 @@ describe("EditTool execution", () => {
             { path: filePath, oldString: "", newString: "-", replaceAll: true },
             stubCtx,
           ),
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+        ).pipe(Effect.provide(editLayer)),
       )
       expect(exit._tag).toBe("Failure")
       expect(yield* fs.readFileString(filePath)).toBe("abc")
@@ -592,9 +582,11 @@ describe("EditTool execution", () => {
       const original = "foo \nbar\nfoo  \nbar\n"
       yield* fs.writeFileString(filePath, original)
       const exit = yield* Effect.exit(
-        runToolWithCtx(EditTool, { path: filePath, oldString: "foo\nbar", newString: "x" }, stubCtx)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+        runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "foo\nbar", newString: "x" },
+          stubCtx,
+        ).pipe(Effect.provide(editLayer)),
       )
       expect(exit._tag).toBe("Failure")
       expect(yield* fs.readFileString(filePath)).toBe(original)
@@ -611,9 +603,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "foo\nbar", newString: "x", replaceAll: true },
         stubCtx,
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(2)
       expect(yield* fs.readFileString(filePath)).toBe("x\nmid\nx\n")
     }),
@@ -629,9 +619,7 @@ describe("EditTool execution", () => {
         EditTool,
         { path: filePath, oldString: "line1\\nline2", newString: "merged" },
         stubCtx,
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(editLayer))
+      ).pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(1)
       const content = yield* fs.readFileString(filePath)
       expect(content).toBe("merged\n")
@@ -1697,10 +1685,7 @@ describe("the git processes behind a listing", () => {
         GIT_INDEX_FILE: `${other}/.git/index`,
       })
 
-      const files = yield* listed(repo).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- The spawner's environment names repositories this test creates.
-        Effect.provide(layerWithSpawner(hook)),
-      )
+      const files = yield* listed(repo).pipe(Effect.provide(layerWithSpawner(hook)))
       expect(files).toEqual([".gitignore", "a.ts"])
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
@@ -1717,11 +1702,7 @@ describe("the git processes behind a listing", () => {
         GrepTool,
         { pattern: "x", path: tmpDir },
         testToolContext({ cwd: tmpDir }),
-      ).pipe(
-        Effect.flip,
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(layerWithSpawner(endless)),
-      )
+      ).pipe(Effect.flip, Effect.provide(layerWithSpawner(endless)))
       expect(failure.message).toContain("more than 100000 files")
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
@@ -1736,11 +1717,7 @@ describe("the git processes behind a listing", () => {
       const hung = fakeLsFiles(`echo started > ${signals}/started; exec sleep 30`)
 
       const listing = yield* Effect.forkChild(
-        listed(tmpDir).pipe(
-          Effect.flip,
-          // oxlint-disable-next-line effect/noInlineProvide -- The fake git signals through a pipe this test creates.
-          Effect.provide(layerWithSpawner(hung)),
-        ),
+        listed(tmpDir).pipe(Effect.flip, Effect.provide(layerWithSpawner(hung))),
       )
       // Reading the pipe returns once git runs, so its timeout is already armed.
       yield* fs.readFileString(`${signals}/started`)

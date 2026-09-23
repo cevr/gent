@@ -1160,7 +1160,6 @@ describe("keychainTransformClient — credential failure through the SDK", () =>
           Layer.provide(clientLayer),
         )
         const exit = yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
           Effect.provide(
             Layer.provideMerge(
               modelLayer,
@@ -2406,7 +2405,6 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
       })
       const model = yield* driver
         .resolveModel("claude-opus-4-6", makeOAuthInfo())
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
         .pipe(Effect.provide(fetchLayer))
       yield* runOne(model, fetchState)
 
@@ -2469,7 +2467,6 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       })
       const model = yield* driver
         .resolveModel("claude-opus-4-6", authInfo)
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
         .pipe(Effect.provide(fetchLayer))
       yield* runOne(model, fetchState)
 

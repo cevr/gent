@@ -4,6 +4,7 @@ import {
   adaptedSeamsIn,
   collectExportFacts,
   type ExportFacts,
+  type Finding,
   findAliasTestLayers,
   findBannedEslintDisableBlocks,
   findBlanketEslintDisables,
@@ -22,20 +23,36 @@ import {
   findUnadaptedSeams,
   findUnadmittedChildSessionWriters,
   findUnconsumedExports,
-  findUndeclaredWorkspaceImports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
   isSteeringFile,
   OxlintConfigSchema,
+  PACKAGE_SURFACE_MANIFESTS,
   type PackageJson,
-  type WorkspaceManifest,
 } from "./guards"
 
 const trackedFileNames = Effect.promise(() =>
   Bun.$`git ls-files --cached --others --exclude-standard`.text(),
 ).pipe(Effect.map((output) => output.split("\n").filter((file) => file.length > 0)))
+
+/**
+ * Tracked symlinks (git mode 120000). A symlink is not a second file: its
+ * target is read under its own name, so reading the link too would report
+ * every finding twice.
+ */
+const trackedSymlinks = Effect.promise(() => Bun.$`git ls-files --stage`.text()).pipe(
+  Effect.map(
+    (output) =>
+      new Set(
+        output
+          .split("\n")
+          .filter((row) => row.startsWith("120000 "))
+          .map((row) => row.slice(row.indexOf("\t") + 1)),
+      ),
+  ),
+)
 
 const readTrackedFile = Effect.fn("Tooling.readTrackedFile")(function* (file: string) {
   const source = Bun.file(file)
@@ -48,7 +65,7 @@ const readJsonFile = Effect.fn("Tooling.readJsonFile")(function* (path: string) 
 })
 
 const OXLINT_CONFIG = ".oxlintrc.json"
-const LINT_PLUGIN = "lint/gent-rules.ts"
+const LINT_PLUGIN = "packages/tooling/src/gent-rules.ts"
 
 /** The two findings that read the lint config rather than one source file. */
 const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
@@ -68,54 +85,34 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
   ]
 })
 
-/** Every finding one file answers on its own, without the rest of the tree. */
-const singleFileFailures = (file: string, text: string): ReadonlyArray<string> => {
-  const blanket = [
-    ...findBlanketEslintDisables(file, text),
-    ...findBannedEslintDisableBlocks(file, text),
-  ].map(
-    (finding) =>
-      `${finding.file}:${finding.line}: blanket and block lint-disable comments (eslint- or oxlint- spelling) are banned; use line-local suppressions with exact rules`,
-  )
-  const suppressions = findSuppressionInventoryFindings(file, text).map(
-    (finding) => `${finding.file}:${finding.line}: unreviewed suppression ${finding.kind}`,
-  )
-  if (!/\.[cm]?[jt]sx?$/.test(file)) return [...blanket, ...suppressions]
-  const sourceOnly = [
-    ...findPlatformDuplicationViolations(file, text),
-    ...findCoreFeatureIndependenceFindings(file, text),
-    ...findRetiredSurfaces(file, text),
-    ...findCoreVendorModelPins(file, text),
-    ...findAliasTestLayers(file, text),
-    ...findE2eFixtureImportFindings(file, text),
-    ...findUnadmittedChildSessionWriters(file, text),
-    ...findIdentityEncodes(file, text),
-    ...findTuiSessionIdentityReads(file, text),
-  ].map((finding) => `${finding.file}:${finding.line}: ${finding.message}`)
-  return [...blanket, ...suppressions, ...sourceOnly]
-}
+type FileFinder = (file: string, text: string) => ReadonlyArray<Finding>
 
-/**
- * The findings on the files that describe the project rather than run it: the
- * steering documents and the pre-commit hook. Each answers from one file, but
- * the path scan needs the tracked list to resolve what a document names.
- */
-const projectFileFailures = (
-  file: string,
-  text: string,
-  trackedFiles: ReadonlyArray<string>,
-): ReadonlyArray<string> =>
-  [...findSteeringFilePaths(file, text, trackedFiles), ...findHookWithoutGuards(file, text)].map(
-    (finding) => `${finding.file}:${finding.line}: ${finding.message}`,
-  )
+/** Findings any scanned file answers on its own: source, config, docs and the hook. */
+const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
+  findBlanketEslintDisables,
+  findBannedEslintDisableBlocks,
+  findSuppressionInventoryFindings,
+  findHookWithoutGuards,
+]
+
+/** Findings a source file answers on its own, without the rest of the tree. */
+const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
+  findPlatformDuplicationViolations,
+  findCoreFeatureIndependenceFindings,
+  findRetiredSurfaces,
+  findCoreVendorModelPins,
+  findAliasTestLayers,
+  findE2eFixtureImportFindings,
+  findUnadmittedChildSessionWriters,
+  findIdentityEncodes,
+  findTuiSessionIdentityReads,
+]
+
+const isSourceFile = (file: string): boolean => /\.[cm]?[jt]sx?$/.test(file)
 
 /** The findings that read the package manifests and the root tsconfig. */
 const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* () {
-  const packageJsonPaths = [
-    "packages/core/package.json",
-    "packages/extensions/package.json",
-    "packages/sdk/package.json",
-  ]
+  const packageJsonPaths = PACKAGE_SURFACE_MANIFESTS
   const [tsconfigJson, ...packageJsons] = yield* Effect.all(
     [readJsonFile("tsconfig.json"), ...packageJsonPaths.map(readJsonFile)],
     { concurrency: "unbounded" },
@@ -128,6 +125,7 @@ const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(funct
 
 const program = Effect.gen(function* () {
   const trackedFiles = yield* trackedFileNames
+  const symlinks = yield* trackedSymlinks
   const textFiles = yield* Effect.forEach(
     trackedFiles
       // The steering files are Markdown and the hook is YAML; both join the
@@ -136,15 +134,12 @@ const program = Effect.gen(function* () {
         (file) =>
           /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file) || file === HOOK_FILE,
       )
-      .filter((file) => !file.includes("/dist/")),
+      .filter((file) => !file.includes("/dist/") && !symlinks.has(file)),
     readTrackedFile,
     { concurrency: 32 },
   )
 
-  const failures: string[] = []
-  const pushFailure = (message: string): void => {
-    if (!failures.includes(message)) failures.push(message)
-  }
+  const findings: Array<Finding> = []
 
   // Export-consumer scan needs the whole tree: collect every declared export
   // in the scanned surfaces, then count which names any other file reaches.
@@ -168,63 +163,28 @@ const program = Effect.gen(function* () {
   for (const maybeEntry of textFiles) {
     if (Option.isNone(maybeEntry)) continue
     const { file, text } = maybeEntry.value
-    for (const failure of singleFileFailures(file, text)) pushFailure(failure)
-    for (const failure of projectFileFailures(file, text, trackedFiles)) pushFailure(failure)
-    if (/\.[cm]?[jt]sx?$/.test(file)) collectWholeTreeFacts(file, text)
+    for (const finder of ANY_FILE_FINDERS) findings.push(...finder(file, text))
+    findings.push(...findSteeringFilePaths(file, text, trackedFiles))
+    if (!isSourceFile(file)) continue
+    for (const finder of SOURCE_FILE_FINDERS) findings.push(...finder(file, text))
+    collectWholeTreeFacts(file, text)
   }
 
-  for (const finding of findUnusedSuppressionApprovals(sourceTexts)) {
-    pushFailure(
-      `${finding.file}: approved suppression has no matching comment; drop it from packages/tooling/src/guards.ts: ${finding.comment}`,
-    )
-  }
-
-  const reportOnly: string[] = []
-  for (const finding of findUnconsumedExports(exportFacts)) {
-    const line = `${finding.file}:${finding.line}: ${finding.message}`
-    if (finding.enforced) pushFailure(line)
-    else reportOnly.push(line)
-  }
-
-  for (const finding of findUnadaptedSeams(sourceTexts, adaptedSeams)) {
-    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
-  }
-
-  // A GENT_* variable whose writer left: its reader is a branch nothing takes.
-  for (const finding of findReadersWithoutWriters(sourceTexts)) {
-    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
-  }
-
-  // The lint config must not name a file or a rule that is gone.
-  for (const finding of yield* lintConfigFindings(trackedFiles, sourceTexts)) {
-    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
-  }
-
-  // Every workspace package imports only the workspace packages it declares.
-  const manifestDirs = trackedFiles
-    .filter((file) => /^(?:(?:packages|apps)\/[^/]+|examples)\/package\.json$/.test(file))
-    .map((file) => file.slice(0, -"/package.json".length))
-  const manifests = yield* Effect.forEach(
-    manifestDirs,
-    Effect.fn("Tooling.readManifest")(function* (dir: string) {
-      const manifest: WorkspaceManifest = yield* readJsonFile(`${dir}/package.json`)
-      const entry: readonly [string, WorkspaceManifest] = [dir, manifest]
-      return entry
-    }),
+  findings.push(
+    ...findUnusedSuppressionApprovals(sourceTexts),
+    ...findUnconsumedExports(exportFacts),
+    ...findUnadaptedSeams(sourceTexts, adaptedSeams),
+    // A GENT_* variable whose writer left: its reader is a branch nothing takes.
+    ...findReadersWithoutWriters(sourceTexts),
+    // The lint config must not name a file or a rule that is gone.
+    ...(yield* lintConfigFindings(trackedFiles, sourceTexts)),
+    ...(yield* packageSurfaceFindings()),
   )
-  for (const finding of findUndeclaredWorkspaceImports(new Map(manifests), sourceTexts)) {
-    pushFailure(`${finding.file}:${finding.line}: ${finding.message}`)
-  }
 
-  for (const finding of yield* packageSurfaceFindings()) {
-    pushFailure(`${finding.path}: ${finding.message}`)
-  }
-
-  if (reportOnly.length > 0) {
-    yield* Console.warn("Gent guardrails report-only findings:")
-    yield* Effect.forEach(reportOnly, (line) => Console.warn(`  ${line}`), { discard: true })
-  }
-
+  // Two finders may report one line with one message; say it once.
+  const failures = [
+    ...new Set(findings.map((finding) => `${finding.file}:${finding.line}: ${finding.message}`)),
+  ]
   if (failures.length === 0) return
   yield* Console.error("Gent guardrails failed:")
   yield* Effect.forEach(failures, (failure) => Console.error(`  ${failure}`), { discard: true })

@@ -1,6 +1,6 @@
 import { Option, Predicate, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, ClientRequestGrant, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
+import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import { AgentName, ModelId, ReasoningEffort, RunSpecSchema } from "./agent.js"
 import type { EventEnvelope, ToolCallStarted, Usage } from "./event.js"
 import * as Response from "effect/unstable/ai/Response"
@@ -234,7 +234,7 @@ export const MessageMetadata = Schema.Struct({
    * Set by the server on every message a client sends (`clientMetadata`),
    * over any value the client gave; an extension's `Session.send` removes it,
    * except that a client's extension request sends to its own branch as the
-   * client while it runs (`clientRequestOrigin` in `extension-host.ts`).
+   * client while it runs (`clientRequestGrant` in `extension-host.ts`).
    * A turn such a message opens has a user watching it (`turnCanAsk`).
    */
   fromClient: Schema.optional(Schema.Boolean),
@@ -352,12 +352,6 @@ export const SteerCommand = Schema.Union([
      * being answered, a child reporting back — says so here.
      */
     wake: Schema.optional(Schema.Boolean),
-    /**
-     * The client request this steer was sent under. The loop gives the
-     * interjection the client origin only if that request still runs when
-     * the loop admits it. The server drops one a client sets.
-     */
-    clientRequest: Schema.optional(ClientRequestGrant),
   }),
 ])
 export type SteerCommand = typeof SteerCommand.Type

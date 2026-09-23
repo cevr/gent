@@ -138,7 +138,8 @@ older turn still running on the branch are not printed and do not settle it. An
 unanswered, or with an error and no answer text; an error marked
 `notice: true` (a compaction fallback) is only a warning. The client status
 also ignores a notice. A failed turn phase
-publishes no `TurnCompleted`; the send fails then, and that ends the run. The
+appends one `TurnCompleted` with `streamFailed: true`, and that settles the
+run; the send fails too, and whichever comes first ends it. The
 run's end owns stderr: a failed run prints one line, an answered run prints one
 `Warning:` line for each notice.
 

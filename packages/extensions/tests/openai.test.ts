@@ -216,7 +216,7 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
         () => {
           fetchCalls += 1
           // The endpoint accepted the socket and went silent: a fetch that never settles.
-          // oxlint-disable-next-line effect/noNewPromise, gent/no-promise-control-flow-in-tests -- The fake implements the Promise-based Fetch contract.
+          // oxlint-disable-next-line effect/noNewPromise -- The fake implements the Promise-based Fetch contract.
           return Promise.race<Response>([])
         },
         { preconnect: () => {} },
@@ -239,10 +239,7 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
           expect(fetchCalls).toBe(1)
           yield* TestClock.adjust("31 seconds")
           return yield* Fiber.join(fiber)
-        }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- The hanging fetch is this operation's HTTP boundary.
-          Effect.provide(Layer.succeed(FetchHttpClient.Fetch, hangingFetch)),
-        ),
+        }).pipe(Effect.provide(Layer.succeed(FetchHttpClient.Fetch, hangingFetch))),
       ).pipe(Effect.timeout("3 seconds"))
       // The timed-out refresh is a failure that passes: resolveModel returns
       // (the request then fails as retryable), and the stored refresh token
@@ -792,9 +789,7 @@ describe("OpenAI credential cache — a shared cell survives rebuilds", () => {
           expect(result.access).toBe("fresh-access")
           expect(refreshCount).toBe(1)
         }),
-      )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        .pipe(Effect.provide(TestClock.layer()), Effect.orDie)
+      ).pipe(Effect.provide(TestClock.layer()), Effect.orDie)
     }),
   )
 })
@@ -2205,7 +2200,6 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
           )
           expect(pending.has("abandoned")).toBe(false)
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
           Effect.provide(
             fakeFetchLayer(fetchState, () => ({
               status: 200,
@@ -2260,7 +2254,6 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       const page = yield* waitFor(
         HttpClient.get(`http://localhost:1455/auth/callback?${query.toString()}`).pipe(
           Effect.flatMap((response) => response.text),
-          // oxlint-disable-next-line effect/noInlineProvide -- The browser's side of the redirect is this operation's HTTP client.
           Effect.provide(FetchHttpClient.layer),
         ),
         () => true,
@@ -2306,10 +2299,8 @@ describe("buildOpenAIModelDriver — token endpoint outage", () => {
         const attempt = Effect.gen(function* () {
           const model = yield* driver.resolveModel("gpt-5.4", authInfo)
           return yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
             Effect.provide(Layer.provideMerge(model, fetchLayer)),
           )
-          // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
         }).pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit)
 
         const first = yield* attempt
@@ -2350,10 +2341,8 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
       const exit = yield* Effect.gen(function* () {
         const model = yield* driver.resolveModel("gpt-5.4", authInfo)
         return yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
           Effect.provide(Layer.provideMerge(model, fetchLayer)),
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
       }).pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
@@ -2418,12 +2407,7 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
           return yield* Effect.die("the turn ended without an error event")
         }
         return event.value.event.error
-      }).pipe(
-        Effect.timeout("10 seconds"),
-        Effect.scoped,
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake endpoints are this operation's HTTP boundary.
-        Effect.provide(fetchLayer),
-      )
+      }).pipe(Effect.timeout("10 seconds"), Effect.scoped, Effect.provide(fetchLayer))
 
       expect(shown).toBe(
         "ChatGPT sign-in expired: Token refresh failed: 400. Sign in again with /auth.",
@@ -2521,10 +2505,8 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
       yield* Effect.gen(function* () {
         const model = yield* driver.resolveModel("gpt-5.4", authInfo)
         yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
           Effect.provide(Layer.provideMerge(model, fetchLayer)),
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake endpoints are this operation's HTTP boundary.
       }).pipe(Effect.scoped, Effect.provide(fetchLayer))
 
       expect(fetchState.captured.some((request) => request.url.endsWith("/oauth/token"))).toBe(
@@ -2562,7 +2544,6 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
       })
       const first = yield* driver
         .resolveModel("gpt-5.4", revoked)
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
         .pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit)
       expect(Exit.isFailure(first)).toBe(true)
 
@@ -2572,10 +2553,8 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
       yield* Effect.gen(function* () {
         const model = yield* driver.resolveModel("gpt-5.4", store.authInfo())
         yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
           Effect.provide(Layer.provideMerge(model, fetchLayer)),
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- The fake endpoints are this operation's HTTP boundary.
       }).pipe(Effect.scoped, Effect.provide(fetchLayer))
 
       const after = fetchState.captured.slice(tokenPostsBefore)

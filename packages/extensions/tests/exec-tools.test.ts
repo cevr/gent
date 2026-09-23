@@ -1988,7 +1988,6 @@ describe("BashTool execution", () => {
             { exitCode: 0, message: "stored output" },
           )
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(
             Layer.mergeAll(
               storageLayer,
@@ -2001,9 +2000,7 @@ describe("BashTool execution", () => {
           BashTool,
           { command: "printf should-not-run", run_in_background: true },
           ctx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
         expect(retried.exitCode).toBe(0)
 
         const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
@@ -2060,9 +2057,7 @@ describe("BashTool execution", () => {
             run_in_background: true,
           },
           ctx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(makeProcessLayerWithFailingMarkFailed(storageLayer)))
+        ).pipe(Effect.provide(makeProcessLayerWithFailingMarkFailed(storageLayer)))
         expect(result.exitCode).toBe(0)
 
         const followUp = yield* Effect.exit(Deferred.await(sent).pipe(Effect.timeout("250 millis")))
@@ -2119,7 +2114,6 @@ describe("BashTool execution", () => {
         yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient
           yield* sql`UPDATE background_bash_jobs SET owner_generation = 'earlier-process'`
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(storageLayer))
 
         // The restarted server's process layer marks the job interrupted as it builds.
@@ -2127,9 +2121,7 @@ describe("BashTool execution", () => {
           BashTool,
           { command: "printf should-not-run", run_in_background: true },
           ctx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(makeProcessLayer(storageLayer)))
+        ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
         expect(retried.exitCode).toBe(0)
 
         const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
@@ -2207,7 +2199,6 @@ describe("BashTool execution", () => {
           command: "sleep 9",
           cwd: Option.none(),
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test builds the storage over a table it planted.
       }).pipe(Effect.provide(BackgroundBashStorage.Live))
       expect(claim._tag).toBe("Terminal")
       if (claim._tag === "Terminal") expect(claim.state.status).toBe("interrupted")
@@ -2263,7 +2254,6 @@ describe("BashTool execution", () => {
           expect(second.exitCode).toBe(0)
           // The replay path is synchronous: a Terminal claim queues its notice
           // before `start` returns, so a second entry would already be here.
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makePlatformLayer()))
 
         const all = yield* Ref.get(notices)
