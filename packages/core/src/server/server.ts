@@ -92,7 +92,6 @@ import {
   type EventEnvelope,
   EventId,
   EventStore,
-  ExtensionStatePublisherLive,
   type EventStoreError,
   InteractionResolved,
   SessionNameUpdated,
@@ -1749,8 +1748,6 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const modelResolverLive = makeModelResolverLayer(config, authDeps)
 
-  const eventServicesLive = Layer.provideMerge(ExtensionStatePublisherLive, baseEventStoreLive)
-
   const baseServicesLive = Layer.provideMerge(
     Layer.mergeAll(
       // The app names the branch-tool feature it ships. The loop builds its
@@ -1759,7 +1756,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       platformServicesLive,
       runtimeEnvironmentLive,
       clusterRunnerLive,
-      eventServicesLive,
+      baseEventStoreLive,
       authLive,
       providerAuthLive,
       configServiceLive,

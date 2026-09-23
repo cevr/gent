@@ -711,30 +711,3 @@ const makeCursorReplayStream = <E>(params: {
       )
     }),
   )
-
-// ── extension-state-publisher ───────────────────────────────────────────────
-
-interface ExtensionStatePublisherService {
-  readonly changed: (params: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly extensionId: ExtensionId
-  }) => Effect.Effect<void, EventStoreError>
-}
-
-/** The extension facet over `EventStore`: an extension says its state changed, nothing more. */
-export class ExtensionStatePublisher extends Context.Service<
-  ExtensionStatePublisher,
-  ExtensionStatePublisherService
->()("@gent/core/src/domain/event/ExtensionStatePublisher") {}
-
-export const ExtensionStatePublisherLive: Layer.Layer<ExtensionStatePublisher, never, EventStore> =
-  Layer.effect(
-    ExtensionStatePublisher,
-    Effect.gen(function* () {
-      const eventStore = yield* EventStore
-      return ExtensionStatePublisher.of({
-        changed: (params) => eventStore.publish(ExtensionStateChanged.make(params)),
-      })
-    }),
-  )

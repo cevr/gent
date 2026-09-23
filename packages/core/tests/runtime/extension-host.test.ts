@@ -151,7 +151,7 @@ import {
 } from "../../src/domain/extension"
 import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/unstable/cluster"
-import { AgentEvent, EventStore, ExtensionStatePublisherLive } from "../../src/domain/event"
+import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
@@ -218,7 +218,7 @@ describe("ambient extension host context", () => {
         }
       }
       expectAbsent(lockExit, "FileLockService")
-      expectAbsent(stateExit, "ExtensionStatePublisher")
+      expectAbsent(stateExit, "EventStore")
     }),
   )
 
@@ -258,12 +258,9 @@ describe("ambient extension host context", () => {
       expect(envelopes.map((envelope) => envelope.event._tag)).toStrictEqual(["MessageReceived"])
     }).pipe(
       Effect.provide(
-        Layer.provideMerge(
-          ExtensionStatePublisherLive,
-          Layer.mergeAll(
-            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-            EventStore.Memory,
-          ),
+        Layer.mergeAll(
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -337,11 +334,8 @@ describe("ambient extension host context", () => {
         // under the workspace in scope at pull time; the memory store reads none.
         Effect.provide(
           Layer.provideMerge(
-            ExtensionStatePublisherLive,
-            Layer.provideMerge(
-              EventStoreLive,
-              SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-            ),
+            EventStoreLive,
+            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
           ),
         ),
       ),
@@ -384,11 +378,8 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provide(
         Layer.provideMerge(
-          ExtensionStatePublisherLive,
-          Layer.provideMerge(
-            EventStoreLive,
-            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          ),
+          EventStoreLive,
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
         ),
       ),
     ),
@@ -4542,16 +4533,12 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, baseDeps)
-  const sessionRuntimeLayer = Layer.provide(
-    SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, statePublisherLayer),
-  )
+  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live({ baseSections: [] }), baseDeps)
   const sessionMutationsLayer = Layer.provide(
     SessionMutationsLive,
-    Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer),
+    Layer.mergeAll(baseDeps, sessionRuntimeLayer),
   )
-  return Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
+  return Layer.mergeAll(baseDeps, sessionRuntimeLayer, sessionMutationsLayer)
 }
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls

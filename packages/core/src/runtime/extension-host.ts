@@ -109,7 +109,7 @@ import {
   EventId,
   EventStore,
   EventStoreError,
-  ExtensionStatePublisher,
+  ExtensionStateChanged,
   InteractionPresented,
   InteractionResolved,
   MessageReceived,
@@ -2623,8 +2623,6 @@ export const makeExtensionHostContextProvider = (
       withLock: (path, effect) => fileLock((service) => service.withLock(path, effect)),
     }
 
-    const statePublisher = yield* facet(ExtensionStatePublisher, "ExtensionStatePublisher")
-
     // `Session.events` from the start replays the history; from now it
     // starts at the newest stored event.
     const subscribeFrom = (from: "start" | "now"): EventId | "latest" => {
@@ -2685,16 +2683,18 @@ export const makeExtensionHostContextProvider = (
           }),
           onSome: (id) => ({
             changed: () =>
-              statePublisher((publisher) =>
+              eventStore((store) =>
                 mapExtensionServiceError(
                   "ExtensionState",
                   "changed",
                   inWorkspace(
-                    publisher.changed({
-                      extensionId: id,
-                      sessionId: runInfo.sessionId,
-                      branchId: runInfo.branchId,
-                    }),
+                    store.publish(
+                      ExtensionStateChanged.make({
+                        extensionId: id,
+                        sessionId: runInfo.sessionId,
+                        branchId: runInfo.branchId,
+                      }),
+                    ),
                   ),
                 ),
               ),

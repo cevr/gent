@@ -152,7 +152,6 @@ import {
   EventId,
   EventStore,
   EventStoreError,
-  ExtensionStatePublisherLive,
   MessageReceived,
   ToolCallStarted,
   ToolCallSucceeded,
@@ -4423,13 +4422,10 @@ const makeRuntimeLayer = (
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, baseDeps)
-  const approvalLayer = ApprovalService.Live.pipe(
-    Layer.provide(Layer.merge(baseDeps, statePublisherLayer)),
-  )
+  const approvalLayer = ApprovalService.Live.pipe(Layer.provide(baseDeps))
   return Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.mergeAll(baseDeps, statePublisherLayer, approvalLayer, ProcessLocalToolReplay.Live),
+    Layer.mergeAll(baseDeps, approvalLayer, ProcessLocalToolReplay.Live),
   )
 }
 
