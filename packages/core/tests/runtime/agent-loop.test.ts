@@ -4089,20 +4089,10 @@ const makeRuntimeLayer = (
   const approvalLayer = ApprovalService.Live.pipe(
     Layer.provide(Layer.merge(baseDeps, eventPublisherLayer)),
   )
-  const layer = Layer.provideMerge(
+  return Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
     Layer.mergeAll(baseDeps, eventPublisherLayer, approvalLayer, ProcessLocalToolReplay.Live),
   )
-  // SessionRuntime.Live keeps the AgentLoop actor client in its context but
-  // names only SessionRuntime in its type. The actor-command tests below drive
-  // that client directly, so this one cast adds it and leaves every other
-  // requirement checked.
-  // oxlint-disable-next-line effect/noAs -- the live layer provides the actor client its type omits
-  return layer as Layer.Layer<
-    Layer.Success<typeof layer> | Effect.Services<typeof AgentLoopActor.Context>,
-    Layer.Error<typeof layer>,
-    Layer.Services<typeof layer>
-  >
 }
 
 const createSessionBranch = Effect.gen(function* () {

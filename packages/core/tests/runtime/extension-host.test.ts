@@ -137,7 +137,7 @@ import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 
-// ── ambient-host-context.test ───────────────────────────────────────────────
+// ── ambient host context ─────────────────────────────────────────────────────
 
 /**
  * The ambient host context resolves each facet from its own service Tag.
@@ -377,7 +377,7 @@ describe("ambient extension host context", () => {
   )
 })
 
-// ── session-profile.test ────────────────────────────────────────────────────
+// ── session profile resolution ───────────────────────────────────────────────
 
 class SessionProfileResourceMarker extends Context.Service<
   SessionProfileResourceMarker,
@@ -667,7 +667,7 @@ describe("session profile resolution", () => {
   )
 })
 
-// ── session-runtime-context.test ────────────────────────────────────────────
+// ── turn profile resolution ──────────────────────────────────────────────────
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
@@ -880,7 +880,7 @@ describe("resolveTurnProfile", () => {
   )
 })
 
-// ── ../drivers/driver-registry.test ─────────────────────────────────────────
+// ── driver resolution ────────────────────────────────────────────────────────
 
 /**
  * Driver resolution — model drivers resolve into the extension registry with
@@ -1058,7 +1058,7 @@ describe("driver resolution", () => {
   )
 })
 
-// ── ../extensions/activation.test ───────────────────────────────────────────
+// ── extension activation isolation ───────────────────────────────────────────
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
@@ -1543,7 +1543,7 @@ describe("extension activation isolation", () => {
   )
 })
 
-// ── ../extensions/capability-host.test ──────────────────────────────────────
+// ── capability registries ────────────────────────────────────────────────────
 
 /**
  * Extension capability registry regression locks.
@@ -1948,7 +1948,7 @@ describe("extension capability registries", () => {
     }))
 })
 
-// ── ../extensions/extension-hooks.test ──────────────────────────────────────
+// ── runtime slots ────────────────────────────────────────────────────────────
 
 const stubHostCtx = testExtensionHostContext()
 
@@ -2185,7 +2185,7 @@ describe("runtime slots", () => {
     }))
 })
 
-// ── ../extensions/host-facet-survivors.test ─────────────────────────────────
+// ── host session facet ───────────────────────────────────────────────────────
 
 /**
  * `ctx.Session.listBranches` is a host-wired facet verb with no other direct
@@ -2232,7 +2232,7 @@ describe("host session facet", () => {
   )
 })
 
-// ── ../extensions/loader.test ───────────────────────────────────────────────
+// ── extension setup ──────────────────────────────────────────────────────────
 
 describe("setupExtension", () => {
   it.scopedLive("requires user trust before project module code runs", () =>
@@ -2620,7 +2620,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
   )
 })
 
-// ── ../extensions/prompt-slots.test ─────────────────────────────────────────
+// ── prompt slots ─────────────────────────────────────────────────────────────
 
 const ext = (
   id: string,
@@ -2660,7 +2660,7 @@ describe("prompt slots", () => {
       ))
 })
 
-// ── ../extensions/registry.test ─────────────────────────────────────────────
+// ── extension resolution ─────────────────────────────────────────────────────
 
 // Test helper: build a no-op model Capability directly. The `tool({...})`
 // factory rejects metadata-free tool records, so fixtures here construct the
@@ -3281,7 +3281,7 @@ describe("resolveExtensions — slash command discovery", () => {
   })
 })
 
-// ── ../extensions/resource-host.test ────────────────────────────────────────
+// ── resources ────────────────────────────────────────────────────────────────
 
 /**
  * ResourceHost — service/lifecycle Resource tests.
@@ -3442,7 +3442,7 @@ describe("buildResourceLayer lifecycle", () => {
   )
 })
 
-// ── ../extensions/runtime-hooks.test ────────────────────────────────────────
+// ── runtime hooks ────────────────────────────────────────────────────────────
 
 const stubCtx = testExtensionHostContext()
 
@@ -3528,7 +3528,7 @@ describe("runtime hooks", () => {
     }))
 })
 
-// ── ../extensions/scope-precedence.test ─────────────────────────────────────
+// ── scope precedence ─────────────────────────────────────────────────────────
 
 /**
  * Scope precedence regression locks.
@@ -3648,7 +3648,7 @@ describe("scope precedence", () => {
   })
 })
 
-// ── ../extensions/memory/agent-override.test ────────────────────────────────
+// ── session agent ────────────────────────────────────────────────────────────
 
 const makeTestExtensions = () => {
   const mainAgent = AgentDefinition.make({
