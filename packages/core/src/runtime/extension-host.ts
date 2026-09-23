@@ -92,6 +92,7 @@ import {
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { GentPlatform } from "./gent-platform.js"
 import {
+  type ConfigLoadError,
   ConfigService,
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
@@ -1089,6 +1090,25 @@ const importFailure = (
   return { manifest: { id: ExtensionId.make(name) }, scope, sourcePath, phase: "load", error }
 }
 
+/**
+ * A config file that did not load, as a `load` failure the extension health
+ * view shows. Its settings are ignored until the file loads again.
+ */
+const configLoadFailure = (
+  path: Path.Path,
+  home: string,
+  error: ConfigLoadError,
+): FailedExtension => {
+  let scope: ExtensionScope = "project"
+  if (error.path === path.join(home, ConfigService.CONFIG_RELATIVE)) scope = "user"
+  return importFailure(
+    path,
+    error.path,
+    scope,
+    `Config did not load; its settings are ignored until it is fixed: ${error.message}`,
+  )
+}
+
 /** Discover and load extensions from all configured directories. Per-file isolation — one broken file does not suppress siblings. */
 export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (opts: {
   readonly userDir: string // ~/.gent/extensions
@@ -1745,9 +1765,9 @@ export class SessionProfileCache extends Context.Service<
           Effect.gen(function* () {
             const profileScope = yield* Scope.fork(serverScope)
             return yield* Effect.gen(function* () {
-              const userConfig = yield* configService.getFresh(cwd)
+              const fresh = yield* configService.getFresh(cwd)
               const declarations = yield* loadRuntimeProfileDeclarations(
-                effectiveInputs(inputsFor(cwd), userConfig),
+                effectiveInputs(inputsFor(cwd), fresh.config),
               ).pipe(Effect.provideContext(platformServicesContext))
               const started = yield* startProcessResources(
                 declarations.extensionDeclarations.active,
@@ -1755,6 +1775,9 @@ export class SessionProfileCache extends Context.Service<
                 profileScope,
               )
               const resolved = resolveExtensions(started.active, [
+                ...fresh.failures.map((failure) =>
+                  configLoadFailure(pathSvc, config.home, failure),
+                ),
                 ...declarations.extensionDeclarations.failed,
                 ...started.failed,
               ])

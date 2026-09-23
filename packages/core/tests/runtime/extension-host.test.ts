@@ -435,6 +435,42 @@ describe("session profile resolution", () => {
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
+  it.scopedLive("a broken config file resolves the profile and reports the file as a failure", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const project = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const projectConfig = path.join(project, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      // A trailing comma: not JSON.
+      yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"], }')
+      const healthy = markerExtension("@gent/test-session-profile/config-healthy", "live")
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const profile = yield* cache.resolve(project)
+        expect(profile.resolved.extensions.map((extension) => extension.manifest.id)).toEqual([
+          ExtensionId.make("@gent/test-session-profile/config-healthy"),
+        ])
+        expect(profile.resolved.failedExtensions).toMatchObject([
+          { sourcePath: projectConfig, scope: "project", phase: "load" },
+        ])
+      }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(
+          makeCacheLayer({
+            cwd: launch,
+            home,
+            extensions: [healthy],
+            allowFailedExtensions: true,
+          }),
+        ),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   it.scopedLive("suspends only the extension whose process resource fails to start", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
