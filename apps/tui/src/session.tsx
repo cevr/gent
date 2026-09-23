@@ -62,7 +62,6 @@ import {
   type SessionMetrics,
   shutdownLog,
   SteerCommandInput,
-  useChildSessions,
   useClient,
   useRuntime,
 } from "./client"
@@ -2301,7 +2300,6 @@ export interface SessionController {
     | { phase: "tool"; turn: number; toolInfo: string }
   phaseLabel: () => string
   elapsed: () => number
-  getChildren: ReturnType<typeof useChildSessions>["getChildren"]
   onComposerInteraction: (event: ComposerInteractionEvent) => void
   onSubmit: (content: string, mode?: "queue" | "interject") => void
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
@@ -2464,7 +2462,6 @@ export function createSessionController(props: {
 
   const authGatePending = () =>
     !props.debugMode && (authGateState() !== "closed" || validatedAgent() !== client.agent())
-  const { getChildren } = useChildSessions(client)
 
   const [composerState, setComposerState] = createSignal<ComposerState>(ComposerState.idle())
   const drafts = useComposerDrafts()
@@ -2904,7 +2901,6 @@ export function createSessionController(props: {
     activity,
     phaseLabel,
     elapsed,
-    getChildren,
     onComposerInteraction,
     onSubmit,
     onSlashCommand,

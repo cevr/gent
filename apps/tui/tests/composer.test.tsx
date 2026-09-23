@@ -459,7 +459,6 @@ function TestComposer(props: {
     activity: () => ({ phase: "idle", turn: 0 }),
     phaseLabel: () => "idle",
     elapsed: () => 0,
-    getChildren: () => [],
     // Production threads the live contributions here (session-controller.ts).
     // Dropping them makes every popup assertion vacuous, so the harness
     // matches the real call.
@@ -838,7 +837,6 @@ function TestComposerGhost(props: {
     activity: () => ({ phase: "idle", turn: 0 }),
     phaseLabel: () => "idle",
     elapsed: () => 0,
-    getChildren: () => [],
     onComposerInteraction: (event: Parameters<typeof transitionComposerInteraction>[1]) =>
       setInteractionState((current) =>
         transitionComposerInteraction(current, event, ext.autocompleteItems()),
@@ -1080,7 +1078,6 @@ function TestComposerSlashEnter(props: {
     activity: () => ({ phase: "idle", turn: 0 }),
     phaseLabel: () => "idle",
     elapsed: () => 0,
-    getChildren: () => [],
     onComposerInteraction: (event: Parameters<typeof transitionComposerInteraction>[1]) =>
       setInteractionState((current) =>
         transitionComposerInteraction(current, event, ext.autocompleteItems()),

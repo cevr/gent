@@ -8,6 +8,7 @@ import {
   type Path,
   Schema,
   Scope,
+  Stream,
 } from "effect"
 import {
   type ActiveInteraction,
@@ -180,6 +181,14 @@ export interface ClientTransport {
   /** Subscribe to every event for the active session/branch. */
   readonly onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
   /**
+   * Every event of one branch, by explicit key: its saved history from the
+   * start, then its live events. The key is usually not the session the shell
+   * is on — a delegate row reads its child's tools and text through this.
+   */
+  readonly sessionEvents: (
+    key: ActiveExtensionSession,
+  ) => Stream.Stream<EventEnvelope, ClientTransportRequestError>
+  /**
    * Read live detail for one loop, by explicit key rather than the active
    * session: the caller is asking about a row, which is usually not the
    * session the shell is on.
@@ -238,6 +247,18 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   ) => requestExtensionAt(payload, ref, input, activeSession),
   onExtensionStateChanged: payload.onExtensionStateChanged,
   onSessionEvent: payload.onSessionEvent,
+  sessionEvents: (key) =>
+    payload.client.session.events({ ...key, after: 0 }).pipe(
+      Stream.mapError(
+        (cause) =>
+          new ClientTransportRequestError({
+            extensionId: "@gent/tui/client-transport",
+            tag: "session.events",
+            message: `session.events failed: ${String(cause)}`,
+            cause,
+          }),
+      ),
+    ),
   agentDetail: (key) => agentDetailAt(payload, key),
   deleteSession: (sessionId) =>
     shellRead(payload, "session.delete", (client) => client.session.delete({ sessionId })).pipe(

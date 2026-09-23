@@ -53,6 +53,7 @@ import { BUILTIN_TOOL_RENDERERS } from "../tool-renderers"
 import { AskUserRenderer, HandoffRenderer, PromptRenderer } from "../interaction-renderers"
 import builtinAgentsView from "./agents.client"
 import builtinBtw from "./btw.client"
+import builtinDelegate from "./delegate.client"
 import builtinWake from "./wake.client"
 import builtinThreadView from "./thread-view.client"
 import {
@@ -836,6 +837,7 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinAgentsView,
   builtinBtw,
   builtinConnection,
+  builtinDelegate,
   builtinDriver,
   builtinFiles,
   builtinGoal,

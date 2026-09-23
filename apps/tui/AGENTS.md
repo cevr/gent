@@ -177,6 +177,7 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter                 |
 | `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane (the session browser), tray |
 | `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                        |
+| `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child run tree    |
 | `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                          |
 | `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row         |
 
@@ -190,6 +191,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `lifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
 - Extensions have no overlays. A pane is a `below-input` widget that the extension opens and closes with its own signal (agents, thread, btw). A pane that takes typed text reads keys through `useScopedKeyboard`, as the agents filter and the btw ask line do: an `<input>` would take the terminal's focus from the composer, and the composer would not get it back.
+- The TUI host (`src/` outside `extensions/`) never imports `@gent/extensions`; the `gent/core-entry-boundary` oxlint rule enforces it. One extension's view is a client extension that reads its server state through `ClientContext.transport`. `transport.sessionEvents(key)` reads another branch's events, as the delegate row does for each child
 - `useExtensionUI()` provides the resolved contributions, the load `failures`, and `clientRuntime`; widgets read the session from `transport.currentSession()`
 - **Message rows**: `messageRendererContribution(customType, component)` draws the user-role messages whose `metadata.customType` matches exactly. The component composes `UserRow` or `CollapsedRow` from `src/ui.tsx`. `message-list.tsx` names only the runtime's own kinds (`context-window`, `model-change`), and full detail draws every message as the plain row
 - Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`

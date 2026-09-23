@@ -46,7 +46,6 @@ import { GenericToolRenderer, type ToolCall } from "./tool-renderers"
 import { useExtensionUI } from "./extensions/host"
 import type { MessageRenderer, MessageRowProps } from "./extensions/client-facets"
 import type { ImagePartProjection } from "@gent/core/protocol"
-import type { ChildSessionEntry } from "./client"
 import { replaceMermaidBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
@@ -406,7 +405,6 @@ function AssistantMessage(props: {
   syntaxStyle: () => SyntaxStyle
   streaming: boolean
   dimensions: Accessor<TerminalDimensions>
-  getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
   const { theme } = useTheme()
 
@@ -470,7 +468,6 @@ function AssistantMessage(props: {
                     calls={calls}
                     disclosure={props.disclosure}
                     fullDetail={props.fullDetail}
-                    getChildSessions={props.getChildSessions}
                   />
                 ),
                 text: (segment) => {
@@ -500,7 +497,6 @@ function ToolCallGroup(props: {
   calls: ToolCall[]
   disclosure: DisclosureLevel
   fullDetail: boolean
-  getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }) {
   const { theme } = useTheme()
   const failed = () => props.calls.some((call) => call.status === "error")
@@ -609,21 +605,13 @@ function ToolCallGroup(props: {
                       </box>
                       <Show when={rowsOpen()}>
                         <ToolFrameBody>
-                          <SingleToolCall
-                            toolCall={call}
-                            expanded={true}
-                            getChildSessions={props.getChildSessions}
-                          />
+                          <SingleToolCall toolCall={call} expanded={true} />
                         </ToolFrameBody>
                       </Show>
                     </box>
                   }
                 >
-                  <SingleToolCall
-                    toolCall={call}
-                    expanded={rowsOpen()}
-                    getChildSessions={props.getChildSessions}
-                  />
+                  <SingleToolCall toolCall={call} expanded={rowsOpen()} />
                 </Show>
               )
             }}
@@ -648,18 +636,12 @@ function ToolCallGroup(props: {
   )
 }
 
-function SingleToolCall(props: {
-  toolCall: ToolCall
-  expanded: boolean
-  getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
-}) {
+function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
   const { theme } = useTheme()
   const ext = useExtensionUI()
   const toolName = () => props.toolCall.toolName.toLowerCase()
   const hasRenderer = () => ext.renderers().has(toolName())
   const Renderer = () => ext.renderers().get(toolName())
-
-  const childSessions = () => props.getChildSessions?.(props.toolCall.id)
 
   return (
     <Show
@@ -690,11 +672,7 @@ function SingleToolCall(props: {
         const RendererComponent = R.value
         return (
           <ToolCallIdentityProvider id={props.toolCall.id}>
-            <RendererComponent
-              toolCall={props.toolCall}
-              expanded={props.expanded}
-              childSessions={childSessions()}
-            />
+            <RendererComponent toolCall={props.toolCall} expanded={props.expanded} />
           </ToolCallIdentityProvider>
         )
       })()}
@@ -708,7 +686,6 @@ interface MessageListProps {
   fullDetail?: boolean
   syntaxStyle: () => SyntaxStyle
   streaming: boolean
-  getChildSessions?: (toolCallId: string) => ChildSessionEntry[]
 }
 
 export function MessageList(props: MessageListProps) {
@@ -737,7 +714,6 @@ export function MessageList(props: MessageListProps) {
                     syntaxStyle={props.syntaxStyle}
                     streaming={props.streaming && index() === props.items.length - 1}
                     dimensions={dimensions}
-                    getChildSessions={props.getChildSessions}
                   />
                 }
               >

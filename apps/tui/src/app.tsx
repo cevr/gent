@@ -668,7 +668,6 @@ export function Session(props: SessionProps) {
               fullDetail={controller.uiState().transcriptExpanded}
               syntaxStyle={syntaxStyle}
               streaming={streaming}
-              getChildSessions={controller.getChildren}
             />
           )}
         >
