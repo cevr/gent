@@ -321,13 +321,16 @@ export const activityText = (state: ActivityFold): Option.Option<string> =>
 
 interface AgentActivityService {
   /**
-   * Follow these loops: start a follower for each key not followed yet. A
-   * follower owns its lifetime: one per loop, across turns, so a next turn's
-   * first event is never missed. Each turn's end clears its line. It ends, and
-   * forgets its activity, when the loop is no longer live at a turn's end,
-   * when its subscription ends, or at once when the loop is not working as it
-   * starts. No caller stops another caller's followers, so a filtered listing,
-   * or a TUI in another workspace, cannot blank the tray.
+   * Follow these loops: start a follower for each key not followed yet, and
+   * stop the followers of loops the runtime lists idle or no longer lists.
+   * A follower follows one loop while that loop works. Each turn's end clears
+   * its line. It ends, and forgets its activity, at a turn's end that finds
+   * the loop idle or gone, at a follow whose listing finds the same, when its
+   * subscription ends, or at once when the loop is not working as it starts.
+   * A later turn gets a new follower from the first listing that sees the
+   * loop working. Only the runtime listing stops a follower, never a
+   * caller's rows, so a filtered listing, or a TUI in another workspace,
+   * cannot blank the tray.
    */
   readonly follow: (
     loops: ReadonlyArray<AgentRowKey>,
@@ -371,18 +374,19 @@ export const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
             ).pipe(Option.map((candidate) => candidate.status)),
           ),
         )
-        // Only a turn's end asks whether the loop is still live.
+        // Only a turn's end asks whether the loop still works: a finished
+        // child stays listed, idle, until it is evicted, and no later event
+        // would come to end its follower.
         const followsOn = (event: AgentEvent) => {
           if (event._tag !== "TurnCompleted") return Effect.succeed(true)
-          return Effect.map(liveStatus, Option.isSome)
+          return Effect.map(liveStatus, (status) => Option.exists(status, isWorking))
         }
         // A loop that is not working has no line to report; a listing that
         // sees it working again starts a follower then.
         const status = yield* liveStatus
         if (!Option.exists(status, isWorking)) return
         // From now: the fold needs only what the loop does next, so a
-        // follower never replays the child's whole history. The fold clears
-        // at each turn's end; the follower lives on while the loop does.
+        // follower never replays the child's whole history.
         yield* ctx.Session.events({ ...loop, from: "now" }).pipe(
           Stream.mapEffect((event) =>
             setFold(key, (fold) => foldActivity(fold, event)).pipe(
@@ -409,6 +413,20 @@ export const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
       follow: (loops) =>
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
+          // A loop's turn end is sent before the loop settles, so it can
+          // still read as working then; no later event comes to end the
+          // follower of a finished child. The runtime listing does: a loop
+          // it shows idle, or no longer shows, has nothing to report. A
+          // failed listing stops nothing.
+          const listing = yield* Effect.option(ctx.Session.listActiveLoops)
+          if (Option.isSome(listing)) {
+            const working = new Set(
+              listing.value.filter((loop) => isWorking(loop.status)).map(rowKey),
+            )
+            for (const [key] of Array.from(followers)) {
+              if (!working.has(key)) yield* FiberMap.remove(followers, key)
+            }
+          }
           const wanted = new Map(loops.map((loop) => [rowKey(loop), loop]))
           for (const [key, loop] of wanted) {
             yield* FiberMap.run(
