@@ -131,10 +131,6 @@ import {
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as EffectEntry from "effect"
-import * as EffectAiEntry from "effect/unstable/ai"
-import * as EffectHttpEntry from "effect/unstable/http"
-import * as EffectProcessEntry from "effect/unstable/process"
-import * as EffectSqlEntry from "effect/unstable/sql"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
 import {
   type Branch,
@@ -1145,12 +1141,12 @@ const extensionDirectories = (
  * entry. A bound specifier also gives a user extension the same module
  * instances as a shipped one: the same Tags and the same Schema classes.
  *
- * Only these names resolve: the two authoring entries a shipped extension may
- * read, and `effect`. `@gent/core/protocol` is a client entry; the TUI binds
- * it for client files. An internal path such as `@gent/core/host` is not
- * bound, and it does not resolve outside the repository. The `effect/unstable`
- * names are the barrels the shipped extensions read; a deep module path under
- * one does not resolve.
+ * The loader binds the two authoring entries and `effect`. The host that
+ * composes the shipped extensions binds the other `effect/*` and `@effect/*`
+ * modules they import (`BuiltinExtensionModules` in `@gent/extensions`).
+ * `@gent/core/protocol` is a client entry; the TUI binds it for client files
+ * only. An internal path such as `@gent/core/host` is not bound, and it does
+ * not resolve outside the repository.
  *
  * The gent entries re-export this module, so they are read on first use: a
  * static import here would evaluate them inside their own import cycle.
@@ -1164,10 +1160,6 @@ export const extensionEntryModules: ReadonlyMap<string, RuntimeModuleSource> = n
   // gent/no-dynamic-imports: allow the entry imports this module; read it after both evaluate
   ["@gent/core/extensions/branch-tools", () => import("../extensions/branch-tools.js")],
   ["effect", () => EffectEntry],
-  ["effect/unstable/ai", () => EffectAiEntry],
-  ["effect/unstable/http", () => EffectHttpEntry],
-  ["effect/unstable/process", () => EffectProcessEntry],
-  ["effect/unstable/sql", () => EffectSqlEntry],
 ])
 
 /** Bind the extension entries before an extension file is imported. */

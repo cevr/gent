@@ -1072,7 +1072,9 @@ Core never imports from extensions. Composition roots (apps, SDK) pass `BuiltinE
 Extensions may import from:
 
 - `@gent/core/extensions/api` — the authoring surface
-- `effect`, `@effect/*` — as peer deps
+- `@gent/core/extensions/branch-tools` — the branch-tool entry
+- `effect`, `effect/*`, `@effect/*` — as peer deps. A user or project
+  extension run by the compiled binary resolves only the ones listed below.
 
 Extensions may NOT import Gent domain, runtime, storage, server, or provider
 internals, nor the `@gent/core/host` and `@gent/core/test-utils` entries. The
@@ -1088,17 +1090,33 @@ privileged.
 
 TUI client extensions may also import shared client data from `@gent/core/protocol`. This exception does not apply to server extension implementations or to nested protocol paths.
 
-The loaders enforce the same contract at runtime. Before a user or project
-extension file is imported, the server loader binds `@gent/core/extensions/api`,
-`@gent/core/extensions/branch-tools`, `effect`, and the `effect/unstable`
-barrels the shipped extensions read (`ai`, `http`, `process`, `sql`) to the
-modules the process already runs (`GentPlatform.bindModules`, a Bun runtime
-plugin). The TUI loader adds `@gent/core/protocol`, `@gent/tui/extensions`,
-`solid-js`, `solid-js/store` and `@opentui/solid`, and compiles client JSX with
-the OpenTUI Solid transform. So an extension outside the repository works in
-the compiled binary, which has no node_modules, and it gets the same Tags and
-Schema classes as a shipped one. No other package resolves: the binary runs
-with `--no-install`, so an unbound specifier is never fetched from npm.
+The loaders enforce the same contract at runtime. The compiled binary has no
+node_modules and runs with `--no-install`, so a user or project extension
+resolves only a specifier a loader binds to the module the process already
+runs (`GentPlatform.bindModules`, a Bun runtime plugin). It gets the same Tags
+and Schema classes as a shipped extension, and an unbound specifier is never
+fetched from npm. The bound specifiers are exact:
+
+- Every extension file: `@gent/core/extensions/api`,
+  `@gent/core/extensions/branch-tools` and `effect`, bound by the server loader
+  (`extensionEntryModules`, `runtime/extension-host.ts`) and by the TUI loader.
+- The peers the shipped extensions import: `BuiltinExtensionModules` in
+  `@gent/extensions`, bound by the SDK server root before it loads extensions.
+  It holds each `effect/*` and `@effect/*` specifier that
+  `packages/extensions/src/` or `examples/extensions/` imports, and no other.
+  `packages/extensions/tests/index.test.ts` derives that set from the sources
+  and fails when the map differs, so a shipped extension never reads a module
+  a user extension cannot. A user extension is as capable as a shipped one.
+- Client files only: `@gent/core/protocol`, `@gent/tui/extensions`,
+  `solid-js`, `solid-js/store` and `@opentui/solid`. Bun resolves a bare import
+  from a runtime plugin without the importer, so these are bound under a prefix
+  drawn for each TUI load. The TUI loader compiles each `*.client.*` file with
+  `Bun.build` and the OpenTUI Solid transform, and renames these imports to the
+  prefixed names in the file, in the relative modules it imports, and in the
+  packages it bundles. A server extension in the same process imports
+  `@gent/core/protocol` and gets "Cannot find package".
+
+Nothing else resolves, internal entries such as `@gent/core/host` included.
 
 ### Extension API Inventory
 

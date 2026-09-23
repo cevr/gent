@@ -21,10 +21,6 @@ import {
   Schema as S,
 } from "effect"
 import * as EffectEntry from "effect"
-import * as EffectAiEntry from "effect/unstable/ai"
-import * as EffectHttpEntry from "effect/unstable/http"
-import * as EffectProcessEntry from "effect/unstable/process"
-import * as EffectSqlEntry from "effect/unstable/sql"
 import { describe, expect, it, test } from "effect-bun-test"
 import * as ExtensionApiEntry from "../../src/extensions/api"
 import * as BranchToolsEntry from "../../src/extensions/branch-tools"
@@ -2825,10 +2821,6 @@ const boundEntries = {
   "@gent/core/extensions/api": ExtensionApiEntry,
   "@gent/core/extensions/branch-tools": BranchToolsEntry,
   effect: EffectEntry,
-  "effect/unstable/ai": EffectAiEntry,
-  "effect/unstable/http": EffectHttpEntry,
-  "effect/unstable/process": EffectProcessEntry,
-  "effect/unstable/sql": EffectSqlEntry,
 }
 
 // gent/no-dynamic-imports: allow the test reads the exports of an extension file it wrote

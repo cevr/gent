@@ -1,4 +1,15 @@
-import { Cause, Duration, Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
+import {
+  Cause,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Predicate,
+  Random,
+  Ref,
+  Schema,
+} from "effect"
 import {
   type ExtensionScope,
   isClientEntrypoint,
@@ -15,7 +26,6 @@ import {
 import * as ProtocolEntry from "@gent/core/protocol"
 import * as ClientExtensionEntry from "@gent/tui/extensions"
 import * as OpenTuiSolidEntry from "@opentui/solid"
-import { ensureSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import * as SolidEntry from "solid-js"
 import * as SolidStoreEntry from "solid-js/store"
 import {
@@ -32,6 +42,11 @@ import {
   type WidgetSlot,
   unknownContributionKey,
 } from "./client-facets.js"
+import {
+  bindModuleSource,
+  buildClientExtension,
+  type ClientBuildNames,
+} from "../client-extension-build-adapter"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
 
@@ -541,48 +556,93 @@ const setupExtension = (
   )
 
 /**
- * Bind what a client extension file imports to the modules this process
- * runs, and compile its JSX as the build compiles the shipped ones. The
- * compiled binary has no node_modules, so this is the only way a file outside
- * the repository reaches `@gent/tui/extensions` or Solid. A bound specifier
- * gives the file the TUI's own instances: one Solid runtime, one ClientContext.
- * A client file also reads the two authoring entries and `effect`, as a server
- * extension does, and the client entry `@gent/core/protocol`.
+ * The names a client extension file imports and a server extension file does
+ * not: the client protocol entry, the client authoring entry, and Solid. The
+ * compiled binary has no node_modules, so a file outside the repository
+ * reaches them only through these bindings, and it gets the TUI's own
+ * instances: one Solid runtime, one ClientContext.
+ *
+ * Bun resolves a bare import from a runtime plugin without the importer, so a
+ * global binding would also reach a server extension in the same process.
+ * The names are bound under a prefix drawn for each load instead, and only the
+ * client build below rewrites a client file's imports to that prefix.
  */
-const provideClientExtensionModules = Effect.sync(() => ensureSolidTransformPlugin()).pipe(
-  Effect.andThen(
-    bindBunModules(
-      new Map<string, RuntimeModuleSource>([
-        ...extensionEntryModules,
-        ["@gent/core/protocol", () => ProtocolEntry],
-        ["@gent/tui/extensions", () => ClientExtensionEntry],
-        ["@opentui/solid", () => OpenTuiSolidEntry],
-        ["solid-js", () => SolidEntry],
-        ["solid-js/store", () => SolidStoreEntry],
-      ]),
-    ),
-  ),
-)
+const clientOnlyModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
+  string,
+  RuntimeModuleSource
+>([
+  ["@gent/core/protocol", () => ProtocolEntry],
+  ["@gent/tui/extensions", () => ClientExtensionEntry],
+  ["@opentui/solid", () => OpenTuiSolidEntry],
+  ["solid-js", () => SolidEntry],
+  ["solid-js/store", () => SolidStoreEntry],
+])
 
-/** Import module and validate shape — does NOT call setup() */
-function loadExtensionModule(filePath: string) {
-  // gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
-  return import(filePath)
-}
+/**
+ * Bind the names every extension file reads (the two authoring entries and
+ * `effect`) under their own names, and the client names under a prefix drawn
+ * for this load. Return the loader for client files: it compiles a file and
+ * the relative modules it imports as the build compiles the shipped ones
+ * (Solid JSX), rewrites each client name to its prefixed binding, binds the
+ * output under a fresh prefixed name, and imports it. A bound name stays an
+ * import of the running module. The server root binds the other `effect`
+ * modules the shipped extensions read.
+ */
+const provideClientExtensionModules = Effect.gen(function* () {
+  const prefix = `gent-client-${(yield* Random.nextInt).toString(36)}${(yield* Random.nextInt).toString(36)}:`
+  const clientModuleId = (specifier: string) => `${prefix}${specifier}`
+  yield* bindBunModules(
+    new Map<string, RuntimeModuleSource>([
+      ...extensionEntryModules,
+      ...[...clientOnlyModules].map(([specifier, source]): [string, RuntimeModuleSource] => [
+        clientModuleId(specifier),
+        source,
+      ]),
+    ]),
+  )
+  const names: ClientBuildNames = {
+    external: [...extensionEntryModules.keys(), `${prefix}*`],
+    rename: (specifier) =>
+      Option.map(
+        Option.liftPredicate(specifier, (name: string) => clientOnlyModules.has(name)),
+        clientModuleId,
+      ),
+    solidRuntime: clientModuleId("@opentui/solid"),
+  }
+  const builds = yield* Ref.make(0)
+  return (filePath: string) =>
+    Effect.gen(function* () {
+      const contents = yield* buildClientExtension(filePath, names).pipe(
+        Effect.mapError(
+          (error) =>
+            new TuiExtensionImportError({
+              message: `Failed to build ${filePath}`,
+              cause: error.cause,
+            }),
+        ),
+      )
+      const name = clientModuleId(
+        `file:${filePath}#${yield* Ref.updateAndGet(builds, (n) => n + 1)}`,
+      )
+      yield* bindModuleSource(name, contents)
+      return yield* Effect.tryPromise({
+        // gent/no-dynamic-imports: allow TUI extension modules are discovered from user/project files at runtime
+        try: () => import(name),
+        catch: (cause) =>
+          new TuiExtensionImportError({ message: `Failed to load ${filePath}`, cause }),
+      })
+    })
+})
+
+type ClientExtensionLoader = Effect.Success<typeof provideClientExtensionModules>
 
 const importExtension = (
+  load: ClientExtensionLoader,
   entry: DiscoveredTuiExtension,
   timeout: Duration.Input,
 ): Effect.Effect<ImportedExtension, ClientExtensionFailure> =>
   Effect.gen(function* () {
-    const mod = yield* Effect.tryPromise({
-      try: () => loadExtensionModule(entry.filePath),
-      catch: (cause) =>
-        new TuiExtensionImportError({
-          message: `Failed to load ${entry.filePath}`,
-          cause,
-        }),
-    })
+    const mod = yield* load(entry.filePath)
     const candidate = Option.getOrElse(Option.fromNullishOr(mod.default), () => mod)
     if (!isExtensionClientModule(candidate)) {
       return yield* Effect.fail({
@@ -626,9 +686,9 @@ export const loadTuiExtensions = (opts: {
       () => EXTENSION_LOAD_TIMEOUT,
     )
     const discovered = yield* discoverTuiExtensions(opts)
-    if (discovered.length > 0) yield* provideClientExtensionModules
+    const load = yield* provideClientExtensionModules
     const [importFailures, imported] = yield* Effect.partition(discovered, (entry) =>
-      importExtension(entry, timeout),
+      importExtension(load, entry, timeout),
     )
     const builtins = Option.getOrElse(Option.fromNullishOr(opts.builtins), () => []).map(
       (module): ImportedExtension => ({
