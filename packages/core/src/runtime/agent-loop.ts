@@ -1212,9 +1212,10 @@ type AgentLoopBehavior = {
    * Branch-lifetime services: the cell kernel, the model context ledger, and
    * every extension Resource declared with `scope: "branch"`. Extension leaves
    * invoked outside a turn (an `extension.request` RPC, say) must be given this
-   * context, or a branch Resource resolves as "Service not found".
+   * context, or a branch Resource resolves as "Service not found". Built on
+   * first use from the session's profile.
    */
-  branchContext: Context.Context<never>
+  branchContext: Effect.Effect<Context.Context<never>>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   interrupt: (messageId?: MessageId) => Effect.Effect<void, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
@@ -1391,24 +1392,44 @@ const makeAgentLoopBehavior = (
     // `loopScope`, so they are rebuilt per loop and interrupted when the branch
     // closes. Process-scope Resources are not collected here — they belong to
     // the process graph host and outlive this scope.
-    const branchResourceLayer = buildResourceLayer(
-      extensionRegistry.getResolved().extensions,
-      "branch",
-    )
     const branchTools = yield* CurrentBranchToolFeature
     const branchCwd = yield* sessionWorkingDirectory(sessionId)
-    const branchContext = yield* Layer.build(
-      Layer.merge(
-        branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
-        branchResourceLayer,
-      ),
+    const branchToolContext = yield* Layer.build(
+      branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
     ).pipe(Scope.provide(loopScope))
+    // The branch's Resources come from the session's profile, the same one its
+    // turns and requests resolve: the extensions set up for the session's cwd,
+    // over that profile's process services. The launch registry would build
+    // another project's Resources. They are built on the first turn or
+    // request, not at open, so a control-plane write (a cancel, an answer to
+    // no question) never resolves a profile.
+    const branchResourceLock = yield* Semaphore.make(1)
+    const branchResources = yield* Ref.make(Option.none<typeof branchToolContext>())
+    const branchContext = Effect.gen(function* () {
+      const built = yield* Ref.get(branchResources)
+      if (Option.isSome(built)) return built.value
+      const profile = yield* resolveTurnProfile
+      return yield* Effect.uninterruptible(
+        Layer.build(
+          buildResourceLayer(profile.turnExtensionRegistry.getResolved().extensions, "branch"),
+        ).pipe(
+          Effect.provideContext(
+            Option.getOrElse(Option.fromUndefinedOr(profile.turnCapabilityContext), Context.empty),
+          ),
+          Scope.provide(loopScope),
+          Effect.map((resources): typeof branchToolContext =>
+            Context.merge(branchToolContext, resources),
+          ),
+          Effect.tap((context) => Ref.set(branchResources, Option.some(context))),
+        ),
+      )
+    }).pipe(branchResourceLock.withPermits(1))
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnLedger = yield* makeTurnLedger
     // A tool holding branch-scoped work exposes how to cancel it. A branch
     // whose tools are all stateless has nothing to cancel.
-    const branchWork = Context.getOption(branchContext, BranchToolWork)
+    const branchWork = Context.getOption(branchToolContext, BranchToolWork)
     const initialLoopState = buildIdleState()
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
       buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
@@ -1469,7 +1490,10 @@ const makeAgentLoopBehavior = (
       runTurn: (state) =>
         Effect.acquireUseRelease(
           keepAlive(true),
-          () => runTurn(state).pipe(Effect.provideContext(branchContext)),
+          () =>
+            branchContext.pipe(
+              Effect.flatMap((context) => runTurn(state).pipe(Effect.provideContext(context))),
+            ),
           () => keepAlive(false),
         ),
     })
@@ -2461,7 +2485,7 @@ const buildAgentLoopActorHandlers = (config: {
               // Branch Resources live on the loop scope, not on the turn
               // profile. Without this an extension leaf reached over RPC
               // cannot see a `scope: "branch"` service.
-              Effect.provideContext(handle.branchContext),
+              Effect.provideContext(yield* handle.branchContext),
             )
             // A read-only request answers while a turn runs; anything else is
             // a side mutation and waits for the permit the turn holds.
