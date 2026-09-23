@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Layer, Option, Schema } from "effect"
+import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { ExtensionId, getToolId } from "@gent/core/extensions/api"
-import { BuiltinExtensions } from "../src/index.js"
+import { BuiltinExtensionModules, BuiltinExtensions } from "../src/index.js"
 import { homedir } from "node:os"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
@@ -19,6 +19,45 @@ describe("starting extensions", () => {
     expect(BuiltinExtensions.length).toBeGreaterThan(0)
     expect(BuiltinExtensions.every(hasPublicExtensionContract)).toBe(true)
   })
+})
+
+// ── builtin peer modules ────────────────────────────────────────────────────
+
+/** An `effect`, `effect/*` or `@effect/*` specifier; `effect-encore` is not one. */
+const EFFECT_SPECIFIER = /^(?:effect(?:\/.+)?|@effect\/.+)$/
+const IMPORT_SOURCE = /(?:\bfrom\s+|\bimport\s*\(\s*|^\s*import\s+)"([^"]+)"/gm
+
+// gent/no-dynamic-imports: allow the test compares each binding with the module its name resolves to here
+const importSpecifier = (specifier: string) => Effect.promise(() => import(specifier))
+
+describe("builtin peer modules", () => {
+  it.live("bind exactly the effect modules the shipped extensions import", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const roots = [
+        path.join(import.meta.dirname, "..", "src"),
+        path.join(import.meta.dirname, "..", "..", "..", "examples", "extensions"),
+      ]
+      const imported = new Set<string>()
+      for (const root of roots) {
+        const files = yield* fs.readDirectory(root, { recursive: true })
+        for (const file of files.filter((name) => /\.tsx?$/.test(name))) {
+          const source = yield* fs.readFileString(path.join(root, file))
+          for (const [, specifier = ""] of source.matchAll(IMPORT_SOURCE)) {
+            if (EFFECT_SPECIFIER.test(specifier)) imported.add(specifier)
+          }
+        }
+      }
+      expect(imported.size).toBeGreaterThan(0)
+      expect([...BuiltinExtensionModules.keys()].sort()).toEqual([...imported].sort())
+
+      for (const [specifier, source] of BuiltinExtensionModules) {
+        const resolved: object = yield* importSpecifier(specifier)
+        expect({ specifier, same: source() === resolved }).toEqual({ specifier, same: true })
+      }
+    }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
 })
 
 // ── tool schemas ────────────────────────────────────────────────────────────

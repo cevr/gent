@@ -63,6 +63,12 @@ import {
 } from "../../src/autocomplete"
 import { makeClientRuntime } from "../../src/extensions/host"
 import { createMockClient, createMockRuntime } from "../render-harness-boundary"
+import * as EffectEntry from "effect"
+import * as ProtocolEntry from "@gent/core/protocol"
+import * as ClientExtensionEntry from "@gent/tui/extensions"
+import * as SolidEntry from "solid-js"
+import * as SolidStoreEntry from "solid-js/store"
+import * as OpenTuiSolidEntry from "@opentui/solid"
 
 // ── extensions resolve ──────────────────────────────────────────────────────
 
@@ -385,6 +391,19 @@ describe("resolveTuiExtensions", () => {
  */
 
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+/** Each specifier a client extension imports, with the module the TUI runs for it. */
+const clientEntries = {
+  effect: EffectEntry,
+  "@gent/core/protocol": ProtocolEntry,
+  "@gent/tui/extensions": ClientExtensionEntry,
+  "solid-js": SolidEntry,
+  "solid-js/store": SolidStoreEntry,
+  "@opentui/solid": OpenTuiSolidEntry,
+}
+/** Where a probe extension leaves the modules it imported, for the test to compare. */
+const PROBE_GLOBAL = "__gentClientEntriesProbe"
+// gent/no-dynamic-imports: allow the test imports a server-style file as the server loader does
+const importFile = (file: string) => Effect.tryPromise(() => import(file))
 const runtime = makeClientExtensionRuntime()
 describe("loadTuiExtensions Effect setup", () => {
   it.scopedLive("does not import project code until the user grants trust", () =>
@@ -447,6 +466,138 @@ export default {
         { id: "@user/stale-labels", reason: 'unknown contribution "borderLabels"' },
       ])
     }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  // The compiled binary has no node_modules. A client extension outside the
+  // repository resolves its imports, and compiles its JSX, only because the
+  // loader binds them to the modules the TUI runs. A relative module the
+  // client file imports gets the same names. A server file in the same
+  // process gets only the shared names.
+  it.scopedLive(
+    "a JSX client extension outside the repository imports the public entries and Solid; a server file does not",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        // The system temp directory: no node_modules above it.
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "gent-client-entries-" })
+        const userDir = path.join(root, "home/.gent/extensions")
+        const projectDir = path.join(root, "project/.gent/extensions")
+        yield* fs.makeDirectory(path.join(userDir, "_lib"), { recursive: true })
+        // A package the user installed beside the extension; the Solid
+        // transform skips node_modules, the client build still renames it.
+        const packageDir = path.join(userDir, "node_modules", "probe-lib")
+        yield* fs.makeDirectory(packageDir, { recursive: true })
+        yield* fs.writeFileString(
+          path.join(packageDir, "package.json"),
+          encode({ name: "probe-lib", type: "module", main: "index.js" }),
+        )
+        yield* fs.writeFileString(
+          path.join(packageDir, "index.js"),
+          `export { createSignal as packageCreateSignal } from "solid-js"\n`,
+        )
+        yield* fs.writeFileString(
+          path.join(userDir, "_lib", "ids.ts"),
+          `export { SessionId as helperSessionId } from "@gent/core/protocol"\n`,
+        )
+        yield* fs.writeFileString(
+          path.join(userDir, "_lib", "label.tsx"),
+          `
+import { createSignal } from "solid-js"
+
+export const Label = (props: { readonly text: string }) => {
+  const [text] = createSignal(props.text)
+  return <text>{text()}</text>
+}
+`,
+        )
+        yield* fs.writeFileString(
+          path.join(userDir, "entries.client.tsx"),
+          `
+import * as effect from "effect"
+import * as protocol from "@gent/core/protocol"
+import * as tui from "@gent/tui/extensions"
+import * as solid from "solid-js"
+import * as solidStore from "solid-js/store"
+import * as openTuiSolid from "@opentui/solid"
+import { helperSessionId } from "./_lib/ids"
+import { packageCreateSignal } from "probe-lib"
+import { Label } from "./_lib/label"
+
+const bound = {
+  effect,
+  "@gent/core/protocol": protocol,
+  "@gent/tui/extensions": tui,
+  "solid-js": solid,
+  "solid-js/store": solidStore,
+  "@opentui/solid": openTuiSolid,
+}
+
+const Probe = () => <Label text="entries probe" />
+
+export default tui.defineClientExtension("@user/client-entries", {
+  setup: effect.Effect.sync(() => {
+    Reflect.set(globalThis, ${encode(PROBE_GLOBAL)}, { bound, helperSessionId, packageCreateSignal })
+    return tui.clientContributions(
+      tui.widgetContribution({ id: "entries-probe", slot: "below-input", component: Probe }),
+      tui.clientCommandContribution({ id: "entries-probe", title: "Entries probe", onSelect: () => {} }),
+    )
+  }),
+})
+`,
+        )
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => Reflect.deleteProperty(globalThis, PROBE_GLOBAL)),
+        )
+        const result = yield* loadTuiExtensions({ userDir, projectDir, runtime })
+        expect(result.failures).toEqual([])
+        expect(result.widgets.map((entry) => entry.id)).toContain("entries-probe")
+        expect(
+          result.commandSources.flatMap((source) => source.commands.map((command) => command.id)),
+        ).toContain("entries-probe")
+
+        const probe: object = Reflect.get(globalThis, PROBE_GLOBAL)
+        expect(Reflect.get(probe, "helperSessionId")).toBe(ProtocolEntry.SessionId)
+        expect(Reflect.get(probe, "packageCreateSignal")).toBe(SolidEntry.createSignal)
+        const bound: object = Reflect.get(probe, "bound")
+        for (const [specifier, entryModule] of Object.entries(clientEntries)) {
+          const imported: object = Reflect.get(bound, specifier)
+          for (const [name, value] of Object.entries(entryModule)) {
+            const same = Reflect.get(imported, name) === value
+            expect({ specifier, name, same }).toEqual({
+              specifier,
+              name,
+              same: true,
+            })
+          }
+        }
+
+        // A server extension file, imported in this process after the client load.
+        const serverDir = path.join(root, "server")
+        yield* fs.makeDirectory(serverDir, { recursive: true })
+        const serverImport = (file: string, specifier: string) =>
+          fs
+            .writeFileString(
+              path.join(serverDir, file),
+              `import * as entry from "${specifier}"\nexport const keys = Object.keys(entry)\n`,
+            )
+            .pipe(
+              Effect.andThen(importFile(path.join(serverDir, file))),
+              Effect.map(() => "resolved"),
+              Effect.catch((error) => Effect.succeed(String(error.cause))),
+            )
+        expect(yield* serverImport("api.ts", "@gent/core/extensions/api")).toBe("resolved")
+        expect(yield* serverImport("effect.ts", "effect")).toBe("resolved")
+        expect(yield* serverImport("protocol.ts", "@gent/core/protocol")).toContain(
+          "Cannot find package '@gent/core'",
+        )
+        expect(yield* serverImport("tui.ts", "@gent/tui/extensions")).toContain(
+          "Cannot find package '@gent/tui'",
+        )
+        expect(yield* serverImport("solid.ts", "solid-js")).toContain(
+          "Cannot find package 'solid-js'",
+        )
+      }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
   )
 
   it.live("Effect setup is run through the runtime; FileSystem is provided", () =>
