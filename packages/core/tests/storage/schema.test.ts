@@ -166,8 +166,13 @@ describe("session admission", () => {
         const recorded = SessionId.make("recorded-child")
         const queued = SessionId.make("queued-child")
         const plain = SessionId.make("plain-parent")
+        // A stored turn names `old`; the turn in flight names `new`.
+        const both = SessionId.make("recorded-and-in-flight")
+        // Two stored turns disagree; the later one names `new`.
+        const history = SessionId.make("two-records")
         const branch = (sessionId: SessionId) => BranchId.make(`${sessionId}-branch`)
         const turn = (sessionId: SessionId) => MessageId.make(`${sessionId}-turn`)
+        const laterTurn = MessageId.make(`${history}-z-later`)
 
         // The shape a build before this migration left: sessions with no
         // admission, and the per-turn admission on a turn record or a queued turn.
@@ -175,7 +180,7 @@ describe("session admission", () => {
           const sessions = yield* SessionStorage
           const branches = yield* BranchStorage
           const messages = yield* MessageStorage
-          for (const sessionId of [recorded, queued, plain]) {
+          for (const sessionId of [recorded, queued, plain, both, history]) {
             yield* sessions.createSession(
               new Session({
                 id: sessionId,
@@ -197,6 +202,16 @@ describe("session admission", () => {
               }),
             )
           }
+          yield* messages.createMessage(
+            Message.cases.regular.make({
+              id: laterTurn,
+              sessionId: history,
+              branchId: branch(history),
+              role: "user",
+              parts: [Prompt.textPart({ text: "later task" })],
+              createdAt: FIXED_NOW,
+            }),
+          )
           const sql = yield* SqlClient.SqlClient
           const admissionJson =
             '{"agentOverride":"helper","interactive":false,"runSpec":{"overrides":{"deniedTools":["delegate.start"]}}}'
@@ -205,6 +220,18 @@ describe("session admission", () => {
           const queueJson = `{"steering":[],"followUp":[],"inFlight":{"message":{"_tag":"regular","id":"q"},"agentOverride":"helper","interactive":false}}`
           yield* sql`INSERT INTO agent_loop_queues (workspace_id, session_id, branch_id, queue_json, updated_at)
             VALUES (${WORKSPACE}, ${queued}, ${branch(queued)}, ${queueJson}, 1)`
+          const oldJson = '{"agentOverride":"old"}'
+          const newJson = '{"agentOverride":"new"}'
+          yield* sql`INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
+            VALUES (${both}, ${branch(both)}, ${turn(both)}, 1, 0, '[]', ${oldJson}, 5)`
+          const inFlightJson = `{"steering":[],"followUp":[],"inFlight":{"message":{"_tag":"regular","id":"f"},"agentOverride":"new"}}`
+          yield* sql`INSERT INTO agent_loop_queues (workspace_id, session_id, branch_id, queue_json, updated_at)
+            VALUES (${WORKSPACE}, ${both}, ${branch(both)}, ${inFlightJson}, 1)`
+          // The earlier record sorts first by key and by rowid; only its time says it is older.
+          yield* sql`INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
+            VALUES (${history}, ${branch(history)}, ${turn(history)}, 1, 0, '[]', ${oldJson}, 1)`
+          yield* sql`INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
+            VALUES (${history}, ${branch(history)}, ${laterTurn}, 1, 0, '[]', ${newJson}, 2)`
           yield* sql`UPDATE sessions SET admission_json = NULL`
           yield* sql`DELETE FROM gent_storage_migrations WHERE name = 'session_admission'`
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer under test.
@@ -222,6 +249,14 @@ describe("session admission", () => {
             interactive: false,
           })
           expect((yield* sessions.getSession(plain))?.admission).toBeUndefined()
+          // The turn that runs next keeps its agent over an older record.
+          expect((yield* sessions.getSession(both))?.admission).toEqual({
+            agent: AgentName.make("new"),
+          })
+          // Among stored turns, the latest one wins.
+          expect((yield* sessions.getSession(history))?.admission).toEqual({
+            agent: AgentName.make("new"),
+          })
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer under test.
         }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(storage))
       }),

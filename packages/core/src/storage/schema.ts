@@ -729,6 +729,10 @@ const turnRecordAdmissionMigration = Effect.gen(function* () {
  * existed (a delegate child's first turn, a headless `--agent` run) takes the
  * admission its stored turn record or queued turn carried, so its later turns
  * keep the agent, the run overrides and the withheld tools.
+ *
+ * When rows disagree, the turn that runs next wins: the one in flight, then
+ * steering, then follow-ups, each in queue order. After those, the latest
+ * stored turn wins, by `updated_at` and then by rowid.
  */
 const sessionAdmissionMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
@@ -736,20 +740,21 @@ const sessionAdmissionMigration = Effect.gen(function* () {
     .unsafe(`ALTER TABLE sessions ADD COLUMN admission_json TEXT`)
     .pipe(ignoreAlreadyAppliedSqliteError("023_session_admission", "ADD COLUMN admission_json"))
   yield* sql.unsafe(`
-    WITH admitted(session_id, admission, source) AS (
-      SELECT session_id, admission_json, 0 FROM turn_records WHERE admission_json IS NOT NULL
-      UNION ALL
-      SELECT q.session_id, json_remove(e.value, '$.message', '$.wake', '$.keyed'), 1
-      FROM agent_loop_queues q, json_each(q.queue_json, '$.steering') e
-      UNION ALL
-      SELECT q.session_id, json_remove(e.value, '$.message', '$.wake', '$.keyed'), 1
-      FROM agent_loop_queues q, json_each(q.queue_json, '$.followUp') e
-      UNION ALL
-      SELECT q.session_id, json_remove(json_extract(q.queue_json, '$.inFlight'), '$.message', '$.wake', '$.keyed'), 1
+    WITH admitted(session_id, admission, source, position, tiebreak) AS (
+      SELECT q.session_id, json_remove(json_extract(q.queue_json, '$.inFlight'), '$.message', '$.wake', '$.keyed'), 0, 0, 0
       FROM agent_loop_queues q
       WHERE json_extract(q.queue_json, '$.inFlight') IS NOT NULL
+      UNION ALL
+      SELECT q.session_id, json_remove(e.value, '$.message', '$.wake', '$.keyed'), 1, e.key, 0
+      FROM agent_loop_queues q, json_each(q.queue_json, '$.steering') e
+      UNION ALL
+      SELECT q.session_id, json_remove(e.value, '$.message', '$.wake', '$.keyed'), 2, e.key, 0
+      FROM agent_loop_queues q, json_each(q.queue_json, '$.followUp') e
+      UNION ALL
+      SELECT session_id, admission_json, 3, -updated_at, -rowid
+      FROM turn_records WHERE admission_json IS NOT NULL
     ),
-    renamed(session_id, admission, source) AS (
+    renamed(session_id, admission, source, position, tiebreak) AS (
       SELECT session_id,
         CASE WHEN json_extract(admission, '$.agentOverride') IS NULL
           THEN json_remove(admission, '$.agentOverride')
@@ -758,13 +763,13 @@ const sessionAdmissionMigration = Effect.gen(function* () {
             '$.agentOverride'
           )
         END,
-        source
+        source, position, tiebreak
       FROM admitted
     )
     UPDATE sessions SET admission_json = (
       SELECT r.admission FROM renamed r
       WHERE r.session_id = sessions.id AND r.admission <> '{}'
-      ORDER BY r.source LIMIT 1
+      ORDER BY r.source, r.position, r.tiebreak LIMIT 1
     )
     WHERE admission_json IS NULL
   `)
