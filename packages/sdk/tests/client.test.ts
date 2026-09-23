@@ -8,6 +8,7 @@ import {
   makeTempDirectoryScoped,
   waitFor,
   WORKSPACE_ID_HEADER,
+  projectMessagesWithToolInteractions,
 } from "@gent/core/test-utils"
 import { GentPlatform, workspaceHeadersForCwd, workspaceIdForCwd } from "@gent/core/host"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -21,7 +22,6 @@ import {
   dateFromMillis,
   Message,
   messagePartsText,
-  projectMessagesWithToolInteractions,
 } from "@gent/core/protocol"
 
 // ── client.test ─────────────────────────────────────────────────────────────

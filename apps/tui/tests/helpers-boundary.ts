@@ -1,5 +1,5 @@
 import { renderFrame, type renderWithProviders } from "./render-harness-boundary"
-import { Clock, Effect, type ManagedRuntime, Schema } from "effect"
+import { Effect, type ManagedRuntime, Schema } from "effect"
 
 export { renderFrame }
 
@@ -12,46 +12,71 @@ export const inRuntime = <A, E, R, ER>(
 ): Effect.Effect<A, E | ER> =>
   runtime.contextEffect.pipe(Effect.flatMap((context) => Effect.provideContext(effect, context)))
 
-class RenderFrameTimeoutError extends Schema.TaggedError<RenderFrameTimeoutError>()(
-  "RenderFrameTimeoutError",
+export class RenderWaitTimeoutError extends Schema.TaggedError<RenderWaitTimeoutError>()(
+  "RenderWaitTimeoutError",
   {
     message: Schema.String,
   },
 ) {}
 
 /**
- * Frame polling for unit render tests.
+ * Repeat `observe` until it holds or `timeoutMs` passes.
  *
- * Polls renderOnce until the predicate matches or the timeout expires.
- * Uses wall-clock timeout (not iteration count) for predictable behavior.
+ * The deadline is an `Effect.timeout` on the poll, so the poll stops with the
+ * test fiber: an outer timeout or interrupt ends it, and it never touches a
+ * torn-down setup. The error message is read at the deadline, so it can carry
+ * the last observation.
  */
-export const waitForRenderedFrame = (
+const pollUntil = (
+  observe: Effect.Effect<boolean>,
+  describe: () => string,
+  timeoutMs: number,
+): Effect.Effect<void, RenderWaitTimeoutError> => {
+  const poll: Effect.Effect<void> = Effect.gen(function* () {
+    if (yield* observe) return
+    // gent/no-sleep: allow render-poll primitive — state must settle between observations
+    yield* Effect.sleep("10 millis")
+    return yield* poll
+  })
+  return poll.pipe(
+    Effect.timeoutOrElse({
+      duration: `${timeoutMs} millis`,
+      orElse: () => Effect.fail(new RenderWaitTimeoutError({ message: describe() })),
+    }),
+  )
+}
+
+/**
+ * Render until `check` holds, then return the frame.
+ *
+ * Each poll renders twice with a fiber yield between, so a Solid update that an
+ * Effect fiber scheduled during the first render lands before the check.
+ * `check` may ignore the frame and read other state.
+ */
+export const waitForFrame = (
   setup: TestSetup,
-  predicate: (frame: string) => boolean,
+  check: (frame: string) => boolean,
   label = "condition",
   timeoutMs = 2_000,
-): Promise<string> => {
+): Effect.Effect<string, RenderWaitTimeoutError> => {
   let lastFrame = ""
-
-  const loop = (startedAt: number): Effect.Effect<string, RenderFrameTimeoutError> =>
+  return pollUntil(
     Effect.gen(function* () {
       yield* Effect.promise(() => setup.renderOnce())
-      // Test the frame we just rendered before consulting the clock. Checking
-      // the deadline first throws away an unexamined frame, so a condition that
-      // becomes true on the final render is reported as a timeout.
-      const frame = renderFrame(setup)
-      lastFrame = frame
-      if (predicate(frame)) return frame
-      const now = yield* Clock.currentTimeMillis
-      if (now - startedAt >= timeoutMs) {
-        return yield* new RenderFrameTimeoutError({
-          message: `timed out waiting for rendered frame: ${label}\n${lastFrame}`,
-        })
-      }
-      // gent/no-sleep: allow render-poll primitive — TUI frame must be re-rendered between observations
-      yield* Effect.sleep("10 millis")
-      return yield* loop(startedAt)
-    })
-
-  return Effect.runPromise(Clock.currentTimeMillis.pipe(Effect.flatMap(loop)))
+      yield* Effect.yieldNow
+      yield* Effect.promise(() => setup.renderOnce())
+      lastFrame = renderFrame(setup)
+      return check(lastFrame)
+    }),
+    () => `timed out waiting for rendered frame: ${label}\n${lastFrame}`,
+    timeoutMs,
+  ).pipe(Effect.map(() => lastFrame))
 }
+
+/** Wait, without rendering, until `check` holds: for reactive state outside a render tree. */
+export const waitUntil = (
+  check: () => boolean,
+  label = "condition",
+  timeoutMs = 2_000,
+): Effect.Effect<void, RenderWaitTimeoutError> =>
+  pollUntil(Effect.sync(check), () => `timed out waiting for: ${label}`, timeoutMs)

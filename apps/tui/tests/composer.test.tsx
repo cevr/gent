@@ -29,7 +29,7 @@ import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { createSignal, type JSX, onMount } from "solid-js"
 import { PromptSearchState } from "../src/pickers"
 import { useExtensionUI } from "../src/extensions/host"
-import { waitForRenderedFrame } from "./helpers-boundary"
+import { type RenderWaitTimeoutError, waitForFrame } from "./helpers-boundary"
 import { useScopedKeyboard } from "../src/terminal"
 import {
   type AutocompleteItem,
@@ -521,10 +521,8 @@ describe("Composer renderer", () => {
       expect(renderFrame(setup)).not.toContain("Ship the release?")
 
       yield* Deferred.complete(release, Effect.void)
-      yield* Effect.promise(() =>
-        // "Other:" is the ask-user renderer's free-text row: the fallback prompt has none.
-        waitForRenderedFrame(setup, (frame) => frame.includes("Other:"), "ask-user"),
-      )
+      // "Other:" is the ask-user renderer's free-text row: the fallback prompt has none.
+      yield* waitForFrame(setup, (frame) => frame.includes("Other:"), "ask-user")
       expect(dispatched).toEqual([])
     }).pipe(Effect.timeout("10 seconds")),
   )
@@ -587,9 +585,7 @@ describe("Composer renderer", () => {
       yield* Effect.promise(() => setup.mockInput.typeText("/"))
       // The rows arrive through a resource, so the frame is polled rather than
       // rendered once.
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("/sessions"), "command rows"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("/sessions"), "command rows")
       const frame = renderFrame(setup)
       // Assert the popup itself: its title, both contributed rows, and the
       // footer it draws. A bare `toContain("/")` passes on the slash echoed in
@@ -664,9 +660,7 @@ describe("AutocompletePopup renderer", () => {
           { width: 80, height: 24 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("/gamma"), "items"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("/gamma"), "items")
       // Up from the first row lands on the last.
       setup.mockInput.pressArrow("up")
       yield* Effect.promise(() => setup.renderOnce())
@@ -707,9 +701,7 @@ describe("AutocompletePopup renderer", () => {
           { width: 80, height: 24 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("/monitor"), "items"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("/monitor"), "items")
       expect(ghosts.at(-1)).toBe("model")
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
@@ -743,9 +735,7 @@ describe("AutocompletePopup renderer", () => {
           { width: 80, height: 24 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("No matches"), "empty"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("No matches"), "empty")
       setup.mockInput.pressEnter()
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
@@ -753,7 +743,7 @@ describe("AutocompletePopup renderer", () => {
       expect(seen).toEqual(["return", "down"])
       // Escape still closes the popup.
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() => waitForRenderedFrame(setup, () => closed === 1, "closed"))
+      yield* waitForFrame(setup, () => closed === 1, "closed")
       expect(seen).toEqual(["return", "down"])
     }),
   )
@@ -887,9 +877,7 @@ describe("Composer ghost line", () => {
       yield* Effect.promise(() => setup.mockInput.typeText("/ag"))
       // `agents` is the ghost because it is the top row. Before ranking, the
       // top row was `/fork` — a ghost then would have offered the wrong word.
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("agents ⇥"), "ghost"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("agents ⇥"), "ghost")
     }),
   )
 
@@ -898,14 +886,10 @@ describe("Composer ghost line", () => {
       const submitted: Array<string> = []
       const setup = yield* mount(submitted)
       yield* Effect.promise(() => setup.mockInput.typeText("/ag"))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("agents ⇥"), "ghost"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("agents ⇥"), "ghost")
       // `/agzz` matches no command, so there is nothing to offer.
       yield* Effect.promise(() => setup.mockInput.typeText("zz"))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => !frame.includes("agents ⇥"), "ghost withdrawn"),
-      )
+      yield* waitForFrame(setup, (frame) => !frame.includes("agents ⇥"), "ghost withdrawn")
     }),
   )
 
@@ -914,9 +898,7 @@ describe("Composer ghost line", () => {
       const submitted: Array<string> = []
       const setup = yield* mount(submitted)
       yield* Effect.promise(() => setup.mockInput.typeText("/agents"))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("/agents"), "draft"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("/agents"), "draft")
       // There is no remainder left to offer, so the row stays empty.
       expect(renderFrame(setup)).not.toContain("agents ⇥")
     }),
@@ -1112,7 +1094,7 @@ const typeThenEnter = (
   dispatched: Array<Dispatched>,
   text: string,
   expected: string,
-): Effect.Effect<Awaited<ReturnType<typeof renderWithProviders>>> =>
+): Effect.Effect<Awaited<ReturnType<typeof renderWithProviders>>, RenderWaitTimeoutError> =>
   Effect.gen(function* () {
     const setup = yield* Effect.promise(() =>
       renderWithProviders(
@@ -1129,9 +1111,7 @@ const typeThenEnter = (
       ),
     )
     yield* Effect.promise(() => setup.mockInput.typeText(text))
-    yield* Effect.promise(() =>
-      waitForRenderedFrame(setup, (frame) => frame.includes(expected), expected),
-    )
+    yield* waitForFrame(setup, (frame) => frame.includes(expected), expected)
     setup.mockInput.pressEnter()
     yield* Effect.promise(() => setup.renderOnce())
     return setup
@@ -1142,7 +1122,7 @@ const typeThenTab = (
   dispatched: Array<Dispatched>,
   text: string,
   expected: string,
-): Effect.Effect<Awaited<ReturnType<typeof renderWithProviders>>> =>
+): Effect.Effect<Awaited<ReturnType<typeof renderWithProviders>>, RenderWaitTimeoutError> =>
   Effect.gen(function* () {
     const setup = yield* Effect.promise(() =>
       renderWithProviders(
@@ -1159,9 +1139,7 @@ const typeThenTab = (
       ),
     )
     yield* Effect.promise(() => setup.mockInput.typeText(text))
-    yield* Effect.promise(() =>
-      waitForRenderedFrame(setup, (frame) => frame.includes(expected), expected),
-    )
+    yield* waitForFrame(setup, (frame) => frame.includes(expected), expected)
     setup.mockInput.pressTab()
     yield* Effect.promise(() => setup.renderOnce())
     return setup
@@ -1238,13 +1216,9 @@ describe("Composer slash Enter", () => {
         ),
       )
       yield* Effect.promise(() => setup.mockInput.typeText("@notes"))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("notes.ts"), "file row"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("notes.ts"), "file row")
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("@notes.ts"), "inserted"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("@notes.ts"), "inserted")
       // The `@` path inserts and waits — it never dispatches a command.
       expect(dispatched).toEqual([])
       expect(renderFrame(setup)).toContain("@notes.ts")
@@ -1281,9 +1255,7 @@ describe("Composer slash Enter", () => {
       // Tab is the completion key. Nothing ran.
       expect(dispatched).toEqual([])
       // The name is in the draft with its trailing space, ready for an argument.
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("/agents "), "completed draft"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("/agents "), "completed draft")
     }),
   )
 
@@ -1297,9 +1269,7 @@ describe("Composer slash Enter", () => {
       const setup = yield* typeThenTab(dispatched, "/ag", "/fork")
       expect(dispatched).toEqual([])
       // The draft holds a completed name, so the composer is not left empty.
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("/fork "), "completed draft"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("/fork "), "completed draft")
     }),
   )
 
@@ -1324,9 +1294,7 @@ describe("Composer slash Enter", () => {
       // The `@` path never dispatched and must not start now.
       const setup = yield* typeThenTab(dispatched, "@notes", "notes.ts")
       expect(dispatched).toEqual([])
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("@notes.ts"), "inserted"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("@notes.ts"), "inserted")
     }),
   )
 })

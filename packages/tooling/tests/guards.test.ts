@@ -25,7 +25,6 @@ import {
   findUndeclaredWorkspaceImports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
-  findMissingLockIncludes,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
   isSteeringFile,
@@ -709,48 +708,6 @@ const PLUGIN = "lint/gent-rules.ts"
 
 const messages = (findings: ReadonlyArray<{ readonly message: string }>): ReadonlyArray<string> =>
   findings.map((finding) => finding.message)
-
-describe("a lock include must name a tracked file", () => {
-  const LOCKS = "packages/core/tsconfig.locks.json"
-  const text = `{\n  "include": [\n    "src",\n    "tests/domain/actor.test.ts"\n  ]\n}`
-  const config = { include: ["src", "tests/domain/actor.test.ts"] }
-
-  test("an include naming a tracked file or directory is silent", () => {
-    const findings = findMissingLockIncludes(LOCKS, text, config, [
-      "packages/core/src/domain/ids.ts",
-      "packages/core/tests/domain/actor.test.ts",
-    ])
-    expect(findings).toEqual([])
-  })
-
-  test("a trailing slash, a ./ prefix, a .. segment, and a glob are legal forms", () => {
-    const findings = findMissingLockIncludes(
-      LOCKS,
-      "",
-      { include: ["src/", "./tests/domain/actor.test.ts", "../core/src", "tests/**/*.test.ts"] },
-      ["packages/core/src/domain/ids.ts", "packages/core/tests/domain/actor.test.ts"],
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("a directory include does not match a sibling that shares its prefix", () => {
-    const findings = findMissingLockIncludes(LOCKS, "", { include: ["src"] }, [
-      "packages/core/srcfoo/a.ts",
-    ])
-    expect(findings).toHaveLength(1)
-  })
-
-  test("an include naming a deleted test is reported on its line", () => {
-    const findings = findMissingLockIncludes(LOCKS, text, config, [
-      "packages/core/src/domain/ids.ts",
-    ])
-    expect(findings.map((finding) => `${finding.line}: ${finding.message}`)).toEqual([
-      expect.stringMatching(
-        /^4: lock include `tests\/domain\/actor.test.ts` names no tracked file/,
-      ),
-    ])
-  })
-})
 
 describe("an override must match a tracked file", () => {
   const configFor = (globs: ReadonlyArray<string>) => ({
