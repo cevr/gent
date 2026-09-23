@@ -39,8 +39,8 @@ const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) 
     ...env,
   }
 }
-/** Run `gent --debug -H <args>` in a fresh home and collect its exit and output. */
-const runHeadless = (args: ReadonlyArray<string>) =>
+/** Run `gent --debug <args>` in a fresh home and collect its exit and output. */
+const runGent = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const path = yield* Path.Path
     const appDir = path.resolve(import.meta.dir, "..")
@@ -49,7 +49,7 @@ const runHeadless = (args: ReadonlyArray<string>) =>
     yield* seedAuth(env["GENT_AUTH_DIRECTORY"]!)
     // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
     const proc = Bun.spawn(
-      ["bun", "--preload", "@opentui/solid/preload", "src/main.tsx", "--debug", "-H", ...args],
+      ["bun", "--preload", "@opentui/solid/preload", "src/main.tsx", "--debug", ...args],
       {
         cwd: appDir,
         env: makeChildEnv(homeDir, env),
@@ -67,6 +67,7 @@ const runHeadless = (args: ReadonlyArray<string>) =>
     )
     return { exitCode, stdout, stderr }
   })
+const runHeadless = (args: ReadonlyArray<string>) => runGent(["-H", ...args])
 
 describe("headless CLI", () => {
   it.scopedLive(
@@ -92,7 +93,7 @@ describe("headless CLI", () => {
         ])
         expect(exitCode).toBe(1)
         // A startup failure is reported on stderr; stdout stays the session's output.
-        expect(stderr).toContain("NotFoundError: Unknown agent: revieww")
+        expect(stderr).toBe("NotFoundError: Unknown agent: revieww\n")
         expect(stdout).not.toContain("Unknown agent")
         expect(stdout).not.toContain("Latest user message")
       }).pipe(Effect.provide(BunServices.layer)),

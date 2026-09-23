@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite"
 import {
+  Cause,
   Config,
   Console,
   DateTime,
@@ -8,7 +9,10 @@ import {
   Match,
   Option,
   Predicate,
+  Runtime,
   Schema,
+  Stdio,
+  Stream,
 } from "effect"
 import {
   classifyLogFile,
@@ -382,6 +386,29 @@ export class CliStartupError extends Schema.TaggedError<CliStartupError>()("CliS
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
+
+/**
+ * A failure that ends the CLI (a startup error such as an unknown agent) is
+ * reported on stderr, one line per error: `NotFoundError: Unknown agent: x`.
+ * Stdout carries only the session's output, so a caller that pipes it reads
+ * the reply and nothing else. A defect is a bug, so it keeps its stack.
+ */
+export const reportFailureOnStderr = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.tapCause(effect, (cause) => {
+    if (Cause.hasInterruptsOnly(cause)) return Effect.void
+    if (!Runtime.getErrorReported(Cause.squash(cause))) return Effect.void
+    return Effect.gen(function* () {
+      const stdio = yield* Stdio.Stdio
+      yield* Stream.make(`${failureText(cause)}\n`).pipe(Stream.run(stdio.stderr()))
+    })
+  })
+
+const failureText = <E>(cause: Cause.Cause<E>): string => {
+  if (Cause.hasDies(cause)) return Cause.pretty(cause)
+  return Cause.prettyErrors(cause)
+    .map((error) => `${error.name}: ${error.message}`)
+    .join("\n")
+}
 
 /** Where the server lock and the storage live. `/tmp` when the shell has no HOME. */
 export const readHome = Effect.map(

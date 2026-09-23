@@ -4,6 +4,7 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   ConfigProvider,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Logger,
@@ -11,6 +12,8 @@ import {
   Path,
   Random,
   Schema,
+  Sink,
+  Stdio,
 } from "effect"
 import { MinimumLogLevel } from "effect/References"
 import {
@@ -33,6 +36,7 @@ import {
   makeDoctorReport,
   readDoctorExtensionHealth,
   refuseResetWhileServing,
+  reportFailureOnStderr,
   resetStorage,
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
@@ -118,6 +122,44 @@ const writeLog = (dir: string, name: string, ageRank: number) =>
     yield* fs.utimes(path, seconds, seconds)
     return path
   })
+
+class UnknownAgentError extends Schema.TaggedError<UnknownAgentError>()("NotFoundError", {
+  message: Schema.String,
+}) {}
+
+const reported = { stdout: "", stderr: "" }
+const captureTo = (stream: "stdout" | "stderr") =>
+  Sink.forEach((chunk: string | Uint8Array) =>
+    Effect.sync(() => {
+      reported[stream] += String(chunk)
+    }),
+  )
+const reportTest = it.live.layer(
+  Stdio.layerTest({ stdout: () => captureTo("stdout"), stderr: () => captureTo("stderr") }),
+)
+
+describe("startup failure report", () => {
+  reportTest("a failure is one line on stderr, and stdout stays the session's output", () =>
+    Effect.gen(function* () {
+      reported.stdout = ""
+      reported.stderr = ""
+      const exit = yield* Effect.exit(
+        reportFailureOnStderr(new UnknownAgentError({ message: "Unknown agent: revieww" })),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(reported.stderr).toBe("NotFoundError: Unknown agent: revieww\n")
+      expect(reported.stdout).toBe("")
+    }),
+  )
+
+  reportTest("an interrupt reports nothing", () =>
+    Effect.gen(function* () {
+      reported.stderr = ""
+      yield* Effect.exit(reportFailureOnStderr(Effect.interrupt))
+      expect(reported.stderr).toBe("")
+    }),
+  )
+})
 
 describe("client trace logger", () => {
   it.scopedLive("creates the log directory it writes into", () =>

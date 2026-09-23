@@ -47,6 +47,7 @@ import { runHeadless } from "./headless"
 import { GentConnectionError, type GentClientBundle } from "@gent/sdk"
 import {
   CliStartupError,
+  reportFailureOnStderr,
   doctor,
   readHome,
   resolveClientBundle,
@@ -448,11 +449,22 @@ const cli = Command.run(command, {
 const TraceLoggerLayer = Layer.unwrap(
   clientTraceLogger.pipe(Effect.map((logger) => Logger.layer([logger]))),
 )
-const CliRuntimeLayer = Layer.merge(PlatformLayer, Layer.provide(TraceLoggerLayer, PlatformLayer))
+/**
+ * The platform is built first, so a failure anywhere after it, the trace
+ * logger included, is reported through the platform's stderr.
+ */
 const mainEffect = Effect.scoped(
   Effect.gen(function* () {
-    const cliContext = yield* Layer.build(CliRuntimeLayer)
-    return yield* Effect.provideContext(cli, Context.makeUnsafe<unknown>(cliContext.mapUnsafe))
+    const platformContext = yield* Layer.build(PlatformLayer)
+    const platform = Context.makeUnsafe<unknown>(platformContext.mapUnsafe)
+    const runCli = Effect.gen(function* () {
+      const loggerContext = yield* Layer.build(TraceLoggerLayer)
+      return yield* Effect.provideContext(
+        cli,
+        Context.merge(platform, Context.makeUnsafe<unknown>(loggerContext.mapUnsafe)),
+      )
+    })
+    return yield* Effect.provideContext(reportFailureOnStderr(runCli), platform)
   }),
 )
 
@@ -493,19 +505,7 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
   process.on("SIGTERM", onSignal)
 })
 
-/**
- * A failure that ends the CLI (a startup error such as an unknown agent) is
- * reported on stderr. Stdout carries only the session's output, so a caller
- * that pipes it reads the reply and nothing else.
- */
-const reportFailureOnStderr = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.tapCause(effect, (cause) => {
-    if (Cause.hasInterruptsOnly(cause)) return Effect.void
-    if (!Runtime.getErrorReported(Cause.squash(cause))) return Effect.void
-    return Effect.logError(cause).pipe(Effect.provideService(Logger.LogToStderr, true))
-  })
-
-runCliMain(Effect.scoped(mainEffect).pipe(reportFailureOnStderr), {
+runCliMain(Effect.scoped(mainEffect), {
   teardown: gracefulCliTeardown,
   disableErrorReporting: true,
 })
