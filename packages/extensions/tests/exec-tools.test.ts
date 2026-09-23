@@ -1000,6 +1000,63 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("a command in any shape of statement, word or redirection asks", () => {
+    const r = "rm -rf /nonexistent/gent-probe-x"
+    for (const command of [
+      // A redirection with no command still runs the commands in its target.
+      `echo $(< <(${r}))`,
+      `echo $(< $(${r}))`,
+      `echo "$(< <(${r}))"`,
+      `x=$(< <(${r}))`,
+      `echo $(<<< $(${r}))`,
+      `echo $(2> $(${r}))`,
+      "echo `< <(" + r + ")`",
+      `cat <(< <(${r}))`,
+      `echo $(< "$(${r})")`,
+      `cat < <(${r})`,
+      `echo x > >(${r})`,
+      `ls &> >(${r})`,
+      `ls >| $(${r})`,
+      `exec 3< <(${r})`,
+      `while read l; do :; done < <(${r})`,
+      `{ ls; } > >(${r})`,
+      `(ls) < <(${r})`,
+      `coproc name { ${r}; }`,
+      `coproc sh -c '${r}'`,
+      `case $(${r}) in a) ;; esac`,
+      `case x in a|$(${r})) :;; esac`,
+      `case x in a) ls ;& b) ${r} ;;& esac`,
+      `local x=$(${r})`,
+      `declare -a a=($(${r}))`,
+      `unset $(${r})`,
+      `a[$(${r})]=1`,
+      `export A=1 B=$(${r})`,
+      `[[ -f x && -n $(${r}) ]]`,
+      `[[ ( -f $(${r}) ) ]]`,
+      `test -n "$(${r})"`,
+      `( (${r}) )`,
+      `$( (${r}) )`,
+      `(( x = $(${r}) ))`,
+      `for ((i=$(${r}); i<1; i++)); do :; done`,
+      `echo $[ $(${r}) ]`,
+      `echo $(( a[$(${r})] ))`,
+      `select x in $(${r}); do :; done`,
+      `echo {a,$(${r})}`,
+      `ls # $(${r})\n${r}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("echo $(> /nonexistent/gent-probe-x/.env)").level).toBe("sensitive")
+    for (const command of [
+      "echo $(< /nonexistent/gent-probe-x/f)",
+      "coproc ls /nonexistent/gent-probe-x",
+      "[[ -f /nonexistent/gent-probe-x ]]",
+      "cat < <(ls /nonexistent/gent-probe-x)",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("a keyword, a runner or a shell that runs a command does not hide it", () => {
     for (const command of [
       "coproc rm -rf x",
