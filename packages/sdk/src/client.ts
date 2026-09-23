@@ -1,6 +1,7 @@
-import { Effect, Layer, Match, Option, Predicate } from "effect"
-import type { Scope } from "effect"
+import { Effect, Layer, Match, Option, Predicate, Stream } from "effect"
+import type { Context, Scope } from "effect"
 import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
+import { Headers } from "effect/unstable/http"
 import { Socket } from "effect/unstable/socket"
 import {
   ConnectionState,
@@ -11,11 +12,6 @@ import {
 } from "@gent/core/protocol"
 import { RpcHandlersLive } from "@gent/core-internal/server/server.js"
 import {
-  makeNamespacedClient,
-  type GentNamespacedClient,
-  type GentRuntime,
-} from "./namespaced-client.js"
-import {
   awaitServerShutdown,
   resolveServer,
   getOwnedInternal,
@@ -25,15 +21,133 @@ import {
   type GentServerOptions,
 } from "./server.js"
 import { workspaceHeadersForCwd } from "@gent/core-internal/server/workspace-rpc.js"
+// `runtime-boundary.ts` owns the Effect→Promise edge for `GentRuntime.run`.
+import { makeGentRuntime as makeRuntime, type GentRuntime } from "./runtime-boundary.js"
 
 // ---------------------------------------------------------------------------
-// Internal: build runtime from captured services + lifecycle
+// Namespaced client — typed nested view over the flat RPC transport
 // ---------------------------------------------------------------------------
-//
-// `makeRuntime` lives in `runtime-boundary.ts` — that module owns the
-// Effect→Promise edge for `GentRuntime.run`.
 
-import { makeGentRuntime as makeRuntime } from "./runtime-boundary.js"
+/**
+ * Extract all unique namespace prefixes from a union of dotted string keys.
+ * E.g. "session.create" | "branch.list" → "session" | "branch"
+ */
+type Namespaces<K extends string> = K extends `${infer NS}.${string}` ? NS : never
+
+/**
+ * Given a namespace prefix and a flat client, extract the methods under that namespace.
+ * "session" + { "session.create": fn, "session.list": fn, "branch.list": fn }
+ * → { create: fn, list: fn }
+ */
+type NamespaceMethods<NS extends string, T> = {
+  [K in keyof T as K extends `${NS}.${infer Method}` ? Method : never]: T[K]
+}
+
+/**
+ * Restructure a flat dotted-key client into nested namespaces.
+ * { "session.create": fn, "branch.list": fn } → { session: { create: fn }, branch: { list: fn } }
+ */
+type NamespacedClient<T> = {
+  readonly [NS in Namespaces<Extract<keyof T, string>>]: Readonly<NamespaceMethods<NS, T>>
+}
+
+export type GentNamespacedClient = NamespacedClient<GentRpcClient>
+type RpcMethod = (
+  ...args: ReadonlyArray<never>
+) => Effect.Effect<never, never, never> | Stream.Stream<never, never, never>
+
+// ---------------------------------------------------------------------------
+// Adapter factory — builds a GentNamespacedClient from the flat RPC transport
+// ---------------------------------------------------------------------------
+
+const rpcKeys = (): ReadonlyArray<string> => [...GentRpcs.requests.keys()]
+
+const splitRpcKey = (key: string) => {
+  const separator = key.indexOf(".")
+  if (separator === -1) return { namespace: key, method: Option.none<string>() }
+  return {
+    namespace: key.slice(0, separator),
+    method: Option.some(key.slice(separator + 1)),
+  }
+}
+
+const namespaceMethods = (namespace: string): ReadonlyArray<string> =>
+  rpcKeys().flatMap((key) => {
+    const parsed = splitRpcKey(key)
+    if (parsed.namespace === namespace && Option.isSome(parsed.method)) {
+      return [parsed.method.value]
+    }
+    return []
+  })
+
+const makeNamespace = (flat: GentRpcClient, namespace: string, headers?: Headers.Input) => {
+  const methods = namespaceMethods(namespace)
+  const headersOption = Option.fromNullishOr(headers)
+  const absent = Option.getOrUndefined(Option.none())
+  return new Proxy(Object.create(null), {
+    get: (_target, property) => {
+      if (!Predicate.isString(property)) return absent
+      const method = Reflect.get(flat, `${namespace}.${property}`)
+      if (Option.isNone(headersOption) || !Predicate.isFunction(method)) return method
+      // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion, effect/noAs -- Runtime key comes from GentRpcs.requests; wrapping preserves the underlying RPC method shape.
+      const call = method as RpcMethod
+      return (...args: ReadonlyArray<never>) => {
+        const result = call(...args)
+        if (Stream.isStream(result)) {
+          return Stream.updateService(
+            result,
+            RpcClient.CurrentHeaders,
+            Headers.merge(Headers.fromInput(headersOption.value)),
+          )
+        }
+        return RpcClient.withHeaders(result, headersOption.value)
+      }
+    },
+    has: (_target, property) => Predicate.isString(property) && methods.includes(property),
+    ownKeys: () => methods,
+    getOwnPropertyDescriptor: (_target, property) => {
+      if (Predicate.isString(property) && methods.includes(property)) {
+        return { enumerable: true, configurable: true }
+      }
+      return absent
+    },
+  })
+}
+
+export const makeNamespacedClient = (
+  flat: GentRpcClient,
+  headers?: Headers.Input,
+): GentNamespacedClient => {
+  const namespaceCache = new Map<string, object>()
+  const namespaces = [
+    ...new Set(
+      rpcKeys().flatMap((key) => {
+        const { namespace } = splitRpcKey(key)
+        if (namespace === "") return []
+        return [namespace]
+      }),
+    ),
+  ]
+  const absent = Option.getOrUndefined(Option.none())
+  return new Proxy(Object.create(null), {
+    get: (_target, property) => {
+      if (!Predicate.isString(property) || !namespaces.includes(property)) return absent
+      const existing = Option.fromNullishOr(namespaceCache.get(property))
+      if (Option.isSome(existing)) return existing.value
+      const created = makeNamespace(flat, property, headers)
+      namespaceCache.set(property, created)
+      return created
+    },
+    has: (_target, property) => Predicate.isString(property) && namespaces.includes(property),
+    ownKeys: () => namespaces,
+    getOwnPropertyDescriptor: (_target, property) => {
+      if (Predicate.isString(property) && namespaces.includes(property)) {
+        return { enumerable: true, configurable: true }
+      }
+      return absent
+    },
+  })
+}
 
 // ---------------------------------------------------------------------------
 // Static lifecycle for non-supervised connections
@@ -50,6 +164,28 @@ const staticLifecycle = (state: ConnectionState): GentLifecycle => ({
   ),
   waitForReady: Effect.void,
 })
+
+// ---------------------------------------------------------------------------
+// In-process transport (internal)
+// ---------------------------------------------------------------------------
+
+/** A client that calls the handlers directly, with no socket in between. */
+const inProcessBundle = <Services>(
+  handlerContext: Context.Context<Layer.Success<typeof RpcHandlersLive>>,
+  headers: Headers.Input,
+): Effect.Effect<GentClientBundle<Services>, never, Services | Scope.Scope> =>
+  Effect.gen(function* () {
+    // oxlint-disable-next-line effect/noInlineProvide -- the in-process client uses the handler context its caller built
+    const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(handlerContext))
+    const services = yield* Effect.context<Services>()
+    return {
+      client: makeNamespacedClient(rpcClient, headers),
+      runtime: makeRuntime(
+        services,
+        staticLifecycle(ConnectionState.cases.Connected.make({ generation: 0 })),
+      ),
+    }
+  })
 
 // ---------------------------------------------------------------------------
 // WebSocket transport (internal)
@@ -83,9 +219,7 @@ const makeRpcClient: Effect.Effect<GentRpcClient, never, RpcClient.Protocol | Sc
 // Gent — unified client constructors
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer with no requirements should infer the empty service context
-type LayerContext<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
-type RpcHandlersContext = LayerContext<typeof RpcHandlersLive>
+type RpcHandlersContext = Layer.Services<typeof RpcHandlersLive>
 
 export interface GentClientBundle<Services = Scope.Scope> {
   readonly client: GentNamespacedClient
@@ -188,16 +322,7 @@ export const Gent = {
   ): Effect.Effect<GentClientBundle<R | Scope.Scope>, E, R | Scope.Scope> =>
     Effect.gen(function* () {
       const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
-      // oxlint-disable-next-line effect/noInlineProvide -- the test client factory owns its supplied handler context
-      const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
-      const services = yield* Effect.context<R | Scope.Scope>()
-      return {
-        client: makeNamespacedClient(rpcClient, workspaceHeadersForCwd(process.cwd())),
-        runtime: makeRuntime(
-          services,
-          staticLifecycle(ConnectionState.cases.Connected.make({ generation: 0 })),
-        ),
-      }
+      return yield* inProcessBundle<R | Scope.Scope>(context, workspaceHeadersForCwd(process.cwd()))
     }),
 
   /** Composable state spec factories. */
@@ -241,24 +366,13 @@ export const Gent = {
               // socket for the transport tracker to see. Registering here keeps
               // the server alive for as long as this client's scope is open.
               yield* internal.trackInProcessClient
-              const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(
-                // oxlint-disable-next-line effect/noInlineProvide -- the owned client uses its server-owned handler context
-                Effect.provide(internal.handlerContext),
-              )
-              const services = yield* Effect.context<Scope.Scope>()
               const headers = Option.fromNullishOr(options?.cwd).pipe(
                 Option.match({
                   onNone: () => internal.headers,
                   onSome: workspaceHeadersForCwd,
                 }),
               )
-              return {
-                client: makeNamespacedClient(rpcClient, headers),
-                runtime: makeRuntime(
-                  services,
-                  staticLifecycle(ConnectionState.cases.Connected.make({ generation: 0 })),
-                ),
-              }
+              return yield* inProcessBundle<Scope.Scope>(internal.handlerContext, headers)
             }),
           Attached: (attachedServer) =>
             connectWs(attachedServer.url, {

@@ -22,11 +22,9 @@ export type {
 } from "@gent/core/protocol"
 
 // Client constructors
-export { Gent, type GentClientBundle } from "./client.js"
+export { Gent, type GentClientBundle, type GentNamespacedClient } from "./client.js"
+export type { GentRuntime } from "./runtime-boundary.js"
 export type { IdleShutdownSpec } from "./server.js"
-
-// Namespaced client + runtime types
-export type { GentNamespacedClient, GentRuntime } from "./namespaced-client.js"
 
 // Server identity probe (shared by resolveServer + CLI `server stop`)
 export { probeServerLockEntryIdentity } from "./server.js"
