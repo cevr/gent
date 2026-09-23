@@ -38,6 +38,7 @@ export {
   makeTempDirectoryScoped,
   multiToolCallStep,
   oneGenerate,
+  seedAuthKeys,
   type SequenceStep,
   textStep,
   toolCallStep,
@@ -68,6 +69,7 @@ export {
   TurnCompleted,
 } from "../domain/event.js"
 export {
+  emptyQueueSnapshot,
   MessagePart,
   projectMessagesWithToolInteractions,
   toolResultMessageIdForTurn,

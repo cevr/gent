@@ -1,17 +1,14 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
-  "globalDependencies": ["tsconfig.json"],
+  "globalDependencies": ["tsconfig.json", "package.json", "patches/**"],
   "tasks": {
     "typecheck": {
       "dependsOn": ["^typecheck"],
       "inputs": [
-        "src/**/*.ts",
-        "src/**/*.tsx",
-        "tests/**/*.ts",
-        "tests/**/*.tsx",
-        "integration/**/*.ts",
-        "integration/**/*.tsx",
+        "src/**",
+        "tests/**",
+        "integration/**",
         "tsconfig.json",
         "../../tsconfig.json",
         "package.json"
@@ -20,31 +17,15 @@
     },
     "build": {
       "dependsOn": ["^build"],
-      "inputs": [
-        "src/**/*.ts",
-        "src/**/*.tsx",
-        "tsconfig.json",
-        "../../tsconfig.json",
-        "package.json"
-      ],
+      "inputs": ["src/**", "tsconfig.json", "../../tsconfig.json", "package.json"],
       "outputs": ["dist/**"]
     },
     "test": {
-      "inputs": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "package.json"],
       "outputs": [],
       "cache": false
     },
     "test:e2e": {
       "dependsOn": ["build"],
-      "inputs": [
-        "src/**/*.ts",
-        "src/**/*.tsx",
-        "tests/**/*.ts",
-        "tests/**/*.tsx",
-        "integration/**/*.ts",
-        "integration/**/*.tsx",
-        "package.json"
-      ],
       "outputs": [],
       "cache": false
     },
