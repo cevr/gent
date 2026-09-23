@@ -171,6 +171,7 @@ import { BunCrypto, BunServices } from "@effect/platform-bun"
 import {
   ExternalToolRunner,
   type ModelDriverContribution,
+  ProviderAuthError,
   type TurnContext,
   TurnError,
   type TurnExecutor,
@@ -1650,6 +1651,78 @@ describe("native model context projection", () => {
         ])
       }),
     ).pipe(Effect.provide(layer), Effect.timeout("5 seconds"))
+  })
+})
+
+describe("model resolution failure", () => {
+  it.live("a credential failure shows the user its own message, not the error tag", () => {
+    const modelId = ModelId.make("signed-out-driver/model")
+    const signInMessage =
+      "ChatGPT sign-in expired: refresh token revoked. Sign in again with /auth."
+    const driver: ModelDriverContribution = {
+      id: "signed-out-driver",
+      name: "Signed-out driver",
+      resolveModel: () => Effect.fail(new ProviderAuthError({ message: signInMessage })),
+    }
+    const resolved = resolveExtensions([
+      {
+        manifest: { id: ExtensionId.make("signed-out-driver") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: { agents: AllBuiltinAgents, modelDrivers: [driver] },
+      },
+    ])
+    return Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      const deps = Layer.mergeAll(
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+        ExtensionRegistry.fromResolved(resolved),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+        ConfigService.Test(),
+        makeCountingEventStore(eventsRef),
+        ToolRunner.Test(),
+        ApprovalService.Test(),
+        BunServices.layer,
+        ModelRegistry.Test([
+          Model.make({
+            id: modelId,
+            name: "Signed-out model",
+            provider: ProviderId.make("signed-out-driver"),
+            contextLength: 128_000,
+          }),
+        ]),
+        GentPlatform.Test(),
+        ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      )
+      const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            deps,
+            Layer.provide(EventPublisherLive, deps),
+            AgentLoopSessionGovernance.Live,
+          ),
+        ),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(
+          agentLoop,
+          makeMessage(
+            SessionId.make("signed-out-session"),
+            BranchId.make("signed-out-branch"),
+            "hello",
+          ),
+          { runSpec: { overrides: { modelId } } },
+        ).pipe(Effect.exit)
+        const events = yield* Ref.get(eventsRef)
+        const shown = events.flatMap((event) => {
+          if (event._tag !== "ErrorOccurred") return []
+          return [event.error]
+        })
+        expect(shown).toEqual([signInMessage])
+        // oxlint-disable-next-line effect/noInlineProvide -- The layer is built from this test's driver.
+      }).pipe(Effect.scoped, Effect.provide(layer))
+    }).pipe(Effect.timeout("5 seconds"))
   })
 })
 

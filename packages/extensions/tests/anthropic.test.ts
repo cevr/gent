@@ -34,6 +34,7 @@ import {
   Cause,
   Clock,
   Context,
+  FileSystem,
   Deferred,
   Effect,
   Exit,
@@ -41,6 +42,7 @@ import {
   Layer,
   Match,
   Option,
+  Path,
   Predicate,
   Ref,
   Schema,
@@ -62,6 +64,8 @@ import { HttpClientError, TransportError } from "effect/unstable/http/HttpClient
 import {
   type CredentialCache,
   type CredentialCacheCell,
+  type CredentialFailure,
+  CredentialRefreshUnavailable,
   EMPTY_CREDENTIAL_CELL,
 } from "../src/providers.js"
 import {
@@ -787,7 +791,7 @@ const buildBetaCache = (): Promise<AnthropicBetaCacheApi> =>
   )
 const validCredsIO = (label: string): AnthropicCredentialIO => ({
   read: Effect.succeed(makeCredsKeychain(label)),
-  refresh: Effect.fail(new ProviderAuthError({ message: "should not be called" })),
+  refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
 })
 // `HttpBody.jsonUnsafe` mirrors how the Anthropic SDK serializes
 // outgoing JSON bodies (via `text` → Uint8Array). The transform reads
@@ -906,7 +910,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
       const creds = yield* Effect.promise(() =>
         buildCreds({
           read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
-          refresh: Effect.fail(new ProviderAuthError({ message: "no refresh token either" })),
+          refresh: () => Effect.fail(new ProviderAuthError({ message: "no refresh token either" })),
         }),
       )
       const cache = yield* Effect.promise(() => buildBetaCache())
@@ -1141,7 +1145,7 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
         attempt++
         return Effect.succeed(makeCredsKeychain(freshLabel))
       }),
-      refresh: Effect.fail(new ProviderAuthError({ message: "should not be called" })),
+      refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
     }
   }
   it.live("401 once → invalidate creds → retry succeeds with fresh token", () =>
@@ -1246,10 +1250,11 @@ describe("keychainTransformClient — credential failure through the SDK", () =>
         const creds = yield* Effect.promise(() =>
           buildCreds({
             read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
-            refresh: Effect.suspend(() => {
-              refreshes++
-              return Effect.fail(new ProviderAuthError({ message: "refresh token revoked" }))
-            }),
+            refresh: () =>
+              Effect.suspend(() => {
+                refreshes++
+                return Effect.fail(new ProviderAuthError({ message: "refresh token revoked" }))
+              }),
           }),
         )
         const cache = yield* Effect.promise(() => buildBetaCache())
@@ -1325,11 +1330,11 @@ const makeCreds = (label: string, expiresAt: number): ClaudeCredentials => ({
 })
 interface IOState {
   readResult: () => Effect.Effect<ClaudeCredentials, ProviderAuthError>
-  refreshResult: () => Effect.Effect<ClaudeCredentials, ProviderAuthError>
+  refreshResult: () => Effect.Effect<ClaudeCredentials, CredentialFailure>
 }
 const makeIO = (state: IOState): AnthropicCredentialIO => ({
   read: Effect.suspend(() => state.readResult()),
-  refresh: Effect.suspend(() => state.refreshResult()),
+  refresh: () => Effect.suspend(() => state.refreshResult()),
 })
 interface PersistState {
   lastWritten: Option.Option<{
@@ -1505,10 +1510,30 @@ describe("AnthropicCredentialService — refresh on stale", () => {
         const errOpt = Cause.findErrorOption(result.cause)
         expect(Option.isSome(errOpt)).toBe(true)
         if (Option.isSome(errOpt)) {
-          // The refresh's own reason reaches the caller, not a generic hint.
+          // The refresh's own reason reaches the caller, with what to do next.
           expect(errOpt.value.message).toContain("OAuth 401 from refresh")
+          expect(errOpt.value.message).toContain("choose Claude Code in /auth")
         }
       }
+    }),
+  )
+  it.live("an unreachable token endpoint stays a failure that can pass", () =>
+    Effect.gen(function* () {
+      const stale = makeCreds("stale", 30000)
+      const state: IOState = {
+        readResult: () => Effect.succeed(stale),
+        refreshResult: () =>
+          Effect.fail(new CredentialRefreshUnavailable({ message: "token endpoint 503" })),
+      }
+      const layer = credLayer(makeIO(state))
+      const result = yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* AnthropicCredentialService
+          return yield* Effect.flip(svc.getFresh)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(layer)),
+      )
+      expect(result._tag).toBe("CredentialRefreshUnavailable")
     }),
   )
 })
@@ -2691,6 +2716,70 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       const sentBeta = fetchState.captured.at(-1)!.headers["anthropic-beta"] ?? ""
       expect(sentBeta).not.toContain("context-1m-2025-08-07")
     }),
+  )
+})
+describe("buildAnthropicModelDriver — refresh token order", () => {
+  it.live("refresh tries the keychain token first, then the held token", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      yield* fs.makeDirectory(path.join(home, ".claude"))
+      // The keychain (the credentials file off darwin) holds an expired token
+      // that the `claude` CLI rotated; the cache holds an older one.
+      yield* fs.writeFileString(
+        path.join(home, ".claude", ".credentials.json"),
+        encodeExternalJson({
+          claudeAiOauth: {
+            accessToken: "keychain-access",
+            refreshToken: "keychain-refresh",
+            expiresAt: 0,
+          },
+        }),
+      )
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      yield* SynchronizedRef.set(credentialCellRef, {
+        _tag: "Durable",
+        creds: { accessToken: "held-access", refreshToken: "held-refresh", expiresAt: 0 },
+        at: 0,
+        invalidated: false,
+      })
+      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const driver = buildAnthropicModelDriverLive(
+        credentialCellRef,
+        betaCellRef,
+        Option.none(),
+        AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+        testCatalogSource(),
+      )
+      const fetchState = makeFakeFetchState()
+      const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+        if (!request.url.endsWith("/v1/oauth/token")) return anthropicHappyResponse()
+        if ((request.body ?? "").includes("refresh_token=held-refresh")) {
+          return {
+            status: 200,
+            body: encodeExternalJson({
+              access_token: "held-new-access",
+              refresh_token: "held-new-refresh",
+              expires_in: 3600,
+            }),
+          }
+        }
+        return { status: 400, body: '{"error":"invalid_grant"}' }
+      })
+      const model = yield* driver
+        .resolveModel("claude-opus-4-6", makeOAuthInfo())
+        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
+        .pipe(Effect.provide(fetchLayer))
+      yield* runOne(model, fetchState)
+
+      const refreshTokens = fetchState.captured
+        .filter((request) => request.url.endsWith("/v1/oauth/token"))
+        .map((request) => /refresh_token=([^&]*)/.exec(request.body ?? "")?.[1])
+      expect(refreshTokens).toEqual(["keychain-refresh", "held-refresh"])
+      expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer held-new-access")
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 })
 describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {

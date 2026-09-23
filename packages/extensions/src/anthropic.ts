@@ -40,10 +40,14 @@ import {
   type CredentialCache,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
+  type CredentialFailure,
+  checkCredentials,
+  CredentialRefreshUnavailable,
   driverListModels,
   EMPTY_CREDENTIAL_CELL,
   freshCredentials,
   freshEnoughAt,
+  isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
   readOptionalEnv,
@@ -970,13 +974,14 @@ const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
  * `readClaudeCodeCredentials` call sees them. Costs zero LLM tokens —
  * matches the path `griffinmartin/opencode-claude-auth` discovered.
  *
- * Falls back to `claude -p . --model haiku` (which triggers the CLI's own
- * refresh logic) when the direct refresh fails for any reason — auth-server
- * downtime, refresh-token revoked, schema change, etc.
+ * A transport failure, a timeout, a 429, or a 5xx is
+ * `CredentialRefreshUnavailable` (it can pass); any other failure is a
+ * `ProviderAuthError`. The caller falls back to `claude -p . --model haiku`
+ * (which triggers the CLI's own refresh logic) when the direct refresh fails.
  */
 const refreshViaOAuth = (
   refreshToken: string,
-): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
+): Effect.Effect<ClaudeCredentials, CredentialFailure> =>
   Effect.gen(function* () {
     const response = yield* postOAuthForm(OAUTH_TOKEN_URL, {
       grant_type: "refresh_token",
@@ -985,9 +990,17 @@ const refreshViaOAuth = (
     }).pipe(
       Effect.mapError(
         (e) =>
-          new ProviderAuthError({ message: `Direct OAuth refresh failed: ${e.message}`, cause: e }),
+          new CredentialRefreshUnavailable({
+            message: `Direct OAuth refresh failed: ${e.message}`,
+            cause: e,
+          }),
       ),
     )
+    if (isTransientTokenStatus(response.status)) {
+      return yield* new CredentialRefreshUnavailable({
+        message: `Direct OAuth refresh failed: ${response.status} ${response.body}`,
+      })
+    }
     if (response.status >= 400) {
       return yield* new ProviderAuthError({
         message: `Direct OAuth refresh failed: ${response.status} ${response.body}`,
@@ -1044,11 +1057,11 @@ const spawnClaudeCli = (
   )
 
 /**
- * Refresh the cached Claude Code credentials and return the fresh ones
- * directly to the caller. Tries the direct OAuth endpoint first (fast,
- * free); falls back to spawning `claude` (slow, costs Haiku tokens)
- * only if the direct path fails. The CLI fallback writes back via the
- * Claude binary itself; we re-read keychain afterwards.
+ * Refresh the Claude Code credentials and return the fresh ones directly
+ * to the caller. The direct OAuth endpoint (fast, free) is tried first with
+ * the keychain's refresh token, which the `claude` CLI may have rotated,
+ * then with the held token when it differs. Only when both fail does it
+ * spawn `claude` (slow, costs Haiku tokens) and re-read the keychain.
  *
  * Crucially the caller MUST use the returned value rather than
  * re-reading keychain after the call. A void-returning shape would
@@ -1056,59 +1069,81 @@ const spawnClaudeCli = (
  * (locked keychain, file perms, race with `claude` CLI). Write-back
  * here is best-effort; the in-memory creds are authoritative for this
  * turn.
+ *
+ * The failure is `CredentialRefreshUnavailable` when the token endpoint
+ * was unreachable and the CLI fallback also failed, so the loop retries.
  */
-const refreshClaudeCodeCredentials: Effect.Effect<
+const refreshClaudeCodeCredentials = (
+  held: Option.Option<ClaudeCredentials>,
+): Effect.Effect<
   ClaudeCredentials,
-  ProviderAuthError,
+  CredentialFailure,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> = Effect.gen(function* () {
-  // The reason the direct path failed. It is kept so that a failed CLI
-  // fallback reports both causes instead of only the last one.
-  let directFailure = "no stored refresh token"
-  const current = yield* Effect.exit(readClaudeCodeCredentials)
-  if (Exit.isFailure(current)) {
-    directFailure = Option.match(Cause.findErrorOption(current.cause), {
-      onNone: () => directFailure,
-      onSome: (error) => error.message,
-    })
-  }
-  if (Exit.isSuccess(current) && current.value.refreshToken !== "") {
-    const refreshed = yield* Effect.exit(refreshViaOAuth(current.value.refreshToken))
-    if (Exit.isSuccess(refreshed)) {
-      // Best-effort write-back so subsequent processes pick up the
-      // new token. A failure here doesn't lose the refresh — the
-      // caller has it in memory.
-      yield* writeBackCredentials(refreshed.value).pipe(
-        Effect.catchEager((e: ProviderAuthError) =>
-          Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
-            Effect.annotateLogs({ error: String(e) }),
-          ),
-        ),
-      )
-      return refreshed.value
-    }
-    directFailure = Option.match(Cause.findErrorOption(refreshed.cause), {
-      onNone: () => directFailure,
-      onSome: (error) => error.message,
-    })
-  }
-  // Direct path failed — fall back to the CLI spawn (second attempt
-  // historically helps when the first invocation kicks a stale-token
-  // error). The CLI refreshes its active account, which is the
-  // primary one read here.
-  const platform = yield* AnthropicPlatform
-  return yield* spawnClaudeCli(platform.home).pipe(
-    Effect.retry({ times: 1 }),
-    Effect.andThen(readClaudeCodeCredentials),
-    Effect.mapError(
-      (cause) =>
-        new ProviderAuthError({
-          message: `${directFailure}; CLI fallback: ${cause.message}`,
-          cause,
+> =>
+  Effect.gen(function* () {
+    // Why each direct attempt failed. A failed CLI fallback reports all of
+    // them instead of only the last one.
+    const failures: Array<string> = []
+    let endpointUnavailable = false
+    const current = yield* Effect.exit(readClaudeCodeCredentials)
+    if (Exit.isFailure(current)) {
+      failures.push(
+        Option.match(Cause.findErrorOption(current.cause), {
+          onNone: () => "keychain read failed",
+          onSome: (error) => error.message,
         }),
-    ),
-  )
-})
+      )
+    }
+    let keychainToken = ""
+    if (Exit.isSuccess(current)) keychainToken = current.value.refreshToken
+    const heldToken = Option.match(held, { onNone: () => "", onSome: (c) => c.refreshToken })
+    const tokens = [keychainToken, heldToken].filter(
+      (token, index, all) => token !== "" && all.indexOf(token) === index,
+    )
+    if (tokens.length === 0) failures.push("no stored refresh token")
+    for (const token of tokens) {
+      const refreshed = yield* Effect.exit(refreshViaOAuth(token))
+      if (Exit.isSuccess(refreshed)) {
+        // Best-effort write-back so subsequent processes pick up the
+        // new token. A failure here doesn't lose the refresh — the
+        // caller has it in memory.
+        yield* writeBackCredentials(refreshed.value).pipe(
+          Effect.catchEager((e: ProviderAuthError) =>
+            Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
+              Effect.annotateLogs({ error: String(e) }),
+            ),
+          ),
+        )
+        return refreshed.value
+      }
+      const error = Cause.findErrorOption(refreshed.cause)
+      failures.push(
+        Option.match(error, {
+          onNone: () => "direct OAuth refresh failed",
+          onSome: (e) => e.message,
+        }),
+      )
+      // An unreachable endpoint rejects every token alike; stop here.
+      if (Option.isSome(error) && error.value._tag === "CredentialRefreshUnavailable") {
+        endpointUnavailable = true
+        break
+      }
+    }
+    // Direct path failed — fall back to the CLI spawn (second attempt
+    // historically helps when the first invocation kicks a stale-token
+    // error). The CLI refreshes its active account, which is the
+    // primary one read here.
+    const platform = yield* AnthropicPlatform
+    return yield* spawnClaudeCli(platform.home).pipe(
+      Effect.retry({ times: 1 }),
+      Effect.andThen(readClaudeCodeCredentials),
+      Effect.mapError((cause): CredentialFailure => {
+        const message = `${failures.join("; ")}; CLI fallback: ${cause.message}`
+        if (endpointUnavailable) return new CredentialRefreshUnavailable({ message, cause })
+        return new ProviderAuthError({ message, cause })
+      }),
+    )
+  })
 
 // ── credential service ──────────────────────────────────────────────────────
 
@@ -1141,8 +1176,10 @@ type CredentialIO = Effect.Effect<
 export interface AnthropicCredentialIO {
   /** Read the primary account's stored creds. */
   readonly read: CredentialIO
-  /** Refresh the primary account's creds via OAuth or CLI fallback. */
-  readonly refresh: CredentialIO
+  /** Refresh the primary account's creds via OAuth or CLI fallback; `held` is the cached credential. */
+  readonly refresh: (
+    held: Option.Option<ClaudeCredentials>,
+  ) => Effect.Effect<ClaudeCredentials, CredentialFailure, AnthropicCredentialIORequirements>
 }
 
 const realIO: AnthropicCredentialIO = {
@@ -1156,17 +1193,6 @@ export class AnthropicCredentialService extends Context.Service<
   AnthropicCredentialService,
   CredentialCache<ClaudeCredentials>
 >()("@gent/extensions/src/anthropic/AnthropicCredentialService") {
-  /**
-   * Production layer. The cache cell is provided externally so its
-   * lifetime is hoisted above the per-`resolveModel` layer build; a Ref
-   * allocated per build would disable the cache. `authInfo.persist`
-   * (when present) durably writes refreshed credentials back to Auth.
-   */
-  static layerFromRef = (
-    cellRef: CredentialCacheCellRef<ClaudeCredentials>,
-    authInfo?: ProviderAuthInfo,
-  ) => Layer.effect(AnthropicCredentialService, build(cellRef, realIO, authInfo))
-
   /** Test-friendly variant — accepts the IO seam so tests can drive read/refresh deterministically. */
   static layerFromIO = (io: AnthropicCredentialIO, authInfo?: ProviderAuthInfo) =>
     Layer.effect(
@@ -1177,6 +1203,20 @@ export class AnthropicCredentialService extends Context.Service<
     )
 }
 
+/** The production credential cache over the Claude Code keychain and the real platform. */
+const buildLiveCredentialCache = (
+  cellRef: CredentialCacheCellRef<ClaudeCredentials>,
+  authInfo: ProviderAuthInfo,
+  platform: AnthropicPlatformApi,
+): Effect.Effect<CredentialCache<ClaudeCredentials>> =>
+  Effect.suspend(() => build(cellRef, realIO, authInfo)).pipe(
+    // @effect-diagnostics-next-line strictEffectProvide:off
+    Effect.provide(Layer.merge(BunServices.layer, Layer.succeed(AnthropicPlatform, platform))),
+  )
+
+/** What the user does when the Claude Code sign-in no longer works. */
+const CLAUDE_SIGN_IN_HINT = "Run `claude` to sign in again, then choose Claude Code in /auth."
+
 const build = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
   io: AnthropicCredentialIO,
@@ -1185,7 +1225,6 @@ const build = (
   Effect.gen(function* () {
     const ioContext = yield* Effect.context<AnthropicCredentialIORequirements>()
     const read = io.read.pipe(Effect.provideContext(ioContext))
-    const refresh = io.refresh.pipe(Effect.provideContext(ioContext))
     const cache = yield* makeCredentialCache({
       label: "Anthropic",
       credentials: ClaudeCredentials,
@@ -1199,21 +1238,22 @@ const build = (
       // A refresh failure keeps its own reason (locked keychain, access
       // denied, OAuth 4xx); only a refresh that returns an expired token
       // gets the generic hint.
-      refresh: () =>
+      refresh: (held) =>
         Effect.gen(function* () {
-          const refreshed = yield* refresh.pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderAuthError({
-                  message: `Claude Code credentials are unavailable: ${cause.message}`,
-                  cause,
-                }),
-            ),
+          const refreshed = yield* io.refresh(held).pipe(
+            Effect.provideContext(ioContext),
+            Effect.mapError((cause): CredentialFailure => {
+              if (cause._tag === "CredentialRefreshUnavailable") return cause
+              return new ProviderAuthError({
+                message: `Claude Code sign-in failed: ${cause.message}. ${CLAUDE_SIGN_IN_HINT}`,
+                cause,
+              })
+            }),
           )
           const now = yield* Clock.currentTimeMillis
           if (freshEnoughForUse(refreshed, now)) return refreshed
           return yield* new ProviderAuthError({
-            message: "Claude Code credentials are expired. Run `claude` to refresh them.",
+            message: `Claude Code credentials are expired. ${CLAUDE_SIGN_IN_HINT}`,
           })
         }),
       toPersisted: (creds) => ({
@@ -2096,17 +2136,13 @@ const makeApiKeyAnthropicLayer = (modelName: string, config: AnthropicConfig, ap
 /**
  * OAuth path: builds `AnthropicClient.layer` with `transformClient` set
  * to the keychain transform middleware (auth headers, long-context beta
- * retry, 401 recovery). Uses
- * `Layer.unwrap` because the transform factory needs the credential
- * service and beta cache instances at construction time, and those
- * come from layers that the unwrapped Effect can `yield*`.
+ * retry, 401 recovery). Uses `Layer.unwrap` because the transform
+ * factory needs the beta cache instance at construction time.
  *
- * The cache cells for credentials and beta state are passed in from
- * extension-closure scope (allocated once by the Effectful
- * `modelDrivers()` setup), not per layer build. Without this hoist,
- * every `Provider.stream`/`Provider.generate` call rebuilds the service
- * layer and resets the cache, killing cross-request beta learning and
- * credential reuse.
+ * `resolveModel` builds the credential cache, and this layer builds the
+ * beta cache, over cells the Effectful `modelDrivers()` setup allocates
+ * once. Cells allocated per layer build would reset both caches, killing
+ * cross-request beta learning and credential reuse.
  *
  * No `apiKey` is passed — the SDK's apiKey is optional and skips
  * `x-api-key` injection when absent (verified at
@@ -2117,23 +2153,20 @@ const makeApiKeyAnthropicLayer = (modelName: string, config: AnthropicConfig, ap
 const makeOauthAnthropicLayer = (
   modelName: string,
   config: AnthropicConfig,
-  authInfo: ProviderAuthInfo,
-  credentialCellRef: CredentialCacheCellRef<ClaudeCredentials>,
+  creds: CredentialCache<ClaudeCredentials>,
   betaCellRef: Ref.Ref<BetaCacheCell>,
   platform: AnthropicPlatformApi,
 ) => {
-  const credentialLayer = AnthropicCredentialService.layerFromRef(credentialCellRef, authInfo)
   const cacheLayer = AnthropicBetaCache.layerFromRef(betaCellRef)
 
   const clientLayer = Layer.unwrap(
     Effect.gen(function* () {
-      const creds = yield* AnthropicCredentialService
       const cache = yield* AnthropicBetaCache
       return AnthropicClient.layer({
         transformClient: buildKeychainTransformClient(creds, cache, platform.env),
       }).pipe(Layer.provide(FetchHttpClient.layer))
     }),
-  ).pipe(Layer.provide(credentialLayer), Layer.provide(cacheLayer))
+  ).pipe(Layer.provide(cacheLayer))
 
   const wrappedClient = makeKeychainClientLayer.pipe(
     Layer.provide(clientLayer),
@@ -2203,22 +2236,16 @@ export const buildAnthropicModelDriver = (
         })
       }
 
-      // OAuth path: per-resolveModel layer build wires the
-      // extension-closure-owned cache cells into a fresh credential
-      // service + beta cache layer pair. The Refs are shared across all
-      // calls, so cross-request beta learning and credential cache reuse
-      // survive.
+      // OAuth path: the credential cache and the beta cache are built over
+      // the extension-closure-owned cells, so cross-request beta learning
+      // and credential reuse survive. The credentials are checked before
+      // the layer exists, so an expired sign-in fails with its own message.
+      const creds = yield* buildLiveCredentialCache(credentialCellRef, auth.value, platform)
+      yield* checkCredentials(creds)
       return AiModel.make(
         "anthropic",
         modelName,
-        makeOauthAnthropicLayer(
-          modelName,
-          config,
-          auth.value,
-          credentialCellRef,
-          betaCellRef,
-          platform,
-        ),
+        makeOauthAnthropicLayer(modelName, config, creds, betaCellRef, platform),
       )
     }),
   auth: {
@@ -2236,7 +2263,12 @@ export const buildAnthropicModelDriver = (
           // Use the returned creds — re-reading keychain after refresh
           // would silently lose direct-OAuth tokens whenever write-back
           // failed.
-          creds = yield* refreshClaudeCodeCredentials
+          creds = yield* refreshClaudeCodeCredentials(Option.none()).pipe(
+            Effect.mapError((cause) => {
+              if (cause._tag === "ProviderAuthError") return cause
+              return new ProviderAuthError({ message: cause.message, cause })
+            }),
+          )
         }
         // Persist keychain creds to Auth
         yield* ctx.persist({

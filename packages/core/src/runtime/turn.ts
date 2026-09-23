@@ -137,7 +137,6 @@ import {
   retryProviderCall,
 } from "./provider.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
-import * as AiError from "effect/unstable/ai/AiError"
 import {
   currentHandoffId,
   estimateTextTokens,
@@ -1691,15 +1690,12 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     stream: rawStream.pipe(
       Stream.mapError(
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
-        (error: unknown) => {
-          let message = String(error)
-          if (AiError.isAiError(error)) message = error.message
-          return new ProviderError({
-            message,
+        (error: unknown) =>
+          new ProviderError({
+            message: causeMessage(error),
             model: resolved.modelId,
             cause: error,
-          })
-        },
+          }),
       ),
     ),
     formatStreamError: causeMessage,

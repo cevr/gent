@@ -48,9 +48,13 @@ import {
   type CredentialCache,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
+  type CredentialFailure,
+  checkCredentials,
+  CredentialRefreshUnavailable,
   driverListModels,
   EMPTY_CREDENTIAL_CELL,
   freshCredentials,
+  isTransientTokenStatus,
   makeCredentialCache,
   makeOpenAiCompatResolution,
   postOAuthForm,
@@ -120,6 +124,7 @@ export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
   reason: Schema.Literals([
     "token-exchange-failed",
     "token-refresh-failed",
+    "token-endpoint-unavailable",
     "callback-error",
     "missing-code",
     "state-mismatch",
@@ -285,9 +290,9 @@ const parseAuthorizationInput = (input: string): AuthorizationInput => {
 }
 
 /**
- * POST one grant to the token endpoint and decode the token reply. Every
- * failure — transport, timeout, 4xx/5xx, malformed body — is an
- * `OAuthError` with `reason`.
+ * POST one grant to the token endpoint and decode the token reply. A
+ * transport failure, a timeout, a 429, or a 5xx is `token-endpoint-unavailable`
+ * (it can pass); any other failure is `reason`.
  */
 const requestTokens = (
   reason: "token-exchange-failed" | "token-refresh-failed",
@@ -297,9 +302,19 @@ const requestTokens = (
   Effect.gen(function* () {
     const response = yield* postOAuthForm(`${ISSUER}/oauth/token`, params).pipe(
       Effect.mapError(
-        (e) => new OAuthError({ reason, message: `${label} HTTP failed: ${e.message}` }),
+        (e) =>
+          new OAuthError({
+            reason: "token-endpoint-unavailable",
+            message: `${label} HTTP failed: ${e.message}`,
+          }),
       ),
     )
+    if (isTransientTokenStatus(response.status)) {
+      return yield* new OAuthError({
+        reason: "token-endpoint-unavailable",
+        message: `${label} failed: ${response.status}`,
+      })
+    }
     if (response.status >= 400) {
       return yield* new OAuthError({ reason, message: `${label} failed: ${response.status}` })
     }
@@ -838,7 +853,7 @@ const OpenAICredentials: Schema.Schema<OpenAICredentials> = Schema.Struct({
 /** IO the service depends on, lifted out so tests can drive it without hitting `auth.openai.com`. */
 export interface OpenAICredentialIO {
   /** Refresh creds against the OpenAI token endpoint. */
-  readonly refresh: (refreshToken: string) => Effect.Effect<OpenAICredentials, ProviderAuthError>
+  readonly refresh: (refreshToken: string) => Effect.Effect<OpenAICredentials, CredentialFailure>
 }
 
 const realIO: OpenAICredentialIO = {
@@ -848,13 +863,18 @@ const realIO: OpenAICredentialIO = {
         ...credentials,
         accountId: Option.fromNullishOr(credentials.accountId),
       })),
-      Effect.mapError(
-        (cause) =>
-          new ProviderAuthError({
-            message: `Failed to refresh ChatGPT OAuth credentials: ${cause.message}`,
+      Effect.mapError((cause): CredentialFailure => {
+        if (cause.reason === "token-endpoint-unavailable") {
+          return new CredentialRefreshUnavailable({
+            message: `ChatGPT token endpoint unavailable: ${cause.message}`,
             cause,
-          }),
-      ),
+          })
+        }
+        return new ProviderAuthError({
+          message: `ChatGPT sign-in expired: ${cause.message}. Sign in again with /auth.`,
+          cause,
+        })
+      }),
     ),
 }
 
@@ -927,8 +947,7 @@ const build = (
       if (Option.isNone(refreshToken) || refreshToken.value.length === 0) {
         return Effect.fail(
           new ProviderAuthError({
-            message:
-              "ChatGPT OAuth credentials are unavailable. Re-run authorization from the auth picker.",
+            message: "ChatGPT OAuth credentials are unavailable. Sign in again with /auth.",
           }),
         )
       }
@@ -1293,37 +1312,27 @@ const makeApiKeyOpenAIResolution = (
  * `apiKey !== undefined`, so omitting it lets our middleware own the
  * Authorization header without a "scrub-the-placeholder" coupling.
  *
- * The credential cache cell is passed in from extension-closure
- * scope (allocated once by the Effectful `modelDrivers()` setup), not
- * allocated per layer build. Without this hoist, every
- * `Provider.stream`/`Provider.generate` call would rebuild the service
- * layer and reset the cache, killing credential reuse and the rotated
+ * `resolveModel` builds the credential cache over the cell that the
+ * Effectful `modelDrivers()` setup allocates once, and checks it before the
+ * layer exists, so an expired sign-in fails with its own message. A cell
+ * allocated per layer build would reset the cache and break the rotated
  * refresh-token contract.
  */
 const makeOauthOpenAILayer = (
   modelName: string,
   config: OpenAiResponsesConfig,
-  authInfo: ProviderAuthInfo,
-  credentialCellRef: CredentialCacheCellRef<OpenAICredentials>,
+  creds: CredentialCache<OpenAICredentials>,
 ) => {
-  const credentialLayer = OpenAICredentialService.layerFromRef(credentialCellRef, authInfo)
-
-  const clientLayer = Layer.unwrap(
+  const codexHttpClientLayer = Layer.effect(
+    HttpClient.HttpClient,
     Effect.gen(function* () {
-      const creds = yield* OpenAICredentialService
-      const codexHttpClientLayer = Layer.effect(
-        HttpClient.HttpClient,
-        Effect.gen(function* () {
-          const client = yield* HttpClient.HttpClient
-          return buildCodexTransformClient(creds)(client)
-        }),
-      ).pipe(Layer.provide(FetchHttpClient.layer))
-      return OpenAiResponsesClient.layer({
-        apiUrl: "https://chatgpt.com/backend-api/codex",
-      }).pipe(Layer.provide(codexHttpClientLayer))
+      const client = yield* HttpClient.HttpClient
+      return buildCodexTransformClient(creds)(client)
     }),
-  ).pipe(Layer.provide(credentialLayer))
-
+  ).pipe(Layer.provide(FetchHttpClient.layer))
+  const clientLayer = OpenAiResponsesClient.layer({
+    apiUrl: "https://chatgpt.com/backend-api/codex",
+  }).pipe(Layer.provide(codexHttpClientLayer))
   return OpenAiResponsesLanguageModel.layer({ model: modelName, config }).pipe(
     Layer.provide(clientLayer),
   )
@@ -1363,11 +1372,9 @@ export const buildOpenAIModelDriver = (
             message: `Model "${modelName}" not available with ChatGPT OAuth`,
           })
         }
-        return AiModel.make(
-          "openai",
-          modelName,
-          makeOauthOpenAILayer(modelName, config, auth.value, credentialCellRef),
-        )
+        const creds = yield* build(credentialCellRef, realIO, auth.value)
+        yield* checkCredentials(creds)
+        return AiModel.make("openai", modelName, makeOauthOpenAILayer(modelName, config, creds))
       }
 
       // Stored API key takes precedence over env var

@@ -38,7 +38,7 @@ import {
 } from "effect/unstable/http"
 import { EncodeError, HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { runEffectBoundary } from "./run-effect-boundary.js"
-import { LanguageModel } from "effect/unstable/ai"
+import { AiError, LanguageModel } from "effect/unstable/ai"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import {
@@ -2332,6 +2332,109 @@ describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
       expect(page).not.toContain("<script>alert")
       // Completes the flow: stops the timer and closes the redirect server.
       yield* Effect.exit(callback(authContext(0, "escaped")))
+    }),
+  )
+})
+describe("buildOpenAIModelDriver — token endpoint outage", () => {
+  it.live(
+    "a 503 from the token endpoint fails the attempt as retryable, and the retry succeeds",
+    () =>
+      Effect.gen(function* () {
+        const credentialCellRef =
+          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+        const driver = buildOpenAIModelDriver(
+          credentialCellRef,
+          noopCallbacks(),
+          Option.none(),
+          testCatalogSource(),
+        )
+        let tokenEndpointDown = true
+        const fetchState = makeFakeFetchState()
+        const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+          if (!request.url.endsWith("/oauth/token")) return openaiResponsesHappyResponse()
+          if (tokenEndpointDown) return { status: 503, body: "service unavailable" }
+          return {
+            status: 200,
+            body: '{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}',
+          }
+        })
+        const authInfo: ProviderAuthInfo = {
+          type: "oauth",
+          access: "expired-access",
+          refresh: "old-refresh",
+          expires: 0,
+          persist: () => Effect.void,
+        }
+        // One attempt of the loop: resolve the model, then send one request.
+        const attempt = Effect.gen(function* () {
+          const model = yield* driver.resolveModel("gpt-5.4", authInfo)
+          return yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
+            Effect.provide(Layer.provideMerge(model, fetchLayer)),
+          )
+          // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
+        }).pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit)
+
+        const first = yield* attempt
+        expect(Exit.isFailure(first)).toBe(true)
+        if (!Exit.isFailure(first)) return
+        const error = Cause.findErrorOption(first.cause).pipe(Option.filter(AiError.isAiError))
+        // The loop retries only a retryable AiError: an outage must be one.
+        expect(Option.isSome(error) && error.value.isRetryable).toBe(true)
+
+        tokenEndpointDown = false
+        const retry = yield* attempt
+        expect(Exit.isSuccess(retry)).toBe(true)
+        expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer new-access")
+      }),
+  )
+})
+describe("buildOpenAIModelDriver — revoked sign-in", () => {
+  it.live("a rejected refresh token tells the user to sign in again with /auth", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+      )
+      const fetchState = makeFakeFetchState()
+      const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+        if (!request.url.endsWith("/oauth/token")) return openaiResponsesHappyResponse()
+        return { status: 400, body: '{"error":"invalid_grant"}' }
+      })
+      const authInfo: ProviderAuthInfo = {
+        type: "oauth",
+        access: "expired-access",
+        refresh: "revoked-refresh",
+        expires: 0,
+        persist: () => Effect.void,
+      }
+      const exit = yield* Effect.gen(function* () {
+        const model = yield* driver.resolveModel("gpt-5.4", authInfo)
+        return yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
+          Effect.provide(Layer.provideMerge(model, fetchLayer)),
+        )
+        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
+      }).pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (!Exit.isFailure(exit)) return
+      // Core shows the failure's own message to the user.
+      const shown = Option.match(Cause.findErrorOption(exit.cause), {
+        onNone: () => "",
+        onSome: (error) => error.message,
+      })
+      expect(shown).toContain("Sign in again with /auth.")
+      expect(shown).toContain("400")
+      expect(shown).not.toContain("request body")
+      // The model request is never sent with the rejected credential.
+      expect(fetchState.captured.every((request) => request.url.endsWith("/oauth/token"))).toBe(
+        true,
+      )
     }),
   )
 })
