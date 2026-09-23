@@ -201,6 +201,13 @@ const CASES: ReadonlyArray<RuleCase> = [
   },
   {
     rule: "gent/no-bun-outside-adapter",
+    invalid: "packages/core/src/runtime/host-facts.invalid.ts",
+    valid: "packages/core/src/runtime/host-facts.valid.ts",
+    // os, bun, crypto and url imports, process.cwd, and a hand-rolled file path
+    expectedCount: 6,
+  },
+  {
+    rule: "gent/no-bun-outside-adapter",
     invalid: "apps/server/src/main.ts",
     valid: "apps/server/src/launch.valid.ts",
     // process.execPath: the server launcher is not exempt

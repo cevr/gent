@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "examples"
   ],
   "type": "module",
   "scripts": {
@@ -31,6 +32,7 @@
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@effect/tsgo": "0.41.0",
+    "@oxlint/plugins": "^1.82.0",
     "@types/bun": "^1.4.2",
     "@types/picomatch": "catalog:",
     "concurrently": "^10.0.5",

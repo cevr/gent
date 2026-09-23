@@ -39,7 +39,7 @@
  *   throws during module load and the file registers no tests at all.
  */
 
-import type { Plugin } from "#oxlint/plugins"
+import type { Plugin, Range } from "@oxlint/plugins"
 
 const LOG_METHODS = new Set([
   "logInfo",
@@ -50,16 +50,25 @@ const LOG_METHODS = new Set([
   "logFatal",
 ])
 
+/**
+ * The view a structural walk takes of any ESTree node: a `type` tag and the
+ * source range a report points at, with every other field read by name
+ * through the helpers below. Typed ESTree nodes from `@oxlint/plugins` are
+ * assignable to it.
+ */
 interface AstNode {
   readonly type: string
-  readonly [k: string]: unknown
+  readonly range: Range
 }
 
-const isAstNode = (value: unknown): value is AstNode => {
-  if (typeof value !== "object" || value === null || !("type" in value)) return false
-  const t = (value as Record<string, unknown>).type
-  return typeof t === "string"
-}
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null
+
+/** Read one field of a node without claiming its shape. */
+const fieldOf = (node: AstNode, field: string): unknown => Reflect.get(node, field)
+
+const isAstNode = (value: unknown): value is AstNode =>
+  isRecord(value) && typeof value["type"] === "string" && Array.isArray(value["range"])
 
 const walkAst = (node: unknown, visit: (n: AstNode) => void): void => {
   if (Array.isArray(node)) {
@@ -70,35 +79,32 @@ const walkAst = (node: unknown, visit: (n: AstNode) => void): void => {
   visit(node)
   for (const key in node) {
     if (key === "type" || key === "loc" || key === "range" || key === "parent") continue
-    walkAst(node[key], visit)
+    walkAst(fieldOf(node, key), visit)
   }
 }
 
 const getStringField = (n: AstNode, field: string): string | undefined => {
-  const v = n[field]
+  const v = fieldOf(n, field)
   return typeof v === "string" ? v : undefined
 }
 
 const getNodeField = (n: AstNode, field: string): AstNode | undefined => {
-  const v = n[field]
+  const v = fieldOf(n, field)
   return isAstNode(v) ? v : undefined
 }
 
 const getNodeArrayField = (n: AstNode, field: string): AstNode[] | undefined => {
-  const v = n[field]
+  const v = fieldOf(n, field)
   if (!Array.isArray(v)) return undefined
   return v.filter(isAstNode)
 }
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null
-
 const getLocLine = (node: AstNode, edge: "start" | "end"): number | undefined => {
-  const loc = node.loc
+  const loc = fieldOf(node, "loc")
   if (!isRecord(loc)) return undefined
   const point = loc[edge]
   if (!isRecord(point)) return undefined
-  const line = point.line
+  const line = point["line"]
   return typeof line === "number" ? line : undefined
 }
 
@@ -196,6 +202,47 @@ const platformBoundaryFilename = (filename: string): boolean => {
 const HOST_PROCESS_MEMBERS = new Set(["execPath", "kill", "platform", "pid"])
 const HOST_OS_MEMBERS = new Set(["hostname", "homedir", "release"])
 
+/**
+ * Core and shipped-extension source, outside the test harness: the code that
+ * also takes its working directory and host modules through Effect services.
+ * The TUI, the SDK and the server launcher are process hosts; they read their
+ * own working directory.
+ */
+const protectedHostFactFilename = (filename: string): boolean =>
+  /\/packages\/(?:core|extensions)\/src\//.test(filename) && !/\/test-utils\//.test(filename)
+
+/** Host modules protected source reaches only through a service, and which one. */
+const HOST_MODULE_MESSAGES: ReadonlyMap<string, string> = new Map([
+  ["os", "Host OS facts come from `GentPlatform` (`osInfo`, `homeDirectory`)."],
+  ["bun", "Direct `bun` imports are adapter-only; use Effect platform services."],
+  [
+    "crypto",
+    "Random bytes and ids come from Effect `Crypto`; digests come from `GentPlatform.hash`.",
+  ],
+  ["url", "Turn a file URL into a path with Effect `Path.fromFileUrl`."],
+])
+
+const hostModuleMessage = (source: string): string | undefined => {
+  const message = HOST_MODULE_MESSAGES.get(source.replace(/^node:/, ""))
+  return message === undefined ? undefined : `\`${source}\` is not allowed here. ${message}`
+}
+
+/** `new URL(import.meta.url)`: the operand a hand-rolled file path reads `.pathname` from. */
+const isImportMetaUrlConstruction = (node: AstNode | undefined): boolean => {
+  if (node?.type !== "NewExpression") return false
+  const callee = getNodeField(node, "callee")
+  if (callee?.type !== "Identifier" || getStringField(callee, "name") !== "URL") return false
+  const [arg] = getNodeArrayField(node, "arguments") ?? []
+  if (arg?.type !== "MemberExpression") return false
+  const meta = getNodeField(arg, "object")
+  const property = getNodeField(arg, "property")
+  return (
+    meta?.type === "MetaProperty" &&
+    property !== undefined &&
+    getStringField(property, "name") === "url"
+  )
+}
+
 /** `object.property` for an identifier-rooted member expression. */
 const hostMember = (
   node: AstNode,
@@ -258,7 +305,7 @@ const wrapperFunctionName = (node: AstNode | undefined): string | undefined => {
 }
 
 const callExpressionArgs = (node: AstNode): ReadonlyArray<AstNode> => {
-  const args = node.arguments
+  const args = fieldOf(node, "arguments")
   if (!Array.isArray(args)) return []
   return args.filter(isAstNode)
 }
@@ -387,7 +434,7 @@ const isPromiseConstructor = (node: AstNode): boolean => {
 /** Locate a named property's arrow-function value inside an object literal. */
 const findArrowInObject = (objExpr: AstNode, propName: string): AstNode | undefined => {
   if (objExpr.type !== "ObjectExpression") return undefined
-  const properties = objExpr.properties
+  const properties = fieldOf(objExpr, "properties")
   if (!Array.isArray(properties)) return undefined
   for (const propRaw of properties) {
     if (!isAstNode(propRaw) || propRaw.type !== "Property") continue
@@ -408,7 +455,7 @@ const findArrowInObject = (objExpr: AstNode, propName: string): AstNode | undefi
 
 /** Locate a named property's arrow value in the first object-literal arg of a CallExpression. */
 const findArrowInFirstArg = (node: AstNode, propName: string): AstNode | undefined => {
-  const args = node.arguments
+  const args = fieldOf(node, "arguments")
   if (!Array.isArray(args) || args.length === 0) return undefined
   const arg = args[0]
   if (!isAstNode(arg)) return undefined
@@ -792,12 +839,12 @@ const plugin: Plugin = {
             }
             for (const key in n) {
               if (key === "type" || key === "loc" || key === "range" || key === "parent") continue
-              visit(n[key])
+              visit(fieldOf(n, key))
             }
           }
           // Don't apply the function-boundary stop to the immediate setup body
           // (it IS the function), only to its descendants.
-          visit(fn.body)
+          visit(fieldOf(fn, "body"))
         }
         return {
           CallExpression(node) {
@@ -1026,20 +1073,55 @@ const plugin: Plugin = {
      * `tests/`: `Bun.Glob` (the FileIndex service replaced it) and
      * `Bun.randomUUIDv7` (only `runtime/gent-platform-bun.ts` may call it;
      * everyone else uses `GentPlatform.randomId`).
+     *
+     * Core and shipped-extension source (outside `test-utils/`) is held to
+     * three more host facts: `process.cwd()` (the working directory comes
+     * from `RuntimeEnvironment` or the extension context), imports of the
+     * `os`, `bun`, `crypto` and `url` modules, and a file path hand-rolled as
+     * `new URL(import.meta.url).pathname`. This rule is the one owner of the
+     * host-fact bans; a site that is a deliberate exception carries a
+     * line-local suppression with its reason.
      */
     "no-bun-outside-adapter": {
       create(context) {
         const filename = context.filename
         const platformImpl = /\/runtime\/gent-platform-bun\.ts$/.test(filename)
         const inTests = /\/tests\//.test(filename)
+        const protectedFile =
+          protectedHostFactFilename(filename) && !platformBoundaryFilename(filename)
+        const reportHostModule = (node: AstNode) => {
+          if (!protectedFile) return
+          const source = importSourceOf(node)
+          if (source === undefined) return
+          const message = hostModuleMessage(source)
+          if (message !== undefined) context.report({ message, node })
+        }
         return {
+          ImportDeclaration: reportHostModule,
+          ImportExpression: reportHostModule,
           MemberExpression(node) {
             if (!isAstNode(node)) return
+            if (protectedFile && isImportMetaUrlConstruction(getNodeField(node, "object"))) {
+              context.report({
+                message:
+                  "`new URL(import.meta.url)` read as a path is hand-rolled; use Effect `Path.fromFileUrl`.",
+                node,
+              })
+              return
+            }
             const member = hostMember(node)
             if (member === undefined) return
             const retired = retiredBunMessage(member, platformImpl)
             if (retired !== undefined && !inTests) {
               context.report({ message: retired, node })
+              return
+            }
+            if (protectedFile && member.object === "process" && member.property === "cwd") {
+              context.report({
+                message:
+                  "`process.cwd` is not allowed here. The working directory comes from `RuntimeEnvironment` or the extension context's `cwd`.",
+                node,
+              })
               return
             }
             if (platformBoundaryFilename(filename)) return
@@ -1172,7 +1254,7 @@ const plugin: Plugin = {
             if (inner.type === "TemplateElement") {
               // The text sits under `value: { cooked, raw }` — a bare record
               // with no `type`, so it is not reachable via `getNodeField`.
-              const value = inner["value"]
+              const value = fieldOf(inner, "value")
               if (!isRecord(value)) return
               const cooked = value["cooked"]
               const raw = value["raw"]
@@ -1339,7 +1421,8 @@ const plugin: Plugin = {
           ImportDeclaration(node) {
             if (!isAstNode(node)) return
             const source = getNodeField(node, "source")
-            if (getStringField(source ?? { type: "" }, "value") !== "effect-bun-test") return
+            if (source === undefined || getStringField(source, "value") !== "effect-bun-test")
+              return
             for (const specifier of getNodeArrayField(node, "specifiers") ?? []) {
               if (specifier.type !== "ImportSpecifier") continue
               const imported = getNodeField(specifier, "imported")

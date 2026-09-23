@@ -977,31 +977,36 @@ const extractToolResultOutput = (
   return Option.some([...texts.map((text) => ({ type: "text", text })), ...others])
 }
 
-// The Effect AI response contract requires explicit undefined token counters and metadata.
-/* oxlint-disable effect/noNullish */
 const finishPart = (stopReason: StopReason): TurnStreamPart =>
   Response.makePart("finish", {
     reason: toResponseFinishReason(stopReason),
     usage: emptyUsage(),
+    // oxlint-disable-next-line effect/noNullish -- the Effect AI response contract requires explicit undefined token counters and metadata
     response: undefined,
   })
 
 const emptyUsage = (): Response.Usage =>
   new Response.Usage({
     inputTokens: {
+      // oxlint-disable-next-line effect/noNullish -- the Effect AI response contract requires explicit undefined token counters and metadata
       uncached: undefined,
+      // oxlint-disable-next-line effect/noNullish -- the Effect AI response contract requires explicit undefined token counters and metadata
       total: undefined,
+      // oxlint-disable-next-line effect/noNullish -- the Effect AI response contract requires explicit undefined token counters and metadata
       cacheRead: undefined,
+      // oxlint-disable-next-line effect/noNullish -- the Effect AI response contract requires explicit undefined token counters and metadata
       cacheWrite: undefined,
     },
     outputTokens: {
+      // oxlint-disable-next-line effect/noNullish -- the Effect AI response contract requires explicit undefined token counters and metadata
       total: undefined,
+      // oxlint-disable-next-line effect/noNullish -- the Effect AI response contract requires explicit undefined token counters and metadata
       text: undefined,
+      // oxlint-disable-next-line effect/noNullish -- the Effect AI response contract requires explicit undefined token counters and metadata
       reasoning: undefined,
     },
   })
 
-/* oxlint-enable effect/noNullish */
 /** Map a tool_call_update to a response part based on status. */
 const mapToolCallUpdate = (
   obj: typeof AcpPayload.Type,

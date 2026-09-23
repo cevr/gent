@@ -7,10 +7,15 @@ export interface BlanketDisableFinding {
   readonly line: number
 }
 
+/**
+ * oxlint honors both spellings, `eslint-disable` and `oxlint-disable`, so each
+ * pattern matches both. A blanket directive names no rule; a block directive
+ * disables its rules to the end of the file or the next enable.
+ */
 export const blanketDisableDirective =
-  /(?:\/\*\s*eslint-disable(?:-next-line|-line)?\s*(?:\*\/|--|$))|(?:\/\/\s*eslint-disable(?:-next-line|-line)?\s*(?:--|$))/
+  /(?:\/\*\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:\*\/|--|$))|(?:\/\/\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:--|$))/
 
-export const blockDisableDirective = /\/\*\s*eslint-disable(?:\s|$)/
+export const blockDisableDirective = /\/\*\s*(?:es|ox)lint-disable(?:\s|$)/
 
 const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)(?:\/|\.|\b)/
 
@@ -1286,63 +1291,6 @@ const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
   },
 ]
 
-const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /\b(?:globalThis\.)?process\.cwd\s*\(/,
-    message:
-      "Host working directory facts are adapter-only; use RuntimeEnvironment or GentPlatform",
-  },
-  {
-    pattern: /\bfrom\s+["'](?:node:)?os["']/,
-    message: "Host OS module imports are adapter-only; use GentPlatform",
-  },
-  {
-    pattern: /\bfrom\s+["']bun["']/,
-    message: "Direct `bun` package imports are adapter-only; use Effect platform services",
-  },
-  {
-    // Cover every acquisition form for the crypto specifier:
-    //   `from "node:crypto"`        — static `import … from`
-    //   `import "node:crypto"`      — bare side-effect import
-    //   `import("node:crypto")`     — dynamic import
-    //   `require("node:crypto")`    — CJS require
-    // The shared prefix is `from`/`import`/`require` followed by the quoted
-    // specifier (with optional `(` for the call forms). Plain string usage
-    // of `"crypto"` as data (param names, identifiers) does not trip.
-    pattern: /(?:\bfrom\s+|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'](?:node:)?crypto["']/,
-    message:
-      "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
-  },
-  {
-    pattern: /(?:\bfrom\s+|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'](?:node:)?url["']/,
-    message:
-      "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
-  },
-  {
-    pattern: /(?<![.\w])createHash\s*\(/,
-    message:
-      "Direct createHash() is adapter-only; yield GentPlatform and call platform.hash(algorithm, input)",
-  },
-  {
-    pattern: /(?<![.\w])randomBytes\s*\(/,
-    message:
-      "Direct randomBytes() is adapter-only; yield GentPlatform and call platform.randomBytes(n) (or use the Web Crypto global `crypto.getRandomValues` if you need a sync Uint8Array)",
-  },
-  {
-    pattern: /(?<![.\w])fileURLToPath\s*\(/,
-    message:
-      "Direct fileURLToPath() is adapter-only; yield GentPlatform and call platform.fileURLToPath(url)",
-  },
-  {
-    // Bare `new URL(import.meta.url).pathname` (or `.href`) is a hand-rolled
-    // fileURLToPath that bypasses the platform adapter and breaks under
-    // Windows file URLs (extra leading slash on drive paths).
-    pattern: /new\s+URL\s*\(\s*import\.meta\.url\s*\)/,
-    message:
-      "Bare `new URL(import.meta.url)` is a hand-rolled fileURLToPath; yield GentPlatform and call platform.fileURLToPath(import.meta.url)",
-  },
-]
-
 const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform.ts",
   "packages/core/src/runtime/gent-platform-bun.ts",
@@ -1354,20 +1302,6 @@ const platformProviderRootFiles = new Set([
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])
-
-const protectedHostFactFile = (file: string): boolean =>
-  (file.startsWith("packages/core/src/") || file.startsWith("packages/extensions/src/")) &&
-  !file.includes("/test-utils/") &&
-  file !== "packages/core/src/runtime/gent-platform-bun.ts" &&
-  file !== "packages/core/src/runtime/gent-platform.ts" &&
-  // The workspace id is a wire constant, not a host fact. A client and its
-  // server derive it in separate processes and must agree byte for byte, so
-  // it is pinned to node:crypto sha256 rather than routed through
-  // GentPlatform.hash, which a future adapter could implement differently.
-  // This is the sole owner of that derivation; see its JSDoc.
-  file !== "packages/core/src/server/workspace-rpc.ts" &&
-  // The cell worker entry is a process entrypoint; it reads its own working directory once.
-  file !== "packages/extensions/src/cell-worker-boundary.ts"
 
 /**
  * `apps/server/src/main.ts` is a launcher, not a composition root. It reads
@@ -1401,7 +1335,6 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
         pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b"
       ),
   )
-  if (protectedHostFactFile(file)) patterns.push(...bannedProtectedHostFactPatterns)
   if (launcherFiles.has(file)) patterns.push(...bannedLauncherPatterns)
   if (file === "packages/core/src/server/rpc.ts") {
     patterns.push(...bannedTransportContractPatterns)

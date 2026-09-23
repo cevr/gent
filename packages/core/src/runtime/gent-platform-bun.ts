@@ -14,8 +14,7 @@
  */
 
 import * as os from "node:os"
-import { createHash, randomBytes as nodeRandomBytes } from "node:crypto"
-import { fileURLToPath as nodeFileURLToPath } from "node:url"
+import { createHash } from "node:crypto"
 import { Effect, Layer, Option, Schema } from "effect"
 import { causeMessage } from "../domain/guards.js"
 import { BunServices } from "@effect/platform-bun"
@@ -70,14 +69,6 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
       }),
 
     hash: (algorithm, input) => createHash(algorithm).update(input).digest("hex"),
-
-    randomBytes: (length) =>
-      Effect.sync(() => {
-        const node = nodeRandomBytes(length)
-        return new Uint8Array(node.buffer, node.byteOffset, node.byteLength)
-      }),
-
-    fileURLToPath: (url) => nodeFileURLToPath(url),
   }),
 )
 

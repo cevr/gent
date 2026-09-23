@@ -12,6 +12,7 @@ const HelloTool = tool({
   params: Schema.Struct({
     name: Schema.String.annotate({ description: "Who to greet" }),
   }),
+  output: Schema.String,
   execute: (params) => Effect.succeed(`Hello, ${params.name}!`),
 })
 

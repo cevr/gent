@@ -50,7 +50,7 @@ const readJsonFile = Effect.fn("Tooling.readJsonFile")(function* (path: string) 
 })
 
 const OXLINT_CONFIG = ".oxlintrc.json"
-const LINT_PLUGIN = "lint/no-direct-env.ts"
+const LINT_PLUGIN = "lint/gent-rules.ts"
 
 /** The two findings that read the lint config rather than one source file. */
 const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
@@ -86,7 +86,7 @@ const singleFileFailures = (file: string, text: string): ReadonlyArray<string> =
     ...findBannedEslintDisableBlocks(file, text),
   ].map(
     (finding) =>
-      `${finding.file}:${finding.line}: blanket eslint-disable comments and block eslint-disable comments are banned; use line-local suppressions with exact rules`,
+      `${finding.file}:${finding.line}: blanket and block lint-disable comments (eslint- or oxlint- spelling) are banned; use line-local suppressions with exact rules`,
   )
   const suppressions = findSuppressionInventoryFindings(file, text).map(
     (finding) => `${finding.file}:${finding.line}: unreviewed suppression ${finding.kind}`,
@@ -213,7 +213,7 @@ const program = Effect.gen(function* () {
 
   // Every workspace package imports only the workspace packages it declares.
   const manifestDirs = trackedFiles
-    .filter((file) => /^(?:packages|apps)\/[^/]+\/package\.json$/.test(file))
+    .filter((file) => /^(?:(?:packages|apps)\/[^/]+|examples)\/package\.json$/.test(file))
     .map((file) => file.slice(0, -"/package.json".length))
   const manifests = yield* Effect.forEach(
     manifestDirs,

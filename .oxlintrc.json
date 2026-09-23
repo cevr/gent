@@ -9,7 +9,7 @@
     "perf": "error"
   },
   "plugins": ["typescript", "import", "node"],
-  "jsPlugins": ["./lint/no-direct-env.ts", "oxlint-plugin-effect/plugin"],
+  "jsPlugins": ["./lint/gent-rules.ts", "oxlint-plugin-effect/plugin"],
   "rules": {
     // Custom — no positional error args in Effect.log*
     "gent/no-positional-log-error": "error",

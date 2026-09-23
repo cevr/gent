@@ -41,8 +41,6 @@ import { BunRuntime } from "@effect/platform-bun"
 
 // ── tool namespace ──────────────────────────────────────────────────────────
 
-/* oxlint-disable effect/noThrowStatement, effect/noNewError, effect/noUnknownParameters -- The namespace runs inside model code; a thrown Error is the cell's failure contract, and a Proxy trap receives any JavaScript value. */
-
 const editDistance = (left: string, right: string): number => {
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index)
   for (let row = 1; row <= left.length; row++) {
@@ -87,10 +85,12 @@ type ToolNode = ReturnType<typeof nodeTarget>
 interface ToolCatalogView {
   readonly ids: () => ReadonlyArray<string>
   readonly describe: (id: string) => Option.Option<CellCatalogEntry>
+  // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
   readonly call: (id: string, input: unknown) => Promise<Schema.Json>
 }
 
 /** A call with no argument sends an empty input, as `tools.delegate.list()` reads; `null` stays `null`. */
+// oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
 const inputOrEmpty = (input: unknown) => {
   if (Predicate.isUndefined(input)) return {}
   return input
@@ -126,11 +126,13 @@ const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
     return [...new Set(names)].toSorted()
   }
   const unknown = (path: string) =>
+    // oxlint-disable-next-line effect/noNewError -- a thrown Error is the cell's failure contract inside model code
     new Error(
       `${toolPath(path)} is not a host tool selected for this turn. Close ids: ${closeIds(path, catalog.ids()) || "none"}`,
     )
   const lookup = (id: string) => {
     const entry = Option.getOrThrowWith(catalog.describe(id), () => unknown(id))
+    // oxlint-disable-next-line effect/noUnknownParameters -- model code passes any JavaScript value to the tool namespace
     return Object.assign((input?: unknown) => catalog.call(entry.name, input), {
       id: entry.name,
       description: entry.description,
@@ -145,6 +147,7 @@ const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
       get: (target, key, receiver) => {
         if (!isToolKey(key)) return Reflect.get(target, key, receiver)
         if (isPrefix(childPath(path, key))) return node(childPath(path, key))
+        // oxlint-disable-next-line effect/noThrowStatement -- a thrown Error is the cell's failure contract inside model code
         throw unknown(childPath(path, key))
       },
       has: (target, key) => {
@@ -162,8 +165,10 @@ const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
       apply: (_target, _this, args: ReadonlyArray<unknown>) => {
         if (path === "") return lookup(String(args[0]))
         if (catalog.ids().includes(path)) return catalog.call(path, args[0])
+        // oxlint-disable-next-line effect/noThrowStatement -- a thrown Error is the cell's failure contract inside model code
         if (!isPrefix(path)) throw unknown(path)
         const inside = catalog.ids().filter((id) => id.startsWith(`${path}.`))
+        // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- a thrown Error is the cell's failure contract inside model code
         throw new Error(
           `${toolPath(path)} is a namespace, not a tool. Its tools: ${inside.join(", ")}`,
         )
@@ -175,8 +180,6 @@ const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
   }
   return node("")
 }
-
-/* oxlint-enable effect/noThrowStatement, effect/noNewError, effect/noUnknownParameters */
 
 // ── bun evaluator ───────────────────────────────────────────────────────────
 
@@ -554,7 +557,6 @@ export const runCellWorker = Effect.scoped(
   }),
 )
 
-/* oxlint-disable effect/noGlobals, gent/no-bun-outside-adapter -- The worker entry owns its process descriptors through Bun. */
 // ── process entry ───────────────────────────────────────────────────────────
 
 /** Frames use dedicated descriptors so cell code keeps stdout and stderr for itself.
@@ -565,9 +567,11 @@ const DescriptorTransport = Layer.effect(
     const outputPermit = yield* Semaphore.make(1)
     const ioError = (cause: unknown) => new CellProtocolError({ message: String(cause) })
     const requestBytes = Stream.fromReadableStream({
+      // oxlint-disable-next-line effect/noGlobals, gent/no-bun-outside-adapter -- The worker entry owns its process descriptors through Bun
       evaluate: () => Bun.file(cellRequestFd).stream(),
       onError: ioError,
     })
+    // oxlint-disable-next-line effect/noGlobals, gent/no-bun-outside-adapter -- The worker entry owns its process descriptors through Bun
     const responses = Bun.file(cellResponseFd)
     // The callback fires once the stream handed the marker to the OS, so everything the
     // cell wrote to the same stream before it is already in the pipe.
@@ -580,6 +584,7 @@ const DescriptorTransport = Layer.effect(
       })
     const writeAll = (bytes: Uint8Array) =>
       Effect.tryPromise({
+        // oxlint-disable-next-line effect/noGlobals, gent/no-bun-outside-adapter -- The worker entry owns its process descriptors through Bun
         try: () => Bun.write(responses, bytes),
         catch: ioError,
       }).pipe(Effect.asVoid)
@@ -595,6 +600,7 @@ const DescriptorTransport = Layer.effect(
       }),
       // stderr is the same pipe as stdout, so one marker closes all cell output.
       endCellOutput: Effect.fn("CellWorkerTransport.endCellOutput")((outputToken) =>
+        // oxlint-disable-next-line effect/noGlobals -- The worker entry owns its process descriptors through Bun
         writeMarker(process.stdout, cellOutputBoundary(outputToken)),
       ),
       send: Effect.fn("CellWorkerTransport.send")((response) =>
@@ -619,6 +625,7 @@ if (import.meta.main) {
             DescriptorTransport,
             Layer.succeed(
               CellWorkerEnvironment,
+              // oxlint-disable-next-line gent/no-bun-outside-adapter -- the worker process entry reads its own working directory once
               CellWorkerEnvironment.of({ workingDirectory: process.cwd() }),
             ),
           ),

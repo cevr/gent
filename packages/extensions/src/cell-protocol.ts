@@ -2,8 +2,6 @@ import { Effect, Option, Predicate, Schema } from "effect"
 
 // ── namespace snapshot codec ────────────────────────────────────────────────
 
-/* oxlint-disable effect/noGlobals, effect/noNullish, effect/noUnknownParameters, effect/noObjectParameters -- This codec is the realm boundary for namespace values; it must inspect arbitrary JavaScript objects and encode JSON null/undefined by design. */
-
 /**
  * Namespace snapshots move cell bindings between a worker and the host as
  * tagged JSON. The worker encodes in its own realm with realm-agnostic checks;
@@ -41,13 +39,17 @@ const isOmitted = (value: Encoded): value is Omitted => value instanceof Omitted
 
 const tagged = (kind: string, value: Schema.Json): Schema.Json => ({ [TAG]: kind, value })
 /** Effect's isObject excludes arrays; snapshots treat both as references. */
+// oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const isReference = (value: unknown): value is object =>
   Predicate.isObject(value) || Array.isArray(value)
+// oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const tagOf = (value: unknown) => Object.prototype.toString.call(value).slice(8, -1)
 
 /** Plain means its prototype is null or a root Object.prototype from any realm. */
+// oxlint-disable-next-line effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const isPlainObject = (value: object) => {
   const proto: unknown = Object.getPrototypeOf(value)
+  // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   return proto === null || Object.getPrototypeOf(proto) === null
 }
 
@@ -83,8 +85,11 @@ const typedArrayKinds = new Set([
   "BigUint64Array",
 ])
 
+// oxlint-disable-next-line effect/noNullish, effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const encodePrimitive = (value: unknown): Encoded | undefined => {
+  // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return value
+  // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   if (Predicate.isUndefined(value)) return tagged("undefined", null)
   if (Predicate.isNumber(value)) {
     if (Number.isFinite(value)) return value
@@ -93,9 +98,11 @@ const encodePrimitive = (value: unknown): Encoded | undefined => {
   if (Predicate.isBigInt(value)) return tagged("bigint", value.toString())
   if (Predicate.isFunction(value)) return new Omitted("function")
   if (!isReference(value)) return new Omitted("unsupported")
+  // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   return undefined
 }
 
+// oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const encodeList = (items: ReadonlyArray<unknown>, inner: (item: unknown) => Encoded): Encoded => {
   const out: Schema.Json[] = []
   for (const item of items) {
@@ -108,6 +115,7 @@ const encodeList = (items: ReadonlyArray<unknown>, inner: (item: unknown) => Enc
 
 const encodeRecord = (
   entries: ReadonlyArray<readonly [string, unknown]>,
+  // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   inner: (item: unknown) => Encoded,
 ): Encoded => {
   const out: Record<string, Schema.Json> = {}
@@ -120,6 +128,7 @@ const encodeRecord = (
   return out
 }
 
+// oxlint-disable-next-line effect/noNullish, effect/noUnknownParameters, effect/noObjectParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const encodeBuiltin = (value: object, inner: (item: unknown) => Encoded): Encoded | undefined => {
   const kind = tagOf(value)
   if (kind === "Date") return tagged("date", Date.prototype.getTime.call(value))
@@ -155,9 +164,11 @@ const encodeBuiltin = (value: object, inner: (item: unknown) => Encoded): Encode
     if (!typedArrayKinds.has(kind) || !isElementView(value)) return new Omitted("unsupported")
     return tagged(kind, elements(value))
   }
+  // oxlint-disable-next-line effect/noNullish -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   return undefined
 }
 
+// oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const encodeValue = (value: unknown, depth: number, seen: Set<object>): Encoded => {
   if (depth > maximumSnapshotDepth) return new Omitted("too-deep")
   const primitive = encodePrimitive(value)
@@ -166,6 +177,7 @@ const encodeValue = (value: unknown, depth: number, seen: Set<object>): Encoded 
   const object: object = value
   if (seen.has(object)) return new Omitted("cyclic")
   seen.add(object)
+  // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
   const inner = (child: unknown) => encodeValue(child, depth + 1, seen)
   let encoded: Encoded
   const builtin = encodeBuiltin(object, inner)
@@ -177,6 +189,7 @@ const encodeValue = (value: unknown, depth: number, seen: Set<object>): Encoded 
   return encoded
 }
 
+// oxlint-disable-next-line effect/noGlobals -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
 const jsonBytes = (value: Schema.Json) => new TextEncoder().encode(JSON.stringify(value)).byteLength
 
 /** Encode every binding. Values that cannot round-trip are named with the reason, never silently dropped. */
@@ -201,12 +214,15 @@ export const encodeSnapshot = (namespace: ReadonlyMap<string, unknown>): CellSna
   return { bindings, omitted }
 }
 
+// oxlint-disable-next-line effect/noGlobals -- the reviver source embeds the tag as a JavaScript literal
+const TAG_LITERAL = JSON.stringify(TAG)
+
 /**
  * Source for a reviver that runs inside the vm context. It returns a function
  * from encoded JSON text to a value built from the context's own intrinsics.
  */
 export const snapshotReviverSource = `(function () {
-  var TAG = ${JSON.stringify(TAG)};
+  var TAG = ${TAG_LITERAL};
   var revive = function (value) {
     if (value === null || typeof value !== "object") return value;
     if (Array.isArray(value)) return value.map(revive);
@@ -236,8 +252,6 @@ export const snapshotReviverSource = `(function () {
   };
   return function (text) { return revive(JSON.parse(text)); };
 })()`
-
-/* oxlint-enable effect/noGlobals, effect/noNullish, effect/noUnknownParameters, effect/noObjectParameters */
 
 // ── frames ──────────────────────────────────────────────────────────────────
 

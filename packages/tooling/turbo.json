@@ -1,0 +1,13 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "typecheck": {
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "../../lint/**/*.ts",
+        "../../testbeds/gamut/gamut.ts",
+        "../../testbeds/gamut/tests/**/*.ts"
+      ]
+    }
+  }
+}

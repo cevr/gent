@@ -63,13 +63,6 @@ const PlatformCompiledBin: Layer.Layer<GentPlatform> = Layer.effect(
         for (let i = 0; i < text.length; i += 1) h = (h * 33) ^ text.charCodeAt(i)
         return (h >>> 0).toString(16).padStart(64, "0")
       },
-      randomBytes: (length) => Effect.succeed(new Uint8Array(length)),
-      fileURLToPath: (url) => {
-        if (url.startsWith("file://")) {
-          return url.slice("file://".length)
-        }
-        return url
-      },
     })
   }),
 )
