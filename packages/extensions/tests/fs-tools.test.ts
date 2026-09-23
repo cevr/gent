@@ -1,21 +1,9 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { spyOn } from "bun:test"
-import { FileFinder as NativeFileFinder } from "@ff-labs/fff-bun"
-import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Path, Predicate } from "effect"
+import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import {
-  detectRedaction,
-  EditTool,
-  FallbackFileIndexLive,
-  FileIndex,
-  FileIndexError,
-  FileIndexLive,
-  findMatch,
-  GrepTool,
-  ReadTool,
-  unescapeStr,
-  WriteTool,
-} from "../src/fs-tools.js"
+import { TestClock } from "effect/testing"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { EditTool, FileIndexLive, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
 import { runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
@@ -100,6 +88,28 @@ describe("ReadTool", () => {
       expect(result.content).toBe("1\tHello, World!")
     }),
   )
+
+  for (const { name, params } of [
+    { name: "offset 0", params: { offset: 0 } },
+    { name: "offset 1.5", params: { offset: 1.5 } },
+    { name: "limit 0", params: { limit: 0 } },
+    { name: "limit -1", params: { limit: -1 } },
+    { name: "limit 2.5", params: { limit: 2.5 } },
+  ]) {
+    readTest(`refuses ${name}: a start line or line count is a positive whole number`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${tmpDir}/a.txt`, "a\nb\n")
+        const exit = yield* Effect.exit(
+          Effect.suspend(() =>
+            runToolWithCtx(ReadTool, { path: `${tmpDir}/a.txt`, ...params }, ctx),
+          ),
+        )
+        expect(exit._tag).toBe("Failure")
+      }),
+    )
+  }
 
   readTest("returns error for non-existent file", () =>
     Effect.gen(function* () {
@@ -284,108 +294,138 @@ describe("WriteTool", () => {
 
 // ── fs-tools/edit.test ──────────────────────────────────────────────────────
 
-describe("detectRedaction", () => {
-  test("clean replacement has no redaction", () => {
-    expect(Option.isNone(detectRedaction("old code", "new code"))).toBe(true)
-  })
-  test("catches [REDACTED]", () => {
-    const result = detectRedaction("old", "before [REDACTED] after")
-    expect(Option.getOrThrow(result)).toContain("[REDACTED]")
-  })
-  test("catches [...omitted code]", () => {
-    const result = detectRedaction("old", "before [...omitted code] after")
-    expect(Option.getOrThrow(result)).toContain("[...omitted code]")
-  })
-  test("catches [rest of file unchanged]", () => {
-    const result = detectRedaction("old", "before [rest of file unchanged] after")
-    expect(Option.getOrThrow(result)).toContain("[rest of file unchanged]")
-  })
-  test("catches // ... existing code", () => {
-    const result = detectRedaction("old", "line1\n// ... existing code\nline3")
-    expect(Option.getOrThrow(result)).toContain("// ... existing code")
-  })
-  test("catches # ... existing code", () => {
-    const result = detectRedaction("old", "line1\n# ... existing code\nline3")
-    expect(Option.getOrThrow(result)).toContain("# ... existing code")
-  })
-  test("allows pattern when also in oldString (legitimate content)", () => {
-    const content = "// ... existing code"
-    expect(Option.isNone(detectRedaction(content, content))).toBe(true)
-  })
-})
-describe("unescapeStr", () => {
-  test("converts literal \\n → newline", () => {
-    expect(unescapeStr("line1\\nline2")).toBe("line1\nline2")
-  })
-  test("converts \\t → tab", () => {
-    expect(unescapeStr("col1\\tcol2")).toBe("col1\tcol2")
-  })
-  test("converts \\r → CR", () => {
-    expect(unescapeStr("before\\rafter")).toBe("before\rafter")
-  })
-  test("converts \\\\\\\\ → single backslash", () => {
-    // "a\\\\b" → JS string "a\\b" → after \\\\→\ replacement → "a\b"
-    expect(unescapeStr("a\\\\b")).toBe("a\\b")
-  })
-  test("no-op on clean strings", () => {
-    expect(unescapeStr("hello world")).toBe("hello world")
-  })
-})
-describe("findMatch", () => {
-  test("exact match → strategy 'exact', correct index", () => {
-    const content = "hello world foo bar"
-    const result = findMatch(content, "world foo")
-    const match = Option.getOrThrow(result)
-    expect(match.strategy).toBe("exact")
-    expect(match.index).toBe(6)
-  })
-  test("literal \\n in oldString → falls through to 'unescaped'", () => {
-    const content = "line1\nline2"
-    const result = findMatch(content, "line1\\nline2")
-    expect(Option.getOrThrow(result).strategy).toBe("unescaped")
-  })
-  test("trailing whitespace diff → falls through to 'normalized'", () => {
-    const content = "hello\nworld"
-    const result = findMatch(content, "hello   \nworld")
-    expect(Option.getOrThrow(result).strategy).toBe("normalized")
-  })
-  test("no match returns none", () => {
-    expect(Option.isNone(findMatch("hello world", "xyz"))).toBe(true)
-  })
-  test("a whitespace-only oldString does not match blank lines", () => {
-    expect(Option.isNone(findMatch("a\n\nb", "   "))).toBe(true)
-    expect(Option.isNone(findMatch("a\n\n\nb", " \n "))).toBe(true)
-  })
-  test("a normalized search matches inside a line", () => {
-    const match = Option.getOrThrow(findMatch('const s = "hello"', "\u201Chello\u201D"))
-    expect(match.strategy).toBe("normalized")
-    expect(match.ranges).toEqual([{ start: 10, end: 17 }])
-  })
-  test("a normalized match across lines keeps the trailing whitespace it spans", () => {
-    const content = "x = \u201Chi\u201D  \nnext line"
-    const match = Option.getOrThrow(findMatch(content, 'x = "hi"\nnext'))
-    expect(match.ranges).toEqual([{ start: 0, end: 15 }])
-  })
-  test("a normalized search that ends a line takes the line's trailing whitespace", () => {
-    const match = Option.getOrThrow(findMatch("a \u201Cq\u201D   \nb", '"q"'))
-    expect(match.ranges).toEqual([{ start: 2, end: 8 }])
-  })
-  test("a normalized match keeps the searched spaces when the line goes on", () => {
-    const match = Option.getOrThrow(findMatch("\u201Chi\u201D  x", '"hi"  '))
-    expect(match.ranges).toEqual([{ start: 0, end: 6 }])
-    const atLineEnd = Option.getOrThrow(findMatch("\u201Chi\u201D\nx", '"hi"  '))
-    expect(atLineEnd.ranges).toEqual([{ start: 0, end: 4 }])
-  })
-  test("a whitespace run that exists in the file still matches exactly", () => {
-    expect(Option.getOrThrow(findMatch("a\tb", "\t")).strategy).toBe("exact")
-  })
-})
-// ============================================================================
-// Integration — real file editing
-// ============================================================================
 const editLayer = BunServices.layer
 const editTest = it.scopedLive.layer(editLayer)
 const stubCtx = testToolContext()
+
+/** Edit a fresh file that holds `content`: the tool's exit and the file afterward. */
+const editFile = Effect.fn("test.editFile")(function* (
+  content: string,
+  params: { readonly oldString: string; readonly newString: string; readonly replaceAll?: boolean },
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const dir = yield* fs.makeTempDirectoryScoped()
+  const filePath = path.join(dir, "test.txt")
+  yield* fs.writeFileString(filePath, content)
+  const exit = yield* Effect.exit(
+    runToolWithCtx(EditTool, { path: filePath, ...params }, stubCtx)
+      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      .pipe(Effect.provide(editLayer)),
+  )
+  let failure = ""
+  if (Exit.isFailure(exit)) failure = Cause.pretty(exit.cause)
+  return { exit, failure, after: yield* fs.readFileString(filePath) }
+})
+
+describe("EditTool redaction check", () => {
+  for (const placeholder of [
+    "[REDACTED]",
+    "[...omitted code]",
+    "[rest of file unchanged]",
+    "// ... existing code",
+    "# ... existing code",
+  ]) {
+    editTest(`a newString with ${placeholder} is refused and the file stays`, () =>
+      Effect.gen(function* () {
+        const { exit, failure, after } = yield* editFile("old\n", {
+          oldString: "old",
+          newString: `line1\n${placeholder}\nline3`,
+        })
+        expect(exit._tag).toBe("Failure")
+        expect(failure).toContain(`redaction placeholder "${placeholder}"`)
+        expect(after).toBe("old\n")
+      }),
+    )
+  }
+  editTest("a placeholder that the old text holds too is legitimate content", () =>
+    Effect.gen(function* () {
+      const { after } = yield* editFile("a\n// ... existing code\n", {
+        oldString: "a\n// ... existing code",
+        newString: "b\n// ... existing code",
+      })
+      expect(after).toBe("b\n// ... existing code\n")
+    }),
+  )
+})
+
+describe("EditTool matching", () => {
+  const cases: ReadonlyArray<{
+    readonly name: string
+    readonly file: string
+    readonly oldString: string
+    readonly after: string
+  }> = [
+    {
+      name: "an exact match",
+      file: "hello world foo bar",
+      oldString: "world foo",
+      after: "hello X bar",
+    },
+    { name: "a literal \\n", file: "line1\nline2", oldString: "line1\\nline2", after: "X" },
+    { name: "a literal \\t", file: "col1\tcol2", oldString: "col1\\tcol2", after: "X" },
+    { name: "a literal \\r", file: "before\rafter", oldString: "before\\rafter", after: "X" },
+    { name: "an escaped backslash", file: "a\\b", oldString: "a\\\\b", after: "X" },
+    {
+      name: "a trailing whitespace diff",
+      file: "hello\nworld",
+      oldString: "hello   \nworld",
+      after: "X",
+    },
+    {
+      name: "curly quotes inside a line",
+      file: 'const s = "hello"',
+      oldString: "“hello”",
+      after: "const s = X",
+    },
+    {
+      name: "a match across lines, with the trailing whitespace it spans",
+      file: "x = “hi”  \nnext line",
+      oldString: 'x = "hi"\nnext',
+      after: "X line",
+    },
+    {
+      name: "a match that ends a line, with the line's trailing whitespace",
+      file: "a “q”   \nb",
+      oldString: '"q"',
+      after: "a X\nb",
+    },
+    {
+      name: "searched spaces when the line goes on",
+      file: "“hi”  x",
+      oldString: '"hi"  ',
+      after: "Xx",
+    },
+    { name: "searched spaces at a line end", file: "“hi”\nx", oldString: '"hi"  ', after: "X\nx" },
+    { name: "a whitespace run the file holds", file: "a\tb", oldString: "\t", after: "aXb" },
+  ]
+  for (const { name, file, oldString, after } of cases) {
+    editTest(`${name} is replaced`, () =>
+      Effect.gen(function* () {
+        const edited = yield* editFile(file, { oldString, newString: "X" })
+        expect(edited.exit._tag).toBe("Success")
+        expect(edited.after).toBe(after)
+      }),
+    )
+  }
+  for (const { name, file, oldString } of [
+    { name: "text the file does not hold", file: "hello world", oldString: "xyz" },
+    { name: "a whitespace-only search", file: "a\n\nb", oldString: "   " },
+    { name: "a whitespace-only search across lines", file: "a\n\n\nb", oldString: " \n " },
+  ]) {
+    editTest(`${name} matches nothing`, () =>
+      Effect.gen(function* () {
+        const edited = yield* editFile(file, { oldString, newString: "X" })
+        expect(edited.exit._tag).toBe("Failure")
+        expect(edited.after).toBe(file)
+      }),
+    )
+  }
+})
+
+// ============================================================================
+// Integration — real file editing
+// ============================================================================
 describe("EditTool execution", () => {
   // The file keeps its own spelling; the model's ASCII search still finds it.
   const normalizedCases = [
@@ -586,11 +626,20 @@ describe("EditTool execution", () => {
 
 // ── fs-tools/grep.test ──────────────────────────────────────────────────────
 
-const ToolLayerGrep = Layer.merge(
-  BunServices.layer,
-  Layer.provide(FallbackFileIndexLive, BunServices.layer),
-)
+const IndexLayer = Layer.merge(BunServices.layer, Layer.provide(FileIndexLive, BunServices.layer))
 const ctxGrep = testToolContext()
+
+/**
+ * The files grep reads for a search of `path` from a session in `cwd`,
+ * relative to `path` and sorted. `^` matches every line, so a file is listed
+ * once per line; the set keeps one.
+ */
+const listed = (cwd: string, path = cwd) =>
+  runToolWithCtx(GrepTool, { pattern: "^", path, limit: 100_000 }, testToolContext({ cwd })).pipe(
+    Effect.map((result) =>
+      [...new Set(result.matches.map((match) => match.file.slice(path.length + 1)))].toSorted(),
+    ),
+  )
 
 describe("GrepTool", () => {
   it.scopedLive("finds pattern in files", () =>
@@ -603,7 +652,7 @@ describe("GrepTool", () => {
 
       const result = yield* runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir }, ctxGrep)
       expect(result.matches.length).toBe(2)
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("respects glob filter", () =>
@@ -620,7 +669,7 @@ describe("GrepTool", () => {
       )
       expect(result.matches.length).toBe(1)
       expect(result.matches[0]!.file).toContain("file1.ts")
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("a glob without a slash matches files in nested directories", () =>
@@ -649,7 +698,7 @@ describe("GrepTool", () => {
         ctxGrep,
       )
       expect(scoped.matches).toEqual([])
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("a glob with a slash matches paths relative to the search root", () =>
@@ -676,7 +725,7 @@ describe("GrepTool", () => {
         "src/deep/b.ts",
         "test/c.ts",
       ])
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("truncated is set only when more matches exist than the limit", () =>
@@ -699,7 +748,7 @@ describe("GrepTool", () => {
       )
       expect(over.matches.length).toBe(2)
       expect(over.truncated).toBe(true)
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("finds matches in a gitignored directory under the session cwd", () =>
@@ -721,7 +770,86 @@ describe("GrepTool", () => {
         ctxRepo,
       )
       expect(ignored.matches.map((match) => match.file)).toEqual([`${tmpDir}/dist/sub/b.js`])
-    }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a file with a NUL byte in its first 8 KB is binary and skipped", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/text.ts`, "const needle = 1")
+      yield* fs.writeFileString(`${tmpDir}/binary.bin`, `${"x".repeat(8000)}\0needle`)
+      yield* fs.writeFileString(`${tmpDir}/late-nul.txt`, `needle${"x".repeat(9000)}\0`)
+
+      const result = yield* runToolWithCtx(GrepTool, { pattern: "needle", path: tmpDir }, ctxGrep)
+      expect(result.matches.map((match) => match.file.slice(tmpDir.length + 1)).toSorted()).toEqual(
+        ["late-nul.txt", "text.ts"],
+      )
+      const direct = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "needle", path: `${tmpDir}/binary.bin` },
+        ctxGrep,
+      )
+      expect(direct.matches).toEqual([])
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  it.scopedLive("a long line is cut around the match, and so is its context", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const long = `${"a".repeat(5000)}needle${"b".repeat(5000)}`
+      yield* fs.writeFileString(`${tmpDir}/min.js`, `${"c".repeat(3000)}\n${long}\nshort`)
+
+      const result = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "needle", path: tmpDir, context: 1 },
+        ctxGrep,
+      )
+      const [match] = result.matches
+      expect(match?.line).toBe(2)
+      expect(match?.content).toBe(
+        `[4900 chars cut] ${"a".repeat(100)}needle${"b".repeat(394)} [4606 chars cut]`,
+      )
+      expect(match?.context?.before).toEqual([`${"c".repeat(500)} [2500 chars cut]`])
+      expect(match?.context?.after).toEqual(["short"])
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  for (const { name, params } of [
+    { name: "limit 0", params: { limit: 0 } },
+    { name: "limit -2", params: { limit: -2 } },
+    { name: "limit 1.5", params: { limit: 1.5 } },
+    { name: "context -1", params: { context: -1 } },
+    { name: "context 0.5", params: { context: 0.5 } },
+  ]) {
+    it.scopedLive(`refuses ${name}: a count is a whole number`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${tmpDir}/a.ts`, "foo\nfoo\n")
+        const exit = yield* Effect.exit(
+          Effect.suspend(() =>
+            runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir, ...params }, ctxGrep),
+          ),
+        )
+        expect(exit._tag).toBe("Failure")
+      }).pipe(Effect.provide(IndexLayer)),
+    )
+  }
+
+  it.scopedLive("context 0 is no context", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/a.ts`, "x\nfoo\ny\n")
+      const result = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "foo", path: tmpDir, context: 0 },
+        ctxGrep,
+      )
+      expect(result.matches.map((match) => "context" in match)).toEqual([false])
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("searches single file directly", () =>
@@ -736,55 +864,26 @@ describe("GrepTool", () => {
         ctxGrep,
       )
       expect(result.matches.length).toBe(2)
-    }).pipe(Effect.provide(ToolLayerGrep)),
+    }).pipe(Effect.provide(IndexLayer)),
   )
 })
 
 // ── fs-tools/file-index.test ────────────────────────────────────────────────
 
-const PlatformLayerFileIndex = BunServices.layer
-const FallbackLayer = Layer.merge(
-  PlatformLayerFileIndex,
-  Layer.provide(FallbackFileIndexLive, PlatformLayerFileIndex),
-)
-const LiveLayer = Layer.merge(
-  PlatformLayerFileIndex,
-  Layer.provide(FileIndexLive({ home: "/tmp" }), PlatformLayerFileIndex),
-)
-
-describe("FileIndex fallback walk", () => {
-  it.scopedLive("listFiles returns files in a directory", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${tmpDir}/a.ts`, "hello")
-      yield* fs.writeFileString(`${tmpDir}/b.js`, "world")
-
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-
-      expect(files.length).toBe(2)
-      expect(files.every((f) => f.path.startsWith(tmpDir))).toBe(true)
-    }).pipe(Effect.provide(FallbackLayer)),
-  )
-
-  it.scopedLive("listFiles includes dotfiles", () =>
+describe("grep's file listing outside a git work tree", () => {
+  it.scopedLive("lists every file, dotfiles too", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(`${tmpDir}/.gitignore`, "node_modules")
-      yield* fs.writeFileString(`${tmpDir}/readme.md`, "hi")
+      yield* fs.writeFileString(`${tmpDir}/a.ts`, "hello")
+      yield* fs.writeFileString(`${tmpDir}/b.js`, "world")
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-      const names = files.map((f) => f.relativePath)
-
-      expect(names).toContain(".gitignore")
-      expect(names).toContain("readme.md")
-    }).pipe(Effect.provide(FallbackLayer)),
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "a.ts", "b.js"])
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
-  it.scopedLive("listFiles respects gitignore", () =>
+  it.scopedLive("a .gitignore line drops the file it names", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
@@ -792,14 +891,8 @@ describe("FileIndex fallback walk", () => {
       yield* fs.writeFileString(`${tmpDir}/kept.txt`, "keep")
       yield* fs.writeFileString(`${tmpDir}/ignored.txt`, "skip")
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-      const names = files.map((f) => f.relativePath)
-
-      expect(names).toContain("kept.txt")
-      expect(names).toContain(".gitignore")
-      expect(names).not.toContain("ignored.txt")
-    }).pipe(Effect.provide(FallbackLayer)),
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "kept.txt"])
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("an edited .gitignore applies to the next listing", () =>
@@ -810,16 +903,10 @@ describe("FileIndex fallback walk", () => {
       yield* fs.writeFileString(`${tmpDir}/first.txt`, "a")
       yield* fs.writeFileString(`${tmpDir}/second.txt`, "b")
 
-      const fileIndex = yield* FileIndex
-      const names = fileIndex
-        .listFiles({ root: tmpDir, cwd: tmpDir })
-        .pipe(Effect.map((files) => files.map((f) => f.relativePath)))
-      expect(yield* names).not.toContain("first.txt")
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "second.txt"])
       yield* fs.writeFileString(`${tmpDir}/.gitignore`, "second.txt")
-      const after = yield* names
-      expect(after).toContain("first.txt")
-      expect(after).not.toContain("second.txt")
-    }).pipe(Effect.provide(FallbackLayer)),
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "first.txt"])
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("a subdirectory listing applies the .gitignore files from the root down", () =>
@@ -844,15 +931,13 @@ describe("FileIndex fallback walk", () => {
         yield* fs.writeFileString(`${tmpDir}/${file}`, "x")
       }
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: `${tmpDir}/pkg` })
-      expect(files.map((f) => f.relativePath).toSorted()).toEqual([
+      expect(yield* listed(tmpDir, `${tmpDir}/pkg`)).toEqual([
         ".gitignore",
         "a.ts",
         "build/out.js",
         "keep.log",
       ])
-    }).pipe(Effect.provide(FallbackLayer)),
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("a directory-only pattern leaves a file of that name", () =>
@@ -864,10 +949,8 @@ describe("FileIndex fallback walk", () => {
       yield* fs.writeFileString(`${tmpDir}/src/logs/a.txt`, "x")
       yield* fs.writeFileString(`${tmpDir}/logs`, "a file")
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-      expect(files.map((f) => f.relativePath).toSorted()).toEqual([".gitignore", "logs"])
-    }).pipe(Effect.provide(FallbackLayer)),
+      expect(yield* listed(tmpDir)).toEqual([".gitignore", "logs"])
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("an explicitly named ignored directory is listed", () =>
@@ -878,13 +961,11 @@ describe("FileIndex fallback walk", () => {
       yield* fs.writeFileString(`${tmpDir}/.gitignore`, "dist/\n")
       yield* fs.writeFileString(`${tmpDir}/dist/b.js`, "x")
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: `${tmpDir}/dist` })
-      expect(files.map((f) => f.relativePath)).toEqual(["b.js"])
-    }).pipe(Effect.provide(FallbackLayer)),
+      expect(yield* listed(tmpDir, `${tmpDir}/dist`)).toEqual(["b.js"])
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
-  it.scopedLive("listFiles returns full file list (no early break)", () =>
+  it.scopedLive("the listing has no early break", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
@@ -892,11 +973,8 @@ describe("FileIndex fallback walk", () => {
         yield* fs.writeFileString(`${tmpDir}/file-${i}.txt`, `content-${i}`)
       }
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-
-      expect(files.length).toBe(50)
-    }).pipe(Effect.provide(FallbackLayer)),
+      expect((yield* listed(tmpDir)).length).toBe(50)
+    }).pipe(Effect.provide(IndexLayer)),
   )
 
   it.scopedLive("the walk skips .git and stops at a directory link cycle", () =>
@@ -909,12 +987,8 @@ describe("FileIndex fallback walk", () => {
       yield* fs.writeFileString(`${tmpDir}/src/a.ts`, "a")
       yield* fs.symlink(tmpDir, `${tmpDir}/src/loop`)
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex
-        .listFiles({ root: tmpDir, cwd: tmpDir })
-        .pipe(Effect.timeout("5 seconds"))
-      expect(files.map((f) => f.relativePath)).toEqual(["src/a.ts"])
-    }).pipe(Effect.provide(FallbackLayer)),
+      expect(yield* listed(tmpDir).pipe(Effect.timeout("5 seconds"))).toEqual(["src/a.ts"])
+    }).pipe(Effect.provide(IndexLayer)),
   )
 })
 
@@ -988,6 +1062,20 @@ const GITIGNORE_CASES = {
     files: ["a/b/c", "x/a/b/c"],
     ignores: { ".gitignore": "a/b/\n" },
   },
+  "escaped-bracket-bang": {
+    files: ["[!a]", "[^a]", "b"],
+    ignores: { ".gitignore": "\\[!a]\n" },
+  },
+  "trailing-backslash": { files: ["foo", "foo\\"], ignores: { ".gitignore": "foo\\\n" } },
+  "class-with-slash": { files: ["a/b", "axb", "a[/]b"], ignores: { ".gitignore": "a[/]b\n" } },
+  "negated-class-and-slash": { files: ["a/b", "acb"], ignores: { ".gitignore": "a[!x]b\n" } },
+  "leading-dot-slash": { files: ["a", "x/a"], ignores: { ".gitignore": "./a\n" } },
+  "question-mark-and-multibyte": {
+    files: ["caf\u00E9", "cafe", "caf\u00E9s"],
+    ignores: { ".gitignore": "caf?\ncaf??s\n" },
+  },
+  "unclosed-class": { files: ["a[b", "ab"], ignores: { ".gitignore": "a[b\n" } },
+  "literal-multibyte": { files: ["caf\u00E9", "cafe"], ignores: { ".gitignore": "caf\u00E9\n" } },
 } satisfies Record<
   string,
   { readonly files: ReadonlyArray<string>; readonly ignores: Record<string, string> }
@@ -1007,7 +1095,7 @@ const writeTree = Effect.fn("test.writeTree")(function* (
   }
 })
 
-describe("FileIndex outside a git work tree", () => {
+describe("the matcher walk against git", () => {
   it.scopedLive("the walk ignores exactly what git ignores", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -1028,28 +1116,23 @@ describe("FileIndex outside a git work tree", () => {
           "--others",
           "--exclude-standard",
         ])
-        const fileIndex = yield* FileIndex
-        const walked = yield* fileIndex.listFiles({ root: plain, cwd: plain })
         results[name] = {
           git: git.stdout
             .split("\0")
             .filter((entry) => entry.length > 0)
             .toSorted()
             .join(" | "),
-          walk: walked
-            .map((file) => file.relativePath)
-            .toSorted()
-            .join(" | "),
+          walk: (yield* listed(plain)).join(" | "),
         }
       }
       for (const [name, result] of Object.entries(results)) {
         expect({ name, listed: result.walk }).toEqual({ name, listed: result.git })
       }
-    }).pipe(Effect.provide(FallbackLayer), Effect.timeout("20 seconds")),
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("20 seconds")),
   )
 })
 
-describe("FileIndex inside a git work tree", () => {
+describe("grep's file listing inside a git work tree", () => {
   it.scopedLive("a subdirectory listing applies the repo's ignore rules above it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -1060,11 +1143,8 @@ describe("FileIndex inside a git work tree", () => {
       })
       yield* fs.writeFileString(`${repo}/.git/info/exclude`, "*.env\n")
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: `${repo}/pkg`, cwd: `${repo}/pkg` })
-      expect(files.map((file) => file.relativePath)).toEqual(["src/a.ts"])
-      expect(files.map((file) => file.path)).toEqual([`${repo}/pkg/src/a.ts`])
-    }).pipe(Effect.provide(FallbackLayer), Effect.timeout("8 seconds")),
+      expect(yield* listed(`${repo}/pkg`)).toEqual(["src/a.ts"])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive(
@@ -1080,14 +1160,8 @@ describe("FileIndex inside a git work tree", () => {
         yield* fs.writeFileString(`${repo}/build/fresh.js`, "x")
         yield* fs.remove(`${repo}/build/gone.js`)
 
-        const fileIndex = yield* FileIndex
-        const files = yield* fileIndex.listFiles({ root: repo, cwd: repo })
-        expect(files.map((file) => file.relativePath).toSorted()).toEqual([
-          ".gitignore",
-          "build/pinned.js",
-          "src/a.ts",
-        ])
-      }).pipe(Effect.provide(FallbackLayer), Effect.timeout("8 seconds")),
+        expect(yield* listed(repo)).toEqual([".gitignore", "build/pinned.js", "src/a.ts"])
+      }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("an explicitly named ignored directory is listed", () =>
@@ -1097,220 +1171,299 @@ describe("FileIndex inside a git work tree", () => {
       yield* runProcess("git", ["init", "-q", repo])
       yield* writeTree(repo, ["dist/b.js", "src/a.ts"], { ".gitignore": "dist/\n" })
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: repo, cwd: `${repo}/dist` })
-      expect(files.map((file) => file.relativePath)).toEqual(["b.js"])
-    }).pipe(Effect.provide(FallbackLayer), Effect.timeout("8 seconds")),
+      expect(yield* listed(repo, `${repo}/dist`)).toEqual(["b.js"])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
   )
 })
 
-describe("an ignored directory with tracked files", () => {
-  for (const { name, layer } of [
-    { name: "fallback", layer: FallbackLayer },
-    { name: "native-first", layer: LiveLayer },
+/** git with a fixed identity, no signing and no global hooks, for test commits. */
+const git = (repo: string, args: ReadonlyArray<string>) =>
+  runProcess("git", [
+    "-C",
+    repo,
+    "-c",
+    "user.name=test",
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "protocol.file.allow=always",
+    ...args,
+  ])
+
+describe("git decides the listing inside a work tree", () => {
+  it.scopedLive("a package session applies every exclude source above it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* writeTree(
+        repo,
+        [
+          "packages/foo/src/a.ts",
+          "packages/foo/dist/out.js",
+          "packages/foo/x.secret",
+          "packages/foo/y.local",
+        ],
+        { ".gitignore": "dist/\n", excludes: "*.local\n" },
+      )
+      yield* fs.writeFileString(`${repo}/.git/info/exclude`, "*.secret\nexcludes\n")
+      yield* git(repo, ["config", "core.excludesFile", `${repo}/excludes`])
+
+      expect(yield* listed(`${repo}/packages/foo`)).toEqual(["src/a.ts"])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("a session inside an ignored directory lists its files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* writeTree(repo, ["scratch/a.ts", "scratch/sub/b.ts", "scratch/c.log", "top.ts"], {
+        ".gitignore": "scratch/\n",
+        "scratch/.gitignore": "*.log\n",
+      })
+
+      expect(yield* listed(`${repo}/scratch`)).toEqual([".gitignore", "a.ts", "sub/b.ts"])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("nested repositories and submodules are listed by their own git", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* fs.makeTempDirectoryScoped()
+      const source = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", source])
+      yield* writeTree(source, ["s.ts"], {})
+      yield* git(source, ["add", "."])
+      yield* git(source, ["commit", "-qm", "source"])
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* writeTree(repo, ["top.ts"], {})
+      yield* git(repo, ["submodule", "add", "-q", source, "mods/s"])
+      yield* runProcess("git", ["init", "-q", `${repo}/vendor/lib`])
+      yield* writeTree(repo, ["vendor/lib/inner.ts", "vendor/lib/x.tmp"], {
+        "vendor/lib/.gitignore": "*.tmp\n",
+      })
+
+      expect(yield* listed(repo)).toEqual([
+        ".gitmodules",
+        "mods/s/s.ts",
+        "top.ts",
+        "vendor/lib/.gitignore",
+        "vendor/lib/inner.ts",
+      ])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("the listing outside a work tree", () => {
+  it.scopedLive("the .gitignore rules decide, and dotfiles are listed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* writeTree(
+        tmpDir,
+        [".env", ".github/ci.yml", "a.ts", "dist/o.js", "node_modules/x/i.js"],
+        { ".gitignore": "dist/\n" },
+      )
+
+      expect(yield* listed(tmpDir)).toEqual([
+        ".env",
+        ".github/ci.yml",
+        ".gitignore",
+        "a.ts",
+        "node_modules/x/i.js",
+      ])
+      expect(yield* listed(tmpDir, `${tmpDir}/dist`)).toEqual(["o.js"])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("4 seconds")),
+  )
+})
+
+describe("symbolic links", () => {
+  for (const { inWorkTree, where } of [
+    { inWorkTree: false, where: "outside a work tree" },
+    { inWorkTree: true, where: "inside a work tree" },
   ]) {
-    it.scopedLive(`${name}: an explicit search lists its untracked files too`, () =>
+    it.scopedLive(`${where}: a symbolic link is never listed or walked`, () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
-        const repo = yield* fs.makeTempDirectoryScoped()
-        yield* runProcess("git", ["init", "-q", repo])
-        yield* writeTree(repo, ["dist/pinned.js", "src/a.ts"], {})
-        yield* runProcess("git", ["-C", repo, "add", "."])
-        yield* fs.writeFileString(`${repo}/.gitignore`, "dist/\n")
-        yield* fs.writeFileString(`${repo}/dist/new.js`, "x")
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        if (inWorkTree) yield* runProcess("git", ["init", "-q", tmpDir])
+        yield* writeTree(tmpDir, ["real/r.ts", "zeta/z.ts"], {})
+        yield* fs.symlink(`${tmpDir}/real`, `${tmpDir}/alink`)
+        yield* fs.symlink(`${tmpDir}/real/r.ts`, `${tmpDir}/flink.ts`)
+        yield* fs.symlink(`${tmpDir}/zeta`, `${tmpDir}/zeta/loop`)
 
-        const fileIndex = yield* FileIndex
-        const files = yield* fileIndex.listFiles({ root: repo, cwd: `${repo}/dist` })
-        expect(files.map((file) => file.relativePath).toSorted()).toEqual(["new.js", "pinned.js"])
-      }).pipe(Effect.provide(layer), Effect.timeout("8 seconds")),
+        expect(yield* listed(tmpDir)).toEqual(["real/r.ts", "zeta/z.ts"])
+      }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
     )
   }
 })
 
-describe("FileIndex native-first layer", () => {
-  it.scopedLive("constructs without error (always succeeds)", () =>
+/**
+ * The index over a platform whose spawner rewrites each command first. It
+ * stands in for what the index cannot choose: the environment gent inherits,
+ * or a git that misbehaves.
+ */
+const layerWithSpawner = (
+  rewrite: (command: ChildProcess.StandardCommand) => ChildProcess.StandardCommand,
+) => {
+  const spawner = Layer.effect(
+    ChildProcessSpawner.ChildProcessSpawner,
     Effect.gen(function* () {
-      const fileIndex = yield* FileIndex
-      expect(fileIndex).toBeDefined()
-      expect(Predicate.isFunction(fileIndex.listFiles)).toBe(true)
-    }).pipe(Effect.provide(LiveLayer)),
-  )
+      const real = yield* ChildProcessSpawner.ChildProcessSpawner
+      return ChildProcessSpawner.make((command) => {
+        if (command._tag !== "StandardCommand") return real.spawn(command)
+        return real.spawn(rewrite(command))
+      })
+    }),
+  ).pipe(Layer.provide(BunServices.layer))
+  const platform = Layer.merge(BunServices.layer, spawner)
+  return Layer.merge(platform, Layer.provide(FileIndexLive, platform))
+}
 
-  it.scopedLive("listFiles returns results for cwd", () =>
+/** gent started by a hook: its environment names another repository. */
+const inheritedEnv = (env: Record<string, string>) => (command: ChildProcess.StandardCommand) =>
+  ChildProcess.make(command.command, command.args, {
+    ...command.options,
+    env: { ...env, ...command.options.env },
+    extendEnv: true,
+  })
+
+/** A git whose `ls-files` runs `script` instead; every other git command is real. */
+const fakeLsFiles = (script: string) => (command: ChildProcess.StandardCommand) => {
+  if (command.command !== "git" || !command.args.includes("ls-files")) return command
+  return ChildProcess.make("sh", ["-c", script], command.options)
+}
+
+describe("git index entries that are not files on disk", () => {
+  it.scopedLive("a sparse index past the file bound still lists the files on disk", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${tmpDir}/indexed.txt`, "hello")
+      const repo = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* writeTree(repo, ["keep/a.ts"], {})
+      const blob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      yield* runProcess("sh", [
+        "-c",
+        `seq 0 100000 | awk '{printf "100644 ${blob}\\tfar/f%s.ts\\n", $1}' | git -C "$0" update-index --index-info && seq 0 100000 | awk '{printf "far/f%s.ts\\n", $1}' | git -C "$0" update-index --skip-worktree --stdin`,
+        repo,
+      ])
 
-      const fileIndex = yield* FileIndex
-      const files = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-
-      expect(files.length).toBe(1)
-      expect(files[0]!.path.length).toBeGreaterThan(0)
-      expect(files[0]!.relativePath).toBe("indexed.txt")
-    }).pipe(Effect.provide(LiveLayer)),
+      expect(yield* listed(repo)).toEqual(["keep/a.ts"])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("4 seconds")),
   )
 
-  it.scopedLive("listings under one root share one native finder", () =>
+  it.scopedLive("a name that is not valid UTF-8 is counted, not silently lost", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.makeDirectory(`${tmpDir}/src/deep`, { recursive: true })
-      yield* fs.makeDirectory(`${tmpDir}/docs`)
-      yield* fs.writeFileString(`${tmpDir}/top.txt`, "t")
-      yield* fs.writeFileString(`${tmpDir}/src/deep/a.txt`, "a")
-      yield* fs.writeFileString(`${tmpDir}/docs/b.txt`, "b")
-      const create = spyOn(NativeFileFinder, "create")
-      yield* Effect.addFinalizer(() => Effect.sync(() => create.mockRestore()))
+      const repo = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* writeTree(repo, ["a.ts"], {})
+      yield* runProcess("sh", [
+        "-c",
+        `printf '100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391\\tbad\\377.ts\\n' | git -C "$0" update-index --index-info`,
+        repo,
+      ])
 
-      const fileIndex = yield* FileIndex
-      const src = yield* fileIndex.listFiles({ root: tmpDir, cwd: `${tmpDir}/src` })
-      const docs = yield* fileIndex.listFiles({ root: tmpDir, cwd: `${tmpDir}/docs` })
+      const result = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "x", path: repo },
+        testToolContext({ cwd: repo }),
+      )
+      expect(result.matches.map((match) => match.file)).toEqual([`${repo}/a.ts`])
+      expect(result.unreadable).toBe(1)
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("4 seconds")),
+  )
+})
 
-      expect(src.map((f) => f.relativePath)).toEqual(["deep/a.txt"])
-      expect(src.map((f) => f.path)).toEqual([`${tmpDir}/src/deep/a.txt`])
-      expect(docs.map((f) => f.relativePath)).toEqual(["b.txt"])
-      expect(create).toHaveBeenCalledTimes(1)
-    }).pipe(Effect.provide(LiveLayer)),
+describe("the git processes behind a listing", () => {
+  it.scopedLive("a GIT_DIR from a hook does not redirect the listing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* fs.makeTempDirectoryScoped()
+      const other = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* runProcess("git", ["init", "-q", other])
+      yield* writeTree(repo, ["a.ts", "b.log"], { ".gitignore": "*.log\n" })
+      yield* writeTree(other, ["elsewhere.ts"], {})
+      const hook = inheritedEnv({
+        GIT_DIR: `${other}/.git`,
+        GIT_WORK_TREE: other,
+        GIT_INDEX_FILE: `${other}/.git/index`,
+      })
+
+      const files = yield* listed(repo).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- The spawner's environment names repositories this test creates.
+        Effect.provide(layerWithSpawner(hook)),
+      )
+      expect(files).toEqual([".gitignore", "a.ts"])
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 
-  it.scopedLive("listing ignored directories does not create finders or evict the root", () =>
+  it.scopedLive("a listing that passes the file bound stops without reading the rest", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
       yield* runProcess("git", ["init", "-q", tmpDir])
-      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "vendor/\n")
-      yield* fs.writeFileString(`${tmpDir}/src.ts`, "x")
-      for (let index = 0; index < 6; index++) {
-        yield* fs.makeDirectory(`${tmpDir}/vendor/p${index}`, { recursive: true })
-        yield* fs.writeFileString(`${tmpDir}/vendor/p${index}/i.js`, "x")
-      }
-      const create = spyOn(NativeFileFinder, "create")
-      yield* Effect.addFinalizer(() => Effect.sync(() => create.mockRestore()))
+      yield* writeTree(tmpDir, ["a.ts"], {})
+      const endless = fakeLsFiles(`yes x | tr '\\n' '\\000'`)
 
-      const fileIndex = yield* FileIndex
-      const root = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-      for (let index = 0; index < 6; index++) {
-        const vendored = yield* fileIndex.listFiles({
-          root: tmpDir,
-          cwd: `${tmpDir}/vendor/p${index}`,
-        })
-        expect(vendored.map((f) => f.relativePath)).toEqual(["i.js"])
-      }
-      const again = yield* fileIndex.listFiles({ root: tmpDir, cwd: tmpDir })
-      expect(again.map((f) => f.relativePath).toSorted()).toEqual(
-        root.map((f) => f.relativePath).toSorted(),
+      const failure = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "x", path: tmpDir },
+        testToolContext({ cwd: tmpDir }),
+      ).pipe(
+        Effect.flip,
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(layerWithSpawner(endless)),
       )
-      expect(create).toHaveBeenCalledTimes(1)
-    }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
+      expect(failure.message).toContain("more than 100000 files")
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 
-  it.scopedLive("an evicted finder stays alive until its in-flight listing finishes", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const roots: Array<string> = []
-      for (let index = 0; index < 5; index++) {
-        const root = yield* fs.makeTempDirectoryScoped()
-        yield* fs.writeFileString(`${root}/file-${index}.txt`, "x")
-        roots.push(root)
-      }
-      const [first, ...others] = roots
-      const firstRoot = Option.getOrThrow(Option.fromUndefinedOr(first))
-
-      // Hold the first finder's scan open until the others have evicted it.
-      const services = yield* Effect.context<never>()
-      const scanStarted = yield* Deferred.make<boolean>()
-      const releaseScan = yield* Deferred.make<boolean>()
-      const create = spyOn(NativeFileFinder, "create")
-      const heldFinder = () =>
-        Option.fromUndefinedOr(create.mock.results[0]).pipe(
-          Option.map((created): unknown => created.value),
-          Option.filter(Predicate.hasProperty("value")),
-          Option.map((result) => result.value),
-          Option.filter((finder) => finder instanceof NativeFileFinder),
-        )
-      const isHeld = (finder: NativeFileFinder) =>
-        Option.exists(heldFinder(), (held) => held === finder)
-      const wait = spyOn(NativeFileFinder.prototype, "waitForScan").mockImplementation(function (
-        this: NativeFileFinder,
-        timeoutMs?: number,
-      ) {
-        const scan = Effect.sync(() => this.waitForScanBlocking(timeoutMs))
-        let held = scan
-        if (isHeld(this)) {
-          held = Deferred.succeed(scanStarted, true).pipe(
-            Effect.andThen(Deferred.await(releaseScan)),
-            Effect.andThen(scan),
-          )
-        }
-        // oxlint-disable-next-line gent/no-promise-control-flow-in-tests -- The fake implements the finder's Promise-based waitForScan contract.
-        return Effect.runPromiseWith(services)(held)
-      })
-      const destroy = spyOn(NativeFileFinder.prototype, "destroy")
-      const search = spyOn(NativeFileFinder.prototype, "fileSearch")
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          for (const spy of [wait, destroy, search, create]) spy.mockRestore()
-        }),
-      )
-      const heldWas = (calls: ReadonlyArray<unknown>) =>
-        calls.some(
-          (context) =>
-            Predicate.isObject(context) && context instanceof NativeFileFinder && isHeld(context),
-        )
-
-      const fileIndex = yield* FileIndex
-      const inFlight = yield* Effect.forkChild(
-        fileIndex.listFiles({ root: firstRoot, cwd: firstRoot }),
-      )
-      yield* Deferred.await(scanStarted)
-      for (const root of others) yield* fileIndex.listFiles({ root, cwd: root })
-      // The first finder is evicted, but its listing still holds it.
-      expect(heldWas(destroy.mock.contexts)).toBe(false)
-
-      yield* Deferred.succeed(releaseScan, true)
-      const files = yield* Fiber.join(inFlight)
-      expect(files.map((file) => file.relativePath)).toEqual(["file-0.txt"])
-      expect(heldWas(search.mock.contexts)).toBe(true)
-      expect(heldWas(destroy.mock.contexts)).toBe(true)
-    }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
-  )
-
-  it.scopedLive("per-method fallback: invalid cwd yields FileIndexError or an empty list", () =>
-    Effect.gen(function* () {
-      const fileIndex = yield* FileIndex
-      const result = yield* fileIndex
-        .listFiles({
-          root: "/nonexistent-path-that-does-not-exist",
-          cwd: "/nonexistent-path-that-does-not-exist",
-        })
-        .pipe(Effect.catchTag("FileIndexError", (e) => Effect.succeed({ caught: e.message })))
-
-      if ("caught" in result) {
-        expect(result.caught).toBeDefined()
-      } else {
-        expect(result.length).toBe(0)
-      }
-    }).pipe(Effect.provide(LiveLayer)),
-  )
-
-  it.scopedLive("a failing primary falls back to the walk", () =>
+  it.scopedLive("a git that never answers times out, and the walk lists", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${tmpDir}/hello.txt`, "hi")
+      const signals = yield* fs.makeTempDirectoryScoped()
+      yield* writeTree(tmpDir, ["a.ts"], {})
+      yield* runProcess("mkfifo", [`${signals}/started`])
+      const hung = fakeLsFiles(`echo started > ${signals}/started; exec sleep 30`)
 
-      const fallbackIndex = yield* FileIndex
-      const files = yield* Effect.fail(
-        new FileIndexError({ message: "native boom", cwd: tmpDir }),
-      ).pipe(
-        Effect.catchTag("FileIndexError", () =>
-          fallbackIndex.listFiles({ root: tmpDir, cwd: tmpDir }),
+      const listing = yield* Effect.forkChild(
+        listed(tmpDir).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- The fake git signals through a pipe this test creates.
+          Effect.provide(layerWithSpawner(hung)),
         ),
       )
+      // Reading the pipe returns once git runs, so its timeout is already armed.
+      yield* fs.readFileString(`${signals}/started`)
+      yield* TestClock.adjust("1 minute")
+      expect(yield* Fiber.join(listing)).toEqual(["a.ts"])
+    }).pipe(
+      // The test clock runs the listing; the live clock bounds the test.
+      Effect.provide(Layer.merge(BunServices.layer, TestClock.layer())),
+      Effect.timeout("4 seconds"),
+    ),
+  )
+})
 
-      expect(files.length).toBe(1)
-      expect(files[0]!.relativePath).toBe("hello.txt")
-    }).pipe(Effect.provide(FallbackLayer)),
+describe("an ignored directory with tracked files", () => {
+  it.scopedLive("an explicit search lists its untracked files too", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* writeTree(repo, ["dist/pinned.js", "src/a.ts"], {})
+      yield* runProcess("git", ["-C", repo, "add", "."])
+      yield* fs.writeFileString(`${repo}/.gitignore`, "dist/\n")
+      yield* fs.writeFileString(`${repo}/dist/new.js`, "x")
+
+      expect(yield* listed(repo, `${repo}/dist`)).toEqual(["new.js", "pinned.js"])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
   )
 })

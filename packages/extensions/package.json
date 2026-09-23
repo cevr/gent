@@ -17,7 +17,6 @@
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",
     "@effect/ai-openai-compat": "catalog:",
-    "@ff-labs/fff-bun": "catalog:",
     "@gent/core": "workspace:*",
     "effect-encore": "catalog:",
     "picomatch": "catalog:"
