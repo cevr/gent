@@ -586,6 +586,31 @@ describe("auth.listProviders", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
+  it.live("a driver override decides the required driver, not the model prefix", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const configContext = yield* Layer.build(ConfigService.Test())
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [authDriversExtension],
+            configServiceLayer: Layer.succeedContext(configContext),
+          }),
+        )
+        const session = yield* client.session.create({ cwd: process.cwd() })
+        // The model stays `anthropic/…`; the turn routes through `otherprov`.
+        yield* client.driver.set({ agentName: DEFAULT_AGENT_NAME, driver: { id: "otherprov" } })
+        yield* client.auth.setKey({ provider: "otherprov", key: "sk-other" })
+        const providers = yield* client.auth.listProviders({ sessionId: session.sessionId })
+        expect(
+          providers.filter((entry) => entry.required).map((entry) => String(entry.provider)),
+        ).toEqual(["otherprov"])
+        expect(providers.filter((entry) => entry.required && !entry.hasKey)).toEqual([])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
   it.live("a driver whose env credential is set reports the key from env", () =>
     Effect.scoped(
       Effect.gen(function* () {

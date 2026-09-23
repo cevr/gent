@@ -916,15 +916,15 @@ const testRegistryLayer = ExtensionRegistry.fromResolved(
 
 describe("listAuthProviders", () => {
   const apiInfo = (key: string): AuthInfo => AuthApi.make({ type: "api", key })
-  const list = (seed: Record<string, AuthInfo>, modelIds: ReadonlyArray<ModelId>) =>
-    listAuthProviders(modelIds).pipe(
+  const list = (seed: Record<string, AuthInfo>, driverIds: ReadonlyArray<string>) =>
+    listAuthProviders(driverIds).pipe(
       Effect.provide(Layer.merge(Auth.Test(seed), testRegistryLayer)),
     )
-  const opus = ModelId.make("anthropic/claude-opus-4-6")
+  const opus = "anthropic"
 
-  it.live("only the providers of the given models are marked required", () =>
+  it.live("only the given drivers are marked required", () =>
     Effect.gen(function* () {
-      const result = yield* list({}, [opus, ModelId.make("google/gemini-2.5-flash")])
+      const result = yield* list({}, [opus, "google"])
       expect(result.filter((p) => p.required).map((p) => p.provider)).toEqual([
         ProviderId.make("anthropic"),
         ProviderId.make("google"),

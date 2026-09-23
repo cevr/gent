@@ -436,19 +436,15 @@ const envCredentialSet = (name: Option.Option<string>): Effect.Effect<boolean> =
 
 /**
  * Every registered model driver with its stored auth. A driver is `required`
- * when one of `modelIds` routes to it; the caller resolves those models for
- * the session it asks about (its registry, config, and model override).
+ * when it is one of `requiredDriverIds`: the drivers the caller's turns route
+ * through, resolved as the turn resolves them (`effectiveModelDriver`).
  */
 export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
-  modelIds: ReadonlyArray<ModelId>,
+  requiredDriverIds: ReadonlyArray<string>,
 ) {
   const auth = yield* Auth
   const registry = yield* ExtensionRegistry
-  const required = new Set<string>()
-  for (const modelId of modelIds) {
-    const provider = parseModelProvider(modelId)
-    if (Option.isSome(provider)) required.add(provider.value)
-  }
+  const required = new Set(requiredDriverIds)
   const providers: AuthProviderInfo[] = []
   for (const driver of registry.getResolved().modelDrivers.values()) {
     const provider = ProviderId.make(driver.id)

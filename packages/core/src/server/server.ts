@@ -129,7 +129,7 @@ import {
   resolveExistingSessionBranch,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import type { AgentName } from "../domain/agent.js"
+import { type AgentName, effectiveModelDriver, resolveAgentDriver } from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import { resolveSessionSettings, sessionAgentDefinition } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
@@ -1419,22 +1419,30 @@ const RpcHandlers = GentRpcs.toLayer(
             ),
           )
           const agents = [...registry.getResolved().agents.values()]
-          const modelFor = (admission: Option.Option<SessionAdmission>) =>
-            resolveSessionSettings(
-              sessionAgentDefinition({
-                agents,
-                admission,
-                configAgents: Option.fromUndefinedOr(config.agents),
-              }).definition,
+          // The driver a turn routes through: the agent's driver, else the
+          // config override, else the model id's provider segment.
+          const driverFor = (admission: Option.Option<SessionAdmission>) => {
+            const { definition } = sessionAgentDefinition({
+              agents,
+              admission,
+              configAgents: Option.fromUndefinedOr(config.agents),
+            })
+            const { modelId } = resolveSessionSettings(
+              definition,
               Option.getOrElse(session, () => ({})),
-            ).modelId
+            )
+            const driver = Option.flatMap(definition, (agent) =>
+              Option.fromUndefinedOr(resolveAgentDriver(agent, config.driverOverrides).driver),
+            )
+            return effectiveModelDriver(driver, modelId).driverId
+          }
           // The session's own agent, then an agent the caller asks about.
-          const modelIds = [
-            modelFor(Option.flatMap(session, (found) => Option.fromUndefinedOr(found.admission))),
+          const admissions = [
+            Option.flatMap(session, (found) => Option.fromUndefinedOr(found.admission)),
           ]
-          if (!Predicate.isUndefined(agentName))
-            modelIds.push(modelFor(Option.some({ agent: agentName })))
-          return yield* listAuthProviders(modelIds).pipe(
+          if (!Predicate.isUndefined(agentName)) admissions.push(Option.some({ agent: agentName }))
+          const driverIds = admissions.flatMap((admission) => Option.toArray(driverFor(admission)))
+          return yield* listAuthProviders(driverIds).pipe(
             Effect.provideService(ExtensionRegistry, registry),
             Effect.provideService(Auth, authStore),
             Effect.mapError((error) => authPersistenceError("read", "*", error)),
