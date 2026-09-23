@@ -774,6 +774,79 @@ describe("file encodings", () => {
     }),
   )
 
+  // A match never starts or ends between a CR and its LF.
+  const crlfEdits: ReadonlyArray<[string, string, string, string, string]> = [
+    [
+      "a search that starts with LF takes the CR before it",
+      "prev\r\nfoo\r\nnext\r\n",
+      "\nfoo",
+      "\nbar",
+      "prev\r\nbar\r\nnext\r\n",
+    ],
+    [
+      "a line deleted from its LF takes its CR too",
+      "prev\r\nfoo\r\nnext\r\n",
+      "\nfoo",
+      "",
+      "prev\r\nnext\r\n",
+    ],
+  ]
+  for (const [name, before, oldString, newString, after] of crlfEdits) {
+    encodingTest(name, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/crlf.txt`
+        yield* fs.writeFileString(filePath, before)
+        const result = yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString, newString },
+          stubCtx,
+        )
+        expect(result.replacements).toBe(1)
+        expect(yield* fs.readFileString(filePath)).toBe(after)
+      }),
+    )
+  }
+
+  encodingTest("a search that ends between a CR and its LF matches nothing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/crlf.txt`
+      yield* fs.writeFileString(filePath, "a\r\nb\r\n")
+      const failed = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "a\r", newString: "Z" },
+        stubCtx,
+      ).pipe(Effect.flip)
+      expect(failed.message).toBe("oldString not found in file")
+      expect(yield* fs.readFileString(filePath)).toBe("a\r\nb\r\n")
+    }),
+  )
+
+  encodingTest("an LF search in a mixed file finds the CRLF sites too", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/mixed.txt`
+      yield* fs.writeFileString(filePath, "a\nb\n--\na\r\nb\r\n")
+      const duplicate = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "a\nb", newString: "X" },
+        stubCtx,
+      ).pipe(Effect.flip)
+      expect(duplicate.message).toContain("found 2 times")
+      const result = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "a\nb", newString: "X\nY", replaceAll: true },
+        stubCtx,
+      )
+      expect(result.replacements).toBe(2)
+      expect(yield* fs.readFileString(filePath)).toBe("X\nY\n--\nX\r\nY\r\n")
+    }),
+  )
+
   // Bytes the decoder can only show as U+FFFD: a rewrite of the text would not
   // give them back.
   const malformed: ReadonlyArray<[string, Uint8Array]> = [

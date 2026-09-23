@@ -1039,13 +1039,22 @@ interface MatchResult {
   ranges: ReadonlyArray<MatchRange>
 }
 
+/** An offset between a CR and its LF, where no match may start or end. */
+const splitsLineBreak = (content: string, index: number): boolean =>
+  content.charAt(index - 1) === "\r" && content.charAt(index) === "\n"
+
 const literalRanges = (content: string, search: string): MatchRange[] => {
   const ranges: MatchRange[] = []
   if (search.length === 0) return ranges
   let from = content.indexOf(search)
   while (from !== -1) {
-    ranges.push({ start: from, end: from + search.length })
-    from = content.indexOf(search, from + search.length)
+    const end = from + search.length
+    if (splitsLineBreak(content, from) || splitsLineBreak(content, end)) {
+      from = content.indexOf(search, from + 1)
+      continue
+    }
+    ranges.push({ start: from, end })
+    from = content.indexOf(search, end)
   }
   return ranges
 }
@@ -1122,14 +1131,18 @@ const lineEndingAt = (content: string, index: number): string => {
 }
 
 /**
- * Match the file as written first, so a search that names its line endings
- * touches only the lines that have them. A search the file misses is tried on
- * the LF view, where line endings never decide a match; one the view misses
- * too (typed with a bare CR) goes through the looser tiers on the file.
+ * A search that names a CR is matched on the file as written first, so it
+ * touches only the lines that have that ending. Every other search, and one
+ * the file misses, is matched on the LF view, where line endings never decide
+ * a match and every CRLF site counts. A search the view misses too (typed with
+ * a bare CR) goes through the looser tiers on the file. No match starts or
+ * ends between a CR and its LF.
  */
 const findEditMatch = (content: string, oldString: string): Option.Option<MatchResult> => {
-  const exact = literalMatch("exact", content, oldString)
-  if (Option.isSome(exact)) return exact
+  if (oldString.includes("\r")) {
+    const exact = literalMatch("exact", content, oldString)
+    if (Option.isSome(exact)) return exact
+  }
   const view = lineFeedView(content)
   const viewed = Option.map(
     findMatch(view.text, oldString.replaceAll("\r\n", "\n")),
