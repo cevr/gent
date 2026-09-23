@@ -812,8 +812,8 @@ The catalog is instruction plus data, not a tool. When the surface narrows to
 `cell`, the cell extension's `systemPrompt` hook adds a `## Host Tools` section
 with one signature line per selected host tool: its callable path, an input
 type and a result type rendered from the JSON Schema, and the first line of its
-prompt snippet or description (`- tools.delegate.cancel(input: { requestId:
-string }): Promise<object> // Cancel a running child ...`). Nested objects
+prompt snippet or description (`- tools.wake.cancel(input?: { wakeId?:
+string }): Promise<{ cancelled: string[] }> // Cancel a pending alarm ...`). Nested objects
 inline while short and otherwise render as `object`. The section is rebuilt
 each turn, so live composition changes reach the model as ordinary instruction
 changes. `cell.ts` builds the data half from the same selected map: name,
@@ -841,8 +841,9 @@ read that returns the tool as a function carrying its catalog entry (`id`,
 segment, which the prompt renders as `tools("read.then")(input)`; it records
 no operation receipt and grants no execution permission. A call with no
 argument sends `{}`; the signature marks `input?` only when the schema accepts
-`{}`. Enums past eight literals and input types past 300 characters render as
-their outer shape. The RPC lifetime test
+`{}`. Enums past eight literals, and input or result types past 300 characters,
+render as their outer shape; a test holds every shipped tool's result under
+that bound, so the cell code reads each result whole. The RPC lifetime test
 checks the namespace keys and a host schema through the compiled worker, and
 that a later cell without a catalog still describes the tool. An agent-denied
 tool and the outer `cell` are absent from the namespace.

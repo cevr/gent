@@ -2793,10 +2793,12 @@ const CELL_WORK = `# Working in the cell
 
 /** Nested objects longer than this render as `object`; `tools(id).parameters` has the rest. */
 const INLINE_OBJECT_LIMIT = 80
-/** An input type longer than this renders as its outer shape, so no schema can flood the prompt. */
-const INPUT_TYPE_LIMIT = 300
-/** A result type longer than this renders as its outer shape. */
-const RESULT_TYPE_LIMIT = 100
+/**
+ * An input or result type longer than this renders as its outer shape, so no
+ * schema can flood the prompt. One bound for both: the result is the half of
+ * the contract the cell code reads, so a shipped tool's result renders whole.
+ */
+const SIGNATURE_TYPE_LIMIT = 300
 /** An enum with more literals than this renders as the literals' types. */
 const LITERAL_LIMIT = 8
 /** The description after a signature is cut here, as opencode codemode cuts it. */
@@ -2961,10 +2963,10 @@ export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(
   if (Schema.isSchema(output)) {
     result = yield* jsonSchemaOf(() => AiTool.getJsonSchemaFromSchema(output))
   }
-  const inputType = boundedType(renderSchemaType(parameters, 0), INPUT_TYPE_LIMIT)
+  const inputType = boundedType(renderSchemaType(parameters, 0), SIGNATURE_TYPE_LIMIT)
   let input = `input: ${inputType}`
   if (acceptsEmptyInput(parameters)) input = `input?: ${inputType}`
-  const resultType = boundedType(renderSchemaType(result, 0), RESULT_TYPE_LIMIT)
+  const resultType = boundedType(renderSchemaType(result, 0), SIGNATURE_TYPE_LIMIT)
   const signature = `${toolPath(getToolId(tool))}(${input}): Promise<${resultType}>`
   const summary = firstLine(getToolPrompt(tool).promptSnippet ?? tool.description)
   if (summary.length === 0) return `- ${signature}`

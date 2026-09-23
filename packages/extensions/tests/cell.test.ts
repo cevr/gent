@@ -21,6 +21,7 @@ import { GentPlatform, BranchStorage, MessageStorage, SessionStorage } from "@ge
 import {
   type LoadedExtension,
   captureTurnTools,
+  collectTestContributions,
   createE2ELayer,
   plantInFlightTurn,
   plantToolCallBinding,
@@ -120,6 +121,7 @@ import {
   resumeCellToolOperation,
 } from "../src/cell.js"
 import { BashTool } from "../src/exec-tools.js"
+import { BuiltinExtensions } from "../src/index.js"
 import { EditTool, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { GoalTool } from "../src/goal.js"
 import { AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
@@ -5095,11 +5097,11 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     CancelChild,
-    "- tools.delegate.cancel(input: { requestId: string }): Promise<object> // Cancel a running child on this branch. Its turn ends as interrupted; a finished child is left as it is.",
+    '- tools.delegate.cancel(input: { requestId: string }): Promise<{ _tag: "Pending"; requestId: string; sessionId: string; branchId: string } | { _tag: "Completed"; requestId: string; sessionId: string; branchId: string; interrupted?: boolean; streamFailed?: boolean; unanswered?: boolean }> // Cancel a running child on this branch. Its turn ends as interrupted; a finished child is left as it is.',
   ],
   [
     ListChildren,
-    "- tools.delegate.list(input?: { completed?: boolean }): Promise<object[]> // List every child this branch owns, from the registry. The registry survives restarts; completed is a turn receipt, no...",
+    "- tools.delegate.list(input?: { completed?: boolean }): Promise<{ requestId: string; sessionId: string; branchId: string; agentName: string; completed: boolean; interrupted?: boolean; streamFailed?: boolean; unanswered?: boolean }[]> // List every child this branch owns, from the registry. The registry survives restarts; completed is a turn receipt, no...",
   ],
   [
     BashTool,
@@ -5119,7 +5121,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     GrepTool,
-    "- tools.grep(input: { pattern: string; path?: string; glob?: string; caseSensitive?: boolean; context?: number; limit?: number }): Promise<object> // Search file contents with regex",
+    "- tools.grep(input: { pattern: string; path?: string; glob?: string; caseSensitive?: boolean; context?: number; limit?: number }): Promise<{ matches: { file: string; line: number; content: string; context?: object }[]; truncated: boolean; unreadable?: number }> // Search file contents with regex",
   ],
   [
     GoalTool,
@@ -5131,7 +5133,7 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   ],
   [
     PromptTool,
-    '- tools.prompt(input: { mode: "present" | "confirm" | "review"; content: string; title?: string }): Promise<object> // Present content to the user for review, confirmation, or informational display. Use mode=present for informational co...',
+    '- tools.prompt(input: { mode: "present" | "confirm" | "review"; content: string; title?: string }): Promise<{ mode: "present"; status: "shown" } | { mode: "confirm"; decision: "yes" | "no" } | { mode: "review"; decision: "yes" | "no" | "edit"; path: string; content?: string }> // Present content to the user for review, confirmation, or informational display. Use mode=present for informational co...',
   ],
   [
     HandoffTool,
@@ -5247,6 +5249,21 @@ describe("tool signature edges", () => {
 })
 
 describe("tool signatures", () => {
+  // The cell code reads a result by its type, so no shipped tool's result
+  // collapses to its outer shape.
+  it.effect("every shipped tool's result renders whole, never as a bare object", () =>
+    Effect.gen(function* () {
+      const tools = yield* Effect.forEach(BuiltinExtensions, (extension) =>
+        collectTestContributions(extension.setup).pipe(
+          Effect.map((contributions) => contributions.tools ?? []),
+        ),
+      )
+      const signatures = yield* Effect.forEach(tools.flat(), renderToolSignature)
+      expect(signatures.length).toBeGreaterThan(shippedSignatures.length)
+      expect(signatures.filter((line) => /: Promise<object(\[\])?>/.test(line))).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   for (const [capability, expected] of shippedSignatures) {
     it.effect(`${String(capability.id)} renders its callable path and types`, () =>
       Effect.gen(function* () {
