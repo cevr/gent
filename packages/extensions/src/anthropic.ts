@@ -45,6 +45,7 @@ import {
   CredentialRefreshUnavailable,
   driverListModels,
   EMPTY_CREDENTIAL_CELL,
+  explainCredentialFailure,
   freshCredentials,
   freshEnoughAt,
   isTransientTokenStatus,
@@ -1751,72 +1752,83 @@ export const transformStreamEvent = (
 type CreateMessageOptions = Parameters<AnthropicClient.Service["createMessage"]>[0]
 type CreateMessageStreamOptions = Parameters<AnthropicClient.Service["createMessageStream"]>[0]
 
-/** Wraps an AnthropicClient to apply Claude Code keychain conventions. */
-const makeKeychainClientLayer: Layer.Layer<
+/**
+ * Wraps an AnthropicClient to apply Claude Code keychain conventions. A
+ * request that fails on its credential keeps the credential's own message.
+ */
+const makeKeychainClientLayer = (
+  creds: CredentialCache<ClaudeCredentials>,
+): Layer.Layer<
   AnthropicClient.AnthropicClient,
   never,
   AnthropicClient.AnthropicClient | KeychainTransformRequirements
-> = Layer.effect(
-  AnthropicClient.AnthropicClient,
-  Effect.gen(function* () {
-    const inner = yield* AnthropicClient.AnthropicClient
-    const transformContext = yield* Effect.context<KeychainTransformRequirements>()
-    const transformPayloadHere = (payload: JsonRecord) =>
-      transformPayload(payload).pipe(Effect.provideContext(transformContext))
+> =>
+  Layer.effect(
+    AnthropicClient.AnthropicClient,
+    Effect.gen(function* () {
+      const inner = yield* AnthropicClient.AnthropicClient
+      const explain = explainCredentialFailure(creds)
+      const transformContext = yield* Effect.context<KeychainTransformRequirements>()
+      const transformPayloadHere = (payload: JsonRecord) =>
+        transformPayload(payload).pipe(Effect.provideContext(transformContext))
 
-    const service: AnthropicClient.Service = {
-      client: inner.client,
-      streamRequest: inner.streamRequest,
+      const service: AnthropicClient.Service = {
+        client: inner.client,
+        streamRequest: inner.streamRequest,
 
-      createMessage: (options: CreateMessageOptions) =>
-        Effect.gen(function* () {
-          const payload = yield* Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
-            Effect.orDie,
-          )
-          const transformed = yield* transformPayloadHere(payload)
-          return yield* inner.createMessage({
-            ...options,
-            payload: encodeMessagePayload(decodeMessagePayload(transformed)),
-          })
-        }).pipe(
-          Effect.map(([body, response]) => {
-            const b = Schema.decodeSync(JsonRecordSchema)(body)
-            const content = b["content"]
-            if (isRecordArray(content)) {
-              const transformed = {
-                ...b,
-                content: transformResponseContent(content),
+        createMessage: (options: CreateMessageOptions) =>
+          Effect.gen(function* () {
+            const payload = yield* Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
+              Effect.orDie,
+            )
+            const transformed = yield* transformPayloadHere(payload)
+            return yield* explain(
+              inner.createMessage({
+                ...options,
+                payload: encodeMessagePayload(decodeMessagePayload(transformed)),
+              }),
+            )
+          }).pipe(
+            Effect.map(([body, response]) => {
+              const b = Schema.decodeSync(JsonRecordSchema)(body)
+              const content = b["content"]
+              if (isRecordArray(content)) {
+                const transformed = {
+                  ...b,
+                  content: transformResponseContent(content),
+                }
+                return [
+                  Schema.decodeUnknownSync(Generated.BetaMessage)(transformed),
+                  response,
+                ] satisfies [typeof body, typeof response]
               }
-              return [
-                Schema.decodeUnknownSync(Generated.BetaMessage)(transformed),
-                response,
-              ] satisfies [typeof body, typeof response]
-            }
-            return [body, response] satisfies [typeof body, typeof response]
-          }),
-        ),
+              return [body, response] satisfies [typeof body, typeof response]
+            }),
+          ),
 
-      createMessageStream: (options: CreateMessageStreamOptions) =>
-        Effect.gen(function* () {
-          const payload = yield* Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
-            Effect.orDie,
-          )
-          const transformed = yield* transformPayloadHere(payload)
-          return yield* inner.createMessageStream({
-            ...options,
-            payload: encodeMessagePayload(decodeMessagePayload(transformed)),
-          })
-        }).pipe(
-          Effect.map(([response, stream]) => [
-            response,
-            stream.pipe(Stream.map(transformStreamEvent)),
-          ]),
-        ),
-    }
+        createMessageStream: (options: CreateMessageStreamOptions) =>
+          Effect.gen(function* () {
+            const payload = yield* Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
+              Effect.orDie,
+            )
+            const transformed = yield* transformPayloadHere(payload)
+            return yield* explain(
+              inner.createMessageStream({
+                ...options,
+                payload: encodeMessagePayload(decodeMessagePayload(transformed)),
+              }),
+            )
+          }).pipe(
+            Effect.map(([response, stream]) => [
+              response,
+              stream.pipe(Stream.map(transformStreamEvent)),
+            ]),
+          ),
+      }
 
-    return service
-  }),
-)
+      return service
+    }),
+  )
 
 // ── keychain transform ──────────────────────────────────────────────────────
 
@@ -2168,7 +2180,7 @@ const makeOauthAnthropicLayer = (
     }),
   ).pipe(Layer.provide(cacheLayer))
 
-  const wrappedClient = makeKeychainClientLayer.pipe(
+  const wrappedClient = makeKeychainClientLayer(creds).pipe(
     Layer.provide(clientLayer),
     Layer.provide(BunCrypto.layer),
     Layer.provide(Layer.succeed(AnthropicPlatform, platform)),

@@ -53,6 +53,7 @@ import {
   CredentialRefreshUnavailable,
   driverListModels,
   EMPTY_CREDENTIAL_CELL,
+  explainCredentialFailure,
   freshCredentials,
   isTransientTokenStatus,
   makeCredentialCache,
@@ -1334,9 +1335,27 @@ const makeOauthOpenAILayer = (
     apiUrl: "https://chatgpt.com/backend-api/codex",
   }).pipe(Layer.provide(codexHttpClientLayer))
   return OpenAiResponsesLanguageModel.layer({ model: modelName, config }).pipe(
-    Layer.provide(clientLayer),
+    Layer.provide(explainedClientLayer(creds).pipe(Layer.provide(clientLayer))),
   )
 }
+
+/** Wraps the Responses client so a credential failure keeps its own message. */
+const explainedClientLayer = (
+  creds: CredentialCache<OpenAICredentials>,
+): Layer.Layer<OpenAiResponsesClient.OpenAiClient, never, OpenAiResponsesClient.OpenAiClient> =>
+  Layer.effect(
+    OpenAiResponsesClient.OpenAiClient,
+    Effect.gen(function* () {
+      const inner = yield* OpenAiResponsesClient.OpenAiClient
+      const explain = explainCredentialFailure(creds)
+      return {
+        client: inner.client,
+        createResponse: (options) => explain(inner.createResponse(options)),
+        createResponseStream: (options) => explain(inner.createResponseStream(options)),
+        createEmbedding: (options) => explain(inner.createEmbedding(options)),
+      }
+    }),
+  )
 
 /**
  * Build the model-driver contribution given a pre-allocated credential

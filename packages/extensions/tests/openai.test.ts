@@ -28,7 +28,7 @@ import {
   type CredentialCacheCell,
   EMPTY_CREDENTIAL_CELL,
 } from "../src/providers.js"
-import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
+import { ProviderAuthError, type ProviderAuthInfo, RequestId } from "@gent/core/extensions/api"
 import {
   FetchHttpClient,
   HttpBody,
@@ -41,11 +41,13 @@ import { runEffectBoundary } from "./run-effect-boundary.js"
 import { AiError, LanguageModel } from "effect/unstable/ai"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
+import { e2ePreset } from "./helpers/test-preset.js"
 import {
   type CapturedRequest,
   fakeFetchLayer,
   type FakeFetchState,
   makeFakeFetchState,
+  createRpcHarness,
   oneGenerate,
   waitFor,
 } from "@gent/core/test-utils"
@@ -2435,6 +2437,69 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
       expect(fetchState.captured.every((request) => request.url.endsWith("/oauth/token"))).toBe(
         true,
       )
+    }),
+  )
+  it.live("a sign-in revoked mid-turn tells the user to sign in again with /auth", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+      )
+      // The held token passes the resolve-time check; the server then
+      // revokes it: the model request gets a 401 and the refresh a 400.
+      const fetchState = makeFakeFetchState()
+      const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+        if (request.url.endsWith("/oauth/token")) {
+          return { status: 400, body: '{"error":"invalid_grant"}' }
+        }
+        return { status: 401, body: '{"error":{"message":"token revoked"}}' }
+      })
+      const authInfo: ProviderAuthInfo = {
+        type: "oauth",
+        access: "revoked-access",
+        refresh: "revoked-refresh",
+        expires: FAR_FUTURE_MS,
+        persist: () => Effect.void,
+      }
+      const shown = yield* Effect.gen(function* () {
+        const model = yield* driver.resolveModel("gpt-5.4", authInfo)
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer: Layer.provide(model, fetchLayer),
+        })
+        const errorEvent = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter((envelope) => envelope.event._tag === "ErrorOccurred"),
+          Stream.runHead,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({
+          sessionId,
+          branchId,
+          content: "hello",
+          requestId: RequestId.make("revoked-mid-turn"),
+        })
+        const event = yield* Fiber.join(errorEvent)
+        if (Option.isNone(event) || event.value.event._tag !== "ErrorOccurred") {
+          return yield* Effect.die("the turn ended without an error event")
+        }
+        return event.value.event.error
+      }).pipe(
+        Effect.timeout("10 seconds"),
+        Effect.scoped,
+        // oxlint-disable-next-line effect/noInlineProvide -- The fake endpoints are this operation's HTTP boundary.
+        Effect.provide(fetchLayer),
+      )
+
+      expect(shown).toContain("ChatGPT sign-in expired")
+      expect(shown).toContain("Sign in again with /auth.")
+      expect(shown).not.toContain("request body")
+      expect(shown).not.toContain("effect/ai/AiError")
+      // The fake endpoint answered the refresh; no request left the test.
+      expect(fetchState.captured.some((request) => request.url.endsWith("/oauth/token"))).toBe(true)
     }),
   )
 })

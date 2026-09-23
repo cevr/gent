@@ -277,7 +277,9 @@ describe("model context RPC boundary", () => {
           if (errorEvent.value.event._tag !== "ErrorOccurred") {
             return yield* Effect.die("unexpected event in error stream")
           }
-          expect(errorEvent.value.event.error).toContain("ModelContextProjectionError")
+          // The user reads the error's own message, not its class tag.
+          expect(errorEvent.value.event.error).toContain("BudgetExceeded projecting the context")
+          expect(errorEvent.value.event.error).not.toContain("ModelContextProjectionError")
           // The transcript prints this text; stack frames belong in the log.
           expect(errorEvent.value.event.error).not.toContain("\n    at ")
           const snapshot = yield* waitFor(

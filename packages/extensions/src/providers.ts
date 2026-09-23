@@ -38,7 +38,7 @@ import {
   HttpClientResponse,
 } from "effect/unstable/http"
 import { EncodeError, HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { Model as AiModel } from "effect/unstable/ai"
+import { AiError, Model as AiModel } from "effect/unstable/ai"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
 
 // ── credentials ─────────────────────────────────────────────────────────────
@@ -282,7 +282,8 @@ export const withHeaders = (
  *   building the request, and the request cannot be built. The AI SDKs map
  *   it to a `NetworkError` that is not retryable, so the loop does not run a
  *   refresh that cannot succeed again. `resolveModel` checks the credential
- *   first, so this path is only a race after that check.
+ *   first, and `explainCredentialFailure` gives a later failure (after a 401,
+ *   for example) the credential's own message.
  */
 const asRequestError = (
   req: HttpClientRequest.HttpClientRequest,
@@ -304,6 +305,47 @@ export const freshCredentials = <C>(
   req: HttpClientRequest.HttpClientRequest,
 ): Effect.Effect<C, HttpClientError> =>
   creds.getFresh.pipe(Effect.mapError((cause) => asRequestError(req, cause)))
+
+/** True when the SDK failed a request before it was sent: the credential is one cause. */
+const isUnbuiltRequest = (error: AiError.AiError): boolean =>
+  error.reason._tag === "NetworkError" && error.reason.reason === "EncodeError"
+
+/**
+ * Give a request that failed on its credential the credential's own message.
+ *
+ * A permanent credential failure crosses the SDK as an `EncodeError`, and the
+ * SDK drops its cause and adds a hint about the request body. This happens
+ * after the resolve-time check, for example when a 401 forces a refresh and
+ * the server rejects the refresh token. Wrap each SDK client call: when a
+ * request fails before it was sent, check the credential again. A permanent
+ * failure becomes an `AuthenticationError` that carries its message; any
+ * other result keeps the SDK error.
+ */
+export const explainCredentialFailure =
+  <C>(creds: CredentialCache<C>) =>
+  <A>(effect: Effect.Effect<A, AiError.AiError>): Effect.Effect<A, AiError.AiError> =>
+    effect.pipe(
+      Effect.catchIf(isUnbuiltRequest, (error) =>
+        creds.getFresh.pipe(
+          Effect.matchEffect({
+            onSuccess: () => Effect.fail(error),
+            onFailure: (failure) => {
+              if (failure._tag === "CredentialRefreshUnavailable") return Effect.fail(error)
+              return Effect.fail(
+                AiError.make({
+                  module: error.module,
+                  method: error.method,
+                  reason: new AiError.AuthenticationError({
+                    kind: "Unknown",
+                    description: failure.message,
+                  }),
+                }),
+              )
+            },
+          }),
+        ),
+      ),
+    )
 
 /**
  * Check the credential before a model is handed to the loop. A permanent
