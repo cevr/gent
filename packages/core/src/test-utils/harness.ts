@@ -730,7 +730,7 @@ export interface E2ELayerConfig {
   readonly durableApproval?: boolean
   /** File-backed SQLite path for restart/recovery tests. Defaults to in-memory SQLite. */
   readonly storagePath?: string
-  /** Optional per-cwd profile cache for shared-server routing tests. */
+  /** Optional per-cwd profile cache for per-workspace routing tests. */
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>

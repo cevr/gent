@@ -1835,7 +1835,7 @@ const buildSessionProfile = (params: {
 // ── session-profile ─────────────────────────────────────────────────────────
 
 /**
- * SessionProfile — per-(workspace,cwd) live profile for shared server mode.
+ * SessionProfile — per-(workspace,cwd) live profile: one server serves many workspaces.
  *
  * Each cache entry is built once. Declarations are loaded, every extension's
  * process resources are built into a scope that closes with the server, and

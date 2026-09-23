@@ -131,7 +131,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
 // ── request-dedup ───────────────────────────────────────────────────────────
 
 // Dedup cache: bound success entries by both time and count so a
-// long-running shared server does not accumulate one entry per user
+// long-running server does not accumulate one entry per user
 // prompt + per session create indefinitely.
 const DEDUP_SUCCESS_TTL: Duration.Input = Duration.seconds(60)
 const DEDUP_MAX_ENTRIES = 1024
