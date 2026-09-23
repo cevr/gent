@@ -74,8 +74,7 @@ import { type AiError, Model as AiModel } from "effect/unstable/ai"
 // (MODEL_CONFIG, getModelOverride, getModelBetas,
 // BetaExclusions), the billing header (SYSTEM_IDENTITY_PREFIX,
 // extractFirstUserMessageText, computeCch, computeVersionSuffix,
-// buildBillingHeaderValue), the wire transforms (repairToolPairs,
-// transformPayload, transformResponseContent, transformStreamEvent,
+// buildBillingHeaderValue), the wire transforms (transformPayload, transformResponseContent, transformStreamEvent,
 // isLongContextError) and the credential parsers (ClaudeCredentials,
 // updateCredentialBlob, parseOAuthResponse) are pure functions with unit tests.
 // AnthropicKeychainEnv, AnthropicPlatform, AnthropicCredentialIO,
@@ -1196,90 +1195,6 @@ const transformToolChoice = (toolChoice: JsonValue): JsonValue => {
 }
 
 /**
- * Drop orphan `tool_use` blocks (no
- * matching downstream `tool_result`) and orphan `tool_result` blocks
- * (no matching upstream `tool_use`) from message history. Anthropic
- * rejects requests with mismatched pairs (HTTP 400), and a partial turn
- * failure or mid-stream cancel can easily strand one half of a pair.
- *
- * After filtering, messages whose `content` array empties out are
- * dropped entirely so the API doesn't see `{ role, content: [] }`.
- */
-type ToolPairIds = {
-  readonly toolUseIds: ReadonlySet<string>
-  readonly toolResultIds: ReadonlySet<string>
-}
-
-const collectToolPairIds = (messages: ReadonlyArray<JsonRecord>): ToolPairIds => {
-  const toolUseIds = new Set<string>()
-  const toolResultIds = new Set<string>()
-
-  for (const message of messages) {
-    if (!isRecordArray(message["content"])) continue
-    for (const block of message["content"]) {
-      const id = block["id"]
-      if (block["type"] === "tool_use" && Predicate.isString(id)) {
-        toolUseIds.add(id)
-      }
-      const toolUseId = block["tool_use_id"]
-      if (block["type"] === "tool_result" && Predicate.isString(toolUseId)) {
-        toolResultIds.add(toolUseId)
-      }
-    }
-  }
-
-  return { toolUseIds, toolResultIds }
-}
-
-const findOrphanedIds = (
-  ids: ReadonlySet<string>,
-  matchingIds: ReadonlySet<string>,
-): ReadonlySet<string> => {
-  const orphaned = new Set<string>()
-  for (const id of ids) {
-    if (!matchingIds.has(id)) orphaned.add(id)
-  }
-  return orphaned
-}
-
-const filterToolPairMessage = (
-  message: JsonRecord,
-  orphanedUses: ReadonlySet<string>,
-  orphanedResults: ReadonlySet<string>,
-): Option.Option<JsonRecord> => {
-  if (!isRecordArray(message["content"])) return Option.some(message)
-  const next = message["content"].filter((block: JsonRecord) => {
-    const id = block["id"]
-    if (block["type"] === "tool_use" && Predicate.isString(id)) {
-      return !orphanedUses.has(id)
-    }
-    const toolUseId = block["tool_use_id"]
-    if (block["type"] === "tool_result" && Predicate.isString(toolUseId)) {
-      return !orphanedResults.has(toolUseId)
-    }
-    return true
-  })
-  if (next.length === 0) return Option.none()
-  return Option.some({ ...message, content: next })
-}
-
-/** Remove unpaired tool-use and tool-result blocks from message history. */
-export const repairToolPairs = (messages: ReadonlyArray<JsonRecord>): ReadonlyArray<JsonRecord> => {
-  const { toolUseIds, toolResultIds } = collectToolPairIds(messages)
-  const orphanedUses = findOrphanedIds(toolUseIds, toolResultIds)
-  const orphanedResults = findOrphanedIds(toolResultIds, toolUseIds)
-
-  if (orphanedUses.size === 0 && orphanedResults.size === 0) return messages
-
-  const filtered: JsonRecord[] = []
-  for (const message of messages) {
-    const next = filterToolPairMessage(message, orphanedUses, orphanedResults)
-    if (Option.isSome(next)) filtered.push(next.value)
-  }
-  return filtered
-}
-
-/**
  * Coerce `system` (string | array | undefined) into the canonical block
  * array shape used by the rest of the pipeline. The downstream billing
  * + identity injection expects an array — string input is wrapped.
@@ -1459,15 +1374,14 @@ const relocateThirdPartyIntoFirstUser = (
  * what's on the wire:
  *
  *   1. transformTools — PascalCase mcp_ prefix on tool names.
- *   2. repairToolPairs — drop orphan tool_use / tool_result blocks
- *      before they can poison the billing hash or trip the API.
- *   3. transformMessages — PascalCase mcp_ prefix on tool_use blocks
- *      in history.
- *   4. transformToolChoice — independent.
- *   5. relocateThirdPartyIntoFirstUser — pull non-billing/non-identity
+ *   2. transformMessages — PascalCase mcp_ prefix on tool_use blocks
+ *      in history. Core's model-context validation already fails a turn
+ *      with an orphan tool call or result, so none reaches this point.
+ *   3. transformToolChoice — independent.
+ *   4. relocateThirdPartyIntoFirstUser — pull non-billing/non-identity
  *      system blocks into the first user message FIRST, so the
- *      billing hash in step 6 sees the final wire text.
- *   6. buildSystemArray — compute billing from FINAL (post-relocation)
+ *      billing hash in step 5 sees the final wire text.
+ *   5. buildSystemArray — compute billing from FINAL (post-relocation)
  *      messages; emit the strict `[billing, identity]` system shape.
  */
 export const transformPayload = (
@@ -1478,10 +1392,6 @@ export const transformPayload = (
 
     if (isRecordArray(result["tools"])) {
       result["tools"] = transformTools(result["tools"])
-    }
-
-    if (isRecordArray(result["messages"])) {
-      result["messages"] = repairToolPairs(result["messages"])
     }
 
     if (isRecordArray(result["messages"])) {

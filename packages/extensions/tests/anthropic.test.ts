@@ -17,7 +17,6 @@ import {
   isLongContextError,
   MODEL_CONFIG,
   parseOAuthResponse,
-  repairToolPairs,
   SYSTEM_IDENTITY_PREFIX,
   transformPayload as transformPayloadEffect,
   transformResponseContent,
@@ -144,7 +143,6 @@ const decodeSystemBlocks = Schema.decodeUnknownSync(
 const decodeToolChoice = Schema.decodeUnknownSync(
   Schema.Struct({ type: Schema.String, name: Schema.String }),
 )
-const decodeContentBlocks = Schema.decodeUnknownSync(Schema.Array(WireContentBlock))
 
 // ── transformPayload ──
 
@@ -335,94 +333,6 @@ describe("transformStreamEvent", () => {
   })
 })
 
-// ── repairToolPairs (opencode parity B) ──
-
-describe("repairToolPairs", () => {
-  test("drops orphan tool_use blocks (no matching downstream tool_result)", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "trying" },
-          { type: "tool_use", id: "tc-1", name: "echo", input: {} },
-          { type: "tool_use", id: "tc-2", name: "echo", input: {} },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }],
-      },
-    ]
-    const repaired = repairToolPairs(messages)
-    const assistantContent = decodeContentBlocks(repaired[0]?.["content"])
-    // tool_use tc-2 is dropped; tc-1 + the text block survive.
-    expect(assistantContent).toHaveLength(2)
-    expect(assistantContent.find((b) => b["id"] === "tc-1")).toBeDefined()
-    expect(assistantContent.find((b) => b["id"] === "tc-2")).toBeUndefined()
-  })
-
-  test("drops orphan tool_result blocks (no matching upstream tool_use)", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [
-          { type: "tool_result", tool_use_id: "tc-orphan", content: "stale" },
-          { type: "text", text: "follow-up" },
-        ],
-      },
-    ]
-    const repaired = repairToolPairs(messages)
-    const userContent = decodeContentBlocks(repaired[0]?.["content"])
-    expect(userContent).toHaveLength(1)
-    expect(userContent[0]!["type"]).toBe("text")
-  })
-
-  test("removes a message whose content fully empties out after filtering", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "tool_use", id: "tc-only", name: "echo", input: {} }],
-      },
-      { role: "user", content: [{ type: "text", text: "hi" }] },
-    ]
-    const repaired = repairToolPairs(messages)
-    expect(repaired).toHaveLength(1)
-    expect(repaired[0]!["role"]).toBe("user")
-  })
-
-  test("returns input unchanged when every pair matches", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "tool_use", id: "tc-1", name: "echo", input: {} }],
-      },
-      {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }],
-      },
-    ]
-    const repaired = repairToolPairs(messages)
-    // Same reference — no defensive copy when nothing to repair.
-    expect(repaired).toBe(messages)
-  })
-
-  test("ignores messages whose content is a string (no tool blocks possible)", () => {
-    const messages = [
-      { role: "user", content: "plain text" },
-      {
-        role: "assistant",
-        content: [{ type: "tool_use", id: "tc-1", name: "echo", input: {} }],
-      },
-    ]
-    // No tool_result for tc-1, so the assistant's tool_use is orphaned
-    // and gets dropped — but the string-content user message rides
-    // through untouched.
-    const repaired = repairToolPairs(messages)
-    expect(repaired).toHaveLength(1)
-    expect(repaired[0]!["content"]).toBe("plain text")
-  })
-})
-
 // ── system relocation (opencode parity A) ──
 
 describe("transformPayload — system content relocation", () => {
@@ -547,12 +457,9 @@ describe("transformPayload — system content relocation", () => {
           ],
         },
       ],
-      // Provide the matching upstream tool_use blocks so repairToolPairs
-      // doesn't drop the tool_result entries.
       tools: [],
     }
-    // Add an upstream assistant turn so the tool_result blocks survive
-    // the orphan check.
+    // A valid history: each tool_result has its tool_use upstream.
     const payloadWithPair = {
       ...payload,
       messages: [
