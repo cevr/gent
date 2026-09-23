@@ -2,8 +2,10 @@ import {
   Context,
   type Duration,
   Effect,
+  FileSystem,
   Layer,
   Option,
+  Path,
   type PlatformError,
   Predicate,
   Ref,
@@ -253,3 +255,30 @@ export const runProcess = (
     }),
   )
 }
+
+// ── write-file-atomic ───────────────────────────────────────────────────────
+
+/**
+ * Replaces `path` with `content` through a staged sibling. The text lands in a
+ * temporary file in the target directory, which is then renamed over the
+ * path, so a reader (or a crash) never sees a half-written file. A symlink at
+ * `path` is replaced as a directory entry; its target is left untouched.
+ * The one atomic write: core's config and every extension use it.
+ */
+export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
+  path: string,
+  content: string,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const pathService = yield* Path.Path
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const staging = yield* fs.makeTempFileScoped({
+        directory: pathService.dirname(path),
+        prefix: ".gent-write-",
+      })
+      yield* fs.writeFileString(staging, content)
+      yield* fs.rename(staging, path)
+    }),
+  )
+})

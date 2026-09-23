@@ -4,7 +4,7 @@
  * language model `Gent.provider.mock()` ships. Clients read `protocol`;
  * extensions read `extensions/api`; tests read `test-utils`.
  */
-export { GentPlatform } from "./runtime/gent-platform.js"
+export { GentPlatform, writeFileAtomic } from "./runtime/gent-platform.js"
 export { BunPlatformLive } from "./runtime/gent-platform-bun.js"
 export { isProjectExtensionDirectoryTrusted, readDisabledExtensions } from "./runtime/config.js"
 export { Auth, AuthApi, ScriptedLanguageModel } from "./runtime/provider.js"

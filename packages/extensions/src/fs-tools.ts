@@ -20,6 +20,7 @@ import {
   ExtensionContext,
   ExtensionHost,
   tool,
+  writeFileAtomic,
 } from "@gent/core/extensions/api"
 
 // ── file index ──────────────────────────────────────────────────────────────
@@ -518,32 +519,6 @@ export const ReadTool = tool({
       ...(truncated && { nextOffset: endIndex + 1 }),
     }
   }),
-})
-
-// ── atomic write ────────────────────────────────────────────────────────────
-
-/**
- * Replaces `path` with `content` through a staged sibling. The text lands in a
- * temporary file in the target directory, which is then renamed over the
- * path, so a reader never sees a half-written file. A symlink at `path` is
- * replaced as a directory entry; its target is left untouched.
- */
-export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
-  path: string,
-  content: string,
-) {
-  const fs = yield* FileSystem.FileSystem
-  const pathService = yield* Path.Path
-  yield* Effect.scoped(
-    Effect.gen(function* () {
-      const staging = yield* fs.makeTempFileScoped({
-        directory: pathService.dirname(path),
-        prefix: ".gent-write-",
-      })
-      yield* fs.writeFileString(staging, content)
-      yield* fs.rename(staging, path)
-    }),
-  )
 })
 
 // ── write ───────────────────────────────────────────────────────────────────

@@ -1,13 +1,14 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Duration, Effect, Layer, Path, Predicate } from "effect"
+import { Duration, Effect, FileSystem, Layer, Path, Predicate } from "effect"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
   GentPlatform,
   ProcessError,
   runProcess,
   SignalError,
+  writeFileAtomic,
 } from "../../src/runtime/gent-platform"
-import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
+import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
 
 // ── gent-platform.test ──────────────────────────────────────────────────────
@@ -231,5 +232,27 @@ describe("runProcess", () => {
         expect(result.stdout).toBe("")
       }).pipe(withProcessTimeout),
     processTestTimeout,
+  )
+})
+
+// ── write-file-atomic ───────────────────────────────────────────────────────
+
+describe("writeFileAtomic", () => {
+  const atomicTest = it.scopedLive.layer(BunServices.layer)
+
+  atomicTest("replaces a symlink entry and leaves its target untouched", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const target = `${dir}/target.json`
+      const link = `${dir}/state.json`
+      yield* fs.writeFileString(target, "target content")
+      yield* fs.symlink(target, link)
+      yield* writeFileAtomic(link, "replaced")
+      expect(yield* fs.readFileString(target)).toBe("target content")
+      expect(yield* fs.readFileString(link)).toBe("replaced")
+      expect((yield* fs.readLink(link).pipe(Effect.result))._tag).toBe("Failure")
+      expect((yield* fs.readDirectory(dir)).sort()).toEqual(["state.json", "target.json"])
+    }),
   )
 })

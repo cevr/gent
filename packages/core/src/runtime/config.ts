@@ -18,6 +18,7 @@ import {
   DriverOverridesFromConfig,
   isRetiredDriverRef,
 } from "../domain/agent.js"
+import { writeFileAtomic } from "./gent-platform.js"
 
 // ── runtime-environment ─────────────────────────────────────────────────────
 
@@ -333,19 +334,13 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // Replace the user config through a staged sibling, so a reader (or a
       // crash) never sees a half-written file.
       const saveUserConfig = (config: UserConfig) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const configDir = path.dirname(userConfigPath)
-            yield* fs.makeDirectory(configDir, { recursive: true })
-            const json = yield* Schema.encodeEffect(UserConfigJson)(config)
-            const staging = yield* fs.makeTempFileScoped({
-              directory: configDir,
-              prefix: ".config-",
-            })
-            yield* fs.writeFileString(staging, json)
-            yield* fs.rename(staging, userConfigPath)
-          }),
-        ).pipe(
+        Effect.gen(function* () {
+          yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+          const json = yield* Schema.encodeEffect(UserConfigJson)(config)
+          yield* writeFileAtomic(userConfigPath, json)
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
           Effect.mapError(
             (cause) => new ConfigWriteError({ path: userConfigPath, message: String(cause) }),
           ),

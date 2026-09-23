@@ -92,7 +92,9 @@ updates this list in the same commit.
     No `ExtensionContext` facet duplicates an Effect platform service; the
     facets are host authority only (`Session`, `Interaction`,
     `FileLock`, `State`). An atomic write has one owner, `writeFileAtomic` in
-    `packages/extensions/src/fs-tools.ts`. Host facts core cannot get from
+    `packages/core/src/runtime/gent-platform.ts`; core config, extensions
+    (through `@gent/core/extensions/api`) and the TUI (through
+    `@gent/core/host`) all call it. Host facts core cannot get from
     Effect (OS info, executable path, home directory) stay on `GentPlatform`.
     The TUI session controller owns screen state, views render and dispatch;
     app-specific UI facets live at the app edge. Receipts:

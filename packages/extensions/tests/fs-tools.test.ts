@@ -16,7 +16,6 @@ import {
   ReadTool,
   unescapeStr,
   WriteTool,
-  writeFileAtomic,
 } from "../src/fs-tools.js"
 import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
@@ -263,26 +262,6 @@ describe("WriteTool", () => {
 
       const written = yield* fs.readFileString(filePath)
       expect(written).toBe("replaced")
-    }),
-  )
-})
-
-describe("writeFileAtomic", () => {
-  const atomicTest = it.scopedLive.layer(BunServices.layer)
-
-  atomicTest("replaces a symlink entry and leaves its target untouched", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const target = `${dir}/target.json`
-      const link = `${dir}/state.json`
-      yield* fs.writeFileString(target, "target content")
-      yield* fs.symlink(target, link)
-      yield* writeFileAtomic(link, "replaced")
-      expect(yield* fs.readFileString(target)).toBe("target content")
-      expect(yield* fs.readFileString(link)).toBe("replaced")
-      expect((yield* fs.readLink(link).pipe(Effect.result))._tag).toBe("Failure")
-      expect((yield* fs.readDirectory(dir)).sort()).toEqual(["state.json", "target.json"])
     }),
   )
 })
