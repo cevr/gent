@@ -812,7 +812,7 @@ class EditError extends Schema.TaggedError<EditError>()("EditError", {
 
 // Edit Tool Params
 
-export const EditParams = Schema.Struct({
+const EditParams = Schema.Struct({
   path: Schema.String.annotate({
     description: "Absolute path to file to edit",
   }),
@@ -912,7 +912,7 @@ const normalizeWithOffsets = (s: string, keepLastLineEnd = false): NormalizedTex
   return { text, offsets }
 }
 
-export function normalizeWhitespace(s: string): string {
+function normalizeWhitespace(s: string): string {
   return normalizeWithOffsets(s).text
 }
 

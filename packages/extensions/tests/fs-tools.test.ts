@@ -12,7 +12,6 @@ import {
   FileIndexLive,
   findMatch,
   GrepTool,
-  normalizeWhitespace,
   ReadTool,
   unescapeStr,
   WriteTool,
@@ -332,19 +331,6 @@ describe("unescapeStr", () => {
     expect(unescapeStr("hello world")).toBe("hello world")
   })
 })
-describe("normalizeWhitespace", () => {
-  test("strips trailing whitespace per line", () => {
-    expect(normalizeWhitespace("hello   \nworld  ")).toBe("hello\nworld")
-  })
-  test("curly quotes → ASCII quotes", () => {
-    expect(normalizeWhitespace("\u201Chello\u201D")).toBe('"hello"')
-    expect(normalizeWhitespace("\u2018hi\u2019")).toBe("'hi'")
-  })
-  test("em-dash → hyphen, NBSP → space", () => {
-    expect(normalizeWhitespace("a\u2014b")).toBe("a-b")
-    expect(normalizeWhitespace("a\u00A0b")).toBe("a b")
-  })
-})
 describe("findMatch", () => {
   test("exact match → strategy 'exact', correct index", () => {
     const content = "hello world foo bar"
@@ -401,6 +387,34 @@ const editLayer = BunServices.layer
 const editTest = it.scopedLive.layer(editLayer)
 const stubCtx = testToolContext()
 describe("EditTool execution", () => {
+  // The file keeps its own spelling; the model's ASCII search still finds it.
+  const normalizedCases = [
+    { name: "trailing spaces", file: "hello   \nworld  \n", search: "hello\nworld" },
+    { name: "double curly quotes", file: "say \u201Chello\u201D now\n", search: 'say "hello" now' },
+    { name: "single curly quotes", file: "say \u2018hi\u2019 now\n", search: "say 'hi' now" },
+    { name: "an em dash", file: "a\u2014b\n", search: "a-b" },
+    { name: "a no-break space", file: "a\u00A0b\n", search: "a b" },
+  ]
+  for (const { name, file, search } of normalizedCases) {
+    editTest(`an ASCII search matches ${name} in the file`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = path.join(dir, "test.txt")
+        yield* fs.writeFileString(filePath, file)
+        const result = yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: search, newString: "done" },
+          stubCtx,
+        )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(editLayer))
+        expect(result.replacements).toBe(1)
+        expect(yield* fs.readFileString(filePath)).toBe("done\n")
+      }),
+    )
+  }
   editTest("applies edit to a real file and reads back the result", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

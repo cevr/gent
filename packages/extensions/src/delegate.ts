@@ -233,7 +233,7 @@ export const childOutcomeWords = (outcome: ChildOutcome): string => {
  * wake, a queued message, an interjection that woke the child) opens with a
  * user message of its own, and the slice ends there.
  */
-export const startTurnMessages = <
+const startTurnMessages = <
   M extends { readonly id: MessageId } & Parameters<typeof isRuntimeUserMessage>[0],
 >(
   messages: ReadonlyArray<M>,
