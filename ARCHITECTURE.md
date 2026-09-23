@@ -427,9 +427,13 @@ Shape:
 - Every admitted turn ends with exactly one `TurnCompleted`. A turn phase that
   fails (a storage write, a profile resolve) publishes `ErrorOccurred`, then
   `completeFailedTurn` appends the receipt with `streamFailed: true`, and the
-  turn's `turnAfter` hooks run once after it, under the turn's profile. The
-  stored turn duration is the receipt's mark, so a failure after `finalizeTurn`
-  stored it appends no second receipt and runs no second hook. `ErrorOccurred` with `notice: true` is a notice the
+  turn's `turnAfter` hooks run once after it, under the turn's profile. It
+  shares the receipt and hook steps with `finalizeTurn` (`appendTurnReceipt`,
+  `emitTurnAfter` in `turn.ts`). The stored turn duration is the receipt's
+  mark, so a failure after `finalizeTurn` stored it appends no second receipt
+  and runs no second hook. As on a normal turn, the receipt and hooks run
+  outside the interrupt permit; only the hand-over to the next item takes it,
+  so a hook may stop its own branch and a Cancel meanwhile stops this turn. `ErrorOccurred` with `notice: true` is a notice the
   turn goes on past (a compaction that fell back to truncation); a client ends
   the turn on `TurnCompleted`, never on `ErrorOccurred`.
 - New turn-stream start/end receipts include the user-message ID and model-step

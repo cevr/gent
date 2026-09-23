@@ -356,6 +356,30 @@ const emptyTurnMetrics = (): TurnMetrics => ({
   usageKnown: true,
 })
 
+/**
+ * The ledger's totals when they are this turn's. A turn that failed before it
+ * began left another turn's counts there: it spent nothing it can report.
+ */
+const turnMetricsFor = (metrics: TurnMetrics, messageId: MessageId): TurnMetrics => {
+  if (Option.contains(metrics.messageId, messageId)) return metrics
+  return { ...emptyTurnMetrics(), messageId: Option.some(messageId), usageKnown: false }
+}
+
+/** How a turn ended, as its receipt and its `turnAfter` hooks record it. */
+interface TurnEnd {
+  readonly messageId: MessageId
+  readonly startedAtMs: number
+  readonly turnInterrupted: boolean
+  readonly streamFailed: boolean
+  readonly unanswered: boolean
+}
+
+/** What appending a turn's receipt settled: its duration and what it spent. */
+interface TurnReceipt {
+  readonly durationMs: number
+  readonly metrics: TurnMetrics
+}
+
 interface TurnResponseMessages {
   readonly assistant: ReadonlyArray<AssistantResponsePart>
   readonly tool: ReadonlyArray<ToolResponsePart>
@@ -751,88 +775,6 @@ const commitWithEvent = Effect.fn("TurnHelpers.commitWithEvent")(function* <A, E
     yield* eventPublisher.deliver(committed.envelope)
   }
   return committed.result
-})
-
-/**
- * Ends a turn that a phase failure stopped. It appends one `TurnCompleted`
- * with `streamFailed`, after the `ErrorOccurred` that names the cause, so
- * every admitted turn ends with exactly one receipt. The stored turn duration
- * is the receipt's mark. If the failure came after `finalizeTurn` stored it,
- * this appends nothing and returns none; otherwise it returns the duration,
- * and the caller runs the turn's `turnAfter` hooks (`emitFailedTurnAfter`).
- */
-export const completeFailedTurn = Effect.fn("TurnHelpers.completeFailedTurn")(function* (params: {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly messageId: MessageId
-  readonly startedAtMs: number
-}) {
-  const messageStorage = yield* MessageStorage
-  const eventPublisher = yield* EventPublisher
-  const storageTransaction = yield* makeStorageTransaction
-  const message = yield* messageStorage.getMessage(params.messageId)
-  if (!Predicate.isUndefined(message?.turnDurationMs)) return Option.none<number>()
-  const endedAt = yield* DateTime.now
-  const durationMs = Math.max(0, DateTime.toEpochMillis(endedAt) - params.startedAtMs)
-  const envelope = yield* storageTransaction(
-    messageStorage.updateMessageTurnDuration(params.messageId, durationMs).pipe(
-      Effect.andThen(
-        eventPublisher.append(
-          TurnCompleted.make({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            messageId: params.messageId,
-            durationMs,
-            streamFailed: true,
-          }),
-        ),
-      ),
-    ),
-  )
-  yield* eventPublisher.deliver(envelope)
-  return Option.some(durationMs)
-})
-
-/**
- * The `turnAfter` hooks of a turn a phase failure stopped, run once, after
- * `completeFailedTurn` appended its receipt. A handler reads it as a failed
- * turn (`streamFailed`), as it reads a broken stream: a goal pauses rather
- * than stall. It runs under the turn's profile, as `finalizeTurn` does.
- */
-export const emitFailedTurnAfter = Effect.fn("TurnHelpers.emitFailedTurnAfter")(function* (params: {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly messageId: MessageId
-  readonly durationMs: number
-  readonly metrics: TurnMetrics
-}) {
-  const extensionRegistry = yield* ExtensionRegistry
-  const agentName = yield* sessionAgentName(params.sessionId)
-  // The ledger counts this turn only if the turn began: a failure before
-  // that leaves another turn's counts, which are not this turn's usage.
-  const usage = Option.match(
-    Option.filter(Option.some(params.metrics), (metrics) =>
-      Option.contains(metrics.messageId, params.messageId),
-    ),
-    {
-      onNone: () => ({ known: { inputTokens: 0, outputTokens: 0 }, complete: false }),
-      onSome: (metrics) => ({
-        known: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
-        complete: metrics.usageKnown,
-      }),
-    },
-  )
-  yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter({
-    sessionId: params.sessionId,
-    branchId: params.branchId,
-    messageId: params.messageId,
-    durationMs: params.durationMs,
-    agentName,
-    interrupted: false,
-    streamFailed: true,
-    unanswered: false,
-    usage,
-  })
 })
 
 export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageReceived")(
@@ -1764,6 +1706,8 @@ type AgentLoopTurnExecutionContext = {
   readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption
   readonly inbox: LoopInbox
+  /** The branch's services a turn's hooks run with; see `AgentLoopBehavior.branchContext`. */
+  readonly branchContext: Effect.Effect<Context.Context<never>>
 }
 
 export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext) =>
@@ -2311,15 +2255,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }),
       })
 
-    const finalizeTurn = Effect.fn("AgentLoop.finalizeTurn")(function* (params: {
-      messageId: RunningState["message"]["id"]
-      startedAtMs: number
-      turnInterrupted: boolean
-      streamFailed: boolean
-      unanswered: boolean
-      turnAgent: AgentNameType
-    }) {
-      const extensionRegistry = yield* ExtensionRegistry
+    /**
+     * Stores the turn's duration and appends its one `TurnCompleted` in a
+     * transaction, then delivers it. It returns what the `turnAfter` hooks
+     * read. The stored duration marks the receipt: a later call (a replay
+     * after a restart, or a failure after the receipt was stored) delivers
+     * the stored receipt again and returns none, so the hooks run once.
+     */
+    const appendTurnReceipt = Effect.fn("AgentLoop.appendTurnReceipt")(function* (params: TurnEnd) {
       const existingMessage = yield* messageStorage.getMessage(params.messageId)
       if (!Predicate.isUndefined(existingMessage?.turnDurationMs)) {
         const envelope = yield* findPersistedEvent({
@@ -2332,12 +2275,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         if (!Predicate.isUndefined(envelope)) {
           yield* eventPublisher.deliver(envelope)
         }
-        return
+        return Option.none<TurnReceipt>()
       }
 
       const turnEndTime = yield* DateTime.now
-      const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
-      const metrics = yield* scope.turnLedger.total
+      const durationMs = Math.max(0, DateTime.toEpochMillis(turnEndTime) - params.startedAtMs)
+      const metrics = turnMetricsFor(yield* scope.turnLedger.total, params.messageId)
       // Token totals are a receipt only when every step reported usable
       // counts; a partial sum would read as the turn's true total.
       const usage = Option.map(flagWhenTrue(metrics.steps > 0 && metrics.usageKnown), () => ({
@@ -2347,15 +2290,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       const envelope = yield* storageTransaction(
         Effect.gen(function* () {
-          yield* messageStorage.updateMessageTurnDuration(params.messageId, turnDurationMs)
-          // Token totals are a receipt only when every step reported usable
-          // counts; a partial sum would read as the turn's true total.
+          yield* messageStorage.updateMessageTurnDuration(params.messageId, durationMs)
           return yield* eventPublisher.append(
             TurnCompleted.make({
               sessionId: scope.sessionId,
               branchId: scope.branchId,
               messageId: params.messageId,
-              durationMs: Number(turnDurationMs),
+              durationMs,
               streamFailed: params.streamFailed,
               ...omitUndefined({
                 interrupted: Option.getOrUndefined(flagWhenTrue(params.turnInterrupted)),
@@ -2367,27 +2308,47 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }),
       )
       yield* eventPublisher.deliver(envelope)
+      return Option.some<TurnReceipt>({ durationMs, metrics })
+    })
 
-      yield* Effect.logDebug("finalize.turn-after.start")
+    /** The turn's `turnAfter` hooks, after its receipt; the caller provides the turn's profile. */
+    const emitTurnAfter = Effect.fn("AgentLoop.emitTurnAfter")(function* (
+      params: TurnEnd & TurnReceipt & { readonly agentName: AgentNameType },
+    ) {
+      const extensionRegistry = yield* ExtensionRegistry
       yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
-        durationMs: Number(turnDurationMs),
+        durationMs: params.durationMs,
         messageId: params.messageId,
-        agentName: params.turnAgent,
+        agentName: params.agentName,
         interrupted: params.turnInterrupted,
         streamFailed: params.streamFailed,
         unanswered: params.unanswered,
         usage: {
-          known: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
-          complete: metrics.usageKnown,
+          known: {
+            inputTokens: params.metrics.inputTokens,
+            outputTokens: params.metrics.outputTokens,
+          },
+          complete: params.metrics.usageKnown,
         },
       })
+    })
+
+    const finalizeTurn = Effect.fn("AgentLoop.finalizeTurn")(function* (
+      params: TurnEnd & { readonly turnAgent: AgentNameType },
+    ) {
+      const receipt = yield* appendTurnReceipt(params)
+      if (Option.isNone(receipt)) return
+      const { durationMs, metrics } = receipt.value
+
+      yield* Effect.logDebug("finalize.turn-after.start")
+      yield* emitTurnAfter({ ...params, durationMs, metrics, agentName: params.turnAgent })
       yield* Effect.logDebug("finalize.turn-after.done")
 
       yield* Effect.logInfo("turn.completed").pipe(
         Effect.annotateLogs({
-          durationMs: Number(turnDurationMs),
+          durationMs,
           interrupted: params.turnInterrupted,
           unanswered: params.unanswered,
         }),
@@ -2412,6 +2373,47 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }),
       })
     })
+
+    /**
+     * Ends a turn that a phase failure stopped, through the same receipt and
+     * hooks as `finalizeTurn`: one `TurnCompleted` with `streamFailed`, after
+     * the `ErrorOccurred` that names the cause, then the `turnAfter` hooks
+     * once. A handler reads it as it reads a broken stream: a goal pauses
+     * rather than stall. The hooks' profile, branch services and agent are
+     * resolved after the receipt is stored, because the failure may have been
+     * one of those reads.
+     */
+    const completeFailedTurn = Effect.fn("AgentLoop.completeFailedTurn")(function* (
+      state: RunningState,
+    ) {
+      const end: TurnEnd = {
+        messageId: state.message.id,
+        startedAtMs: state.startedAtMs,
+        turnInterrupted: false,
+        streamFailed: true,
+        unanswered: false,
+      }
+      const receipt = yield* appendTurnReceipt(end)
+      if (Option.isNone(receipt)) return
+      const context = yield* scope.branchContext
+      const turnProfile = yield* scope.resolveTurnProfile({
+        openedByClient: openedByClient(state.message),
+      })
+      const agentName = yield* sessionAgentName(scope.sessionId)
+      yield* emitTurnAfter({ ...end, ...receipt.value, agentName }).pipe(
+        underTurnProfile(turnProfile),
+        Effect.provideContext(context),
+      )
+    })
+
+    /** Runs a turn's work under its profile. */
+    const underTurnProfile =
+      (turnProfile: AgentLoopTurnProfile) =>
+      <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.provideService(ConfigService, configServiceForRun),
+          runAgentLoopTurnProfile(turnProfile),
+        )
 
     /** The turn context for a running turn: agent, prompt, model, and bindings. */
     const resolveForState = (state: RunningState, turnProfile: AgentLoopTurnProfile) =>
@@ -3012,11 +3014,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         openedByClient: openedByClient(state.message),
       })
 
-      const provideTurnContext = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        effect.pipe(
-          Effect.provideService(ConfigService, configServiceForRun),
-          runAgentLoopTurnProfile(turnProfile),
-        )
+      const provideTurnContext = underTurnProfile(turnProfile)
 
       let preserveReplayBindings = false
       // The session names its agent; each resolved step reports it again.
@@ -3098,5 +3096,5 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
     })
 
-    return { runTurn }
+    return { runTurn, completeFailedTurn }
   })

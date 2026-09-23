@@ -45,7 +45,6 @@ import {
   Message,
   type MessageMetadata,
   messagePartsTextLines,
-  openedByClient,
   type QueuedTurnItem,
   type QueueEntryInfo,
   QueueSnapshot,
@@ -97,8 +96,6 @@ import { causeChainMessage } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
   type AgentLoopTurnProfile,
-  completeFailedTurn,
-  emitFailedTurnAfter,
   interjectionMessageIdForCommand,
   makeAgentLoopTurnExecution,
   makeTurnLedger,
@@ -891,7 +888,7 @@ type AgentLoopWorkerContext<E = never, R = never> = {
     messageId: MessageId,
   ) => Effect.Effect<void>
   readonly publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
-  /** Append the receipt of a turn a phase failure stopped; see `completeFailedTurn`. */
+  /** Append the receipt of a turn a phase failure stopped and run its hooks; never fails. */
   readonly completeFailedTurn: (state: RunningState) => Effect.Effect<void>
   readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
   /** The agent the session runs as; it names the actor of each turn's wide event. */
@@ -998,6 +995,13 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       yield* advanceOrIdle(nextItem)
     })
 
+  /**
+   * Ends a turn a phase failure stopped. The receipt and the `turnAfter`
+   * hooks run outside the interrupt permit, as a normal turn's do inside
+   * `runTurn`: a hook may stop its own branch, and a Cancel that arrives
+   * meanwhile stops this turn, not the next one. Only the hand-over to the
+   * next item takes the permit, as `finishTurnWorker` does.
+   */
   const failTurnWorker = (
     startState: RunningState,
     cause: Cause.Cause<unknown>,
@@ -1006,13 +1010,15 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       yield* scope.recordTurnFailure(cause, startState.message.id)
       yield* publishPhaseFailure(cause)
       yield* scope.completeFailedTurn(startState)
-      // A turn that failed before it settled still holds the in-flight slot,
-      // and `take` hands that slot back first. Clear it, so the failed turn
-      // ends here and the next queued item runs.
-      yield* scope.inbox.settle(startState.message.id)
-      const nextItem = yield* scope.inbox.take
-      yield* scope.turnInterruption.beginTurn
-      yield* advanceOrIdle(nextItem)
+      yield* Effect.gen(function* () {
+        // A turn that failed before it settled still holds the in-flight slot,
+        // and `take` hands that slot back first. Clear it, so the failed turn
+        // ends here and the next queued item runs.
+        yield* scope.inbox.settle(startState.message.id)
+        const nextItem = yield* scope.inbox.take
+        yield* scope.turnInterruption.beginTurn
+        yield* advanceOrIdle(nextItem)
+      }).pipe(scope.interruptSemaphore.withPermits(1))
     })
 
   /** Claims the admission for this worker; false when it was withdrawn before the claim. */
@@ -1049,8 +1055,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
           ),
         ),
         Effect.matchCauseEffect({
-          onFailure: (cause) =>
-            failTurnWorker(startState, cause).pipe(scope.interruptSemaphore.withPermits(1)),
+          onFailure: (cause) => failTurnWorker(startState, cause),
           onSuccess: (outcome) =>
             finishTurnWorker(startState, outcome).pipe(scope.interruptSemaphore.withPermits(1)),
         }),
@@ -1501,7 +1506,7 @@ const makeAgentLoopBehavior = (
         },
       }))
 
-    const { runTurn } = yield* makeAgentLoopTurnExecution({
+    const turnExecution = yield* makeAgentLoopTurnExecution({
       sessionId,
       branchId,
       resolveTurnProfile,
@@ -1509,6 +1514,7 @@ const makeAgentLoopBehavior = (
       turnLedger,
       turnInterruption,
       inbox,
+      branchContext,
     })
 
     const worker = makeAgentLoopWorker({
@@ -1525,28 +1531,7 @@ const makeAgentLoopBehavior = (
       recordTurnFailure,
       publishEvent,
       completeFailedTurn: (state) =>
-        Effect.gen(function* () {
-          const completed = yield* completeFailedTurn({
-            sessionId,
-            branchId,
-            messageId: state.message.id,
-            startedAtMs: state.startedAtMs,
-          })
-          // The receipt this call appended marks the one run of the hooks.
-          if (Option.isNone(completed)) return
-          const metrics = yield* turnLedger.total
-          const context = yield* branchContext
-          const profile = yield* resolveTurnProfile({
-            openedByClient: openedByClient(state.message),
-          })
-          yield* emitFailedTurnAfter({
-            sessionId,
-            branchId,
-            messageId: state.message.id,
-            durationMs: completed.value,
-            metrics,
-          }).pipe(runAgentLoopTurnProfile(profile), Effect.provideContext(context))
-        }).pipe(
+        turnExecution.completeFailedTurn(state).pipe(
           Effect.scoped,
           provideAgentLoopRuntimeContext(runtimeContext),
           Effect.catchCause((cause) =>
@@ -1563,7 +1548,7 @@ const makeAgentLoopBehavior = (
             branchContext.pipe(
               // The turn's profile lease ends with the turn.
               Effect.flatMap((context) =>
-                runTurn(state).pipe(Effect.provideContext(context), Effect.scoped),
+                turnExecution.runTurn(state).pipe(Effect.provideContext(context), Effect.scoped),
               ),
             ),
           () => keepAlive(false),
