@@ -167,30 +167,56 @@ export const renderHeadlessToolCall = (toolCall: HeadlessToolCall): string => {
 // ── headless run loop ───────────────────────────────────────────────────────
 
 /**
- * The turn finished without the model ever answering. Distinct from a
- * connection fault: the run reached the server, spent its continuations and
- * came back empty. Failing here is what gives a scripted caller a non-zero
+ * The turn finished without an answer: the model spent its continuations and
+ * came back empty, or the turn failed before it answered. Distinct from a
+ * connection fault. Failing here is what gives a scripted caller a non-zero
  * exit — a silent exit 0 with no output is indistinguishable from success.
  */
 class HeadlessUnansweredError extends Schema.TaggedError<HeadlessUnansweredError>()(
-  "@gent/tui/HeadlessUnansweredError",
+  "HeadlessUnansweredError",
   { message: Schema.String },
 ) {}
+
+export interface HeadlessOptions {
+  /**
+   * Approve every interaction the turn presents. Off by default: a headless
+   * run has no user, so it declines each ask, as a session with no user does.
+   */
+  readonly approveAll: boolean
+}
+
+/** What the model reads when the run declines its ask. */
+const DECLINE_NOTES =
+  "Declined: this is a headless run and no user is present to answer. Report what you would do; a user can rerun the prompt with --approve-all to approve every ask."
 
 export const runHeadless = (
   client: GentNamespacedClient,
   sessionId: SessionId,
   branchId: BranchId,
   promptText: string,
+  options: HeadlessOptions,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
       const stdio = yield* Stdio.Stdio
       const writeStdout = (text: string) => Stream.make(text).pipe(Stream.run(stdio.stdout()))
       const writeStderr = (text: string) => Stream.make(text).pipe(Stream.run(stdio.stderr()))
-      // Carries whether the turn actually answered, so the race below can fail
-      // the run instead of exiting 0 on an empty transcript.
-      const done = yield* Deferred.make<boolean>()
+      // The replay cursor. A subscription replays the stored events first (a
+      // resumed session's history), then marks the start of the live events.
+      // The run prints and settles on live events only.
+      const synchronized = yield* Deferred.make<number>()
+      // The first runtime state arrived, so a run that starts after it is seen.
+      const runtimeWatched = yield* Deferred.make<void>()
+      const markRuntimeWatched = Deferred.done(runtimeWatched, Exit.void)
+      // Carries whether the turn answered, so the race below can fail the run
+      // instead of exiting 0 on an empty transcript.
+      const done = yield* Deferred.make<boolean, GentConnectionError>()
+      let live = false
+      let failed = false
+      let wroteText = false
+      let ran = false
+      let idleAfterRun = false
+      let checkedIdleFailure = false
       const activeTools = new Map<string, HeadlessToolCall>()
       // Cells whose admitted calls printed their own lines.
       const cellsWithPrintedOperations = new Set<string>()
@@ -204,12 +230,44 @@ export const runHeadless = (
           .join("\n")
         return writeStdout(`${nested}\n`)
       }
+      /**
+       * `TurnCompleted` settles the run. A failed turn phase is the one end
+       * that publishes `ErrorOccurred` and no `TurnCompleted`: the loop goes
+       * idle after it. An error notice (a failed compaction) does not end the
+       * turn, so an error alone settles nothing. After an error and a run that
+       * went idle, the run reads the stored events since its start: the loop
+       * stores a turn's `TurnCompleted` before it goes idle, so a replay
+       * without one is a failed phase.
+       */
+      const settleIfIdleAfterFailure = Effect.gen(function* () {
+        if (!failed || !idleAfterRun || checkedIdleFailure) return
+        checkedIdleFailure = true
+        const cursor = yield* Deferred.await(synchronized)
+        const replay = yield* client.session.events({ sessionId, branchId, after: cursor }).pipe(
+          Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+          Stream.runCollect,
+        )
+        // A stored `TurnCompleted` reaches the live stream, which settles on it.
+        if (replay.some((envelope) => envelope.event._tag === "TurnCompleted")) return
+        yield* Deferred.succeed(done, wroteText)
+      }).pipe(
+        Effect.catchEager((error) =>
+          Deferred.fail(done, new GentConnectionError({ message: String(error) })),
+        ),
+      )
       const streamFiber = yield* client.session.events({ sessionId, branchId }).pipe(
         Stream.tap((envelope) =>
           Effect.gen(function* () {
             const event = envelope.event
+            if (event._tag === "StreamSynchronized") {
+              live = true
+              yield* Deferred.succeed(synchronized, event.lastEventId)
+              return
+            }
+            if (!live) return
             switch (event._tag) {
               case "StreamChunk":
+                if (event.chunk.trim().length > 0) wroteText = true
                 yield* writeStdout(event.chunk)
                 break
               case "ToolCallStarted": {
@@ -267,23 +325,34 @@ export const runHeadless = (
                 yield* writeStdout("\n")
                 break
               case "ErrorOccurred":
+                failed = true
                 yield* writeStderr(`\nError: ${event.error}\n`)
-                yield* Deferred.succeed(done, true)
+                yield* settleIfIdleAfterFailure
                 break
               case "TurnCompleted":
-                yield* Deferred.succeed(done, event.unanswered !== true)
+                // A failed stream ends its turn without `unanswered`; the error
+                // and the empty transcript say it did not answer.
+                yield* Deferred.succeed(done, event.unanswered !== true && (wroteText || !failed))
                 break
-              case "InteractionPresented":
-                yield* writeStdout(`\n[interaction: auto-approving]\n`)
-                yield* client.interaction
-                  .respondInteraction({
-                    requestId: event.requestId,
-                    sessionId,
-                    branchId,
-                    approved: true,
-                  })
-                  .pipe(Effect.catchEager(() => Effect.void))
+              case "InteractionPresented": {
+                const respond = (answer: { readonly approved: boolean; readonly notes?: string }) =>
+                  client.interaction
+                    .respondInteraction({
+                      requestId: event.requestId,
+                      sessionId,
+                      branchId,
+                      ...answer,
+                    })
+                    .pipe(Effect.catchEager(() => Effect.void))
+                if (options.approveAll) {
+                  yield* writeStdout(`\n[interaction: approved by --approve-all]\n`)
+                  yield* respond({ approved: true })
+                  break
+                }
+                yield* writeStdout(`\n[interaction: declined, no user to answer]\n`)
+                yield* respond({ approved: false, notes: DECLINE_NOTES })
                 break
+              }
               case "InteractionResolved":
                 break
             }
@@ -291,6 +360,52 @@ export const runHeadless = (
         ),
         Stream.runDrain,
         Effect.forkScoped,
+      )
+      yield* client.session.watchRuntime({ sessionId, branchId }).pipe(
+        Stream.tap((state) =>
+          Effect.gen(function* () {
+            yield* markRuntimeWatched
+            if (state._tag !== "Idle") {
+              ran = true
+              return
+            }
+            if (!ran) return
+            idleAfterRun = true
+            yield* settleIfIdleAfterFailure
+          }),
+        ),
+        Stream.runDrain,
+        Effect.catchEager((error) =>
+          Deferred.fail(done, new GentConnectionError({ message: String(error) })),
+        ),
+        Effect.ensuring(markRuntimeWatched),
+        Effect.forkScoped,
+      )
+
+      const streamEnded = Fiber.await(streamFiber).pipe(
+        Effect.flatMap((exit) =>
+          Exit.match(exit, {
+            onFailure: (cause) =>
+              Effect.fail(
+                new GentConnectionError({
+                  message: Cause.pretty(cause),
+                }),
+              ),
+            onSuccess: () =>
+              Effect.fail(
+                new GentConnectionError({
+                  message: "headless event stream ended before turn completion",
+                }),
+              ),
+          }),
+        ),
+      )
+
+      // Send after both subscriptions are open, so the turn's first event and
+      // its first runtime move are live, not history.
+      yield* Effect.raceFirst(
+        Effect.all([Deferred.await(synchronized), Deferred.await(runtimeWatched)]),
+        streamEnded,
       )
 
       const sendRequestId = yield* randomId
@@ -313,32 +428,11 @@ export const runHeadless = (
         Effect.withSpan("Headless.sendMessage"),
       )
 
-      const answered = yield* Effect.raceFirst(
-        Deferred.await(done),
-        Fiber.await(streamFiber).pipe(
-          Effect.flatMap((exit) =>
-            Exit.match(exit, {
-              onFailure: (cause) =>
-                Effect.fail(
-                  new GentConnectionError({
-                    message: Cause.pretty(cause),
-                  }),
-                ),
-              onSuccess: () =>
-                Effect.fail(
-                  new GentConnectionError({
-                    message: "headless event stream ended before turn completion",
-                  }),
-                ),
-            }),
-          ),
-        ),
-      )
+      const answered = yield* Effect.raceFirst(Deferred.await(done), streamEnded)
       yield* Fiber.interrupt(streamFiber).pipe(Effect.asVoid)
       if (!answered) {
-        yield* writeStderr("\nError: the turn ended without an answer.\n")
         return yield* new HeadlessUnansweredError({
-          message: "turn completed without producing an answer",
+          message: "the turn ended without an answer",
         })
       }
     }),

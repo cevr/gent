@@ -120,11 +120,21 @@ Components derive state from providers, not props. Add/remove rows per view.
 | `-s, --session`  | Resume specific session ID                      |
 | `-H, --headless` | Headless mode + prompt arg                      |
 | `-a, --agent`    | Agent override for headless mode                |
+| `--approve-all`  | Headless: approve every ask (default: decline)  |
 
 `gent resume [session-id]` opens a stored session; with no id it opens the last
 session in this directory.
 
 Priority: headless → session → continue → prompt → home
+
+A headless run has no user, so it declines every interaction its turn presents,
+with notes that name `--approve-all`. `--approve-all` approves them all, the
+destructive-command guard's asks included. The run prints only live events (it
+skips a resumed session's history) and settles on `TurnCompleted`; an
+`ErrorOccurred` notice alone does not end it. It exits 1 when the turn ended
+unanswered, or with an error and no answer text. A failed turn phase publishes
+no `TurnCompleted`: the run detects it when the loop goes idle after an error
+and the stored events since the run began hold no `TurnCompleted`.
 
 ## Input Prefixes
 

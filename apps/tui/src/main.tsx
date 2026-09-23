@@ -41,7 +41,7 @@ import { ComposerDraftsProvider, SessionShellProvider } from "./session"
 import { detectColorScheme } from "./theme"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
 import { ExtensionUIProvider } from "./extensions/host"
-import { runHeadless } from "./headless"
+import { type HeadlessOptions, runHeadless } from "./headless"
 import { GentConnectionError, type GentClientBundle } from "@gent/sdk"
 import {
   CliStartupError,
@@ -96,6 +96,7 @@ const makeUiLayer = () => Layer.provideMerge(LinkLayer, PlatformLayer)
 const runHeadlessTurn = (
   bundle: GentClientBundle,
   state: Extract<InitialState, { readonly _tag: "headless" }>,
+  options: HeadlessOptions,
 ) => {
   const branchId = Option.fromNullishOr(state.session.activeBranchId)
   if (Option.isNone(branchId)) {
@@ -122,9 +123,13 @@ const runHeadlessTurn = (
       ),
     )
 
-    yield* runHeadless(bundle.client, state.session.id, resolvedBranchId, state.prompt).pipe(
-      Effect.withSpan("Headless.run"),
-    )
+    yield* runHeadless(
+      bundle.client,
+      state.session.id,
+      resolvedBranchId,
+      state.prompt,
+      options,
+    ).pipe(Effect.withSpan("Headless.run"))
   })
 }
 
@@ -172,6 +177,12 @@ const gentFlags = {
     Flag.withDescription("Agent for the new headless session (-H only; default: main)"),
     Flag.optional,
   ),
+  approveAll: Flag.boolean("approve-all").pipe(
+    Flag.withDescription(
+      "Approve every ask of the headless turn, destructive commands included (-H only; default: decline, as no user is present)",
+    ),
+    Flag.withDefault(false),
+  ),
 }
 
 /**
@@ -192,6 +203,7 @@ const runGent = ({
   prompt,
   promptArg,
   agent,
+  approveAll,
 }: {
   readonly connect: Option.Option<string>
   readonly session: Option.Option<string>
@@ -203,6 +215,7 @@ const runGent = ({
   readonly prompt: Option.Option<string>
   readonly promptArg: Option.Option<string>
   readonly agent: Option.Option<string>
+  readonly approveAll: boolean
 }) =>
   Effect.gen(function* () {
     // The server checks the name against its roster when the session starts.
@@ -212,6 +225,11 @@ const runGent = ({
     if (Option.isSome(requestedAgent) && !headless) {
       return yield* new CliStartupError({
         message: "--agent applies to headless mode; add -H with a prompt",
+      })
+    }
+    if (approveAll && !headless) {
+      return yield* new CliStartupError({
+        message: "--approve-all applies to headless mode; add -H with a prompt",
       })
     }
 
@@ -298,7 +316,7 @@ const runGent = ({
         })
       }
 
-      yield* runHeadlessTurn(bundle, state)
+      yield* runHeadlessTurn(bundle, state, { approveAll })
       return
     }
 
@@ -426,6 +444,7 @@ const resume = Command.make(
       prompt,
       promptArg: Option.none(),
       agent: Option.none(),
+      approveAll: false,
     }),
 )
 
