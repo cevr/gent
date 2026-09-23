@@ -24,6 +24,7 @@ import {
   transitionComposerInteraction,
   transitionSessionUi,
   writeEntries,
+  mergeRefused,
 } from "../src/session"
 import type { AutocompleteContribution } from "../src/extensions/client-facets"
 import {
@@ -44,6 +45,40 @@ const testContributions: AutocompleteContribution[] = [
   { prefix: "@", title: "Files", items: () => [] },
   { prefix: "/", title: "Commands", items: () => [] },
 ]
+
+describe("refused submissions", () => {
+  const empty = { entries: [], shown: "" }
+  const editing = (draft: string) =>
+    ({ draft, mode: "editing" }) satisfies Parameters<typeof mergeRefused>[0]
+
+  test("a refusal that lands after an earlier one's text was edited goes ahead of the whole draft", () => {
+    const first = mergeRefused(editing(""), empty, { order: 0, text: "one", shell: false })
+    const edited = mergeRefused(editing("one, edited"), first.block, {
+      order: 1,
+      text: "two",
+      shell: false,
+    })
+    expect(edited.draft).toEqual(editing("two\n\none, edited"))
+  })
+
+  test("refusals keep send order ahead of what the reader typed since", () => {
+    const second = mergeRefused(editing(""), empty, { order: 1, text: "two", shell: false })
+    const typed = `${second.draft.draft}\n\ntyped`
+    const first = mergeRefused(editing(typed), second.block, {
+      order: 0,
+      text: "one",
+      shell: false,
+    })
+    expect(first.draft).toEqual(editing("one\n\ntwo\n\ntyped"))
+  })
+
+  test("a refused command alone stays a command; beside a message it keeps its bang", () => {
+    const alone = mergeRefused(editing(""), empty, { order: 0, text: "ls", shell: true })
+    expect(alone.draft).toEqual({ draft: "ls", mode: "shell" })
+    const mixed = mergeRefused(editing("hello"), empty, { order: 1, text: "ls", shell: true })
+    expect(mixed.draft).toEqual(editing("!ls\n\nhello"))
+  })
+})
 
 describe("transitionComposerInteraction", () => {
   test("derives mention autocomplete from draft changes", () => {

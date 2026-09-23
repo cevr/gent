@@ -530,9 +530,89 @@ interface ComposerDrafts {
   readonly set: (branchId: BranchId, draft: ComposerDraft) => void
 }
 
+/** A submission its session refused. `order` is its place among the branch's sends. */
+interface RefusedSubmission {
+  readonly order: number
+  readonly text: string
+  readonly shell: boolean
+}
+
+/** The composer on screen for a branch: what it holds, and how to replace it. */
+interface ComposerLink {
+  readonly current: () => ComposerDraft
+  readonly apply: (draft: ComposerDraft) => void
+}
+
+/**
+ * Refused submissions go back to the draft of the branch they were sent from:
+ * into its composer when one is on screen, into its kept draft when not. None
+ * is lost, and several come back in the order they were sent, ahead of what
+ * the reader has typed since.
+ */
+interface ComposerRefusals {
+  /** The next submission's place in send order. */
+  readonly nextOrder: () => number
+  readonly link: (branchId: BranchId, link: ComposerLink) => () => void
+  readonly refuse: (branchId: BranchId, refused: RefusedSubmission) => void
+  /** A submit took the whole draft, refused texts included. */
+  readonly submitted: (branchId: BranchId) => void
+}
+
 interface ComposerMemory {
   readonly drafts: ComposerDrafts
+  readonly refusals: ComposerRefusals
   readonly history: PromptHistoryStore
+}
+
+/** The refused texts the draft starts with, as last written there. */
+interface RefusedBlock {
+  readonly entries: ReadonlyArray<RefusedSubmission>
+  readonly shown: string
+}
+
+const EMPTY_REFUSED_BLOCK: RefusedBlock = { entries: [], shown: "" }
+const REFUSED_SEPARATOR = "\n\n"
+
+/**
+ * Put a refused submission into a draft. While the draft still starts with
+ * the refused texts written there before, the new one joins them in send
+ * order; once the reader has edited them, it goes ahead of the whole draft.
+ * A draft of shell commands only stays in shell mode; a mixed one is a
+ * message, each command written with its `!`.
+ */
+interface RefusedMerge {
+  readonly draft: ComposerDraft
+  readonly block: RefusedBlock
+}
+
+export const mergeRefused = (
+  current: ComposerDraft,
+  block: RefusedBlock,
+  refused: RefusedSubmission,
+): RefusedMerge => {
+  // The block stands whole: the draft is it, or it and then a separator.
+  const kept =
+    block.shown.length > 0 &&
+    (current.draft === block.shown ||
+      current.draft.startsWith(`${block.shown}${REFUSED_SEPARATOR}`))
+  let entries: ReadonlyArray<RefusedSubmission> = [refused]
+  let typed = current.draft
+  if (kept) {
+    entries = [...block.entries, refused].toSorted((a, b) => a.order - b.order)
+    typed = current.draft.slice(block.shown.length + REFUSED_SEPARATOR.length)
+  }
+  const hasTyped = typed.trim().length > 0
+  const allShell = entries.every((entry) => entry.shell) && (!hasTyped || current.mode === "shell")
+  const render = (text: string, shell: boolean) => {
+    if (shell && !allShell) return `!${text}`
+    return text
+  }
+  const shown = entries.map((entry) => render(entry.text, entry.shell)).join(REFUSED_SEPARATOR)
+  let draft = shown
+  if (hasTyped) draft = `${shown}${REFUSED_SEPARATOR}${render(typed, current.mode === "shell")}`
+  let mode: ComposerDraft["mode"] = "editing"
+  if (allShell) mode = "shell"
+  return { draft: { draft, mode }, block: { entries, shown } }
 }
 
 const ComposerMemoryContext = createContext<ComposerMemory>()
@@ -549,7 +629,43 @@ export function ComposerMemoryProvider(props: ParentProps) {
       byBranch.set(branchId, draft)
     },
   }
-  const value: ComposerMemory = { drafts, history: makePromptHistoryStore() }
+  const links = new Map<BranchId, ComposerLink>()
+  const blocks = new Map<BranchId, RefusedBlock>()
+  let sent = 0
+  const refusals: ComposerRefusals = {
+    nextOrder: () => sent++,
+    link: (branchId, link) => {
+      links.set(branchId, link)
+      return () => {
+        if (links.get(branchId) === link) links.delete(branchId)
+      }
+    },
+    refuse: (branchId, refused) => {
+      const live = Option.fromUndefinedOr(links.get(branchId))
+      const current = Option.match(live, {
+        onSome: (link) => link.current(),
+        onNone: () =>
+          Option.getOrElse(drafts.get(branchId), (): ComposerDraft => ({
+            draft: "",
+            mode: "editing",
+          })),
+      })
+      const merged = mergeRefused(
+        current,
+        Option.getOrElse(Option.fromUndefinedOr(blocks.get(branchId)), () => EMPTY_REFUSED_BLOCK),
+        refused,
+      )
+      blocks.set(branchId, merged.block)
+      Option.match(live, {
+        onSome: (link) => link.apply(merged.draft),
+        onNone: () => drafts.set(branchId, merged.draft),
+      })
+    },
+    submitted: (branchId) => {
+      blocks.delete(branchId)
+    },
+  }
+  const value: ComposerMemory = { drafts, refusals, history: makePromptHistoryStore() }
   return (
     <ComposerMemoryContext.Provider value={value}>{props.children}</ComposerMemoryContext.Provider>
   )
@@ -557,6 +673,8 @@ export function ComposerMemoryProvider(props: ParentProps) {
 
 const useComposerMemory = () =>
   useRequiredContext(ComposerMemoryContext, "The composer requires ComposerMemoryProvider")
+
+export const useComposerRefusals = () => useComposerMemory().refusals
 
 const useComposerDrafts = () => useComposerMemory().drafts
 

@@ -578,6 +578,12 @@ interface ClientAgentValue {
   // eslint-disable-next-line effect/noNullish -- UI callers pass null to clear a local error.
   setError: (error: string | null) => void
   /**
+   * An error that belongs to one session, such as a send it refused. The
+   * session in view shows it now; another session keeps it until the reader
+   * returns there, and the session in view shows nothing of it.
+   */
+  setErrorIn: (target: SessionIdentity, error: string) => void
+  /**
    * The last extension notice (`ClientContext.shell.notify`). It sits beside the
    * turn status, not in it: a notice leaves a running turn running and a
    * standing error standing. The next notice replaces it; a new turn or a
@@ -947,6 +953,12 @@ export function ClientProvider(props: ClientProviderProps) {
     }
   }
 
+  // Errors a session earned while another was in view, shown when its
+  // snapshot lands on return: the snapshot would otherwise overwrite them.
+  const heldErrors = new Map<string, string>()
+  const identityKey = (identity: SessionIdentity) =>
+    `${identity.sessionId}\u0000${identity.branchId}`
+
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
     const currentSession = sessionOption()
     if (Option.isSome(currentSession)) {
@@ -995,6 +1007,12 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
     })
     setSessionMetrics(metricsOf(snapshot))
+    const key = identityKey(snapshot)
+    const held = Option.fromUndefinedOr(heldErrors.get(key))
+    if (Option.isSome(held)) {
+      heldErrors.delete(key)
+      setAgentStore({ status: AgentStatus.cases.Error.make({ error: held.value }) })
+    }
   }
 
   const refreshSessionMetrics = (): void => {
@@ -1383,6 +1401,14 @@ export function ClientProvider(props: ClientProviderProps) {
       Object.values(modelStore.modelsById).filter((model) =>
         modelStore.driverIds.includes(model.provider),
       ),
+    setErrorIn: (target, error) => {
+      const inView = Option.exists(sessionOption(), (current) => sameIdentity(current, target))
+      if (inView) {
+        agentValue.setError(error)
+        return
+      }
+      heldErrors.set(identityKey(target), error)
+    },
     setError: (error) => {
       const nextError = Option.fromNullishOr(error)
       if (Option.isSome(nextError)) {

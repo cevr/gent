@@ -672,6 +672,11 @@ describe("Composer renderer", () => {
 
 const submitTest = it.scopedLive.layer(testLayer)
 
+const refusedSend = Schema.decodeSync(GentRpcError)({
+  _tag: "InvalidStateError",
+  message: "send refused",
+})
+
 /** A session rooted in `cwd`, as `session.get` returns it. */
 const storedSessionIn = (cwd: string) => ({
   id: SessionId.make("session-elsewhere"),
@@ -920,6 +925,43 @@ describe("Composer submit", () => {
         "error shown",
       )
       yield* waitForFrame(setup, (frame) => frame.includes("keep me"), "draft restored")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // Two sends in flight, both refused, the later one first: neither text is
+  // lost, and the composer holds them in the order they were sent.
+  submitTest("two refused sends both come back, in the order they were sent", () =>
+    Effect.gen(function* () {
+      const firstReply = yield* Deferred.make<void>()
+      const secondReply = yield* Deferred.make<void>()
+      const replies = [firstReply, secondReply]
+      let calls = 0
+      const refused = refusedSend
+      const sendResult = Effect.suspend(() => {
+        const reply = Option.fromUndefinedOr(replies[calls++])
+        if (Option.isNone(reply)) return Effect.fail(refused)
+        return Deferred.await(reply.value).pipe(Effect.andThen(Effect.fail(refused)))
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <TestComposer onSubmit={() => {}} sendResult={sendResult} />),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("first send"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => calls === 1, "first send out")
+      yield* Effect.promise(() => setup.mockInput.typeText("second send"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => calls === 2, "second send out")
+      yield* Deferred.complete(secondReply, Effect.void)
+      yield* waitForFrame(setup, (frame) => frame.includes("second send"), "second back")
+      yield* Deferred.complete(firstReply, Effect.void)
+      const frame = yield* waitForFrame(
+        setup,
+        (text) => text.includes("first send") && text.includes("second send"),
+        "both back",
+      )
+      expect(frame.indexOf("first send")).toBeLessThan(frame.indexOf("second send"))
     }).pipe(Effect.timeout("10 seconds")),
   )
 

@@ -22,6 +22,7 @@ import {
   ComposerEvent,
   ComposerInteractionEvent,
   overlayHoldsComposer,
+  useComposerRefusals,
   usePromptHistory,
   useSessionController,
 } from "./session"
@@ -45,7 +46,7 @@ import {
   type SelectListRow,
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
-import { sameIdentity, type SessionIdentity, useClient, useRuntime } from "./client"
+import { type SessionIdentity, useClient, useRuntime } from "./client"
 import type {
   AutocompleteContribution,
   AutocompleteItem,
@@ -65,7 +66,12 @@ import { useRenderer } from "@opentui/solid"
 import { isSlashCommandName, parseSlashCommand, useCommand } from "./commands"
 import { useEnv } from "./workspace"
 import { openExternalEditor, resolveEditor } from "./os"
-import { type ActiveInteraction, type ApprovalResult, lineCount } from "@gent/core/protocol"
+import {
+  type ActiveInteraction,
+  type ApprovalResult,
+  type GentClientRpcError,
+  lineCount,
+} from "@gent/core/protocol"
 
 // ── shell execution ─────────────────────────────────────────────────────────
 
@@ -738,14 +744,53 @@ function useComposerController(): ComposerController {
   }
 
   /**
-   * Put a submit that failed back in the composer, unless the reader has
-   * started a new draft since. The submit took the draft when it began.
+   * A refused submission goes back to the draft of the branch it was sent
+   * from, with its reason. The composer on screen for that branch takes both
+   * now; a branch the reader has left keeps them for the return.
    */
-  const restoreDraft = (text: string) => {
-    if (Option.isNone(inputRef) || inputRef.value.plainText.length > 0) return
-    inputRef.value.replaceText(text)
-    inputRef.value.cursorOffset = text.length
-    sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text }))
+  const refusals = useComposerRefusals()
+  const writeDraft = (next: { readonly draft: string; readonly mode: "editing" | "shell" }) => {
+    if (next.mode !== sc.interactionState().mode) {
+      if (next.mode === "shell") {
+        sc.onComposerInteraction(ComposerInteractionEvent.cases.EnterShell.make({}))
+      } else sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
+    }
+    if (Option.isSome(inputRef)) {
+      inputRef.value.replaceText(next.draft)
+      inputRef.value.cursorOffset = next.draft.length
+    }
+    sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text: next.draft }))
+  }
+  // The composer on screen takes refusals for the branch in view.
+  createEffect(() => {
+    const identity = client.sessionIdentity()
+    if (Option.isNone(identity)) return
+    onCleanup(
+      refusals.link(identity.value.branchId, {
+        current: () => ({
+          draft: paste.expandPlaceholders(
+            Option.getOrElse(
+              Option.map(inputRef, (renderable) => renderable.plainText),
+              () => "",
+            ),
+          ),
+          mode: sc.interactionState().mode,
+        }),
+        apply: writeDraft,
+      }),
+    )
+  })
+  const shellRefusal = (error: ProcessError | GentClientRpcError): string => {
+    if (error._tag === "ProcessError") return `Shell: ${error.message}`
+    return formatError(error)
+  }
+  const refuse = (
+    target: SessionIdentity,
+    refused: { readonly order: number; readonly text: string; readonly shell: boolean },
+    reason: string,
+  ) => {
+    client.setErrorIn(target, reason)
+    refusals.refuse(target.branchId, refused)
   }
 
   /**
@@ -753,13 +798,13 @@ function useComposerController(): ComposerController {
    * a switch while `@file` expands or `!cmd` runs does not move the message.
    */
   const draftedIn = (): Option.Option<SessionIdentity> => client.sessionIdentity()
-  const stillIn = (target: SessionIdentity) =>
-    Option.exists(client.sessionIdentity(), (current) => sameIdentity(current, target))
 
   const submitShellCommand = (text: string) => {
     const drafted = draftedIn()
     if (Option.isNone(drafted)) return
     const target = drafted.value
+    const order = refusals.nextOrder()
+    refusals.submitted(target.branchId)
     // The command leaves the composer before it runs, so a second Enter
     // finds an empty draft instead of running it again.
     sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
@@ -780,13 +825,7 @@ function useComposerController(): ComposerController {
         Effect.flatMap((userMessage) => sc.onSubmit(userMessage, "queue", target)),
         Effect.catchEager((error) =>
           Effect.sync(() => {
-            if (error._tag === "ProcessError") client.setError(`Shell: ${error.message}`)
-            else client.setError(formatError(error))
-            if (!stillIn(target)) return
-            if (Option.isSome(inputRef) && inputRef.value.plainText.length === 0) {
-              sc.onComposerInteraction(ComposerInteractionEvent.cases.EnterShell.make({}))
-              restoreDraft(text)
-            }
+            refuse(target, { order, text, shell: true }, shellRefusal(error))
           }),
         ),
       ),
@@ -811,6 +850,8 @@ function useComposerController(): ComposerController {
     const target = drafted.value
     client.log.info("composer.submit.requested", { contentLength: text.length, mode })
     history.add(text)
+    const order = refusals.nextOrder()
+    refusals.submitted(target.branchId)
     // The message leaves the composer before its `@file` refs expand, so a
     // second Enter finds an empty draft instead of sending it again.
     clearInput()
@@ -820,10 +861,7 @@ function useComposerController(): ComposerController {
         // A send the server rejects comes back to the composer with the reason.
         Effect.flatMap((expanded) => sc.onSubmit(expanded, mode, target)),
         Effect.catchEager((error) =>
-          Effect.sync(() => {
-            client.setError(formatError(error))
-            if (stillIn(target)) restoreDraft(text)
-          }),
+          Effect.sync(() => refuse(target, { order, text, shell: false }, formatError(error))),
         ),
       ),
     )
