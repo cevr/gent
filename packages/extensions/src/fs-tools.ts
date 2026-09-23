@@ -1134,9 +1134,9 @@ const lineEndingAt = (content: string, index: number): string => {
 }
 
 /**
- * Where a search matched, and whether it matched only once unescaped: a model
- * that sent `oldString` escaped (`\\n` for a line break) sent `newString`
- * the same way, so the replacement is unescaped too.
+ * Where a search matched, and whether it matched only once unescaped (`\\n`
+ * read as a line break). Such a match says nothing about how `newString` was
+ * written, so the edit refuses it instead of guessing.
  */
 interface EditMatch {
   readonly ranges: MatchRanges
@@ -1171,16 +1171,17 @@ function findMatch(content: string, oldString: string): EditMatch {
   const exact = literalRanges(content, oldString)
   if (exact.length > 0) return { ranges: exact, unescaped: false }
 
-  // Tier 2: unescape literal \n, \t, \\ in oldString
-  const unescaped = unescapeStr(oldString)
-  const escaped = unescaped !== oldString
-  if (escaped) {
-    const unescapedMatch = literalRanges(content, unescaped)
-    if (unescapedMatch.length > 0) return { ranges: unescapedMatch, unescaped: true }
-  }
+  // Tier 2: normalize whitespace + unicode in both
+  const normalized = findNormalizedMatch(content, oldString)
+  if (normalized.length > 0) return { ranges: normalized, unescaped: false }
 
-  // Tier 3: normalize whitespace + unicode in both
-  return { ranges: findNormalizedMatch(content, unescaped), unescaped: escaped }
+  // Tier 3: the search read with \n, \t, \r, \\ unescaped. It never edits: a
+  // match here only tells the edit to refuse with a reason clearer than "not found".
+  const unescaped = unescapeStr(oldString)
+  if (unescaped === oldString) return { ranges: [], unescaped: false }
+  const unescapedExact = literalRanges(content, unescaped)
+  if (unescapedExact.length > 0) return { ranges: unescapedExact, unescaped: true }
+  return { ranges: findNormalizedMatch(content, unescaped), unescaped: true }
 }
 
 /**
@@ -1265,6 +1266,14 @@ export const EditTool = tool({
           })
         }
 
+        if (unescaped) {
+          return yield* new EditError({
+            message:
+              "oldString matched only after unescaping (\\n, \\t, \\r, \\\\). Resend oldString and newString as the literal file text, without escapes.",
+            path: filePath,
+          })
+        }
+
         const occurrences = ranges.length
 
         if (occurrences > 1 && !replaceAll) {
@@ -1276,9 +1285,7 @@ export const EditTool = tool({
 
         let replaced: ReadonlyArray<MatchRange> = ranges.slice(0, 1)
         if (replaceAll) replaced = ranges
-        let replacement = params.newString
-        if (unescaped) replacement = unescapeStr(replacement)
-        const newContent = spliceRanges(content, replaced, replacement)
+        const newContent = spliceRanges(content, replaced, params.newString)
         if (!newContent.isWellFormed()) {
           return yield* new EditError({ message: loneSurrogateMessage("edit"), path: filePath })
         }

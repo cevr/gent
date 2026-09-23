@@ -377,10 +377,6 @@ describe("EditTool matching", () => {
       oldString: "world foo",
       after: "hello X bar",
     },
-    { name: "a literal \\n", file: "line1\nline2", oldString: "line1\\nline2", after: "X" },
-    { name: "a literal \\t", file: "col1\tcol2", oldString: "col1\\tcol2", after: "X" },
-    { name: "a literal \\r", file: "before\rafter", oldString: "before\\rafter", after: "X" },
-    { name: "an escaped backslash", file: "a\\b", oldString: "a\\\\b", after: "X" },
     {
       name: "a trailing whitespace diff",
       file: "hello\nworld",
@@ -413,6 +409,12 @@ describe("EditTool matching", () => {
     },
     { name: "searched spaces at a line end", file: "“hi”\nx", oldString: '"hi"  ', after: "X\nx" },
     { name: "a whitespace run the file holds", file: "a\tb", oldString: "\t", after: "aXb" },
+    {
+      name: "curly quotes around a code escape the file holds",
+      file: "s = “a\\nb”",
+      oldString: '"a\\nb"',
+      after: "s = X",
+    },
   ]
   for (const { name, file, oldString, after } of cases) {
     editTest(`${name} is replaced`, () =>
@@ -423,36 +425,31 @@ describe("EditTool matching", () => {
       }),
     )
   }
-  // A search that matched only once unescaped was sent escaped, and so was its
-  // replacement: the replacement is unescaped the same way.
-  for (const { name, file, oldString, newString, after } of [
+  // A search that matches only once unescaped says nothing about how its
+  // replacement was written, so the edit is refused rather than guessed.
+  for (const { name, file, oldString, newString } of [
     {
-      name: "an escaped search on an LF file",
+      name: "an escaped search whose replacement holds a code escape",
       file: "a\nb\n",
       oldString: "a\\nb",
-      newString: "x\\ny",
-      after: "x\ny\n",
+      newString: 'const s = "\\n";',
     },
     {
       name: "an escaped search on a CRLF file",
       file: "a\r\nb\r\n",
       oldString: "a\\nb",
-      newString: "x\\ny",
-      after: "x\r\ny\r\n",
+      newString: "x",
     },
-    {
-      name: "an escaped search with an escaped tab and backslash",
-      file: "a\tb\n",
-      oldString: "a\\tb",
-      newString: "c\\t\\\\d",
-      after: "c\t\\d\n",
-    },
+    { name: "a literal \\t", file: "col1\tcol2", oldString: "col1\\tcol2", newString: "X" },
+    { name: "a literal \\r", file: "before\rafter", oldString: "before\\rafter", newString: "X" },
+    { name: "an escaped backslash", file: "a\\b", oldString: "a\\\\b", newString: "X" },
   ]) {
-    editTest(`${name} writes its replacement unescaped`, () =>
+    editTest(`${name} is refused and the file stays`, () =>
       Effect.gen(function* () {
         const edited = yield* editFile(file, { oldString, newString })
-        expect(edited.exit._tag).toBe("Success")
-        expect(edited.after).toBe(after)
+        expect(edited.exit._tag).toBe("Failure")
+        expect(edited.failure).toContain("matched only after unescaping")
+        expect(edited.after).toBe(file)
       }),
     )
   }
@@ -648,23 +645,6 @@ describe("EditTool execution", () => {
       ).pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(2)
       expect(yield* fs.readFileString(filePath)).toBe("x\nmid\nx\n")
-    }),
-  )
-  editTest("fuzzy match handles literal backslash-n in oldString", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = yield* fs.makeTempDirectoryScoped()
-      const filePath = path.join(dir, "test.txt")
-      yield* fs.writeFileString(filePath, "line1\nline2\n")
-      const result = yield* runToolWithCtx(
-        EditTool,
-        { path: filePath, oldString: "line1\\nline2", newString: "merged" },
-        stubCtx,
-      ).pipe(Effect.provide(editLayer))
-      expect(result.replacements).toBe(1)
-      const content = yield* fs.readFileString(filePath)
-      expect(content).toBe("merged\n")
     }),
   )
 })
