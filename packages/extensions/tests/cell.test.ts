@@ -2257,9 +2257,9 @@ it.scopedLive(
         const pending = yield* askThenLoseWorker(host, requestToolHost("2", "approve"))
         expect(yield* (yield* InteractionStorage).listOpen(cellToolHost)).toHaveLength(1)
         const undecided = yield* recoverCellExecution(hostParams).pipe(Effect.flip)
-        expect(undecided._tag).toBe("CellToolCallSuspended")
-        if (undecided._tag === "CellToolCallSuspended")
-          expect(undecided.pending.requestId).toBe(pending.requestId)
+        expect(undecided._tag).toBe("InteractionPendingError")
+        if (undecided._tag === "InteractionPendingError")
+          expect(undecided.requestId).toBe(pending.requestId)
         expect(yield* Ref.get(approvalCalls)).toBe(1)
         const resumeParams = {
           ...hostParams,

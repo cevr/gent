@@ -1056,20 +1056,6 @@ export class CellOperationHost extends Context.Service<
   }
 >()("@gent/extensions/src/cell/CellOperationHost") {}
 
-/**
- * Recovery's signal: an operation a lost worker left waiting has no answer
- * yet, so the turn parks on its request. A live inner call never suspends; it
- * waits for its answer in place.
- */
-class CellToolCallSuspended extends Schema.TaggedError<CellToolCallSuspended>()(
-  "CellToolCallSuspended",
-  {
-    operationId: Schema.NonEmptyString,
-    toolCallId: ToolCallId,
-    pending: InteractionPendingError,
-  },
-) {}
-
 export class CellKernelError extends Schema.TaggedError<CellKernelError>()("CellKernelError", {
   reason: Schema.Literals([
     "timeout",
@@ -2464,15 +2450,13 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
       return yield* new StorageError({
         message: "Cell approval request is missing during recovery",
       })
+    // An operation a lost worker left waiting has no answer yet, so the turn
+    // parks on its request. A live inner call never parks; it waits in place.
     if (Option.isNone(Option.fromUndefinedOr(request.value.decisionJson)))
-      return yield* new CellToolCallSuspended({
-        operationId: key.operationId,
-        toolCallId: operation.toolCallId,
-        pending: new InteractionPendingError({
-          requestId,
-          sessionId: params.cell.sessionId,
-          branchId: params.cell.branchId,
-        }),
+      return yield* new InteractionPendingError({
+        requestId,
+        sessionId: params.cell.sessionId,
+        branchId: params.cell.branchId,
       })
     yield* resumeCellToolOperation({ ...params, operationId: key.operationId, requestId })
   }
@@ -2540,11 +2524,9 @@ const cellToolCallRecovery = Layer.effect(
         const profile = yield* CurrentAgentLoopTurnProfile
         return yield* recover({ cell, profile }).pipe(
           Effect.map((result) => ToolCallRecoveryOutcome.cases.Settled.make({ result })),
-          Effect.catchTag("CellToolCallSuspended", (suspended) =>
+          Effect.catchTag("InteractionPendingError", (pending) =>
             Effect.succeed(
-              ToolCallRecoveryOutcome.cases.Suspended.make({
-                requestId: suspended.pending.requestId,
-              }),
+              ToolCallRecoveryOutcome.cases.Suspended.make({ requestId: pending.requestId }),
             ),
           ),
           Effect.mapError(
