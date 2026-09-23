@@ -10,6 +10,7 @@ import {
   Option,
   Predicate,
   Schema,
+  type Scope,
   Stream,
   SynchronizedRef,
 } from "effect"
@@ -37,7 +38,6 @@ import {
   HttpClientResponse,
 } from "effect/unstable/http"
 import { EncodeError, HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { runEffectBoundary } from "./run-effect-boundary.js"
 import { AiError, LanguageModel } from "effect/unstable/ai"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
@@ -1081,7 +1081,7 @@ describe("OpenAI device-code login", () => {
 // ── openai/openai-codex-transform.test ──────────────────────────────────────
 
 /**
- * codexTransformClient — auth-headers middleware (O2).
+ * codexTransformClient — auth-headers middleware.
  *
  * Builds a fake `HttpClient` (via `HttpClient.make`) that captures
  * incoming requests and returns canned responses. The transform under
@@ -1160,14 +1160,9 @@ const decodeJsonRecord = (raw: string): Effect.Effect<JsonRecord> =>
 const buildCreds = (
   io: OpenAICredentialIO,
   authInfo: ProviderAuthInfo,
-): Promise<CredentialCache<OpenAICredentials>> => {
+): Effect.Effect<CredentialCache<OpenAICredentials>, never, Scope.Scope> => {
   const layer = OpenAICredentialService.layerFromIO(io, authInfo)
-  return runEffectBoundary(
-    Layer.build(layer).pipe(
-      Effect.scoped,
-      Effect.map((ctx) => Context.get(ctx, OpenAICredentialService)),
-    ),
-  )
+  return Layer.build(layer).pipe(Effect.map((ctx) => Context.get(ctx, OpenAICredentialService)))
 }
 // Real Clock here (no TestClock) — `expires` must be a real future
 // Unix-millis timestamp comfortably outside the 60s freshness margin.
@@ -1200,60 +1195,52 @@ const noopRefreshIO = (): OpenAICredentialIO => ({
 // `HttpBody.jsonUnsafe` mirrors how the OpenAI-compat SDK serializes
 // outgoing JSON bodies (via `bodyJsonUnsafe`/`bodyText` → Uint8Array).
 const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
-const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
-  runEffectBoundary(Effect.scoped(eff.pipe(Effect.orDie)))
+const runOk = <A, E, R>(eff: Effect.Effect<A, E, R>) => Effect.scoped(eff.pipe(Effect.orDie))
 // ── Tests ──
-describe("codexTransformClient — auth headers (O2)", () => {
-  it.live("injects Authorization Bearer from credential service", () =>
+describe("codexTransformClient — auth headers", () => {
+  it.scopedLive("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() =>
-        buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" })),
-      )
+      const creds = yield* buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
       const wrapped = transform(makeFakeClient(fakeState))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(fakeState.captured).toHaveLength(1)
       expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
     }),
   )
-  it.live("overrides any pre-existing Authorization header", () =>
+  it.scopedLive("overrides any pre-existing Authorization header", () =>
     Effect.gen(function* () {
       // Defensive: if anything upstream injected a placeholder Bearer,
       // the transform must replace it with the OAuth value.
-      const creds = yield* Effect.promise(() =>
-        buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" })),
-      )
+      const creds = yield* buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
       const wrapped = transform(makeFakeClient(fakeState))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            headers: { authorization: "Bearer placeholder" },
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          headers: { authorization: "Bearer placeholder" },
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
     }),
   )
-  it.live("sets ChatGPT-Account-Id when present in credentials", () =>
+  it.scopedLive("sets ChatGPT-Account-Id when present in credentials", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() =>
-        buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access", accountId: "acct-123" })),
+      const creds = yield* buildCreds(
+        noopRefreshIO(),
+        validAuthInfo({ access: "k1-access", accountId: "acct-123" }),
       )
       const fakeState: FakeClientState = {
         captured: [],
@@ -1261,103 +1248,85 @@ describe("codexTransformClient — auth headers (O2)", () => {
       }
       const transform = buildCodexTransformClient(creds)
       const wrapped = transform(makeFakeClient(fakeState))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(fakeState.captured[0]!.headers["chatgpt-account-id"]).toBe("acct-123")
     }),
   )
-  it.live("omits ChatGPT-Account-Id when accountId absent", () =>
+  it.scopedLive("omits ChatGPT-Account-Id when accountId absent", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() =>
-        buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" })),
-      )
+      const creds = yield* buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
       const wrapped = transform(makeFakeClient(fakeState))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(fakeState.captured[0]!.headers["chatgpt-account-id"]).toBeUndefined()
     }),
   )
-  it.live("sets default originator + user-agent when upstream omits them", () =>
+  it.scopedLive("sets default originator + user-agent when upstream omits them", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() =>
-        buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" })),
-      )
+      const creds = yield* buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
       const wrapped = transform(makeFakeClient(fakeState))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(fakeState.captured[0]!.headers["originator"]).toBe("gent")
       expect(fakeState.captured[0]!.headers["user-agent"]).toBe("gent")
     }),
   )
-  it.live("preserves upstream originator + user-agent when already set", () =>
+  it.scopedLive("preserves upstream originator + user-agent when already set", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() =>
-        buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" })),
-      )
+      const creds = yield* buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
       const wrapped = transform(makeFakeClient(fakeState))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            headers: { originator: "custom-app", "user-agent": "custom-ua/1.0" },
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          headers: { originator: "custom-app", "user-agent": "custom-ua/1.0" },
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(fakeState.captured[0]!.headers["originator"]).toBe("custom-app")
       expect(fakeState.captured[0]!.headers["user-agent"]).toBe("custom-ua/1.0")
     }),
   )
-  it.live("preserves request method, url, and body for non-Codex paths", () =>
+  it.scopedLive("preserves request method, url, and body for non-Codex paths", () =>
     Effect.gen(function* () {
       // The OpenAI-compat SDK ALSO talks to `/embeddings` and other
       // non-Codex endpoints. Those must pass through untouched (auth
       // headers still applied — see other tests). Use the embeddings
       // path here as a non-Codex example.
-      const creds = yield* Effect.promise(() =>
-        buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" })),
-      )
+      const creds = yield* buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
       const wrapped = transform(makeFakeClient(fakeState))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/embeddings", {
-            body: jsonBody({ model: "text-embedding-3-small", input: "hello" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/embeddings", {
+          body: jsonBody({ model: "text-embedding-3-small", input: "hello" }),
+        }),
       )
       const seen = fakeState.captured[0]!
       expect(seen.method).toBe("POST")
@@ -1370,7 +1339,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
       expect(seen.headers["openai-beta"]).toBeUndefined()
     }),
   )
-  it.live("surfaces ProviderAuthError from getFresh as HttpClientError", () =>
+  it.scopedLive("surfaces ProviderAuthError from getFresh as HttpClientError", () =>
     Effect.gen(function* () {
       // When credentials are unavailable, the typed ProviderAuthError
       // must reach the client surface as the standard transport error
@@ -1386,7 +1355,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
         refresh: "stale-refresh",
         expires: 0, // already expired → forces refresh
       }
-      const creds = yield* Effect.promise(() => buildCreds(refreshFails, stalAuthInfo))
+      const creds = yield* buildCreds(refreshFails, stalAuthInfo)
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
@@ -1432,7 +1401,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
       expect(reason.description).toBe("no usable refresh token")
     }),
   )
-  it.live("calls getFresh per-request (rotated cell wins on second call)", () =>
+  it.scopedLive("calls getFresh per-request (rotated cell wins on second call)", () =>
     Effect.gen(function* () {
       // Ensure the closure-captured creds dispatcher reads the live Ref
       // every time, not a snapshot. Simulate by driving the credential
@@ -1458,26 +1427,22 @@ describe("codexTransformClient — auth headers (O2)", () => {
         refresh: "seed-refresh",
         expires: 0, // forces refresh on first getFresh
       }
-      const creds = yield* Effect.promise(() => buildCreds(rotateIO, stalAuthInfo))
+      const creds = yield* buildCreds(rotateIO, stalAuthInfo)
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
       const transform = buildCodexTransformClient(creds)
       const wrapped = transform(makeFakeClient(fakeState))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(fakeState.captured).toHaveLength(2)
       // First call refreshes seed → rotated; second hits cache and reuses.
@@ -1486,47 +1451,39 @@ describe("codexTransformClient — auth headers (O2)", () => {
     }),
   )
 })
-describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
-  // Helpers local to O3 — keep the auth-header tests above untouched.
+describe("codexTransformClient — URL/body/beta rewrite", () => {
+  // Helpers local to the rewrite tests — keep the auth-header tests above untouched.
   const okResponse = (): FakeClientState => ({
     captured: [],
     responder: () => new Response("ok", { status: 200 }),
   })
-  const buildWrapped = (state: FakeClientState): Promise<HttpClient.HttpClient> =>
-    runEffectBoundary(
-      Effect.gen(function* () {
-        const creds = yield* Effect.promise(() =>
-          buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" })),
-        )
-        return buildCodexTransformClient(creds)(makeFakeClient(state))
-      }),
-    )
-  it.live("rewrites /v1/responses URL to the Codex backend endpoint", () =>
+  const buildWrapped = (state: FakeClientState) =>
+    Effect.gen(function* () {
+      const creds = yield* buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
+      return buildCodexTransformClient(creds)(makeFakeClient(state))
+    })
+  it.scopedLive("rewrites /v1/responses URL to the Codex backend endpoint", () =>
     Effect.gen(function* () {
       const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4", input: [{ role: "user", content: "hi" }] }),
-          }),
-        ),
+      const wrapped = yield* buildWrapped(state)
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4", input: [{ role: "user", content: "hi" }] }),
+        }),
       )
       expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
     }),
   )
-  it.live("does NOT rewrite paths that are not exactly responses", () =>
+  it.scopedLive("does NOT rewrite paths that are not exactly responses", () =>
     Effect.gen(function* () {
       // Exact path equality avoids rewriting sub-resources and other APIs.
       const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
+      const wrapped = yield* buildWrapped(state)
       for (const url of [
         "https://api.openai.com/v1/responses/foo",
         "https://api.openai.com/v1/chat/completions",
       ]) {
-        yield* Effect.promise(() =>
-          runOk(wrapped.post(url, { body: jsonBody({ model: "gpt-5.4" }) })),
-        )
+        yield* runOk(wrapped.post(url, { body: jsonBody({ model: "gpt-5.4" }) }))
       }
       expect(state.captured.map((request) => request.url)).toEqual([
         "https://api.openai.com/v1/responses/foo",
@@ -1536,21 +1493,19 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       expect(state.captured[1]!.headers["openai-beta"]).toBeUndefined()
     }),
   )
-  it.live("sets OpenAI-Beta header on Codex-bound paths", () =>
+  it.scopedLive("sets OpenAI-Beta header on Codex-bound paths", () =>
     Effect.gen(function* () {
       const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      const wrapped = yield* buildWrapped(state)
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(state.captured[0]!.headers["openai-beta"]).toBe("responses=experimental")
     }),
   )
-  it.live(
+  it.scopedLive(
     "merges responses=experimental into a pre-existing OpenAI-Beta header (preserve other tokens)",
     () =>
       Effect.gen(function* () {
@@ -1560,63 +1515,57 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
         // different beta token. Append the required token if missing;
         // preserve every other token unchanged.
         const state = okResponse()
-        const wrapped = yield* Effect.promise(() => buildWrapped(state))
-        yield* Effect.promise(() =>
-          runOk(
-            wrapped.post("https://api.openai.com/v1/responses", {
-              headers: { "openai-beta": "custom=value" },
-              body: jsonBody({ model: "gpt-5.4" }),
-            }),
-          ),
+        const wrapped = yield* buildWrapped(state)
+        yield* runOk(
+          wrapped.post("https://api.openai.com/v1/responses", {
+            headers: { "openai-beta": "custom=value" },
+            body: jsonBody({ model: "gpt-5.4" }),
+          }),
         )
         expect(state.captured[0]!.headers["openai-beta"]).toBe(
           "custom=value, responses=experimental",
         )
       }),
   )
-  it.live("does not duplicate responses=experimental when it's already present", () =>
+  it.scopedLive("does not duplicate responses=experimental when it's already present", () =>
     Effect.gen(function* () {
       const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            headers: { "openai-beta": "custom=value, responses=experimental" },
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      const wrapped = yield* buildWrapped(state)
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          headers: { "openai-beta": "custom=value, responses=experimental" },
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(state.captured[0]!.headers["openai-beta"]).toBe("custom=value, responses=experimental")
     }),
   )
-  it.live("structured input_text system/developer content lifts into instructions", () =>
+  it.scopedLive("structured input_text system/developer content lifts into instructions", () =>
     Effect.gen(function* () {
       const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
+      const wrapped = yield* buildWrapped(state)
       const structured = { role: "system", content: [{ type: "input_text", text: "structured" }] }
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({
-              model: "gpt-5.4",
-              input: [
-                { role: "system", content: "string-instructions" },
-                structured,
-                { role: "user", content: "hi" },
-              ],
-            }),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({
+            model: "gpt-5.4",
+            input: [
+              { role: "system", content: "string-instructions" },
+              structured,
+              { role: "user", content: "hi" },
+            ],
           }),
-        ),
+        }),
       )
       const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
       expect(parsed["instructions"]).toBe("string-instructions\n\nstructured")
       expect(parsed["input"]).toEqual([{ role: "user", content: "hi" }])
     }),
   )
-  it.live("later context updates preserve the instruction prefix and tool history", () =>
+  it.scopedLive("later context updates preserve the instruction prefix and tool history", () =>
     Effect.gen(function* () {
       const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
+      const wrapped = yield* buildWrapped(state)
       const history = [
         { role: "user", content: "Read the file." },
         { type: "function_call", call_id: "stable-call", name: "cell", arguments: "{}" },
@@ -1645,22 +1594,20 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       expect(second["input"]).toEqual([...history, { ...update, role: "developer" }])
     }),
   )
-  it.live("drops sampling limits the Codex backend rejects", () =>
+  it.scopedLive("drops sampling limits the Codex backend rejects", () =>
     Effect.gen(function* () {
       const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({
-              model: "gpt-5.6-luna",
-              max_output_tokens: 4096,
-              temperature: 0.2,
-              reasoning: { effort: "max" },
-              input: [{ role: "user", content: "hi" }],
-            }),
+      const wrapped = yield* buildWrapped(state)
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({
+            model: "gpt-5.6-luna",
+            max_output_tokens: 4096,
+            temperature: 0.2,
+            reasoning: { effort: "max" },
+            input: [{ role: "user", content: "hi" }],
           }),
-        ),
+        }),
       )
       const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
       expect(parsed["max_output_tokens"]).toBeUndefined()
@@ -1668,25 +1615,23 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       expect(parsed["reasoning"]).toEqual({ effort: "max" })
     }),
   )
-  it.live(
+  it.scopedLive(
     "rewrites JSON body: lifts system/developer items into top-level instructions, sets store=false",
     () =>
       Effect.gen(function* () {
         const state = okResponse()
-        const wrapped = yield* Effect.promise(() => buildWrapped(state))
-        yield* Effect.promise(() =>
-          runOk(
-            wrapped.post("https://api.openai.com/v1/responses", {
-              body: jsonBody({
-                model: "gpt-5.4",
-                input: [
-                  { role: "system", content: "You are gent." },
-                  { role: "developer", content: "Be terse." },
-                  { role: "user", content: "hi" },
-                ],
-              }),
+        const wrapped = yield* buildWrapped(state)
+        yield* runOk(
+          wrapped.post("https://api.openai.com/v1/responses", {
+            body: jsonBody({
+              model: "gpt-5.4",
+              input: [
+                { role: "system", content: "You are gent." },
+                { role: "developer", content: "Be terse." },
+                { role: "user", content: "hi" },
+              ],
             }),
-          ),
+          }),
         )
         const seen = state.captured[0]!
         expect(seen.body).toBeDefined()
@@ -1697,37 +1642,33 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
         expect(parsed["model"]).toBe("gpt-5.4")
       }),
   )
-  it.live("Codex-bound body with no instructions gets a non-empty default", () =>
+  it.scopedLive("Codex-bound body with no instructions gets a non-empty default", () =>
     Effect.gen(function* () {
       const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4", input: [] }),
-          }),
-        ),
+      const wrapped = yield* buildWrapped(state)
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4", input: [] }),
+        }),
       )
       const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
       expect(parsed["instructions"]).toBe("You are a helpful assistant.")
       expect(parsed["store"]).toBe(false)
     }),
   )
-  it.live(
+  it.scopedLive(
     "body with input but no system/developer items: default instructions injected, store=false set",
     () =>
       Effect.gen(function* () {
         const state = okResponse()
-        const wrapped = yield* Effect.promise(() => buildWrapped(state))
-        yield* Effect.promise(() =>
-          runOk(
-            wrapped.post("https://api.openai.com/v1/responses", {
-              body: jsonBody({
-                model: "gpt-5.4",
-                input: [{ role: "user", content: "hi" }],
-              }),
+        const wrapped = yield* buildWrapped(state)
+        yield* runOk(
+          wrapped.post("https://api.openai.com/v1/responses", {
+            body: jsonBody({
+              model: "gpt-5.4",
+              input: [{ role: "user", content: "hi" }],
             }),
-          ),
+          }),
         )
         const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
         expect(parsed["instructions"]).toBe("You are a helpful assistant.")
@@ -1735,42 +1676,39 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
         expect(parsed["store"]).toBe(false)
       }),
   )
-  it.live("non-Codex path: body untouched even when it carries an input array", () =>
+  it.scopedLive("non-Codex path: body untouched even when it carries an input array", () =>
     Effect.gen(function* () {
       const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
+      const wrapped = yield* buildWrapped(state)
       const original = {
         model: "text-embedding-3-small",
         input: [{ role: "system", content: "should-not-be-lifted" }],
       }
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/embeddings", {
-            body: jsonBody(original),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/embeddings", {
+          body: jsonBody(original),
+        }),
       )
       const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
       expect(parsed).toEqual(original)
       expect(state.captured[0]!.url).toBe("https://api.openai.com/v1/embeddings")
     }),
   )
-  it.live("auth headers still apply on Codex-rewritten requests", () =>
+  it.scopedLive("auth headers still apply on Codex-rewritten requests", () =>
     Effect.gen(function* () {
       // Belt-and-suspenders: the URL/body rewrite path must not strip
       // the OAuth Bearer / ChatGPT-Account-Id added by the auth-header
       // preprocess.
-      const creds = yield* Effect.promise(() =>
-        buildCreds(noopRefreshIO(), validAuthInfo({ access: "k1-access", accountId: "acc-123" })),
+      const creds = yield* buildCreds(
+        noopRefreshIO(),
+        validAuthInfo({ access: "k1-access", accountId: "acc-123" }),
       )
       const state = okResponse()
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(state.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
       expect(state.captured[0]!.headers["chatgpt-account-id"]).toBe("acc-123")
@@ -1778,12 +1716,12 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
     }),
   )
 })
-describe("codexTransformClient — 401 recovery (O4)", () => {
+describe("codexTransformClient — 401 recovery", () => {
   // The credential cache TTL (30s) can outlive a token's last minute,
   // and OAuth tokens can be revoked server-side between cache fill and
   // wire send. On 401: invalidate the cache + retry once. A second 401
   // surfaces the response so the user can re-authorize.
-  it.live("stale token + 401 → invalidate + retry succeeds with rotated token", () =>
+  it.scopedLive("stale token + 401 → invalidate + retry succeeds with rotated token", () =>
     Effect.gen(function* () {
       // First refresh seeds with "stale-access" (expired authInfo); after
       // the wire returns 401, the credential service is invalidated, and
@@ -1818,7 +1756,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
         refresh: "seed-refresh",
         expires: 0,
       }
-      const creds = yield* Effect.promise(() => buildCreds(rotateIO, stalAuthInfo))
+      const creds = yield* buildCreds(rotateIO, stalAuthInfo)
       const state: FakeClientState = {
         captured: [],
         // First call returns 401, second returns 200.
@@ -1828,12 +1766,10 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
         ),
       }
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
-      const response = yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      const response = yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(response.status).toBe(200)
       expect(state.captured).toHaveLength(2)
@@ -1843,7 +1779,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
       expect(refreshCount).toBe(2)
     }),
   )
-  it.live("double 401 surfaces the response (no infinite retry)", () =>
+  it.scopedLive("double 401 surfaces the response (no infinite retry)", () =>
     Effect.gen(function* () {
       // Both wire attempts return 401. After invalidate + retry, the
       // second 401 must surface as a 401 response (not a typed error,
@@ -1863,25 +1799,23 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
         refresh: "seed",
         expires: 0,
       }
-      const creds = yield* Effect.promise(() => buildCreds(noopRotateIO, stalAuthInfo))
+      const creds = yield* buildCreds(noopRotateIO, stalAuthInfo)
       const state: FakeClientState = {
         captured: [],
         responder: () => new Response("unauthorized", { status: 401 }),
       }
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
-      const response = yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      const response = yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(response.status).toBe(401)
       // Exactly two attempts: original + one retry.
       expect(state.captured).toHaveLength(2)
     }),
   )
-  it.live("non-401 errors do NOT trigger retry", () =>
+  it.scopedLive("non-401 errors do NOT trigger retry", () =>
     Effect.gen(function* () {
       // 500 (or any non-401) must pass through verbatim — only 401 is
       // the auth-recovery signal.
@@ -1889,49 +1823,43 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
         refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
       const validInfo = validAuthInfo({ access: "fresh-access" })
-      const creds = yield* Effect.promise(() => buildCreds(noopRotateIO, validInfo))
+      const creds = yield* buildCreds(noopRotateIO, validInfo)
       const state: FakeClientState = {
         captured: [],
         responder: () => new Response("server error", { status: 500 }),
       }
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
-      const response = yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      const response = yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(response.status).toBe(500)
       // No retry on 500 → exactly one attempt.
       expect(state.captured).toHaveLength(1)
     }),
   )
-  it.live("200 OK never triggers retry", () =>
+  it.scopedLive("200 OK never triggers retry", () =>
     Effect.gen(function* () {
       const noopRotateIO: OpenAICredentialIO = {
         refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
-      const creds = yield* Effect.promise(() =>
-        buildCreds(noopRotateIO, validAuthInfo({ access: "fresh-access" })),
-      )
+      const creds = yield* buildCreds(noopRotateIO, validAuthInfo({ access: "fresh-access" }))
       const state: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
       }
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
-      const response = yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/responses", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
+      const response = yield* runOk(
+        wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({ model: "gpt-5.4" }),
+        }),
       )
       expect(response.status).toBe(200)
       expect(state.captured).toHaveLength(1)
     }),
   )
-  it.live(
+  it.scopedLive(
     "401 → invalidate → retry refresh fails surfaces ProviderAuthError as HttpClientError",
     () =>
       Effect.gen(function* () {
@@ -1964,7 +1892,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
           refresh: "seed-refresh",
           expires: 0,
         }
-        const creds = yield* Effect.promise(() => buildCreds(rotateThenFailIO, stalAuthInfo))
+        const creds = yield* buildCreds(rotateThenFailIO, stalAuthInfo)
         const state: FakeClientState = {
           captured: [],
           responder: () => new Response("unauthorized", { status: 401 }),
