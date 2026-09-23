@@ -23,6 +23,7 @@ import {
 } from "@gent/sdk"
 import type { GentPlatform } from "@gent/core/host"
 import { Command, Flag } from "effect/unstable/cli"
+import * as Terminal from "effect/Terminal"
 
 // ── local health report ─────────────────────────────────────────────────────
 
@@ -481,12 +482,33 @@ const formatTable = (
   return [line(headers), "─".repeat(width), ...rows.map(line)].join("\n")
 }
 
-/** The `server status` table: a header, a rule, and the one server's row. */
-export const formatServerStatus = (label: string, entry: ServerLockEntry): string =>
-  formatTable(
-    ["PID", "STATUS", "SERVER ID", "DB PATH", "URL"],
-    [[String(entry.pid), label, entry.serverId, entry.dbPath, entry.rpcUrl]],
+/**
+ * The `server status` report: a table (header, rule, the one server's row)
+ * when it fits in `columns`, else one `Field: value` line per field, so a long
+ * database path never wraps the table apart. Output with no terminal width
+ * (a pipe) keeps the table.
+ */
+export const formatServerStatus = (
+  label: string,
+  entry: ServerLockEntry,
+  columns: number,
+): string => {
+  const fields: ReadonlyArray<readonly [string, string, string]> = [
+    ["PID", "PID", String(entry.pid)],
+    ["STATUS", "Status", label],
+    ["SERVER ID", "Server ID", entry.serverId],
+    ["DB PATH", "DB path", entry.dbPath],
+    ["URL", "URL", entry.rpcUrl],
+  ]
+  const table = formatTable(
+    fields.map(([header]) => header),
+    [fields.map(([, , value]) => value)],
   )
+  const width = Math.max(...table.split("\n").map((line) => line.length))
+  if (width <= columns) return table
+  const labelWidth = Math.max(...fields.map(([, name]) => name.length)) + 1
+  return fields.map(([, name, value]) => `${`${name}:`.padEnd(labelWidth)} ${value}`).join("\n")
+}
 
 const serverStatus = Command.make("status", {}, () =>
   Effect.gen(function* () {
@@ -503,7 +525,10 @@ const serverStatus = Command.make("status", {}, () =>
     yield* Console.log("Shared server:\n")
     let label = "alive"
     if (status._tag === "Stale") label = "dead"
-    yield* Console.log(formatServerStatus(label, status.entry))
+    // Off a terminal (a pipe) the width is 0: keep the table.
+    let columns = yield* (yield* Terminal.Terminal).columns
+    if (columns === 0) columns = Number.POSITIVE_INFINITY
+    yield* Console.log(formatServerStatus(label, status.entry, columns))
   }),
 )
 
