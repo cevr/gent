@@ -25,9 +25,14 @@ import {
   SessionUiState,
   transitionComposerInteraction,
 } from "../src/session"
-import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
+import {
+  createMockClient,
+  renderFrame,
+  renderWithProviders as renderHarness,
+} from "./render-harness-boundary"
 import { createSignal, type JSX, onMount } from "solid-js"
 import { PromptSearchState } from "../src/pickers"
+import { type ClientContextValue, type SessionIdentity, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
 import { type RenderWaitTimeoutError, waitForFrame } from "./helpers-boundary"
 import { useScopedKeyboard } from "../src/terminal"
@@ -40,6 +45,18 @@ import { builtinClientModules } from "../src/extensions/builtins"
 import { rankAutocompleteItems } from "../src/autocomplete"
 
 // ── shell ───────────────────────────────────────────────────────────────────
+
+/** The composer lives in a session view, so every mount has a session to draft in. */
+const draftSession = {
+  sessionId: SessionId.make("draft-session"),
+  branchId: BranchId.make("draft-branch"),
+  name: "Draft",
+  modelId: Option.getOrUndefined(Option.none()),
+  reasoningLevel: Option.getOrUndefined(Option.none()),
+  cwd: Option.getOrUndefined(Option.none()),
+}
+const renderWithProviders: typeof renderHarness = (ui, options) =>
+  renderHarness(ui, { initialSession: draftSession, ...options })
 
 const testLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
 const shellTest = it.scopedLive.layer(testLayer)
@@ -433,7 +450,7 @@ function Contribute() {
 }
 function TestComposer(props: {
   readonly suspended?: boolean
-  readonly onSubmit: (content: string, mode?: "queue" | "interject") => void
+  readonly onSubmit: (content: string, mode: "queue" | "interject", target: SessionIdentity) => void
   readonly children?: JSX.Element
   readonly composerState?: () => ComposerState
   readonly dispatchComposer?: (event: ComposerEvent) => void
@@ -697,6 +714,55 @@ describe("Composer submit", () => {
       expect(submitted[0]).toContain("SESSION COPY")
       expect(submitted[0]).not.toContain("LAUNCH COPY")
     }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  submitTest(
+    "a switch while @file expands leaves the message in the session it was drafted in",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${dir}/notes.md`, "notes body")
+        // The drafted-in session names no cwd, so the submit reads it from the
+        // server; the read waits on a gate the test opens after the switch.
+        const gate = yield* Deferred.make<void>()
+        const sent: Array<{ content: string; target: SessionIdentity }> = []
+        let client = Option.none<ClientContextValue>()
+        const CaptureClient = () => {
+          client = Option.some(useClient())
+          return <box />
+        }
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => (
+              <TestComposer onSubmit={(content, _mode, target) => sent.push({ content, target })}>
+                <CaptureClient />
+              </TestComposer>
+            ),
+            {
+              cwd: dir,
+              client: createMockClient({
+                session: {
+                  get: () => Deferred.await(gate).pipe(Effect.as(storedSessionIn(dir))),
+                },
+              }),
+            },
+          ),
+        )
+        yield* Effect.promise(() => setup.mockInput.typeText("see @notes.md"))
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        yield* Effect.promise(() => setup.renderOnce())
+        if (Option.isNone(client)) return yield* Effect.die("the client never mounted")
+        client.value.switchSession(SessionId.make("other"), BranchId.make("other-branch"), "Other")
+        yield* Deferred.succeed(gate, void 0)
+        yield* waitForFrame(setup, () => sent.length === 1, "submitted")
+        expect(sent[0]?.content).toContain("notes body")
+        expect(sent[0]?.target).toEqual({
+          sessionId: draftSession.sessionId,
+          branchId: draftSession.branchId,
+        })
+      }).pipe(Effect.timeout("10 seconds")),
   )
 
   submitTest("!cmd runs in the session's directory", () =>

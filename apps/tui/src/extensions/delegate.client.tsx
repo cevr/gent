@@ -18,6 +18,7 @@ import {
   rendererContribution,
   shortId,
   ToolFrame,
+  truncate,
   type ToolInput,
   type ToolRendererProps,
   UserRow,
@@ -47,14 +48,14 @@ const decodeDelegateInput = Schema.decodeUnknownOption(
   }),
 )
 
-/** The delegated task, cut to 60 columns, as the header subtitle. */
-const delegateSubtitle = (input: ToolInput): Option.Option<string> => {
+/** The delegated task, cut to 61 columns with the ellipsis, as the header subtitle. */
+export const delegateSubtitle = (input: ToolInput): Option.Option<string> => {
   const todo = decodeDelegateInput(input).pipe(
     Option.flatMap((inp) => Option.fromNullishOr(inp.todo)),
   )
   if (Option.isNone(todo)) return Option.none()
-  if (todo.value.length > 60) return Option.some(todo.value.slice(0, 60) + "…")
-  return todo
+  // Cut by grapheme and column, so an emoji at the edge is never split in half.
+  return Option.some(truncate(todo.value, 61))
 }
 
 /** The handle `delegate.start` returns, read leniently from the saved output. */

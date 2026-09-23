@@ -3,8 +3,10 @@ import {
   builtinDriver,
   builtinHerdr,
   builtinFiles,
+  FINDER_PAGE_BUDGET,
   getFileTag,
   makeHerdrReporter,
+  rankListed,
 } from "../../src/extensions/builtins"
 import { BunServices } from "@effect/platform-bun"
 import {
@@ -180,6 +182,126 @@ const withFilesPopup = <A>(
   })
 
 const filesTest = it.scopedLive.layer(BunServices.layer)
+
+describe("files popup across sessions", () => {
+  filesTest(
+    "a switch shows the new session's paths, and a read in flight stays with its session",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const sessions = {
+          a: {
+            key: { sessionId: SessionId.make("sess-a"), branchId: BranchId.make("branch-a") },
+            dir: yield* fs.makeTempDirectoryScoped(),
+            paths: ["alpha/only-a.ts"],
+          },
+          b: {
+            key: { sessionId: SessionId.make("sess-b"), branchId: BranchId.make("branch-b") },
+            dir: yield* fs.makeTempDirectoryScoped(),
+            paths: ["beta/only-b.ts"],
+          },
+        }
+        for (const entry of Object.values(sessions)) {
+          for (const file of entry.paths) {
+            yield* fs.makeDirectory(path.dirname(path.join(entry.dir, file)), { recursive: true })
+            yield* fs.writeFileString(path.join(entry.dir, file), file)
+          }
+        }
+        let current = sessions.a
+        // A's second read waits on this gate, so it is still in flight at the switch.
+        const holdA = yield* Deferred.make<void>()
+        let readsOfA = 0
+        yield* provideClientServices(
+          Effect.gen(function* () {
+            const contributions = yield* builtinFiles.setup
+            const source = Option.getOrThrow(
+              Option.fromUndefinedOr(contributions.autocomplete?.[0]),
+            )
+            const items = (filter: string) => {
+              const result = source.items(filter)
+              if (Effect.isEffect(result)) return Effect.orDie(result)
+              return Effect.succeed(result)
+            }
+            const ids = (filter: string) =>
+              items(filter).pipe(Effect.map((shown) => shown.map((item) => item.id)))
+
+            yield* items("")
+            expect(yield* ids("ts")).toEqual(["alpha/only-a.ts"])
+
+            // The popup stays open across the switch: no empty filter re-lists.
+            current = sessions.b
+            expect(yield* ids("ts")).toEqual(["beta/only-b.ts"])
+
+            // Back on A, a listing read is held; a switch to B meanwhile asks for B's own.
+            current = sessions.a
+            const heldRead = yield* Effect.forkChild(items(""))
+            yield* Effect.yieldNow
+            current = sessions.b
+            expect(yield* ids("ts")).toEqual(["beta/only-b.ts"])
+            yield* Deferred.succeed(holdA, void 0)
+            yield* Fiber.join(heldRead)
+            expect(yield* ids("ts")).toEqual(["beta/only-b.ts"])
+          }).pipe(Effect.orDie),
+          {
+            workspace: {
+              cwd: home,
+              home,
+              sessionCwd: Effect.sync(() => current.dir),
+            },
+            currentSession: () => Option.some(current.key),
+            requestEffect: () => {
+              const asked = current
+              if (asked !== sessions.a) return Effect.succeed(asked.paths)
+              readsOfA++
+              if (readsOfA < 2) return Effect.succeed(asked.paths)
+              return Deferred.await(holdA).pipe(Effect.as(asked.paths))
+            },
+          },
+        )
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+describe("files popup page budget", () => {
+  const page = (paths: ReadonlyArray<string>, totalMatched: number) => ({ paths, totalMatched })
+  const unlistedPage = Array.from({ length: 200 }, (_, index) => `ignored/${index}.ts`)
+
+  test("sparse matches stop at the page budget and report the ranking incomplete", () => {
+    let pagesRead = 0
+    const result = Effect.runSync(
+      rankListed(
+        () =>
+          Effect.sync(() => {
+            pagesRead++
+            return page(unlistedPage, 100_000)
+          }),
+        new Set(["src/kept.ts"]),
+        50,
+      ),
+    )
+    expect(pagesRead).toBe(FINDER_PAGE_BUDGET)
+    expect(result).toEqual({ kept: [], complete: false })
+  })
+
+  test("matches that end inside the budget are complete", () => {
+    let pagesRead = 0
+    const result = Effect.runSync(
+      rankListed(
+        () =>
+          Effect.sync(() => {
+            pagesRead++
+            return page(["src/kept.ts", "ignored/x.ts"], 2)
+          }),
+        new Set(["src/kept.ts"]),
+        50,
+      ),
+    )
+    expect(pagesRead).toBe(1)
+    expect(result).toEqual({ kept: ["src/kept.ts"], complete: true })
+  })
+})
 
 describe("files popup", () => {
   filesTest(

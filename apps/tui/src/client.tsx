@@ -487,7 +487,7 @@ interface ClientTransportValue {
  * moves to another session or branch, and every consumer that needs the
  * identity rather than the record reads it.
  */
-interface SessionIdentity {
+export interface SessionIdentity {
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
@@ -510,6 +510,8 @@ interface ClientSessionValue {
    * that names no cwd.
    */
   sessionCwd: Effect.Effect<string, GentClientRpcError>
+  /** The directory a given session resolves against, whether or not it is active. */
+  cwdOf: (sessionId: SessionId) => Effect.Effect<string, GentClientRpcError>
 
   // Session actions (fire-and-forget, update state internally)
   /** Create a session and make it the active one. */
@@ -591,9 +593,10 @@ interface ClientAgentValue {
 
 interface ClientActionValue {
   // Session actions (fire-and-forget, update state internally)
-  sendMessage: (content: string) => void
+  /** Send to the session the content was drafted in, not whichever is active when it lands. */
+  sendMessage: (target: SessionIdentity, content: string) => void
   // Steering (fire-and-forget)
-  steer: (command: SteerCommandInput) => void
+  steer: (target: SessionIdentity, command: SteerCommandInput) => void
 }
 
 export type ClientContextValue = ClientTransportValue &
@@ -714,13 +717,17 @@ export function ClientProvider(props: ClientProviderProps) {
   const isActive = () => sessionState().status === "active"
   const isLoading = () => sessionState().status === "creating"
 
-  const sessionCwd: Effect.Effect<string, GentClientRpcError> = Effect.suspend(() => {
-    const current = sessionOption()
-    if (Option.isNone(current)) return Effect.succeed(workspace.cwd)
-    const known = Option.fromUndefinedOr(current.value.cwd)
-    if (Option.isSome(known)) return Effect.succeed(known.value)
-    const sessionId = current.value.sessionId
-    return client.session.get({ sessionId }).pipe(
+  const cwdOf = (sessionId: SessionId): Effect.Effect<string, GentClientRpcError> =>
+    Effect.suspend(() => {
+      const known = sessionOption().pipe(
+        Option.filter((current) => current.sessionId === sessionId),
+        Option.flatMap((current) => Option.fromUndefinedOr(current.cwd)),
+      )
+      if (Option.isSome(known)) return Effect.succeed(known.value)
+      return readCwd(sessionId)
+    })
+  const readCwd = (sessionId: SessionId): Effect.Effect<string, GentClientRpcError> =>
+    client.session.get({ sessionId }).pipe(
       Effect.map((stored) =>
         Option.fromNullishOr(stored).pipe(
           Option.flatMap((value) => Option.fromUndefinedOr(value.cwd)),
@@ -734,7 +741,12 @@ export function ClientProvider(props: ClientProviderProps) {
       ),
       Effect.map(Option.getOrElse(() => workspace.cwd)),
     )
-  })
+  const sessionCwd: Effect.Effect<string, GentClientRpcError> = Effect.suspend(() =>
+    Option.match(sessionOption(), {
+      onNone: () => Effect.succeed(workspace.cwd),
+      onSome: (current) => cwdOf(current.sessionId),
+    }),
+  )
 
   // A session reached by id alone reads its cwd once, so the status row names
   // where it is rooted before anything is submitted.
@@ -1161,6 +1173,7 @@ export function ClientProvider(props: ClientProviderProps) {
     isActive,
     isLoading,
     sessionCwd,
+    cwdOf,
 
     createSession: () => createSessionWith({}),
 
@@ -1389,11 +1402,7 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const actionValue: ClientActionValue = {
-    sendMessage: (content) => {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return
-      const s = currentSession.value
-
+    sendMessage: (s, content) => {
       const sendMessageEffect = Effect.fn("TUI.sendMessage")(function* () {
         const requestId = yield* randomId
         yield* Effect.sync(() => {
@@ -1416,10 +1425,7 @@ export function ClientProvider(props: ClientProviderProps) {
         ),
       )
     },
-    steer: (command) => {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return
-      const s = currentSession.value
+    steer: (s, command) => {
       cast(
         Effect.gen(function* () {
           const requestId = yield* randomId

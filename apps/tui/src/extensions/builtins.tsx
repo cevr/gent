@@ -161,30 +161,53 @@ const createFinder = (cwd: string, dbDir: string) =>
   })
 
 /**
- * fff's ranking for `query`, kept to the `listed` paths, up to `limit`. The
- * pages stop at the end of fff's matches.
+ * The most fff pages one keystroke reads. When few of fff's matches are in
+ * the listing, paging to the end of them costs 60-80 ms per key on a 19k-file
+ * tree; five pages cost about 4 ms, and the listing fills what they miss.
  */
-const rankListed = (
-  entry: FinderEntry,
-  query: string,
+export const FINDER_PAGE_BUDGET = 5
+
+/** One page of fff's matches: its paths, and how many matched in all. */
+interface FinderPage {
+  readonly paths: ReadonlyArray<string>
+  readonly totalMatched: number
+}
+
+const finderPage = (entry: FinderEntry, query: string) => (pageIndex: number) =>
+  Effect.gen(function* () {
+    const page = entry.finder.fileSearch(query, { pageIndex, pageSize: FINDER_PAGE_SIZE })
+    if (!page.ok) return yield* new FileFinderError({ reason: String(page.error) })
+    return {
+      paths: page.value.items.map((item) => item.relativePath),
+      totalMatched: page.value.totalMatched,
+    } satisfies FinderPage
+  })
+
+/**
+ * fff's ranking kept to the `listed` paths, up to `limit`, reading at most
+ * `FINDER_PAGE_BUDGET` pages. `complete` is false when the budget ran out
+ * before fff's matches did, so the caller fills the rest another way.
+ */
+export const rankListed = <E,>(
+  page: (pageIndex: number) => Effect.Effect<FinderPage, E>,
   listed: ReadonlySet<string>,
   limit: number,
 ) =>
   Effect.gen(function* () {
-    yield* entry.scanned
     const kept: Array<string> = []
-    for (let pageIndex = 0; kept.length < limit; pageIndex++) {
-      const page = entry.finder.fileSearch(query, { pageIndex, pageSize: FINDER_PAGE_SIZE })
-      if (!page.ok) return yield* new FileFinderError({ reason: String(page.error) })
-      for (const item of page.value.items) {
-        if (!listed.has(item.relativePath)) continue
-        kept.push(item.relativePath)
-        if (kept.length >= limit) break
+    for (let pageIndex = 0; pageIndex < FINDER_PAGE_BUDGET; pageIndex++) {
+      const read = yield* page(pageIndex)
+      for (const path of read.paths) {
+        if (!listed.has(path)) continue
+        kept.push(path)
+        if (kept.length >= limit) return { kept, complete: true }
       }
       const seen = (pageIndex + 1) * FINDER_PAGE_SIZE
-      if (page.value.items.length < FINDER_PAGE_SIZE || seen >= page.value.totalMatched) break
+      if (read.paths.length < FINDER_PAGE_SIZE || seen >= read.totalMatched) {
+        return { kept, complete: true }
+      }
     }
-    return kept
+    return { kept, complete: false }
   })
 
 // ── files extension ─────────────────────────────────────────────────────────
@@ -252,63 +275,95 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
     })
     // The directory the last ranking used, for recording the pick against it.
     let rankedIn = Option.none<string>()
-    let listing = Option.none<ReadonlyArray<string>>()
-    // One read at a time: keys typed while a listing is on its way wait for it.
-    let pending = Option.none<Fiber.Fiber<ReadonlyArray<string>>>()
-    const fetchListing = transport.request(ref(FilesRpc.List), {}).pipe(
-      Effect.map((paths) => paths.filter(isReferenceablePath)),
-      // A failed listing offers nothing until the popup opens again.
-      Effect.orElseSucceed((): ReadonlyArray<string> => []),
-      Effect.tap((paths) =>
-        Effect.sync(() => {
-          listing = Option.some(paths)
-        }),
-      ),
-    )
-    const readListing = Effect.gen(function* () {
-      if (Option.isSome(pending)) return yield* Fiber.join(pending.value)
-      const fiber = yield* lifecycle.scoped(Effect.forkScoped(fetchListing))
-      pending = Option.some(fiber)
-      return yield* Fiber.join(fiber).pipe(
-        Effect.ensuring(
+    // The listing and the read in flight each belong to one session. A key
+    // typed after a switch never ranks the session it left, and a reply that
+    // lands after the switch is kept only under the session that asked.
+    let listing = Option.none<{ readonly session: string; readonly paths: ReadonlyArray<string> }>()
+    // One read at a time per session: keys typed while it is on its way wait for it.
+    let pending = Option.none<{
+      readonly session: string
+      readonly fiber: Fiber.Fiber<ReadonlyArray<string>>
+    }>()
+    const sessionKey = () =>
+      Option.match(transport.currentSession(), {
+        onNone: () => "",
+        onSome: (current) => String(current.sessionId),
+      })
+    const fetchListing = (session: string) =>
+      transport.request(ref(FilesRpc.List), {}).pipe(
+        Effect.map((paths) => paths.filter(isReferenceablePath)),
+        // A failed listing offers nothing until the popup opens again.
+        Effect.orElseSucceed((): ReadonlyArray<string> => []),
+        Effect.tap((paths) =>
           Effect.sync(() => {
-            if (Option.contains(pending, fiber)) pending = Option.none()
+            listing = Option.some({ session, paths })
           }),
         ),
       )
-    })
+    const readListing = (session: string) =>
+      Effect.gen(function* () {
+        const inFlight = Option.filter(pending, (read) => read.session === session)
+        if (Option.isSome(inFlight)) return yield* Fiber.join(inFlight.value.fiber)
+        const fiber = yield* lifecycle.scoped(Effect.forkScoped(fetchListing(session)))
+        pending = Option.some({ session, fiber })
+        return yield* Fiber.join(fiber).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (Option.exists(pending, (read) => read.fiber === fiber)) pending = Option.none()
+            }),
+          ),
+        )
+      })
+    const listingFor = (session: string) =>
+      Option.match(
+        Option.filter(listing, (known) => known.session === session),
+        {
+          onNone: () => readListing(session),
+          onSome: (known) => Effect.succeed(known.paths),
+        },
+      )
+    /** The shared matcher over the listing, for keys fff cannot rank. */
+    const matchListed = (paths: ReadonlyArray<string>, filter: string) =>
+      rankAutocompleteItems(
+        paths.map((path) => ({ id: path, label: path })),
+        filter,
+        { prefix: "@" },
+      ).map((item) => item.id)
     return autocompleteContribution({
       prefix: "@",
       title: "Files",
       items: (filter: string) =>
         Effect.gen(function* () {
+          const session = sessionKey()
           const cwd = yield* workspace.sessionCwd
           if (filter.length === 0) {
-            const paths = yield* readListing
+            const paths = yield* readListing(session)
             // Opening the popup starts the scan, so the first typed key finds it ready.
             yield* lifecycle.scoped(Effect.forkScoped(Effect.ignore(finderFor(cwd))))
             return topLevel(paths).slice(0, MAX_RESULTS).map(formatMatch)
           }
-          const paths = yield* Option.match(listing, {
-            onNone: () => readListing,
-            onSome: Effect.succeed,
-          })
+          const paths = yield* listingFor(session)
           const ranked = yield* finderFor(cwd).pipe(
-            Effect.flatMap((entry) => rankListed(entry, filter, new Set(paths), MAX_RESULTS)),
+            Effect.tap((entry) => entry.scanned),
+            Effect.flatMap((entry) =>
+              rankListed(finderPage(entry, filter), new Set(paths), MAX_RESULTS),
+            ),
             Effect.tap(() =>
               Effect.sync(() => {
                 rankedIn = Option.some(cwd)
               }),
             ),
-            Effect.orElseSucceed(() =>
-              rankAutocompleteItems(
-                paths.map((path) => ({ id: path, label: path })),
+            Effect.map(({ kept, complete }) => {
+              if (complete) return kept
+              // The page budget ran out first: the listing fills the rest.
+              const taken = new Set(kept)
+              const rest = matchListed(
+                paths.filter((path) => !taken.has(path)),
                 filter,
-                { prefix: "@" },
               )
-                .slice(0, MAX_RESULTS)
-                .map((item) => item.id),
-            ),
+              return [...kept, ...rest].slice(0, MAX_RESULTS)
+            }),
+            Effect.orElseSucceed(() => matchListed(paths, filter).slice(0, MAX_RESULTS)),
           )
           return ranked.map(formatMatch)
         }),

@@ -44,7 +44,7 @@ import {
   type SelectListRow,
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
-import { useClient, useRuntime } from "./client"
+import { type SessionIdentity, useClient, useRuntime } from "./client"
 import type {
   AutocompleteContribution,
   AutocompleteItem,
@@ -733,13 +733,27 @@ function useComposerController(): ComposerController {
     sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text }))
   }
 
+  /**
+   * The session a draft was written in. A submission carries it to the end:
+   * a switch while `@file` expands or `!cmd` runs does not move the message.
+   */
+  const draftedIn = (): Option.Option<SessionIdentity> => client.sessionIdentity()
+  const stillIn = (target: SessionIdentity) =>
+    Option.exists(
+      client.sessionIdentity(),
+      (current) => current.sessionId === target.sessionId && current.branchId === target.branchId,
+    )
+
   const submitShellCommand = (text: string) => {
+    const drafted = draftedIn()
+    if (Option.isNone(drafted)) return
+    const target = drafted.value
     // The command leaves the composer before it runs, so a second Enter
     // finds an empty draft instead of running it again.
     sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
     clearInput()
     cast(
-      client.sessionCwd.pipe(
+      client.cwdOf(target.sessionId).pipe(
         Effect.flatMap((cwd) => executeShell(text, cwd)),
         Effect.map(({ output, truncated, savedPath }) => {
           let userMessage = `$ ${text}\n\n${output}`
@@ -753,7 +767,7 @@ function useComposerController(): ComposerController {
         }),
         Effect.tap((userMessage) =>
           Effect.sync(() => {
-            sc.onSubmit(userMessage)
+            sc.onSubmit(userMessage, "queue", target)
           }),
         ),
         // eslint-disable-next-line effect/noUnknownParameters -- shell failures cross the process boundary.
@@ -767,6 +781,7 @@ function useComposerController(): ComposerController {
               onSome: (value) => value.message,
             })
             client.setError(message)
+            if (!stillIn(target)) return
             if (Option.isSome(inputRef) && inputRef.value.plainText.length === 0) {
               sc.onComposerInteraction(ComposerInteractionEvent.cases.EnterShell.make({}))
               restoreDraft(text)
@@ -790,23 +805,26 @@ function useComposerController(): ComposerController {
   }
 
   const submitMessage = (text: string, mode: "queue" | "interject") => {
+    const drafted = draftedIn()
+    if (Option.isNone(drafted)) return
+    const target = drafted.value
     client.log.info("composer.submit.requested", { contentLength: text.length, mode })
     history.add(text)
     // The message leaves the composer before its `@file` refs expand, so a
     // second Enter finds an empty draft instead of sending it again.
     clearInput()
     cast(
-      client.sessionCwd.pipe(
+      client.cwdOf(target.sessionId).pipe(
         Effect.flatMap((cwd) => expandFileRefs(text, cwd)),
         Effect.tap((expanded) =>
           Effect.sync(() => {
-            sc.onSubmit(expanded, mode)
+            sc.onSubmit(expanded, mode, target)
           }),
         ),
         Effect.catchEager((error) =>
           Effect.sync(() => {
             client.setError(formatError(error))
-            restoreDraft(text)
+            if (stillIn(target)) restoreDraft(text)
           }),
         ),
       ),

@@ -61,6 +61,7 @@ import type { RGBA } from "@opentui/core"
 import {
   type ClientContextValue,
   type ClientLog,
+  type SessionIdentity,
   type SessionMetrics,
   shutdownLog,
   SteerCommandInput,
@@ -2412,7 +2413,8 @@ export interface SessionController {
   phaseLabel: () => string
   elapsed: () => number
   onComposerInteraction: (event: ComposerInteractionEvent) => void
-  onSubmit: (content: string, mode?: "queue" | "interject") => void
+  /** Send a submission to the session it was drafted in (`target`), never "the current one". */
+  onSubmit: (content: string, mode: "queue" | "interject", target: SessionIdentity) => void
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
   onRestoreQueue: () => void
   dispatchComposer: (event: ComposerEvent) => void
@@ -2900,12 +2902,24 @@ export function createSessionController(props: {
     )
   }
 
-  const onSubmit = (content: string, mode?: "queue" | "interject") => {
-    if (mode === "interject" && client.isStreaming()) {
-      client.steer(SteerCommandInput.cases.Interject.make({ message: content }))
+  const onSubmit = (content: string, mode: "queue" | "interject", target: SessionIdentity) => {
+    // Interjecting steers the stream in view, so it holds only while the
+    // drafted-in session is still the one streaming; otherwise the message queues there.
+    const stillHere = Option.exists(
+      client.sessionIdentity(),
+      (current) => current.sessionId === target.sessionId && current.branchId === target.branchId,
+    )
+    if (mode === "interject" && stillHere && client.isStreaming()) {
+      client.steer(target, SteerCommandInput.cases.Interject.make({ message: content }))
       return
     }
-    client.sendMessage(content)
+    client.sendMessage(target, content)
+  }
+  /** Cancel the turn streaming in the session in view. */
+  const cancelTurn = () => {
+    Option.map(client.sessionIdentity(), (target) =>
+      client.steer(target, SteerCommandInput.cases.Cancel.make({})),
+    )
   }
 
   const clearMessages = () => {
@@ -2943,7 +2957,7 @@ export function createSessionController(props: {
       return
     }
     if (client.isStreaming()) {
-      client.steer(SteerCommandInput.cases.Cancel.make({}))
+      cancelTurn()
       return
     }
     exit()
@@ -2979,7 +2993,7 @@ export function createSessionController(props: {
       }
 
       if (client.isStreaming()) {
-        client.steer(SteerCommandInput.cases.Cancel.make({}))
+        cancelTurn()
         disarmQuit()
         return true
       }
