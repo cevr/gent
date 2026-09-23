@@ -647,9 +647,13 @@ export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string
   }
   const operations = calls.flatMap((call) => call.operations)
   const children = operations.filter(isChildOperation).length
-  const failed =
-    operations.filter((operation) => operation.outcome === "failed").length +
-    calls.filter((call) => call.status === "error").length
+  // A cell that failed with a failed op is one failure, the op's: a reload
+  // settles an interrupted op as failed, and the count must not grow with it.
+  const failed = calls.reduce((sum, call) => {
+    const failedOps = call.operations.filter((operation) => operation.outcome === "failed").length
+    if (failedOps === 0 && call.status === "error") return sum + 1
+    return sum + failedOps
+  }, 0)
   const parts = [plural(calls.length, "cell")]
   if (operations.length > 0) parts.push(plural(operations.length, "op"))
   else {

@@ -777,6 +777,20 @@ describe("formatActivityHeader", () => {
     expect(formatActivityHeader([cell([])])).toBe("1 cell")
   })
 
+  test("a cell that failed with its op counts one failure", () => {
+    // An interrupted cell: live its op is settled to failed when the cell ends,
+    // and a reload projects the same op as failed.
+    expect(formatActivityHeader([cell([op("bash", "git checkout", "failed")], "error")])).toBe(
+      "1 cell · 1 op · 1 failed",
+    )
+    expect(
+      formatActivityHeader([
+        cell([op("bash", "a", "failed"), op("bash", "b", "failed")], "error"),
+        cell([op("read", "c.ts")], "error"),
+      ]),
+    ).toBe("2 cells · 3 ops · 3 failed")
+  })
+
   test("a finished group carries the sum of its call durations", () => {
     expect(formatActivityHeader([{ ...cell([op("bash", "pwd")]), durationMs: 1_250 }])).toBe(
       "1 cell · 1 op · 1.3s",
