@@ -410,6 +410,47 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    // A newer build (a rift binary) can add a key this build does not know;
+    // they share ~/.gent, so a write here must not erase it.
+    it.scopedLive("a driver write keeps every key it did not change, known or not", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const readRaw = fs
+          .readFileString(userConfigPath)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* fs.writeFileString(
+            userConfigPath,
+            encodeJson({
+              trustedProjects: ["/x"],
+              futureField: { nested: [1, 2] },
+              agents: { main: { reasoningEffort: "high", futureOverride: true } },
+            }),
+          )
+          yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
+          expect(yield* readRaw).toEqual({
+            trustedProjects: ["/x"],
+            futureField: { nested: [1, 2] },
+            agents: { main: { reasoningEffort: "high", futureOverride: true } },
+            driverOverrides: { main: { _tag: "Model", id: "anthropic" } },
+          })
+          // Clearing the last override removes the key it owns, and only that.
+          yield* cfg.clearDriverOverride(AgentName.make("main"))
+          expect(yield* readRaw).toEqual({
+            trustedProjects: ["/x"],
+            futureField: { nested: [1, 2] },
+            agents: { main: { reasoningEffort: "high", futureOverride: true } },
+          })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive("a write without a fresh read refuses a config broken after startup", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem

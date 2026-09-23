@@ -1,6 +1,7 @@
 import {
   Context,
   Effect,
+  Equal,
   FileSystem,
   Layer,
   Option,
@@ -158,6 +159,25 @@ const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
     trustedProjects: user.trustedProjects,
   })
 
+/** A config file as JSON, with every key, known to `UserConfig` or not. */
+const RawConfigJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+type RawConfig = typeof RawConfigJson.Type
+
+/**
+ * `raw` with each `UserConfig` field that differs between `before` and
+ * `after` (both encoded) set to its `after` value, or removed when `after`
+ * leaves it out. Every other key of `raw` is kept as it is.
+ */
+const mergeChangedFields = (raw: RawConfig, before: RawConfig, after: RawConfig): RawConfig => {
+  const merged = { ...raw }
+  for (const key of Object.keys(UserConfig.fields)) {
+    if (Equal.equals(before[key], after[key])) continue
+    if (key in after) merged[key] = after[key]
+    else delete merged[key]
+  }
+  return merged
+}
+
 /** The agents whose stored override names a removed external driver. */
 const StoredDriverOverrides = Schema.Struct({
   driverOverrides: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
@@ -287,16 +307,18 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         })
 
       // A missing file reads as an empty config.
-      const readConfigFile = (filePath: string) =>
+      const readConfigText = (filePath: string) =>
         fs.exists(filePath).pipe(
           Effect.flatMap((exists) => {
             if (exists) return fs.readFileString(filePath)
             return Effect.succeed("{}")
           }),
+        )
+
+      const readConfigFile = (filePath: string) =>
+        readConfigText(filePath).pipe(
           Effect.tap((content) => warnRetiredOverrides(filePath, content)),
-          Effect.flatMap((content) =>
-            Schema.decodeEffect(Schema.fromJsonString(UserConfig))(content),
-          ),
+          Effect.flatMap((content) => Schema.decodeEffect(UserConfigJson)(content)),
         )
 
       const readConfigOrEmpty = (filePath: string): Effect.Effect<UserConfig> =>
@@ -332,11 +354,20 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       }).pipe(Effect.asVoid)
 
       // Replace the user config through a staged sibling, so a reader (or a
-      // crash) never sees a half-written file.
-      const saveUserConfig = (config: UserConfig) =>
+      // crash) never sees a half-written file. Only the fields the update
+      // changed are written into the file as it was read: a key this build
+      // does not know (a newer build's field, a hand edit), and the unknown
+      // parts of a known field left unchanged, stay as they are.
+      const saveUserConfig = (raw: RawConfig, before: UserConfig, after: UserConfig) =>
         Effect.gen(function* () {
           yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
-          const json = yield* Schema.encodeEffect(UserConfigJson)(config)
+          const asRaw = (config: UserConfig) =>
+            Schema.encodeEffect(UserConfigJson)(config).pipe(
+              Effect.flatMap(Schema.decodeEffect(RawConfigJson)),
+            )
+          const json = yield* Schema.encodeEffect(RawConfigJson)(
+            mergeChangedFields(raw, yield* asRaw(before), yield* asRaw(after)),
+          )
           yield* writeFileAtomic(userConfigPath, json)
         }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
@@ -369,9 +400,19 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         // that does not decode fails here instead of being replaced.
         SynchronizedRef.updateEffect(userConfigRef, () =>
           Effect.gen(function* () {
-            const onDisk = yield* readConfigFresh(userConfigPath)
+            const [raw, onDisk] = yield* readConfigText(userConfigPath).pipe(
+              Effect.flatMap((content) =>
+                Effect.all([
+                  Schema.decodeEffect(RawConfigJson)(content),
+                  Schema.decodeEffect(UserConfigJson)(content),
+                ]),
+              ),
+              Effect.mapError(
+                (cause) => new ConfigLoadError({ path: userConfigPath, message: String(cause) }),
+              ),
+            )
             const decision = decide(onDisk)
-            if (decision.save) yield* saveUserConfig(decision.updated)
+            if (decision.save) yield* saveUserConfig(raw, onDisk, decision.updated)
             return decision.updated
           }),
         )
