@@ -339,7 +339,6 @@ const requestExtensionAt = <Input, Output>(
     )
   })
 
-/** One shell RPC read, with its failure named by the RPC it came from. */
 /** `{ sessionId }` of the active session, or `{}` before one exists. */
 const activeSessionPayload = (transport: ClientShellTransport) =>
   omitUndefined({
@@ -348,6 +347,7 @@ const activeSessionPayload = (transport: ClientShellTransport) =>
     ),
   })
 
+/** One shell RPC read, with its failure named by the RPC it came from. */
 const shellRead = <A>(
   transport: ClientShellTransport,
   tag: string,
