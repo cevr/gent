@@ -17,9 +17,11 @@ import {
   defineResource,
   ExtensionContext,
   ExtensionHost,
+  runProcess,
   tool,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 
 // ── file index ──────────────────────────────────────────────────────────────
 
@@ -80,27 +82,44 @@ interface IgnoreRule {
   readonly anchored: boolean
 }
 
+/**
+ * picomatch with git's wildmatch rules: no brace, extglob or `!` negation
+ * syntax, `[!a]` negates a class, and parentheses are literal.
+ */
+const GIT_GLOB_OPTIONS = { dot: true, nobrace: true, noextglob: true, nonegate: true }
+
+const compileGitGlob = (pattern: string): PathMatcher => {
+  const source = pattern.replaceAll("[!", "[^").replaceAll(/(?<!\\)[()]/g, (paren) => `\\${paren}`)
+  // A trailing `/**` matches everything inside, never the directory itself.
+  if (!source.endsWith("/**")) return picomatch(source, GIT_GLOB_OPTIONS)
+  const parent = picomatch(source.slice(0, -3), GIT_GLOB_OPTIONS)
+  return (path) => {
+    const parts = path.split("/")
+    for (let depth = 1; depth < parts.length; depth++) {
+      if (parent(parts.slice(0, depth).join("/"))) return true
+    }
+    return false
+  }
+}
+
+/**
+ * One `.gitignore` file, read by git's rules (gitignore(5)): trailing spaces
+ * are trimmed unless escaped, leading spaces are kept, `\#` and `\!` are
+ * literal, and a slash anywhere but the end anchors the pattern.
+ */
 const parseGitignore = (content: string, base: string): Array<IgnoreRule> => {
   const rules: Array<IgnoreRule> = []
   for (const raw of content.split("\n")) {
-    let pattern = raw.trim()
+    let pattern = raw.replace(/\r$/, "").replace(/(?<!\\) +$/, "")
     if (pattern.length === 0 || pattern.startsWith("#")) continue
     const negated = pattern.startsWith("!")
     if (negated) pattern = pattern.slice(1)
-    // `\#` and `\!` are literal.
-    if (pattern.startsWith("\\")) pattern = pattern.slice(1)
     const directoryOnly = pattern.endsWith("/")
     if (directoryOnly) pattern = pattern.slice(0, -1)
     const anchored = pattern.includes("/")
     if (pattern.startsWith("/")) pattern = pattern.slice(1)
     if (pattern.length === 0) continue
-    rules.push({
-      base,
-      matches: picomatch(pattern, { dot: true }),
-      negated,
-      directoryOnly,
-      anchored,
-    })
+    rules.push({ base, matches: compileGitGlob(pattern), negated, directoryOnly, anchored })
   }
   return rules
 }
@@ -132,12 +151,14 @@ const joinRelative = (directory: string, entry: string) => {
 }
 
 /**
- * The walk reads every `.gitignore` from `root` down, as git does: the ones
+ * Outside a git work tree, and for an explicitly named ignored target, the
+ * walk matches `.gitignore` lines itself. It reads every `.gitignore` from
+ * `root` down, as git does: the ones
  * on the way from `root` to `cwd` and the ones inside the walked tree. A
  * `cwd` inside an ignored directory lists nothing, as the native index does;
  * `listIgnoredTargets` then lists it from its own root.
  */
-const makeWalkService: Effect.Effect<FileIndexService, never, FileSystem.FileSystem | Path.Path> =
+const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSystem | Path.Path> =
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
@@ -245,6 +266,89 @@ const makeWalkService: Effect.Effect<FileIndexService, never, FileSystem.FileSys
     }
   })
 
+// ── Fallback inside a git work tree: git lists the files ──
+
+/**
+ * Inside a git work tree git lists the files itself, so every exclude source
+ * applies as git applies it: the `.gitignore` files above the search root,
+ * `.git/info/exclude` and `core.excludesFile`. Tracked files are listed even
+ * when a pattern matches them, as git treats them. `None` outside a work
+ * tree or without git; the matcher walk lists then.
+ */
+const listGitFiles = (
+  cwd: string,
+): Effect.Effect<
+  Option.Option<ReadonlyArray<IndexedFile>>,
+  FileIndexError,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const listed = yield* runProcess("git", [
+      "-C",
+      cwd,
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+    ]).pipe(Effect.option)
+    if (Option.isNone(listed) || listed.value.exitCode !== 0) return Option.none()
+    const relativePaths = [...new Set(listed.value.stdout.split("\0"))].filter(
+      (entry) => entry.length > 0,
+    )
+    if (relativePaths.length > FALLBACK_MAX_FILES) {
+      return yield* new FileIndexError({
+        message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
+        cwd,
+      })
+    }
+    // A deleted tracked file and a submodule are listed too; keep regular files.
+    const files = yield* Effect.forEach(
+      relativePaths,
+      (relativePath) => {
+        const absolutePath = path.join(cwd, relativePath)
+        return fs.stat(absolutePath).pipe(
+          Effect.option,
+          Effect.map((info) =>
+            Option.filter(info, (value) => value.type === "File").pipe(
+              Option.as({ path: absolutePath, relativePath }),
+            ),
+          ),
+        )
+      },
+      { concurrency: 32 },
+    )
+    return Option.some(Arr.getSomes(files))
+  })
+
+/** Git lists inside a work tree; the matcher walk lists elsewhere. */
+const makeWalkService = (
+  matcherWalk: FileIndexService,
+): Effect.Effect<
+  FileIndexService,
+  never,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.gen(function* () {
+    const platform = yield* Effect.context<
+      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+    >()
+    return {
+      listFiles: (params) =>
+        listGitFiles(params.cwd).pipe(
+          Effect.provideContext(platform),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => matcherWalk.listFiles(params),
+              onSome: Effect.succeed,
+            }),
+          ),
+        ),
+    }
+  })
+
 /**
  * A shared root does not index its gitignored subtrees (`dist/`,
  * `node_modules/x`), so an explicit target that lists nothing is walked from
@@ -266,10 +370,13 @@ const listIgnoredTargets = (index: FileIndexService, walk: FileIndexService): Fi
 export const FallbackFileIndexLive: Layer.Layer<
   FileIndex,
   never,
-  FileSystem.FileSystem | Path.Path
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > = Layer.effect(
   FileIndex,
-  Effect.map(makeWalkService, (walk) => listIgnoredTargets(walk, walk)),
+  Effect.gen(function* () {
+    const matcherWalk = yield* makeMatcherWalk
+    return listIgnoredTargets(yield* makeWalkService(matcherWalk), matcherWalk)
+  }),
 )
 
 // ── Native: fff-bun finders, one per search root ──
@@ -440,19 +547,24 @@ const withFallback = (primary: FileIndexService, fallback: FileIndexService): Fi
 /** Native-first with per-call fallback. Finder databases live under `${home}/.gent/fff`. */
 export const FileIndexLive = (options: {
   readonly home: string
-}): Layer.Layer<FileIndex, never, FileSystem.FileSystem | Path.Path> =>
+}): Layer.Layer<
+  FileIndex,
+  never,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> =>
   Layer.effect(
     FileIndex,
     Effect.gen(function* () {
-      const walk = yield* makeWalkService
-      if (!NativeFileFinder.isAvailable()) return listIgnoredTargets(walk, walk)
+      const matcherWalk = yield* makeMatcherWalk
+      const walk = yield* makeWalkService(matcherWalk)
+      if (!NativeFileFinder.isAvailable()) return listIgnoredTargets(walk, matcherWalk)
 
       const path = yield* Path.Path
       const fs = yield* FileSystem.FileSystem
       const dbDir = path.join(options.home, ".gent", "fff")
       yield* fs.makeDirectory(dbDir, { recursive: true }).pipe(Effect.ignore)
       const native = yield* makeNativeService(dbDir)
-      return listIgnoredTargets(withFallback(native, walk), walk)
+      return listIgnoredTargets(withFallback(native, walk), matcherWalk)
     }),
   )
 

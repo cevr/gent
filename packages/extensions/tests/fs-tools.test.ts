@@ -904,6 +904,192 @@ describe("FileIndex fallback walk", () => {
   )
 })
 
+/**
+ * `.gitignore` cases where a glob library and git disagree easily. Each runs
+ * twice: git lists a work tree, and the matcher walk lists a plain copy.
+ */
+const GITIGNORE_CASES = {
+  "anchored-leading-slash": {
+    files: ["foo", "a/foo", "b.txt"],
+    ignores: { ".gitignore": "/foo\n" },
+  },
+  "anchored-middle": {
+    files: ["doc/a.txt", "x/doc/a.txt", "doc/sub/a.txt"],
+    ignores: { ".gitignore": "doc/*.txt\n" },
+  },
+  "dir-only": {
+    files: ["build/a", "x/build/b", "buildfile"],
+    ignores: { ".gitignore": "build/\n" },
+  },
+  "dir-only-file-named-same": { files: ["logs", "x/logs/a"], ignores: { ".gitignore": "logs/\n" } },
+  "double-star-prefix": {
+    files: ["foo", "a/foo", "a/b/foo/c"],
+    ignores: { ".gitignore": "**/foo\n" },
+  },
+  "double-star-suffix-negate": {
+    files: ["foo/a", "foo/keep.txt", "foo/sub/b"],
+    ignores: { ".gitignore": "foo/**\n!foo/keep.txt\n" },
+  },
+  "double-star-middle": {
+    files: ["a/b", "a/x/b", "a/x/y/b", "c/a/b"],
+    ignores: { ".gitignore": "a/**/b\n" },
+  },
+  "negate-inside-ignored-dir": {
+    files: ["dir/a", "dir/keep"],
+    ignores: { ".gitignore": "dir/\n!dir/keep\n" },
+  },
+  "negate-dir-star": {
+    files: ["dir/a", "dir/keep"],
+    ignores: { ".gitignore": "dir/*\n!dir/keep\n" },
+  },
+  "nested-relative": {
+    files: ["sub/a.log", "sub/deep/b.log", "a.log", "sub/x/y", "x/y"],
+    ignores: { "sub/.gitignore": "*.log\nx/y\n" },
+  },
+  "nested-negation-overrides-parent": {
+    files: ["a.log", "sub/b.log"],
+    ignores: { ".gitignore": "*.log\n", "sub/.gitignore": "!b.log\n" },
+  },
+  "escaped-hash": { files: ["#foo", "foo"], ignores: { ".gitignore": "\\#foo\n" } },
+  "escaped-bang": {
+    files: ["!important", "other", "x/y"],
+    ignores: { ".gitignore": "\\!important\n" },
+  },
+  "escaped-star": { files: ["a*b", "axb"], ignores: { ".gitignore": "a\\*b\n" } },
+  "braces-literal": { files: ["{a,b}", "a", "b"], ignores: { ".gitignore": "{a,b}\n" } },
+  "bracket-negation": { files: ["fa", "fb", "fc"], ignores: { ".gitignore": "f[!a]\n" } },
+  "leading-space": { files: [" foo", "foo"], ignores: { ".gitignore": " foo\n" } },
+  "trailing-escaped-space": { files: ["foo ", "foo"], ignores: { ".gitignore": "foo\\ \n" } },
+  "extglob-chars": { files: ["+(a)", "a", "aa"], ignores: { ".gitignore": "+(a)\n" } },
+  "dot-files-star": { files: [".env", "x/.env.local", "a"], ignores: { ".gitignore": ".env*\n" } },
+  "star-only": { files: ["a", "b/c"], ignores: { ".gitignore": "*\n!.gitignore\n" } },
+  question: { files: ["a1", "a12"], ignores: { ".gitignore": "a?\n" } },
+  "slash-star-star-alone": { files: ["a", "b/c"], ignores: { ".gitignore": "/**\n!/a\n" } },
+  paren: { files: ["a(1)", "a1"], ignores: { ".gitignore": "a(1)\n" } },
+  "negate-then-reignore": {
+    files: ["x.log", "keep.log"],
+    ignores: { ".gitignore": "*.log\n!keep.log\nkeep.log\n" },
+  },
+  "dir-pattern-with-slash-inside": {
+    files: ["a/b/c", "x/a/b/c"],
+    ignores: { ".gitignore": "a/b/\n" },
+  },
+} satisfies Record<
+  string,
+  { readonly files: ReadonlyArray<string>; readonly ignores: Record<string, string> }
+>
+
+const writeTree = Effect.fn("test.writeTree")(function* (
+  root: string,
+  files: ReadonlyArray<string>,
+  ignores: Record<string, string>,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const contents: Array<[string, string]> = files.map((file) => [file, "x"])
+  for (const [file, content] of [...contents, ...Object.entries(ignores)]) {
+    yield* fs.makeDirectory(path.dirname(path.join(root, file)), { recursive: true })
+    yield* fs.writeFileString(path.join(root, file), content)
+  }
+})
+
+describe("FileIndex outside a git work tree", () => {
+  it.scopedLive("the walk ignores exactly what git ignores", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const results: Record<string, { readonly git: string; readonly walk: string }> = {}
+      for (const [name, { files, ignores }] of Object.entries(GITIGNORE_CASES)) {
+        const repo = yield* fs.makeTempDirectoryScoped()
+        const plain = yield* fs.makeTempDirectoryScoped()
+        yield* writeTree(repo, files, ignores)
+        yield* writeTree(plain, files, ignores)
+        yield* runProcess("git", ["init", "-q", repo])
+        const git = yield* runProcess("git", [
+          "-C",
+          repo,
+          "-c",
+          "core.excludesFile=/dev/null",
+          "ls-files",
+          "-z",
+          "--others",
+          "--exclude-standard",
+        ])
+        const fileIndex = yield* FileIndex
+        const walked = yield* fileIndex.listFiles({ root: plain, cwd: plain })
+        results[name] = {
+          git: git.stdout
+            .split("\0")
+            .filter((entry) => entry.length > 0)
+            .toSorted()
+            .join(" | "),
+          walk: walked
+            .map((file) => file.relativePath)
+            .toSorted()
+            .join(" | "),
+        }
+      }
+      for (const [name, result] of Object.entries(results)) {
+        expect({ name, listed: result.walk }).toEqual({ name, listed: result.git })
+      }
+    }).pipe(Effect.provide(FallbackLayer), Effect.timeout("20 seconds")),
+  )
+})
+
+describe("FileIndex inside a git work tree", () => {
+  it.scopedLive("a subdirectory listing applies the repo's ignore rules above it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* writeTree(repo, ["pkg/src/a.ts", "pkg/dist/out.js", "pkg/secret.env"], {
+        ".gitignore": "dist/\n",
+      })
+      yield* fs.writeFileString(`${repo}/.git/info/exclude`, "*.env\n")
+
+      const fileIndex = yield* FileIndex
+      const files = yield* fileIndex.listFiles({ root: `${repo}/pkg`, cwd: `${repo}/pkg` })
+      expect(files.map((file) => file.relativePath)).toEqual(["src/a.ts"])
+      expect(files.map((file) => file.path)).toEqual([`${repo}/pkg/src/a.ts`])
+    }).pipe(Effect.provide(FallbackLayer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive(
+    "a tracked file stays listed when a pattern matches it; a deleted one does not",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* fs.makeTempDirectoryScoped()
+        yield* runProcess("git", ["init", "-q", repo])
+        yield* writeTree(repo, ["build/pinned.js", "build/gone.js", "src/a.ts"], {})
+        yield* runProcess("git", ["-C", repo, "add", "."])
+        yield* fs.writeFileString(`${repo}/.gitignore`, "build/\n")
+        yield* fs.writeFileString(`${repo}/build/fresh.js`, "x")
+        yield* fs.remove(`${repo}/build/gone.js`)
+
+        const fileIndex = yield* FileIndex
+        const files = yield* fileIndex.listFiles({ root: repo, cwd: repo })
+        expect(files.map((file) => file.relativePath).toSorted()).toEqual([
+          ".gitignore",
+          "build/pinned.js",
+          "src/a.ts",
+        ])
+      }).pipe(Effect.provide(FallbackLayer), Effect.timeout("8 seconds")),
+  )
+
+  it.scopedLive("an explicitly named ignored directory is listed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* writeTree(repo, ["dist/b.js", "src/a.ts"], { ".gitignore": "dist/\n" })
+
+      const fileIndex = yield* FileIndex
+      const files = yield* fileIndex.listFiles({ root: repo, cwd: `${repo}/dist` })
+      expect(files.map((file) => file.relativePath)).toEqual(["b.js"])
+    }).pipe(Effect.provide(FallbackLayer), Effect.timeout("8 seconds")),
+  )
+})
+
 describe("FileIndex native-first layer", () => {
   it.scopedLive("constructs without error (always succeeds)", () =>
     Effect.gen(function* () {
