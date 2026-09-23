@@ -22,7 +22,6 @@ export { StateLocation } from "./server.js"
 
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Layer output helper intentionally ignores empty error/context channels
 type LayerOutput<T> = T extends Layer.Layer<infer A, infer _E, infer _R> ? A : never
 type BuiltRpcHandlers = LayerOutput<typeof RpcHandlersLive>
 type DependenciesLayer = ReturnType<typeof createDependencies>

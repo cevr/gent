@@ -174,8 +174,6 @@ describe("bounded output", () => {
 
 // ── cell/cell-snapshot.test ─────────────────────────────────────────────────
 
-/* oxlint-disable effect/noGlobals, effect/noNodeBuiltinImport -- This test drives the vm realm boundary directly. */
-
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 type Context = ReturnType<typeof createContext>
 

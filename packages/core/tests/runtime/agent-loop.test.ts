@@ -5169,7 +5169,6 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                 yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
@@ -5198,7 +5197,6 @@ describe("streaming", () => {
           expect(finishedB._tag).toBe("Some")
           const statusA = fiberA.pollUnsafe()
           expect(statusA).toBeUndefined()
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiberA)
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
@@ -5217,7 +5215,6 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                 yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
@@ -5276,7 +5273,6 @@ describe("streaming", () => {
           const queuedB = yield* Fiber.join(fiberB).pipe(Effect.timeoutOption("200 millis"))
           expect(queuedB._tag).toBe("Some")
           expect(calls).toBe(1)
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiberA)
           yield* waitForPhase(
@@ -5308,7 +5304,6 @@ describe("streaming", () => {
         return Effect.succeed(
           Stream.fromEffect(
             Effect.gen(function* () {
-              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
               yield* Deferred.succeed(started, void 0)
               yield* Deferred.await(gate)
               return finishPart({ finishReason: "stop" })
@@ -5341,9 +5336,7 @@ describe("streaming", () => {
           expect(finishedA._tag).toBe("Some")
           const statusB = fiberB.pollUnsafe()
           expect(statusB).toBeUndefined()
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gateA, void 0)
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gateB, void 0)
           yield* Fiber.join(fiberB)
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
@@ -5362,7 +5355,6 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                 yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
@@ -5390,7 +5382,6 @@ describe("streaming", () => {
           yield* Deferred.await(firstStarted)
           yield* submitAgentLoop(agentLoop, second)
           yield* submitAgentLoop(agentLoop, third)
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber)
           yield* waitForPhase(
@@ -5579,7 +5570,6 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                 yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
@@ -5612,7 +5602,6 @@ describe("streaming", () => {
             message: "steer now",
             agent: helperAgent.name,
           })
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber)
           yield* waitForPhase(
@@ -5640,7 +5629,6 @@ describe("streaming", () => {
           return Effect.succeed(
             Stream.fromEffect(
               Effect.gen(function* () {
-                // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                 yield* Deferred.succeed(firstStarted, void 0)
                 yield* Deferred.await(gate)
                 return finishPart({ finishReason: "stop" })
@@ -5689,7 +5677,6 @@ describe("streaming", () => {
             branchId: BranchId.make("b1"),
           })
           expect(secondSnapshot).toEqual(snapshot)
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber)
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
@@ -6856,11 +6843,8 @@ const makeAgentLoopServiceExternalTurn = Effect.gen(function* () {
           workspaceId: DefaultWorkspaceId,
           message,
           // Actor operation payloads require optional fields explicitly.
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           agentOverride: input.agentName,
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           runSpec: input.runSpec,
-          // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
           interactive: input.interactive,
         }
         yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
@@ -6891,11 +6875,8 @@ const runAgentLoopExternalTurn = (
             workspaceId: DefaultWorkspaceId,
             message,
             // Actor operation payloads require optional fields explicitly.
-            // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
             agentOverride: options?.agentOverride,
-            // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
             runSpec: options?.runSpec,
-            // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
             interactive: options?.interactive,
           }),
         )

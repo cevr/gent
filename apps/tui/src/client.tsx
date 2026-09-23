@@ -249,9 +249,7 @@ const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   name: Schema.String,
-  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset model.
   modelId: Schema.UndefinedOr(ModelId),
-  // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset reasoning level.
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 
@@ -269,9 +267,7 @@ export const SessionStateEvent = Schema.TaggedUnion({
   UpdateName: { name: Schema.String },
   UpdateBranch: { branchId: BranchId },
   UpdateSettings: {
-    // eslint-disable-next-line effect/noNullish -- RPC updates preserve an unset model.
     modelId: Schema.UndefinedOr(ModelId),
-    // eslint-disable-next-line effect/noNullish -- RPC updates preserve an unset reasoning level.
     reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
   },
 })
@@ -824,7 +820,6 @@ interface ClientSessionValue {
   createSession: () => void
   /** Open the session a confirmed handoff produces: linked to the current one, seeded with the summary. */
   openHandoffSession: (summary: string) => void
-  // eslint-disable-next-line effect/noNullish -- session switching accepts an optional agent override.
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string, agent?: AgentName) => void
   clearSession: () => void
   /** Replace the session's settings from its current ones; the server reply is folded back. */
@@ -836,16 +831,13 @@ interface ClientSessionValue {
   listMessages: Effect.Effect<readonly Message[], GentClientRpcError>
   listSessions: Effect.Effect<readonly DomainSession[], GentClientRpcError>
   listBranches: Effect.Effect<readonly Branch[], GentClientRpcError>
-  // eslint-disable-next-line effect/noNullish -- RPC branch creation accepts an omitted name.
   createBranch: (name?: string) => Effect.Effect<BranchId, GentClientRpcError>
   getBranchTree: Effect.Effect<readonly BranchTreeNode[], GentClientRpcError>
-  // eslint-disable-next-line effect/noNullish -- RPC branch forking accepts an omitted name.
   forkBranch: (messageId: MessageId, name?: string) => Effect.Effect<BranchId, GentClientRpcError>
   drainQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
   getQueuedMessages: Effect.Effect<QueueSnapshot, GentClientRpcError>
 
   // Branch navigation (fire-and-forget)
-  // eslint-disable-next-line effect/noNullish -- RPC branch switching accepts an omitted summary flag.
   switchBranch: (branchId: BranchId) => void
 }
 
@@ -952,7 +944,6 @@ interface ClientProviderProps extends ParentProps {
   log: ClientLog
   // eslint-disable-next-line effect/noNullish -- bootstrap passes no session when starting fresh.
   initialSession: Session | undefined
-  // eslint-disable-next-line effect/noNullish -- bootstrap may omit an agent override.
   initialAgent?: AgentName
   /**
    * Host-provided platform services (e.g. `FileSystem`, `ChildProcessSpawner`).

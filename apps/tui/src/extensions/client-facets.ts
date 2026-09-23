@@ -614,7 +614,6 @@ export const makeClientSessionResource = <A>(opts: {
   readonly cast: <B, E>(effect: Effect.Effect<B, E, never>) => void
   readonly label: string
   readonly fetch: (session: ActiveClientSession) => Effect.Effect<A, Error>
-  // eslint-disable-next-line effect/noNullish -- subscription is optional for static resources.
   readonly subscribe?: (refetch: () => void) => () => void
 }): Effect.Effect<ClientSessionResource<A>> =>
   Effect.sync(() => {
@@ -873,7 +872,6 @@ type MutableClientContributions = {
   -readonly [Key in keyof ClientContributions]: ClientContributions[Key]
 }
 
-// eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
 const append = <A>(
   // eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
   left: ReadonlyArray<A> | undefined,

@@ -439,7 +439,6 @@ const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown
 // oxlint-disable-next-line effect/noUnknownParameters -- Tool output is decoded at this schema boundary.
 export const encodeToolOutput = (value: unknown): string => encodeJson(value)
 
-// oxlint-disable-next-line effect/noUnknownParameters -- Persisted tool output crosses a schema boundary.
 export const decodeToolOutput = (value: string): Option.Option<unknown> =>
   Result.try(() => decodeJson(value)).pipe(Result.getSuccess)
 

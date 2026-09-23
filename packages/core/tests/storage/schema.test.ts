@@ -53,7 +53,6 @@ describe("feature migrations", () => {
     Effect.gen(function* () {
       expect(yield* tableExists("widgets")).toBe(false)
       expect(yield* appliedMigrations).not.toContain("widgets")
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer under test.
     }).pipe(Effect.provide(kernelOnly)),
   )
 
@@ -63,7 +62,6 @@ describe("feature migrations", () => {
       expect(yield* tableExists("widgets")).toBe(true)
       expect(names.at(-1)).toBe("widgets")
       expect(names.indexOf("widgets")).toBeGreaterThan(names.indexOf("message_insertion_order"))
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer under test.
     }).pipe(Effect.provide(withWidgets)),
   )
 })

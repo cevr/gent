@@ -536,7 +536,6 @@ const { ListThingsRpc } = defineRequests(ExtensionId.make("@test/autocomplete"),
     execute: () => Effect.succeed([]),
   }),
 })
-// eslint-disable-next-line effect/noNullish -- fake transport mirrors the SDK's absent session callback.
 type FakeSession =
   | {
       sessionId: SessionId

@@ -745,7 +745,6 @@ type AuthGateState = "checking" | "open" | "closed" | "error"
 
 interface SessionControllerState {
   readonly authGate: AuthGateState
-  // eslint-disable-next-line effect/noNullish -- reducer consumers expose the validated agent as an optional snapshot field.
   readonly validatedAgent?: string
   readonly authCheckVersion: number
   readonly queue: QueueState

@@ -22,7 +22,6 @@ const source = Effect.runSync(
     const home = yield* makeTempDirectoryScoped("gent-no-catalog-")
     const platform = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
     return { home, platform } satisfies CatalogSource
-    // oxlint-disable-next-line effect/noInlineProvide -- This helper composes the platform layer it captures.
   }).pipe(Effect.provide(platformLayer), Scope.provide(scope)),
 )
 
