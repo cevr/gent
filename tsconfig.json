@@ -124,7 +124,7 @@
             }
           },
           {
-            "include": ["lint/**/*.ts"],
+            "include": ["packages/tooling/src/gent-rules.ts"],
             "options": {
               "diagnosticSeverity": {
                 "nodeBuiltinImport": "off"

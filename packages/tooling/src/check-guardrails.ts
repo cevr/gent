@@ -47,7 +47,7 @@ const readJsonFile = Effect.fn("Tooling.readJsonFile")(function* (path: string) 
 })
 
 const OXLINT_CONFIG = ".oxlintrc.json"
-const LINT_PLUGIN = "lint/gent-rules.ts"
+const LINT_PLUGIN = "packages/tooling/src/gent-rules.ts"
 
 /** The two findings that read the lint config rather than one source file. */
 const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (

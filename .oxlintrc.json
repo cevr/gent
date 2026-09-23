@@ -9,7 +9,7 @@
     "perf": "error"
   },
   "plugins": ["typescript", "import", "node"],
-  "jsPlugins": ["./lint/gent-rules.ts", "oxlint-plugin-effect/plugin"],
+  "jsPlugins": ["./packages/tooling/src/gent-rules.ts", "oxlint-plugin-effect/plugin"],
   "rules": {
     // Custom — no positional error args in Effect.log*
     "gent/no-positional-log-error": "error",
@@ -140,7 +140,7 @@
     },
     {
       // The lint plugin runs inside oxlint's Node host, not in an Effect runtime.
-      "files": ["lint/**/*.ts"],
+      "files": ["packages/tooling/src/gent-rules.ts"],
       "rules": {
         "effect/maxCognitiveComplexity": "off",
         "effect/noNodeBuiltinImport": "off",

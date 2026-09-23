@@ -711,7 +711,7 @@ describe("pre-commit hook runs the guards", () => {
 // ── lint config ─────────────────────────────────────────────────────────────
 
 const CONFIG = ".oxlintrc.json"
-const PLUGIN = "lint/gent-rules.ts"
+const PLUGIN = "packages/tooling/src/gent-rules.ts"
 
 const messages = (findings: ReadonlyArray<{ readonly message: string }>): ReadonlyArray<string> =>
   findings.map((finding) => finding.message)

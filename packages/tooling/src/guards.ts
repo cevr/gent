@@ -894,7 +894,7 @@ export const findHookWithoutGuards = (file: string, text: string): ReadonlyArray
  * - An `.oxlintrc.json` override whose `files` glob matches no tracked file.
  *   The override for `packages/sdk/src/supervisor.ts` outlived that file and
  *   kept turning a rule off for nothing.
- * - A rule defined under `lint/` that the root config never enables. Five such
+ * - A rule defined in `gent-rules.ts` that the root config never enables. Five such
  *   rules accumulated; one of them (`no-make-unsafe`) could not be enabled at
  *   all, because shipped code would have failed it.
  * - A `GENT_*` environment variable read in the source with nothing to set it.
@@ -1192,7 +1192,7 @@ export const findPlatformDuplicationViolations = (
  *
  * Retired `Bun.*` members (`Bun.Glob`, `Bun.randomUUIDv7` outside the platform
  * adapter) are banned by the `gent/no-bun-outside-adapter` rule in
- * `lint/gent-rules.ts` instead, because only the AST sees a member access.
+ * `gent-rules.ts` instead, because only the AST sees a member access.
  *
  * @module
  */
