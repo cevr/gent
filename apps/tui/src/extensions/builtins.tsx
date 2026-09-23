@@ -37,7 +37,6 @@ import {
   sessionQuery,
   shortId,
   statusLabelContribution,
-  textWidth,
   truncate,
   truncatePath,
   UserRow,
@@ -729,19 +728,9 @@ const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDet
 /** The sender line fits the id: an auto-named child carries its whole task in the name. */
 const SENDER_NAME_MAX_COLUMNS = 32
 
-const graphemes = new Intl.Segmenter([], { granularity: "grapheme" })
-
-/** Cuts by terminal columns and whole graphemes, so a wide or combined character is never split. */
-const shortName = (name: string): string => {
-  const flat = name.replace(/\s+/g, " ").trim()
-  if (textWidth(flat) <= SENDER_NAME_MAX_COLUMNS) return flat
-  let kept = ""
-  for (const { segment } of graphemes.segment(flat)) {
-    if (textWidth(kept + segment) > SENDER_NAME_MAX_COLUMNS - 1) break
-    kept += segment
-  }
-  return `${kept.trimEnd()}…`
-}
+/** Collapses runs of whitespace, then cuts by terminal columns via `truncate`. */
+const shortName = (name: string): string =>
+  truncate(name.replace(/\s+/g, " ").trim(), SENDER_NAME_MAX_COLUMNS)
 
 /** Who wrote a sent message: the relation, the cut name, and the short session id. */
 const senderLine = ({ from }: SessionMessageDetails): string => {
