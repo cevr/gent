@@ -6,7 +6,6 @@ import {
   Duration,
   Effect,
   Encoding,
-  Equal,
   Exit,
   FileSystem,
   Layer,
@@ -29,7 +28,6 @@ import {
   isRecordArray,
   type ModelDriverContribution,
   ProviderAuthError,
-  type ProviderAuthInfo,
   type ProviderAuthorizationResult,
   type ProviderHints,
   runProcess,
@@ -48,6 +46,7 @@ import {
   explainCredentialFailure,
   freshCredentials,
   freshEnoughAt,
+  HttpResponseField,
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
@@ -143,16 +142,16 @@ export const getModelOverride = (modelId: string): Option.Option<ModelOverride> 
   return Option.none()
 }
 
-/** Currently-advertised Claude Code CLI version, used by the billing
- *  signature. Override via `ANTHROPIC_CLI_VERSION` env var at the call
- *  site (kept here as the default for the helper). */
-export const getCcVersion = (): string => MODEL_CONFIG.ccVersion
-
 /**
  * Heuristic — does this model id look like opus/sonnet 4.6+ (the
  * versions where 1M-context is default)? Lifted from the opencode
  * reference; broader than a pure version bump because date-suffix
  * model ids (`-20250514`) get treated as `x.0`.
+ *
+ * It needs `family-major-minor`. Ids without a minor version
+ * (`claude-sonnet-5`, `claude-opus-5`) and families other than opus and
+ * sonnet (`claude-fable-5`) get no `context-1m` beta. That is intended:
+ * those models have a 1M context window by default and need no beta.
  */
 export const supports1mContext = (modelId: string): boolean => {
   const lower = modelId.toLowerCase()
@@ -415,139 +414,37 @@ export const buildBillingHeaderValue = (
 // ── beta cache ──────────────────────────────────────────────────────────────
 
 /**
- * AnthropicBetaCache — cross-request learning cache for "betas the
- * server rejected for this model".
- *
- * This isn't just per-request retry state — it's session-level memory
- * so that turn N+1 doesn't include a beta turn N already learned the
- * server hates. It is a service, so it composes through Layer and
- * holds no import-time mutable state.
- *
- * Two implicit clear conditions:
- *   1. `betaFlags` env changes — user toggled flags, prior learning
- *      may no longer apply.
- *   2. `modelId` changes — different model, different beta surface.
- *
- * `getExcluded` takes `currentBetaFlags` as a parameter (not yielded
- * from a hidden module). Production wiring passes the env beta flags;
- * tests can pass anything they want. No global mutation.
+ * Betas the server rejected, by model id. The Ref lives as long as the
+ * extension, so turn N+1 does not resend a beta that turn N learned the
+ * server rejects, and each model keeps its own learning when requests
+ * switch between models (a child or a summarizer on another model).
+ * `ANTHROPIC_BETA_FLAGS` is read once at setup, so the learning cannot
+ * go stale inside one extension instance.
  */
+export type BetaExclusions = ReadonlyMap<string, ReadonlySet<string>>
 
-// ── Internal cache cell ──
-
-export interface BetaCacheCell {
-  readonly map: ReadonlyMap<string, ReadonlySet<string>>
-  readonly lastBetaFlags: Option.Option<string>
-  readonly lastModelId: Option.Option<string>
-}
-
-export const EMPTY_BETA_CELL: BetaCacheCell = {
-  map: new Map(),
-  lastBetaFlags: Option.none(),
-  lastModelId: Option.none(),
-}
-
-const cellAfterMaybeClear = (
-  cell: BetaCacheCell,
-  currentBetaFlags: Option.Option<string>,
+const excludedBetas = (
+  exclusions: Ref.Ref<BetaExclusions>,
   modelId: string,
-): BetaCacheCell => {
-  // Env betaFlags changed → clear everything.
-  if (!Equal.equals(cell.lastBetaFlags, currentBetaFlags)) {
-    return { map: new Map(), lastBetaFlags: currentBetaFlags, lastModelId: Option.some(modelId) }
-  }
-  // Model changed → clear. The first request has nothing to clear.
-  if (Option.isSome(cell.lastModelId) && cell.lastModelId.value !== modelId) {
-    return { map: new Map(), lastBetaFlags: currentBetaFlags, lastModelId: Option.some(modelId) }
-  }
-  return { ...cell, lastModelId: Option.some(modelId) }
-}
-
-// ── Service interface ──
-
-export interface AnthropicBetaCacheApi {
-  /**
-   * Get the set of betas previously learned to be rejected for `modelId`
-   * under the current `betaFlags` env. Auto-clears the entire cache if
-   * either the env flags or the model differs from the last call.
-   */
-  readonly getExcluded: (
-    modelId: string,
-    currentBetaFlags: Option.Option<string>,
-  ) => Effect.Effect<ReadonlySet<string>>
-  /**
-   * Record that `beta` was rejected for `modelId` under the current
-   * `betaFlags` env. Runs the same env/model-change clear logic as
-   * `getExcluded` so the call is standalone-safe (no hidden ordering
-   * contract).
-   */
-  readonly recordExcluded: (
-    modelId: string,
-    beta: string,
-    currentBetaFlags: Option.Option<string>,
-  ) => Effect.Effect<void>
-}
-
-// ── Service tag ──
-
-export class AnthropicBetaCache extends Context.Service<
-  AnthropicBetaCache,
-  AnthropicBetaCacheApi
->()("@gent/extensions/src/anthropic/AnthropicBetaCache") {
-  static layer: Layer.Layer<AnthropicBetaCache> = Layer.effect(
-    AnthropicBetaCache,
-    Effect.gen(function* () {
-      const cellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-      return AnthropicBetaCache.buildService(cellRef)
-    }),
+): Effect.Effect<ReadonlySet<string>> =>
+  Ref.get(exclusions).pipe(
+    Effect.map((byModel) =>
+      Option.getOrElse(Option.fromNullishOr(byModel.get(modelId)), () => new Set<string>()),
+    ),
   )
 
-  /**
-   * The cell Ref is provided externally so the cache lives for the
-   * extension lifetime, not one `resolveModel` call. A beta the server
-   * rejected on turn N stays excluded on turn N+1.
-   */
-  static layerFromRef = (cellRef: Ref.Ref<BetaCacheCell>): Layer.Layer<AnthropicBetaCache> =>
-    Layer.succeed(AnthropicBetaCache, AnthropicBetaCache.buildService(cellRef))
-
-  private static buildService = (cellRef: Ref.Ref<BetaCacheCell>): AnthropicBetaCacheApi => {
-    const getExcluded = (
-      modelId: string,
-      currentBetaFlags: Option.Option<string>,
-    ): Effect.Effect<ReadonlySet<string>> =>
-      Ref.modify(cellRef, (cell) => {
-        const next = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
-        const excluded = Option.getOrElse(
-          Option.fromNullishOr(next.map.get(modelId)),
-          () => new Set<string>(),
-        )
-        return [excluded, next]
-      })
-
-    const recordExcluded = (
-      modelId: string,
-      beta: string,
-      currentBetaFlags: Option.Option<string>,
-    ): Effect.Effect<void> =>
-      Ref.update(cellRef, (cell) => {
-        // Apply the same clear/seed transition as getExcluded so the
-        // call is standalone-safe — no hidden contract that
-        // recordExcluded must follow a getExcluded.
-        const seeded = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
-        const existing = Option.getOrElse(
-          Option.fromNullishOr(seeded.map.get(modelId)),
-          () => new Set<string>(),
-        )
-        const updated = new Set(existing)
-        updated.add(beta)
-        const nextMap = new Map(seeded.map)
-        nextMap.set(modelId, updated)
-        return { ...seeded, map: nextMap }
-      })
-
-    return AnthropicBetaCache.of({ getExcluded, recordExcluded })
-  }
-}
+const recordExcludedBeta = (
+  exclusions: Ref.Ref<BetaExclusions>,
+  modelId: string,
+  beta: string,
+): Effect.Effect<void> =>
+  Ref.update(exclusions, (byModel) => {
+    const held = Option.getOrElse(
+      Option.fromNullishOr(byModel.get(modelId)),
+      () => new Set<string>(),
+    )
+    return new Map(byModel).set(modelId, new Set([...held, beta]))
+  })
 
 // ── oauth credentials ───────────────────────────────────────────────────────
 
@@ -574,9 +471,6 @@ const decodeOAuthTokenResponse = Schema.decodeUnknownOption(
 )
 
 export type ClaudeCredentials = typeof ClaudeCredentials.Type
-
-export const freshEnoughForUse = (creds: ClaudeCredentials, now: number): boolean =>
-  freshEnoughAt(creds.expiresAt, now)
 
 const decodeCredentials = (raw: string): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
   Schema.decodeEffect(Schema.fromJsonString(ClaudeCredentialsWrapper))(raw).pipe(
@@ -674,7 +568,8 @@ export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official
  * CLI version: the live env wins, otherwise the `MODEL_CONFIG.ccVersion`
  * baseline. Pure function — env comes from the caller's `AnthropicPlatform`.
  */
-const getCliVersion = (env: AnthropicKeychainEnv): string => env.cliVersion ?? getCcVersion()
+const getCliVersion = (env: AnthropicKeychainEnv): string =>
+  env.cliVersion ?? MODEL_CONFIG.ccVersion
 
 const getUserAgent = (env: AnthropicKeychainEnv): string =>
   env.userAgent ?? `claude-cli/${getCliVersion(env)} (external, cli)`
@@ -1149,8 +1044,7 @@ const refreshClaudeCodeCredentials = (
 // ── credential service ──────────────────────────────────────────────────────
 
 /**
- * AnthropicCredentialService — Claude Code credentials behind the shared
- * credential cache (`makeCredentialCache` in `providers.ts`).
+ * Claude Code credentials behind the shared credential cache (`makeCredentialCache` in `providers.ts`).
  *
  * The keychain is the source of truth: once the cache TTL lapses the
  * service re-reads it, and only refreshes (OAuth or CLI fallback) when
@@ -1188,29 +1082,12 @@ const realIO: AnthropicCredentialIO = {
   refresh: refreshClaudeCodeCredentials,
 }
 
-// ── Service tag ──
-
-export class AnthropicCredentialService extends Context.Service<
-  AnthropicCredentialService,
-  CredentialCache<ClaudeCredentials>
->()("@gent/extensions/src/anthropic/AnthropicCredentialService") {
-  /** Test-friendly variant — accepts the IO seam so tests can drive read/refresh deterministically. */
-  static layerFromIO = (io: AnthropicCredentialIO, authInfo?: ProviderAuthInfo) =>
-    Layer.effect(
-      AnthropicCredentialService,
-      SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
-        Effect.flatMap((cellRef) => build(cellRef, io, authInfo)),
-      ),
-    )
-}
-
 /** The production credential cache over the Claude Code keychain and the real platform. */
 const buildLiveCredentialCache = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
-  authInfo: ProviderAuthInfo,
   platform: AnthropicPlatformApi,
 ): Effect.Effect<CredentialCache<ClaudeCredentials>> =>
-  Effect.suspend(() => build(cellRef, realIO, authInfo)).pipe(
+  Effect.suspend(() => makeAnthropicCredentialCache(cellRef, realIO)).pipe(
     // @effect-diagnostics-next-line strictEffectProvide:off
     Effect.provide(Layer.merge(BunServices.layer, Layer.succeed(AnthropicPlatform, platform))),
   )
@@ -1218,24 +1095,23 @@ const buildLiveCredentialCache = (
 /** What the user does when the Claude Code sign-in no longer works. */
 const CLAUDE_SIGN_IN_HINT = "Run `claude` to sign in again, then choose Claude Code in /auth."
 
-const build = (
+/** The Anthropic credential cache over a cell that outlives one `resolveModel` call. */
+export const makeAnthropicCredentialCache = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
   io: AnthropicCredentialIO,
-  authInfo?: ProviderAuthInfo,
 ): Effect.Effect<CredentialCache<ClaudeCredentials>, never, AnthropicCredentialIORequirements> =>
   Effect.gen(function* () {
     const ioContext = yield* Effect.context<AnthropicCredentialIORequirements>()
     const read = io.read.pipe(Effect.provideContext(ioContext))
-    const cache = yield* makeCredentialCache({
+    const cache = yield* makeCredentialCache<ClaudeCredentials>({
       label: "Anthropic",
       credentials: ClaudeCredentials,
       cellRef,
-      authInfo: Option.fromNullishOr(authInfo),
       seed: Option.none(),
       expiresAt: (creds) => creds.expiresAt,
       // A keychain miss surfaces as ProviderAuthError; swallowing it
       // turns the miss into a refresh attempt instead of a failure.
-      read: () => Effect.option(read),
+      read: Option.some(() => Effect.option(read)),
       // A refresh failure keeps its own reason (locked keychain, access
       // denied, OAuth 4xx); only a refresh that returns an expired token
       // gets the generic hint.
@@ -1252,18 +1128,17 @@ const build = (
             }),
           )
           const now = yield* Clock.currentTimeMillis
-          if (freshEnoughForUse(refreshed, now)) return refreshed
+          if (freshEnoughAt(refreshed.expiresAt, now)) return refreshed
           return yield* new ProviderAuthError({
             message: `Claude Code credentials are expired. ${CLAUDE_SIGN_IN_HINT}`,
           })
         }),
-      toPersisted: (creds) => ({
-        access: creds.accessToken,
-        refresh: creds.refreshToken,
-        expires: creds.expiresAt,
-      }),
+      // The keychain is the source of truth, and the refresh writes it.
+      // The stored `oauth` entry only selects this path; nothing reads its
+      // tokens, so a refresh is not written there.
+      store: Option.none(),
     })
-    return AnthropicCredentialService.of(cache)
+    return cache
   })
 
 // ── keychain client ─────────────────────────────────────────────────────────
@@ -1712,17 +1587,13 @@ export const transformPayload = (
 
 // ── Response Transforms (incoming) ──
 
-/** Strip `mcp_` and lowercase the first char so gent sees its
- *  registered tool name (`Bash` from the wire → `bash` internally). */
-const stripPrefix = (name: string): string => unprefixName(name)
-
 /** Strip mcp_ prefix from tool_use content blocks in a non-streaming response */
 export const transformResponseContent = (
   content: ReadonlyArray<JsonRecord>,
 ): ReadonlyArray<JsonRecord> =>
   content.map((block) => {
     if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
-      return { ...block, name: stripPrefix(block["name"]) }
+      return { ...block, name: unprefixName(block["name"]) }
     }
     return block
   })
@@ -1741,7 +1612,7 @@ export const transformStreamEvent = (
   if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
     return decodeMessageStreamEvent({
       ...event,
-      content_block: { ...block, name: stripPrefix(block["name"]) },
+      content_block: { ...block, name: unprefixName(block["name"]) },
     })
   }
   return event
@@ -1840,7 +1711,7 @@ const makeKeychainClientLayer = (
  * (`x-api-key`, `anthropic-version`, `accept: application/json`). This
  * middleware augments + overrides what OAuth needs:
  *
- * - Sets `authorization: Bearer <accessToken>` from `AnthropicCredentialService`
+ * - Sets `authorization: Bearer <accessToken>` from the credential cache
  * - Sets `anthropic-beta: <merged>` from per-model defaults
  * - Sets `x-app: cli`, `user-agent: claude-cli/<version> (external, cli)`,
  *   `anthropic-dangerous-direct-browser-access: true`
@@ -1853,17 +1724,12 @@ const makeKeychainClientLayer = (
  * what we want — replacing it would mean re-implementing it. See
  * `~/.cache/repo/effect-ts/effect-smol/packages/ai/anthropic/src/AnthropicClient.ts:215-232`.
  *
- * Why a factory `(creds) => (client) => client` instead of grabbing the
- * service from context inside `mapRequestEffect`: the SDK's
+ * Why a factory `(creds) => (client) => client`: the SDK's
  * `transformClient` signature is `(HttpClient) => HttpClient`, which
- * requires the returned client's requirement channel to be empty.
- * `mapRequestEffect` widens that channel to whatever services its body
- * yields — so reading the service from context per-request would
- * surface `AnthropicCredentialService` as a requirement and not
- * type-check against the SDK signature. The factory captures the
- * service instance in a closure; per-request semantics are preserved
- * because each call to `creds.getFresh` still consults the live
- * `Ref` cache.
+ * requires the returned client's requirement channel to be empty, so the
+ * credential cache is a closure argument. Per-request semantics are
+ * preserved because each call to `creds.getFresh` still consults the
+ * live `Ref` cache.
  *
  * The middleware stack, layered outside-in via `pipe`:
  *   - mapRequestEffect (preprocess) — auth + cache-aware headers
@@ -1880,8 +1746,8 @@ const makeKeychainClientLayer = (
  * containing "Extra usage is required for long context requests" or
  * "long context beta is not yet available". The fix is to retry with
  * one of those betas removed, learning across requests so the next
- * turn doesn't re-include it. The cross-request learning state lives
- * in `AnthropicBetaCache` (Commit 2c); this middleware reads from it
+ * turn doesn't re-include it. The cross-request learning lives in the
+ * `BetaExclusions` Ref, keyed by model; this middleware reads from it
  * in `mapRequestEffect` (so the outgoing header reflects what we've
  * learned) and writes to it in the beta-retry `transformResponse` (so
  * the next attempt's preprocess sees the updated set).
@@ -1891,19 +1757,13 @@ const makeKeychainClientLayer = (
 
 /**
  * Internal error driving the long-context beta retry. Carries the response
- * so the catch-tag can hand the final 400 back to the caller. `response` is
- * `Schema.Any` because `HttpClientResponse` is a vendor class; the typed
- * accessor `getResponse` re-narrows it.
+ * so the catch-tag can hand the final 400 back to the caller.
  */
 class LongContextBetaError extends Schema.TaggedError<LongContextBetaError>(
   "@gent/extensions/src/anthropic/LongContextBetaError",
 )("LongContextBetaError", {
-  response: Schema.Any,
-}) {
-  getResponse(): HttpClientResponse.HttpClientResponse {
-    return this.response
-  }
-}
+  response: HttpResponseField,
+}) {}
 
 /**
  * Pick the next long-context beta to drop given the candidates the
@@ -1941,16 +1801,16 @@ const requestBodyText = (req: HttpClientRequest.HttpClientRequest): Option.Optio
 }
 
 /**
- * Build the OAuth header set for a request. `excluded` is an optional
- * set of betas to drop (used by the beta-retry middleware in commit
- * 2d; for 2a it's always empty / undefined).
+ * Build the OAuth header set for a request. `excluded` holds the betas
+ * the server rejected for this model; the beta-retry middleware learns
+ * them.
  */
 const buildOauthHeaders = (
   req: HttpClientRequest.HttpClientRequest,
   accessToken: string,
   modelId: string,
   env: AnthropicKeychainEnv,
-  excluded?: Set<string>,
+  excluded: ReadonlySet<string>,
 ): Headers.Headers => {
   // Start from the SDK's existing headers (preserve `anthropic-version`
   // etc.) but drop `x-api-key` since OAuth uses Bearer.
@@ -1959,7 +1819,7 @@ const buildOauthHeaders = (
   const modelBetas = getModelBetas(
     modelId,
     Option.fromNullishOr(env.betaFlags),
-    Option.fromNullishOr(excluded),
+    Option.some(excluded),
   )
   const incomingBeta = headers["anthropic-beta"] ?? ""
   const mergedBetas = Array.from(
@@ -1989,22 +1849,15 @@ const buildOauthHeaders = (
 /**
  * Build the `transformClient` value the Anthropic SDK accepts.
  *
- * Takes the `AnthropicCredentialService` instance as a closure
- * argument (not via `yield*` inside `mapRequestEffect`) because the
- * SDK's `transformClient` signature `(HttpClient) => HttpClient`
- * requires the returned client to have an empty requirement channel —
- * yielding the service from context inside the middleware would
- * surface it as a requirement and break the type.
- *
- * Per-request semantics are preserved: each request invokes
- * `creds.getFresh` which consults the live `Ref` cache. The closure
- * captures the dispatcher (the service instance), not a snapshot of
- * its state.
+ * Takes the credential cache as a closure argument: the SDK's
+ * `transformClient` signature `(HttpClient) => HttpClient` requires the
+ * returned client to have an empty requirement channel. Each request
+ * invokes `creds.getFresh`, which consults the live `Ref` cache.
  */
 export const buildKeychainTransformClient =
   (
     creds: CredentialCache<ClaudeCredentials>,
-    betaCache: AnthropicBetaCacheApi,
+    betaExclusions: Ref.Ref<BetaExclusions>,
     env: AnthropicKeychainEnv,
   ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   (client) =>
@@ -2013,13 +1866,12 @@ export const buildKeychainTransformClient =
         Effect.gen(function* () {
           const fresh = yield* freshCredentials(creds, req)
           const modelId = parseModelIdFromBody(requestBodyText(req))
-          const betaFlags = env.betaFlags
-          // Read the cross-request-learned exclusion set from the
-          // betaCache. On retry, mapRequestEffect re-runs and reads the
-          // updated set — the beta-retry transformResponse below records
-          // the rejected beta into the cache before failing to retry.
-          const excluded = yield* betaCache.getExcluded(modelId, Option.fromNullishOr(betaFlags))
-          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env, new Set(excluded))
+          // Read the betas learned to be rejected for this model. On retry,
+          // mapRequestEffect re-runs and reads the updated set — the
+          // beta-retry transformResponse below records the rejected beta
+          // before failing to retry.
+          const excluded = yield* excludedBetas(betaExclusions, modelId)
+          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env, excluded)
           return withHeaders(req, headers)
         }),
       ),
@@ -2047,7 +1899,7 @@ export const buildKeychainTransformClient =
                       // Body matches: try to record the next beta + retry.
                       const modelId = parseModelIdFromBody(requestBodyText(response.request))
                       const betaFlags = env.betaFlags
-                      return betaCache.getExcluded(modelId, Option.fromNullishOr(betaFlags)).pipe(
+                      return excludedBetas(betaExclusions, modelId).pipe(
                         Effect.flatMap((excluded) => {
                           const beta = pickNextBetaToExclude(
                             modelId,
@@ -2055,13 +1907,11 @@ export const buildKeychainTransformClient =
                             excluded,
                           )
                           if (Option.isNone(beta)) return Effect.succeed(response)
-                          return betaCache
-                            .recordExcluded(modelId, beta.value, Option.fromNullishOr(betaFlags))
-                            .pipe(
-                              Effect.flatMap(() =>
-                                Effect.fail(new LongContextBetaError({ response })),
-                              ),
-                            )
+                          return recordExcludedBeta(betaExclusions, modelId, beta.value).pipe(
+                            Effect.flatMap(() =>
+                              Effect.fail(new LongContextBetaError({ response })),
+                            ),
+                          )
                         }),
                       )
                     }),
@@ -2081,7 +1931,7 @@ export const buildKeychainTransformClient =
             while: (e) => e._tag === "LongContextBetaError",
             times: 8,
           }),
-          Effect.catchTag("LongContextBetaError", (e) => Effect.succeed(e.getResponse())),
+          Effect.catchTag("LongContextBetaError", (e) => Effect.succeed(e.response)),
         ),
       ),
       recoverUnauthorized(creds),
@@ -2089,10 +1939,9 @@ export const buildKeychainTransformClient =
 
 // ── extension ───────────────────────────────────────────────────────────────
 
-// Credential cache + refresh logic live in `AnthropicCredentialService`
-// (Effect-native). The OAuth path provides this service into the layer
-// that hosts `AnthropicClient`; the keychain transform middleware reads
-// from it per-request via `mapRequestEffect`.
+// Credential cache + refresh logic live in `makeAnthropicCredentialCache`.
+// The OAuth path hands the cache to the keychain transform middleware,
+// which reads it per request via `mapRequestEffect`.
 
 // Maps gent reasoning level to Anthropic effort.
 //
@@ -2148,13 +1997,11 @@ const makeApiKeyAnthropicLayer = (modelName: string, config: AnthropicConfig, ap
 /**
  * OAuth path: builds `AnthropicClient.layer` with `transformClient` set
  * to the keychain transform middleware (auth headers, long-context beta
- * retry, 401 recovery). Uses `Layer.unwrap` because the transform
- * factory needs the beta cache instance at construction time.
+ * retry, 401 recovery).
  *
- * `resolveModel` builds the credential cache, and this layer builds the
- * beta cache, over cells the Effectful `modelDrivers()` setup allocates
- * once. Cells allocated per layer build would reset both caches, killing
- * cross-request beta learning and credential reuse.
+ * The credential cell and the beta exclusions are allocated once in the
+ * extension setup. Cells allocated per layer build would reset both,
+ * killing cross-request beta learning and credential reuse.
  *
  * No `apiKey` is passed — the SDK's apiKey is optional and skips
  * `x-api-key` injection when absent (verified at
@@ -2166,19 +2013,12 @@ const makeOauthAnthropicLayer = (
   modelName: string,
   config: AnthropicConfig,
   creds: CredentialCache<ClaudeCredentials>,
-  betaCellRef: Ref.Ref<BetaCacheCell>,
+  betaExclusions: Ref.Ref<BetaExclusions>,
   platform: AnthropicPlatformApi,
 ) => {
-  const cacheLayer = AnthropicBetaCache.layerFromRef(betaCellRef)
-
-  const clientLayer = Layer.unwrap(
-    Effect.gen(function* () {
-      const cache = yield* AnthropicBetaCache
-      return AnthropicClient.layer({
-        transformClient: buildKeychainTransformClient(creds, cache, platform.env),
-      }).pipe(Layer.provide(FetchHttpClient.layer))
-    }),
-  ).pipe(Layer.provide(cacheLayer))
+  const clientLayer = AnthropicClient.layer({
+    transformClient: buildKeychainTransformClient(creds, betaExclusions, platform.env),
+  }).pipe(Layer.provide(FetchHttpClient.layer))
 
   const wrappedClient = makeKeychainClientLayer(creds).pipe(
     Layer.provide(clientLayer),
@@ -2200,7 +2040,7 @@ const makeOauthAnthropicLayer = (
  */
 export const buildAnthropicModelDriver = (
   credentialCellRef: CredentialCacheCellRef<ClaudeCredentials>,
-  betaCellRef: Ref.Ref<BetaCacheCell>,
+  betaExclusions: Ref.Ref<BetaExclusions>,
   envApiKey: Option.Option<string>,
   platform: AnthropicPlatformApi,
   catalog: CatalogSource,
@@ -2218,14 +2058,29 @@ export const buildAnthropicModelDriver = (
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {
       const auth = Option.fromNullishOr(authInfo)
-      // Precedence: stored API key > env API key > keychain/OAuth
+      const config = buildAnthropicConfig(Option.fromNullishOr(hints))
+
+      // Precedence, the same as OpenAI: stored Claude Code sign-in, then
+      // stored API key, then ANTHROPIC_API_KEY. A user who chooses Claude
+      // Code in /auth is not billed on a shell API key.
+      if (Option.isSome(auth) && auth.value.type === "oauth") {
+        // The credential cache and the beta cache are built over the
+        // extension-closure-owned cells, so cross-request beta learning and
+        // credential reuse survive. The credentials are checked before the
+        // layer exists, so an expired sign-in fails with its own message.
+        const creds = yield* buildLiveCredentialCache(credentialCellRef, platform)
+        yield* checkCredentials(creds)
+        return AiModel.make(
+          "anthropic",
+          modelName,
+          makeOauthAnthropicLayer(modelName, config, creds, betaExclusions, platform),
+        )
+      }
+
       let apiKey = envApiKey
       if (Option.isSome(auth) && auth.value.type === "api") {
         apiKey = Option.fromNullishOr(auth.value.key)
       }
-
-      const config = buildAnthropicConfig(Option.fromNullishOr(hints))
-
       if (Option.isSome(apiKey)) {
         return AiModel.make(
           "anthropic",
@@ -2234,31 +2089,11 @@ export const buildAnthropicModelDriver = (
         )
       }
 
-      // Fail closed — no stored API key, no env var, and no stored OAuth.
-      // (The OAuth layer builds over `authInfo` — with `authInfo` absent
-      // it builds an unauthenticated client that fails late as a generic
-      // HTTP error, masking the real auth failure for non-TUI callers.
-      // Keychain fallback is handled by the extension's `authorize` flow
-      // upstream; by the time we reach `resolveModel`, any valid creds
-      // have already been staged into `authInfo`.)
-      if (Option.isNone(auth) || auth.value.type !== "oauth") {
-        return yield* new ProviderAuthError({
-          message:
-            "Anthropic credentials unavailable: no Claude Code OAuth, stored API key, or ANTHROPIC_API_KEY env var",
-        })
-      }
-
-      // OAuth path: the credential cache and the beta cache are built over
-      // the extension-closure-owned cells, so cross-request beta learning
-      // and credential reuse survive. The credentials are checked before
-      // the layer exists, so an expired sign-in fails with its own message.
-      const creds = yield* buildLiveCredentialCache(credentialCellRef, auth.value, platform)
-      yield* checkCredentials(creds)
-      return AiModel.make(
-        "anthropic",
-        modelName,
-        makeOauthAnthropicLayer(modelName, config, creds, betaCellRef, platform),
-      )
+      // Fail closed: no stored sign-in, no stored API key, no env var.
+      return yield* new ProviderAuthError({
+        message:
+          "Anthropic credentials unavailable: no Claude Code OAuth, stored API key, or ANTHROPIC_API_KEY env var",
+      })
     }),
   auth: {
     methods: [
@@ -2271,7 +2106,7 @@ export const buildAnthropicModelDriver = (
         // The Claude Code authorize flow reads the primary account.
         let creds = yield* readClaudeCodeCredentials
         const now = yield* Clock.currentTimeMillis
-        if (!freshEnoughForUse(creds, now)) {
+        if (!freshEnoughAt(creds.expiresAt, now)) {
           // Use the returned creds — re-reading keychain after refresh
           // would silently lose direct-OAuth tokens whenever write-back
           // failed.
@@ -2332,13 +2167,13 @@ export const AnthropicExtension = defineExtension({
     // through SynchronizedRef.make instead of an unsafe closure escape hatch.
     const credentialCellRef =
       yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-    const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+    const betaExclusions = yield* Ref.make<BetaExclusions>(new Map())
 
     const catalog = yield* catalogSource(ctx.home)
 
     yield* ctx.register(
       "modelDriver",
-      buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform, catalog),
+      buildAnthropicModelDriver(credentialCellRef, betaExclusions, envApiKey, platform, catalog),
     )
   }),
 })

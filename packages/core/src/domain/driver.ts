@@ -97,13 +97,27 @@ export interface ProviderAuthInfo {
   readonly expires?: number
   /** OAuth account ID. */
   readonly accountId?: string
-  /** Persist updated auth back to the store (token refresh path). */
-  readonly persist?: (updated: {
-    access: string
-    refresh: string
-    expires: number
-    accountId?: string
-  }) => Effect.Effect<void, ProviderAuthError>
+  /**
+   * Read, then maybe write, the stored OAuth credential (token refresh
+   * path). `f` receives the OAuth credential the store holds now (none when
+   * it holds none) and returns a result plus the credential to write (none
+   * leaves the store as it is). The store runs each provider's writes one
+   * at a time, and every profile of the process shares the store, so a
+   * sign-in, a key change and each profile's refresh never interleave.
+   */
+  readonly update?: <A, E>(
+    f: (
+      stored: Option.Option<StoredOAuthCredentials>,
+    ) => Effect.Effect<readonly [A, Option.Option<StoredOAuthCredentials>], E>,
+  ) => Effect.Effect<A, E | ProviderAuthError>
+}
+
+/** The OAuth fields of a stored credential. */
+export interface StoredOAuthCredentials {
+  readonly access: string
+  readonly refresh: string
+  readonly expires: number
+  readonly accountId?: string
 }
 
 /** Persist auth credentials — invoked by `ProviderAuth` into a model driver's
