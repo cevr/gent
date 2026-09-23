@@ -315,6 +315,49 @@ describe("writeFileAtomic", () => {
     }).pipe(Effect.provide(recordingFs)),
   )
 
+  /** The platform file system, recording each staged sync and each rename in order. */
+  const syncOrder: Array<string> = []
+  const syncRecordingFs = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (fs) =>
+      FileSystem.FileSystem.of({
+        ...fs,
+        open: (file, options) =>
+          fs.open(file, options).pipe(
+            // The handle is a class instance: forward to it, bound, and
+            // record its sync.
+            Effect.map(
+              (handle) =>
+                new Proxy(handle, {
+                  get: (target, key) => {
+                    if (key === "sync")
+                      return Effect.sync(() => syncOrder.push("sync")).pipe(
+                        Effect.andThen(target.sync),
+                      )
+                    const value: unknown = Reflect.get(target, key, target)
+                    if (Predicate.isFunction(value)) return value.bind(target)
+                    return value
+                  },
+                }),
+            ),
+          ),
+        rename: (from, to) =>
+          Effect.sync(() => syncOrder.push("rename")).pipe(Effect.andThen(fs.rename(from, to))),
+      }),
+    ),
+  )
+
+  atomicTest("syncs the staged text to disk before the rename publishes it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      syncOrder.length = 0
+      yield* writeFileAtomic(`${dir}/state.json`, "durable")
+      expect(syncOrder).toEqual(["sync", "rename"])
+      expect(yield* fs.readFileString(`${dir}/state.json`)).toBe("durable")
+    }).pipe(Effect.provide(syncRecordingFs)),
+  )
+
   /**
    * The platform file system, where another writer creates the same staging
    * file just before this write's exclusive create, as a suffix collision does.

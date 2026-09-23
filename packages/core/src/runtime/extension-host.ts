@@ -58,6 +58,7 @@ import {
 } from "../domain/extension.js"
 import {
   type BranchId,
+  type ClientRequestGrant,
   ExtensionId,
   MessageId,
   ProcessGenerationId,
@@ -94,6 +95,7 @@ import { GentPlatform } from "./gent-platform.js"
 import {
   type ConfigLoadError,
   ConfigService,
+  fileVersion,
   type FreshConfig,
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
@@ -134,6 +136,7 @@ import {
   type MessageMetadata,
   type Session,
   turnCanAsk,
+  isSpawnedSession,
 } from "../domain/message.js"
 import {
   AgentLoop as AgentLoopActor,
@@ -982,27 +985,23 @@ const isExtensionFile = (entry: string): boolean =>
     return entry.endsWith(ext)
   })
 
+/** An extension file found on disk, and its version (`fileVersion`). */
+interface DiscoveredFile {
+  readonly path: string
+  readonly version: string
+}
+
 /**
- * Discover extension files from a directory, sorted by name. An entry that
- * cannot be read (a dangling symlink, a permission error) is a `load` failure
- * for that path alone; its siblings are still discovered.
+ * The extension files in a directory, sorted by path, and the entries that
+ * could not be read (a dangling symlink, a permission error). It reports
+ * nothing; `discoverDir` turns the unreadable entries into failures.
  */
-const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
-  dir: string,
-  scope: ExtensionScope,
-) {
+const scanDir = Effect.fn("ExtensionLoader.scanDir")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const paths: string[] = []
-  const failed: FailedExtension[] = []
-  const fail = (sourcePath: string, error: PlatformError.PlatformError) =>
-    Effect.gen(function* () {
-      const message = `Failed to read ${sourcePath}: ${error.message}`
-      failed.push(importFailure(path, sourcePath, scope, message))
-      yield* Effect.logWarning("extension.discover.failed").pipe(
-        Effect.annotateLogs({ path: sourcePath, scope, error: message }),
-      )
-    })
+  const paths: DiscoveredFile[] = []
+  const unreadable: Array<{ readonly path: string; readonly error: PlatformError.PlatformError }> =
+    []
 
   const listed = yield* Effect.result(
     Effect.gen(function* () {
@@ -1011,8 +1010,8 @@ const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
     }),
   )
   if (Result.isFailure(listed)) {
-    yield* fail(dir, listed.failure)
-    return { paths, failed }
+    unreadable.push({ path: dir, error: listed.failure })
+    return { paths, unreadable }
   }
 
   for (const entry of listed.success) {
@@ -1024,24 +1023,79 @@ const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
     const found = yield* Effect.result(
       Effect.gen(function* () {
         const stat = yield* fs.stat(filePath)
-        if (stat.type === "File" && isExtensionFile(entry)) return Option.some(filePath)
-        if (stat.type !== "Directory") return Option.none<string>()
-        // A directory extension is its index.ts/index.js/index.mjs.
+        if (stat.type === "File" && isExtensionFile(entry))
+          return Option.some({ path: filePath, version: fileVersion(stat) })
+        if (stat.type !== "Directory") return Option.none<DiscoveredFile>()
+        // A directory extension is its index.ts/index.js/index.mjs. Its
+        // version is the index's: an edit to a module it imports is not seen.
         for (const indexName of ["index.ts", "index.js", "index.mjs"]) {
           const indexPath = path.join(filePath, indexName)
-          if (yield* fs.exists(indexPath)) return Option.some(indexPath)
+          if (yield* fs.exists(indexPath)) {
+            const indexStat = yield* fs.stat(indexPath)
+            return Option.some({ path: indexPath, version: fileVersion(indexStat) })
+          }
         }
-        return Option.none<string>()
+        return Option.none<DiscoveredFile>()
       }),
     )
     if (Result.isFailure(found)) {
-      yield* fail(filePath, found.failure)
+      unreadable.push({ path: filePath, error: found.failure })
       continue
     }
     if (Option.isSome(found.success)) paths.push(found.success.value)
   }
 
-  return { paths: paths.sort(), failed }
+  return { paths: paths.toSorted((a, b) => a.path.localeCompare(b.path)), unreadable }
+})
+
+/**
+ * Discover extension files from a directory, sorted by name. An entry that
+ * cannot be read is a `load` failure for that path alone; its siblings are
+ * still discovered.
+ */
+const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
+  dir: string,
+  scope: ExtensionScope,
+) {
+  const path = yield* Path.Path
+  const scanned = yield* scanDir(dir)
+  const failed: FailedExtension[] = []
+  for (const entry of scanned.unreadable) {
+    const message = `Failed to read ${entry.path}: ${entry.error.message}`
+    failed.push(importFailure(path, entry.path, scope, message))
+    yield* Effect.logWarning("extension.discover.failed").pipe(
+      Effect.annotateLogs({ path: entry.path, scope, error: message }),
+    )
+  }
+  return { paths: scanned.paths, failed }
+})
+
+/**
+ * The extension files a profile would load, each with its version, and the
+ * paths that failed to read. A profile is keyed on it, so an added, removed,
+ * fixed or edited extension file reaches the next resolve.
+ */
+const discoveredFilesStamp = (inputs: {
+  readonly cwd: string
+  readonly home: string
+}): Effect.Effect<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path
+    const dirs = extensionDirectories(path, inputs)
+    const found = [yield* scanDir(dirs.userDir), yield* scanDir(dirs.projectDir)]
+    return found.flatMap(({ paths, unreadable }) => [
+      ...paths.map((file) => `${file.path}@${file.version}`),
+      ...unreadable.map((entry) => `!${entry.path}`),
+    ])
+  })
+
+/** The user and project extension directories a profile discovers. */
+const extensionDirectories = (
+  path: Path.Path,
+  inputs: { readonly cwd: string; readonly home: string },
+) => ({
+  userDir: path.join(inputs.home, GENT_CONFIG_DIRECTORY, "extensions"),
+  projectDir: path.join(path.resolve(inputs.cwd), GENT_CONFIG_DIRECTORY, "extensions"),
 })
 
 // Loading — import extension files via Bun native import()
@@ -1049,12 +1103,17 @@ const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
 // gent/no-dynamic-imports: allow extension modules are discovered from user/project files at runtime
 const importExtensionModule = (filePath: string) => import(filePath)
 
-/** Load a single extension from a file path. */
+/**
+ * Load a single extension from a file path. The import names the file's
+ * version, so an edited file is imported again instead of from Bun's module
+ * cache.
+ */
 const loadExtensionFile = Effect.fn("ExtensionLoader.loadExtensionFile")(function* (
-  filePath: string,
+  file: DiscoveredFile,
 ) {
+  const filePath = file.path
   const mod = yield* Effect.tryPromise({
-    try: () => importExtensionModule(filePath),
+    try: () => importExtensionModule(`${filePath}?v=${encodeURIComponent(file.version)}`),
     catch: (err) =>
       new ExtensionLoadError({
         extensionId: ExtensionId.make("unknown"),
@@ -1212,11 +1271,12 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
 
   /** Load one scope's files; a broken file is skipped, its siblings still load. */
   const loadScope = Effect.fn("ExtensionLoader.loadScope")(function* (
-    paths: ReadonlyArray<string>,
+    files: ReadonlyArray<DiscoveredFile>,
     scope: ExtensionScope,
   ) {
-    for (const filePath of paths) {
-      const result = yield* loadExtensionFile(filePath).pipe(Effect.result)
+    for (const file of files) {
+      const filePath = file.path
+      const result = yield* loadExtensionFile(file).pipe(Effect.result)
       if (Result.isSuccess(result)) {
         loaded.push({ extension: result.success, scope, sourcePath: filePath })
         continue
@@ -1238,7 +1298,7 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
   } else {
     const error =
       "Project code is not trusted. Add its canonical root to trustedProjects in the user config."
-    for (const filePath of projectPaths) {
+    for (const { path: filePath } of projectPaths) {
       failed.push(importFailure(path, filePath, "project", error))
       yield* Effect.logWarning("extension.load.untrusted").pipe(
         Effect.annotateLogs({ path: filePath, error }),
@@ -1598,12 +1658,7 @@ export const loadRuntimeProfileDeclarations = (
     const disabledSet = new Set(inputs.disabledExtensions ?? [])
 
     // 2. Discover external extensions (user + project dirs)
-    const userExtensionsDir = path.join(inputs.home, GENT_CONFIG_DIRECTORY, "extensions")
-    const projectExtensionsDir = path.join(canonicalCwd, GENT_CONFIG_DIRECTORY, "extensions")
-    const discovery = yield* discoverExtensions({
-      userDir: userExtensionsDir,
-      projectDir: projectExtensionsDir,
-    }).pipe(
+    const discovery = yield* discoverExtensions(extensionDirectories(path, inputs)).pipe(
       Effect.catchEager((error) =>
         Effect.logWarning("runtime-profile.extension.discovery.failed").pipe(
           Effect.annotateLogs({ error: String(error), cwd: canonicalCwd }),
@@ -1734,27 +1789,41 @@ export interface SessionProfileCacheService {
   readonly resolve: (cwd: string) => Effect.Effect<SessionProfile, never, ScopeType.Scope>
 }
 
+/** Makes a region of an uninterruptible effect interruptible (`Effect.uninterruptibleMask`). */
+type Restore = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+
 /** One (workspace, cwd) place: at most one current profile, one build lock. */
 const placeKey = (workspaceId: WorkspaceId, cwd: string): string =>
   [workspaceId, cwd].join("\u0000")
 
 /**
- * The raw disabled list as the config names it. It only finds a profile the
- * same list resolved before; the profile itself is keyed by `profileKey`.
+ * The raw disabled list as the config names it, and the extension files on
+ * disk (`discoveredFilesStamp`). It only finds a profile the same inputs
+ * resolved before; the profile itself is keyed by `profileKey`.
  */
-const listKey = (place: string, disabledExtensions: ReadonlyArray<string>): string =>
-  [place, ...[...new Set(disabledExtensions)].toSorted()].join("\u0000")
+const listKey = (
+  place: string,
+  disabledExtensions: ReadonlyArray<string>,
+  files: ReadonlyArray<string>,
+): string => [place, ...[...new Set(disabledExtensions)].toSorted(), "", ...files].join("\u0000")
 
 /**
- * A profile is derived from its place and the extensions its config leaves
- * set up, so the key holds the active and the failed extension ids, not the
- * disabled list: an id no extension has builds no second profile.
+ * A profile is derived from its place, the extensions its config leaves set
+ * up, and the files they load from, so the key holds the active and the
+ * failed extension ids and the file versions, not the disabled list: an id
+ * no extension has builds no second profile, and an edited file builds one.
  */
-const profileKey = (place: string, declarations: ExtensionActivationResult): string =>
+const profileKey = (
+  place: string,
+  declarations: ExtensionActivationResult,
+  files: ReadonlyArray<string>,
+): string =>
   [
     place,
     ...declarations.active.map((extension) => `+${extension.manifest.id}`).toSorted(),
     ...declarations.failed.map((extension) => `!${extension.manifest.id}`).toSorted(),
+    "",
+    ...files,
   ].join("\u0000")
 
 /** The profile inputs with the merged user and project config's disabled list. */
@@ -1771,48 +1840,6 @@ interface StartedProcessResources {
   readonly failed: ReadonlyArray<FailedExtension>
   readonly context: Context.Context<unknown>
 }
-
-/**
- * Build every extension's process resources in resolution order, so a later
- * extension's service wins exactly as it does in the registry. Each extension
- * gets its own child scope so a failed build releases only what it acquired;
- * the extension is then reported as failed at the startup phase instead of
- * taking the whole profile down.
- */
-const startProcessResources = (
-  extensions: ReadonlyArray<LoadedExtension>,
-  baseContext: Context.Context<unknown>,
-  profileScope: Scope.Scope,
-): Effect.Effect<StartedProcessResources> =>
-  Effect.gen(function* () {
-    let context = baseContext
-    const active: Array<LoadedExtension> = []
-    const failed: Array<FailedExtension> = []
-    for (const extension of sortExtensionsByScope(extensions)) {
-      if (collectResourceEntries([extension], "process").length === 0) {
-        active.push(extension)
-        continue
-      }
-      const extensionScope = yield* Scope.fork(profileScope)
-      const built = yield* Layer.build(buildResourceLayer([extension], "process")).pipe(
-        Effect.provideContext(context),
-        Effect.provideService(Scope.Scope, extensionScope),
-        Effect.exit,
-      )
-      if (Exit.isSuccess(built)) {
-        context = Context.merge(context, built.value)
-        active.push(extension)
-        continue
-      }
-      const error = Cause.pretty(built.cause)
-      yield* Scope.close(extensionScope, built)
-      yield* Effect.logError("session-profile.resource.failed").pipe(
-        Effect.annotateLogs({ extensionId: extension.manifest.id, error }),
-      )
-      failed.push(toFailedExtension(extension, "startup", error))
-    }
-    return { active, failed, context }
-  })
 
 export class SessionProfileCache extends Context.Service<
   SessionProfileCache,
@@ -1860,10 +1887,21 @@ export class SessionProfileCache extends Context.Service<
           readonly place: string
           readonly profile: SessionProfile
           readonly scope: Scope.Closeable
+          /** The shared process resources the profile holds (`sharedResources`). */
+          readonly resources: ReadonlyArray<string>
         }
-        // Every map below changes only under the place's lock.
+        // Every map below changes only under the place's lock. A shared
+        // resource's key starts with its place, so its place's lock guards it.
         const entries = new Map<string, ProfileEntry>()
         const leases = new Map<string, number>()
+        // One extension's process resources, shared by every profile that
+        // builds them over the same context (`startProcessResources`), and
+        // the number of profiles that hold them.
+        const sharedResources = new Map<
+          string,
+          { readonly scope: Scope.Closeable; readonly context: Context.Context<unknown> }
+        >()
+        const resourceHolders = new Map<string, number>()
         // A raw disabled list seen before, to the profile it resolved to.
         const aliases = new Map<string, string>()
         // The profile the place's config selects now. Only a superseded
@@ -1891,18 +1929,125 @@ export class SessionProfileCache extends Context.Service<
           extensions: config.extensions,
         })
 
+        /**
+         * Let go of shared resources a profile held. The ones no profile holds
+         * any more are returned for the caller to close.
+         */
+        const dropResources = (keys: ReadonlyArray<string>): ReadonlyArray<Scope.Closeable> =>
+          keys.toReversed().flatMap((key) => {
+            const holders = (resourceHolders.get(key) ?? 1) - 1
+            resourceHolders.set(key, holders)
+            const shared = Option.fromNullishOr(sharedResources.get(key))
+            if (holders > 0 || Option.isNone(shared)) return []
+            sharedResources.delete(key)
+            resourceHolders.delete(key)
+            return [shared.value.scope]
+          })
+
+        const closeScopes = (scopes: ReadonlyArray<Scope.Closeable>) =>
+          Effect.forEach(scopes, (scope) => Scope.close(scope, Exit.void), { discard: true })
+
+        /**
+         * Build every extension's process resources in resolution order, so
+         * a later extension's service wins exactly as it does in the
+         * registry. An extension's resources are shared by every profile of
+         * the place that builds them over the same context: the same
+         * resource-bearing extensions before it and itself (id, source and
+         * file version). A profile rebuilt for an edit that leaves them alone
+         * keeps them, and with them their state: an open `/btw` fork, a
+         * watcher, a running job. They close when the last profile holding
+         * them retires. A resource that fails to build is not shared: its
+         * extension is reported as failed at the startup phase, and the rest
+         * of the profile stays live. Only a build can be interrupted; each
+         * key it shares or builds is pushed to `held` at once, so the caller
+         * can let go of it.
+         */
+        const startProcessResources = (
+          place: string,
+          extensions: ReadonlyArray<LoadedExtension>,
+          files: ReadonlyArray<string>,
+          held: Array<string>,
+          restore: Restore,
+        ): Effect.Effect<StartedProcessResources> =>
+          Effect.gen(function* () {
+            let context = platformServicesContext
+            const chain = [place]
+            const active: Array<LoadedExtension> = []
+            const failed: Array<FailedExtension> = []
+            for (const extension of sortExtensionsByScope(extensions)) {
+              if (collectResourceEntries([extension], "process").length === 0) {
+                active.push(extension)
+                continue
+              }
+              const source = Option.getOrElse(
+                Option.fromUndefinedOr(
+                  files.find((file) => file.startsWith(`${extension.sourcePath}@`)),
+                ),
+                () => extension.sourcePath,
+              )
+              const identity = `${extension.scope}:${extension.manifest.id}:${source}`
+              const key = [...chain, identity].join("\u0000")
+              const shared = Option.fromNullishOr(sharedResources.get(key))
+              if (Option.isSome(shared)) {
+                resourceHolders.set(key, (resourceHolders.get(key) ?? 0) + 1)
+                held.push(key)
+                context = Context.merge(context, shared.value.context)
+                chain.push(identity)
+                active.push(extension)
+                continue
+              }
+              const extensionScope = yield* Scope.fork(serverScope)
+              const built = yield* restore(
+                Layer.build(buildResourceLayer([extension], "process")).pipe(
+                  Effect.provideContext(context),
+                  Effect.provideService(Scope.Scope, extensionScope),
+                ),
+              ).pipe(Effect.exit)
+              if (Exit.isSuccess(built)) {
+                sharedResources.set(key, { scope: extensionScope, context: built.value })
+                resourceHolders.set(key, 1)
+                held.push(key)
+                context = Context.merge(context, built.value)
+                chain.push(identity)
+                active.push(extension)
+                continue
+              }
+              yield* Scope.close(extensionScope, built)
+              // An interrupt stops the whole build; it is not a failed extension.
+              if (Cause.hasInterruptsOnly(built.cause)) return yield* Effect.failCause(built.cause)
+              const error = Cause.pretty(built.cause)
+              yield* Effect.logError("session-profile.resource.failed").pipe(
+                Effect.annotateLogs({ extensionId: extension.manifest.id, error }),
+              )
+              failed.push(toFailedExtension(extension, "startup", error))
+            }
+            return { active, failed, context }
+          })
+
+        /**
+         * Build a profile into a new scope. The caller runs this where it
+         * cannot be interrupted; only a resource build and the registry
+         * build (`restore`) can be. A failed or interrupted build closes its
+         * scope and lets go of the shared resources it took.
+         */
         const buildProfile = (
+          place: string,
           cwd: string,
           fresh: FreshConfig,
           declarations: RuntimeProfileDeclarations,
+          files: ReadonlyArray<string>,
+          restore: Restore,
         ) =>
           Effect.gen(function* () {
             const profileScope = yield* Scope.fork(serverScope)
+            const held: Array<string> = []
             const profile = yield* Effect.gen(function* () {
               const started = yield* startProcessResources(
+                place,
                 declarations.extensionDeclarations.active,
-                platformServicesContext,
-                profileScope,
+                files,
+                held,
+                restore,
               )
               // A config failure is not part of the profile: health reads it
               // live (`configHealthStatuses`), so it clears when the file is
@@ -1920,38 +2065,60 @@ export class SessionProfileCache extends Context.Service<
               if (config.failOnExtensionFailure && buildFailures.length > 0) {
                 return yield* Effect.die(describeFailedExtensions(buildFailures))
               }
-              return yield* buildSessionProfile({
-                cwd,
-                resolved,
-                coreSections: declarations.coreSections,
-                resourceContext: started.context,
-                generationId,
-              })
+              return yield* restore(
+                buildSessionProfile({
+                  cwd,
+                  resolved,
+                  coreSections: declarations.coreSections,
+                  resourceContext: started.context,
+                  generationId,
+                }),
+              )
             }).pipe(
               Effect.provideService(Scope.Scope, profileScope),
               // A failed or interrupted build releases everything it acquired.
-              Effect.onError((cause) => Scope.close(profileScope, Exit.failCause(cause))),
+              Effect.onError((cause) =>
+                Scope.close(profileScope, Exit.failCause(cause)).pipe(
+                  Effect.andThen(closeScopes(dropResources(held))),
+                ),
+              ),
             )
-            return { profile, scope: profileScope }
+            return { profile, scope: profileScope, resources: held }
           })
 
-        /** The profile for a raw list: aliased, found by its extensions, or built. */
-        const entryFor = (place: string, list: string, cwd: string, fresh: FreshConfig) =>
+        /**
+         * The profile for a raw list: aliased, found by its extensions, or
+         * built. It runs where it cannot be interrupted, so an entry it
+         * stores is always leased by the caller; only the reads and the build
+         * (`restore`) can be interrupted, and they store nothing.
+         */
+        const entryFor = (
+          place: string,
+          list: string,
+          files: ReadonlyArray<string>,
+          cwd: string,
+          fresh: FreshConfig,
+          restore: Restore,
+        ) =>
           Effect.gen(function* () {
             const aliased = Option.flatMap(Option.fromNullishOr(aliases.get(list)), (key) =>
               Option.fromNullishOr(entries.get(key)),
             )
             if (Option.isSome(aliased)) return aliased.value
-            const declarations = yield* loadRuntimeProfileDeclarations(
-              effectiveInputs(inputsFor(cwd), fresh.config),
-            ).pipe(Effect.provideContext(platformServicesContext))
-            const key = profileKey(place, declarations.extensionDeclarations)
+            const declarations = yield* restore(
+              loadRuntimeProfileDeclarations(effectiveInputs(inputsFor(cwd), fresh.config)).pipe(
+                Effect.provideContext(platformServicesContext),
+              ),
+            )
+            const key = profileKey(place, declarations.extensionDeclarations, files)
             const found = Option.fromNullishOr(entries.get(key))
             if (Option.isSome(found)) {
               aliases.set(list, key)
               return found.value
             }
-            const built = yield* buildProfile(cwd, fresh, declarations).pipe(Effect.orDie)
+            const built = yield* buildProfile(place, cwd, fresh, declarations, files, restore).pipe(
+              Effect.orDie,
+            )
             const entry: ProfileEntry = { key, place, ...built }
             entries.set(key, entry)
             aliases.set(list, key)
@@ -1966,11 +2133,12 @@ export class SessionProfileCache extends Context.Service<
           })
 
         /**
-         * Drop a superseded profile no lease holds. The caller closes the
-         * returned scope after it releases the place's lock, so an extension
+         * Drop a superseded profile no lease holds: its scope, and the shared
+         * resources no other profile holds. The caller closes the returned
+         * scopes after it releases the place's lock, so an extension
          * finalizer never runs under it.
          */
-        const retireIfUnused = (key: string): Option.Option<Scope.Closeable> => {
+        const retireIfUnused = (key: string): Option.Option<ReadonlyArray<Scope.Closeable>> => {
           const entry = Option.fromNullishOr(entries.get(key))
           if (Option.isNone(entry)) return Option.none()
           if ((leases.get(key) ?? 0) > 0) return Option.none()
@@ -1978,16 +2146,14 @@ export class SessionProfileCache extends Context.Service<
           entries.delete(key)
           leases.delete(key)
           for (const [list, target] of aliases) if (target === key) aliases.delete(list)
-          return Option.some(entry.value.scope)
+          return Option.some([entry.value.scope, ...dropResources(entry.value.resources)])
         }
 
-        const closeRetired = (retired: Option.Option<Scope.Closeable>) =>
+        const closeRetired = (retired: Option.Option<ReadonlyArray<Scope.Closeable>>) =>
           Option.match(retired, {
             onNone: () => Effect.void,
-            onSome: (profileScope) =>
-              Scope.close(profileScope, Exit.void).pipe(
-                Effect.andThen(Effect.logInfo("session-profile.retired")),
-              ),
+            onSome: (scopes) =>
+              closeScopes(scopes).pipe(Effect.andThen(Effect.logInfo("session-profile.retired"))),
           })
 
         const release = (entry: ProfileEntry, lock: Semaphore.Semaphore) =>
@@ -2001,30 +2167,40 @@ export class SessionProfileCache extends Context.Service<
             const workspaceId = yield* CurrentWorkspaceId
             const callerScope = yield* Scope.Scope
             const canonicalCwd = pathSvc.resolve(cwd)
-            const fresh = yield* configService.getFresh(canonicalCwd)
             const place = placeKey(workspaceId, canonicalCwd)
-            const list = listKey(
-              place,
-              effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
-            )
             const lock = yield* lockFor(place)
-            const { entry, retired } = yield* Effect.gen(function* () {
-              const entry = yield* entryFor(place, list, canonicalCwd, fresh)
-              // The lease and its release are registered together, or not at all.
-              yield* Effect.uninterruptible(
-                Effect.gen(function* () {
-                  leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
-                  yield* Scope.addFinalizer(callerScope, release(entry, lock))
-                }),
-              )
-              const previous = Option.fromNullishOr(current.get(place))
-              current.set(place, entry.key)
-              const retired = Option.flatMap(
-                Option.filter(previous, (key) => key !== entry.key),
-                retireIfUnused,
-              )
-              return { entry, retired }
-            }).pipe(lock.withPermits(1))
+            // Finding or building the entry, its lease, and `current` are one
+            // step no interrupt can split: an entry stored without its lease
+            // and not current would never retire. Only the reads and the
+            // build inside it (`restore`) can be interrupted.
+            const { entry, retired } = yield* Effect.uninterruptibleMask((restore) =>
+              Effect.gen(function* () {
+                // The config is read under the place lock, so resolves set
+                // `current` in the order they read it: a read from before an
+                // edit cannot put the older profile back.
+                const fresh = yield* restore(configService.getFresh(canonicalCwd))
+                const files = yield* restore(
+                  discoveredFilesStamp(inputsFor(canonicalCwd)).pipe(
+                    Effect.provideContext(platformServicesContext),
+                  ),
+                )
+                const list = listKey(
+                  place,
+                  effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
+                  files,
+                )
+                const entry = yield* entryFor(place, list, files, canonicalCwd, fresh, restore)
+                leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
+                yield* Scope.addFinalizer(callerScope, release(entry, lock))
+                const previous = Option.fromNullishOr(current.get(place))
+                current.set(place, entry.key)
+                const retired = Option.flatMap(
+                  Option.filter(previous, (key) => key !== entry.key),
+                  retireIfUnused,
+                )
+                return { entry, retired }
+              }),
+            ).pipe(lock.withPermits(1))
             yield* closeRetired(retired)
             return entry.profile
           })
@@ -2188,6 +2364,7 @@ interface ExtensionSessionControlService {
     readonly content: string
     readonly metadata?: MessageMetadata
     readonly wake?: boolean
+    readonly clientRequest?: ClientRequestGrant
   }) => Effect.Effect<void, Error>
   readonly dequeueFollowUp: (input: {
     readonly sourceId: string
@@ -2209,6 +2386,34 @@ interface ExtensionHostContextInput {
   readonly sessionControl?: ExtensionSessionControlService
 }
 
+/**
+ * A client's extension request while it runs: the grant its branch's loop
+ * holds live until the request ends (`ClientRequestGrant`).
+ */
+interface ClientRequest {
+  readonly grant: ClientRequestGrant
+}
+
+/**
+ * What opened a run. A turn knows whether a client sent its opening message.
+ * A client's extension request (a slash command, say) is client-opened, and
+ * while it runs a message it sends to its own branch keeps the client origin
+ * (`clientRequestGrant`).
+ */
+export type RunOpener =
+  | { readonly openedByClient: boolean }
+  | { readonly clientRequest: ClientRequest }
+
+const clientRequestOf = (opener: RunOpener): Option.Option<ClientRequest> => {
+  if ("clientRequest" in opener) return Option.some(opener.clientRequest)
+  return Option.none()
+}
+
+const runOpenedByClient = (opener: RunOpener): boolean => {
+  if ("clientRequest" in opener) return true
+  return opener.openedByClient
+}
+
 interface MakeExtensionHostContextRunInfo {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -2219,6 +2424,8 @@ interface MakeExtensionHostContextRunInfo {
    * an approval in it.
    */
   readonly interactive: boolean
+  /** Some when a client's extension request opened this run. */
+  readonly clientRequest: Option.Option<ClientRequest>
 }
 
 /** Builds the `ExtensionHostContext` for one run of one branch. */
@@ -2333,6 +2540,28 @@ export const makeExtensionHostContextProvider = (
       branchId: params.branchId ?? runInfo.branchId,
     })
 
+    /**
+     * The grant a message a run sends carries. The extension boundary already
+     * removed any client origin the sender claimed (`extensionMetadata`).
+     * A client's extension request sends as its client while it runs, to its
+     * own branch only: the user who typed the slash command watches that
+     * branch. Only a message to that branch carries the request's grant, and
+     * the loop decides the origin when it admits the message: a message
+     * admitted after the request ended (from a fiber it left behind) stays an
+     * extension send. The rule is the same for every extension, since any
+     * request a client calls gets it.
+     */
+    const clientRequestGrant = (
+      runInfo: MakeExtensionHostContextRunInfo,
+      target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+    ) =>
+      Option.getOrUndefined(
+        Option.filter(
+          Option.map(runInfo.clientRequest, (request) => request.grant),
+          () => target.sessionId === runInfo.sessionId && target.branchId === runInfo.branchId,
+        ),
+      )
+
     const forRun = (runInfo: MakeExtensionHostContextRunInfo): ExtensionHostContext => ({
       sessionId: runInfo.sessionId,
       branchId: runInfo.branchId,
@@ -2446,22 +2675,21 @@ export const makeExtensionHostContextProvider = (
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))
                   }),
-                queue: (queued) => {
-                  const target = targetIn(runInfo, queued)
-                  return requireTarget("send", target).pipe(
-                    Effect.andThen(
-                      control((loop) =>
-                        loop.queueFollowUp({
-                          ...target,
-                          sourceId: queued.sourceId,
-                          content: queued.content,
-                          metadata: queued.metadata,
-                          wake: queued.wake,
-                        }),
-                      ).pipe(Effect.mapError(sessionError("send"))),
-                    ),
-                  )
-                },
+                queue: (queued) =>
+                  Effect.gen(function* () {
+                    const target = targetIn(runInfo, queued)
+                    yield* requireTarget("send", target)
+                    yield* control((loop) =>
+                      loop.queueFollowUp({
+                        ...target,
+                        sourceId: queued.sourceId,
+                        content: queued.content,
+                        metadata: queued.metadata,
+                        wake: queued.wake,
+                        ...omitUndefined({ clientRequest: clientRequestGrant(runInfo, target) }),
+                      }),
+                    ).pipe(Effect.mapError(sessionError("send")))
+                  }),
                 steer: (steered) =>
                   Effect.gen(function* () {
                     const target = targetIn(runInfo, steered)
@@ -2475,6 +2703,7 @@ export const makeExtensionHostContextProvider = (
                         message: steered.content,
                         metadata: steered.metadata,
                         wake: steered.wake,
+                        ...omitUndefined({ clientRequest: clientRequestGrant(runInfo, target) }),
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))
                   }),
@@ -2659,15 +2888,15 @@ export const sessionWorkingDirectory = (
  * and the host defaults apply. A storage lookup failure falls back to them as well.
  * The caller's scope holds the profile's lease for as long as it uses it.
  */
-export const resolveTurnProfile = (params: {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  /** Whether a client opened this run (`openedByClient` of its opening message). */
-  readonly openedByClient: boolean
-  readonly profileCache?: SessionProfileCacheService
-  readonly hostProvider: ExtensionHostContextProvider
-  readonly defaults: TurnProfileDefaults
-}): Effect.Effect<
+export const resolveTurnProfile = (
+  params: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly profileCache?: SessionProfileCacheService
+    readonly hostProvider: ExtensionHostContextProvider
+    readonly defaults: TurnProfileDefaults
+  } & RunOpener,
+): Effect.Effect<
   AgentLoopTurnProfile,
   never,
   ExtensionRegistry | SessionStorage | ScopeType.Scope
@@ -2678,16 +2907,15 @@ export const resolveTurnProfile = (params: {
     const session = yield* storedSession(params.sessionId)
     const sessionCwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
     const interactive = turnCanAsk({
-      sessionHasParent: Option.exists(session, (value) =>
-        Predicate.isNotUndefined(value.parentSessionId),
-      ),
-      openedByClient: params.openedByClient,
+      sessionIsSpawned: Option.exists(session, isSpawnedSession),
+      openedByClient: runOpenedByClient(params),
     })
     const runInfo = {
       sessionId: params.sessionId,
       branchId: params.branchId,
       sessionCwd: Option.getOrUndefined(sessionCwd),
       interactive,
+      clientRequest: clientRequestOf(params),
     }
     const profile = yield* Option.match(
       Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),

@@ -8,10 +8,13 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Logger,
+  MutableRef,
   Option,
   Path,
   Predicate,
   Ref,
+  References,
   Schema,
   Scope,
   Stream,
@@ -82,14 +85,21 @@ import { CurrentWorkspaceId, WorkspaceId, workspaceIdForCwd } from "../../src/se
 import {
   ActorCommandId,
   BranchId,
+  ClientRequestGrant,
   ExtensionId,
   MessageId,
   ProcessGenerationId,
   RequestId,
   SessionId,
 } from "../../src/domain/ids"
-import { dateFromMillis, Session, Branch, messagePartsDisplayText } from "../../src/domain/message"
-import { GentPlatform } from "../../src/runtime/gent-platform"
+import {
+  dateFromMillis,
+  Session,
+  Branch,
+  type MessageMetadata,
+  messagePartsDisplayText,
+} from "../../src/domain/message"
+import { GentPlatform, writeFileAtomic } from "../../src/runtime/gent-platform"
 import {
   type ModelDriverContribution,
   ProviderAuthInfo,
@@ -158,7 +168,7 @@ const ambientContext = Effect.gen(function* () {
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
   })
-  return provider.forRun({ sessionId, branchId, interactive: true })
+  return provider.forRun({ sessionId, branchId, interactive: true, clientRequest: Option.none() })
 }).pipe(Effect.provide(RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" })))
 
 describe("ambient extension host context", () => {
@@ -407,6 +417,8 @@ const makeCacheLayer = (params: {
   readonly extensions: ReadonlyArray<GentExtension>
   /** Only for a test about a failing extension. */
   readonly allowFailedExtensions?: boolean
+  /** Wraps the config service the cache reads, for a test that orders its reads. */
+  readonly wrapConfig?: (live: ConfigService["Service"]) => ConfigService["Service"]
 }) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: params.cwd,
@@ -414,10 +426,20 @@ const makeCacheLayer = (params: {
   })
   // The config service and environment are outputs too, so a test reads
   // config health from the same instance the cache builds profiles with.
-  const configLive = ConfigService.Live.pipe(
+  const baseConfigLive = ConfigService.Live.pipe(
     Layer.provide(BunServices.layer),
     Layer.provideMerge(runtimeEnvironmentLive),
   )
+  const configLive = Option.match(Option.fromUndefinedOr(params.wrapConfig), {
+    onNone: () => baseConfigLive,
+    onSome: (wrap) =>
+      Layer.merge(
+        Layer.effect(ConfigService, Effect.map(Effect.service(ConfigService), wrap)).pipe(
+          Layer.provide(baseConfigLive),
+        ),
+        runtimeEnvironmentLive,
+      ),
+  })
   return SessionProfileCache.Live({
     failOnExtensionFailure: params.allowFailedExtensions !== true,
     home: params.home,
@@ -684,13 +706,27 @@ describe("session profile resolution", () => {
           )
         }),
       })
+      // Each toggle holds a process resource and sorts before `tracked`, so
+      // every list builds `tracked` over a different context: no profile
+      // shares it with another.
       const toggles = ["a", "b", "c", "d"].map((name) =>
-        defineExtension({ id: `@gent/test-session-profile/toggle-${name}`, setup: Effect.void }),
+        defineExtension({
+          id: `@gent/test-session-profile/toggle-${name}`,
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              startResource(`@gent/test-session-profile/toggle-${name}/resource`, Effect.void),
+            )
+          }),
+        }),
       )
       const projectConfig = path.join(launch, ".gent", "config.json")
       yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
       const disable = (ids: ReadonlyArray<string>) =>
-        fs.writeFileString(projectConfig, encodeJson({ disabledExtensions: ids }))
+        // Replaced, as gent and most editors save: two same-size edits in one
+        // millisecond differ only by the new file's inode (`fileVersion`).
+        writeFileAtomic(projectConfig, encodeJson({ disabledExtensions: ids }))
 
       yield* Effect.gen(function* () {
         const cache = yield* SessionProfileCache
@@ -724,6 +760,307 @@ describe("session profile resolution", () => {
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("2".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A resolve interrupted right after its build stored the profile: the
+  // entry, its lease and `current` are one step, so the profile still
+  // retires when a later edit supersedes it.
+  it.scopedLive("a resolve interrupted after its build still retires the profile it built", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const open = yield* Ref.make<ReadonlyArray<string>>([])
+      const toggles = ["a", "b"].map((name) =>
+        defineExtension({
+          id: `@gent/test-session-profile/held-${name}`,
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              defineResource({
+                id: `@gent/test-session-profile/held-${name}/marker`,
+                scope: "process",
+                layer: Layer.effect(
+                  SessionProfileResourceMarker,
+                  Effect.acquireRelease(
+                    Ref.update(open, (names) => [...names, name]),
+                    () => Ref.update(open, (names) => names.filter((entry) => entry !== name)),
+                  ).pipe(Effect.as(SessionProfileResourceMarker.of({ value: name }))),
+                ),
+              }),
+            )
+          }),
+        }),
+      )
+      const projectConfig = path.join(launch, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      const disable = (ids: ReadonlyArray<string>) =>
+        // Replaced, as gent and most editors save: two same-size edits in one
+        // millisecond differ only by the new file's inode (`fileVersion`).
+        writeFileAtomic(projectConfig, encodeJson({ disabledExtensions: ids }))
+      // The interrupt lands on the first profile's build log, the last step
+      // of its build.
+      const interrupted = MutableRef.make(false)
+      const interruptAfterBuild = Logger.make(({ message, fiber }) => {
+        let rendered = String(message)
+        if (Array.isArray(message)) rendered = message.join(" ")
+        if (!rendered.includes("session-profile.initialized") || MutableRef.get(interrupted)) return
+        MutableRef.set(interrupted, true)
+        fiber.interruptUnsafe()
+      })
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        yield* disable(["@gent/test-session-profile/held-a"])
+        const first = yield* Effect.scoped(cache.resolve(launch)).pipe(Effect.forkChild)
+        expect(Exit.hasInterrupts(yield* Fiber.await(first))).toBe(true)
+        expect(yield* Ref.get(open)).toEqual(["b"])
+        yield* disable(["@gent/test-session-profile/held-b"])
+        yield* Effect.scoped(cache.resolve(launch))
+        expect(yield* Ref.get(open)).toEqual(["a"])
+      }).pipe(
+        Effect.timeout("10 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(
+          Layer.mergeAll(
+            makeCacheLayer({ cwd: launch, home, extensions: toggles }),
+            Logger.layer([interruptAfterBuild]),
+            Layer.succeed(References.MinimumLogLevel, "Info"),
+          ),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("3".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A resolve that read the config before an edit takes the place lock
+  // after the resolve that read the edit: it must not make the older
+  // profile current again and retire the newer one.
+  it.scopedLive("a config read before an edit cannot put the older profile back", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const toggles = ["a", "b"].map((name) =>
+        defineExtension({ id: `@gent/test-session-profile/order-${name}`, setup: Effect.void }),
+      )
+      const projectConfig = path.join(launch, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      const disable = (ids: ReadonlyArray<string>) =>
+        // Replaced, as gent and most editors save: two same-size edits in one
+        // millisecond differ only by the new file's inode (`fileVersion`).
+        writeFileAtomic(projectConfig, encodeJson({ disabledExtensions: ids }))
+      // The first config read waits, after it read, until the test lets it go.
+      const firstRead = yield* Deferred.make<void>()
+      const letGo = yield* Deferred.make<void>()
+      const reads = MutableRef.make(0)
+      const holdFirstRead = (live: ConfigService["Service"]): ConfigService["Service"] => ({
+        ...live,
+        getFresh: (cwd) =>
+          live.getFresh(cwd).pipe(
+            Effect.tap(() => {
+              MutableRef.update(reads, (count) => count + 1)
+              if (MutableRef.get(reads) !== 1) return Effect.void
+              return Deferred.succeed(firstRead, void 0).pipe(Effect.andThen(Deferred.await(letGo)))
+            }),
+          ),
+      })
+      const ids = (profile: SessionProfile) =>
+        profile.resolved.extensions.map((extension) => String(extension.manifest.id))
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        yield* disable(["@gent/test-session-profile/order-a"])
+        const older = yield* Effect.scoped(cache.resolve(launch)).pipe(Effect.forkChild)
+        yield* Deferred.await(firstRead)
+        yield* disable(["@gent/test-session-profile/order-b"])
+        const newer = yield* Effect.scoped(cache.resolve(launch)).pipe(Effect.forkChild)
+        // A resolve that reads outside the lock finishes here, before the
+        // older read goes on; one that reads under the lock waits behind it.
+        // Only the unfixed order depends on this wait, so it cannot flake
+        // the fixed one.
+        yield* Fiber.await(newer).pipe(Effect.timeout("500 millis"), Effect.ignore)
+        yield* Deferred.succeed(letGo, void 0)
+        expect(ids(yield* Fiber.join(older))).toEqual(["@gent/test-session-profile/order-b"])
+        const newerProfile = yield* Fiber.join(newer)
+        expect(ids(newerProfile)).toEqual(["@gent/test-session-profile/order-a"])
+        // The edit read last stays current: the next resolve reuses it.
+        expect(yield* Effect.scoped(cache.resolve(launch))).toBe(newerProfile)
+      }).pipe(
+        Effect.timeout("10 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(
+          makeCacheLayer({ cwd: launch, home, extensions: toggles, wrapConfig: holdFirstRead }),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("4".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A profile is keyed on the extension files on disk as well as the config:
+  // a file added, broken, fixed or edited reaches the next resolve without a
+  // restart or a config edit.
+  it.scopedLive("an added, broken, fixed or edited extension file reaches the next resolve", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      // Under the repository, so the extension file resolves `effect`.
+      const home = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../../.."),
+        prefix: ".tmp-profile-files-",
+      })
+      const extensionDir = path.join(home, ".gent", "extensions")
+      yield* fs.makeDirectory(extensionDir, { recursive: true })
+      const extensionFile = path.join(extensionDir, "probe.ts")
+      const writeExtension = (id: string) =>
+        fs.writeFileString(
+          extensionFile,
+          `import { Effect } from "effect"\nexport default { manifest: { id: "${id}" }, setup: Effect.void }\n`,
+        )
+      const kept = defineExtension({
+        id: "@gent/test-session-profile/files-kept",
+        setup: Effect.void,
+      })
+      const ids = (profile: SessionProfile) =>
+        profile.resolved.extensions.map((extension) => String(extension.manifest.id))
+      const failedPaths = (profile: SessionProfile) =>
+        profile.resolved.failedExtensions.map((extension) => extension.sourcePath)
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const resolve = Effect.scoped(cache.resolve(launch))
+        expect(ids(yield* resolve)).toEqual(["@gent/test-session-profile/files-kept"])
+
+        yield* writeExtension("@gent/test-file-added")
+        expect(ids(yield* resolve)).toContain("@gent/test-file-added")
+
+        yield* fs.writeFileString(extensionFile, "export const = ;\n")
+        const broken = yield* resolve
+        expect(ids(broken)).toEqual(["@gent/test-session-profile/files-kept"])
+        expect(failedPaths(broken)).toEqual([extensionFile])
+
+        // The same path again, with new content: imported afresh, not from
+        // the module cache.
+        yield* writeExtension("@gent/test-file-fixed-and-renamed")
+        const fixed = yield* resolve
+        expect(ids(fixed)).toContain("@gent/test-file-fixed-and-renamed")
+        expect(failedPaths(fixed)).toEqual([])
+        // Nothing changed since: the same profile.
+        expect(yield* resolve).toBe(fixed)
+      }).pipe(
+        Effect.timeout("15 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(
+          makeCacheLayer({ cwd: launch, home, extensions: [kept], allowFailedExtensions: true }),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("5".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A profile rebuilt for a config edit shares the process resources it
+  // builds over the same context, so an open pane, a watcher or a running job
+  // keeps its state. Only resources the edit touches close and rebuild.
+  it.scopedLive(
+    "a profile rebuilt for an edit keeps the process resources the edit leaves alone",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const launch = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const builds = yield* Ref.make<ReadonlyArray<string>>([])
+        const open = yield* Ref.make<ReadonlyArray<string>>([])
+        const withResource = (name: string) =>
+          defineExtension({
+            id: `@gent/test-session-profile/${name}`,
+            setup: Effect.gen(function* () {
+              const host = yield* ExtensionHost
+              yield* host.register(
+                "resource",
+                defineResource({
+                  id: `@gent/test-session-profile/${name}/marker`,
+                  scope: "process",
+                  layer: Layer.effect(
+                    SessionProfileResourceMarker,
+                    Effect.acquireRelease(
+                      Ref.update(builds, (names) => [...names, name]).pipe(
+                        Effect.andThen(Ref.update(open, (names) => [...names, name])),
+                      ),
+                      // One release closes one build of the resource.
+                      () =>
+                        Ref.update(open, (names) =>
+                          names.filter((_, index) => index !== names.indexOf(name)),
+                        ),
+                    ).pipe(Effect.as(SessionProfileResourceMarker.of({ value: name }))),
+                  ),
+                }),
+              )
+            }),
+          })
+        // Resolution order: `shared-a`, then `shared-b` (no resource), then `shared-c`.
+        const extensions = [
+          withResource("shared-a"),
+          defineExtension({ id: "@gent/test-session-profile/shared-b", setup: Effect.void }),
+          withResource("shared-c"),
+        ]
+        const projectConfig = path.join(launch, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+        // Replaced, as gent and most editors save: see `fileVersion`.
+        const disable = (names: ReadonlyArray<string>) =>
+          writeFileAtomic(
+            projectConfig,
+            encodeJson({
+              disabledExtensions: names.map((name) => `@gent/test-session-profile/${name}`),
+            }),
+          )
+        const sorted = (names: ReadonlyArray<string>) => names.toSorted()
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(launch))
+          const first = yield* resolve
+          expect(sorted(yield* Ref.get(open))).toEqual(["shared-a", "shared-c"])
+
+          // An extension with no resource: both resources carry over.
+          yield* disable(["shared-b"])
+          expect(yield* resolve).not.toBe(first)
+          expect(sorted(yield* Ref.get(builds))).toEqual(["shared-a", "shared-c"])
+          expect(sorted(yield* Ref.get(open))).toEqual(["shared-a", "shared-c"])
+
+          // The last resource's extension: only its resource closes.
+          yield* disable(["shared-c"])
+          yield* resolve
+          expect(sorted(yield* Ref.get(builds))).toEqual(["shared-a", "shared-c"])
+          expect(yield* Ref.get(open)).toEqual(["shared-a"])
+
+          yield* disable(["shared-b"])
+          yield* resolve
+          expect(sorted(yield* Ref.get(builds))).toEqual(["shared-a", "shared-c", "shared-c"])
+          expect(sorted(yield* Ref.get(open))).toEqual(["shared-a", "shared-c"])
+
+          // An extension before `shared-c`: `shared-c` is built over another
+          // context now, so it is built again.
+          yield* disable(["shared-a"])
+          yield* resolve
+          expect(sorted(yield* Ref.get(builds))).toEqual([
+            "shared-a",
+            "shared-c",
+            "shared-c",
+            "shared-c",
+          ])
+          expect(yield* Ref.get(open)).toEqual(["shared-c"])
+        }).pipe(
+          Effect.timeout("10 seconds"),
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("6".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
   )
 
   it.scopedLive("releases a partially built profile when its build is interrupted", () =>
@@ -2348,11 +2685,95 @@ describe("host session facet", () => {
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
       })
-      const ctx = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID, interactive: true })
+      const ctx = provider.forRun({
+        sessionId: SESSION_ID,
+        branchId: BRANCH_ID,
+        interactive: true,
+        clientRequest: Option.none(),
+      })
       const listed = yield* ctx.Session.listBranches
       expect(listed).toHaveLength(1)
       expect(listed[0]!.id).toBe(BRANCH_ID)
     }).pipe(
+      Effect.provide(
+        Layer.merge(
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+        ),
+      ),
+    ),
+  )
+})
+
+/**
+ * A client request's send carries its grant, and the host decides no origin.
+ * The loop decides it when it admits the message (`admitWithOrigin`), so a
+ * send the request started but the loop admits after the request ended is an
+ * extension send. Here the loop's control is held between the send and the
+ * admission: what reaches it must still carry no client origin.
+ */
+describe("client request origin", () => {
+  it.live("a send held before admission carries the grant, never the client origin", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const branches = yield* BranchStorage
+      yield* sessions.createSession(
+        new Session({
+          id: SESSION_ID,
+          name: "test",
+          cwd: "/tmp",
+          createdAt: FIXTURE_DATE,
+          updatedAt: FIXTURE_DATE,
+        }),
+      )
+      yield* branches.createBranch(
+        new Branch({ id: BRANCH_ID, sessionId: SESSION_ID, createdAt: FIXTURE_DATE }),
+      )
+      const reached = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      interface Reached {
+        readonly metadata?: MessageMetadata
+        readonly clientRequest?: ClientRequestGrant
+      }
+      const reachedLoop = yield* Ref.make<ReadonlyArray<Reached>>([])
+      const hold = (input: Reached) =>
+        Deferred.succeed(reached, void 0).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(Ref.update(reachedLoop, (all) => [...all, input])),
+        )
+      const provider = yield* makeExtensionHostContextProvider({
+        host: testHostFacts().host,
+        sessionControl: {
+          queueFollowUp: hold,
+          dequeueFollowUp: () => Effect.succeed(false),
+          send: () => Effect.void,
+          steer: (command) => {
+            if (command._tag !== "Interject") return Effect.void
+            return hold(command)
+          },
+        },
+      })
+      const grant = ClientRequestGrant.make("request-grant")
+      const ctx = provider.forRun({
+        sessionId: SESSION_ID,
+        branchId: BRANCH_ID,
+        interactive: true,
+        clientRequest: Option.some({ grant }),
+      })
+      const sends = Effect.all([
+        ctx.Session.send({ delivery: "queue", sourceId: "held", content: "queued" }),
+        ctx.Session.send({ delivery: "steer", content: "steered" }),
+      ])
+      const fiber = yield* sends.pipe(Effect.forkChild)
+      yield* Deferred.await(reached)
+      // The request ends here; the loop has not admitted anything yet.
+      yield* Deferred.succeed(release, void 0)
+      yield* Fiber.join(fiber)
+      const admitted = yield* Ref.get(reachedLoop)
+      expect(admitted.map((input) => input.clientRequest)).toEqual([grant, grant])
+      expect(admitted.map((input) => input.metadata?.fromClient === true)).toEqual([false, false])
+    }).pipe(
+      Effect.timeout("5 seconds"),
       Effect.provide(
         Layer.merge(
           SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
@@ -2509,8 +2930,8 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       expect(first.loaded).toHaveLength(1)
       expect(first.loaded[0]?.extension.artifactIdentity).toBeUndefined()
 
-      // The module path remains cached even though the source file changes.
-      // The loader must not attach a new identity to the old export.
+      // An edited file is imported again under its new version. The loader
+      // still attaches no identity to what it imported.
       yield* fs.writeFileString(
         extensionPath,
         'import { Effect } from "effect"\nexport default { manifest: { id: "@gent/test-pinned-v2" }, setup: Effect.void }\n',

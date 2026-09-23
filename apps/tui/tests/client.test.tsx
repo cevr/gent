@@ -124,14 +124,12 @@ describe("reduceAgentLifecycle", () => {
   })
 
   test("a notice leaves the status as it is", () => {
-    const notice = Object.assign(
-      ErrorOccurred.make({
-        sessionId: SessionId.make("s1"),
-        branchId: BranchId.make("b1"),
-        error: "compaction fell back to truncation",
-      }),
-      { notice: true },
-    )
+    const notice = ErrorOccurred.make({
+      sessionId: SessionId.make("s1"),
+      branchId: BranchId.make("b1"),
+      error: "compaction fell back to truncation",
+      notice: true,
+    })
 
     expect(reduceAgentLifecycle(notice)).toEqual({})
   })

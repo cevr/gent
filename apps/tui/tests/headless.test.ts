@@ -78,6 +78,9 @@ const completed = (
   fields: { readonly unanswered?: boolean; readonly messageId?: MessageId } = {},
 ) => TurnCompleted.make({ sessionId, branchId, durationMs: 1, messageId: OWN_TURN, ...fields })
 const errorOccurred = (error: string) => ErrorOccurred.make({ sessionId, branchId, error })
+/** An error the turn continues past, such as a compaction fallback. */
+const errorNotice = (error: string) =>
+  ErrorOccurred.make({ sessionId, branchId, error, notice: true })
 
 /**
  * A branch as one run sees it: the stored history, the synchronization
@@ -98,13 +101,9 @@ const branchClient = (input: {
 }) => {
   const sent = Deferred.makeUnsafe<void>()
   const history = input.history ?? []
-  // The envelope keeps each event as given: `make` rebuilds an event and
-  // drops a field its schema does not name, such as a notice's `notice`.
   const envelopes = (events: ReadonlyArray<AgentEvent>, from: number) =>
     events.map((event, index) =>
-      Object.assign(EventEnvelope.make({ id: EventId.make(from + index), event, createdAt: 0 }), {
-        event,
-      }),
+      EventEnvelope.make({ id: EventId.make(from + index), event, createdAt: 0 }),
     )
   const marker = AgentEvent.cases.StreamSynchronized.make({
     sessionId,
@@ -194,10 +193,7 @@ describe("runHeadless", () => {
   headlessTest("a notice does not fail a turn that ends without answer text", () =>
     Effect.gen(function* () {
       const client = branchClient({
-        ownTurn: [
-          Object.assign(errorOccurred("compaction fell back to truncation"), { notice: true }),
-          completed(),
-        ],
+        ownTurn: [errorNotice("compaction fell back to truncation"), completed()],
       })
       capturedErrors.length = 0
       const exit = yield* Effect.exit(run(client))
@@ -209,7 +205,7 @@ describe("runHeadless", () => {
   headlessTest("a notice alone leaves the run waiting for its turn", () =>
     Effect.gen(function* () {
       const client = branchClient({
-        ownTurn: [Object.assign(errorOccurred("compaction fell back"), { notice: true })],
+        ownTurn: [errorNotice("compaction fell back")],
       })
       const outcome = yield* runHeadless(client, sessionId, branchId, PROMPT, noUser).pipe(
         Effect.timeoutOption("150 millis"),

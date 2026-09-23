@@ -326,8 +326,10 @@ describe("goal stream failure", () => {
           capabilityId: "goal-command",
           input: "Write the pelican poem",
         })
+        // The command queued the first turn, which can fail and pause the
+        // goal before this read: the goal exists, active or already paused.
         const created = yield* readGoal()
-        expect(Option.map(created, (goal) => goal.status)).toEqual(Option.some("active"))
+        expect(Option.isSome(created)).toBe(true)
 
         const paused = yield* waitFor(
           readGoal(),
@@ -357,6 +359,60 @@ describe("goal stream failure", () => {
         expect(goalMessages.length).toBe(1)
         // Two continuations inside the one turn, then the failure. No fourth call.
         expect(yield* Ref.get(calls)).toBe(3)
+      }).pipe(Effect.timeout("14 seconds")),
+    18_000,
+  )
+})
+
+describe("goal phase failure", () => {
+  it.scopedLive(
+    "a goal pauses when its turn fails outside the model stream",
+    () =>
+      Effect.gen(function* () {
+        // A defect in the stream is not a broken stream the loop retries: the
+        // turn phase fails, and the turn ends on its failed receipt.
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.succeed(Stream.die("stream defect")),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        const readGoal = () =>
+          client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: GOAL_EXTENSION_ID,
+              capabilityId: "goal.get",
+              input: {},
+            })
+            .pipe(
+              Effect.map((snapshot) =>
+                Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
+              ),
+            )
+
+        yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: GOAL_EXTENSION_ID,
+          capabilityId: "goal-command",
+          input: "Write the pelican poem",
+        })
+        const paused = yield* waitFor(
+          readGoal(),
+          (goal) =>
+            Option.contains(
+              Option.map(goal, (value) => value.status),
+              "paused",
+            ),
+          10_000,
+          "goal pauses on the failed turn",
+        )
+        expect(Option.map(paused, (goal) => goal.pausedReason)).toEqual(
+          Option.some(GOAL_PAUSED_STREAM_FAILED),
+        )
       }).pipe(Effect.timeout("14 seconds")),
     18_000,
   )
