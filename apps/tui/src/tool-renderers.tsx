@@ -714,7 +714,9 @@ function CellToolRenderer(props: ToolRendererProps) {
 
   // Each live op draws through the renderer registered for its tool, as a
   // collapsed sub-row: its header and its summary, never its full body. An op
-  // with no renderer keeps its one-line receipt.
+  // with no renderer keeps its one-line receipt. A blank line separates each op
+  // and the cell's own text after them, as it separates transcript blocks;
+  // one-line receipts stay a tight list.
   const Operations = () => (
     <Show
       when={liveOperations().length > 0}
@@ -726,7 +728,7 @@ function CellToolRenderer(props: ToolRendererProps) {
         </Show>
       }
     >
-      <box flexDirection="column">
+      <box flexDirection="column" gap={1}>
         <For each={liveOperations()}>
           {(call) => (
             <RegisteredToolCall
@@ -761,7 +763,7 @@ function CellToolRenderer(props: ToolRendererProps) {
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
-        <box flexDirection="column">
+        <box flexDirection="column" gap={1}>
           <Operations />
           <Failure />
           <Show when={displayLines().length > 0}>
@@ -770,14 +772,16 @@ function CellToolRenderer(props: ToolRendererProps) {
         </box>
       }
     >
-      <Show when={code().length > 0}>
-        <GutterText lines={codeLines()} startLine={1} />
-      </Show>
-      <Operations />
-      <Failure />
-      <Show when={displayLines().length > 0}>
-        <text style={{ fg: theme.text }}>{formatHeadTail(displayLines(), 100)}</text>
-      </Show>
+      <box flexDirection="column" gap={1}>
+        <Show when={code().length > 0}>
+          <GutterText lines={codeLines()} startLine={1} />
+        </Show>
+        <Operations />
+        <Failure />
+        <Show when={displayLines().length > 0}>
+          <text style={{ fg: theme.text }}>{formatHeadTail(displayLines(), 100)}</text>
+        </Show>
+      </box>
       <Show when={truncated()}>
         <text style={{ fg: theme.warning }}>display truncated</text>
       </Show>
