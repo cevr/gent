@@ -589,15 +589,17 @@ export class GentRpcs extends RpcGroup.make()
 // RPC Client Types
 // ============================================================================
 
+// A call fails with its RPC's error or the transport's. `GentConnectionError`
+// belongs to connection setup (the SDK's server and client constructors); no
+// call produces one.
 export type GentRpcClient = RpcClient.RpcClient<
   RpcGroupNs.Rpcs<typeof GentRpcs>,
-  RpcClientError.RpcClientError | GentConnectionError
+  RpcClientError.RpcClientError
 >
 
 export type GentClientRpcError =
   | Rpc.Error<RpcGroupNs.Rpcs<typeof GentRpcs>>
   | RpcClientError.RpcClientError
-  | GentConnectionError
 
 // ============================================================================
 // Namespaced client — typed nested view over the flat RPC transport

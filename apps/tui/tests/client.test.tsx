@@ -19,7 +19,6 @@ import {
   BranchId,
   dateFromMillis,
   EventEnvelope,
-  GentConnectionError,
   GentRpcError,
   Message,
   MessageId,
@@ -1364,7 +1363,7 @@ const isSessionEvent = Predicate.or(
 describe("ClientProvider send", () => {
   const refused = Schema.decodeSync(GentRpcError)({ _tag: "InvalidStateError", message: "refused" })
   const target = { sessionId: FIRST.sessionId, branchId: FIRST.branchId }
-  type Failure = GentConnectionError | GentRpcError | RpcClientError
+  type Failure = GentRpcError | RpcClientError
   /**
    * A client whose send and steer both answer the first attempt with `first`
    * and then land. Each verb records the request id of every attempt.
@@ -1398,7 +1397,6 @@ describe("ClientProvider send", () => {
       client.steer(target, SteerCommandInput.cases.Interject.make({ message: "once" })),
   }
   const lost = {
-    "a gent connection error": new GentConnectionError({ message: "socket closed" }),
     "a socket close": new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
   }
   const answered = {
