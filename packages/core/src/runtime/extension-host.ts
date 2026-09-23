@@ -1568,21 +1568,13 @@ const collectValidationFailures = (
     const byScope = new Map<LoadedExtension["scope"], Map<string, LoadedExtension[]>>()
     for (const ext of extensions) {
       const scopeMap = byScope.get(ext.scope) ?? new Map<string, LoadedExtension[]>()
-      const seen = new Set<string>()
+      // A key named twice by one extension is a package error that
+      // `validateExtensionPackage` owns; here each extension counts once per key.
       for (const item of pickItems(ext.contributions)) {
         const key = getKey(item)
         if (Option.isNone(key)) continue
-        // Resolution keeps one entry per key, so one extension naming a key
-        // twice would silently lose all but the last.
-        if (seen.has(key.value)) {
-          addFailure(
-            ext,
-            `Duplicate ${label} "${key.value}" in extension "${ext.manifest.id}" (scope "${ext.scope}")`,
-          )
-          continue
-        }
-        seen.add(key.value)
         const existing = scopeMap.get(key.value) ?? []
+        if (existing.includes(ext)) continue
         existing.push(ext)
         scopeMap.set(key.value, existing)
       }

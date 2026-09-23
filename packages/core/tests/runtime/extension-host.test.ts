@@ -1826,25 +1826,44 @@ describe("extension activation isolation", () => {
   it.live("validation fails one extension whose own tool and request share an id", () =>
     Effect.gen(function* () {
       // One extension, one id twice: resolution would keep only the request.
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("self-shadow", {
-          tools: [
-            tool({
-              id: "shared_name",
-              description: "model",
-              params: Schema.Struct({}),
-              output: Schema.Void,
-              execute: () => Effect.void,
-            }),
-          ],
-          requests: [rawRpcLeaf("shared_name")],
-        }),
-      ])
+      // Setup owns this check; the cross-extension pass never sees the package.
+      const result = yield* setupExtensions({
+        extensions: [
+          builtin(
+            makeBuiltin(
+              "self-shadow",
+              Effect.succeed({
+                tools: [
+                  tool({
+                    id: "shared_name",
+                    description: "model",
+                    params: Schema.Struct({}),
+                    output: Schema.Void,
+                    execute: () => Effect.void,
+                  }),
+                ],
+                requests: [
+                  request({
+                    id: "shared_name",
+                    input: Schema.Struct({}),
+                    output: Schema.String,
+                    execute: () => Effect.succeed("ok"),
+                  }),
+                ],
+              }),
+            ),
+          ),
+        ],
+        cwd: "/tmp",
+        home: "/tmp",
+        disabled: new Set(),
+      })
 
       expect(result.active).toEqual([])
       expect(result.failed.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("self-shadow")])
-      expect(result.failed[0]?.error).toContain('capability "shared_name"')
-    }),
+      expect(result.failed[0]?.phase).toBe("setup")
+      expect(result.failed[0]?.error).toContain("requests[0] (shared_name): duplicate id")
+    }).pipe(Effect.provide(fsLayer)),
   )
 
   it.live("a tool with a blank description keeps its extension out of the active set", () =>
