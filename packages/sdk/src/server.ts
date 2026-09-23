@@ -1089,6 +1089,25 @@ const probeServerLockEntryIdentity = (entry: ServerLockEntry): Effect.Effect<boo
 
 // ── Main server resolver ──
 
+/** A stop that did not confirm the holder is gone: it may still have the database open. */
+const holderStillBlocks = Predicate.or(
+  Predicate.isTagged("NotOwned"),
+  Predicate.isTagged("StillRunning"),
+)
+
+/** Why a live holder blocks a new server, and how an operator clears it. */
+const holderBlocksMessage = (
+  stopped: Extract<ServerStopResult, { readonly _tag: "NotOwned" | "StillRunning" }>,
+  lockPath: string,
+): string => {
+  const { entry } = stopped
+  const holder = `PID ${entry.pid} holds ${entry.dbPath} (lock ${lockPath})`
+  if (stopped._tag === "StillRunning") {
+    return `${holder} and is still running after SIGTERM; stop it, then retry`
+  }
+  return `${holder} but did not confirm its identity; if that PID is not a gent server, remove the lock, then retry`
+}
+
 export const resolveServer = (
   options: GentServerOptions,
 ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> =>
@@ -1131,7 +1150,16 @@ const resolveServerInternal = (
       }
     }
     // Anything else is replaced: stop what the lock names, then write our own.
-    if (status._tag !== "None") yield* serverLock.stop(home, { removeStale: true })
+    // A holder that is not confirmed gone may still have the database open,
+    // so a second server never starts beside it.
+    if (status._tag !== "None") {
+      const stopped = yield* serverLock.stop(home, { removeStale: true })
+      if (holderStillBlocks(stopped)) {
+        return yield* new GentConnectionError({
+          message: holderBlocksMessage(stopped, (yield* dataPaths(home)).serverLock),
+        })
+      }
+    }
 
     const server = yield* buildOwnedServer(options, stateSpec, providerSpec)
     const internalOption = getOwnedInternal(server)

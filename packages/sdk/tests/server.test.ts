@@ -378,42 +378,48 @@ describe("Build Fingerprint", () => {
 })
 
 /**
- * Trap SIGTERM to this process. A trapped SIGTERM marks the pid gone, so the
- * liveness probe that follows sees the server exit.
+ * Trap SIGTERM to this process. With `exits`, a trapped SIGTERM marks the pid
+ * gone, so the liveness probe that follows sees the server exit; without it,
+ * the pid stays alive, as a server that ignores SIGTERM does.
  */
-const withSignalTrap = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<
-  { readonly result: A; readonly signals: ReadonlyArray<string | number> },
-  E,
-  R | Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const signals: Array<string | number> = []
-    // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
-    const originalKill = process.kill
-    const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
-      if (pid !== process.pid) return originalKill(pid, signal)
-      if (signal === "SIGTERM") {
-        signals.push(signal)
-        return true
+const signalTrap =
+  (exits: boolean) =>
+  <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<
+    { readonly result: A; readonly signals: ReadonlyArray<string | number> },
+    E,
+    R | Scope.Scope
+  > =>
+    Effect.gen(function* () {
+      const signals: Array<string | number> = []
+      // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
+      const originalKill = process.kill
+      const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
+        if (pid !== process.pid) return originalKill(pid, signal)
+        if (signal === "SIGTERM") {
+          signals.push(signal)
+          return true
+        }
+        // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- the trap keeps process.kill's contract: a gone pid throws ESRCH
+        if (exits && signals.length > 0) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" })
+        return originalKill(pid, signal)
       }
-      // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- the trap keeps process.kill's contract: a gone pid throws ESRCH
-      if (signals.length > 0) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" })
-      return originalKill(pid, signal)
-    }
-    yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        process.kill = replacement
-      }),
-      () =>
+      yield* Effect.acquireRelease(
         Effect.sync(() => {
-          process.kill = originalKill
+          process.kill = replacement
         }),
-    )
-    const result = yield* effect
-    return { result, signals }
-  })
+        () =>
+          Effect.sync(() => {
+            process.kill = originalKill
+          }),
+      )
+      const result = yield* effect
+      return { result, signals }
+    })
+
+const withSignalTrap = signalTrap(true)
+const withIgnoredSigterm = signalTrap(false)
 
 describe("Server Lock", () => {
   it.scopedLive(
@@ -654,6 +660,39 @@ describe("Server Lock", () => {
   )
 })
 
+/**
+ * Write `entry` as the lock, pointed at an identity endpoint that answers with
+ * the entry's own identity, changed by `overrides`.
+ */
+const lockWithIdentity = (
+  home: string,
+  entry: ServerLockEntry,
+  overrides: { readonly pid?: number },
+) =>
+  Effect.gen(function* () {
+    const endpoint = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
+        Bun.serve({
+          port: 0,
+          fetch: () =>
+            Response.json({
+              serverId: entry.serverId,
+              pid: entry.pid,
+              hostname: entry.hostname,
+              dbPath: entry.dbPath,
+              buildFingerprint: entry.buildFingerprint,
+              ...overrides,
+            }),
+        }),
+      ),
+      (server) => Effect.promise(() => server.stop(true)),
+    )
+    const locked = new ServerLockEntry({ ...entry, rpcUrl: `${new URL(endpoint.url).origin}/rpc` })
+    yield* serverLock.write(home, locked)
+    return locked
+  })
+
 describe("Server Lock Ownership", () => {
   it.scopedLive("status reads a live pid as alive and a gone pid as stale", () =>
     provideFs(
@@ -670,71 +709,51 @@ describe("Server Lock Ownership", () => {
     ),
   )
 
-  it.scopedLive("PID-reused stale server locks are removed without SIGTERM", () =>
+  it.scopedLive(
+    "a live holder that does not prove its identity blocks a new server; nothing is signalled",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const buildFingerprint = yield* (yield* BuildFingerprint).current
+          const dbPath = (yield* dataPaths(home)).dbPath
+          // The pid is alive, but the endpoint names another process: a server
+          // that cannot be confirmed may still hold the database.
+          const holder = yield* lockWithIdentity(home, makeEntry({ dbPath, buildFingerprint }), {
+            pid: 99999999,
+          })
+          const { result, signals } = yield* Gent.server({
+            cwd: home,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }).pipe(Effect.flip, withSignalTrap)
+          expect(result._tag).toBe("@gent/core/GentConnectionError")
+          expect(result.message).toContain(String(holder.pid))
+          expect(signals).toEqual([])
+          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
+        }),
+      ),
+  )
+
+  it.scopedLive("a holder still running after SIGTERM blocks a new server", () =>
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        const entry = makeEntry({
-          pid: process.pid,
-          buildFingerprint: "stale-fingerprint",
-        })
-        const fakeOwner = yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
-            Bun.serve({
-              port: 0,
-              fetch: (request) => {
-                if (new URL(request.url).pathname !== "/_gent/identity") {
-                  return new Response("not found", { status: 404 })
-                }
-                return Response.json({
-                  serverId: entry.serverId,
-                  pid: 99999999,
-                  hostname: entry.hostname,
-                  dbPath: entry.dbPath,
-                  buildFingerprint: entry.buildFingerprint,
-                })
-              },
-            }),
-          ),
-          (server) => Effect.promise(() => server.stop(true)),
+        // Another build on the same database: the resolver must stop it first.
+        const dbPath = (yield* dataPaths(home)).dbPath
+        const holder = yield* lockWithIdentity(
+          home,
+          makeEntry({ dbPath, buildFingerprint: "another-build" }),
+          {},
         )
-        const fakeOwnerUrl = new URL(fakeOwner.url)
-        const entryWithEndpoint = new ServerLockEntry({
-          ...entry,
-          rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
-        })
-        yield* serverLock.write(home, entryWithEndpoint)
-
-        const signals: Array<{ pid: number; signal: string | number }> = []
-        // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
-        const originalKill = process.kill
-        const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
-          if (signal === "SIGTERM") {
-            signals.push({ pid, signal })
-            return true
-          }
-          return originalKill(pid, signal)
-        }
-
-        yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            process.kill = replacement
-          }),
-          () =>
-            Effect.sync(() => {
-              process.kill = originalKill
-            }),
-        )
-        yield* Gent.server({
-          cwd: process.cwd(),
+        const { result, signals } = yield* Gent.server({
+          cwd: home,
           state: Gent.state.sqlite({ home }),
           provider: Gent.provider.mock(),
-        })
-
-        expect(signals).toEqual([])
-        const after = Option.getOrThrow(yield* serverLock.read(home))
-        expect(after.serverId).not.toBe(entryWithEndpoint.serverId)
+        }).pipe(Effect.flip, withIgnoredSigterm)
+        expect(result._tag).toBe("@gent/core/GentConnectionError")
+        expect(signals).toEqual(["SIGTERM"])
+        expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
       }),
     ),
   )
