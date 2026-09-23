@@ -119,14 +119,14 @@ const CASES: ReadonlyArray<RuleCase> = [
   },
   {
     // A client extension reaches the TUI only through @gent/tui/extensions;
-    // the builtin roster may name its sibling client extensions.
+    // only the builtin roster may name its sibling client extensions.
     rule: "gent/core-entry-boundary",
     invalid: "apps/tui/src/extensions/owner-rule.invalid.client.tsx",
     valid: ["apps/tui/src/extensions/builtins.tsx"],
     // the client provider, the extension host, a host utility, the facet
-    // module by path, a type import, a re-export, a dynamic import, and
-    // `typeof import`
-    expectedCount: 8,
+    // module by path, a type import, a re-export, a dynamic import,
+    // `typeof import`, and a sibling client extension
+    expectedCount: 9,
   },
   {
     // The TUI host reads no extension module; a client extension owns that view.
@@ -198,8 +198,9 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-promise-control-flow-in-tests",
     invalid: "no-promise-control-flow-in-tests.invalid.test.ts",
     valid: ["no-promise-control-flow-in-tests.valid.test.ts"],
-    // three chain methods and three runPromise edges
-    expectedCount: 6,
+    // four chain methods, one on a capitalised promise variable, and three
+    // runPromise edges
+    expectedCount: 7,
   },
   {
     rule: "gent/no-promise-control-flow-in-tests",

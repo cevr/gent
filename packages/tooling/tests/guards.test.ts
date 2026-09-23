@@ -1121,6 +1121,18 @@ describe("the guard entry routes each tracked file to its finders", () => {
     ).toEqual([])
   })
 
+  test("a manifest field other than scripts sets nothing, even when it shows the prefix", () => {
+    expect(
+      gentNames([
+        { file: "packages/sdk/src/reader.ts", text: `Config.string("GENT_PROBE_SCRIPT")\n` },
+        {
+          file: "apps/tui/package.json",
+          text: `{ "description": "run with GENT_PROBE_SCRIPT=1 to probe", "scripts": { "dev": "bun run x" } }\n`,
+        },
+      ]),
+    ).toEqual([expect.stringContaining("is read but nothing in the tree sets it")])
+  })
+
   test("with no script to set it, the entry still reports the reader", () => {
     expect(
       gentNames([

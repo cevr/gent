@@ -163,7 +163,9 @@ const EXTENSIONS_PACKAGE = /^@gent\/extensions(?:\/|$)/
  * extension does.
  */
 const TUI_CLIENT_EXTENSION_FILE = /\/apps\/tui\/src\/extensions\/(?:[^/]+\.client|builtins)\.tsx?$/
-/** The one relative target a client extension may name: a sibling client extension. */
+/** The builtin roster, the one client module that names its siblings. */
+const TUI_CLIENT_ROSTER_FILE = /\/apps\/tui\/src\/extensions\/builtins\.tsx?$/
+/** The one relative target the roster may name: a sibling client extension. */
 const TUI_CLIENT_EXTENSION_MODULE = /\/apps\/tui\/src\/extensions\/[^/]+\.client(?:\.tsx?|\.js)?$/
 
 /** The module specifier of an import, re-export, or dynamic import. */
@@ -239,18 +241,36 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
 
 const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
 
-/**
- * A capitalised receiver is a module namespace (`Effect`, `Stream`, `Layer`),
- * and its `catch` is a combinator, not a Promise chain.
- */
-const isNamespaceReceiver = (object: AstNode | undefined): boolean =>
-  object?.type === "Identifier" && /^[A-Z]/.test(getStringField(object, "name") ?? "")
+/** An Effect module: `effect`, its subpaths, and the `@effect/*` packages. */
+const EFFECT_MODULE = /^(?:effect(?:\/.*)?|@effect\/.+)$/
 
-const promiseChainMethodName = (node: AstNode): string | undefined => {
+/**
+ * The local names an Effect-module import binds, by name or as a namespace:
+ * `import { Stream } from "effect"`, `import * as Layer from "effect/Layer"`.
+ * Such a receiver's `catch` is a combinator, not a Promise chain; any other
+ * receiver, capitalised or not, may hold a Promise.
+ */
+const effectModuleBindings = (node: AstNode): ReadonlyArray<string> => {
+  if (!EFFECT_MODULE.test(importSourceOf(node) ?? "")) return []
+  return (getNodeArrayField(node, "specifiers") ?? [])
+    .filter(
+      (specifier) =>
+        specifier.type === "ImportSpecifier" || specifier.type === "ImportNamespaceSpecifier",
+    )
+    .map(specifierLocalName)
+}
+
+const promiseChainMethodName = (
+  node: AstNode,
+  effectBindings: ReadonlySet<string>,
+): string | undefined => {
   if (node.type !== "CallExpression") return undefined
   const callee = getNodeField(node, "callee")
   if (callee?.type !== "MemberExpression") return undefined
-  if (isNamespaceReceiver(getNodeField(callee, "object"))) return undefined
+  const object = getNodeField(callee, "object")
+  if (object?.type === "Identifier" && effectBindings.has(getStringField(object, "name") ?? "")) {
+    return undefined
+  }
   const prop = getNodeField(callee, "property")
   if (prop?.type !== "Identifier") return undefined
   const name = getStringField(prop, "name")
@@ -679,9 +699,9 @@ const plugin: Plugin = {
      * - The TUI host (`apps/tui/src/` outside `extensions/`) never reads
      *   `@gent/extensions`. One extension's view belongs in its client
      *   extension, which reaches the TUI only through `@gent/tui/extensions`,
-     *   as a user extension does: a TUI client extension (`*.client.*` and
-     *   the `builtins.tsx` roster) names no TUI module by relative path
-     *   except a sibling client extension.
+     *   as a user extension does: a TUI client extension (`*.client.*`)
+     *   names no TUI module by relative path, and the `builtins.tsx` roster
+     *   names only its sibling client extensions.
      *
      * Every module form counts: `import`, `export ... from`, `import(...)`
      * and `typeof import(...)`.
@@ -701,6 +721,7 @@ const plugin: Plugin = {
         const tuiExtension = filename.includes("apps/tui/src/extensions/")
         const tuiHost = !tuiExtension && productFile && filename.includes("/apps/tui/src/")
         const tuiClientExtension = TUI_CLIENT_EXTENSION_FILE.test(filename)
+        const tuiClientRoster = TUI_CLIENT_ROSTER_FILE.test(filename)
 
         const extensionMessage = (
           source: string,
@@ -713,6 +734,16 @@ const plugin: Plugin = {
           if (AUTHORING_ENTRY.test(source)) return undefined
           if (tuiExtension && PROTOCOL_ENTRY.test(source)) return undefined
           return `Extensions must import from "@gent/core/extensions/api" or "@gent/core/extensions/branch-tools". Forbidden: "${source}"`
+        }
+
+        /** A client extension names no TUI module by path; the roster names only its siblings. */
+        const clientExtensionMessage = (
+          source: string,
+          resolved: string | undefined,
+        ): string | undefined => {
+          if (!tuiClientExtension || resolved === undefined) return undefined
+          if (tuiClientRoster && TUI_CLIENT_EXTENSION_MODULE.test(resolved)) return undefined
+          return `A client extension reaches the TUI through "@gent/tui/extensions", as a user extension does; only the builtin roster names a sibling client extension by relative path. Forbidden: "${source}"`
         }
 
         const report = (node: AstNode, source: string | undefined) => {
@@ -734,14 +765,7 @@ const plugin: Plugin = {
           ) {
             message = `Code outside core reads it through "@gent/core/<entry>", not its source. Forbidden: "${source}"`
           }
-          if (
-            message === undefined &&
-            tuiClientExtension &&
-            resolved !== undefined &&
-            !TUI_CLIENT_EXTENSION_MODULE.test(resolved)
-          ) {
-            message = `A client extension reaches the TUI through "@gent/tui/extensions", as a user extension does; a relative import may name only a sibling client extension. Forbidden: "${source}"`
-          }
+          if (message === undefined) message = clientExtensionMessage(source, resolved)
           if (message === undefined && tuiHost && EXTENSIONS_PACKAGE.test(source)) {
             message = `The TUI host reads no extension module; move the view into a client extension under apps/tui/src/extensions/. Forbidden: "${source}"`
           }
@@ -1131,7 +1155,13 @@ const plugin: Plugin = {
         if (!isTestFilename(filename)) return {}
         if (isTestBoundaryFilename(filename)) return {}
 
+        // Filled as the import declarations are visited, before any call.
+        const effectBindings = new Set<string>()
         return {
+          ImportDeclaration(node) {
+            if (!isAstNode(node)) return
+            for (const name of effectModuleBindings(node)) effectBindings.add(name)
+          },
           CallExpression(node) {
             if (!isAstNode(node)) return
             const callee = getNodeField(node, "callee")
@@ -1153,7 +1183,7 @@ const plugin: Plugin = {
               })
               return
             }
-            const method = promiseChainMethodName(node)
+            const method = promiseChainMethodName(node, effectBindings)
             if (method === undefined) return
             context.report({
               message: `Do not use Promise-chain \`.${method}(...)\` control flow in tests. Import \`it\` from \`effect-bun-test\`; use \`yield*\` in \`Effect.gen\`, \`Effect.all([...])\` for concurrency, and \`Effect.scoped\` / \`it.scopedLive\` for cleanup.`,

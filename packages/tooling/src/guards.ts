@@ -1161,18 +1161,35 @@ const recordAt = (text: string, open: number): string => {
   return text.slice(open)
 }
 
-/** The names `text` (comments blanked) sets, by the three writer shapes. */
-const namesWritten = (file: string, text: string): ReadonlyArray<string> => {
+/** The names source `text` (comments blanked) sets, by the record and assignment shapes. */
+const namesWritten = (text: string): ReadonlyArray<string> => {
   const records = [...text.matchAll(ENV_RECORD_OPEN)].map((match) =>
     recordAt(text, match.index + match[0].length - 1),
   )
-  const written = [
+  return [
     ...records.flatMap((record) => namesMatching(record, ENV_RECORD_KEY)),
     ...namesMatching(text, ENV_ASSIGNMENT),
   ]
-  if (!file.endsWith("package.json")) return written
-  return [...written, ...namesMatching(text, SCRIPT_PREFIX)]
 }
+
+const isManifest = (file: string): boolean => /(?:^|\/)package\.json$/.test(file)
+
+/** The one manifest field that runs a shell: every other field is data. */
+const decodeManifestScripts = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({ scripts: Schema.optional(Schema.Record(Schema.String, Schema.String)) }),
+  ),
+)
+
+/** The names a manifest's `scripts` set by a shell prefix; a description that shows one sets nothing. */
+const namesScriptsSet = (text: string): ReadonlyArray<string> =>
+  Option.match(decodeManifestScripts(text), {
+    onNone: () => [],
+    onSome: (manifest) =>
+      Object.values(manifest.scripts ?? {}).flatMap((script) =>
+        namesMatching(script, SCRIPT_PREFIX),
+      ),
+  })
 
 interface VariableUse {
   readonly file: string
@@ -1208,6 +1225,11 @@ const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>) => {
   for (const [file, text] of sourceTexts) {
     // This finder names variables to describe itself; it is not a call site.
     if (file === GUARDS_FILE || isTestSupport(file)) continue
+    // A manifest reads nothing; only its scripts write.
+    if (isManifest(file)) {
+      for (const name of namesScriptsSet(text)) writers.add(name)
+      continue
+    }
     // A comment that shows `GENT_X=1` documents a variable; it sets nothing.
     const code = withoutComments(text)
     for (const [index, line] of code.split("\n").entries()) {
@@ -1217,7 +1239,7 @@ const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>) => {
         readers.set(name, found)
       }
     }
-    for (const name of namesWritten(file, code)) writers.add(name)
+    for (const name of namesWritten(code)) writers.add(name)
   }
   return { readers, writers }
 }
