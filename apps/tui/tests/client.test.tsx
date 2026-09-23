@@ -1300,6 +1300,58 @@ describe("ClientProvider send", () => {
   )
 })
 
+// ── errors ──────────────────────────────────────────────────────────────────
+
+/**
+ * A session's snapshot writes its status, so an error set before the snapshot
+ * lands would be overwritten. An error for the session in view waits for the
+ * snapshot, as one for a session the reader left does.
+ */
+describe("ClientProvider errors", () => {
+  it.live("an error set after a switch, before the snapshot lands, survives the snapshot", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
+      client.setErrorIn(SECOND, "send refused")
+      client.applySessionSnapshot(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0 }))
+      expect(client.error()).toBe("send refused")
+    }),
+  )
+
+  it.live("an error set once the snapshot is in shows at once", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
+      client.setErrorIn(FIRST, "send refused")
+      expect(client.error()).toBe("send refused")
+    }),
+  )
+})
+
 describe("useSessionFeed", () => {
   it.live("changes route when a branch event changes the active client identity", () =>
     Effect.gen(function* () {

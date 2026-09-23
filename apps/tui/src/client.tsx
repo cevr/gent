@@ -830,6 +830,15 @@ export function ClientProvider(props: ClientProviderProps) {
   const [extensionHealth, setExtensionHealth] =
     createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
 
+  // Errors a session earned before its snapshot was in, shown when the
+  // snapshot lands: the snapshot writes the status and would overwrite them.
+  // That covers a session the reader left and the one just switched to.
+  const heldErrors = new Map<string, string>()
+  const identityKey = (identity: SessionIdentity) =>
+    `${identity.sessionId}\u0000${identity.branchId}`
+  // The identity whose snapshot has landed since the last session change.
+  let snapshotIn = Option.none<string>()
+
   /**
    * Drop everything the previous session left behind.
    *
@@ -853,6 +862,7 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedReasoningLevel: Option.none(),
     })
     setSessionMetrics(EMPTY_SESSION_METRICS)
+    snapshotIn = Option.none()
     setNoticeState(Option.none())
     clearConnectionIssue()
     if (input.clearExtensionHealth) setExtensionHealth(EMPTY_EXTENSION_HEALTH)
@@ -948,12 +958,6 @@ export function ClientProvider(props: ClientProviderProps) {
     }
   }
 
-  // Errors a session earned while another was in view, shown when its
-  // snapshot lands on return: the snapshot would otherwise overwrite them.
-  const heldErrors = new Map<string, string>()
-  const identityKey = (identity: SessionIdentity) =>
-    `${identity.sessionId}\u0000${identity.branchId}`
-
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
     const currentSession = sessionOption()
     if (Option.isSome(currentSession)) {
@@ -1003,6 +1007,7 @@ export function ClientProvider(props: ClientProviderProps) {
     })
     setSessionMetrics(metricsOf(snapshot))
     const key = identityKey(snapshot)
+    snapshotIn = Option.some(key)
     const held = Option.fromUndefinedOr(heldErrors.get(key))
     if (Option.isSome(held)) {
       heldErrors.delete(key)
@@ -1397,12 +1402,13 @@ export function ClientProvider(props: ClientProviderProps) {
         modelStore.driverIds.includes(model.provider),
       ),
     setErrorIn: (target, error) => {
+      const key = identityKey(target)
       const inView = Option.exists(sessionOption(), (current) => sameIdentity(current, target))
-      if (inView) {
-        agentValue.setError(error)
-        return
-      }
-      heldErrors.set(identityKey(target), error)
+      // The session in view shows it now; until its snapshot is in, the
+      // error is also held, so the snapshot shows it again over its status.
+      if (inView) agentValue.setError(error)
+      if (inView && Option.contains(snapshotIn, key)) return
+      heldErrors.set(key, error)
     },
     setError: (error) => {
       const nextError = Option.fromNullishOr(error)
