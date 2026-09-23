@@ -2258,6 +2258,7 @@ const makeHarness = (
       worker,
       inbox,
       phase,
+      loop: TxSubscriptionRef.get(loopRef),
       queue,
       setPhase,
       ranTurns,
@@ -2420,6 +2421,72 @@ describe("a wake and a submit that race for an idle loop", () => {
         "late",
       ])
       expect((yield* harness.phase)._tag).toBe("Running")
+    }),
+  )
+})
+
+describe("a start interrupted while it waits for the loop", () => {
+  // Each item runs exactly once; an idle admit starts ahead of queued items.
+  const runsOf = (harness: Effect.Success<ReturnType<typeof makeHarness>>, count: number) =>
+    Ref.get(harness.ranTurns).pipe(
+      Effect.repeat({
+        until: (ids) => ids.length >= count,
+        schedule: Schedule.spaced("5 millis"),
+      }),
+      Effect.timeout("2 seconds"),
+    )
+
+  it.live("an idle take strands nothing, and both items run once", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("queued-first")
+      const second = queuedItem("submitted-second")
+      const harness = yield* makeHarness(
+        { state: buildIdleState(), queue: { ...emptyLoopQueueState(), followUp: [first] } },
+        { settles: true },
+      )
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      // Something holds the loop, so the starter waits for it.
+      yield* harness.sideMutationSemaphore.take(1)
+      const starter = yield* Effect.forkChild(harness.worker.startNextIfIdle(), {
+        startImmediately: true,
+      })
+      yield* Fiber.interrupt(starter)
+      yield* harness.sideMutationSemaphore.release(1)
+
+      const loopState = yield* harness.loop
+      expect(loopState.startingState).toBeUndefined()
+      yield* harness.worker.admitAndStart(second, { queueOnly: false })
+      yield* harness.worker.startNextIfIdle()
+      expect((yield* runsOf(harness, 2)).toSorted()).toEqual(["queued-first", "submitted-second"])
+      expect((yield* harness.queue).followUp).toEqual([])
+      yield* Fiber.interrupt(loop)
+    }),
+  )
+
+  it.live("an admitted start strands nothing, and both items run once", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("admitted-first")
+      const second = queuedItem("submitted-second")
+      const harness = yield* makeHarness(
+        { state: buildIdleState(), queue: emptyLoopQueueState() },
+        { settles: true },
+      )
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      yield* harness.sideMutationSemaphore.take(1)
+      const starter = yield* Effect.forkChild(
+        harness.worker.admitAndStart(first, { queueOnly: false }),
+        { startImmediately: true },
+      )
+      yield* Fiber.interrupt(starter)
+      yield* harness.sideMutationSemaphore.release(1)
+
+      const loopState = yield* harness.loop
+      expect(loopState.startingState).toBeUndefined()
+      yield* harness.worker.admitAndStart(second, { queueOnly: false })
+      yield* harness.worker.startNextIfIdle()
+      expect((yield* runsOf(harness, 2)).toSorted()).toEqual(["admitted-first", "submitted-second"])
+      expect((yield* harness.queue).followUp).toEqual([])
+      yield* Fiber.interrupt(loop)
     }),
   )
 })

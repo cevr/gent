@@ -227,6 +227,7 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * | `admit`                 | Batching, the depth ceiling, the idle test, the start reservation     |
  * | `take` / `takeIfIdle`   | Steering-before-follow-up order, the in-flight slot, re-stamping      |
  * | `claimStart`            | Whose reservation a start spends; a lost start goes back in the queue |
+ * | `releaseStart`          | That an unstarted reservation returns its item to the queue head      |
  * | `settle`                | Which message the in-flight slot named, and whether a row changed     |
  * | `steer`                 | Where a steering item goes, and the phase a caller must test to wake  |
  * | `deliverSteering`       | What a step may take, and the final-step hold                         |
@@ -607,6 +608,12 @@ export type LoopInbox = {
    * race never drops what it carried.
    */
   readonly claimStart: (item: QueuedTurnItem) => Effect.Effect<boolean, AgentLoopError>
+  /**
+   * Give back the reservation `admit` made for an item whose start never ran:
+   * the item goes to the head of the follow-up queue, ahead of everything
+   * that queued behind the reservation. A no-op once a phase spent it.
+   */
+  readonly releaseStart: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   /** True when this message was the in-flight admission and is now settled. */
   readonly settle: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   /**
@@ -859,6 +866,23 @@ export const makeLoopInbox = (
       }),
     )
 
+    const releaseStart = Effect.fn("LoopInbox.releaseStart")((item: QueuedTurnItem) =>
+      commitQueueTransaction("returned a reserved turn", (s) => {
+        const reserved =
+          Predicate.isNotUndefined(s.startingState) && phaseHolds(s.startingState, item.message.id)
+        if (s.state._tag !== "Idle" || !reserved) return { value: void 0, next: s, persist: false }
+        const followUp = [
+          item,
+          ...s.queue.followUp.filter((queued) => queued.message.id !== item.message.id),
+        ]
+        return {
+          value: void 0,
+          next: { state: s.state, queue: { ...s.queue, followUp } },
+          persist: true,
+        }
+      }),
+    )
+
     const settle = Effect.fn("LoopInbox.settle")((messageId: MessageId) =>
       commitQueueTransaction("cleared in-flight turn", (s) => {
         const queue = clearInFlightQueuedTurn(s.queue, messageId)
@@ -940,6 +964,7 @@ export const makeLoopInbox = (
       takeIfIdle: takeFromState({ onlyIfIdle: true }),
       take: takeFromState({ onlyIfIdle: false }),
       claimStart,
+      releaseStart,
       settle,
       steer,
       deliverSteering,
@@ -1216,12 +1241,45 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     yield* Effect.raceFirst(resume, resumedElsewhere)
   })
 
+  // A start holds a reservation from its claim until `advanceOrIdle` moves the
+  // phase. Only the permit wait before it can be interrupted, so an interrupt
+  // never leaves an Idle loop with a reservation nobody will spend.
   const startTurn = Effect.fn("AgentLoop.startTurn")((item: QueuedTurnItem) =>
     Effect.gen(function* () {
       if (!(yield* scope.inbox.claimStart(item))) return
       yield* scope.turnInterruption.beginTurn
       yield* advanceOrIdle(Option.some(item))
-    }).pipe(scope.sideMutationSemaphore.withPermits(1)),
+    }).pipe(Effect.uninterruptible, scope.sideMutationSemaphore.withPermits(1)),
+  )
+
+  /** Take the next queued item and start it, all under the permit: the take's reservation never outlives this region. */
+  const startNextIfIdle = Effect.fn("AgentLoop.startNextIfIdle")(() =>
+    Effect.gen(function* () {
+      const next = yield* scope.inbox.takeIfIdle
+      if (Option.isNone(next)) return
+      yield* scope.turnInterruption.beginTurn
+      yield* advanceOrIdle(next)
+    }).pipe(Effect.uninterruptible, scope.sideMutationSemaphore.withPermits(1)),
+  )
+
+  /**
+   * Admit one item and start it when the admission reserved the start. The
+   * admission cannot wait for the permit (it must queue at once), so a start
+   * interrupted in that wait gives the reservation back (`releaseStart`).
+   */
+  const admitAndStart = Effect.fn("AgentLoop.admitAndStart")(
+    (item: QueuedTurnItem, options: { readonly queueOnly: boolean }) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const reserved = yield* scope.inbox.admit(item, options)
+          if (Option.isSome(reserved)) {
+            yield* restore(startTurn(item)).pipe(
+              Effect.onInterrupt(() => scope.inbox.releaseStart(item).pipe(Effect.orDie)),
+            )
+          }
+          return reserved
+        }),
+      ),
   )
 
   const respondInteraction = Effect.fn("AgentLoop.respondInteraction")(
@@ -1251,6 +1309,8 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
   return {
     turnWorkerLoop,
     startTurn,
+    startNextIfIdle,
+    admitAndStart,
     interruptActiveStream: interruptActiveStream(scope.activeStreamRef),
     interrupt,
     respondInteraction,
@@ -1324,6 +1384,13 @@ type AgentLoopBehavior = {
    */
   branchContext: Effect.Effect<Context.Context<never>>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
+  /** Take the next queued item and start it in one permit region. */
+  startNextIfIdle: () => Effect.Effect<void, AgentLoopError>
+  /** Admit one item and start it when the admission reserved the start. */
+  admitAndStart: (
+    item: QueuedTurnItem,
+    options: { readonly queueOnly: boolean },
+  ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
   interrupt: (messageId?: MessageId) => Effect.Effect<void, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
   withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
@@ -1785,6 +1852,8 @@ const makeAgentLoopBehavior = (
       resolveTurnProfile,
       branchContext,
       startTurn: worker.startTurn,
+      startNextIfIdle: worker.startNextIfIdle,
+      admitAndStart: worker.admitAndStart,
       interrupt: worker.interrupt,
       respondInteraction: worker.respondInteraction,
       withSideMutation: worker.withSideMutation,
@@ -2090,12 +2159,7 @@ const buildAgentLoopActorHandlers = (config: {
       handle: AgentLoopBehavior,
       item: QueuedTurnItem,
       options: { readonly queueOnly: boolean },
-    ) =>
-      Effect.gen(function* () {
-        const reserved = yield* handle.inbox.admit(item, options)
-        if (Option.isSome(reserved)) yield* handle.startTurn(item).pipe(orCleanup(handle))
-        return reserved
-      })
+    ) => handle.admitAndStart(item, options).pipe(orCleanup(handle))
 
     // Typed reentrant-only handle lookup. The only legitimate caller is the
     // `AgentLoopFollowUp` enqueue implementation provided to the behavior — it
@@ -2128,23 +2192,18 @@ const buildAgentLoopActorHandlers = (config: {
       handle: AgentLoopBehavior,
       options?: { readonly startupPermitHeld?: boolean },
     ) =>
-      Effect.gen(function* () {
-        const start = yield* handle.inbox.takeIfIdle
-        if (Option.isSome(start)) {
-          yield* handle.startTurn(start.value).pipe(
-            Effect.catchEager((error) => {
-              let cleanup = closeBehavior
-              const startupPermitHeld = Option.fromUndefinedOr(options).pipe(
-                Option.map(({ startupPermitHeld: held }) => held),
-              )
-              if (Option.isSome(startupPermitHeld) && startupPermitHeld.value === true) {
-                cleanup = closeBehaviorWithHeldStartupPermit
-              }
-              return cleanup(handle).pipe(Effect.andThen(Effect.fail(error)))
-            }),
+      handle.startNextIfIdle().pipe(
+        Effect.catchEager((error) => {
+          let cleanup = closeBehavior
+          const startupPermitHeld = Option.fromUndefinedOr(options).pipe(
+            Option.map(({ startupPermitHeld: held }) => held),
           )
-        }
-      })
+          if (Option.isSome(startupPermitHeld) && startupPermitHeld.value === true) {
+            cleanup = closeBehaviorWithHeldStartupPermit
+          }
+          return cleanup(handle).pipe(Effect.andThen(Effect.fail(error)))
+        }),
+      )
 
     const markWrite = Effect.gen(function* () {
       if (yield* sessionGovernance.isTerminated(workspaceId, sessionId)) {
@@ -2309,8 +2368,7 @@ const buildAgentLoopActorHandlers = (config: {
     ) {
       const wasAlreadyWarm = yield* markWrite
       const item = yield* buildFollowUpItem(input)
-      const reserved = yield* handle.inbox.admit(item, { queueOnly: !wasAlreadyWarm })
-      if (Option.isSome(reserved)) yield* handle.startTurn(item).pipe(orCleanup(handle))
+      yield* handle.admitAndStart(item, { queueOnly: !wasAlreadyWarm }).pipe(orCleanup(handle))
       if (!wasAlreadyWarm && (yield* shouldWake(handle, input))) {
         yield* startNextQueuedTurnIfIdle(handle)
       }
@@ -2570,8 +2628,8 @@ const buildAgentLoopActorHandlers = (config: {
      * between.
      *
      * `start` is the one difference between the two callers. The mailbox
-     * starts at once (`startNextQueuedTurnIfIdle`: `takeIfIdle` reserves the
-     * start, and `startTurn` claims it). A re-entrant caller holds the
+     * starts at once (`startNextQueuedTurnIfIdle`: the take and the start run
+     * in one permit region). A re-entrant caller holds the
      * side-mutation permit, so its wake starts after the permit is released
      * (`wakeAfterPermit`).
      */
