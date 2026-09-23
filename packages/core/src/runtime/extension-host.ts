@@ -1426,7 +1426,15 @@ const collectValidationFailures = (
       for (const item of pickItems(ext.contributions)) {
         const key = getKey(item)
         if (Option.isNone(key)) continue
-        if (seen.has(key.value)) continue
+        // Resolution keeps one entry per key, so one extension naming a key
+        // twice would silently lose all but the last.
+        if (seen.has(key.value)) {
+          addFailure(
+            ext,
+            `Duplicate ${label} "${key.value}" in extension "${ext.manifest.id}" (scope "${ext.scope}")`,
+          )
+          continue
+        }
         seen.add(key.value)
         const existing = scopeMap.get(key.value) ?? []
         existing.push(ext)

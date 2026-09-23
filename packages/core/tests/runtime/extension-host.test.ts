@@ -1259,6 +1259,30 @@ describe("extension activation isolation", () => {
     }),
   )
 
+  it.live("validation fails one extension whose own tool and request share an id", () =>
+    Effect.gen(function* () {
+      // One extension, one id twice: resolution would keep only the request.
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("self-shadow", {
+          tools: [
+            tool({
+              id: "shared_name",
+              description: "model",
+              params: Schema.Struct({}),
+              output: Schema.Void,
+              execute: () => Effect.void,
+            }),
+          ],
+          requests: [rawRpcLeaf("shared_name")],
+        }),
+      ])
+
+      expect(result.active).toEqual([])
+      expect(result.failed.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("self-shadow")])
+      expect(result.failed[0]?.error).toContain('capability "shared_name"')
+    }),
+  )
+
   it.live("a tool with a blank description keeps its extension out of the active set", () =>
     Effect.gen(function* () {
       const result = yield* setupExtensions({
