@@ -44,7 +44,7 @@ import {
   type GentNamespacedClient,
   type Message,
   type QueueSnapshot,
-  type SessionSettings,
+  type UpdateSessionSettingsInput,
   type SessionSnapshot,
   type SteerCommand,
 } from "@gent/core/protocol"
@@ -216,10 +216,8 @@ export interface Session {
   readonly cwd: string | undefined
 }
 
-export const sessionSettings = (session: Session): SessionSettings => ({
-  modelId: session.modelId,
-  reasoningLevel: session.reasoningLevel,
-})
+/** A change to the session's settings: a field left out stays as the server stores it. */
+type SessionSettingsChange = Omit<UpdateSessionSettingsInput, "sessionId">
 
 const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   sessionId: SessionId,
@@ -508,10 +506,11 @@ interface ClientSessionValue {
   openHandoffSession: (summary: string) => void
   switchSession: (sessionId: SessionId, branchId: BranchId, name: string) => void
   clearSession: () => void
-  /** Replace the session's settings from its current ones; the server reply is folded back. */
-  updateSessionSettings: (
-    update: (current: SessionSettings) => SessionSettings,
-  ) => Effect.Effect<void, GentClientRpcError>
+  /**
+   * Change the session's settings. Only the fields the change names are sent;
+   * the server merges them into what it stores, and its reply is folded back.
+   */
+  updateSessionSettings: (change: SessionSettingsChange) => Effect.Effect<void, GentClientRpcError>
 
   // Sync data fetching helpers (return Effects for caller to run)
   listMessages: Effect.Effect<readonly Message[], GentClientRpcError>
@@ -1239,21 +1238,19 @@ export function ClientProvider(props: ClientProviderProps) {
       return yield* client.branch.list({ sessionId: currentSession.value.sessionId })
     }),
 
-    updateSessionSettings: (update) => {
+    updateSessionSettings: (change) => {
       const currentSession = sessionOption()
       if (Option.isNone(currentSession)) return Effect.void
       const s = currentSession.value
-      return client.session
-        .updateSettings({ sessionId: s.sessionId, ...update(sessionSettings(s)) })
-        .pipe(
-          Effect.tap((result) =>
-            Effect.sync(() => {
-              dispatchSession(SessionStateEvent.cases.UpdateSettings.make(result))
-              refreshSessionMetrics()
-            }),
-          ),
-          Effect.asVoid,
-        )
+      return client.session.updateSettings({ ...change, sessionId: s.sessionId }).pipe(
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            dispatchSession(SessionStateEvent.cases.UpdateSettings.make(result))
+            refreshSessionMetrics()
+          }),
+        ),
+        Effect.asVoid,
+      )
     },
 
     createBranch: (name) => {

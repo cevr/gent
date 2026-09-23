@@ -1440,15 +1440,12 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         return
       }
       // `default`/`off` decode to `None`, which clears the session override.
-      const sessionReasoningLevel = Option.getOrUndefined(
-        Schema.decodeUnknownOption(ReasoningEffort)(reasoningLevel.value),
+      const sessionReasoningLevel = Schema.decodeUnknownOption(ReasoningEffort)(
+        reasoningLevel.value,
       )
       props.cast(
         props.client
-          .updateSessionSettings((current) => ({
-            ...current,
-            reasoningLevel: sessionReasoningLevel,
-          }))
+          .updateSessionSettings({ reasoningLevel: sessionReasoningLevel })
           .pipe(props.client.surfaceError),
       )
     },
@@ -1467,14 +1464,7 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
         return
       }
       const apply = (modelId: Option.Option<ModelId>) =>
-        props.cast(
-          props.client
-            .updateSessionSettings((current) => ({
-              ...current,
-              modelId: Option.getOrUndefined(modelId),
-            }))
-            .pipe(props.client.surfaceError),
-        )
+        props.cast(props.client.updateSessionSettings({ modelId }).pipe(props.client.surfaceError))
       if (query === "default" || query === "off") {
         apply(Option.none())
         return
@@ -2986,23 +2976,12 @@ export function createSessionController(props: {
 
   const onModelSelect = (modelId: ModelId) => {
     closeOverlay()
-    cast(
-      client
-        .updateSessionSettings((current) => ({ ...current, modelId }))
-        .pipe(client.surfaceError),
-    )
+    cast(client.updateSessionSettings({ modelId: Option.some(modelId) }).pipe(client.surfaceError))
   }
 
   const onReasoningSelect = (level: Option.Option<ReasoningEffort>) => {
     closeOverlay()
-    cast(
-      client
-        .updateSessionSettings((current) => ({
-          ...current,
-          reasoningLevel: Option.getOrUndefined(level),
-        }))
-        .pipe(client.surfaceError),
-    )
+    cast(client.updateSessionSettings({ reasoningLevel: level }).pipe(client.surfaceError))
   }
 
   const onForkSelect = (messageId: MessageId) => {

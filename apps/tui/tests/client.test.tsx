@@ -27,6 +27,8 @@ import {
   projectMessage,
   SessionId,
   type SessionSnapshot,
+  type ReasoningEffort,
+  type UpdateSessionSettingsInput,
   ToolCallId,
   ToolInteraction,
   OutputCut,
@@ -37,7 +39,6 @@ import {
   type ClientContextValue,
   reduceAgentLifecycle,
   type Session,
-  sessionSettings,
   SessionState,
   SteerCommandInput,
   SessionStateEvent,
@@ -164,7 +165,7 @@ describe("session settings", () => {
     )
     expect(next.status).toBe("active")
     if (next.status === "active") {
-      expect(sessionSettings(next.session)).toEqual({
+      expect(next.session).toMatchObject({
         modelId: ModelId.make("openai/gpt-5.6-luna"),
         reasoningLevel: absent,
       })
@@ -690,7 +691,7 @@ describe("ClientProvider session lifecycle", () => {
       client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
       const state = client.sessionState()
       if (state.status !== "active") return yield* Effect.die("no active session")
-      expect(sessionSettings(state.session)).toEqual({ modelId: model, reasoningLevel: "high" })
+      expect(state.session).toMatchObject({ modelId: model, reasoningLevel: "high" })
       expect(client.isStreaming()).toBe(true)
       expect(client.cost()).toBe(1.5)
       expect(client.agent()).toBe(AgentName.make("cowork"))
@@ -740,6 +741,40 @@ describe("ClientProvider session lifecycle", () => {
         expect(client.cost()).toBe(0)
         expect(Option.isNone(client.sessionMetrics().context)).toBe(true)
       }),
+  )
+  it.live("a settings change sends only the field it names", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const sent: Array<UpdateSessionSettingsInput> = []
+      const low: ReasoningEffort = "low"
+      const client = createMockClient({
+        session: {
+          updateSettings: (input: UpdateSessionSettingsInput) =>
+            Effect.sync(() => {
+              sent.push(input)
+              return { modelId: ModelId.make("openai/gpt-5.6-luna"), reasoningLevel: low }
+            }),
+        },
+      })
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client,
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const active = yield* requireClientSessionState(ctx)
+      // Just switched: the session's model is not known here yet.
+      active.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
+      yield* active.updateSessionSettings({ reasoningLevel: Option.some("low") })
+      expect(sent).toEqual([{ sessionId: SECOND.sessionId, reasoningLevel: Option.some("low") }])
+      expect(active.session()?.modelId).toBe(ModelId.make("openai/gpt-5.6-luna"))
+    }),
   )
   it.live("runtime idle clears finishing activity only for the current branch", () =>
     Effect.gen(function* () {
