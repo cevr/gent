@@ -464,6 +464,20 @@ describe("the completion headline", () => {
     )
   })
 
+  test("the child's task names its reply as the result and keeps session.send for later turns", () => {
+    const [source, later, blank, task] = childTaskText(SessionId.make("parent-1"), "do it").split(
+      "\n",
+    )
+    expect(source).toContain("Your final reply in this turn is your result")
+    expect(source).toContain("do not also send it with session.send")
+    expect(later).toContain(
+      'A later turn started by one of them returns nothing by itself: send that turn\'s result with session.send to "parent"',
+    )
+    expect(later).not.toContain("send each one")
+    expect(blank).toBe("")
+    expect(task).toBe("do it")
+  })
+
   test("text that is not an envelope reads as nothing", () => {
     expect(Option.isNone(readChildCompletionHeadline("plain answer"))).toBe(true)
   })
@@ -1773,7 +1787,7 @@ describe("a child's later turn", () => {
                 return Effect.succeed(reply("armed a wake for CI"))
               }
               // The wake's turn: a model that follows its task sends the result upward.
-              const told = texts[0].includes("reaches your parent only through session.send")
+              const told = texts[0].includes("A later turn started by one of them returns nothing")
               if (told && !ids.includes("send-later")) {
                 return Effect.succeed(
                   toolStep("session.send", { to: "parent", message: laterResult }, "send-later"),

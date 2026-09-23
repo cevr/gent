@@ -458,15 +458,18 @@ const CHILD_TASK_PREFIX = "Task from your parent session "
 /**
  * The child's first message names where the task came from. Without it a
  * child reads a bare instruction after its system prompt and can take its
- * own task for an injection. It also says how a later turn reports: only the
- * turn that takes the task returns as the completion, and a wake, a monitor
- * or a goal starts turns nobody waits for. The first message stays in every
- * later turn's context, whichever agent runs that turn.
+ * own task for an injection. It also says where results go. The reply that
+ * ends this turn is the result: it returns as the completion, and a child
+ * told only that "a later result goes through session.send" sent this turn's
+ * result that way too, so the parent read every result twice. Only a later
+ * turn (a wake, a monitor, a goal) that nobody waits for reports with
+ * session.send. The first message stays in every later turn's context,
+ * whichever agent runs that turn.
  */
 export const childTaskText = (parentSessionId: SessionId, prompt: string): string =>
   [
-    `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply to this task returns to the parent as your completion; ask it with session.send if you are blocked.`,
-    `End this turn once the task is done or handed to a wake, a monitor or a goal; do not wait for them. A later turn's result reaches your parent only through session.send with to "parent", so send each one there.`,
+    `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply in this turn is your result: it returns to the parent as your completion by itself, so do not also send it with session.send. Use session.send in this turn only to ask the parent when you are blocked.`,
+    `End this turn once the task is done or handed to a wake, a monitor or a goal; do not wait for them. A later turn started by one of them returns nothing by itself: send that turn's result with session.send to "parent".`,
     "",
     prompt,
   ].join("\n")
