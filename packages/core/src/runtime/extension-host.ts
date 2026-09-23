@@ -2282,35 +2282,43 @@ export class SessionProfileCache extends Context.Service<
             // Finding or building the entry, its lease, and `current` are one
             // step no interrupt can split: an entry stored without its lease
             // and not current would never retire. Only the reads and the
-            // build inside it (`restore`) can be interrupted.
+            // build inside it (`restore`) can be interrupted. The lease's
+            // release joins the caller's scope after the lock is let go: a
+            // scope that already closed (a loop that closed while one of its
+            // fibers resolved) runs the release at once, and the release
+            // takes the lock.
             const { entry, retired } = yield* Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
-                // The config is read under the place lock, so resolves set
-                // `current` in the order they read it: a read from before an
-                // edit cannot put the older profile back.
-                const fresh = yield* restore(configService.getFresh(canonicalCwd))
-                const scan = yield* restore(
-                  scanRuntimeProfileExtensions(inputsFor(canonicalCwd)).pipe(
-                    Effect.provideContext(platformServicesContext),
-                  ),
-                )
-                const list = listKey(
-                  place,
-                  effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
-                  extensionScanStamp(scan),
-                )
-                const entry = yield* entryFor(place, list, scan, canonicalCwd, fresh, restore)
-                leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
-                yield* Scope.addFinalizer(callerScope, release(entry, lock))
-                const previous = Option.fromNullishOr(current.get(place))
-                current.set(place, entry.key)
-                const retired = Option.flatMap(
-                  Option.filter(previous, (key) => key !== entry.key),
-                  retireIfUnused,
-                )
-                return { entry, retired }
+                yield* restore(lock.take(1))
+                const leased = yield* Effect.gen(function* () {
+                  // The config is read under the place lock, so resolves set
+                  // `current` in the order they read it: a read from before an
+                  // edit cannot put the older profile back.
+                  const fresh = yield* restore(configService.getFresh(canonicalCwd))
+                  const scan = yield* restore(
+                    scanRuntimeProfileExtensions(inputsFor(canonicalCwd)).pipe(
+                      Effect.provideContext(platformServicesContext),
+                    ),
+                  )
+                  const list = listKey(
+                    place,
+                    effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
+                    extensionScanStamp(scan),
+                  )
+                  const entry = yield* entryFor(place, list, scan, canonicalCwd, fresh, restore)
+                  leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
+                  const previous = Option.fromNullishOr(current.get(place))
+                  current.set(place, entry.key)
+                  const retired = Option.flatMap(
+                    Option.filter(previous, (key) => key !== entry.key),
+                    retireIfUnused,
+                  )
+                  return { entry, retired }
+                }).pipe(Effect.ensuring(lock.release(1)))
+                yield* Scope.addFinalizer(callerScope, release(leased.entry, lock))
+                return leased
               }),
-            ).pipe(lock.withPermits(1))
+            )
             yield* closeRetired(retired)
             return entry.profile
           })
