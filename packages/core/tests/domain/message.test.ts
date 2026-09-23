@@ -451,8 +451,8 @@ describe("message part projection", () => {
         status: "completed",
         input: { path: "a.md" },
         summary: "3 lines",
-        // A snapshot carries what the collapsed op row draws, never the full output.
-        output: noText,
+        // A short output is its own bounded excerpt.
+        output: "one\ntwo\nthree",
         durationMs: 30,
       },
       // The cell settled, so an operation that never ended is not running.
@@ -602,10 +602,87 @@ describe("message part projection", () => {
       toolCallReceipts(events),
     )
     const [operation] = projected[0]?.toolInteractions[0]?.operations ?? []
-    expect(operation?.output).toBeUndefined()
-    // The row keeps the fields a header reads, each cut to the receipt bound.
-    expect(operation?.input).toEqual({ path: "big.txt", content: `${"x".repeat(100)}...` })
+    // A field too large for the budget is left out whole, never cut: a cut
+    // string draws wrong content.
+    expect(operation?.input).toEqual({ path: "big.txt" })
     expect(operation?.summary).toBe(`${"x".repeat(100)}...`)
+    // The output keeps a bounded excerpt, not the full 50 KB.
+    expect(operation?.output?.startsWith("x")).toBe(true)
+    expect(operation?.output?.length ?? 0).toBeLessThan(2_200)
+  })
+
+  test("a reloaded operation keeps a bash exit code and the whole edit it drew", () => {
+    const sessionId = SessionId.make("session-projection")
+    const branchId = BranchId.make("branch-projection")
+    const cell = ToolCallId.make("tc-cell-row")
+    const bash = ToolCallId.make("tc-bash-row")
+    const edit = ToolCallId.make("tc-edit-row")
+    const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+    const stdout = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join("\n")
+    const editInput = {
+      path: `/workspace/${"deeply/nested/".repeat(10)}module.ts`,
+      oldString: `export const value = "${"a".repeat(150)}"`,
+      newString: `export const value = "${"b".repeat(150)}"\nexport const other = 1`,
+    }
+    const started = (
+      id: number,
+      toolCallId: ToolCallId,
+      toolName: string,
+      input: Readonly<Record<string, string>>,
+    ) =>
+      EventEnvelope.make({
+        id: EventId.make(id),
+        createdAt: id,
+        event: AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId,
+          toolName,
+          input,
+          parentToolCallId: cell,
+        }),
+      })
+    const succeeded = (id: number, toolCallId: ToolCallId, toolName: string, output: string) =>
+      EventEnvelope.make({
+        id: EventId.make(id),
+        createdAt: id,
+        event: AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId,
+          toolName,
+          summary: "done",
+          output,
+          parentToolCallId: cell,
+        }),
+      })
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("a", "assistant", [
+          Prompt.toolCallPart({ id: cell, name: "cell", params: {}, providerExecuted: false }),
+        ]),
+      ],
+      toolCallReceipts([
+        started(1, bash, "bash", { command: "bun test" }),
+        succeeded(2, bash, "bash", encodeJson({ stdout, stderr: "1 fail", exitCode: 1 })),
+        started(3, edit, "edit", editInput),
+        succeeded(4, edit, "edit", encodeJson({ path: editInput.path, replacements: 1 })),
+      ]),
+    )
+    const [bashOp, editOp] = projected[0]?.toolInteractions[0]?.operations ?? []
+    const bashOutput = Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({ stdout: Schema.String, stderr: Schema.String, exitCode: Schema.Finite }),
+      ),
+    )(bashOp?.output)
+    // A failed command still reads as failed after a reload.
+    expect(bashOutput.exitCode).toBe(1)
+    expect(bashOutput.stderr).toBe("1 fail")
+    // Its output keeps the first and last lines.
+    expect(bashOutput.stdout.split("\n").slice(0, 6)).toEqual(stdout.split("\n").slice(0, 6))
+    expect(bashOutput.stdout.split("\n").slice(-6)).toEqual(stdout.split("\n").slice(-6))
+    // The edit keeps the whole strings its diff is built from, and its path.
+    expect(editOp?.input).toEqual(editInput)
   })
 
   test("projects Gent transcript parts without exposing persisted field names", () => {

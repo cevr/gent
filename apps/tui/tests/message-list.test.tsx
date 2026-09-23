@@ -29,7 +29,11 @@ import {
   SessionId,
   ToolCallId,
   projectMessagesWithToolInteractions,
+  AgentEvent,
+  EventEnvelope,
+  EventId,
 } from "@gent/core/protocol"
+import { toolCallReceipts } from "@gent/core/test-utils"
 import { type SessionMessageDetails, sessionMessageText } from "@gent/extensions/client"
 import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
@@ -527,6 +531,8 @@ const registeredFailureMessage = (id: string): ListMessage =>
     summary: "read failed",
     output: absent,
   })
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 const cellMessage = (id: string, display = "hello from a.txt"): ListMessage =>
   assistantToolMessage("assistant-cell", {
@@ -1191,6 +1197,115 @@ describe("FX transcript treatment", () => {
         ),
       )
       expect(frame.match(/Its source was not replayed/g)?.length).toBe(3)
+    }),
+  )
+
+  it.live("a reloaded cell draws a failed bash op and a whole edit diff", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-reloaded-ops")
+      const branchId = BranchId.make("branch-reloaded-ops")
+      const cell = ToolCallId.make("call-cell-reload")
+      const editInput = {
+        path: "/workspace/src/module.ts",
+        oldString: `export const value = "${"a".repeat(120)}"`,
+        newString: `export const value = "${"b".repeat(120)}"\nexport const other = 1`,
+      }
+      const envelope = (id: number, event: AgentEvent) =>
+        EventEnvelope.make({ id: EventId.make(id), createdAt: id, event })
+      const op = (
+        id: number,
+        toolCallId: string,
+        toolName: string,
+        input: Readonly<Record<string, string>>,
+        output: string,
+      ) => [
+        envelope(
+          id,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make(toolCallId),
+            toolName,
+            input,
+            parentToolCallId: cell,
+          }),
+        ),
+        envelope(
+          id + 1,
+          AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make(toolCallId),
+            toolName,
+            summary: "done",
+            output,
+            parentToolCallId: cell,
+          }),
+        ),
+      ]
+      // The snapshot a reload reads: the cell's ops projected from its stored events.
+      const [projected] = projectMessagesWithToolInteractions(
+        [
+          Message.cases.regular.make({
+            id: MessageId.make("assistant-reloaded-cell"),
+            sessionId,
+            branchId,
+            role: "assistant",
+            parts: [
+              Prompt.toolCallPart({
+                id: cell,
+                name: "cell",
+                params: { code: "await tools.bash({command: 'bun test'})" },
+                providerExecuted: false,
+              }),
+            ],
+            createdAt: dateFromMillis(0),
+          }),
+        ],
+        toolCallReceipts([
+          ...op(
+            1,
+            "op-bash",
+            "bash",
+            { command: "bun test" },
+            encodeJson({ stdout: "1 fail", stderr: "", exitCode: 1 }),
+          ),
+          ...op(
+            3,
+            "op-edit",
+            "edit",
+            editInput,
+            encodeJson({ path: editInput.path, replacements: 1 }),
+          ),
+        ]),
+      )
+      const interaction = Option.fromNullishOr(projected?.toolInteractions[0])
+      if (Option.isNone(interaction)) return yield* Effect.die("no projected cell")
+      const { operations, ...call } = interaction.value
+      const reloaded: ToolCall = {
+        ...call,
+        status: "completed",
+        operations: (operations ?? []).map((operation) => ({ ...operation })),
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <RegisteredToolMessageLists
+              items={[assistantToolMessage("assistant-reloaded-cell", reloaded)]}
+              fullDetail
+            />
+          ),
+          { width: 110, height: 60 },
+        ),
+      )
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (next) => next.includes("module.ts"), "reloaded cell ops"),
+      )
+      // A failed command reads as failed after a reload, not as a bare success header.
+      expect(frame).toContain("exit 1")
+      // The diff is built from the whole strings: the new text adds a line.
+      expect(frame).toContain("+1 -0")
+      expect(frame).toContain("+export const other = 1")
     }),
   )
 

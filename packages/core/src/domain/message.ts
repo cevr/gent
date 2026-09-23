@@ -115,8 +115,9 @@ export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteract
   ...ToolInteractionFields,
   /**
    * The calls a cell admitted, from the branch's tool receipts. Wire only,
-   * never stored. Each carries what its collapsed row draws: bounded scalar
-   * input and summary, never the output. Absent when the branch has no
+   * never stored. Each carries what its collapsed row draws: its scalar
+   * input fields within a size budget, the summary, and a bounded output
+   * (top-level scalars, strings cut to their first and last lines). Absent when the branch has no
    * receipts for them, as on a fork, which copies messages but not events.
    */
   operations: Schema.optional(Schema.Array(ToolOperation)),
@@ -756,24 +757,79 @@ interface ToolCallReceipts {
 const callKey = (assistantMessageId: Option.Option<MessageId>, toolCallId: string): string =>
   `${Option.getOrElse(assistantMessageId, () => "")}\u0000${toolCallId}`
 
+/** Characters of string input one projected operation carries, across its fields. */
+const OPERATION_INPUT_BUDGET = 4_096
+
+/** Lines a projected output string keeps: the first and the last six. */
+const OPERATION_OUTPUT_LINES = 12
+
+/** Characters a projected output string keeps, for output with very long lines. */
+const OPERATION_OUTPUT_CHARS = 2_048
+
 /**
- * An operation's input as its collapsed row reads it: top-level scalar fields,
- * each string cut to the summary bound. Nested values stay on the branch.
+ * An operation's input as its collapsed row reads it: top-level scalar fields.
+ * A string is kept whole or not at all, shortest first, within
+ * `OPERATION_INPUT_BUDGET`: a cut `oldString` draws a wrong diff and a cut path
+ * a broken link, so a missing field is the honest answer. Nested values stay
+ * on the branch.
  */
 // oxlint-disable-next-line effect/noNullish -- ToolInteraction.input is an UndefinedOr wire field; absent input stays absent.
 type BoundedInput = string | Readonly<Record<string, string | number | boolean>> | undefined
 
 // oxlint-disable-next-line effect/noUnknownParameters -- Tool input is an external model value; only its scalar fields are kept.
 const boundedInput = (input: unknown): BoundedInput => {
-  if (Predicate.isString(input)) return clipSummary(input)
+  if (Predicate.isString(input)) {
+    if (input.length <= OPERATION_INPUT_BUDGET) return input
+    return Option.getOrUndefined(Option.none<string>())
+  }
   if (!Predicate.isObject(input) || Array.isArray(input))
     return Option.getOrUndefined(Option.none<string>())
+  const fits = new Set<string>()
+  let budget = OPERATION_INPUT_BUDGET
+  const strings = Object.entries(input)
+    .filter((entry): entry is [string, string] => Predicate.isString(entry[1]))
+    .map(([key, value]) => ({ key, length: value.length }))
+  for (const { key, length } of strings.toSorted((left, right) => left.length - right.length)) {
+    if (length > budget) break
+    budget -= length
+    fits.add(key)
+  }
   const kept: Record<string, string | number | boolean> = {}
   for (const [key, value] of Object.entries(input)) {
-    if (Predicate.isString(value)) kept[key] = clipSummary(value)
-    else if (Predicate.isNumber(value) || Predicate.isBoolean(value)) kept[key] = value
+    if (Predicate.isString(value)) {
+      if (fits.has(key)) kept[key] = value
+    } else if (Predicate.isNumber(value) || Predicate.isBoolean(value)) kept[key] = value
   }
   return kept
+}
+
+/** A long output string as a collapsed row reads it: its first and last lines, bounded by size. */
+const boundedText = (text: string): string =>
+  headTailChars(formatHeadTail(text.split("\n"), OPERATION_OUTPUT_LINES), OPERATION_OUTPUT_CHARS)
+    .text
+
+/**
+ * An operation's output as its collapsed row reads it. A JSON object keeps its
+ * top-level scalar fields (a bash `exitCode`, a read `lineCount`), each string
+ * cut to `boundedText`; a text result is cut the same way. Nested values stay
+ * on the branch.
+ */
+// oxlint-disable-next-line effect/noNullish -- ToolInteraction.output is an UndefinedOr wire field; absent output stays absent.
+const boundedOutput = (output: string | undefined): string | undefined => {
+  if (Predicate.isUndefined(output)) return output
+  const decoded = decodeToolOutput(output)
+  if (Option.isNone(decoded) || Predicate.isString(decoded.value)) {
+    return boundedText(Option.getOrElse(Option.filter(decoded, Predicate.isString), () => output))
+  }
+  const value = decoded.value
+  if (!Predicate.isObject(value) || Array.isArray(value))
+    return Option.getOrUndefined(Option.none<string>())
+  const kept: Record<string, string | number | boolean> = {}
+  for (const [key, field] of Object.entries(value)) {
+    if (Predicate.isString(field)) kept[key] = boundedText(field)
+    else if (Predicate.isNumber(field) || Predicate.isBoolean(field)) kept[key] = field
+  }
+  return encodeJson(kept)
 }
 
 const noReceipts: ToolCallReceipts = { durations: new Map(), operations: new Map() }
@@ -790,7 +846,7 @@ interface OperationSlot {
   readonly index: number
 }
 
-/** Place one admitted call under its cell. The snapshot carries what the collapsed op row draws; the full output stays on the branch. */
+/** Place one admitted call under its cell. The snapshot carries what the collapsed op row draws; the full input and output stay on the branch. */
 const admitOperation = (
   event: ToolCallStarted,
   operations: Map<string, Array<ToolOperation>>,
@@ -848,6 +904,7 @@ export const toolCallReceipts = (events: ReadonlyArray<EventEnvelope>): ToolCall
       summary: Option.getOrUndefined(
         Option.map(Option.fromUndefinedOr(event.summary), clipSummary),
       ),
+      output: boundedOutput(event.output),
       durationMs,
     }
   }

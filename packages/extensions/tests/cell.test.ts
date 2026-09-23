@@ -2525,8 +2525,8 @@ describe("shipped model surface", () => {
             assistantMessageId: cellAssistant?.id,
           },
         ])
-        // A reload reads the inner call back from those events: the row's input and a
-        // bounded summary, never the full output.
+        // A reload reads the inner call back from those events: the row's input, a
+        // bounded summary, and the bounded output its collapsed row draws.
         const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
         const cellInteraction = snapshot.messages
           .flatMap((message) => message.toolInteractions)
@@ -2539,7 +2539,12 @@ describe("shipped model surface", () => {
             summary: expect.stringContaining("shipped surface"),
           },
         ])
-        expect(cellInteraction?.operations?.[0]?.output).toBeUndefined()
+        const readOutput = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(
+            Schema.Struct({ content: Schema.String, lineCount: Schema.Finite }),
+          ),
+        )(cellInteraction?.operations?.[0]?.output)
+        expect(readOutput).toMatchObject({ content: "1\tshipped surface", lineCount: 1 })
 
         // Working data from the first cell is still bound in the next turn.
         const second = yield* runTurn("use the note", "second")
