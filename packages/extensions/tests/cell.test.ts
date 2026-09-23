@@ -544,6 +544,38 @@ describe("recorded cell execution", () => {
   )
 
   it.scopedLive(
+    "a host operation's failure reaches the model as its message, without the worker's stack",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [uncaught] = yield* setupCalls(["console.log('before'); await tools.start({})"])
+        if (!uncaught) return yield* Effect.die("Missing test cell")
+        const refusal = "Parent branch already has 8 unfinished children"
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("start"),
+          call: () =>
+            Effect.fail(
+              new CellEvaluationError({ phase: "execute", message: refusal, output: "" }),
+            ),
+        })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        const failed = yield* cells
+          .run(uncaught)
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(failed).toMatchObject({
+          isFailure: true,
+          result: { _tag: "CellEvaluationError", message: refusal, output: "before" },
+        })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "restores the saved namespace into a replaced worker and into a new branch owner",
     () =>
       Effect.gen(function* () {
