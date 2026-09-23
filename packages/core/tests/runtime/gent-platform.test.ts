@@ -269,6 +269,21 @@ describe("writeFileAtomic", () => {
     }),
   )
 
+  atomicTest("empty content empties the file, and bytes land as given", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const file = `${dir}/state.json`
+      yield* fs.writeFileString(file, "old")
+      yield* writeFileAtomic(file, "")
+      expect(yield* fs.readFileString(file)).toBe("")
+      const bytes = new Uint8Array([0xfe, 0xff, 0x00, 0x68])
+      yield* writeFileAtomic(file, bytes)
+      expect(Buffer.from(yield* fs.readFile(file)).equals(bytes)).toBe(true)
+      expect(yield* fs.readDirectory(dir)).toEqual(["state.json"])
+    }),
+  )
+
   atomicTest("a relative dangling symlink creates the file it names", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

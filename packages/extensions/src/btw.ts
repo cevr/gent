@@ -24,6 +24,10 @@ import {
   SessionId,
 } from "@gent/core/extensions/api"
 
+// Test seam: only tests read these exports. foldForkEvent is the pure fold the
+// fork follower runs per event; ForkProgress is the output of the progress
+// request, which the tests decode.
+
 // ── protocol ────────────────────────────────────────────────────────────────
 
 export const BTW_EXTENSION_ID = ExtensionId.make("@gent/btw")

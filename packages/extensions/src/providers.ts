@@ -29,9 +29,7 @@ import {
   credentialFailureMetadata,
   ProviderAuthError,
   type ProviderAuthInfo,
-  type ProviderHints,
   ProviderId,
-  type ProviderResolution,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
 import {
@@ -943,42 +941,12 @@ export const apiKeyFrom = (
     Option.orElse(() => envApiKey),
   )
 
-/** Sampling limits the chat-completions drivers (Google, Mistral) send. */
-const buildOpenAiCompatConfig = (hints: Option.Option<ProviderHints>): OpenAiCompatConfig => {
-  let config: OpenAiCompatConfig = {}
-  if (Option.isSome(hints)) {
-    const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
-    if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
-    const temperature = Option.fromNullishOr(hints.value.temperature)
-    if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-  }
-  return config
-}
-
-const makeOpenAiCompatResolution = (params: {
-  readonly provider: string
-  readonly modelName: string
-  readonly apiKey: string
-  readonly config: OpenAiCompatConfig
-  readonly apiUrl: Option.Option<string>
-}): ProviderResolution => {
-  const clientLayer = OpenAiClient.layer({
-    apiKey: Redacted.make(params.apiKey),
-    ...Option.match(params.apiUrl, { onNone: () => ({}), onSome: (apiUrl) => ({ apiUrl }) }),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
-  const modelLayer = OpenAiLanguageModel.layer({
-    model: params.modelName,
-    config: params.config,
-  }).pipe(Layer.provide(clientLayer))
-  return AiModel.make(params.provider, params.modelName, modelLayer)
-}
-
 const makeApiKeyCompatDriver = (params: {
   readonly id: string
   readonly name: string
   readonly envApiKey: Option.Option<string>
   readonly envVarName: string
-  readonly apiUrl: Option.Option<string>
+  readonly apiUrl: string
   readonly catalog: CatalogSource
 }): ModelDriverContribution => ({
   id: params.id,
@@ -1001,13 +969,20 @@ const makeApiKeyCompatDriver = (params: {
           message: `${params.name} credentials unavailable: no stored API key or ${params.envVarName} env var`,
         })
       }
-      return makeOpenAiCompatResolution({
-        provider: params.id,
-        modelName,
-        apiKey: apiKey.value,
+      // The sampling limits the chat-completions APIs take.
+      let config: OpenAiCompatConfig = {}
+      const maxTokens = Option.fromNullishOr(hints?.maxTokens)
+      if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
+      const temperature = Option.fromNullishOr(hints?.temperature)
+      if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
+      const clientLayer = OpenAiClient.layer({
+        apiKey: Redacted.make(apiKey.value),
         apiUrl: params.apiUrl,
-        config: buildOpenAiCompatConfig(Option.fromNullishOr(hints)),
-      })
+      }).pipe(Layer.provide(FetchHttpClient.layer))
+      const modelLayer = OpenAiLanguageModel.layer({ model: modelName, config }).pipe(
+        Layer.provide(clientLayer),
+      )
+      return AiModel.make(params.id, modelName, modelLayer)
     }),
   auth: {
     methods: [AuthMethod.make({ type: "api", label: "Manually enter API key" })],
@@ -1034,7 +1009,7 @@ const makeApiKeyCompatExtension = (params: {
           name: params.name,
           envApiKey,
           envVarName: params.envVarName,
-          apiUrl: Option.some(params.apiUrl),
+          apiUrl: params.apiUrl,
           catalog,
         }),
       )

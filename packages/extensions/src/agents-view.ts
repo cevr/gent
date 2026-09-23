@@ -532,7 +532,7 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* () {
         updatedAt: session.updatedAt.getTime(),
         // A handoff joins its parent's thread. A delegate child or a `/btw` fork
         // has a parent and is the session its own thread is named after.
-        // A child may name its parent session without a branch.
+        // A session that names its parent without a branch gets no `parent`.
         sideThread: isSpawnedSession(session),
       },
     ]

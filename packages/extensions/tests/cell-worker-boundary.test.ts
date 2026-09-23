@@ -266,6 +266,45 @@ describe("cell worker", () => {
       expect((yield* worker.next)._tag).toBe("Evaluated")
     }).pipe(Effect.timeout("3 seconds")),
   )
+
+  it.scopedLive("an error's cause reads one level deep, even in a loop or a long chain", () =>
+    Effect.gen(function* () {
+      const worker = yield* makeHarness
+      const evaluate = (cellId: string, source: string) =>
+        Effect.gen(function* () {
+          yield* worker.send(
+            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
+          )
+          return yield* worker.next
+        })
+      const failed = (cellId: string, source: string) =>
+        Effect.gen(function* () {
+          const result = yield* evaluate(cellId, source)
+          if (result._tag !== "Failed")
+            return yield* new CellProtocolError({ message: `Expected failure, got ${result._tag}` })
+          return result.error.message
+        })
+      expect(yield* failed("loop", "const e = new Error('a'); e.cause = e; throw e")).toBe(
+        "Error: a\ncaused by Error: a",
+      )
+      const logged = yield* evaluate(
+        "logged",
+        "const f = new Error('b'); f.cause = f; console.log(f); 1",
+      )
+      expect(logged._tag).toBe("Evaluated")
+      expect(
+        yield* failed(
+          "chain",
+          "throw new Error('l1', { cause: new Error('l2', { cause: new Error('l3', { cause: new Error('l4') }) }) })",
+        ),
+      ).toBe("Error: l1\ncaused by Error: l2")
+      // The worker is intact for the next cell.
+      const next = yield* evaluate("after", "42")
+      if (next._tag !== "Evaluated")
+        return yield* new CellProtocolError({ message: "Expected result" })
+      expect(next.result.display).toBe("42")
+    }).pipe(Effect.timeout("3 seconds")),
+  )
 })
 
 // ── bun cell evaluator ──────────────────────────────────────────────────────
@@ -505,6 +544,21 @@ describe("Bun cell evaluation", () => {
       expect((yield* kernel.evaluate("undefined")).display).toBe("")
       expect((yield* kernel.evaluate("null")).display).toBe("null")
       expect((yield* kernel.evaluate("'undefined'")).display).toBe("undefined")
+    }).pipe(Effect.timeout("2 seconds")),
+  )
+
+  it.scopedLive("a logged system error keeps its code, path and syscall on one line", () =>
+    Effect.gen(function* () {
+      const kernel = yield* makeKernel({ call: () => Effect.succeed(0) })
+      const shown = yield* kernel.evaluate(
+        "try { require('node:fs').readFileSync('/nonexistent/gent-probe-x') } catch (e) { console.log(e) }",
+      )
+      const [head, fields, ...rest] = shown.display.split("\n")
+      expect(head).toContain("ENOENT")
+      expect(fields).toBe(
+        "  code: ENOENT, errno: -2, syscall: open, path: /nonexistent/gent-probe-x",
+      )
+      expect(rest).toEqual([])
     }).pipe(Effect.timeout("2 seconds")),
   )
 

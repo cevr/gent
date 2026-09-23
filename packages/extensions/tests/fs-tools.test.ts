@@ -689,6 +689,91 @@ describe("file encodings", () => {
     }),
   )
 
+  const atomicModes: ReadonlyArray<[string, boolean]> = [
+    ["a write", false],
+    ["an atomic write", true],
+  ]
+  for (const [how, atomic] of atomicModes) {
+    encodingTest(`${how} over a file keeps its byte order mark and encoding`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const bomPath = `${dir}/bom.txt`
+        const bom = Buffer.from([0xef, 0xbb, 0xbf])
+        yield* fs.writeFile(bomPath, Buffer.concat([bom, Buffer.from("hi\n")]))
+        const written = yield* runToolWithCtx(
+          WriteTool,
+          { path: bomPath, content: "bye\n", atomic },
+          stubCtx,
+        )
+        const bomAfter = Buffer.from(yield* fs.readFile(bomPath))
+        expect(bomAfter.equals(Buffer.concat([bom, Buffer.from("bye\n")]))).toBe(true)
+        expect(written.bytesWritten).toBe(bomAfter.length)
+
+        const utf16Path = `${dir}/utf16.txt`
+        yield* fs.writeFile(utf16Path, utf16File("hi\n", "be"))
+        yield* runToolWithCtx(WriteTool, { path: utf16Path, content: "bye\n", atomic }, stubCtx)
+        const utf16After = Buffer.from(yield* fs.readFile(utf16Path))
+        expect(utf16After.equals(utf16File("bye\n", "be"))).toBe(true)
+      }),
+    )
+  }
+
+  encodingTest("edit matches across lines in a CRLF file and writes CRLF line endings", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/crlf.txt`
+      yield* fs.writeFileString(filePath, "alpha\r\nbeta\r\ngamma\r\n")
+      const result = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "alpha\nbeta", newString: "one\ntwo\nthree" },
+        stubCtx,
+      )
+      expect(result.replacements).toBe(1)
+      expect(yield* fs.readFileString(filePath)).toBe("one\r\ntwo\r\nthree\r\ngamma\r\n")
+    }),
+  )
+
+  encodingTest(
+    "edit in a mixed file gives the replacement its line's ending and leaves other lines alone",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/mixed.txt`
+        yield* fs.writeFileString(filePath, "a\r\nb\nc\r\nd\n")
+        yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "b\nc", newString: "B\nC" },
+          stubCtx,
+        )
+        expect(yield* fs.readFileString(filePath)).toBe("a\r\nB\nC\r\nd\n")
+        yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "a\nB", newString: "x\ny\nB" },
+          stubCtx,
+        )
+        expect(yield* fs.readFileString(filePath)).toBe("x\r\ny\r\nB\nC\r\nd\n")
+      }),
+  )
+
+  encodingTest("a CRLF search in a mixed file replaces only the CRLF sites", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/mixed.txt`
+      yield* fs.writeFileString(filePath, "a\nb\n--\na\r\nb\r\n")
+      const result = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "a\r\nb", newString: "X", replaceAll: true },
+        stubCtx,
+      )
+      expect(result.replacements).toBe(1)
+      expect(yield* fs.readFileString(filePath)).toBe("a\nb\n--\nX\r\n")
+    }),
+  )
+
   // Bytes the decoder can only show as U+FFFD: a rewrite of the text would not
   // give them back.
   const malformed: ReadonlyArray<[string, Uint8Array]> = [

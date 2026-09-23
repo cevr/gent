@@ -4,7 +4,7 @@
  */
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 
-import { CELL_EXTENSION_ID } from "../../src/cell.js"
+import { CellExtension } from "../../src/cell.js"
 import type { E2ELayerConfig } from "@gent/core/test-utils"
 
 /**
@@ -25,6 +25,6 @@ export const shippedPreset = {
 export const e2ePreset = {
   agents: [],
   extensionInputs: BuiltinExtensions.filter(
-    (extension) => extension.manifest.id !== CELL_EXTENSION_ID,
+    (extension) => extension.manifest.id !== CellExtension.manifest.id,
   ),
 } satisfies Pick<E2ELayerConfig, "agents" | "extensionInputs">
