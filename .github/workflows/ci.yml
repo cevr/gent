@@ -9,7 +9,8 @@ on:
 jobs:
   test:
     # The build targets darwin-arm64 only (apps/tui/scripts/build.ts, the gent-cell compile).
-    runs-on: macos-14
+    # A pinned arm64 image, not macos-latest, whose image moves under the job.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
