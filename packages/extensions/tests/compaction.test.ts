@@ -81,13 +81,17 @@ const promptText = (prompt: Prompt.Prompt): string =>
     })
     .join("\n")
 
-const summaryProvider = (text: string, capture?: (prompt: Prompt.Prompt) => void) =>
+const summaryProvider = (
+  text: string,
+  capture?: (prompt: Prompt.Prompt) => void,
+  finishReason: "stop" | "length" = "stop",
+) =>
   LanguageModelLayers.testStream((options) => {
     if (Predicate.isNotUndefined(capture)) capture(Prompt.make(options.prompt))
     return Effect.succeed(
       Stream.fromIterable([
         textDeltaPart(text),
-        finishPart({ finishReason: "stop", usage: { inputTokens: 120, outputTokens: 8 } }),
+        finishPart({ finishReason, usage: { inputTokens: 120, outputTokens: 8 } }),
       ]),
     )
   })
@@ -331,6 +335,54 @@ describe("context handoff", () => {
       const refused = yield* attempt(summaryProvider(overBound))
       expect(Option.map(refused, (error) => error.reason)).toEqual(Option.some("SummaryOversize"))
     }).pipe(Effect.timeout("10 seconds"))
+  })
+
+  it.scopedLive("a summary cut at the provider cap is marked as cut", () =>
+    Effect.gen(function* () {
+      const result = yield* compact()
+      expect(result.notice).toContain("Summary:\nhalf a sent")
+      expect(result.notice).toContain("[Summary cut at the output limit.]")
+    }).pipe(
+      Effect.provide(summaryProvider("half a sent", () => {}, "length")),
+      Effect.timeout("10 seconds"),
+    ),
+  )
+
+  it.scopedLive("a summary that fills the provider cap with dense tokens is accepted", () => {
+    let requested = Option.none<number>()
+    // The fake fills whatever cap the compactor asks for at 5 characters per
+    // token, denser than the 4-per-token estimate the accept bound uses.
+    const denseProvider = LanguageModelLayers.testStream(() =>
+      Effect.sync(() => {
+        const cap = Option.getOrElse(requested, () => 0)
+        return Stream.fromIterable([
+          textDeltaPart("dense".repeat(cap)),
+          finishPart({ finishReason: "length", usage: { inputTokens: 120, outputTokens: cap } }),
+        ])
+      }),
+    )
+    return Effect.gen(function* () {
+      const model = yield* LanguageModel.LanguageModel
+      const compactor = yield* ModelContextCompactor
+      const result = yield* compactor.compact({
+        modelId,
+        sessionId,
+        branchId,
+        history: history(),
+        kept: [],
+        budget: budget(),
+        summaryModel: (maxTokens) => {
+          requested = Option.some(maxTokens)
+          return Effect.succeed(model)
+        },
+      })
+      const cap = Option.getOrThrow(requested)
+      expect(result.notice).toContain(`Summary:\n${"dense".repeat(cap)}`)
+      expect(result.notice).toContain("[Summary cut at the output limit.]")
+    }).pipe(
+      Effect.provide(Layer.mergeAll(ModelContextCompactorLive, denseProvider)),
+      Effect.timeout("10 seconds"),
+    )
   })
 
   it.scopedLive("an empty, oversized, or failed summary is a compaction error", () => {

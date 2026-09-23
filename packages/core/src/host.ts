@@ -11,6 +11,7 @@ export { Auth, AuthApi, ScriptedLanguageModel } from "./runtime/provider.js"
 export { BranchStorage, MessageStorage, SessionStorage } from "./storage/storage.js"
 export {
   provideWorkspaceIdHeader,
+  WORKSPACE_ID_HEADER,
   type WorkspaceHeaders,
   workspaceHeadersForCwd,
   workspaceIdForCwd,

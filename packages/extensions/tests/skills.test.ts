@@ -5,7 +5,6 @@ import {
   formatSkillsForPrompt,
   installBundledSkills,
   parseSkillFile,
-  Skill,
   SkillEntry,
   Skills,
   SkillsExtension,
@@ -24,14 +23,17 @@ import { builtinAgent } from "./helpers/builtin-agents"
 
 // ── skills/skills.test ──────────────────────────────────────────────────────
 
-const makeSkill = (name: string, level: "local" | "global", description = `${name} skill`) =>
-  new Skill({
-    name,
-    description,
-    filePath: `/test/${level}/${name}.md`,
-    content: `Content for ${name}`,
-    level,
-  })
+const makeSkill = (
+  name: string,
+  level: "local" | "global",
+  description = `${name} skill`,
+): SkillEntry => ({
+  name,
+  description,
+  filePath: `/test/${level}/${name}.md`,
+  content: `Content for ${name}`,
+  level,
+})
 
 describe("formatSkillsForPrompt", () => {
   test("empty array returns empty string", () => {
@@ -91,6 +93,51 @@ Content here`
     const result = parseSkillFile("# Title\nShort description\n\nMore content", "test.md")
     expect(Option.getOrThrow(result).description).toBe("Short description")
   })
+
+  test("a folded block scalar description reads as one line", () => {
+    const content =
+      "---\nname: arch\ndescription: >-\n  Effect-first patterns.\n  Use when designing.\n---\nBody"
+    const result = Option.getOrThrow(parseSkillFile(content, "arch"))
+    expect(result.name).toBe("arch")
+    expect(result.description).toBe("Effect-first patterns. Use when designing.")
+    expect(result.content).toBe("Body")
+  })
+
+  test("a literal block scalar description keeps its words on one prompt line", () => {
+    const content = "---\nname: lit\ndescription: |\n  First line.\n  Second line.\n---\nBody"
+    expect(Option.getOrThrow(parseSkillFile(content, "lit")).description).toBe(
+      "First line. Second line.",
+    )
+  })
+
+  test("quoted values lose their quotes", () => {
+    const content = `---\nname: "quoted"\ndescription: 'Single: quoted'\n---\nBody`
+    const result = Option.getOrThrow(parseSkillFile(content, "file"))
+    expect(result.name).toBe("quoted")
+    expect(result.description).toBe("Single: quoted")
+  })
+
+  test("a frontmatter with no name uses the file name and keeps its description", () => {
+    const content = "---\ndescription: only desc\n---\nbody"
+    const result = Option.getOrThrow(parseSkillFile(content, "named-by-file.md"))
+    expect(result.name).toBe("named-by-file")
+    expect(result.description).toBe("only desc")
+    expect(result.content).toBe("body")
+  })
+
+  test("a frontmatter with neither key describes the skill from its body", () => {
+    const content = "---\nversion: 2\n---\n# Title\nBody text\n\nMore"
+    const result = Option.getOrThrow(parseSkillFile(content, "bare"))
+    expect(result.name).toBe("bare")
+    expect(result.description).toBe("Body text")
+  })
+
+  test("malformed YAML falls back to the file name", () => {
+    const content = "---\nname: [unclosed\n---\nbody"
+    const result = Option.getOrThrow(parseSkillFile(content, "broken.md"))
+    expect(result.name).toBe("broken")
+    expect(result.content).toBe("body")
+  })
 })
 
 // ── skills/skills-rpc.test ──────────────────────────────────────────────────
@@ -100,21 +147,21 @@ Content here`
  * request(...) path with per-request scopes, matching production behavior.
  */
 
-const testSkills = [
-  new Skill({
+const testSkills: ReadonlyArray<SkillEntry> = [
+  {
     name: "effect-v4",
     description: "Effect v4 patterns",
     filePath: "/global/effect-v4.md",
     content: "Use Effect.fn for tracing",
     level: "global",
-  }),
-  new Skill({
+  },
+  {
     name: "react",
     description: "React component patterns",
     filePath: "/local/react.md",
     content: "Use function components",
     level: "local",
-  }),
+  },
 ]
 
 const skillsLayerOverride = { "@gent/skills": () => Skills.Test(testSkills) }
@@ -233,6 +280,57 @@ describe("bundled skills", () => {
         expect(yield* fs.readFileString(path.join(roots[0], relativePath))).toBe(content)
       }
       expect(yield* fs.readDirectory(path.dirname(roots[0]))).toHaveLength(1)
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("a dangling link or unreadable entry is skipped, not fatal", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-skill-home-" })
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "gent-skill-project-" })
+      const globalDir = path.join(home, ".claude", "skills")
+      yield* fs.makeDirectory(path.join(globalDir, "good"), { recursive: true })
+      yield* fs.writeFileString(
+        path.join(globalDir, "good", "SKILL.md"),
+        "---\nname: good\ndescription: Works\n---\nbody",
+      )
+      yield* fs.symlink(path.join(home, "nonexistent"), path.join(globalDir, "broken"))
+      yield* fs.makeDirectory(path.join(globalDir, "unreadable"))
+      yield* fs.writeFileString(path.join(globalDir, "unreadable", "SKILL.md"), "x")
+      yield* fs.chmod(path.join(globalDir, "unreadable", "SKILL.md"), 0o000)
+      // A skills path that is a file, not a directory.
+      yield* fs.makeDirectory(path.join(cwd, ".gent"))
+      yield* fs.writeFileString(path.join(cwd, ".gent", "skills"), "not a dir")
+
+      const names = yield* Effect.gen(function* () {
+        const skills = yield* Skills
+        return (yield* skills.list).map((skill) => skill.name)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test constructs the real service after acquiring its scoped fixture directories.
+      }).pipe(Effect.provide(Skills.Live({ home, cwd })))
+      expect(names).toContain("good")
+      expect(names).not.toContain("broken")
+      expect(names).not.toContain("unreadable")
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("a session in the home directory lists each skill once", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "gent-skill-home-" })
+      const dir = path.join(home, ".gent", "skills", "mine")
+      yield* fs.makeDirectory(dir, { recursive: true })
+      yield* fs.writeFileString(
+        path.join(dir, "SKILL.md"),
+        "---\nname: mine\ndescription: Mine\n---\nbody",
+      )
+      const levels = yield* Effect.gen(function* () {
+        const skills = yield* Skills
+        return (yield* skills.list).filter((skill) => skill.name === "mine").map((s) => s.level)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test constructs the real service after acquiring its scoped fixture directories.
+      }).pipe(Effect.provide(Skills.Live({ home, cwd: home })))
+      expect(levels).toEqual(["global"])
     }).pipe(Effect.provide(BunServices.layer)),
   )
 

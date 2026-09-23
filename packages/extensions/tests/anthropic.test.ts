@@ -66,7 +66,6 @@ import {
   ProviderAuthError,
   type ProviderAuthInfo,
 } from "@gent/core/extensions/api"
-import { runEffectBoundary } from "./run-effect-boundary.js"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import { createHash } from "node:crypto"
@@ -772,11 +771,10 @@ const validCredsIO = (label: string): AnthropicCredentialIO => ({
 const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 // `Effect.orDie` collapses typed errors to defects so test bodies can
 // assert success without `as Effect<unknown, never, never>` casts.
-const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
-  runEffectBoundary(Effect.scoped(eff.pipe(Effect.orDie)))
+const runOk = <A, E, R>(eff: Effect.Effect<A, E, R>) => Effect.scoped(eff.pipe(Effect.orDie))
 // ── Tests ──
 describe("keychainTransformClient — auth headers", () => {
-  it.live("injects Authorization Bearer from credential service", () =>
+  it.scopedLive("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
@@ -786,18 +784,16 @@ describe("keychainTransformClient — auth headers", () => {
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
       )
       expect(fakeState.captured).toHaveLength(1)
       expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer k1-access")
     }),
   )
-  it.live("removes x-api-key (would otherwise conflict with OAuth Bearer)", () =>
+  it.scopedLive("removes x-api-key (would otherwise conflict with OAuth Bearer)", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
@@ -809,20 +805,18 @@ describe("keychainTransformClient — auth headers", () => {
       const wrapped = transform(makeFakeClient(fakeState))
       // Simulate the SDK's baseline by injecting x-api-key on the
       // outgoing request. The transform must strip it.
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            headers: { "x-api-key": "oauth-placeholder", "anthropic-version": "2023-06-01" },
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          headers: { "x-api-key": "oauth-placeholder", "anthropic-version": "2023-06-01" },
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
       )
       expect(fakeState.captured[0]!.headers["x-api-key"]).toBeUndefined()
       // Preserves SDK baseline header
       expect(fakeState.captured[0]!.headers["anthropic-version"]).toBe("2023-06-01")
     }),
   )
-  it.live("sets x-app, user-agent, anthropic-dangerous-direct-browser-access", () =>
+  it.scopedLive("sets x-app, user-agent, anthropic-dangerous-direct-browser-access", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
@@ -832,12 +826,10 @@ describe("keychainTransformClient — auth headers", () => {
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
       )
       const headers = fakeState.captured[0]!.headers
       expect(headers["x-app"]).toBe("cli")
@@ -845,7 +837,7 @@ describe("keychainTransformClient — auth headers", () => {
       expect(headers["anthropic-dangerous-direct-browser-access"]).toBe("true")
     }),
   )
-  it.live("merges anthropic-beta with model defaults", () =>
+  it.scopedLive("merges anthropic-beta with model defaults", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
@@ -858,13 +850,11 @@ describe("keychainTransformClient — auth headers", () => {
       // Body declares claude-opus-4-6, which has model-default betas
       // (base set + 1M-context + effort-2025-11-24 from the override).
       // Incoming "incoming-beta-1" must merge with those, not replace.
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            headers: { "anthropic-beta": "incoming-beta-1" },
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        ),
+      yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          headers: { "anthropic-beta": "incoming-beta-1" },
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
       )
       const beta = fakeState.captured[0]!.headers["anthropic-beta"]
       expect(beta).toBeDefined()
@@ -877,7 +867,7 @@ describe("keychainTransformClient — auth headers", () => {
       expect(betas).toContain("effort-2025-11-24")
     }),
   )
-  it.live("credential-service failure surfaces as a request-build HttpClientError", () =>
+  it.scopedLive("credential-service failure surfaces as a request-build HttpClientError", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache({
         read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
@@ -928,7 +918,7 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
       return { exit, captured: fakeState.captured }
     })
   for (const status of [429, 529, 500]) {
-    it.live(`a ${status} reaches the caller after one attempt`, () =>
+    it.scopedLive(`a ${status} reaches the caller after one attempt`, () =>
       Effect.gen(function* () {
         const { exit, captured } = yield* sendOnce(() => new Response("busy", { status }))
         expect(captured).toHaveLength(1)
@@ -936,7 +926,7 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
       }),
     )
   }
-  it.live("a transport failure reaches the caller after one attempt", () =>
+  it.scopedLive("a transport failure reaches the caller after one attempt", () =>
     Effect.gen(function* () {
       const { exit, captured } = yield* sendOnce(() => transportFailure("socket hang up"))
       expect(captured).toHaveLength(1)
@@ -950,7 +940,7 @@ describe("keychainTransformClient — long-context beta retry", () => {
   const LONG_CONTEXT_BODY =
     '{"type":"error","error":{"message":"Extra usage is required for long context requests"}}'
   const NON_LONG_CONTEXT_400 = '{"type":"error","error":{"message":"some other 400"}}'
-  it.live("400 long-context once → drops one beta → retry succeeds", () =>
+  it.scopedLive("400 long-context once → drops one beta → retry succeeds", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
@@ -963,12 +953,10 @@ describe("keychainTransformClient — long-context beta retry", () => {
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        ),
+      const response = yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
       )
       expect(fakeState.captured).toHaveLength(2)
       expect(response.status).toBe(200)
@@ -979,7 +967,7 @@ describe("keychainTransformClient — long-context beta retry", () => {
       expect(retryBetas).toBe(initialBetas - 1)
     }),
   )
-  it.live("learning persists into the cache — next request starts pre-narrowed", () =>
+  it.scopedLive("learning persists into the cache — next request starts pre-narrowed", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
@@ -993,34 +981,30 @@ describe("keychainTransformClient — long-context beta retry", () => {
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
       // First request: 400 → retry → 200. Two captures.
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped
-            .post("https://api.anthropic.com/v1/messages", {
-              body: jsonBody({ model: "claude-opus-4-6" }),
-            })
-            .pipe(Effect.orDie),
-        ),
+      yield* runOk(
+        wrapped
+          .post("https://api.anthropic.com/v1/messages", {
+            body: jsonBody({ model: "claude-opus-4-6" }),
+          })
+          .pipe(Effect.orDie),
       )
       expect(fakeState.captured).toHaveLength(2)
       const learnedBetaCount = fakeState.captured[1]!.headers["anthropic-beta"]!.split(",").length
       // Second request — the cache should already have the previously
       // rejected beta, so the FIRST attempt sends the narrower set.
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped
-            .post("https://api.anthropic.com/v1/messages", {
-              body: jsonBody({ model: "claude-opus-4-6" }),
-            })
-            .pipe(Effect.orDie),
-        ),
+      yield* runOk(
+        wrapped
+          .post("https://api.anthropic.com/v1/messages", {
+            body: jsonBody({ model: "claude-opus-4-6" }),
+          })
+          .pipe(Effect.orDie),
       )
       expect(fakeState.captured).toHaveLength(3)
       const nextRequestBetas = fakeState.captured[2]!.headers["anthropic-beta"]!.split(",").length
       expect(nextRequestBetas).toBe(learnedBetaCount)
     }),
   )
-  it.live("learning for one model survives requests to another model", () =>
+  it.scopedLive("learning for one model survives requests to another model", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
@@ -1037,11 +1021,7 @@ describe("keychainTransformClient — long-context beta retry", () => {
         TEST_ENV,
       )(makeFakeClient(fakeState))
       const send = (model: string) =>
-        Effect.promise(() =>
-          runOk(
-            wrapped.post("https://api.anthropic.com/v1/messages", { body: jsonBody({ model }) }),
-          ),
-        )
+        runOk(wrapped.post("https://api.anthropic.com/v1/messages", { body: jsonBody({ model }) }))
       // Opus learns: 400, then a narrower retry.
       yield* send("claude-opus-4-6")
       const learned = fakeState.captured[1]!.headers["anthropic-beta"]
@@ -1053,7 +1033,7 @@ describe("keychainTransformClient — long-context beta retry", () => {
       expect(fakeState.captured[3]!.headers["anthropic-beta"]).toBe(learned)
     }),
   )
-  it.live("429 with long-context-shaped body passes through without narrowing betas", () =>
+  it.scopedLive("429 with long-context-shaped body passes through without narrowing betas", () =>
     Effect.gen(function* () {
       // Long-context layer is 400-only. A 429 whose body happens to match
       // the long-context marker goes back to the caller untouched: the rate
@@ -1066,19 +1046,17 @@ describe("keychainTransformClient — long-context beta retry", () => {
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        ),
+      const response = yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
       )
       expect(fakeState.captured).toHaveLength(1)
       expect(response.status).toBe(429)
       expect((yield* Ref.get(cache)).size).toBe(0)
     }),
   )
-  it.live("non-long-context 400 passes through without retry", () =>
+  it.scopedLive("non-long-context 400 passes through without retry", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
@@ -1088,20 +1066,18 @@ describe("keychainTransformClient — long-context beta retry", () => {
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runOk(
-          wrapped
-            .post("https://api.anthropic.com/v1/messages", {
-              body: jsonBody({ model: "claude-opus-4-6" }),
-            })
-            .pipe(Effect.orDie),
-        ),
+      const response = yield* runOk(
+        wrapped
+          .post("https://api.anthropic.com/v1/messages", {
+            body: jsonBody({ model: "claude-opus-4-6" }),
+          })
+          .pipe(Effect.orDie),
       )
       expect(fakeState.captured).toHaveLength(1)
       expect(response.status).toBe(400)
     }),
   )
-  it.live("exhausted candidates surface terminal 400 (every long-context beta tried)", () =>
+  it.scopedLive("exhausted candidates surface terminal 400 (every long-context beta tried)", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
@@ -1113,14 +1089,12 @@ describe("keychainTransformClient — long-context beta retry", () => {
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runOk(
-          wrapped
-            .post("https://api.anthropic.com/v1/messages", {
-              body: jsonBody({ model: "claude-opus-4-6" }),
-            })
-            .pipe(Effect.orDie),
-        ),
+      const response = yield* runOk(
+        wrapped
+          .post("https://api.anthropic.com/v1/messages", {
+            body: jsonBody({ model: "claude-opus-4-6" }),
+          })
+          .pipe(Effect.orDie),
       )
       // claude-opus-4-6 emits 2 long-context betas
       // (context-1m-2025-08-07 + interleaved-thinking-2025-05-14).
@@ -1150,7 +1124,7 @@ describe("keychainTransformClient — 401 recovery", () => {
       refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
     }
   }
-  it.live("401 once → invalidate creds → retry succeeds with fresh token", () =>
+  it.scopedLive("401 once → invalidate creds → retry succeeds with fresh token", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(togglingCredsIO("stale", "fresh"))
       const cache = yield* buildBetaCache()
@@ -1163,12 +1137,10 @@ describe("keychainTransformClient — 401 recovery", () => {
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        ),
+      const response = yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
       )
       expect(fakeState.captured).toHaveLength(2)
       expect(response.status).toBe(200)
@@ -1178,31 +1150,31 @@ describe("keychainTransformClient — 401 recovery", () => {
       expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer fresh-access")
     }),
   )
-  it.live("two consecutive 401s — second surfaces (real auth failure, no infinite loop)", () =>
-    Effect.gen(function* () {
-      const creds = yield* credentialCache(togglingCredsIO("stale", "still-bad"))
-      const cache = yield* buildBetaCache()
-      const fakeState: FakeClientState = {
-        captured: [],
-        // Both attempts get 401 — the second 401 is a real auth failure
-        // (revoked session, missing scope) and must reach the caller.
-        responder: () => new Response("auth", { status: 401 }),
-      }
-      const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
-      const wrapped = transform(makeFakeClient(fakeState))
-      const response = yield* Effect.promise(() =>
-        runOk(
+  it.scopedLive(
+    "two consecutive 401s — second surfaces (real auth failure, no infinite loop)",
+    () =>
+      Effect.gen(function* () {
+        const creds = yield* credentialCache(togglingCredsIO("stale", "still-bad"))
+        const cache = yield* buildBetaCache()
+        const fakeState: FakeClientState = {
+          captured: [],
+          // Both attempts get 401 — the second 401 is a real auth failure
+          // (revoked session, missing scope) and must reach the caller.
+          responder: () => new Response("auth", { status: 401 }),
+        }
+        const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
+        const wrapped = transform(makeFakeClient(fakeState))
+        const response = yield* runOk(
           wrapped.post("https://api.anthropic.com/v1/messages", {
             body: jsonBody({ model: "claude-opus-4-6" }),
           }),
-        ),
-      )
-      // 1 initial + 1 retry = 2 attempts (no third)
-      expect(fakeState.captured).toHaveLength(2)
-      expect(response.status).toBe(401)
-    }),
+        )
+        // 1 initial + 1 retry = 2 attempts (no third)
+        expect(fakeState.captured).toHaveLength(2)
+        expect(response.status).toBe(401)
+      }),
   )
-  it.live("non-401 failure does not invalidate creds", () =>
+  it.scopedLive("non-401 failure does not invalidate creds", () =>
     Effect.gen(function* () {
       // Fire TWO sequential requests (500 then 200) on the same creds
       // service. If a non-401 mistakenly invalidated the cache, request
@@ -1219,19 +1191,15 @@ describe("keychainTransformClient — 401 recovery", () => {
       }
       const transform = buildKeychainTransformClient(creds, cache, TEST_ENV)
       const wrapped = transform(makeFakeClient(fakeState))
-      const r1 = yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        ),
+      const r1 = yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
       )
-      const r2 = yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.anthropic.com/v1/messages", {
-            body: jsonBody({ model: "claude-opus-4-6" }),
-          }),
-        ),
+      const r2 = yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
       )
       expect(fakeState.captured).toHaveLength(2)
       expect(r1.status).toBe(500)
@@ -1244,7 +1212,7 @@ describe("keychainTransformClient — 401 recovery", () => {
   )
 })
 describe("keychainTransformClient — credential failure through the SDK", () => {
-  it.live(
+  it.scopedLive(
     "a failed refresh runs once and reaches the caller as a non-retryable error with its reason",
     () =>
       Effect.gen(function* () {
