@@ -1151,7 +1151,6 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
   ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
   ["GENT_IDLE_TIMEOUT_MS", "the launcher of a shared server sets its idle window"],
-  ["GENT_BUILD_FINGERPRINT", "an operator pins the build fingerprint to override the computed one"],
 ])
 
 /** `Config.string("GENT_NAME")` and friends -- the shapes that read a variable. */

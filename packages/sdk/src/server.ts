@@ -83,7 +83,7 @@ interface DataPaths {
 
 /**
  * Build the paths for an already-resolved data directory. Pure — callers that
- * hold an explicit directory (a test fixture, an explicit `dbPath`) use this;
+ * hold an explicit directory (a test fixture) use this;
  * callers reading the environment use {@link dataPaths}.
  */
 export const dataPathsIn = (dataDir: string): DataPaths => {
@@ -164,11 +164,13 @@ const computeLocalFingerprintUncached: Effect.Effect<
   return "unknown"
 })
 
+/**
+ * The one build fingerprint. The lock entry and the identity endpoint both
+ * read it, so a probe that compares them compares one fact.
+ */
 interface BuildFingerprintApi {
-  /** Cached local fingerprint computation. Identical across yields within TTL. */
-  readonly local: Effect.Effect<string>
-  /** Resolved fingerprint — env override (`GENT_BUILD_FINGERPRINT`) wins, else local. */
-  readonly resolved: Effect.Effect<string>
+  /** Cached computation. Identical across yields within the TTL. */
+  readonly current: Effect.Effect<string>
 }
 
 export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFingerprintApi>()(
@@ -186,27 +188,14 @@ export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFin
       >()
       const cached = yield* Effect.cachedWithTTL(computeLocalFingerprintUncached, "1 hour")
       // oxlint-disable-next-line effect/noInlineProvide -- Layer construction captures the services required by the cached computation.
-      const local: Effect.Effect<string> = Effect.provide(cached, ctx)
-      const resolved: Effect.Effect<string> = Effect.gen(function* () {
-        const opt: Option.Option<string> = yield* Config.option(
-          Config.string("GENT_BUILD_FINGERPRINT"),
-        )
-        if (Option.isSome(opt) && opt.value !== "") return opt.value
-        return yield* local
-      }).pipe(Effect.catchEager(() => local))
-      return BuildFingerprint.of({ local, resolved })
+      const current: Effect.Effect<string> = Effect.provide(cached, ctx)
+      return BuildFingerprint.of({ current })
     }),
   )
 
   /** Deterministic test layer. */
   static Test = (fingerprint = "test-fingerprint"): Layer.Layer<BuildFingerprint> =>
-    Layer.succeed(
-      BuildFingerprint,
-      BuildFingerprint.of({
-        local: Effect.succeed(fingerprint),
-        resolved: Effect.succeed(fingerprint),
-      }),
-    )
+    Layer.succeed(BuildFingerprint, BuildFingerprint.of({ current: Effect.succeed(fingerprint) }))
 }
 
 // ── server-lock ─────────────────────────────────────────────────────────────
@@ -682,8 +671,8 @@ type BuiltRpcHandlers = Layer.Success<typeof RpcHandlersLive>
 
 export const StateSpec = Schema.Union([
   Schema.TaggedStruct("Sqlite", {
+    /** The fallback root for the data directory when `GENT_DATA_DIR` is unset. */
     home: Schema.optional(Schema.String),
-    dbPath: Schema.optional(Schema.String),
   }),
   Schema.TaggedStruct("Memory", {}),
 ]).pipe(Schema.toTaggedUnion("_tag"))
@@ -736,9 +725,8 @@ export const LaunchConfig = Config.all({
     Schema.Int.check(Schema.isGreaterThan(0)),
     "GENT_IDLE_TIMEOUT_MS",
   ).pipe(Config.withDefault(30_000)),
-  // `GENT_DATA_DIR` is not read here: `data-paths.ts` owns it, so the server
-  // and the doctor resolve the same directory from one place.
-  home: Config.option(Config.string("HOME")),
+  // `GENT_DATA_DIR` and the home directory are not read here: `dataPaths` and
+  // the platform own them, so the server and the doctor resolve one directory.
   authDirectory: Config.option(Config.string("GENT_AUTH_DIRECTORY")),
   shell: Config.option(Config.string("SHELL")),
 })
@@ -832,7 +820,7 @@ export const awaitServerShutdown = (server: GentServer): Effect.Effect<void> =>
 // ── Factories ──
 
 export const state = {
-  sqlite: (options?: { readonly home?: string; readonly dbPath?: string }): StateSpec =>
+  sqlite: (options?: { readonly home?: string }): StateSpec =>
     StateSpec.cases.Sqlite.make(options ?? {}),
   memory: (): StateSpec => StateSpec.cases.Memory.make({}),
 }
@@ -878,17 +866,12 @@ const resolveHome = (stateSpec: StateSpec, homeDirectory: string): string =>
   )
 
 /**
- * An explicit `dbPath` on the state spec wins; otherwise the database sits in
- * the data directory `data-paths.ts` resolves, so the server writes where
- * `gent doctor` and `gent storage reset` look.
+ * The database always sits in the data directory `dataPaths` resolves, beside
+ * the server lock. The server writes where `gent doctor` and
+ * `gent storage reset` look, and a lock never guards a database it does not sit beside.
  */
-const resolveDbPath = (home: string, stateSpec: StateSpec): Effect.Effect<string> => {
-  if (stateSpec._tag === "Sqlite") {
-    const dbPath = Option.fromNullishOr(stateSpec.dbPath)
-    if (Option.isSome(dbPath)) return Effect.succeed(pathResolve(dbPath.value))
-  }
-  return Effect.map(dataPaths(home), (paths) => paths.dbPath)
-}
+const resolveDbPath = (home: string): Effect.Effect<string> =>
+  Effect.map(dataPaths(home), (paths) => paths.dbPath)
 
 /**
  * Poll the connection tracker and complete `shutdown` once the server has
@@ -971,13 +954,13 @@ const buildOwnedServer = (
       onNone: () => platform.randomId,
       onSome: Effect.succeed,
     })
-    const buildFingerprint = yield* (yield* BuildFingerprint).resolved
+    const buildFingerprint = yield* (yield* BuildFingerprint).current
 
     const languageModelLayer = resolveLanguageModelLayer(providerSpec)
     const dbPath = yield* Match.value(stateSpec).pipe(
       Match.tagsExhaustive({
         Memory: () => Effect.succeed(Option.none<string>()),
-        Sqlite: (sqliteSpec) => Effect.asSome(resolveDbPath(home, sqliteSpec)),
+        Sqlite: () => Effect.asSome(resolveDbPath(home)),
       }),
     )
     const serverRoot = yield* buildServerRoot({
@@ -1126,14 +1109,18 @@ const resolveServerInternal = (
     // SQLite state: shared-server aware
     const platform = yield* GentPlatform
     const home = resolveHome(stateSpec, yield* platform.homeDirectory)
-    const dbPath = yield* resolveDbPath(home, stateSpec)
-    const fingerprint = yield* (yield* BuildFingerprint).local
+    const dbPath = yield* resolveDbPath(home)
+    const fingerprint = yield* (yield* BuildFingerprint).current
     const osInfo = yield* platform.osInfo
     const pid = yield* platform.pid
 
-    // Attach to a live server of this build that proves the lock's identity.
+    // Attach to a live server of this build, on this database, that proves the lock's identity.
     const status = yield* serverLock.status(home)
-    if (status._tag === "Alive" && status.entry.buildFingerprint === fingerprint) {
+    if (
+      status._tag === "Alive" &&
+      status.entry.buildFingerprint === fingerprint &&
+      status.entry.dbPath === dbPath
+    ) {
       if (yield* probeServerLockEntryIdentity(status.entry)) {
         return GentServer.cases.Attached.make({
           url: status.entry.rpcUrl,
