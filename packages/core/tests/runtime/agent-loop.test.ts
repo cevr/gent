@@ -3131,6 +3131,99 @@ describe("turn record", () => {
   )
 
   it.scopedLive(
+    "a row behind its messages never moves the turn below a step with no assistant message",
+    () =>
+      Effect.gen(function* () {
+        resetProbe()
+        const tempDir = yield* makeTempDirectoryScoped("gent-turn-position-")
+        const dbPath = `${tempDir}/gent.db`
+        const finalReply = "RESUMED-AFTER-GAP"
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        probe.gate = Option.some({ label: "late", entered, release })
+
+        // First process: step 1 writes nothing (no assistant message) and is
+        // re-prompted; step 2 calls the probe, which holds. The process dies.
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          {
+            parts: [
+              finishPart({ finishReason: "stop", usage: { inputTokens: 10, outputTokens: 0 } }),
+            ],
+          },
+          toolCallStep("resume_probe", { label: "late" }),
+        ])
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: firstProvider.layer,
+                extensions: [ResumeProbeExtension],
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message
+              .send({ sessionId, branchId, content: "gap then probe" })
+              .pipe(Effect.forkScoped)
+            yield* Deferred.await(entered)
+            return { sessionId, branchId }
+          }).pipe(Effect.timeout("10 seconds")),
+        )
+        probe.gate = Option.none()
+
+        // The crash window: step 2's messages are durable, the row still
+        // names step 1 with nothing pending.
+        yield* Effect.sync(() => {
+          const db = new Database(dbPath)
+          db.run(
+            "UPDATE turn_records SET step = 1, pending_tool_calls_json = '[]' WHERE session_id = ? AND branch_id = ?",
+            [started.sessionId, started.branchId],
+          )
+          db.close()
+        })
+
+        // Second process: the turn resumes at step 2's pending call, not at a
+        // position below the row.
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: secondProvider.layer,
+                extensions: [ResumeProbeExtension],
+                storagePath: dbPath,
+              }),
+            )
+            yield* client.session.getSnapshot({
+              sessionId: started.sessionId,
+              branchId: started.branchId,
+            })
+            yield* client.message.send({
+              sessionId: started.sessionId,
+              branchId: started.branchId,
+              content: "continue",
+            })
+            yield* waitFor(
+              client.message.list({ branchId: started.branchId }),
+              (messages) =>
+                messages.some((message) =>
+                  message.parts.some(
+                    (part) => part.type === "text" && part.text.includes(finalReply),
+                  ),
+                ),
+              15_000,
+              "resumed turn produced its reply",
+            )
+            yield* secondProvider.controls.assertDone
+          }).pipe(Effect.timeout("20 seconds")),
+        )
+      }).pipe(Effect.timeout("40 seconds")),
+    60_000,
+  )
+
+  it.scopedLive(
     "finishes an interrupted turn from the record without re-running a settled tool",
     () =>
       Effect.gen(function* () {

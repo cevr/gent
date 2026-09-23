@@ -2401,11 +2401,15 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
 
       // No usable row. Derive the position from the messages once, then adopt
-      // it. A turn that is only starting exits on the first missing id.
-      let lastCompletedStep = 0
+      // it. A turn that is only starting exits on the first missing id. The
+      // row is written after its step's messages, so the steps it names are
+      // settled: the probe starts past them. A step that wrote nothing (an
+      // empty answer re-prompted) has no assistant message, and a probe from
+      // step 1 would stop there and move the turn backwards.
+      let lastCompletedStep = record.step
       let pendingAssistant = Option.none<Message>()
       let pendingToolCalls: ReadonlyArray<Prompt.ToolCallPart> = []
-      for (let step = 1; step <= MAX_TURN_STEPS; step++) {
+      for (let step = record.step + 1; step <= MAX_TURN_STEPS; step++) {
         const at = stepAddress(messageId, step)
         const existingAssistant = yield* messageStorage.getMessage(at.assistant)
         if (Predicate.isUndefined(existingAssistant)) break
