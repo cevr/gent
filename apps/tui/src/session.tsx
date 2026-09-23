@@ -2762,7 +2762,6 @@ export function createSessionController(props: {
 
   const onBranchPickerSelect = (branchId: BranchId) => {
     dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
-    if (branchId === props.branchId) return
     client.switchSession(props.sessionId, branchId, currentSessionName())
   }
 
