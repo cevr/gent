@@ -753,6 +753,44 @@ const commitWithEvent = Effect.fn("TurnHelpers.commitWithEvent")(function* <A, E
   return committed.result
 })
 
+/**
+ * Ends a turn that a phase failure stopped. It appends one `TurnCompleted`
+ * with `streamFailed`, after the `ErrorOccurred` that names the cause, so
+ * every admitted turn ends with exactly one receipt. The stored turn duration
+ * is the receipt's mark. If the failure came after `finalizeTurn` stored it,
+ * this appends nothing.
+ */
+export const completeFailedTurn = Effect.fn("TurnHelpers.completeFailedTurn")(function* (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly messageId: MessageId
+  readonly startedAtMs: number
+}) {
+  const messageStorage = yield* MessageStorage
+  const eventPublisher = yield* EventPublisher
+  const storageTransaction = yield* makeStorageTransaction
+  const message = yield* messageStorage.getMessage(params.messageId)
+  if (!Predicate.isUndefined(message?.turnDurationMs)) return
+  const endedAt = yield* DateTime.now
+  const durationMs = Math.max(0, DateTime.toEpochMillis(endedAt) - params.startedAtMs)
+  const envelope = yield* storageTransaction(
+    messageStorage.updateMessageTurnDuration(params.messageId, durationMs).pipe(
+      Effect.andThen(
+        eventPublisher.append(
+          TurnCompleted.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            messageId: params.messageId,
+            durationMs,
+            streamFailed: true,
+          }),
+        ),
+      ),
+    ),
+  )
+  yield* eventPublisher.deliver(envelope)
+})
+
 export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageReceived")(
   function* (params: { message: Message }) {
     const messageStorage = yield* MessageStorage

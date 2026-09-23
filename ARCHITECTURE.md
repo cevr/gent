@@ -421,8 +421,14 @@ Shape:
 - turn resolution streams through `LanguageModel.streamText` from `ModelResolver`, with durable stream/tool/finalization events derived from the response stream.
 - New `TurnCompleted` receipts include `streamFailed`, including explicit false.
   Historical receipts can omit it; absence does not prove model success. The
-  receipt commits with turn duration. This flag reports model failure only, not
-  task success or a complete child outcome. Actor Idle is not completion proof.
+  receipt commits with turn duration. This flag reports a failed turn only (a
+  broken model stream or a failed turn phase), not task success or a complete
+  child outcome. Actor Idle is not completion proof.
+- Every admitted turn ends with exactly one `TurnCompleted`. A turn phase that
+  fails (a storage write, a profile resolve) publishes `ErrorOccurred`, then
+  `completeFailedTurn` appends the receipt with `streamFailed: true`. The stored
+  turn duration is the receipt's mark, so a failure after `finalizeTurn` stored
+  it appends no second one. A client ends the turn on `TurnCompleted`.
 - New turn-stream start/end receipts include the user-message ID and model-step
   number. Model, failure, and interruption paths keep that identity.
   Historical receipts can omit it and must not be treated

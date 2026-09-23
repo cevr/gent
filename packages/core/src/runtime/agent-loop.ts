@@ -95,6 +95,7 @@ import { causeChainMessage } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
   type AgentLoopTurnProfile,
+  completeFailedTurn,
   interjectionMessageIdForCommand,
   makeAgentLoopTurnExecution,
   makeTurnLedger,
@@ -887,6 +888,8 @@ type AgentLoopWorkerContext<E = never, R = never> = {
     messageId: MessageId,
   ) => Effect.Effect<void>
   readonly publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
+  /** Append the receipt of a turn a phase failure stopped; see `completeFailedTurn`. */
+  readonly completeFailedTurn: (state: RunningState) => Effect.Effect<void>
   readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
   /** The agent the session runs as; it names the actor of each turn's wide event. */
   readonly sessionAgent: Effect.Effect<AgentName, AgentLoopError | E, R>
@@ -999,6 +1002,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     Effect.gen(function* () {
       yield* scope.recordTurnFailure(cause, startState.message.id)
       yield* publishPhaseFailure(cause)
+      yield* scope.completeFailedTurn(startState)
       // A turn that failed before it settled still holds the in-flight slot,
       // and `take` hands that slot back first. Clear it, so the failed turn
       // ends here and the next queued item runs.
@@ -1516,6 +1520,20 @@ const makeAgentLoopBehavior = (
       admissionGateRef: yield* Ref.make(emptyAdmissionGate),
       recordTurnFailure,
       publishEvent,
+      completeFailedTurn: (state) =>
+        completeFailedTurn({
+          sessionId,
+          branchId,
+          messageId: state.message.id,
+          startedAtMs: state.startedAtMs,
+        }).pipe(
+          provideAgentLoopRuntimeContext(runtimeContext),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to complete the failed turn").pipe(
+              Effect.annotateLogs({ error: Cause.pretty(cause) }),
+            ),
+          ),
+        ),
       interactionAnswered: approval.answered,
       runTurn: (state) =>
         Effect.acquireUseRelease(
