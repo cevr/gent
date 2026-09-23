@@ -260,11 +260,16 @@ current are one step no interrupt can split. `resolve` takes a
 lease in the caller's scope: a turn and an extension request hold it until they
 end, a branch loop holds it while its branch Resources live, and a query holds
 it for its read. The newest profile of a (workspace, cwd) stays cached; a
-superseded one closes its scope, and with it its process resources, when its
-last lease is released. It builds every
-extension's process-scope resources in resolution order, each in its own child
+superseded one closes its scope when its last lease is released. It builds
+every extension's process-scope resources in resolution order, each in its own
 scope, and reports an extension whose layer fails as failed at the startup
-phase. `buildSessionProfile` then stages the `ExtensionRegistry` and the base
+phase. An extension's process resources are shared by every profile of the
+place that builds them over the same context: the same resource-bearing
+extensions before it, and itself (id, source, file version). So a profile
+rebuilt for a config edit keeps the resources the edit leaves alone, and their
+state with them (an open `/btw` fork, the agents-view watchers, a running
+background job); a resource closes when the last profile that holds it
+retires. `buildSessionProfile` then stages the `ExtensionRegistry` and the base
 prompt sections over the built resource context. Profile tests use the live
 cache. The tool test layer uses the production composition root. Neither has a
 separate activation implementation.

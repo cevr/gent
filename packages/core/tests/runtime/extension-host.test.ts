@@ -699,8 +699,20 @@ describe("session profile resolution", () => {
           )
         }),
       })
+      // Each toggle holds a process resource and sorts before `tracked`, so
+      // every list builds `tracked` over a different context: no profile
+      // shares it with another.
       const toggles = ["a", "b", "c", "d"].map((name) =>
-        defineExtension({ id: `@gent/test-session-profile/toggle-${name}`, setup: Effect.void }),
+        defineExtension({
+          id: `@gent/test-session-profile/toggle-${name}`,
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              startResource(`@gent/test-session-profile/toggle-${name}/resource`, Effect.void),
+            )
+          }),
+        }),
       )
       const projectConfig = path.join(launch, ".gent", "config.json")
       yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
@@ -935,6 +947,106 @@ describe("session profile resolution", () => {
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("5".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A profile rebuilt for a config edit shares the process resources it
+  // builds over the same context, so an open pane, a watcher or a running job
+  // keeps its state. Only resources the edit touches close and rebuild.
+  it.scopedLive(
+    "a profile rebuilt for an edit keeps the process resources the edit leaves alone",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const launch = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const builds = yield* Ref.make<ReadonlyArray<string>>([])
+        const open = yield* Ref.make<ReadonlyArray<string>>([])
+        const withResource = (name: string) =>
+          defineExtension({
+            id: `@gent/test-session-profile/${name}`,
+            setup: Effect.gen(function* () {
+              const host = yield* ExtensionHost
+              yield* host.register(
+                "resource",
+                defineResource({
+                  id: `@gent/test-session-profile/${name}/marker`,
+                  scope: "process",
+                  layer: Layer.effect(
+                    SessionProfileResourceMarker,
+                    Effect.acquireRelease(
+                      Ref.update(builds, (names) => [...names, name]).pipe(
+                        Effect.andThen(Ref.update(open, (names) => [...names, name])),
+                      ),
+                      // One release closes one build of the resource.
+                      () =>
+                        Ref.update(open, (names) =>
+                          names.filter((_, index) => index !== names.indexOf(name)),
+                        ),
+                    ).pipe(Effect.as(SessionProfileResourceMarker.of({ value: name }))),
+                  ),
+                }),
+              )
+            }),
+          })
+        // Resolution order: `shared-a`, then `shared-b` (no resource), then `shared-c`.
+        const extensions = [
+          withResource("shared-a"),
+          defineExtension({ id: "@gent/test-session-profile/shared-b", setup: Effect.void }),
+          withResource("shared-c"),
+        ]
+        const projectConfig = path.join(launch, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+        const disable = (names: ReadonlyArray<string>) =>
+          fs.writeFileString(
+            projectConfig,
+            encodeJson({
+              disabledExtensions: names.map((name) => `@gent/test-session-profile/${name}`),
+            }),
+          )
+        const sorted = (names: ReadonlyArray<string>) => names.toSorted()
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const resolve = Effect.scoped(cache.resolve(launch))
+          const first = yield* resolve
+          expect(sorted(yield* Ref.get(open))).toEqual(["shared-a", "shared-c"])
+
+          // An extension with no resource: both resources carry over.
+          yield* disable(["shared-b"])
+          expect(yield* resolve).not.toBe(first)
+          expect(sorted(yield* Ref.get(builds))).toEqual(["shared-a", "shared-c"])
+          expect(sorted(yield* Ref.get(open))).toEqual(["shared-a", "shared-c"])
+
+          // The last resource's extension: only its resource closes.
+          yield* disable(["shared-c"])
+          yield* resolve
+          expect(sorted(yield* Ref.get(builds))).toEqual(["shared-a", "shared-c"])
+          expect(yield* Ref.get(open)).toEqual(["shared-a"])
+
+          yield* disable(["shared-b"])
+          yield* resolve
+          expect(sorted(yield* Ref.get(builds))).toEqual(["shared-a", "shared-c", "shared-c"])
+          expect(sorted(yield* Ref.get(open))).toEqual(["shared-a", "shared-c"])
+
+          // An extension before `shared-c`: `shared-c` is built over another
+          // context now, so it is built again.
+          yield* disable(["shared-a"])
+          yield* resolve
+          expect(sorted(yield* Ref.get(builds))).toEqual([
+            "shared-a",
+            "shared-c",
+            "shared-c",
+            "shared-c",
+          ])
+          expect(yield* Ref.get(open)).toEqual(["shared-c"])
+        }).pipe(
+          Effect.timeout("10 seconds"),
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("6".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
   )
 
   it.scopedLive("releases a partially built profile when its build is interrupted", () =>
