@@ -1723,7 +1723,7 @@ describe("buildBillingHeaderValue", () => {
 describe("MODEL_CONFIG", () => {
   test("ccVersion is the currently-advertised Claude Code CLI version", () => {
     // Reference: opencode-claude-auth/src/model-config.ts:15
-    expect(MODEL_CONFIG.ccVersion).toBe("2.1.90")
+    expect(MODEL_CONFIG.ccVersion).toBe("2.1.280")
   })
 
   test("baseBetas carry the five flags Claude Code currently sends", () => {

@@ -105,7 +105,7 @@ interface ModelConfig {
  * `~/.cache/repo/griffinmartin/opencode-claude-auth/src/model-config.ts`.
  */
 export const MODEL_CONFIG: ModelConfig = {
-  ccVersion: "2.1.90",
+  ccVersion: "2.1.280",
   baseBetas: [
     "claude-code-20250219",
     "oauth-2025-04-20",
