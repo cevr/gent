@@ -239,14 +239,18 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
 
 const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
 
+/**
+ * A capitalised receiver is a module namespace (`Effect`, `Stream`, `Layer`),
+ * and its `catch` is a combinator, not a Promise chain.
+ */
+const isNamespaceReceiver = (object: AstNode | undefined): boolean =>
+  object?.type === "Identifier" && /^[A-Z]/.test(getStringField(object, "name") ?? "")
+
 const promiseChainMethodName = (node: AstNode): string | undefined => {
   if (node.type !== "CallExpression") return undefined
   const callee = getNodeField(node, "callee")
   if (callee?.type !== "MemberExpression") return undefined
-  const object = getNodeField(callee, "object")
-  if (object?.type === "Identifier" && getStringField(object, "name") === "Effect") {
-    return undefined
-  }
+  if (isNamespaceReceiver(getNodeField(callee, "object"))) return undefined
   const prop = getNodeField(callee, "property")
   if (prop?.type !== "Identifier") return undefined
   const name = getStringField(prop, "name")
@@ -272,7 +276,7 @@ const platformBoundaryFilename = (filename: string): boolean => {
   if (/\/runtime\/gent-platform-bun\.ts$/.test(filename)) return true
   if (/-adapter\.tsx?$/.test(filename)) return true
   if (/\/packages\/tooling\/fixtures\//.test(filename)) return false
-  return /\/(?:scripts|packages\/tooling|packages\/e2e|tests)\/|\.test\.tsx?$/.test(filename)
+  return /\/(?:packages\/tooling|packages\/e2e|tests)\/|\.test\.tsx?$/.test(filename)
 }
 
 const HOST_PROCESS_MEMBERS = new Set(["execPath", "kill", "platform", "pid"])
@@ -393,7 +397,7 @@ const hostMemberMessage = (member: {
 }): string | undefined => {
   const suffix = member.property !== undefined ? `.${member.property}` : ""
   if (member.object === "Bun") {
-    return `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). Bun APIs are allowed only in adapter, build script, tooling, and test harness boundaries.`
+    return `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). Bun APIs are allowed only in adapter, tooling, and test harness boundaries.`
   }
   const hostFact =
     (member.object === "process" && HOST_PROCESS_MEMBERS.has(member.property ?? "")) ||
@@ -631,6 +635,21 @@ const createRequireAliasName = (node: AstNode): string | undefined => {
     return undefined
   }
   return getStringField(id, "name")
+}
+
+/** The local name an import specifier binds. */
+const specifierLocalName = (specifier: AstNode): string => {
+  const local = getNodeField(specifier, "local")
+  return (local === undefined ? undefined : getStringField(local, "name")) ?? ""
+}
+
+/** The exported name an `import { x as y }` specifier reads: `x`, identifier or string. */
+const specifierImportedName = (specifier: AstNode): string | undefined => {
+  const imported = getNodeField(specifier, "imported")
+  if (imported === undefined) return undefined
+  return imported.type === "Identifier"
+    ? getStringField(imported, "name")
+    : getStringField(imported, "value")
 }
 
 const plugin: Plugin = {
@@ -911,21 +930,12 @@ const plugin: Plugin = {
         // Allow tests
         if (/\/tests\//.test(filename)) return {}
         if (/\.test\.tsx?$/.test(filename)) return {}
-        // Allow lint plugin file itself (rule definitions reference the API in messages)
-        if (/\/lint\/[^/]+\.ts$/.test(filename) && !/\/fixtures\//.test(filename)) return {}
 
-        // Effect static methods that exit the Effect world via Promise/fiber
-        // — the boundary contract treats these as edges that must live in
-        // `*-boundary.ts`. `runSync`/`runFork`/`runForkWith` are NOT in this
-        // set: they're Effect-internal (no Promise edge) and used heavily by
-        // Solid signal lanes, PubSub.unbounded eager-build, etc. — adding
-        // them would force a much wider boundary refactor.
-        const EFFECT_RUN_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
-        // Instance methods on a `ManagedRuntime` / `Runtime` that exit via
-        // Promise — same boundary semantics as `Effect.runPromise`. Effect's
-        // `ManagedRuntime` exposes `runPromise{,With,Exit}`; all three are
-        // the Promise edge.
-        const RUNTIME_RUN_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
+        // `RUN_PROMISE_METHODS` are the Promise edges, as `Effect` statics and
+        // as `ManagedRuntime` / `Runtime` instance methods alike.
+        // `runSync`/`runFork`/`runForkWith` are NOT in the set: they're
+        // Effect-internal (no Promise edge) and used heavily by Solid signal
+        // lanes, PubSub.unbounded eager-build, etc.
 
         return {
           CallExpression(node) {
@@ -936,7 +946,7 @@ const plugin: Plugin = {
 
             // Static `Effect.runPromise(...)` / `runPromiseWith` / `runPromiseExit`.
             if (obj.type === "Identifier" && obj.name === "Effect") {
-              if (!EFFECT_RUN_METHODS.has(prop.name)) return
+              if (!RUN_PROMISE_METHODS.has(prop.name)) return
               context.report({
                 message: `\`Effect.${prop.name}\` may only be called inside a \`*-boundary.ts\` file. Move the Promise edge into a boundary module.`,
                 node,
@@ -950,7 +960,7 @@ const plugin: Plugin = {
             // `runtime`, `clientRuntime`, `serverRuntime`, or ends in
             // `Runtime`. Catches both `runtime.runPromise(...)` and
             // `extensionUI.clientRuntime.runPromise(...)`.
-            if (!RUNTIME_RUN_METHODS.has(prop.name)) return
+            if (!RUN_PROMISE_METHODS.has(prop.name)) return
             // Resolve the rightmost identifier of the object expression — this
             // handles both `runtime.runPromise(...)` (Identifier object) and
             // `extensionUI.clientRuntime.runPromise(...)` (nested member chain).
@@ -1156,7 +1166,8 @@ const plugin: Plugin = {
 
     /**
      * Bans `Bun.*` references and host process and OS facts everywhere except
-     * platform adapter, build script, tooling, and test harness boundaries.
+     * platform adapter, tooling, and test harness boundaries. The TUI build
+     * script is exempt by its `.oxlintrc.json` override.
      * The `Bun` global is a platform-specific runtime API, and `process.pid`,
      * `process.platform`, `os.hostname()` and the rest are host facts; product
      * code routes both through Effect platform services (`GentPlatform`,
@@ -1166,7 +1177,6 @@ const plugin: Plugin = {
      * Exempt by filename:
      *   - `runtime/gent-platform-bun.ts` (the GentPlatform live impl)
      *   - `*-adapter.ts` / `*-adapter.tsx` files (platform-specific adapters)
-     *   - `**\/scripts/**` (build/dev entrypoints)
      *   - `**\/packages/tooling/**` (CI helpers)
      *   - `**\/packages/e2e/**` (test infrastructure spawning real processes)
      *   - `*.test.ts` and files under `tests/`
@@ -1513,28 +1523,16 @@ const plugin: Plugin = {
         }
         return {
           ImportDeclaration(node) {
-            if (!isAstNode(node)) return
-            const source = getNodeField(node, "source")
-            if (source === undefined || getStringField(source, "value") !== "effect-bun-test")
-              return
+            if (!isAstNode(node) || importSourceOf(node) !== "effect-bun-test") return
             for (const specifier of getNodeArrayField(node, "specifiers") ?? []) {
-              if (specifier.type === "ImportNamespaceSpecifier") {
-                const local = getNodeField(specifier, "local")
-                const localName = local === undefined ? undefined : getStringField(local, "name")
-                if (localName !== undefined) namespaces.add(localName)
-                continue
+              const local = specifierLocalName(specifier)
+              if (specifier.type === "ImportNamespaceSpecifier") namespaces.add(local)
+              if (
+                specifier.type === "ImportSpecifier" &&
+                specifierImportedName(specifier) === "it"
+              ) {
+                inertNames.add(local)
               }
-              if (specifier.type !== "ImportSpecifier") continue
-              const imported = getNodeField(specifier, "imported")
-              if (imported === undefined) continue
-              const importedName =
-                imported.type === "Identifier"
-                  ? getStringField(imported, "name")
-                  : getStringField(imported, "value")
-              if (importedName !== "it") continue
-              const local = getNodeField(specifier, "local")
-              const localName = local === undefined ? undefined : getStringField(local, "name")
-              inertNames.add(localName ?? "it")
             }
           },
           CallExpression(node) {
