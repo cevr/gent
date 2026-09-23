@@ -74,19 +74,22 @@ const assistant = (id: string, calls: ToolCall[], text = ""): SessionItem => {
 }
 
 /** The text the parent model reads; the row shows only the answer after the blank line. */
-const envelope = (preview: string) =>
+const envelope = (preview: string, status = "completed") =>
   [
-    'Child agent "delegate" completed. requestId op-delegate; session childsess-1234; branch branch-child.',
+    `Child agent "delegate" ${status}. requestId op-delegate; session childsess-1234; branch branch-child.`,
     "Completion is a turn receipt, not task success. Read the output before relying on it.",
     "",
     preview,
   ].join("\n")
 
-const completion = (details: Schema.JsonObject): SessionItem => ({
+const completion = (
+  details: Schema.JsonObject,
+  content = envelope("CHILD-ANSWER: the loader is fine"),
+): SessionItem => ({
   _tag: "regular-message",
   id: "child-completion",
   role: "user",
-  content: envelope("CHILD-ANSWER: the loader is fine"),
+  content,
   reasoning: "",
   images: [],
   createdAt: 1,
@@ -245,18 +248,46 @@ describe("child-completion row", () => {
     }),
   )
 
-  it.live("a row saved before the details grew still draws its answer", () =>
+  /** The three ids an older completion row carries, and nothing else. */
+  const oldDetails = {
+    requestId: "op-delegate",
+    sessionId: "childsess-1234",
+    branchId: "branch-child",
+  }
+
+  it.live("a row saved before the details grew reads its status from the envelope", () =>
+    Effect.gen(function* () {
+      const frame = yield* loadedFrame([completion(oldDetails)])
+      expect(frame).toContain("✓ delegate completed · childses")
+      expect(frame).toContain("CHILD-ANSWER")
+      expect(frame).not.toContain("Completion is a turn receipt")
+    }),
+  )
+
+  it.live("an older row for an interrupted child never draws a success mark", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([
-        completion({
-          requestId: "op-delegate",
-          sessionId: "childsess-1234",
-          branchId: "branch-child",
-        }),
+        completion(oldDetails, envelope("CHILD-ANSWER: partial", "ended (interrupted)")),
       ])
-      // No outcome was saved, so the row does not claim one.
-      expect(frame).toContain("child finished")
-      expect(frame).not.toContain("Completion is a turn receipt")
+      expect(frame).toContain("✕ delegate ended (interrupted)")
+      expect(frame).not.toContain("✓ delegate")
+    }),
+  )
+
+  it.live("an older row for a failed child never draws a success mark", () =>
+    Effect.gen(function* () {
+      const frame = yield* loadedFrame([
+        completion(oldDetails, envelope("CHILD-ANSWER: none", "ended (model stream failed)")),
+      ])
+      expect(frame).toContain("✕ delegate ended (model stream failed)")
+    }),
+  )
+
+  it.live("an older row whose envelope does not parse draws a neutral mark", () =>
+    Effect.gen(function* () {
+      const frame = yield* loadedFrame([completion(oldDetails, "CHILD-ANSWER: bare text")])
+      expect(frame).toContain("· child finished · childses")
+      expect(frame).not.toContain("✓ child")
     }),
   )
 

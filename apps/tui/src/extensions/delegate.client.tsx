@@ -8,6 +8,7 @@ import {
   ChildCompletionDetails,
   childOutcomeWords,
   DelegateRpc,
+  readChildCompletionHeadline,
 } from "@gent/extensions/client.js"
 import { useTheme } from "../theme"
 import { ToolFrame, UserRow } from "../ui"
@@ -110,26 +111,59 @@ const completionAnswer = (content: string): string => {
 
 const COMPLETION_ANSWER_LINES = 12
 
-/** `delegate completed · abcd1234 · ↑1.2k ↓300`. A row saved before outcomes were written reads "finished". */
-const completionHeader = (details: CompletionDetails): string => {
-  const who = Option.getOrElse(Option.fromUndefinedOr(details.agentName), () => "child")
-  const status = Option.fromUndefinedOr(details.outcome).pipe(
-    Option.map(childOutcomeWords),
-    Option.getOrElse(() => "finished"),
-  )
+/** How a headline's status words ended. */
+const endedBy = (status: string): "completed" | "badly" => {
+  if (status === "completed") return "completed"
+  return "badly"
+}
+
+/** What the row says about how the child ended; "unknown" never draws a success mark. */
+interface CompletionState {
+  readonly who: string
+  readonly status: string
+  readonly ended: "completed" | "badly" | "unknown"
+}
+
+/**
+ * The outcome in the details, else the headline `describeChildCompletion`
+ * wrote in the message: rows saved before outcomes were written read it
+ * there. A row with neither reads "finished" with a neutral mark.
+ */
+const completionState = (details: CompletionDetails, content: string): CompletionState => {
+  const agentName = Option.fromUndefinedOr(details.agentName)
+  const outcome = Option.fromUndefinedOr(details.outcome)
+  if (Option.isSome(outcome)) {
+    const status = childOutcomeWords(outcome.value)
+    return {
+      who: Option.getOrElse(agentName, () => "child"),
+      status,
+      ended: endedBy(status),
+    }
+  }
+  return Option.match(readChildCompletionHeadline(content), {
+    onNone: () => ({
+      who: Option.getOrElse(agentName, () => "child"),
+      status: "finished",
+      ended: "unknown",
+    }),
+    onSome: (headline) => ({
+      who: Option.getOrElse(agentName, () => headline.agentName),
+      status: headline.status,
+      ended: endedBy(headline.status),
+    }),
+  })
+}
+
+/** `delegate completed · abcd1234 · ↑1.2k ↓300`. */
+const completionHeader = (state: CompletionState, details: CompletionDetails): string => {
   const usage = Option.fromUndefinedOr(details.usage).pipe(
     Option.map(formatUsageStats),
     Option.filter((text) => text.length > 0),
     Option.map((text) => ` · ${text}`),
     Option.getOrElse(() => ""),
   )
-  return `${who} ${status} · ${shortSession(details.sessionId)}${usage}`
+  return `${state.who} ${state.status} · ${shortSession(details.sessionId)}${usage}`
 }
-
-const endedBadly = (details: CompletionDetails) =>
-  Option.fromUndefinedOr(details.outcome).pipe(
-    Option.exists((outcome) => childOutcomeWords(outcome) !== "completed"),
-  )
 
 function ChildToolTree(props: { details: CompletionDetails }) {
   const { theme } = useTheme()
@@ -169,8 +203,11 @@ function ChildToolTree(props: { details: CompletionDetails }) {
 
 function ChildCompletionRow(props: MessageRowProps & { details: CompletionDetails }) {
   const { theme } = useTheme()
+  const state = () => completionState(props.details, props.content)
   const glyph = () => {
-    if (endedBadly(props.details)) return { mark: "✕", color: theme.error }
+    const ended = state().ended
+    if (ended === "badly") return { mark: "✕", color: theme.error }
+    if (ended === "unknown") return { mark: "·", color: theme.textMuted }
     return { mark: "✓", color: theme.success }
   }
   const answer = () =>
@@ -186,7 +223,8 @@ function ChildCompletionRow(props: MessageRowProps & { details: CompletionDetail
       borderColor={theme.textMuted}
     >
       <text style={{ fg: theme.textMuted }}>
-        <span style={{ fg: glyph().color }}>{glyph().mark}</span> {completionHeader(props.details)}
+        <span style={{ fg: glyph().color }}>{glyph().mark}</span>{" "}
+        {completionHeader(state(), props.details)}
       </text>
       <ChildToolTree details={props.details} />
       <Show when={answer().length > 0}>

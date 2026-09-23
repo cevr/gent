@@ -288,6 +288,24 @@ export const describeChildCompletion = (params: {
   ].join("\n")
 }
 
+/**
+ * The agent and status words `describeChildCompletion` wrote on the first
+ * line. Rows saved before the details carried an outcome read it here.
+ */
+export const readChildCompletionHeadline = (
+  text: string,
+): Option.Option<{ readonly agentName: string; readonly status: string }> =>
+  Option.fromNullishOr(
+    /^Child agent "([^"\n]*)" (completed|ended \([^)\n]+\))\. requestId /.exec(text),
+  ).pipe(
+    Option.flatMap(([, agentName, status]) =>
+      Option.all({
+        agentName: Option.fromNullishOr(agentName),
+        status: Option.fromNullishOr(status),
+      }),
+    ),
+  )
+
 export const CHILD_COMPLETION_TYPE = "child-completion"
 
 /** One call a child made, as its completion row draws it. */

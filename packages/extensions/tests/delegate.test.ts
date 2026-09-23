@@ -12,7 +12,14 @@ import {
   Struct,
 } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { childTaskText, DELEGATE_AGENT_NAME, DelegateEntry, StartChild } from "../src/delegate.js"
+import {
+  childTaskText,
+  DELEGATE_AGENT_NAME,
+  DelegateEntry,
+  describeChildCompletion,
+  readChildCompletionHeadline,
+  StartChild,
+} from "../src/delegate.js"
 import { DEFAULT_AGENT_NAME, RequestId } from "@gent/core/extensions/api"
 import {
   createRpcHarness,
@@ -30,7 +37,7 @@ import {
   RuntimeEnvironment,
   UserConfig,
 } from "@gent/core/test-utils"
-import { type BranchId, ToolCallId, ModelId, SteerCommand } from "@gent/core/protocol"
+import { BranchId, ModelId, SessionId, SteerCommand, ToolCallId } from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import type * as Prompt from "effect/unstable/ai/Prompt"
@@ -354,6 +361,34 @@ describe("a child's completion", () => {
  * after an Escape. The rows settle before the children stop, so no completion
  * message wakes the parent the user just interrupted.
  */
+
+describe("the completion headline", () => {
+  const headlineOf = (outcome: Parameters<typeof describeChildCompletion>[0]["outcome"]) =>
+    readChildCompletionHeadline(
+      describeChildCompletion({
+        requestId: RequestId.make("req-1"),
+        agentName: DELEGATE_AGENT_NAME,
+        sessionId: SessionId.make("session-child"),
+        branchId: BranchId.make("branch-child"),
+        outcome,
+        text: "answer",
+      }),
+    )
+
+  test("reads back the agent and status the envelope writes", () => {
+    expect(Option.getOrThrow(headlineOf({}))).toEqual({
+      agentName: DELEGATE_AGENT_NAME,
+      status: "completed",
+    })
+    expect(Option.getOrThrow(headlineOf({ interrupted: true, streamFailed: true })).status).toBe(
+      "ended (interrupted, model stream failed)",
+    )
+  })
+
+  test("text that is not an envelope reads as nothing", () => {
+    expect(Option.isNone(readChildCompletionHeadline("plain answer"))).toBe(true)
+  })
+})
 
 describe("a parent interrupt", () => {
   it.live(

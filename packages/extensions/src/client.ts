@@ -6,6 +6,7 @@ export {
   childTaskText,
   DelegateChild,
   DelegateRpc,
+  readChildCompletionHeadline,
 } from "./delegate.js"
 export { SkillsRpc } from "./skills.js"
 export {
