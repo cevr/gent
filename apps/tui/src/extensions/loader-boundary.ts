@@ -1,4 +1,4 @@
-import { Cause, Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
+import { Cause, Duration, Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
 import {
   type ExtensionScope,
   isClientEntrypoint,
@@ -161,8 +161,7 @@ export interface ResolvedTuiExtensions {
   readonly widgets: ReadonlyArray<ResolvedWidget>
   /** Each extension's commands, in scope order; `resolveCommands` decides the owners. */
   readonly commandSources: ReadonlyArray<CommandSource>
-  // eslint-disable-next-line effect/noNullish -- the undefined key selects the default renderer.
-  readonly interactionRenderers: Map<string | undefined, InteractionRendererComponent>
+  readonly interactionRenderers: Map<string, InteractionRendererComponent>
   readonly borderLabels: ReadonlyArray<ResolvedBorderLabel>
   readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
   readonly failures: ReadonlyArray<ClientExtensionFailure>
@@ -395,7 +394,7 @@ export const resolveTuiExtensions = (
       itemsOrEmpty(contributions.interactionRenderers).map((contribution) => ({
         key: contribution.metadataType,
         value: contribution.component,
-        name: Option.getOrElse(Option.fromNullishOr(contribution.metadataType), () => "(default)"),
+        name: contribution.metadataType,
       })),
   )
   return {
@@ -463,9 +462,36 @@ interface ImportedExtension {
   readonly filePath: string
 }
 
-/** Run one extension's setup; any failure or defect becomes a recorded failure. */
+/**
+ * How long one extension may take to import, and again to set up. The host
+ * holds pending interactions and native history until every extension has
+ * settled, so a load that never ends must become a failure.
+ */
+const EXTENSION_LOAD_TIMEOUT: Duration.Input = "10 seconds"
+
+/** A load step that outlives `timeout` fails with a recorded reason. */
+const withinLoadTimeout =
+  (id: string, step: "import" | "setup", timeout: Duration.Input) =>
+  <A, R>(
+    self: Effect.Effect<A, ClientExtensionFailure, R>,
+  ): Effect.Effect<A, ClientExtensionFailure, R> =>
+    self.pipe(
+      Effect.timeoutOrElse({
+        duration: timeout,
+        orElse: () => {
+          const reason = `${step} timed out after ${Duration.format(Duration.fromInputUnsafe(timeout))}`
+          return Effect.logWarning(`tui-ext.${step}.timeout`).pipe(
+            Effect.annotateLogs({ id, error: reason }),
+            Effect.andThen(Effect.fail({ id, reason })),
+          )
+        },
+      }),
+    )
+
+/** Run one extension's setup; any failure, defect or timeout becomes a recorded failure. */
 const setupExtension = (
   ext: ImportedExtension,
+  timeout: Duration.Input,
 ): Effect.Effect<LoadedTuiExtension, ClientExtensionFailure, ClientRuntimeServices> =>
   ext.module.setup.pipe(
     Effect.map((contributions) => ({
@@ -482,6 +508,7 @@ const setupExtension = (
         ),
       ),
     ),
+    withinLoadTimeout(ext.module.id, "setup", timeout),
   )
 
 /** Import module and validate shape — does NOT call setup() */
@@ -492,6 +519,7 @@ function loadExtensionModule(filePath: string) {
 
 const importExtension = (
   entry: DiscoveredTuiExtension,
+  timeout: Duration.Input,
 ): Effect.Effect<ImportedExtension, ClientExtensionFailure> =>
   Effect.gen(function* () {
     const mod = yield* Effect.tryPromise({
@@ -519,6 +547,7 @@ const importExtension = (
         Effect.annotateLogs({ filePath: entry.filePath, error: failure.reason }),
       ),
     ),
+    withinLoadTimeout(entry.filePath, "import", timeout),
   )
 
 /**
@@ -534,11 +563,19 @@ export const loadTuiExtensions = (opts: {
   readonly userDir: string
   readonly projectDir: string
   readonly disabled?: ReadonlyArray<string>
+  /** Bound on each import and each setup; a test shortens it. */
+  readonly loadTimeout?: Duration.Input
 }): Effect.Effect<ResolvedTuiExtensions, never, ClientRuntimeServices> =>
   Effect.gen(function* () {
     const disabled = new Set(Option.getOrElse(Option.fromNullishOr(opts.disabled), () => []))
+    const timeout = Option.getOrElse(
+      Option.fromNullishOr(opts.loadTimeout),
+      () => EXTENSION_LOAD_TIMEOUT,
+    )
     const discovered = yield* discoverTuiExtensions(opts)
-    const [importFailures, imported] = yield* Effect.partition(discovered, importExtension)
+    const [importFailures, imported] = yield* Effect.partition(discovered, (entry) =>
+      importExtension(entry, timeout),
+    )
     const builtins = Option.getOrElse(Option.fromNullishOr(opts.builtins), () => []).map(
       (module): ImportedExtension => ({
         module,
@@ -547,7 +584,9 @@ export const loadTuiExtensions = (opts: {
       }),
     )
     const enabled = [...builtins, ...imported].filter((ext) => !disabled.has(ext.module.id))
-    const [setupFailures, loaded] = yield* Effect.partition(enabled, setupExtension)
+    const [setupFailures, loaded] = yield* Effect.partition(enabled, (ext) =>
+      setupExtension(ext, timeout),
+    )
     return resolveTuiExtensions(loaded, [...importFailures, ...setupFailures])
   })
 
