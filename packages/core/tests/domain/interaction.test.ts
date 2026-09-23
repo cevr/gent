@@ -34,10 +34,11 @@ const persistInteraction = (is: InteractionStorageService, record: InteractionRe
   )
 const decideInteraction = (
   is: InteractionStorageService,
+  branch: { readonly sessionId: SessionId; readonly branchId: BranchId },
   requestId: InteractionRequestId,
   decisionJson: string,
 ) =>
-  is.decide(requestId, decisionJson).pipe(
+  is.decide(branch, requestId, decisionJson).pipe(
     Effect.mapError(
       (cause) =>
         new EventStoreError({
@@ -68,7 +69,8 @@ describe("Interaction Request", () => {
   )
   const callbacksFor = (is: InteractionStorage["Service"]): InteractionStorageConfig => ({
     persist: (record) => persistInteraction(is, record),
-    decide: (requestId, decisionJson) => decideInteraction(is, requestId, decisionJson),
+    decide: (branch, requestId, decisionJson) =>
+      decideInteraction(is, branch, requestId, decisionJson),
     resolve: (requestId) => is.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
     take: (requestId) => is.take(requestId).pipe(Effect.catchEager(() => Effect.void)),
   })

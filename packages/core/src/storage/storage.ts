@@ -1115,11 +1115,13 @@ export interface InteractionStorageService {
    */
   readonly take: (requestId: InteractionRequestId) => Effect.Effect<void, StorageError>
   /**
-   * Store the answer of a pending request. The first answer wins: a later one
-   * leaves the row unchanged and gets back the answer already stored. None
-   * when the request has no row in this workspace or closed without one.
+   * Store the answer of a pending request of this session branch. The first
+   * answer wins: a later one leaves the row unchanged and gets back the answer
+   * already stored. None when the branch has no such row in this workspace,
+   * or the row closed without an answer.
    */
   readonly decide: (
+    branch: { readonly sessionId: SessionId; readonly branchId: BranchId },
     requestId: InteractionRequestId,
     decisionJson: string,
   ) => Effect.Effect<Option.Option<StoredInteractionDecision>, StorageError>
@@ -1177,12 +1179,16 @@ export class InteractionStorage extends Context.Service<
         ),
 
         decide: Effect.fn("InteractionStorage.decide")(
-          function* (requestId, decisionJson) {
+          function* (branch, requestId, decisionJson) {
             const workspaceId = yield* CurrentWorkspaceId
-            // One statement, so two replies that race cannot both store.
+            // One statement, so two replies that race cannot both store. A
+            // reply reaches only the branch it names: another branch's row is
+            // never written, and its answer is never read back as a retry.
             const stored = yield* sql`UPDATE interaction_requests
               SET decision_json = ${decisionJson}
               WHERE request_id = ${requestId}
+                AND session_id = ${branch.sessionId}
+                AND branch_id = ${branch.branchId}
                 AND status = 'pending'
                 AND decision_json IS NULL
                 AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})
@@ -1191,6 +1197,8 @@ export class InteractionStorage extends Context.Service<
             const rows = yield* sql<Pick<InteractionRequestRow, "decision_json">>`
               SELECT decision_json FROM interaction_requests
               WHERE request_id = ${requestId}
+                AND session_id = ${branch.sessionId}
+                AND branch_id = ${branch.branchId}
                 AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
             return Option.fromUndefinedOr(rows[0]).pipe(
               Option.flatMap((row) => Option.fromNullishOr(row.decision_json)),

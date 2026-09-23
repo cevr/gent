@@ -464,8 +464,12 @@ describe("a child's completion", () => {
           const child = yield* childOf(harness)
           const childSnapshot = yield* harness.client.session.getSnapshot(child)
           expect(childSnapshot.runtime._tag).toBe("Idle")
+          // The child reads why, and who can answer instead.
           expect(resultsOf("bash", childSnapshot.messages)[0]).toMatchObject({
-            result: { status: "blocked" },
+            result: {
+              status: "blocked",
+              stdout: expect.stringContaining('Ask your parent with session.send to "parent"'),
+            },
           })
         }).pipe(Effect.timeout("8 seconds")),
       ),

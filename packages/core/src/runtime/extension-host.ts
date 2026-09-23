@@ -1979,9 +1979,9 @@ const makeApprovalInteractionService: Effect.Effect<
       ),
     resolve: (requestId) => store.resolve(requestId).pipe(Effect.catchEager(() => Effect.void)),
     take: (requestId) => store.take(requestId).pipe(Effect.catchEager(() => Effect.void)),
-    decide: (requestId, decisionJson) =>
+    decide: (branch, requestId, decisionJson) =>
       store
-        .decide(requestId, decisionJson)
+        .decide(branch, requestId, decisionJson)
         .pipe(
           Effect.mapError(
             (cause) =>

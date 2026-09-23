@@ -1156,7 +1156,7 @@ describe("interaction.respondInteraction", () => {
             approved: true,
             notes: "stored before wake",
           })
-          yield* storage.decide(first.requestId, decisionJson)
+          yield* storage.decide(first, first.requestId, decisionJson)
         }).pipe(
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(storageLayer),
@@ -1353,6 +1353,12 @@ describe("interaction.respondInteraction", () => {
             client.interaction.respondInteraction({ ...reply, approved: false }),
           )
           expect(changed._tag).toBe("InteractionDecisionConflictError")
+          // The same reply named on another branch is not a retry: that branch never asked.
+          const other = yield* client.session.create({ cwd: "/tmp" })
+          const misaddressed = yield* Effect.flip(
+            client.interaction.respondInteraction({ ...reply, ...other }),
+          )
+          expect(misaddressed._tag).toBe("InteractionRequestMismatchError")
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
@@ -2357,6 +2363,8 @@ describe("interaction.respondInteraction", () => {
   const askTwiceAcrossRestart = <E>(params: {
     readonly dbName: string
     readonly beforeRestart: (first: {
+      readonly sessionId: SessionId
+      readonly branchId: BranchId
       readonly q2: InteractionRequestId
       readonly dbPath: string
     }) => Effect.Effect<void, E>
@@ -2419,7 +2427,12 @@ describe("interaction.respondInteraction", () => {
           return { sessionId, branchId, q2, lastEventId: snapshot.lastEventId ?? 0 }
         }).pipe(Effect.timeout("8 seconds")),
       )
-      yield* params.beforeRestart({ q2: first.q2, dbPath })
+      yield* params.beforeRestart({
+        sessionId: first.sessionId,
+        branchId: first.branchId,
+        q2: first.q2,
+        dbPath,
+      })
 
       const secondProvider = yield* LanguageModelLayers.sequence([textStep("asked twice")])
       return yield* Effect.scoped(
@@ -2508,7 +2521,7 @@ describe("interaction.respondInteraction", () => {
                 approved: true,
                 notes: "two",
               })
-              yield* storage.decide(first.q2, decisionJson)
+              yield* storage.decide(first, first.q2, decisionJson)
             }).pipe(
               Effect.provide(
                 SqliteStorage.LiveWithSql(first.dbPath, () => Layer.empty, {}).pipe(

@@ -263,8 +263,9 @@ export interface StoredInteractionDecision {
  */
 export interface InteractionStorageConfig {
   readonly persist: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
-  /** First answer wins; returns the answer the row keeps. See `InteractionStorage.decide`. */
+  /** First answer wins; returns the answer the branch's row keeps. See `InteractionStorage.decide`. */
   readonly decide: (
+    branch: BranchRef,
     requestId: InteractionRequestId,
     decisionJson: string,
   ) => Effect.Effect<Option.Option<StoredInteractionDecision>, EventStoreError>
@@ -853,7 +854,7 @@ export const makeInteractionService = (
               Option.exists(branch.open, (open) => open.requestId === requestId),
             )
           if (elsewhere) return yield* mismatch(before)
-          const durable = yield* config.storage.decide(requestId, decisionJson)
+          const durable = yield* config.storage.decide(branchRef, requestId, decisionJson)
           // The first answer wins. Storage decides for a request with a row;
           // memory keeps the same rule for one without. A request that is not
           // shown keeps no new answer: nothing would take it.

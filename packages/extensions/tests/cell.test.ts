@@ -4430,7 +4430,7 @@ it.live(
             ),
         ),
       ).toBe(true)
-      yield* recordInteractionDecision(requestId, { approved: true })
+      yield* recordInteractionDecision(cellOperationStorage, requestId, { approved: true })
       const resumed = yield* storage.resume(key, requestId)
       yield* storage.complete(
         key,
@@ -4480,7 +4480,7 @@ it.live("binds a decision to one waiting operation and grants one resume attempt
       true,
     )
     const decision = { approved: false, notes: "Do not write" }
-    yield* recordInteractionDecision(requestId, decision)
+    yield* recordInteractionDecision(cellOperationStorage, requestId, decision)
     const resumed = yield* storage.resume(key, requestId)
     expect(resumed.state).toEqual({ _tag: "Resuming", requestId, decision })
     expect(resumed.toolCallId).toBe(first.operation.toolCallId)
@@ -4502,7 +4502,7 @@ it.live("a stored decision that does not decode grants no resume", () =>
     yield* storage.admit(params)
     yield* storage.suspend(key, requestOperationStorage)
     // The first answer is the one the request keeps, so a corrupt one stays.
-    yield* (yield* InteractionStorage).decide(requestId, "not-json")
+    yield* (yield* InteractionStorage).decide(cellOperationStorage, requestId, "not-json")
     expect(Schema.is(StorageError)(yield* storage.resume(key, requestId).pipe(Effect.flip))).toBe(
       true,
     )
@@ -4560,7 +4560,7 @@ it.live("does not admit external work inside a caller transaction or after cell 
     ).toBe(true)
     expect((yield* storage.admit(params)).admitted).toBe(true)
     yield* storage.suspend(key, requestOperationStorage)
-    yield* recordInteractionDecision(requestId, { approved: true })
+    yield* recordInteractionDecision(cellOperationStorage, requestId, { approved: true })
     expect(
       Schema.is(StorageError)(
         yield* storage.resume(key, requestId).pipe(sql.withTransaction, Effect.flip),
@@ -4609,7 +4609,7 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
           const storage = (yield* CellStorage).operations
           yield* storage.admit(params)
           yield* storage.suspend(key, requestOperationStorage)
-          yield* recordInteractionDecision(requestId, { approved: true })
+          yield* recordInteractionDecision(cellOperationStorage, requestId, { approved: true })
         }).pipe(Effect.provideContext(context))
       }),
     )
