@@ -13,6 +13,7 @@ describe("SDK public surface", () => {
       "QueueEntryInfo",
       "QueueSnapshot",
       "ServerLockEntry",
+      "ServerLockStatus",
       "Session",
       "SessionSnapshot",
       "buildLogPaths",
@@ -21,14 +22,8 @@ describe("SDK public surface", () => {
       "dataPathsIn",
       "emptyQueueSnapshot",
       "ensureLogDir",
-      "getLocalHostname",
-      "isPidAlive",
       "makeJsonFileLogger",
-      "probeServerLockEntryIdentity",
-      "readServerLock",
-      "removeServerLock",
-      "signalIfIdentityOwned",
-      "validateServerLockEntry",
+      "serverLock",
     ])
     expect("GentRpcs" in RuntimePublicSdk).toBe(false)
     expect("RpcHandlersLive" in RuntimePublicSdk).toBe(false)

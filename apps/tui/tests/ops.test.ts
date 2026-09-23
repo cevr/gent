@@ -1,4 +1,4 @@
-import { describe, expect, it } from "effect-bun-test"
+import { describe, expect, it, test } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   ConfigProvider,
@@ -18,6 +18,7 @@ import {
   dataPathsIn,
   makeJsonFileLogger,
   ServerLockEntry,
+  ServerLockStatus,
 } from "@gent/sdk"
 import { makeClientTraceLogger } from "../src/client"
 import {
@@ -31,7 +32,7 @@ import {
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
 import { SqlClient } from "effect/unstable/sql"
-import { GentPlatform, SignalError } from "@gent/core-internal/runtime/gent-platform"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
 import { ExtensionHealth, ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protocol"
 
 // ── client-logs.test ────────────────────────────────────────────────────────
@@ -212,7 +213,7 @@ describe("inspect logs", () => {
 
 // ── local-health.test ───────────────────────────────────────────────────────
 
-const absentServerEntry = Option.none<ServerLockEntry>()
+const absentServer = ServerLockStatus.cases.None.make({})
 
 const lockEntry = new ServerLockEntry({
   serverId: "server-1",
@@ -223,18 +224,6 @@ const lockEntry = new ServerLockEntry({
   buildFingerprint: "fp",
   startedAt: 0,
 })
-
-/** The test platform with a liveness probe that reports the pid gone. */
-const deadPidPlatform = Layer.effect(
-  GentPlatform,
-  Effect.map(GentPlatform, (platform) =>
-    GentPlatform.of({
-      ...platform,
-      signal: (pid, signal) =>
-        Effect.fail(new SignalError({ pid, signal, code: "ESRCH", reason: "no such process" })),
-    }),
-  ),
-).pipe(Layer.provide(GentPlatform.Test()))
 
 /** Run the effect against an environment that redirects the data directory. */
 const withDataDir =
@@ -253,21 +242,21 @@ const createDb = (dbPath: string, ...statements: ReadonlyArray<string>) =>
   }).pipe(Effect.provide(BunSqliteClient.layer({ filename: dbPath })))
 
 describe("local health", () => {
-  it.live("a live shared server reports its pid, id, and url from the SDK lock record", () =>
-    Effect.gen(function* () {
-      const server = yield* inspectServer(Option.some(lockEntry))
-      expect(server.status).toBe("alive")
-      expect(server.summary).toBe("Shared server alive: pid 4242, server-1, http://127.0.0.1:1/rpc")
-    }).pipe(Effect.provide(GentPlatform.Test())),
-  )
+  test("a live shared server reports its pid, id, and url from the SDK lock record", () => {
+    const server = inspectServer(ServerLockStatus.cases.Alive.make({ entry: lockEntry }))
+    expect(server.status).toBe("alive")
+    expect(server.summary).toBe("Shared server alive: pid 4242, server-1, http://127.0.0.1:1/rpc")
+  })
 
-  it.live("a lock whose pid is gone reports a stale server", () =>
-    Effect.gen(function* () {
-      const server = yield* inspectServer(Option.some(lockEntry))
-      expect(server.status).toBe("dead")
-      expect(server.summary).toBe("Shared server lock is stale: pid 4242, server-1")
-    }).pipe(Effect.provide(deadPidPlatform)),
-  )
+  test("a lock whose pid is gone reports a stale server", () => {
+    const server = inspectServer(ServerLockStatus.cases.Stale.make({ entry: lockEntry }))
+    expect(server.status).toBe("dead")
+    expect(server.summary).toBe("Shared server lock is stale: pid 4242, server-1")
+  })
+
+  test("no lock reports no shared server", () => {
+    expect(inspectServer(absentServer)).toEqual({ status: "none", summary: "No shared server." })
+  })
 
   it.scopedLive("reports incompatible storage tables without migration records", () =>
     Effect.gen(function* () {
@@ -286,7 +275,7 @@ describe("local health", () => {
       expect(storage.existingStorageTables).toEqual(["sessions"])
       expect(storage.migrationCount).toBe(0)
 
-      const report = formatDoctorReport(yield* makeDoctorReport(home, absentServerEntry))
+      const report = formatDoctorReport(yield* makeDoctorReport(home, absentServer))
       expect(report).toContain("Gent doctor")
       expect(report).toContain("incompatible")
       expect(report).toContain("Migration table: missing")
@@ -319,7 +308,7 @@ describe("local health", () => {
       )
 
       const report = formatDoctorReport(
-        yield* makeDoctorReport(home, absentServerEntry, extensionHealth),
+        yield* makeDoctorReport(home, absentServer, extensionHealth),
       )
       expect(report).toContain("Extensions:")
       expect(report).toContain("degraded (1 degraded, 0 healthy)")

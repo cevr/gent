@@ -239,31 +239,45 @@ const serverLockPath = (home: string): Effect.Effect<string, never, FileSystem.F
     return paths.serverLock
   })
 
-export const readServerLock = (
+/** What the lock says about the server on this host. */
+export const ServerLockStatus = Schema.Union([
+  Schema.TaggedStruct("None", {}),
+  Schema.TaggedStruct("Alive", { entry: ServerLockEntry }),
+  Schema.TaggedStruct("Stale", { entry: ServerLockEntry }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type ServerLockStatus = Schema.Schema.Type<typeof ServerLockStatus>
+
+/** What `serverLock.stop` did. */
+const ServerStopResult = Schema.Union([
+  Schema.TaggedStruct("None", {}),
+  /** The pid is gone and the caller did not ask to remove its lock. */
+  Schema.TaggedStruct("NotRunning", { entry: ServerLockEntry }),
+  /** The pid is gone; its lock is removed. */
+  Schema.TaggedStruct("Removed", { entry: ServerLockEntry }),
+  /** The pid is alive but its identity endpoint does not confirm the lock, so no signal. */
+  Schema.TaggedStruct("NotOwned", { entry: ServerLockEntry }),
+  /** SIGTERM sent, the process exited, and its lock is removed. */
+  Schema.TaggedStruct("Stopped", { entry: ServerLockEntry }),
+  /** SIGTERM sent, but the process was still alive when the wait ended. */
+  Schema.TaggedStruct("StillRunning", { entry: ServerLockEntry }),
+]).pipe(Schema.toTaggedUnion("_tag"))
+type ServerStopResult = Schema.Schema.Type<typeof ServerStopResult>
+
+/** A lock written by another host is invisible here, so every entry read is local. */
+const readLock = (
   home: string,
-): Effect.Effect<
-  // oxlint-disable-next-line effect/noNullish -- The lock file is an optional process boundary record consumed by the TUI.
-  ServerLockEntry | undefined,
-  never,
-  FileSystem.FileSystem | GentPlatform
-> =>
+): Effect.Effect<Option.Option<ServerLockEntry>, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* serverLockPath(home)
-    const platform = yield* GentPlatform
-    const osInfo = yield* platform.osInfo
+    const osInfo = yield* (yield* GentPlatform).osInfo
     const content = yield* fs.readFileString(path).pipe(Effect.option)
-    // oxlint-disable-next-line effect/noNullish -- A missing lock file is the documented absent-server result.
-    if (content._tag === "None") return undefined
-    const decoded = Schema.decodeOption(ServerLockEntryJson)(content.value)
-    // oxlint-disable-next-line effect/noNullish -- Invalid lock content is treated as no active server.
-    if (decoded._tag === "None") return undefined
-    // oxlint-disable-next-line effect/noNullish -- A lock owned by another host is invisible to this client.
-    if (decoded.value.hostname !== osInfo.hostname) return undefined
-    return decoded.value
+    return Option.flatMap(content, Schema.decodeOption(ServerLockEntryJson)).pipe(
+      Option.filter((entry) => entry.hostname === osInfo.hostname),
+    )
   })
 
-export const writeServerLock = (
+const writeLock = (
   home: string,
   entry: ServerLockEntry,
 ): Effect.Effect<void, never, FileSystem.FileSystem> =>
@@ -274,14 +288,15 @@ export const writeServerLock = (
     yield* fs.writeFileString(path, json).pipe(Effect.ignore)
   })
 
-export const removeServerLock = (
+/** Removes the lock only while it still names `serverId`. */
+const removeLock = (
   home: string,
   serverId: string,
 ): Effect.Effect<boolean, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const current = yield* readServerLock(home)
-    if (Predicate.isUndefined(current) || current.serverId !== serverId) return false
+    const current = yield* readLock(home)
+    if (Option.isNone(current) || current.value.serverId !== serverId) return false
     const path = yield* serverLockPath(home)
     return yield* fs.remove(path).pipe(
       Effect.as(true),
@@ -289,15 +304,7 @@ export const removeServerLock = (
     )
   })
 
-export const getLocalHostname: Effect.Effect<string, never, GentPlatform> = Effect.gen(
-  function* () {
-    const platform = yield* GentPlatform
-    const osInfo = yield* platform.osInfo
-    return osInfo.hostname
-  },
-)
-
-export const isPidAlive = (pid: number): Effect.Effect<boolean, never, GentPlatform> =>
+const pidAlive = (pid: number): Effect.Effect<boolean, never, GentPlatform> =>
   Effect.gen(function* () {
     const platform = yield* GentPlatform
     return yield* platform.signal(pid, 0).pipe(
@@ -306,62 +313,66 @@ export const isPidAlive = (pid: number): Effect.Effect<boolean, never, GentPlatf
     )
   })
 
-export const validateServerLockEntry = (
-  entry: ServerLockEntry,
-): Effect.Effect<{ valid: boolean; reason?: string }, never, GentPlatform> =>
+const lockStatus = (
+  home: string,
+): Effect.Effect<ServerLockStatus, never, FileSystem.FileSystem | GentPlatform> =>
   Effect.gen(function* () {
-    const platform = yield* GentPlatform
-    const osInfo = yield* platform.osInfo
-    if (entry.hostname !== osInfo.hostname) {
-      return { valid: false, reason: "different-host" }
+    const entry = yield* readLock(home)
+    if (Option.isNone(entry)) return ServerLockStatus.cases.None.make({})
+    if (yield* pidAlive(entry.value.pid)) {
+      return ServerLockStatus.cases.Alive.make({ entry: entry.value })
     }
-    if (!(yield* isPidAlive(entry.pid))) {
-      return { valid: false, reason: "dead-pid" }
-    }
-    return { valid: true }
+    return ServerLockStatus.cases.Stale.make({ entry: entry.value })
   })
 
-interface ServerLockIdentity {
-  readonly serverId: string
-  readonly pid: number
-  readonly hostname: string
-  readonly dbPath: string
-  readonly buildFingerprint: string
+/** `stop` polls a signalled server this many times, 100 ms apart, before it gives up. */
+const STOP_WAIT_ATTEMPTS = 20
+
+const exitedWithin = (pid: number): Effect.Effect<boolean, never, GentPlatform> =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < STOP_WAIT_ATTEMPTS; attempt++) {
+      if (!(yield* pidAlive(pid))) return true
+      yield* Effect.sleep("100 millis")
+    }
+    return !(yield* pidAlive(pid))
+  })
+
+/**
+ * Stop the server the lock names. SIGTERM goes out only after the identity
+ * endpoint confirms every field of the lock, so a reused pid is never signalled.
+ */
+const stopLocked = (
+  home: string,
+  options?: { readonly removeStale?: boolean },
+): Effect.Effect<ServerStopResult, never, FileSystem.FileSystem | GentPlatform> =>
+  Effect.gen(function* () {
+    const status = yield* lockStatus(home)
+    if (status._tag === "None") return ServerStopResult.cases.None.make({})
+    const { entry } = status
+    if (status._tag === "Stale") {
+      if (options?.removeStale !== true) return ServerStopResult.cases.NotRunning.make({ entry })
+      yield* removeLock(home, entry.serverId)
+      return ServerStopResult.cases.Removed.make({ entry })
+    }
+    if (!(yield* probeServerLockEntryIdentity(entry))) {
+      return ServerStopResult.cases.NotOwned.make({ entry })
+    }
+    const platform = yield* GentPlatform
+    yield* platform.signal(entry.pid, "SIGTERM").pipe(Effect.ignore)
+    if (!(yield* exitedWithin(entry.pid)))
+      return ServerStopResult.cases.StillRunning.make({ entry })
+    yield* removeLock(home, entry.serverId)
+    return ServerStopResult.cases.Stopped.make({ entry })
+  })
+
+/** The shared server lock: read, write, remove, status, and stop. */
+export const serverLock = {
+  read: readLock,
+  write: writeLock,
+  remove: removeLock,
+  status: lockStatus,
+  stop: stopLocked,
 }
-
-export const serverLockIdentityOf = (entry: ServerLockEntry): ServerLockIdentity => ({
-  serverId: entry.serverId,
-  pid: entry.pid,
-  hostname: entry.hostname,
-  dbPath: entry.dbPath,
-  buildFingerprint: entry.buildFingerprint,
-})
-
-const canSignalServerLockEntry = (
-  entry: ServerLockEntry,
-): Effect.Effect<boolean, never, GentPlatform> =>
-  Effect.gen(function* () {
-    const platform = yield* GentPlatform
-    const osInfo = yield* platform.osInfo
-    return entry.hostname === osInfo.hostname && (yield* isPidAlive(entry.pid))
-  })
-
-export const signalIfIdentityOwned = <E, R>(
-  entry: ServerLockEntry,
-  probe: (entry: ServerLockEntry) => Effect.Effect<boolean, E, R>,
-): Effect.Effect<"signaled" | "skipped", never, R | GentPlatform> =>
-  Effect.gen(function* () {
-    if (!(yield* canSignalServerLockEntry(entry))) return "skipped"
-    const owns = yield* probe(entry).pipe(Effect.catchEager(() => Effect.succeed(false)))
-    if (!owns) return "skipped"
-    const platform = yield* GentPlatform
-    const sent = yield* platform.signal(entry.pid, "SIGTERM").pipe(
-      Effect.as(true),
-      Effect.catchEager(() => Effect.succeed(false)),
-    )
-    if (sent) return "signaled"
-    return "skipped"
-  })
 
 // ── debug-session ───────────────────────────────────────────────────────────
 
@@ -1079,13 +1090,15 @@ const buildOwnedServer = (
 
 // ── Probe an existing server via identity endpoint ──
 
-const probeServer = (
-  rpcUrl: string,
-  expected: ReturnType<typeof serverLockIdentityOf>,
-): Effect.Effect<boolean> =>
+/**
+ * Ask the lock's `/_gent/identity` endpoint who it is, and confirm every field.
+ * Server id, db and build prove the endpoint; pid and host prove signal
+ * ownership, so a pid reused after a crash is never attached to or signalled.
+ */
+const probeServerLockEntryIdentity = (entry: ServerLockEntry): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
-    const baseUrl = rpcUrl.replace("/rpc", "")
+    const baseUrl = entry.rpcUrl.replace("/rpc", "")
     const response = yield* http.get(`${baseUrl}/_gent/identity`).pipe(Effect.timeout(3000))
     if (response.status >= 400) return false
     const identity = yield* Schema.decodeUnknownEffect(
@@ -1097,28 +1110,18 @@ const probeServer = (
         buildFingerprint: Schema.String,
       }),
     )(yield* response.json)
-    // Server id/db/build prove endpoint identity; pid/host prove signal ownership.
-    // All fields must match before attach or SIGTERM.
     return (
-      identity.serverId === expected.serverId &&
-      identity.pid === expected.pid &&
-      identity.hostname === expected.hostname &&
-      identity.dbPath === expected.dbPath &&
-      identity.buildFingerprint === expected.buildFingerprint
+      identity.serverId === entry.serverId &&
+      identity.pid === entry.pid &&
+      identity.hostname === entry.hostname &&
+      identity.dbPath === entry.dbPath &&
+      identity.buildFingerprint === entry.buildFingerprint
     )
   }).pipe(
     // @effect-diagnostics-next-line strictEffectProvide:off self-contained probe, no scope lifetime
     Effect.provide(FetchHttpClient.layer),
     Effect.catchEager(() => Effect.succeed(false)),
   )
-
-/**
- * Probe a server lock entry's `/_gent/identity` endpoint and confirm every
- * identity field matches. Shared with `server stop` paths (TUI/CLI) so
- * PID-reuse after a crash never signals an unrelated process.
- */
-export const probeServerLockEntryIdentity = (entry: ServerLockEntry): Effect.Effect<boolean> =>
-  probeServer(entry.rpcUrl, serverLockIdentityOf(entry))
 
 // ── Main server resolver ──
 
@@ -1153,39 +1156,24 @@ const resolveServerInternal = (
     const osInfo = yield* platform.osInfo
     const pid = yield* platform.pid
 
-    // Check the single shared server lock.
-    const existingOption = Option.fromNullishOr(yield* readServerLock(home))
-    if (Option.isSome(existingOption)) {
-      const existing = existingOption.value
-      const validation = yield* validateServerLockEntry(existing)
-      if (validation.valid && existing.buildFingerprint === fingerprint) {
-        // Probe the server before trusting — verify serverId, dbPath, fingerprint
-        const alive = yield* probeServer(existing.rpcUrl, {
-          serverId: existing.serverId,
-          pid: existing.pid,
-          hostname: existing.hostname,
-          dbPath: existing.dbPath,
-          buildFingerprint: fingerprint,
+    // Attach to a live server of this build that proves the lock's identity.
+    const status = yield* serverLock.status(home)
+    if (status._tag === "Alive" && status.entry.buildFingerprint === fingerprint) {
+      if (yield* probeServerLockEntryIdentity(status.entry)) {
+        return GentServer.cases.Attached.make({
+          url: status.entry.rpcUrl,
+          workspaceId: workspaceIdForCwd(options.cwd),
         })
-        if (alive) {
-          return GentServer.cases.Attached.make({
-            url: existing.rpcUrl,
-            workspaceId: workspaceIdForCwd(options.cwd),
-          })
-        }
       }
-      // Stale — only signal when the live process proves it owns this server identity.
-      if (validation.valid) {
-        yield* signalIfIdentityOwned(existing, probeServerLockEntryIdentity)
-      }
-      yield* removeServerLock(home, existing.serverId)
     }
+    // Anything else is replaced: stop what the lock names, then write our own.
+    if (status._tag !== "None") yield* serverLock.stop(home, { removeStale: true })
 
     const server = yield* buildOwnedServer(options, stateSpec, providerSpec)
     const internalOption = getOwnedInternal(server)
     if (Option.isSome(internalOption)) {
       const internal = internalOption.value
-      yield* writeServerLock(
+      yield* serverLock.write(
         home,
         new ServerLockEntry({
           serverId: internal.serverId,
@@ -1199,7 +1187,7 @@ const resolveServerInternal = (
       )
       // Clean up the shared server lock on scope close.
       yield* Effect.addFinalizer(() =>
-        removeServerLock(home, internal.serverId).pipe(Effect.ignore),
+        serverLock.remove(home, internal.serverId).pipe(Effect.ignore),
       )
     }
     return server
