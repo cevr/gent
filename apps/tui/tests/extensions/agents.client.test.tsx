@@ -220,7 +220,6 @@ describe("Agents pane navigation", () => {
               detail: () => Option.none(),
               select: () => {},
               open: () => true,
-              setOpen: () => {},
             }}
             onSelect={(value) => {
               selected = Option.some(value)
@@ -282,7 +281,6 @@ describe("Agents pane navigation", () => {
                 })
               },
               open: () => true,
-              setOpen: () => {},
             }}
             onSelect={() => {}}
             onToggle={() => {}}
@@ -336,7 +334,6 @@ describe("Agents pane navigation", () => {
                 }),
               select: () => {},
               open: () => true,
-              setOpen: () => {},
             }}
             onSelect={() => {}}
             onToggle={() => {}}
@@ -373,7 +370,6 @@ describe("Agents pane navigation", () => {
               detail: () => Option.none(),
               select: () => {},
               open,
-              setOpen,
             }}
             onSelect={() => {}}
             onToggle={() => {
@@ -419,7 +415,6 @@ describe("Agents pane delete", () => {
               detail: () => Option.none(),
               select: () => {},
               open: () => true,
-              setOpen: () => {},
             }}
             onSelect={() => {}}
             onToggle={() => {}}
@@ -541,7 +536,6 @@ describe("Agents pane framing", () => {
                   }),
                 select: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onToggle={() => {}}
@@ -605,7 +599,6 @@ describe("Agents pane framing", () => {
                 detail: () => Option.none(),
                 select: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onToggle={() => {}}
@@ -660,7 +653,6 @@ describe("Agents pane framing", () => {
                 detail: () => Option.none(),
                 select: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onToggle={() => {}}
@@ -717,7 +709,6 @@ describe("Agents pane framing", () => {
                 detail: () => Option.none(),
                 select: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onToggle={() => {}}
@@ -787,7 +778,6 @@ describe("Agents pane framing", () => {
                 detail: () => Option.none(),
                 select: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onToggle={() => {}}
@@ -900,7 +890,6 @@ describe("Subagent tray", () => {
               detail: () => Option.none(),
               select: () => {},
               open,
-              setOpen,
             }}
           />
         )),
@@ -940,7 +929,6 @@ describe("Subagent tray", () => {
               detail: () => Option.none(),
               select: () => {},
               open: () => false,
-              setOpen: () => {},
             }}
           />
         )),

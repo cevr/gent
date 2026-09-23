@@ -20,6 +20,7 @@ import {
   type StatusRowLabel,
   ComposerEvent,
   ComposerInteractionEvent,
+  overlayHoldsComposer,
   usePromptHistory,
   useSessionController,
 } from "./session"
@@ -1023,7 +1024,7 @@ function useComposerController(): ComposerController {
       !command.paletteOpen() &&
       !sc.promptSearch.isOpen() &&
       effectiveMode() !== "interaction" &&
-      sc.uiState().overlay._tag === "none",
+      !overlayHoldsComposer(sc.uiState().overlay),
     attachTextarea: (renderable) => {
       inputRef = Option.fromNullishOr(renderable)
       if (Option.isSome(inputRef)) {

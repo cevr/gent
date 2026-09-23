@@ -9,6 +9,7 @@ import {
   type InteractionRendererComponent,
   makeClientContextLayer,
   type MessageRenderer,
+  type PaneOwner,
 } from "./client-facets.js"
 import {
   type Accessor,
@@ -71,6 +72,11 @@ interface ExtensionUIContextValue {
    */
   readonly loaded: Accessor<boolean>
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
+  /**
+   * The session view installs its overlay as the pane owner while it is
+   * mounted; with no session mounted, no pane opens.
+   */
+  readonly setPaneOwner: (owner: Option.Option<PaneOwner>) => void
   readonly renderers: Accessor<Map<string, ToolRenderer>>
   /** Message-row renderers by `metadata.customType`. */
   readonly messageRenderers: Accessor<Map<string, MessageRenderer>>
@@ -120,6 +126,8 @@ export function ExtensionUIProvider(props: {
     () => ({ state: "unknown" }),
   )
 
+  const [paneOwner, setPaneOwner] = createSignal<Option.Option<PaneOwner>>(Option.none())
+
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [loaded, setLoaded] = createSignal(false)
   const [sessionCommands, setSessionCommands] = createSignal<ReadonlyArray<Command>>([])
@@ -157,6 +165,11 @@ export function ExtensionUIProvider(props: {
       notify: (message) => client.setNotice(message),
       switchSession: (input) => client.switchSession(input.sessionId, input.branchId, input.name),
       cast: client.runtime.cast,
+      pane: {
+        open: (id) => Option.map(paneOwner(), (owner) => owner.open(id)),
+        close: (id) => Option.map(paneOwner(), (owner) => owner.close(id)),
+        isOpen: (id) => Option.exists(paneOwner(), (owner) => owner.isOpen(id)),
+      },
     },
     activity: () => activityProvider()(),
     lifecycle: { addCleanup },
@@ -318,6 +331,7 @@ export function ExtensionUIProvider(props: {
         failures: () => [...resolved().failures, ...resolvedCommands().failures],
         setDynamicAutocomplete,
         setActivityProvider: (provider) => setActivityProvider(() => provider),
+        setPaneOwner: (owner) => setPaneOwner(() => owner),
         clientRuntime,
       }}
     >

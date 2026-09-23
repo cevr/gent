@@ -194,13 +194,12 @@ interface AgentsController {
   readonly detail: () => Option.Option<ExtensionAgentDetail>
   /** Tell the controller which row is selected, so it can fetch that detail. */
   readonly select: (row: Option.Option<AgentRowEntry>) => void
-  /**
-   * Whether the pane is showing. A docked widget is always mounted, so
-   * visibility is controller state.
-   */
+  /** Whether the pane is showing: the host's pane slot names it. */
   readonly open: () => boolean
-  readonly setOpen: (open: boolean) => void
 }
+
+/** The agents pane's name in the host's one pane slot. */
+const AGENTS_PANE = "agents.pane"
 
 export const makeAgentsController = (
   fetchRows: (
@@ -263,8 +262,6 @@ export const makeAgentsController = (
       )
     }
 
-    const [open, setOpen] = createSignal(false)
-
     return {
       rows: listing.value,
       current: transport.currentSession,
@@ -274,8 +271,7 @@ export const makeAgentsController = (
       reload: listing.refresh,
       detail,
       select,
-      open,
-      setOpen,
+      open: () => shell.pane.isOpen(AGENTS_PANE),
     }
   })
 
@@ -657,12 +653,12 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         slash: "sessions",
         aliases: ["agents", "tree"],
         onSelect: () => {
-          controller.setOpen(true)
+          shell.pane.open(AGENTS_PANE)
           controller.refresh("")
         },
       }),
       widgetContribution({
-        id: "agents.pane",
+        id: AGENTS_PANE,
         // Docked under the composer rather than covering the transcript: the
         // agent list is something you read *while* working, not instead of it.
         slot: "below-input",
@@ -670,11 +666,14 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
           <AgentsPane
             open={controller.open()}
             controller={controller}
-            onClose={() => controller.setOpen(false)}
+            onClose={() => shell.pane.close(AGENTS_PANE)}
             onToggle={() => {
-              const next = !controller.open()
-              controller.setOpen(next)
-              if (next) controller.refresh("")
+              if (controller.open()) {
+                shell.pane.close(AGENTS_PANE)
+                return
+              }
+              shell.pane.open(AGENTS_PANE)
+              controller.refresh("")
             }}
             onDelete={(row) =>
               shell.cast(
@@ -691,7 +690,7 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
               )
             }
             onSelect={(row) => {
-              controller.setOpen(false)
+              shell.pane.close(AGENTS_PANE)
               // Rows are already keyed per branch, so there is no active-branch
               // lookup to do — the row *is* the loop being switched to.
               shell.switchSession({

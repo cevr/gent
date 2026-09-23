@@ -41,6 +41,7 @@ import {
   buildModelLabels,
   createSessionController,
   formatCwdGit,
+  overlayHoldsComposer,
   SessionControllerContext,
 } from "./session"
 import { useExtensionUI } from "./extensions/host"
@@ -707,7 +708,7 @@ export function Session(props: SessionProps) {
           expanded={controller.uiState().transcriptExpanded}
           disclosure={controller.uiState().disclosure}
           displayRevision={controller.uiState().displayRevision}
-          overlayOpen={command.paletteOpen() || controller.uiState().overlay._tag !== "none"}
+          overlayOpen={command.paletteOpen() || overlayHoldsComposer(controller.uiState().overlay)}
           renderItems={(items, streaming) => (
             <MessageList
               items={items}

@@ -425,6 +425,21 @@ export interface ClientShell {
   }) => void
   /** Fork an extension-owned Effect from a sync UI callback. */
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
+  /**
+   * The one docked pane under the composer. The host keeps a single slot,
+   * shared with its own pickers: opening a pane closes whatever pane or picker
+   * was open. A pane widget renders while `isOpen` answers true for its name.
+   */
+  readonly pane: PaneOwner
+}
+
+/** Open and close panes by name; at most one is open. */
+export interface PaneOwner {
+  readonly open: (id: string) => void
+  /** Closes the named pane only; a pane that has since replaced it stays open. */
+  readonly close: (id: string) => void
+  /** Reactive: re-read inside a Solid scope to follow the slot. */
+  readonly isOpen: (id: string) => boolean
 }
 
 interface ClientLifecycle {
@@ -464,21 +479,21 @@ export class ClientContext extends Context.Service<
 >()("@gent/tui/src/extensions/client-facets/ClientContext") {}
 
 /**
- * What a surface supplies: the transport, the workspace, and the `cast` of its
- * connected runtime. The other shell callbacks, the activity reader, and the
+ * What a surface supplies: the transport, the workspace, the `cast` of its
+ * connected runtime, and the pane slot. The other shell callbacks, the activity reader, and the
  * cleanup registry default to no-ops, so a test does not restate them.
  */
 export interface ClientContextDeps {
   readonly transport: ClientShellTransport
   readonly workspace: ClientWorkspace
-  readonly shell: Pick<ClientShell, "cast"> & Partial<Omit<ClientShell, "cast">>
+  readonly shell: Pick<ClientShell, "cast" | "pane"> & Partial<Omit<ClientShell, "cast" | "pane">>
   /** Current UI activity; absent when the surface has no activity to report. */
   readonly activity?: () => ClientActivitySnapshot
   /** Cleanup registry; absent when the surface disposes the runtime whole. */
   readonly lifecycle?: Pick<ClientLifecycle, "addCleanup">
 }
 
-const noopShell: Omit<ClientShell, "cast"> = { notify: () => {}, switchSession: () => {} }
+const noopShell: Omit<ClientShell, "cast" | "pane"> = { notify: () => {}, switchSession: () => {} }
 
 const noopLifecycle: Pick<ClientLifecycle, "addCleanup"> = { addCleanup: () => {} }
 

@@ -45,6 +45,7 @@ import { BunServices } from "@effect/platform-bun"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
+  makePaneSlot,
   runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
 import { defineRequests, ExtensionId, ref, request } from "@gent/core/extensions/api"
@@ -1088,7 +1089,7 @@ const testRuntime = makeClientRuntime({
     onSessionEvent: () => () => {},
   },
   workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
-  shell: { cast: castTestShellEffect },
+  shell: { cast: castTestShellEffect, pane: makePaneSlot() },
 })
 /** Run the loader on a client runtime, the stub one unless the test gives its own. */
 const loadTuiExtensions = (

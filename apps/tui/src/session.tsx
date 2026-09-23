@@ -558,6 +558,16 @@ type SessionOverlayState =
    */
   | { readonly _tag: "branches"; readonly branches: readonly Branch[] }
   | PromptSearchOverlayState
+  /**
+   * A client extension's docked pane, by the name the extension gave it. It
+   * shares this union so one pane or picker is open at a time; unlike the
+   * session's own overlays it leaves the composer focused and its keys live.
+   */
+  | { readonly _tag: "pane"; readonly id: string }
+
+/** Whether the overlay takes the composer and the session's keys; an extension pane does not. */
+export const overlayHoldsComposer = (overlay: SessionOverlayState): boolean =>
+  overlay._tag !== "none" && overlay._tag !== "pane"
 
 /** How much of each tool group the inline transcript shows. `ctrl+o` cycles; `esc` collapses. */
 export type DisclosureLevel = "collapsed" | "preview" | "full"
@@ -601,6 +611,9 @@ const SessionUiEvent = Schema.TaggedUnion({
   OpenAuth: { enforceAuth: Schema.Boolean },
   OpenSettingsPicker: { picker: Schema.Literals(["model", "reasoning"]) },
   OpenBranches: { branches: Schema.Array(Branch) },
+  OpenPane: { id: Schema.String },
+  /** Closes the named pane only, so a late close never shuts the pane that replaced it. */
+  ClosePane: { id: Schema.String },
   CloseOverlay: {},
   PromptSearch: { event: PromptSearchEventSchema },
 })
@@ -670,6 +683,16 @@ export function transitionSessionUi(
         },
         effects: [],
       }),
+      OpenPane: (event): SessionUiTransitionResult => ({
+        state: { ...state, overlay: { _tag: "pane", id: event.id } },
+        effects: [],
+      }),
+      ClosePane: (event): SessionUiTransitionResult => {
+        if (state.overlay._tag !== "pane" || state.overlay.id !== event.id) {
+          return { state, effects: [] }
+        }
+        return { state: { ...state, overlay: { _tag: "none" } }, effects: [] }
+      },
       CloseOverlay: (): SessionUiTransitionResult => ({
         state: {
           ...state,
@@ -2511,6 +2534,20 @@ export function createSessionController(props: {
     }
   })
 
+  // The session's overlay is the one pane owner; client extensions open and
+  // close their panes through the host, which forwards here.
+  ext.setPaneOwner(
+    Option.some({
+      open: (id) => dispatchSessionUi(SessionUiEvent.cases.OpenPane.make({ id })),
+      close: (id) => dispatchSessionUi(SessionUiEvent.cases.ClosePane.make({ id })),
+      isOpen: (id) => {
+        const overlay = uiState().overlay
+        return overlay._tag === "pane" && overlay.id === id
+      },
+    }),
+  )
+  onCleanup(() => ext.setPaneOwner(Option.none()))
+
   ext.setActivityProvider(() => {
     const session = Option.fromNullishOr(client.session())
     const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))
@@ -2807,7 +2844,7 @@ export function createSessionController(props: {
 
   const handleInterrupt = () => {
     disarmQuit()
-    if (uiState().overlay._tag !== "none") {
+    if (overlayHoldsComposer(uiState().overlay)) {
       exit()
       return
     }
@@ -2836,7 +2873,7 @@ export function createSessionController(props: {
       handleInterrupt()
       return true
     }
-    if (uiState().overlay._tag !== "none") return false
+    if (overlayHoldsComposer(uiState().overlay)) return false
 
     if (event.name === "escape") {
       if (uiState().transcriptExpanded && !command.paletteOpen()) {

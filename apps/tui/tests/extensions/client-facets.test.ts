@@ -4,7 +4,11 @@ import { createMemo, createRoot, createSignal } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import { ClientContext, sessionQuery } from "../../src/extensions/client-facets"
 import { makeClientRuntime } from "../../src/extensions/host"
-import { makeClientTestTransport, provideClientServices } from "../extension-test-harness-boundary"
+import {
+  makeClientTestTransport,
+  makePaneSlot,
+  provideClientServices,
+} from "../extension-test-harness-boundary"
 import { createMockRuntime } from "../render-harness-boundary"
 import { runRuntimeEffectBoundary } from "../run-effect-boundary"
 
@@ -166,7 +170,7 @@ describe("sessionQuery", () => {
 
 const workspace = { cwd: "/tmp/client-runtime-cwd", home: "/tmp/client-runtime-home" }
 const mockRuntime = createMockRuntime()
-const runCast = { cast: mockRuntime.cast }
+const runCast = { cast: mockRuntime.cast, pane: makePaneSlot() }
 const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }
 
 describe("makeClientRuntime", () => {

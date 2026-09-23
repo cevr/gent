@@ -1,4 +1,5 @@
 import { Deferred, Effect, Option, type Scope } from "effect"
+import { createSignal } from "solid-js"
 import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
 import type {
   AnyExtensionClientModule,
@@ -7,6 +8,7 @@ import type {
   ClientRuntimeServices,
   ClientShell,
   ClientShellTransport,
+  PaneOwner,
 } from "../src/extensions/client-facets"
 import { makeClientRuntime } from "../src/extensions/host"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
@@ -38,6 +40,18 @@ const waitForDeferred = <A, E>(deferred: Deferred.Deferred<A, E>) => Deferred.aw
 export const makeActiveSessionRef = (value?: ActiveClientSession): ActiveClientSessionRef => ({
   value,
 })
+
+/** One pane slot, as the session overlay keeps it: opening a pane replaces the open one. */
+export const makePaneSlot = (): PaneOwner => {
+  const [open, setOpen] = createSignal(Option.none<string>())
+  return {
+    open: (id) => setOpen(Option.some(id)),
+    close: (id) => {
+      if (Option.contains(open(), id)) setOpen(Option.none())
+    },
+    isOpen: (id) => Option.contains(open(), id),
+  }
+}
 
 export const makeClientTestTransport = (
   opts: ClientExtensionHarnessOptions = {},
@@ -86,6 +100,7 @@ export const makeClientExtensionRuntime = (
       cast: <A, E>(effect: Effect.Effect<A, E, never>) => {
         Effect.runFork(effect)
       },
+      pane: makePaneSlot(),
       ...Option.getOrElse(Option.fromUndefinedOr(opts.shell), () => ({})),
     },
     activity: () => ({ state: "idle" }),
