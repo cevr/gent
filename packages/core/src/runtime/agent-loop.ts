@@ -1959,8 +1959,10 @@ const buildAgentLoopActorHandlers = (config: {
     const shouldWake = (handle: AgentLoopBehavior, input: { readonly wake?: boolean }) =>
       Effect.gen(function* () {
         if (input.wake === true) return true
-        if (Option.isSome(yield* handle.incompleteUserTurn)) return true
-        return yield* handle.hasPriorHistory
+        // An incomplete turn is a stored user message, so history answers first
+        // and the event-log scan runs only for a branch with no messages.
+        if (yield* handle.hasPriorHistory) return true
+        return Option.isSome(yield* handle.incompleteUserTurn)
       })
 
     const startNextQueuedTurnIfIdle = (
