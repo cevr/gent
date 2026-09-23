@@ -259,11 +259,14 @@ export const runProcess = (
 // ── write-file-atomic ───────────────────────────────────────────────────────
 
 /**
- * Replaces `path` with `content` through a staged sibling. The text lands in a
- * temporary file in the target directory, which is then renamed over the
- * path, so a reader (or a crash) never sees a half-written file. A symlink at
- * `path` is replaced as a directory entry; its target is left untouched.
- * The one atomic write: core's config and every extension use it.
+ * Replaces the file at `path` with `content` through a staged sibling. The
+ * text lands in a temporary file in the target directory, which is then
+ * renamed over the file, so a reader (or a crash) never sees a half-written
+ * file. The one atomic write: core's config and every extension use it.
+ *
+ * A symlink at `path` is followed, as a plain write follows it: the file it
+ * names is replaced (staged in that file's directory) and the link stays. A
+ * config under ~/.gent can be a link into a dotfiles checkout.
  *
  * The file keeps its permission bits: `options.mode` when given (a
  * credential passes 0600), else the mode of the file it replaces, else the
@@ -276,11 +279,27 @@ export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem
   const pathService = yield* Path.Path
+  // The file behind `path`: follow the link at the file itself (not the
+  // directories above it), hop by hop, as the OS does, up to its 40-hop limit.
+  // A path that is not a link is the file; a dangling link names the file to
+  // create.
+  const follow = (current: string, hops: number): Effect.Effect<string> =>
+    fs.readLink(current).pipe(
+      Effect.map((link) => pathService.resolve(pathService.dirname(current), link)),
+      Effect.matchEffect({
+        onFailure: () => Effect.succeed(current),
+        onSuccess: (next) => {
+          if (hops >= 40) return Effect.succeed(next)
+          return follow(next, hops + 1)
+        },
+      }),
+    )
+  const target = yield* follow(path, 1)
   const mode = yield* Option.fromUndefinedOr(options?.mode).pipe(
     Option.match({
       onSome: (explicit) => Effect.succeedSome(explicit),
       onNone: () =>
-        fs.stat(path).pipe(
+        fs.stat(target).pipe(
           Effect.map((info) => Option.some(info.mode & 0o7777)),
           Effect.catchIf(
             (error) => error.reason._tag === "NotFound",
@@ -292,14 +311,14 @@ export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
   yield* Effect.scoped(
     Effect.gen(function* () {
       const staging = yield* fs.makeTempFileScoped({
-        directory: pathService.dirname(path),
+        directory: pathService.dirname(target),
         prefix: ".gent-write-",
       })
       // Set the mode before the content lands, so a secret is never readable
       // under the default mode, even in the staged file.
       if (Option.isSome(mode)) yield* fs.chmod(staging, mode.value)
       yield* fs.writeFileString(staging, content)
-      yield* fs.rename(staging, path)
+      yield* fs.rename(staging, target)
     }),
   )
 })

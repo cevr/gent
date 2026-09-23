@@ -490,6 +490,43 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    it.scopedLive(
+      "a driver write through a symlinked config writes the target and keeps the link",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const cwd = yield* fs.makeTempDirectoryScoped()
+          const home = yield* fs.makeTempDirectoryScoped()
+          const dotfiles = yield* fs.makeTempDirectoryScoped()
+          const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+          const target = path.join(dotfiles, "gent-config.json")
+          yield* fs.writeFileString(target, encodeJson({ trustedProjects: ["/x"] }))
+          yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+          yield* fs.symlink(target, userConfigPath)
+          yield* Effect.gen(function* () {
+            const cfg = yield* ConfigService
+            yield* cfg.setDriverOverride(
+              AgentName.make("main"),
+              DriverRef.make({ id: "anthropic" }),
+            )
+            expect(yield* fs.readLink(userConfigPath)).toBe(target)
+            const written = yield* fs
+              .readFileString(target)
+              .pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))),
+              )
+            expect(written).toEqual({
+              trustedProjects: ["/x"],
+              driverOverrides: { main: { _tag: "Model", id: "anthropic" } },
+            })
+            // The staged file lands beside the target, then renames over it.
+            expect(yield* fs.readDirectory(dotfiles)).toEqual(["gent-config.json"])
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+        }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive("a write without a fresh read refuses a config broken after startup", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem

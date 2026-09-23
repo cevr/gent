@@ -201,7 +201,7 @@ describe("WriteTool", () => {
     }),
   )
 
-  writeTest("atomic replacement replaces a symlink while normal writes follow it", () =>
+  writeTest("atomic and normal writes both follow a symlink to its target", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const dir = yield* fs.makeTempDirectoryScoped()
@@ -212,9 +212,8 @@ describe("WriteTool", () => {
       yield* runToolWithCtx(WriteTool, { path: link, content: "normal write" }, ctx)
       expect(yield* fs.readFileString(target)).toBe("normal write")
       yield* runToolWithCtx(WriteTool, { path: link, content: "atomic result", atomic: true }, ctx)
-      expect(yield* fs.readFileString(target)).toBe("normal write")
-      expect(yield* fs.readFileString(link)).toBe("atomic result")
-      expect((yield* fs.stat(link)).type).toBe("File")
+      expect(yield* fs.readFileString(target)).toBe("atomic result")
+      expect(yield* fs.readLink(link)).toBe(target)
       expect((yield* fs.readDirectory(dir)).sort()).toEqual(["link.md", "target.md"])
     }),
   )
