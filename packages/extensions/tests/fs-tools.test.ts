@@ -639,6 +639,80 @@ describe("EditTool execution", () => {
   )
 })
 
+// ── file encodings ──────────────────────────────────────────────────────────
+
+/** `text` as a UTF-16 file with its byte order mark. */
+const utf16File = (text: string, order: "le" | "be") => {
+  const littleEndian = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")])
+  if (order === "le") return littleEndian
+  return Buffer.from(littleEndian).swap16()
+}
+
+describe("file encodings", () => {
+  const encodingTest = it.scopedLive.layer(editLayer)
+
+  const orders: ReadonlyArray<"le" | "be"> = ["le", "be"]
+  for (const order of orders) {
+    encodingTest(`read returns the text of a UTF-16 ${order} file`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/utf16.txt`
+        yield* fs.writeFile(filePath, utf16File("hello NEEDLE\nsecond line", order))
+        const result = yield* runToolWithCtx(ReadTool, { path: filePath }, stubCtx)
+        expect(result.content).toBe("1\thello NEEDLE\n2\tsecond line")
+        expect(result.lineCount).toBe(2)
+      }),
+    )
+
+    encodingTest(`edit finds text in a UTF-16 ${order} file and keeps its encoding`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/utf16.txt`
+        yield* fs.writeFile(filePath, utf16File("hello NEEDLE\nsecond line\n", order))
+        const result = yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "hello", newString: "goodbye" },
+          stubCtx,
+        )
+        expect(result.replacements).toBe(1)
+        const after = Buffer.from(yield* fs.readFile(filePath))
+        expect(after.equals(utf16File("goodbye NEEDLE\nsecond line\n", order))).toBe(true)
+      }),
+    )
+  }
+
+  encodingTest("edit keeps a UTF-8 byte order mark", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/bom.txt`
+      const bom = Buffer.from([0xef, 0xbb, 0xbf])
+      yield* fs.writeFile(filePath, Buffer.concat([bom, Buffer.from("hello world\n")]))
+      yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "hello", newString: "goodbye" },
+        stubCtx,
+      )
+      const after = Buffer.from(yield* fs.readFile(filePath))
+      expect(after.equals(Buffer.concat([bom, Buffer.from("goodbye world\n")]))).toBe(true)
+    }),
+  )
+
+  encodingTest("read refuses a binary file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/blob.bin`
+      yield* fs.writeFile(filePath, new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01, 0x00]))
+      const exit = yield* Effect.exit(runToolWithCtx(ReadTool, { path: filePath }, stubCtx))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("binary file")
+    }),
+  )
+})
+
 // ── grep tool ───────────────────────────────────────────────────────────────
 
 const IndexLayer = BunServices.layer

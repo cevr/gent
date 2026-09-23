@@ -558,6 +558,76 @@ const listFiles: (params: {
   return yield* walkFiles(params)
 })
 
+// ── file text ───────────────────────────────────────────────────────────────
+
+/** How a text file spells its text: UTF-8, or the byte order mark it starts with. */
+type TextEncoding = "utf-8" | "utf-8-bom" | "utf-16le" | "utf-16be"
+
+/** A text file's text and the encoding it was read in, so an edit writes it back the same way. */
+interface FileText {
+  readonly text: string
+  readonly encoding: TextEncoding
+}
+
+/** ripgrep's rule: a NUL byte in a file's first 8 KB marks it binary. */
+const BINARY_PROBE_BYTES = 8192
+
+const UTF8_BOM = [0xef, 0xbb, 0xbf]
+const UTF16LE_BOM = [0xff, 0xfe]
+const UTF16BE_BOM = [0xfe, 0xff]
+
+const startsWith = (bytes: Uint8Array, mark: ReadonlyArray<number>) =>
+  mark.every((byte, index) => bytes[index] === byte)
+
+/** Decode the bytes after a byte order mark; the mark is not part of the text. */
+const decodeAfter = (label: string, bytes: Uint8Array, mark: ReadonlyArray<number>) =>
+  new TextDecoder(label, { ignoreBOM: true }).decode(bytes.subarray(mark.length))
+
+/**
+ * The text of a file, or `None` for a binary one. read, edit and grep all read
+ * through this one decoder. A UTF-16 file starts with a byte order mark and
+ * holds NUL bytes, so it is decoded before the NUL probe, as ripgrep
+ * transcodes it.
+ */
+const decodeFileText = (bytes: Uint8Array): Option.Option<FileText> => {
+  if (startsWith(bytes, UTF16LE_BOM)) {
+    return Option.some({ encoding: "utf-16le", text: decodeAfter("utf-16le", bytes, UTF16LE_BOM) })
+  }
+  if (startsWith(bytes, UTF16BE_BOM)) {
+    return Option.some({ encoding: "utf-16be", text: decodeAfter("utf-16be", bytes, UTF16BE_BOM) })
+  }
+  if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return Option.none()
+  if (startsWith(bytes, UTF8_BOM)) {
+    return Option.some({ encoding: "utf-8-bom", text: decodeAfter("utf-8", bytes, UTF8_BOM) })
+  }
+  return Option.some({ encoding: "utf-8", text: decodeAfter("utf-8", bytes, []) })
+}
+
+/** UTF-16 code units in the given byte order, after the byte order mark. */
+const encodeUtf16 = (text: string, littleEndian: boolean): Uint8Array => {
+  const bytes = new Uint8Array(2 + text.length * 2)
+  const view = new DataView(bytes.buffer)
+  view.setUint16(0, 0xfeff, littleEndian)
+  for (let index = 0; index < text.length; index++) {
+    view.setUint16(2 + index * 2, text.charCodeAt(index), littleEndian)
+  }
+  return bytes
+}
+
+/** The bytes of `file.text` in the encoding the file was read in, with its byte order mark. */
+const encodeFileText = (file: FileText): Uint8Array => {
+  switch (file.encoding) {
+    case "utf-8":
+      return new TextEncoder().encode(file.text)
+    case "utf-8-bom":
+      return new Uint8Array([...UTF8_BOM, ...new TextEncoder().encode(file.text)])
+    case "utf-16le":
+      return encodeUtf16(file.text, true)
+    case "utf-16be":
+      return encodeUtf16(file.text, false)
+  }
+}
+
 // ── read ────────────────────────────────────────────────────────────────────
 
 // Read Tool Error
@@ -648,7 +718,7 @@ export const ReadTool = tool({
       })
     }
 
-    const content = yield* fs.readFileString(filePath).pipe(
+    const bytes = yield* fs.readFile(filePath).pipe(
       Effect.mapError(
         (e) =>
           new ReadError({
@@ -658,8 +728,12 @@ export const ReadTool = tool({
           }),
       ),
     )
+    const decoded = decodeFileText(bytes)
+    if (Option.isNone(decoded)) {
+      return yield* new ReadError({ message: "Cannot read a binary file.", path: filePath })
+    }
 
-    const lines = splitLines(content)
+    const lines = splitLines(decoded.value.text)
     const totalLines = lines.length
     const offset = params.offset ?? 1
     const limit = params.limit ?? 2000
@@ -1024,7 +1098,7 @@ export const EditTool = tool({
     return yield* ctx.FileLock.withLock(
       filePath,
       Effect.gen(function* () {
-        const content = yield* fs.readFileString(filePath).pipe(
+        const bytes = yield* fs.readFile(filePath).pipe(
           Effect.mapError(
             (e) =>
               new EditError({
@@ -1034,6 +1108,11 @@ export const EditTool = tool({
               }),
           ),
         )
+        const decoded = decodeFileText(bytes)
+        if (Option.isNone(decoded)) {
+          return yield* new EditError({ message: "Cannot edit a binary file.", path: filePath })
+        }
+        const content = decoded.value.text
 
         const replaceAll = params.replaceAll === true
 
@@ -1062,7 +1141,9 @@ export const EditTool = tool({
         const newContent = spliceRanges(content, replaced, params.newString)
         const replacements = replaced.length
 
-        yield* fs.writeFileString(filePath, newContent).pipe(
+        // The file keeps the encoding and byte order mark it was read in.
+        const written = encodeFileText({ ...decoded.value, text: newContent })
+        yield* fs.writeFile(filePath, written).pipe(
           Effect.mapError(
             (e) =>
               new EditError({
@@ -1151,9 +1232,6 @@ const GrepResult = Schema.Struct({
   oversized: Schema.optional(Schema.Finite),
 })
 
-/** ripgrep's rule: a NUL byte in a file's first 8 KB marks it binary, and grep skips it. */
-const BINARY_PROBE_BYTES = 8192
-
 /** A file larger than this is skipped and counted: it is a log or a bundle, not source. */
 const MAX_SEARCH_FILE_BYTES = 10 * 1024 * 1024
 
@@ -1164,22 +1242,6 @@ const SEARCH_CONCURRENCY = 16
 const SEARCH_ROUND = 64
 
 type GrepMatch = typeof GrepMatch.Type
-
-/**
- * The text of a file, or `None` for a binary one. A UTF-16 file starts with a
- * byte order mark and holds NUL bytes, so it is decoded before the NUL probe,
- * as ripgrep transcodes it.
- */
-const fileText = (bytes: Uint8Array): Option.Option<string> => {
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
-    return Option.some(new TextDecoder("utf-16le").decode(bytes))
-  }
-  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
-    return Option.some(new TextDecoder("utf-16be").decode(bytes))
-  }
-  if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return Option.none()
-  return Option.some(new TextDecoder().decode(bytes))
-}
 
 /** A match or context line longer than this is cut to this many characters. */
 const MAX_LINE_LENGTH = 500
@@ -1235,10 +1297,10 @@ const searchFile = (
     if (Option.isNone(info)) return none
     if (info.value.size > BigInt(MAX_SEARCH_FILE_BYTES)) return { matches: [], oversized: true }
     const bytes = yield* fs.readFile(filePath).pipe(Effect.option)
-    const text = Option.flatMap(bytes, fileText)
-    if (Option.isNone(text)) return none
+    const decoded = Option.flatMap(bytes, decodeFileText)
+    if (Option.isNone(decoded)) return none
 
-    const lines = text.value.split("\n")
+    const lines = decoded.value.text.split("\n")
     const contextOf = (from: number, to: number) =>
       lines.slice(from, to).map((line) => clipLine(line, 0))
     const found: Array<GrepMatch> = []
