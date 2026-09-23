@@ -118,7 +118,7 @@ export interface ExtensionAgentDetail {
  *
  *   ```ts
  *   import { Effect } from "effect"
- *   import { ClientContext, defineClientExtension } from "./client-facets"
+ *   import { ClientContext, defineClientExtension } from "@gent/tui/extensions"
  *
  *   export default defineClientExtension("@gent/x", {
  *     setup: Effect.gen(function* () {
