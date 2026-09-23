@@ -1,3 +1,4 @@
+import { FileFinder } from "@ff-labs/fff-bun"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   builtinDriver,
@@ -136,6 +137,7 @@ const withFilesPopup = <A>(
       filter: string,
     ) => Effect.Effect<ReadonlyArray<AutocompleteItem>, never, ClientRuntimeServices>
     readonly insertion: (id: string) => string
+    readonly select: (id: string, filter: string) => void
     readonly reads: () => number
   }) => Effect.Effect<A, never, ClientRuntimeServices>,
   options: {
@@ -167,7 +169,9 @@ const withFilesPopup = <A>(
         }
         const insertion = (id: string) =>
           Option.getOrThrow(Option.fromUndefinedOr(source.formatInsertion))(id)
-        return yield* body({ items, insertion, reads: () => reads })
+        const select = (id: string, filter: string) =>
+          Option.getOrThrow(Option.fromUndefinedOr(source.onSelect))(id, filter)
+        return yield* body({ items, insertion, select, reads: () => reads })
       }).pipe(Effect.orDie),
       {
         // The session is rooted outside the launch directory: fff scans the session's.
@@ -390,6 +394,68 @@ describe("files popup", () => {
         { gate: Deferred.await(open) },
       )
       expect(reads).toBe(1)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+/**
+ * Counts the fff finders the popup creates and destroys while `body` runs.
+ * fff's own constructor is wrapped, so the count is what reached fff.
+ */
+const countingFinders = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const counts = { created: 0, destroyed: 0 }
+    const original = FileFinder.create.bind(FileFinder)
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        FileFinder.create = (options) => {
+          const created = original(options)
+          if (!created.ok) return created
+          counts.created++
+          const finder = created.value
+          const destroy = finder.destroy.bind(finder)
+          finder.destroy = () => {
+            counts.destroyed++
+            destroy()
+          }
+          return created
+        }
+      }),
+      () =>
+        Effect.sync(() => {
+          FileFinder.create = original
+        }),
+    )
+    const result = yield* body
+    return { result, counts }
+  })
+
+describe("files popup finder", () => {
+  filesTest("keys typed during the first listing share one finder, destroyed at teardown", () =>
+    Effect.gen(function* () {
+      const open = yield* Deferred.make<void>()
+      // The popup's scope closes inside the count, so teardown is counted too.
+      const { counts } = yield* countingFinders(
+        Effect.scoped(
+          withFilesPopup(
+            ["src/a.ts", "src/b.ts"],
+            (popup) =>
+              Effect.gen(function* () {
+                const typed = yield* Effect.forkChild(
+                  Effect.all([popup.items(""), popup.items("s"), popup.items("a.ts")], {
+                    concurrency: "unbounded",
+                  }),
+                )
+                yield* Effect.yieldNow
+                yield* Deferred.succeed(open, void 0)
+                yield* Fiber.join(typed)
+                yield* popup.items("b")
+              }),
+            { gate: Deferred.await(open) },
+          ),
+        ),
+      )
+      expect(counts).toEqual({ created: 1, destroyed: 1 })
     }).pipe(Effect.timeout("10 seconds")),
   )
 })
