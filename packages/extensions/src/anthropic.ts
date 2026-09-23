@@ -42,6 +42,7 @@ import {
   checkCredentials,
   CredentialRefreshUnavailable,
   driverListModels,
+  effortAtOrAbove,
   EMPTY_CREDENTIAL_CELL,
   explainCredentialFailure,
   freshCredentials,
@@ -66,7 +67,7 @@ import {
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
 import type { HttpClientError } from "effect/unstable/http/HttpClientError"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
-import { Model as AiModel } from "effect/unstable/ai"
+import { type AiError, Model as AiModel } from "effect/unstable/ai"
 
 // ── model config ────────────────────────────────────────────────────────────
 
@@ -76,8 +77,8 @@ import { Model as AiModel } from "effect/unstable/ai"
  * `griffinmartin/opencode-claude-auth/src/model-config.ts`.
  *
  * The override table is matched first-match-wins by `String.includes`
- * against the lowercased model id — list more specific keys before
- * broader ones (e.g. `"opus-4-6"` before `"opus"`).
+ * against the lowercased model id: `"haiku"` names a family, `"4-6"` a
+ * version of any family. A model both keys match takes only the first.
  *
  * @module
  */
@@ -125,12 +126,7 @@ export const MODEL_CONFIG: ModelConfig = {
   },
 }
 
-/**
- * First-match-wins lookup against the override table. Keys match by
- * `String.includes` against the lowercased model id; list more
- * specific keys before broader ones (e.g. `"opus-4-6"` before
- * `"opus"`) so the right override wins.
- */
+/** First-match-wins lookup against the override table, in its insertion order. */
 export const getModelOverride = (modelId: string): Option.Option<ModelOverride> => {
   const lower = modelId.toLowerCase()
   for (const [pattern, override] of Object.entries(MODEL_CONFIG.modelOverrides)) {
@@ -1685,119 +1681,111 @@ export const transformStreamEvent = (
 // ── Layer ──
 
 type CreateMessageOptions = Parameters<AnthropicClient.Service["createMessage"]>[0]
-type CreateMessageStreamOptions = Parameters<AnthropicClient.Service["createMessageStream"]>[0]
+
+type CreateMessageReply = Effect.Success<ReturnType<AnthropicClient.Service["createMessage"]>>
+type CreateMessageStreamReply = Effect.Success<
+  ReturnType<AnthropicClient.Service["createMessageStream"]>
+>
+
+/** What one auth path adds around the request plan. */
+interface ClientPath<R> {
+  /** The path's own payload rewrite, run after the request plan is applied. */
+  readonly payload: (payload: JsonRecord) => Effect.Effect<JsonRecord, never, R>
+  readonly message: (
+    call: Effect.Effect<CreateMessageReply, AiError.AiError>,
+  ) => Effect.Effect<CreateMessageReply, AiError.AiError>
+  readonly stream: (
+    call: Effect.Effect<CreateMessageStreamReply, AiError.AiError>,
+  ) => Effect.Effect<CreateMessageStreamReply, AiError.AiError>
+}
 
 /**
- * Wraps an AnthropicClient to apply Claude Code keychain conventions. A
- * request that fails on its credential keeps the credential's own message.
+ * Wraps an AnthropicClient so every request carries the model's request plan
+ * (effort and thinking), then the auth path's own rewrite. Both auth paths
+ * build their client through this one layer. The rewritten payload is
+ * decoded once against the request schema, which is the type the SDK client
+ * takes.
  */
-const makeKeychainClientLayer = (
-  creds: CredentialCache<ClaudeCredentials>,
-): Layer.Layer<
-  AnthropicClient.AnthropicClient,
-  never,
-  AnthropicClient.AnthropicClient | KeychainTransformRequirements
-> =>
+const requestPlanClientLayer = <R>(
+  plan: AnthropicRequestPlan,
+  path: ClientPath<R>,
+): Layer.Layer<AnthropicClient.AnthropicClient, never, AnthropicClient.AnthropicClient | R> =>
   Layer.effect(
     AnthropicClient.AnthropicClient,
     Effect.gen(function* () {
       const inner = yield* AnthropicClient.AnthropicClient
-      const explain = explainCredentialFailure(creds)
-      const transformContext = yield* Effect.context<KeychainTransformRequirements>()
-      const transformPayloadHere = (payload: JsonRecord) =>
-        transformPayload(payload).pipe(Effect.provideContext(transformContext))
-
-      const service: AnthropicClient.Service = {
+      const pathContext = yield* Effect.context<R>()
+      const prepare = <Options extends { readonly payload: CreateMessageOptions["payload"] }>(
+        options: Options,
+      ) =>
+        Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
+          Effect.orDie,
+          Effect.flatMap((payload) => path.payload(applyRequestPlan(payload, plan))),
+          Effect.provideContext(pathContext),
+          Effect.map((payload) => ({
+            ...options,
+            payload: encodeMessagePayload(decodeMessagePayload(payload)),
+          })),
+        )
+      return AnthropicClient.AnthropicClient.of({
         client: inner.client,
         streamRequest: inner.streamRequest,
-
-        createMessage: (options: CreateMessageOptions) =>
-          Effect.gen(function* () {
-            const payload = yield* Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
-              Effect.orDie,
-            )
-            const transformed = yield* transformPayloadHere(payload)
-            return yield* explain(
-              inner.createMessage({
-                ...options,
-                payload: encodeMessagePayload(decodeMessagePayload(transformed)),
-              }),
-            )
-          }).pipe(
-            Effect.map(([body, response]) => {
-              const b = Schema.decodeSync(JsonRecordSchema)(body)
-              const content = b["content"]
-              if (isRecordArray(content)) {
-                const transformed = {
-                  ...b,
-                  content: transformResponseContent(content),
-                }
-                return [
-                  Schema.decodeUnknownSync(Generated.BetaMessage)(transformed),
-                  response,
-                ] satisfies [typeof body, typeof response]
-              }
-              return [body, response] satisfies [typeof body, typeof response]
-            }),
-          ),
-
-        createMessageStream: (options: CreateMessageStreamOptions) =>
-          Effect.gen(function* () {
-            const payload = yield* Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
-              Effect.orDie,
-            )
-            const transformed = yield* transformPayloadHere(payload)
-            return yield* explain(
-              inner.createMessageStream({
-                ...options,
-                payload: encodeMessagePayload(decodeMessagePayload(transformed)),
-              }),
-            )
-          }).pipe(
-            Effect.map(([response, stream]) => [
-              response,
-              stream.pipe(Stream.map(transformStreamEvent)),
-            ]),
-          ),
-      }
-
-      return service
+        createMessage: (options) =>
+          path.message(Effect.flatMap(prepare(options), inner.createMessage)),
+        createMessageStream: (options) =>
+          path.stream(Effect.flatMap(prepare(options), inner.createMessageStream)),
+      })
     }),
   )
 
 /**
- * Wraps an AnthropicClient so each API-key request carries prompt-cache
- * markers. The Claude Code path marks its payload in `transformPayload`.
+ * The API-key path marks prompt-cache breakpoints and changes nothing else.
+ * The Claude Code path marks its payload in `transformPayload`.
  */
-const promptCacheClientLayer: Layer.Layer<
-  AnthropicClient.AnthropicClient,
-  never,
-  AnthropicClient.AnthropicClient
-> = Layer.effect(
-  AnthropicClient.AnthropicClient,
-  Effect.gen(function* () {
-    const inner = yield* AnthropicClient.AnthropicClient
-    const withMarkers = <Options extends { readonly payload: CreateMessageOptions["payload"] }>(
-      options: Options,
-    ) =>
-      Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
-        Effect.orDie,
-        Effect.map((payload) => ({
-          ...options,
-          payload: encodeMessagePayload(
-            decodeMessagePayload(markCacheBreakpoints(payload, "system")),
-          ),
-        })),
-      )
-    return AnthropicClient.AnthropicClient.of({
-      client: inner.client,
-      streamRequest: inner.streamRequest,
-      createMessage: (options) => Effect.flatMap(withMarkers(options), inner.createMessage),
-      createMessageStream: (options) =>
-        Effect.flatMap(withMarkers(options), inner.createMessageStream),
-    })
-  }),
-)
+const apiKeyClientPath: ClientPath<never> = {
+  payload: (payload) => Effect.succeed(markCacheBreakpoints(payload, "system")),
+  message: (call) => call,
+  stream: (call) => call,
+}
+
+/**
+ * The Claude Code path: its keychain conventions on the payload, the tool
+ * names restored on the reply, and a request that fails on its credential
+ * keeps the credential's own message.
+ */
+const claudeCodeClientPath = (
+  creds: CredentialCache<ClaudeCredentials>,
+): ClientPath<KeychainTransformRequirements> => {
+  const explain = explainCredentialFailure(creds)
+  return {
+    payload: transformPayload,
+    message: (call) =>
+      explain(call).pipe(
+        Effect.map(([body, response]) => {
+          const b = Schema.decodeSync(JsonRecordSchema)(body)
+          const content = b["content"]
+          if (isRecordArray(content)) {
+            const transformed = { ...b, content: transformResponseContent(content) }
+            return [
+              Schema.decodeUnknownSync(Generated.BetaMessage)(transformed),
+              response,
+            ] satisfies CreateMessageReply
+          }
+          return [body, response] satisfies CreateMessageReply
+        }),
+      ),
+    stream: (call) =>
+      explain(call).pipe(
+        Effect.map(
+          ([response, stream]) =>
+            [
+              response,
+              stream.pipe(Stream.map(transformStreamEvent)),
+            ] satisfies CreateMessageStreamReply,
+        ),
+      ),
+  }
+}
 
 // ── keychain transform ──────────────────────────────────────────────────────
 
@@ -2047,26 +2035,83 @@ type AnthropicEffort = typeof AnthropicEffort.Type
 const ANTHROPIC_EFFORT_ORDER = AnthropicEffort.literals
 
 /**
- * The effort levels each model family accepts, lowest first; first match
- * wins, by substring of the lowercased id. From the model table at
- * platform.claude.com/docs/en/build-with-claude/effort (read 2026-09-23).
- * A model no row matches takes no effort: Sonnet 4.5, Haiku 4.5 and older
- * models answer HTTP 400 when a request names one, so a new family stays
- * effort-free until it is added here.
+ * The effort levels the request schema of the installed `@effect/ai-anthropic`
+ * accepts (`BetaEffortLevel`, verified against 4.0.0-rc.112): every level but
+ * `xhigh`, which sends `high` until that schema widens.
  */
-const ANTHROPIC_ACCEPTED_EFFORTS: ReadonlyArray<{
+const WIRE_EFFORT = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "high",
+  max: "max",
+} satisfies Record<AnthropicEffort, "low" | "medium" | "high" | "max">
+type WireEffort = (typeof WIRE_EFFORT)[AnthropicEffort]
+
+/**
+ * How a family thinks when a request does not say. From the model table at
+ * platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting
+ * (read 2026-09-23):
+ *   - `Off`: thinking stays off until the request sets `{type: "adaptive"}`.
+ *   - `On`: thinking is on, and `{type: "disabled"}` turns it off.
+ *   - `AlwaysOn`: thinking is on, and a request that disables it gets HTTP 400.
+ */
+type ThinkingDefault = "Off" | "On" | "AlwaysOn"
+
+interface AnthropicFamily {
   readonly pattern: RegExp
+  /** The effort levels the family accepts, lowest first. */
   readonly accepts: ReadonlyArray<AnthropicEffort>
-}> = [
+  /** None for a family without adaptive thinking (extended thinking only). */
+  readonly thinking: Option.Option<ThinkingDefault>
+  /** A non-default `temperature` gets HTTP 400 on every request, thinking or not. */
+  readonly fixedSampling: boolean
+}
+
+/**
+ * The model families that take effort, first match wins, by substring of the
+ * lowercased id. Efforts are from platform.claude.com/docs/en/build-with-claude/effort,
+ * thinking from the table above, sampling from the thinking page's "Sampling
+ * parameters" section (all read 2026-09-23). A model no row matches takes no
+ * effort and no thinking: Sonnet 4.5, Haiku 4.5 and older models answer HTTP
+ * 400 when a request names an effort, so a new family stays plain until it
+ * is added here.
+ */
+const ANTHROPIC_FAMILIES: ReadonlyArray<AnthropicFamily> = [
   {
-    pattern: /(fable-5|mythos|opus-5|opus-4-[78]|sonnet-5)(-|$)/,
+    pattern: /(fable-5|mythos|opus-5-5)(-|$)/,
     accepts: ["low", "medium", "high", "xhigh", "max"],
+    thinking: Option.some("AlwaysOn"),
+    fixedSampling: true,
   },
-  { pattern: /(opus|sonnet)-4-6(-|$)/, accepts: ["low", "medium", "high", "max"] },
-  { pattern: /opus-4-5(-|$)/, accepts: ["low", "medium", "high"] },
+  {
+    // Opus 5 accepts `disabled` only at effort `high` or below; `none` names no effort.
+    pattern: /(opus-5|sonnet-5)(-|$)/,
+    accepts: ["low", "medium", "high", "xhigh", "max"],
+    thinking: Option.some("On"),
+    fixedSampling: true,
+  },
+  {
+    pattern: /opus-4-[78](-|$)/,
+    accepts: ["low", "medium", "high", "xhigh", "max"],
+    thinking: Option.some("Off"),
+    fixedSampling: true,
+  },
+  {
+    pattern: /(opus|sonnet)-4-6(-|$)/,
+    accepts: ["low", "medium", "high", "max"],
+    thinking: Option.some("Off"),
+    fixedSampling: false,
+  },
+  {
+    pattern: /opus-4-5(-|$)/,
+    accepts: ["low", "medium", "high"],
+    thinking: Option.none(),
+    fixedSampling: false,
+  },
 ]
 
-/** The level a gent reasoning hint asks for; `none` asks for no effort, so the model runs at its default. */
+/** Each gent reasoning level as an Anthropic effort; `none` asks for no reasoning and is handled per family. */
 const HINT_EFFORT = new Map<string, AnthropicEffort>([
   ["minimal", "low"],
   ["low", "low"],
@@ -2077,60 +2122,113 @@ const HINT_EFFORT = new Map<string, AnthropicEffort>([
 ])
 
 /**
- * The installed `@effect/ai-anthropic` config type is narrower than the wire
- * schema: `output_config.effort` is `"low" | "medium" | "high"`, so `xhigh`
- * and `max` send `high` until that type widens (verified against
- * @effect/ai-anthropic@4.0.0-rc.112).
+ * What one model's requests carry for a reasoning hint. Both auth paths apply
+ * it to the payload in `requestPlanClientLayer`: the SDK config type cannot
+ * name effort `max`, and effort and thinking are decided together.
  */
-const SDK_EFFORT = {
-  low: "low",
-  medium: "medium",
-  high: "high",
-  xhigh: "high",
-  max: "high",
-} satisfies Record<AnthropicEffort, "low" | "medium" | "high">
+interface AnthropicRequestPlan {
+  readonly effort: Option.Option<WireEffort>
+  readonly thinking: Option.Option<"adaptive" | "disabled">
+  /** False where a `temperature` would get HTTP 400. */
+  readonly temperature: boolean
+}
 
-/** The effort a request sends: the lowest level the model accepts at or above the hint, else its highest. */
-const anthropicEffort = (
+const PLAIN_REQUEST: AnthropicRequestPlan = {
+  effort: Option.none(),
+  thinking: Option.none(),
+  temperature: true,
+}
+
+/**
+ * The request plan for a model and a hint.
+ *
+ * - No hint: the model's own defaults.
+ * - `none`: as little reasoning as the model allows. A family that can turn
+ *   thinking off does; an always-on family runs at its lowest effort. The
+ *   compaction summary asks for this under a 768-token cap, and thinking
+ *   counts toward `max_tokens`, so a thinking summary can come back cut or
+ *   empty.
+ * - A level: the lowest effort the family accepts at or above it, else its
+ *   highest, with adaptive thinking on, which an `Off` family needs to reason.
+ */
+const anthropicRequestPlan = (
   modelName: string,
   hint: ProviderHints["reasoning"],
-): Option.Option<"low" | "medium" | "high"> => {
+): AnthropicRequestPlan => {
   const lower = modelName.toLowerCase()
-  return Option.fromUndefinedOr(
-    ANTHROPIC_ACCEPTED_EFFORTS.find((entry) => entry.pattern.test(lower)),
-  ).pipe(
-    Option.flatMap((family) =>
-      Option.fromUndefinedOr(hint).pipe(
-        Option.flatMap((level) => Option.fromUndefinedOr(HINT_EFFORT.get(level))),
-        Option.flatMap((effort) => {
-          const rank = ANTHROPIC_EFFORT_ORDER.indexOf(effort)
-          return Option.fromUndefinedOr(
-            family.accepts.find((level) => ANTHROPIC_EFFORT_ORDER.indexOf(level) >= rank),
-          ).pipe(Option.orElse(() => Option.fromUndefinedOr(family.accepts.at(-1))))
-        }),
-      ),
-    ),
-    Option.map((effort) => SDK_EFFORT[effort]),
+  const family = ANTHROPIC_FAMILIES.find((entry) => entry.pattern.test(lower))
+  if (Predicate.isUndefined(family)) return PLAIN_REQUEST
+  if (Predicate.isUndefined(hint)) {
+    return { ...PLAIN_REQUEST, temperature: !family.fixedSampling }
+  }
+  if (hint === "none") {
+    const thinkingDefault = Option.getOrUndefined(family.thinking)
+    if (thinkingDefault === "On") {
+      return { effort: Option.none(), thinking: Option.some("disabled"), temperature: false }
+    }
+    if (thinkingDefault === "AlwaysOn") {
+      const lowest = Option.fromUndefinedOr(family.accepts[0])
+      return {
+        effort: Option.map(lowest, (effort) => WIRE_EFFORT[effort]),
+        thinking: Option.none(),
+        temperature: false,
+      }
+    }
+    return { ...PLAIN_REQUEST, temperature: !family.fixedSampling }
+  }
+  const effort = Option.fromUndefinedOr(HINT_EFFORT.get(hint)).pipe(
+    Option.flatMap((level) => effortAtOrAbove(ANTHROPIC_EFFORT_ORDER, family.accepts, level)),
+    Option.map((level) => WIRE_EFFORT[level]),
   )
+  const thinking: AnthropicRequestPlan["thinking"] = Option.map(family.thinking, () => "adaptive")
+  // Before the 4.7 families, `temperature` conflicts only with thinking on.
+  return { effort, thinking, temperature: !family.fixedSampling && Option.isNone(thinking) }
 }
 
 type AnthropicConfig = Required<Parameters<typeof AnthropicLanguageModel.layer>[0]>["config"]
 
-/** Sampling limits and effort for one model; a model outside the effort table gets none. */
-const buildAnthropicConfig = (
+/** One model's requests: the SDK config and the plan the client layer applies. */
+interface AnthropicRequest {
+  /** The output cap, and `temperature` where the model takes one. */
+  readonly config: AnthropicConfig
+  readonly plan: AnthropicRequestPlan
+}
+
+const anthropicRequest = (
   modelName: string,
   hints: Option.Option<ProviderHints>,
-): AnthropicConfig => {
+): AnthropicRequest => {
+  const plan = anthropicRequestPlan(
+    modelName,
+    Option.getOrUndefined(
+      Option.flatMap(hints, (value) => Option.fromUndefinedOr(value.reasoning)),
+    ),
+  )
   let config: AnthropicConfig = {}
   if (Option.isSome(hints)) {
     const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
     if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
     const temperature = Option.fromNullishOr(hints.value.temperature)
-    if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-    const effort = anthropicEffort(modelName, hints.value.reasoning)
-    if (Option.isSome(effort)) config = { ...config, output_config: { effort: effort.value } }
+    if (Option.isSome(temperature) && plan.temperature) {
+      config = { ...config, temperature: temperature.value }
+    }
   }
-  return config
+  return { config, plan }
+}
+
+/** The payload with the plan's effort and thinking; any `output_config` the SDK set is kept. */
+const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): JsonRecord => {
+  let result = payload
+  if (Option.isSome(plan.thinking)) {
+    result = { ...result, thinking: { type: plan.thinking.value } }
+  }
+  if (Option.isSome(plan.effort)) {
+    const current = result["output_config"]
+    let outputConfig: JsonRecord = {}
+    if (isRecord(current)) outputConfig = current
+    result = { ...result, output_config: { ...outputConfig, effort: plan.effort.value } }
+  }
+  return result
 }
 
 // ── Layer construction helpers ──
@@ -2141,12 +2239,14 @@ const buildAnthropicConfig = (
  * billing-header system blocks + identity prefix, which API-key users
  * are not on the hook for.
  */
-const makeApiKeyAnthropicLayer = (modelName: string, config: AnthropicConfig, apiKey: string) => {
-  const clientLayer = promptCacheClientLayer.pipe(
+const makeApiKeyAnthropicLayer = (modelName: string, request: AnthropicRequest, apiKey: string) => {
+  const clientLayer = requestPlanClientLayer(request.plan, apiKeyClientPath).pipe(
     Layer.provide(AnthropicClient.layer({ apiKey: Redacted.make(apiKey) })),
     Layer.provide(FetchHttpClient.layer),
   )
-  return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(Layer.provide(clientLayer))
+  return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
+    Layer.provide(clientLayer),
+  )
 }
 
 /**
@@ -2166,7 +2266,7 @@ const makeApiKeyAnthropicLayer = (modelName: string, config: AnthropicConfig, ap
  */
 const makeOauthAnthropicLayer = (
   modelName: string,
-  config: AnthropicConfig,
+  request: AnthropicRequest,
   creds: CredentialCache<ClaudeCredentials>,
   betaExclusions: Ref.Ref<BetaExclusions>,
   platform: AnthropicPlatformApi,
@@ -2175,12 +2275,12 @@ const makeOauthAnthropicLayer = (
     transformClient: buildKeychainTransformClient(creds, betaExclusions, platform.env),
   }).pipe(Layer.provide(FetchHttpClient.layer))
 
-  const wrappedClient = makeKeychainClientLayer(creds).pipe(
+  const wrappedClient = requestPlanClientLayer(request.plan, claudeCodeClientPath(creds)).pipe(
     Layer.provide(clientLayer),
     Layer.provide(BunCrypto.layer),
     Layer.provide(Layer.succeed(AnthropicPlatform, platform)),
   )
-  return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
+  return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
     Layer.provide(wrappedClient),
     Layer.provide(BunServices.layer),
   )
@@ -2214,7 +2314,7 @@ export const buildAnthropicModelDriver = (
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {
       const auth = Option.fromNullishOr(authInfo)
-      const config = buildAnthropicConfig(modelName, Option.fromNullishOr(hints))
+      const request = anthropicRequest(modelName, Option.fromNullishOr(hints))
 
       // Precedence, the same as OpenAI: stored Claude Code sign-in, then
       // stored API key, then ANTHROPIC_API_KEY. A user who chooses Claude
@@ -2229,7 +2329,7 @@ export const buildAnthropicModelDriver = (
         return AiModel.make(
           "anthropic",
           modelName,
-          makeOauthAnthropicLayer(modelName, config, creds, betaExclusions, platform),
+          makeOauthAnthropicLayer(modelName, request, creds, betaExclusions, platform),
         )
       }
 
@@ -2238,7 +2338,7 @@ export const buildAnthropicModelDriver = (
         return AiModel.make(
           "anthropic",
           modelName,
-          makeApiKeyAnthropicLayer(modelName, config, apiKey.value),
+          makeApiKeyAnthropicLayer(modelName, request, apiKey.value),
         )
       }
 

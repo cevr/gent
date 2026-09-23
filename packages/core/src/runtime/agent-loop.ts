@@ -1220,7 +1220,7 @@ type AgentLoopBehavior = {
    * the withdrawal has to reach the admission gate as well.
    */
   withdrawFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
-  resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile>
+  resolveTurnProfile: Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
   /**
    * Branch-lifetime services: the cell kernel, the model context ledger, and
    * every extension Resource declared with `scope: "branch"`. Extension leaves
@@ -1423,7 +1423,9 @@ const makeAgentLoopBehavior = (
     const branchContext = Effect.gen(function* () {
       const built = yield* Ref.get(branchResources)
       if (Option.isSome(built)) return built.value
-      const profile = yield* resolveTurnProfile
+      // The branch's Resources are built over this profile's services, so
+      // the loop holds its lease until the branch closes.
+      const profile = yield* resolveTurnProfile.pipe(Scope.provide(loopScope))
       return yield* Effect.uninterruptible(
         Layer.build(
           buildResourceLayer(profile.turnExtensionRegistry.getResolved().extensions, "branch"),
@@ -1513,7 +1515,10 @@ const makeAgentLoopBehavior = (
           keepAlive(true),
           () =>
             branchContext.pipe(
-              Effect.flatMap((context) => runTurn(state).pipe(Effect.provideContext(context))),
+              // The turn's profile lease ends with the turn.
+              Effect.flatMap((context) =>
+                runTurn(state).pipe(Effect.provideContext(context), Effect.scoped),
+              ),
             ),
           () => keepAlive(false),
         ),
@@ -2476,6 +2481,8 @@ const buildAgentLoopActorHandlers = (config: {
             // `admitFollowUp`, which forks the drain in the actor scope.
             return yield* run.pipe(handle.withSideMutation)
           }).pipe(
+            // The request's profile lease ends with the request.
+            Effect.scoped,
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
             provideActorWorkspace,
           ),

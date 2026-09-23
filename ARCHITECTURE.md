@@ -246,7 +246,16 @@ validates declarations, and loads the core prompt sections. It does not build
 Resource layers. Trusted setup can still perform its own effects; this is not a
 sandbox boundary.
 
-`SessionProfileCache` builds one profile per (workspace, cwd). It builds every
+`SessionProfileCache` builds one profile per (workspace, cwd, set of
+extensions the config leaves active or failed). Each resolve reads the config as
+it is now, so an edit to `disabledExtensions` reaches the next turn and the next
+session without a restart; a list that leaves the same extensions, such as one
+that names an unknown id, finds the profile already built. `resolve` takes a
+lease in the caller's scope: a turn and an extension request hold it until they
+end, a branch loop holds it while its branch Resources live, and a query holds
+it for its read. The newest profile of a (workspace, cwd) stays cached; a
+superseded one closes its scope, and with it its process resources, when its
+last lease is released. It builds every
 extension's process-scope resources in resolution order, each in its own child
 scope, and reports an extension whose layer fails as failed at the startup
 phase. `buildSessionProfile` then stages the `ExtensionRegistry` and the base
@@ -256,7 +265,8 @@ separate activation implementation.
 
 The production server uses one live profile owner:
 
-- `runtime/extension-host.ts` owns entries by workspace and canonical cwd. Each
+- `runtime/extension-host.ts` owns entries by workspace, canonical cwd and
+  disabled list. Each
   entry is built once: declarations load, every extension's process resources
   build into a child of the server scope, and `buildSessionProfile` stages the
   catalog from that context. An extension whose process resource fails to build

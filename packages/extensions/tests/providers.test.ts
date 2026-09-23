@@ -150,8 +150,12 @@ describe("OpenAI-compatible provider drivers", () => {
  */
 
 const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000
-const CachedModelsJson = Schema.fromJsonString(Schema.Array(Model))
-const encodeCachedModels = Schema.encodeSync(CachedModelsJson)
+/** A cache file from a build before the format stamp: a bare `Model[]`. */
+const UnstampedCacheJson = Schema.fromJsonString(Schema.Array(Model))
+const encodeUnstampedCache = Schema.encodeSync(UnstampedCacheJson)
+const StampedCacheJson = Schema.fromJsonString(
+  Schema.Struct({ format: Schema.String, models: Schema.Array(Model) }),
+)
 const AnyJson = Schema.fromJsonString(Schema.Unknown)
 const encodeAnyJson = Schema.encodeSync(AnyJson)
 
@@ -164,6 +168,13 @@ const remotePayload = {
         limit: { context: 400_000 },
         release_date: "2026-07-24",
         tool_call: true,
+        reasoning: true,
+      },
+      "gpt-4o": {
+        name: "GPT-4o",
+        limit: { context: 128_000 },
+        tool_call: true,
+        reasoning: false,
       },
       "text-embedding-3-small": {
         name: "text-embedding-3-small",
@@ -255,13 +266,35 @@ const ageCacheTwoDays = Effect.fn("test.ageCache")(function* (cachePath: string)
 /** A fresh home directory. Each test gets its own so the per-home memo is new. */
 const freshHome = (label: string) => makeTempDirectoryScoped(`models-dev-${label}-`)
 
+/**
+ * The format this build stamps on its cache, read back from a file the
+ * catalog wrote itself, so the test never restates how the stamp is derived.
+ */
+const currentCacheFormat = Effect.fn("test.currentCacheFormat")(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const home = yield* freshHome("format")
+  const calls = yield* Ref.make(0)
+  yield* modelsDevCatalog(home).pipe(
+    // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
+    Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
+  )
+  const written = yield* fs.readFileString(yield* cachePathIn(home))
+  return (yield* Schema.decodeEffect(StampedCacheJson)(written)).format
+})
+
+/** A cache file in this build's format. */
+const stampedCache = Effect.fn("test.stampedCache")(function* (models: ReadonlyArray<Model>) {
+  const format = yield* currentCacheFormat()
+  return yield* Schema.encodeEffect(StampedCacheJson)({ format, models })
+})
+
 describe("models.dev catalog", () => {
   it.scopedLive("serves a fresh cache from disk without fetching", () =>
     Effect.gen(function* () {
       const home = yield* freshHome("disk")
       yield* writeCache(
         home,
-        encodeCachedModels([
+        yield* stampedCache([
           Model.make({
             id: ModelId.make("openai/gpt-5.4"),
             name: "GPT-5.4",
@@ -290,7 +323,7 @@ describe("models.dev catalog", () => {
       const home = yield* freshHome("stale")
       const cachePath = yield* writeCache(
         home,
-        encodeCachedModels([
+        yield* stampedCache([
           Model.make({
             id: ModelId.make("openai/gpt-4.1"),
             name: "GPT-4.1",
@@ -313,9 +346,30 @@ describe("models.dev catalog", () => {
 
       // The cache holds gent's canonical `Model[]`, never the raw payload.
       const written = yield* fs.readFileString(cachePath)
-      const decoded = yield* Schema.decodeEffect(CachedModelsJson)(written)
-      expect(decoded.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
+      const decoded = yield* Schema.decodeEffect(StampedCacheJson)(written)
+      expect(decoded.models.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
       expect(written.includes('"openai":{"models"')).toBe(false)
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  // The driver sends a reasoning effort only to a model that reasons; the
+  // catalog, not a name pattern, says which ones do.
+  it.scopedLive("each model carries the reasoning flag models.dev gives it", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("reasoning")
+      const calls = yield* Ref.make(0)
+
+      const models = yield* modelsDevCatalog(home).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
+        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
+      )
+      const reasoningOf = (id: string) =>
+        models.find((model) => model.id === ModelId.make(id))?.reasoning
+
+      expect(reasoningOf("openai/gpt-5.4")).toBe(true)
+      expect(reasoningOf("openai/gpt-4o")).toBe(false)
+      // models.dev names no flag: the catalog does not guess one.
+      expect(reasoningOf("anthropic/claude-opus-5")).toBeUndefined()
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -340,7 +394,7 @@ describe("models.dev catalog", () => {
       const home = yield* freshHome("offline")
       const cachePath = yield* writeCache(
         home,
-        encodeCachedModels([
+        yield* stampedCache([
           Model.make({
             id: ModelId.make("openai/gpt-4.1"),
             name: "GPT-4.1",
@@ -425,14 +479,55 @@ describe("models.dev catalog", () => {
     }).pipe(Effect.provide(platformLayer)),
   )
 
-  it.scopedLive("a cache written before release dates existed still loads", () =>
+  // A build before the stamp wrote a bare array without cache prices. Served
+  // for a day, it priced every cache read as uncached input.
+  const olderBuildCache = encodeUnstampedCache([
+    Model.make({
+      id: ModelId.make("anthropic/claude-opus-5"),
+      name: "Claude Opus 5",
+      provider: ProviderId.make("anthropic"),
+      pricing: { input: 5, output: 25 },
+    }),
+  ])
+
+  it.scopedLive("a fresh cache an older build wrote refetches and gains the new fields", () =>
     Effect.gen(function* () {
-      const home = yield* freshHome("no-release-date")
-      // Exactly the shape every shipped cache already on disk has: no
-      // releaseDate key at all. It must still decode.
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* freshHome("unstamped")
+      const cachePath = yield* writeCache(home, olderBuildCache)
+      const calls = yield* Ref.make(0)
+
+      const models = yield* modelsDevCatalog(home).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
+        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
+      )
+
+      expect(yield* Ref.get(calls)).toBe(1)
+      const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
+      expect(opus?.pricing).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 })
+      // The rewrite carries this build's stamp, so the next load serves it.
+      const rewritten = yield* fs.readFileString(cachePath)
+      expect((yield* Schema.decodeEffect(StampedCacheJson)(rewritten)).format).toBe(
+        yield* currentCacheFormat(),
+      )
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive("a fresh cache stamped with another format refetches", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("other-format")
       yield* writeCache(
         home,
-        '[{"id":"openai/gpt-5.4","name":"GPT-5.4","provider":"openai","contextLength":400000}]',
+        yield* Schema.encodeEffect(StampedCacheJson)({
+          format: "0",
+          models: [
+            Model.make({
+              id: ModelId.make("openai/gpt-4.1"),
+              name: "GPT-4.1",
+              provider: ProviderId.make("openai"),
+            }),
+          ],
+        }),
       )
       const calls = yield* Ref.make(0)
 
@@ -441,10 +536,24 @@ describe("models.dev catalog", () => {
         Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
       )
 
-      expect(models).toHaveLength(1)
-      expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
-      expect(models[0]?.releaseDate).toBeUndefined()
-      expect(yield* Ref.get(calls)).toBe(0)
+      expect(yield* Ref.get(calls)).toBe(1)
+      expect(models.map((model) => model.id)).not.toContain(ModelId.make("openai/gpt-4.1"))
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive("a cache an older build wrote still serves when the fetch fails", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("unstamped-offline")
+      yield* writeCache(home, olderBuildCache)
+      const calls = yield* Ref.make(0)
+
+      const models = yield* modelsDevCatalog(home).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
+        Effect.provide(failingHttpLayer(calls)),
+      )
+
+      expect(yield* Ref.get(calls)).toBe(1)
+      expect(models.map((model) => model.id)).toEqual([ModelId.make("anthropic/claude-opus-5")])
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -490,7 +599,10 @@ describe("models.dev catalog", () => {
       const [openai, anthropic] = yield* Fiber.join(both).pipe(Effect.timeout(5_000))
 
       expect(yield* Ref.get(calls)).toBe(1)
-      expect(openai.map((model) => model.id)).toEqual([ModelId.make("openai/gpt-5.4")])
+      expect(openai.map((model) => model.id)).toEqual([
+        ModelId.make("openai/gpt-5.4"),
+        ModelId.make("openai/gpt-4o"),
+      ])
       expect(anthropic.map((model) => model.id)).toEqual([ModelId.make("anthropic/claude-opus-5")])
     }).pipe(Effect.provide(platformLayer)),
   )
