@@ -26,6 +26,7 @@ import {
   type ExtensionHostService,
   isRecord,
   isRecordArray,
+  Model,
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthorizationResult,
@@ -70,7 +71,7 @@ import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { type AiError, Model as AiModel } from "effect/unstable/ai"
 
 // Test seam: only tests read these exports. The model table and its lookups
-// (MODEL_CONFIG, getModelOverride, supports1mContext, getModelBetas,
+// (MODEL_CONFIG, getModelOverride, getModelBetas,
 // BetaExclusions), the billing header (SYSTEM_IDENTITY_PREFIX,
 // extractFirstUserMessageText, computeCch, computeVersionSuffix,
 // buildBillingHeaderValue), the wire transforms (repairToolPairs,
@@ -124,6 +125,10 @@ export const MODEL_CONFIG: ModelConfig = {
     "prompt-caching-scope-2026-01-05",
     "context-management-2025-06-27",
   ],
+  // The driver never adds `context-1m`: every 1M-window model has 1M by
+  // default with no beta (platform.claude.com/docs/en/build-with-claude/
+  // context-windows, read 2026-09-23). It stays a backoff candidate for an
+  // ANTHROPIC_BETA_FLAGS list that names it.
   longContextBetas: ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"],
   modelOverrides: {
     haiku: {
@@ -147,36 +152,6 @@ export const getModelOverride = (modelId: string): Option.Option<ModelOverride> 
   return Option.none()
 }
 
-/**
- * Heuristic — does this model id look like opus/sonnet 4.6 or later in
- * the 4 family, the versions that take the `context-1m` beta? Date-suffix
- * model ids (`-20250514`) are treated as `x.0`.
- *
- * It needs `family-4-minor`. The 5 family (`claude-sonnet-5`,
- * `claude-opus-5-5`) and families other than opus and sonnet
- * (`claude-fable-5`) get no `context-1m` beta: those models have a 1M
- * context window by default and need no beta.
- */
-export const supports1mContext = (modelId: string): boolean => {
-  const lower = modelId.toLowerCase()
-  if (!lower.includes("opus") && !lower.includes("sonnet")) return false
-  const versionMatch = lower.match(/(opus|sonnet)-(\d+)-(\d+)/)
-  const match = Option.fromNullishOr(versionMatch)
-  if (Option.isNone(match)) return false
-  const major = parseInt(
-    Option.getOrElse(Option.fromNullishOr(match.value[2]), () => "0"),
-    10,
-  )
-  const minor = parseInt(
-    Option.getOrElse(Option.fromNullishOr(match.value[3]), () => "0"),
-    10,
-  )
-  // Date suffixes like 20250514 are not minor versions — treat as x.0
-  let effectiveMinor = minor
-  if (minor > 99) effectiveMinor = 0
-  return major === 4 && effectiveMinor >= 6
-}
-
 const applyModelOverride = (betas: Array<string>, override: Option.Option<ModelOverride>): void => {
   if (Option.isNone(override)) return
   const excludedBetas = Option.fromNullishOr(override.value.exclude)
@@ -197,11 +172,8 @@ const applyModelOverride = (betas: Array<string>, override: Option.Option<ModelO
 /**
  * Compose the beta list to send for a given model. Layered:
  *   1. base = `MODEL_CONFIG.baseBetas` (or env-override), comma-split.
- *   2. + first long-context beta when `supports1mContext(modelId)` is
- *      true (matches Claude CLI behavior — opt-in via the model id
- *      version, not a separate flag).
- *   3. apply per-model `exclude` / `add` from `getModelOverride`.
- *   4. drop anything in the optional `excluded` set (used by the
+ *   2. apply per-model `exclude` / `add` from `getModelOverride`.
+ *   3. drop anything in the optional `excluded` set (used by the
  *      long-context backoff path that retries with successive
  *      long-context betas removed).
  */
@@ -215,12 +187,6 @@ export const getModelBetas = (
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
-
-  if (supports1mContext(modelId)) {
-    const longContext = MODEL_CONFIG.longContextBetas[0]
-    const longContextOption = Option.fromNullishOr(longContext)
-    if (Option.isSome(longContextOption)) betas.push(longContextOption.value)
-  }
 
   applyModelOverride(betas, getModelOverride(modelId))
 
@@ -2070,13 +2036,16 @@ interface AnthropicFamily {
   readonly thinking: Option.Option<ThinkingDefault>
   /** A non-default `temperature` gets HTTP 400 on every request, thinking or not. */
   readonly fixedSampling: boolean
+  /** The family has the 1M-token window; every other Claude model has 200k. */
+  readonly millionTokenContext: boolean
 }
 
 /**
  * The model families that take effort, first match wins, by substring of the
  * lowercased id. Efforts are from platform.claude.com/docs/en/build-with-claude/effort,
  * thinking from the table above, sampling from the thinking page's "Sampling
- * parameters" section (all read 2026-09-23). A model no row matches takes no
+ * parameters" section, the window from the context-windows page (all read
+ * 2026-09-23). A model no row matches takes no
  * effort and no thinking: Sonnet 4.5, Haiku 4.5 and older models answer HTTP
  * 400 when a request names an effort, so a new family stays plain until it
  * is added here.
@@ -2087,6 +2056,7 @@ const ANTHROPIC_FAMILIES: ReadonlyArray<AnthropicFamily> = [
     accepts: ["low", "medium", "high", "xhigh", "max"],
     thinking: Option.some("AlwaysOn"),
     fixedSampling: true,
+    millionTokenContext: true,
   },
   {
     // Opus 5 accepts `disabled` only at effort `high` or below; `none` names no effort.
@@ -2094,26 +2064,48 @@ const ANTHROPIC_FAMILIES: ReadonlyArray<AnthropicFamily> = [
     accepts: ["low", "medium", "high", "xhigh", "max"],
     thinking: Option.some("On"),
     fixedSampling: true,
+    millionTokenContext: true,
   },
   {
     pattern: /opus-4-[78](-|$)/,
     accepts: ["low", "medium", "high", "xhigh", "max"],
     thinking: Option.some("Off"),
     fixedSampling: true,
+    millionTokenContext: true,
   },
   {
     pattern: /(opus|sonnet)-4-6(-|$)/,
     accepts: ["low", "medium", "high", "max"],
     thinking: Option.some("Off"),
     fixedSampling: false,
+    millionTokenContext: true,
   },
   {
     pattern: /opus-4-5(-|$)/,
     accepts: ["low", "medium", "high"],
     thinking: Option.none(),
     fixedSampling: false,
+    millionTokenContext: false,
   },
 ]
+
+/** The window of every Claude model outside the 1M families. */
+const STANDARD_CONTEXT_TOKENS = 200_000
+
+/**
+ * The catalog with each window checked against the docs: models.dev lists
+ * 1M for Claude Sonnet 4.5, which has 200k now that no beta widens it, and a
+ * request past the real window fails before compaction would start.
+ */
+const withDocumentedWindows = (models: ReadonlyArray<Model>): ReadonlyArray<Model> =>
+  models.map((model) => {
+    const lower = model.id.toLowerCase()
+    const family = ANTHROPIC_FAMILIES.find((entry) => entry.pattern.test(lower))
+    if (family?.millionTokenContext === true) return model
+    if (Predicate.isUndefined(model.contextLength)) return model
+    if (model.contextLength <= STANDARD_CONTEXT_TOKENS) return model
+    return Model.make({ ...model, contextLength: STANDARD_CONTEXT_TOKENS })
+  })
 
 /** Each gent reasoning level as an Anthropic effort; `none` asks for no reasoning and is handled per family. */
 const HINT_EFFORT = new Map<string, AnthropicEffort>([
@@ -2331,7 +2323,7 @@ export const buildAnthropicModelDriver = (
   id: "anthropic",
   name: "Anthropic",
   envCredential: "ANTHROPIC_API_KEY",
-  listModels: driverListModels(catalog, "anthropic"),
+  listModels: () => Effect.map(driverListModels(catalog, "anthropic")(), withDocumentedWindows),
   retry: {
     ...DEFAULT_RETRY_POLICY,
     // An accepted request can still end with an error event inside the stream; Anthropic names its type.

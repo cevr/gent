@@ -10,6 +10,7 @@ import {
   Path,
   Ref,
   Schema,
+  SynchronizedRef,
 } from "effect"
 import {
   Model,
@@ -28,13 +29,21 @@ import {
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { BunFileSystem } from "@effect/platform-bun"
 import {
+  type CredentialCacheCell,
   driverCatalog,
+  EMPTY_CREDENTIAL_CELL,
   freshEnoughAt,
   GoogleExtension,
   MistralExtension,
   modelsDevCatalog,
 } from "../src/providers.js"
 import { encodeExternalJson } from "./helpers/external-wire.js"
+import {
+  AnthropicPlatform,
+  type BetaExclusions,
+  buildAnthropicModelDriver,
+  type ClaudeCredentials,
+} from "../src/anthropic.js"
 
 // ── openai compatible providers ─────────────────────────────────────────────
 
@@ -314,6 +323,51 @@ describe("models.dev catalog", () => {
       expect(models[0]?.name).toBe("GPT-5.4")
       expect(yield* Ref.get(calls)).toBe(0)
     }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive(
+    "the Anthropic driver lists a documented 200k model at 200k, whatever the catalog says",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* freshHome("anthropic-window")
+        const claude = (key: string, contextLength: number) =>
+          Model.make({
+            id: ModelId.make(`anthropic/${key}`),
+            name: key,
+            provider: ProviderId.make("anthropic"),
+            contextLength,
+          })
+        // models.dev lists Sonnet 4.5 at 1M; platform.claude.com/docs/en/build-with-claude/context-windows says 200k.
+        yield* writeCache(
+          home,
+          yield* stampedCache([
+            claude("claude-sonnet-4-5", 1_000_000),
+            claude("claude-sonnet-4-6", 1_000_000),
+            claude("claude-opus-5", 1_000_000),
+            claude("claude-haiku-4-5", 200_000),
+          ]),
+        )
+        const platform = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
+        const driver = buildAnthropicModelDriver(
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
+            EMPTY_CREDENTIAL_CELL,
+          ),
+          yield* Ref.make<BetaExclusions>(new Map()),
+          Option.none(),
+          AnthropicPlatform.of({ platform: "darwin", home, env: {} }),
+          { home, platform },
+        )
+        const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
+        const windows = (yield* listModels()).map(
+          (model) => `${model.id} ${String(model.contextLength)}`,
+        )
+        expect(windows).toEqual([
+          "anthropic/claude-sonnet-4-5 200000",
+          "anthropic/claude-sonnet-4-6 1000000",
+          "anthropic/claude-opus-5 1000000",
+          "anthropic/claude-haiku-4-5 200000",
+        ])
+      }).pipe(Effect.provide(platformLayer)),
   )
 
   it.scopedLive("a cache older than a day refetches and rewrites the canonical models", () =>
