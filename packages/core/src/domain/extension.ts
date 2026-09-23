@@ -26,7 +26,7 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "./capability.js"
-import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
+import type { ModelDriverContribution } from "./driver.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import {
@@ -180,9 +180,6 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
  * this file. Each leaf carries a stable resource identity; the leaf is widened
  * by structural assignability at the bucket boundary.
  *
- * Drivers split into `modelDrivers` and `externalDrivers`; one untagged
- * `drivers: []` bucket would erase the correlated union.
- *
  * @module
  */
 
@@ -193,11 +190,6 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
  * an extension that contributes nothing returns `{}`. Each bucket is
  * homogeneously typed — there is no discriminator, the field name is the
  * discrimination.
- *
- * Driver split: `modelDrivers` / `externalDrivers` are separate buckets. They
- * share `id` (driver registry key) but nothing else, so a single `drivers`
- * bucket would re-introduce the union-shape unsoundness that the correlated
- * `DriverKindContribution` fixed.
  */
 export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
@@ -217,7 +209,6 @@ export interface ExtensionContributions {
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly hooks?: ReadonlyArray<AnyExtensionHook>
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
-  readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
 }
 
 // ── extension ───────────────────────────────────────────────────────────────
@@ -504,7 +495,7 @@ export interface GentExtension<R = ExtensionSetupServices> {
  * and the two registration primitives:
  *
  * - `register(domain, ...values)` adds typed leaves to one registration
- *   domain: tools, requests, agents, resources, model or external drivers.
+ *   domain: tools, requests, agents, resources, model drivers.
  * - `on(kind, handler)` adds one runtime hook.
  *
  * The loader provides the service around `GentExtension.setup`, collects the
@@ -522,7 +513,6 @@ interface RegistrationDomainMap {
   readonly agent: "agents"
   readonly resource: "resources"
   readonly modelDriver: "modelDrivers"
-  readonly externalDriver: "externalDrivers"
 }
 
 const registrationDomains: RegistrationDomainMap = {
@@ -531,7 +521,6 @@ const registrationDomains: RegistrationDomainMap = {
   agent: "agents",
   resource: "resources",
   modelDriver: "modelDrivers",
-  externalDriver: "externalDrivers",
 }
 
 type RegistrationDomain = keyof typeof registrationDomains
@@ -641,7 +630,6 @@ export const registerContributions = (contributions: ExtensionContributions) =>
     yield* host.register("request", ...(contributions.requests ?? []))
     yield* host.register("agent", ...(contributions.agents ?? []))
     yield* host.register("modelDriver", ...(contributions.modelDrivers ?? []))
-    yield* host.register("externalDriver", ...(contributions.externalDrivers ?? []))
     for (const slot of contributions.hooks ?? []) yield* replayHook(host, slot)
   })
 
@@ -1056,14 +1044,6 @@ const validateDriverIds = (contribs: ExtensionContributions): Option.Option<stri
     }
     allDriverIds.set(d.id, `modelDrivers[${i}]`)
   }
-  for (const [i, d] of (contribs.externalDrivers ?? []).entries()) {
-    if (allDriverIds.has(d.id)) {
-      return Option.some(
-        `externalDrivers[${i}] (${d.id}): driver id already used by ${allDriverIds.get(d.id)}`,
-      )
-    }
-    allDriverIds.set(d.id, `externalDrivers[${i}]`)
-  }
   return Option.none()
 }
 
@@ -1074,7 +1054,6 @@ const allowedContributionBuckets = new Set([
   "agents",
   "hooks",
   "modelDrivers",
-  "externalDrivers",
 ])
 
 const unknownBucketMessage = (key: string) =>

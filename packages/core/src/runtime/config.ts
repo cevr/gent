@@ -14,7 +14,8 @@ import {
   AgentName,
   AgentRunOverridesSchema,
   type DriverRef,
-  DriverRefFromConfig,
+  DriverOverridesFromConfig,
+  isRetiredDriverRef,
 } from "../domain/agent.js"
 
 // ── runtime-environment ─────────────────────────────────────────────────────
@@ -93,16 +94,16 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
   disabledExtensions: Schema.optional(Schema.Array(Schema.String)),
   trustedProjects: Schema.optional(Schema.Array(Schema.String)),
   /**
-   * Per-agent driver routing overrides. Keyed by agent name; the value is
-   * a `DriverRef` (model or external). Project config shadows user config
-   * key-by-key — see `mergeConfigs`.
+   * Per-agent model driver overrides. Keyed by agent name; the value is a
+   * `DriverRef`. Project config shadows user config key-by-key — see
+   * `mergeConfigs`.
    *
    * Used by `resolveAgentDriver` (domain/agent.ts) to route an agent
-   * through an alternative backend without editing its definition. E.g.
-   * `{ main: { _tag: "External", id: "acp-claude-code" } }` makes
-   * `main` dispatch through the Claude Code SDK executor.
+   * through another model driver without editing its definition. E.g.
+   * `{ main: { _tag: "Model", id: "openai" } }` sends `main`'s model name
+   * to the OpenAI driver.
    */
-  driverOverrides: Schema.optional(Schema.Record(AgentName, DriverRefFromConfig)),
+  driverOverrides: Schema.optional(DriverOverridesFromConfig),
   /**
    * Per-agent definition overrides: model, reasoning effort, tool lists and
    * a prompt addendum. Project config shadows user config key-by-key; a
@@ -153,6 +154,19 @@ const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
     driverOverrides: nonEmptyRecord({ ...user.driverOverrides, ...project.driverOverrides }),
     agents: nonEmptyRecord({ ...user.agents, ...project.agents }),
     trustedProjects: user.trustedProjects,
+  })
+
+/** The agents whose stored override names a removed external driver. */
+const StoredDriverOverrides = Schema.Struct({
+  driverOverrides: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+})
+const retiredOverrideAgents = (content: string): ReadonlyArray<string> =>
+  Option.match(Schema.decodeOption(Schema.fromJsonString(StoredDriverOverrides))(content), {
+    onNone: () => [],
+    onSome: (stored) =>
+      Object.entries(stored.driverOverrides ?? {})
+        .filter(([, ref]) => isRetiredDriverRef(ref))
+        .map(([agent]) => agent),
   })
 
 // ConfigService
@@ -240,6 +254,23 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         ),
       )
 
+      // A stored override that names a removed external driver decodes as
+      // absent. Say so once per file, not on every read of a project config.
+      const warnedRetiredPaths = yield* Ref.make<ReadonlySet<string>>(new Set())
+      const warnRetiredOverrides = (filePath: string, content: string) =>
+        Effect.gen(function* () {
+          const agents = retiredOverrideAgents(content)
+          if (agents.length === 0) return
+          const warned = yield* Ref.modify(warnedRetiredPaths, (paths) => [
+            paths.has(filePath),
+            new Set([...paths, filePath]),
+          ])
+          if (warned) return
+          yield* Effect.logWarning(
+            "Config names a removed external driver; the agent uses its default model",
+          ).pipe(Effect.annotateLogs({ path: filePath, agents: agents.join(", ") }))
+        })
+
       // A missing file reads as an empty config.
       const readConfigFile = (filePath: string) =>
         fs.exists(filePath).pipe(
@@ -247,6 +278,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
             if (exists) return fs.readFileString(filePath)
             return Effect.succeed("{}")
           }),
+          Effect.tap((content) => warnRetiredOverrides(filePath, content)),
           Effect.flatMap((content) =>
             Schema.decodeEffect(Schema.fromJsonString(UserConfig))(content),
           ),

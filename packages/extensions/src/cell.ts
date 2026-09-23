@@ -2624,18 +2624,14 @@ export const CellExtension = defineExtension({
     const host = yield* ExtensionHost
     yield* host.register("tool", CellTool)
     yield* host.on("turnProjection", ({ agent }) => {
-      if (agent.driver?._tag === "External" || agent.deniedTools?.includes("cell")) {
+      if (agent.deniedTools?.includes("cell") === true) {
         return Effect.succeed({})
       }
       return Effect.succeed({ toolPolicy: { include: ["cell"], modelSet: ["cell"] } })
     })
     yield* host.on("systemPrompt", (input) =>
       Effect.gen(function* () {
-        if (
-          input.agent.driver?._tag === "External" ||
-          input.tools?.length !== 1 ||
-          !input.tools.some((tool) => getToolId(tool) === "cell")
-        ) {
+        if (input.tools?.length !== 1 || !input.tools.some((tool) => getToolId(tool) === "cell")) {
           return input.basePrompt
         }
         const entries = yield* Effect.forEach(

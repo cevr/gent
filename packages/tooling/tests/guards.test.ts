@@ -2198,7 +2198,7 @@ export const handoff = tool({ run: () => "HandoffError happened" })
 export type SessionUpdate = typeof SessionUpdate.Type
 `
     const findings = findingsFor([
-      { file: "packages/extensions/src/acp-agents/schema.ts", text: source },
+      { file: "packages/extensions/src/example/schema.ts", text: source },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([1, 2])
   })

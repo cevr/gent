@@ -6,12 +6,15 @@ const JsonRecord = Schema.Record(Schema.String, Schema.Unknown)
 /** Narrow an unknown value to a string-keyed record. */
 export const isRecord = Schema.is(JsonRecord)
 
-/** Narrow an unknown value to an object with a `.message` string property. */
-const hasMessage = Schema.is(Schema.Struct({ message: Schema.String }))
-
-/** The message an unknown failure carries, or its string form. */
+/**
+ * The message an unknown failure carries, or its string form. The message
+ * can be an accessor on the prototype (`AiError` computes it), so the check
+ * reads the property, not the own keys.
+ */
 export const causeMessage = (cause: unknown): string => {
-  if (hasMessage(cause)) return cause.message
+  if (Predicate.hasProperty(cause, "message") && Predicate.isString(cause.message)) {
+    return cause.message
+  }
   return String(cause)
 }
 

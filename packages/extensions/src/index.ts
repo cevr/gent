@@ -15,7 +15,6 @@ import { AnthropicExtension } from "./anthropic.js"
 import { OpenAIExtension } from "./openai.js"
 import { GoogleExtension, MistralExtension } from "./providers.js"
 import { SkillsExtension } from "./skills.js"
-import { AcpAgentsExtension } from "./acp-agents.js"
 import { WorkflowsExtension } from "./workflows.js"
 import { GoalExtension } from "./goal.js"
 import { WakeExtension } from "./wake.js"
@@ -76,7 +75,6 @@ export const BuiltinExtensions: ReadonlyArray<
   AgentsViewExtension,
   WorkflowsExtension,
   SkillsExtension,
-  AcpAgentsExtension,
   AnthropicExtension,
   OpenAIExtension,
   GoogleExtension,

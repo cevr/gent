@@ -48,11 +48,17 @@ import {
   type CredentialCache,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
+  type CredentialFailure,
+  checkCredentials,
+  CredentialRefreshUnavailable,
   driverListModels,
   EMPTY_CREDENTIAL_CELL,
+  explainCredentialFailure,
   freshCredentials,
+  isTransientTokenStatus,
   makeCredentialCache,
   makeOpenAiCompatResolution,
+  postOAuthForm,
   readOptionalEnv,
   recoverUnauthorized,
   withHeaders,
@@ -119,6 +125,7 @@ export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
   reason: Schema.Literals([
     "token-exchange-failed",
     "token-refresh-failed",
+    "token-endpoint-unavailable",
     "callback-error",
     "missing-code",
     "state-mismatch",
@@ -283,49 +290,54 @@ const parseAuthorizationInput = (input: string): AuthorizationInput => {
   return { code: Option.some(value), state: Option.none() }
 }
 
+/**
+ * POST one grant to the token endpoint and decode the token reply. A
+ * transport failure, a timeout, a 429, or a 5xx is `token-endpoint-unavailable`
+ * (it can pass); any other failure is `reason`.
+ */
+const requestTokens = (
+  reason: "token-exchange-failed" | "token-refresh-failed",
+  label: string,
+  params: Record<string, string>,
+): Effect.Effect<TokenResponse, OAuthError, HttpClient.HttpClient> =>
+  Effect.gen(function* () {
+    const response = yield* postOAuthForm(`${ISSUER}/oauth/token`, params).pipe(
+      Effect.mapError(
+        (e) =>
+          new OAuthError({
+            reason: "token-endpoint-unavailable",
+            message: `${label} HTTP failed: ${e.message}`,
+          }),
+      ),
+    )
+    if (isTransientTokenStatus(response.status)) {
+      return yield* new OAuthError({
+        reason: "token-endpoint-unavailable",
+        message: `${label} failed: ${response.status}`,
+      })
+    }
+    if (response.status >= 400) {
+      return yield* new OAuthError({ reason, message: `${label} failed: ${response.status}` })
+    }
+    return yield* decodeTokenResponse(response.body).pipe(
+      Effect.mapError(
+        (e) => new OAuthError({ reason, message: `${label} response invalid: ${e.message}` }),
+      ),
+    )
+  })
+
 const exchangeCodeForTokens = (
   code: string,
   redirectUri: string,
   codeVerifier: string,
 ): Effect.Effect<TokenResponse, OAuthError, HttpClient.HttpClient> =>
-  Effect.gen(function* () {
-    const http = yield* HttpClient.HttpClient
-    const request = HttpClientRequest.post(`${ISSUER}/oauth/token`).pipe(
-      HttpClientRequest.bodyUrlParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: redirectUri,
-        client_id: CLIENT_ID,
-        code_verifier: codeVerifier,
-      }),
-    )
-    const response = yield* http.execute(request)
-    if (response.status >= 400) {
-      return yield* new OAuthError({
-        reason: "token-exchange-failed",
-        message: `Token exchange failed: ${response.status}`,
-      })
-    }
-    const body = yield* response.text
-    return yield* decodeTokenResponse(body).pipe(
-      Effect.mapError(
-        (e) =>
-          new OAuthError({
-            reason: "token-exchange-failed",
-            message: `Token exchange response invalid: ${e.message}`,
-          }),
-      ),
-    )
-  }).pipe(
-    Effect.catchTag("HttpClientError", (e) =>
-      Effect.fail(
-        new OAuthError({
-          reason: "token-exchange-failed",
-          message: `Token exchange HTTP failed: ${e.message}`,
-        }),
-      ),
-    ),
-  )
+  requestTokens("token-exchange-failed", "Token exchange", {
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: redirectUri,
+    client_id: CLIENT_ID,
+    code_verifier: codeVerifier,
+  })
 
 const exchangeCodeWithFetch = (
   code: string,
@@ -338,41 +350,11 @@ const exchangeCodeWithFetch = (
   )
 
 const refreshAccessToken = (refreshToken: string): Effect.Effect<TokenResponse, OAuthError> =>
-  Effect.gen(function* () {
-    const http = yield* HttpClient.HttpClient
-    const request = HttpClientRequest.post(`${ISSUER}/oauth/token`).pipe(
-      HttpClientRequest.bodyUrlParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        client_id: CLIENT_ID,
-      }),
-    )
-    const response = yield* http.execute(request)
-    if (response.status >= 400) {
-      return yield* new OAuthError({
-        reason: "token-refresh-failed",
-        message: `Token refresh failed: ${response.status}`,
-      })
-    }
-    const body = yield* response.text
-    return yield* decodeTokenResponse(body).pipe(
-      Effect.mapError(
-        (e) =>
-          new OAuthError({
-            reason: "token-refresh-failed",
-            message: `Token refresh response invalid: ${e.message}`,
-          }),
-      ),
-    )
+  requestTokens("token-refresh-failed", "Token refresh", {
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: CLIENT_ID,
   }).pipe(
-    Effect.catchTag("HttpClientError", (e) =>
-      Effect.fail(
-        new OAuthError({
-          reason: "token-refresh-failed",
-          message: `Token refresh HTTP failed: ${e.message}`,
-        }),
-      ),
-    ),
     // @effect-diagnostics-next-line strictEffectProvide:off OAuth token endpoint at extension boundary
     Effect.provide(FetchHttpClient.layer),
   )
@@ -391,6 +373,18 @@ const HTML_SUCCESS = `<!doctype html>
   </body>
 </html>`
 
+const HTML_ESCAPES = new Map([
+  ["&", "&amp;"],
+  ["<", "&lt;"],
+  [">", "&gt;"],
+  ['"', "&quot;"],
+  ["'", "&#39;"],
+])
+
+/** The error text comes from the query string, so it is escaped before it goes into HTML. */
+const escapeHtml = (text: string): string =>
+  text.replace(/[&<>"']/g, (char) => HTML_ESCAPES.get(char) ?? char)
+
 const HTML_ERROR = (error: string) => `<!doctype html>
 <html>
   <head>
@@ -398,7 +392,7 @@ const HTML_ERROR = (error: string) => `<!doctype html>
   </head>
   <body>
     <h1>Authorization Failed</h1>
-    <p>${error}</p>
+    <p>${escapeHtml(error)}</p>
   </body>
 </html>`
 
@@ -429,6 +423,17 @@ const buildCallbackRoutes = (
       const error = Option.fromNullishOr(url.searchParams.get("error"))
       const errorDescription = url.searchParams.get("error_description")
 
+      // The state is checked first: a request that does not carry this
+      // flow's state is not the provider's redirect, so its error text is
+      // not trusted.
+      if (stateParam !== expectedState) {
+        const errorMsg = "Invalid state"
+        yield* Deferred.fail(
+          deferred,
+          new OAuthError({ reason: "state-mismatch", message: errorMsg }),
+        )
+        return HttpServerResponse.setStatus(HttpServerResponse.html(HTML_ERROR(errorMsg)), 400)
+      }
       if (Option.isSome(error)) {
         const errorMsg = errorDescription ?? error.value
         yield* Deferred.fail(
@@ -442,14 +447,6 @@ const buildCallbackRoutes = (
         yield* Deferred.fail(
           deferred,
           new OAuthError({ reason: "missing-code", message: errorMsg }),
-        )
-        return HttpServerResponse.setStatus(HttpServerResponse.html(HTML_ERROR(errorMsg)), 400)
-      }
-      if (stateParam !== expectedState) {
-        const errorMsg = "Invalid state"
-        yield* Deferred.fail(
-          deferred,
-          new OAuthError({ reason: "state-mismatch", message: errorMsg }),
         )
         return HttpServerResponse.setStatus(HttpServerResponse.html(HTML_ERROR(errorMsg)), 400)
       }
@@ -528,7 +525,12 @@ const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.
     const authUrl = buildAuthorizeUrl(redirectUri, pkce, state)
     const deferred = yield* Deferred.make<PendingCallbackPayload, OAuthError>()
 
-    yield* Effect.forkScoped(startRedirectServer(state, deferred))
+    // Nothing joins the server fiber, so a failed start (port 1455 in use,
+    // for example) fails the deferred; otherwise `callback()` waits forever.
+    yield* startRedirectServer(state, deferred).pipe(
+      Effect.tapError((error) => Deferred.fail(deferred, error)),
+      Effect.forkScoped,
+    )
 
     const callback = (manualInput?: string): Effect.Effect<OpenAIOAuthTokens, OAuthError> =>
       Effect.gen(function* () {
@@ -852,7 +854,7 @@ const OpenAICredentials: Schema.Schema<OpenAICredentials> = Schema.Struct({
 /** IO the service depends on, lifted out so tests can drive it without hitting `auth.openai.com`. */
 export interface OpenAICredentialIO {
   /** Refresh creds against the OpenAI token endpoint. */
-  readonly refresh: (refreshToken: string) => Effect.Effect<OpenAICredentials, ProviderAuthError>
+  readonly refresh: (refreshToken: string) => Effect.Effect<OpenAICredentials, CredentialFailure>
 }
 
 const realIO: OpenAICredentialIO = {
@@ -862,13 +864,18 @@ const realIO: OpenAICredentialIO = {
         ...credentials,
         accountId: Option.fromNullishOr(credentials.accountId),
       })),
-      Effect.mapError(
-        (cause) =>
-          new ProviderAuthError({
-            message: `Failed to refresh ChatGPT OAuth credentials: ${cause.message}`,
+      Effect.mapError((cause): CredentialFailure => {
+        if (cause.reason === "token-endpoint-unavailable") {
+          return new CredentialRefreshUnavailable({
+            message: `ChatGPT token endpoint unavailable: ${cause.message}`,
             cause,
-          }),
-      ),
+          })
+        }
+        return new ProviderAuthError({
+          message: `ChatGPT sign-in expired: ${cause.message}. Sign in again with /auth.`,
+          cause,
+        })
+      }),
     ),
 }
 
@@ -941,8 +948,7 @@ const build = (
       if (Option.isNone(refreshToken) || refreshToken.value.length === 0) {
         return Effect.fail(
           new ProviderAuthError({
-            message:
-              "ChatGPT OAuth credentials are unavailable. Re-run authorization from the auth picker.",
+            message: "ChatGPT OAuth credentials are unavailable. Sign in again with /auth.",
           }),
         )
       }
@@ -1307,41 +1313,49 @@ const makeApiKeyOpenAIResolution = (
  * `apiKey !== undefined`, so omitting it lets our middleware own the
  * Authorization header without a "scrub-the-placeholder" coupling.
  *
- * The credential cache cell is passed in from extension-closure
- * scope (allocated once by the Effectful `modelDrivers()` setup), not
- * allocated per layer build. Without this hoist, every
- * `Provider.stream`/`Provider.generate` call would rebuild the service
- * layer and reset the cache, killing credential reuse and the rotated
+ * `resolveModel` builds the credential cache over the cell that the
+ * Effectful `modelDrivers()` setup allocates once, and checks it before the
+ * layer exists, so an expired sign-in fails with its own message. A cell
+ * allocated per layer build would reset the cache and break the rotated
  * refresh-token contract.
  */
 const makeOauthOpenAILayer = (
   modelName: string,
   config: OpenAiResponsesConfig,
-  authInfo: ProviderAuthInfo,
-  credentialCellRef: CredentialCacheCellRef<OpenAICredentials>,
+  creds: CredentialCache<OpenAICredentials>,
 ) => {
-  const credentialLayer = OpenAICredentialService.layerFromRef(credentialCellRef, authInfo)
-
-  const clientLayer = Layer.unwrap(
+  const codexHttpClientLayer = Layer.effect(
+    HttpClient.HttpClient,
     Effect.gen(function* () {
-      const creds = yield* OpenAICredentialService
-      const codexHttpClientLayer = Layer.effect(
-        HttpClient.HttpClient,
-        Effect.gen(function* () {
-          const client = yield* HttpClient.HttpClient
-          return buildCodexTransformClient(creds)(client)
-        }),
-      ).pipe(Layer.provide(FetchHttpClient.layer))
-      return OpenAiResponsesClient.layer({
-        apiUrl: "https://chatgpt.com/backend-api/codex",
-      }).pipe(Layer.provide(codexHttpClientLayer))
+      const client = yield* HttpClient.HttpClient
+      return buildCodexTransformClient(creds)(client)
     }),
-  ).pipe(Layer.provide(credentialLayer))
-
+  ).pipe(Layer.provide(FetchHttpClient.layer))
+  const clientLayer = OpenAiResponsesClient.layer({
+    apiUrl: "https://chatgpt.com/backend-api/codex",
+  }).pipe(Layer.provide(codexHttpClientLayer))
   return OpenAiResponsesLanguageModel.layer({ model: modelName, config }).pipe(
-    Layer.provide(clientLayer),
+    Layer.provide(explainedClientLayer(creds).pipe(Layer.provide(clientLayer))),
   )
 }
+
+/** Wraps the Responses client so a credential failure keeps its own message. */
+const explainedClientLayer = (
+  creds: CredentialCache<OpenAICredentials>,
+): Layer.Layer<OpenAiResponsesClient.OpenAiClient, never, OpenAiResponsesClient.OpenAiClient> =>
+  Layer.effect(
+    OpenAiResponsesClient.OpenAiClient,
+    Effect.gen(function* () {
+      const inner = yield* OpenAiResponsesClient.OpenAiClient
+      const explain = explainCredentialFailure(creds)
+      return {
+        client: inner.client,
+        createResponse: (options) => explain(inner.createResponse(options)),
+        createResponseStream: (options) => explain(inner.createResponseStream(options)),
+        createEmbedding: (options) => explain(inner.createEmbedding(options)),
+      }
+    }),
+  )
 
 /**
  * Build the model-driver contribution given a pre-allocated credential
@@ -1377,11 +1391,9 @@ export const buildOpenAIModelDriver = (
             message: `Model "${modelName}" not available with ChatGPT OAuth`,
           })
         }
-        return AiModel.make(
-          "openai",
-          modelName,
-          makeOauthOpenAILayer(modelName, config, auth.value, credentialCellRef),
-        )
+        const creds = yield* build(credentialCellRef, realIO, auth.value)
+        yield* checkCredentials(creds)
+        return AiModel.make("openai", modelName, makeOauthOpenAILayer(modelName, config, creds))
       }
 
       // Stored API key takes precedence over env var
@@ -1451,6 +1463,8 @@ export const buildOpenAIModelDriver = (
         // abandoned flow leaves the redirect HTTP server resident
         // until extension teardown. The fiber both clears the map
         // entry and closes the OAuth scope (tears down the listener).
+        // It is detached: `authorize` returns at once, and a child fiber
+        // would stop with it. `callback` interrupts it.
         const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
           Effect.flatMap(() =>
             Effect.gen(function* () {
@@ -1458,7 +1472,7 @@ export const buildOpenAIModelDriver = (
               yield* close
             }),
           ),
-          Effect.forkChild,
+          Effect.forkDetach,
         )
         pendingCallbacks.set(ctx.authorizationId, {
           flow,

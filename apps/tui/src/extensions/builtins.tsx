@@ -31,7 +31,7 @@ import { CollapsedRow, UserRow } from "../ui"
 import { textWidth } from "../text-width-adapter"
 import { BunSocket } from "@effect/platform-bun"
 import { createEffect, createRoot, Show } from "solid-js"
-import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/protocol"
+import { AgentName, DriverRef } from "@gent/core/protocol"
 import { ref } from "@gent/core/extensions/api"
 import {
   GOAL_CONTEXT_MESSAGE_TYPE,
@@ -488,18 +488,9 @@ export const builtinHerdr = defineClientExtension("@gent/herdr", {
  * Validation lives server-side: `driver.set` rejects unknown driver ids. The
  * usage hint and every failure go to the footer through `shell.notify`;
  * a change that lands reports nothing.
- *
- * This contribution is delivered by a core builtin (not by the
- * `@gent/acp-agents` extension) so the slash remains available even when
- * the ACP extension is disabled — useful for clearing a stale override.
  */
 
 const USAGE = "Usage: /driver <agent> <driver-id|default>"
-
-const driverRef = (entry: { readonly _tag: string; readonly id: string }) => {
-  if (entry._tag === "External") return ExternalDriverRef.make({ id: entry.id })
-  return ModelDriverRef.make({ id: entry.id })
-}
 
 export const builtinDriver = defineClientExtension("@gent/driver-ui", {
   setup: Effect.gen(function* () {
@@ -514,11 +505,10 @@ export const builtinDriver = defineClientExtension("@gent/driver-ui", {
     const setDriver = (agentName: AgentName, driverId: string) =>
       Effect.gen(function* () {
         const { drivers } = yield* transport.driverList
-        const matches = drivers.filter((driver) => driver.id === driverId)
-        const match = Option.fromNullishOr(matches[0])
-        if (matches.length > 1) return yield* notify(`Ambiguous driver "${driverId}".`)
-        if (Option.isNone(match)) return yield* notify(`Unknown driver "${driverId}".`)
-        yield* transport.driverSet({ agentName, driver: driverRef(match.value) })
+        if (!drivers.some((driver) => driver.id === driverId)) {
+          return yield* notify(`Unknown driver "${driverId}".`)
+        }
+        yield* transport.driverSet({ agentName, driver: DriverRef.make({ id: driverId }) })
       }).pipe(Effect.catch((error) => notify(`Failed to set driver: ${String(error)}`)))
 
     const route = (args: string): Effect.Effect<void> => {

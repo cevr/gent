@@ -1,11 +1,21 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, FileSystem, Layer, Path, Predicate, Ref, Schema } from "effect"
+import {
+  Deferred,
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  Path,
+  Predicate,
+  Ref,
+  References,
+  Schema,
+} from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
   AgentDefinition,
   AgentName,
-  ExternalDriverRef,
-  ModelDriverRef,
+  DriverRef,
   ModelId,
   resolveAgentDriver,
   RunSpecSchema,
@@ -46,7 +56,7 @@ describe("user configuration", () => {
       expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
       yield* cfg.setDriverOverride(
         AgentName.make("cowork"),
-        ExternalDriverRef.make({ id: "acp-claude-code" }),
+        DriverRef.make({ id: "anthropic-proxy" }),
       )
       expect((yield* cfg.get()).trustedProjects).toEqual(trustedProjects)
       yield* cfg.clearDriverOverride(AgentName.make("cowork"))
@@ -149,7 +159,7 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           yield* Effect.forEach(
             agents,
-            (agent) => cfg.setDriverOverride(agent, ModelDriverRef.make({ id: "anthropic" })),
+            (agent) => cfg.setDriverOverride(agent, DriverRef.make({ id: "anthropic" })),
             { concurrency: 16 },
           )
           const result = Object.keys((yield* cfg.get()).driverOverrides ?? {})
@@ -190,7 +200,7 @@ describe("user configuration", () => {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride(
           AgentName.make("cowork"),
-          ExternalDriverRef.make({ id: "acp-claude-code" }),
+          DriverRef.make({ id: "anthropic-proxy" }),
         )
         const result = yield* cfg.get()
         expect(result.disabledExtensions).toEqual(["@gent/todo"])
@@ -205,60 +215,92 @@ describe("user configuration", () => {
     it.live("a single agent's driver override is persisted", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
-        const driver = ExternalDriverRef.make({ id: "acp-claude-code" })
+        const driver = DriverRef.make({ id: "anthropic-proxy" })
         yield* cfg.setDriverOverride(AgentName.make("cowork"), driver)
         const result = yield* cfg.get()
         const cowork = result.driverOverrides?.[AgentName.make("cowork")]
         if (Predicate.isUndefined(cowork))
           return yield* Effect.die(new Error("expected cowork override"))
-        expect(cowork._tag).toBe("External")
-        expect(cowork.id).toBe("acp-claude-code")
+        expect(cowork._tag).toBe("Model")
+        expect(cowork.id).toBe("anthropic-proxy")
       }).pipe(Effect.provide(ConfigService.Test())),
     )
 
-    // A config written before the PascalCase variant rename holds
-    // `{"_tag":"external"}`. `readConfigOrEmpty` turns ANY decode failure into
-    // an empty config, and the next `set()` encodes that empty config over the
-    // user's file — so a rejected tag silently destroys unrelated settings.
-    it.scopedLive("a config written with the pre-rename lowercase driver tag still loads", () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        const cwd = yield* fs.makeTempDirectoryScoped()
-        const home = yield* fs.makeTempDirectoryScoped()
-        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
-        yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
-        // Written by hand, exactly as a pre-rename gent left it on disk.
-        yield* fs.writeFileString(
-          userConfigPath,
-          '{"driverOverrides":{"cowork":{"_tag":"external","id":"acp-claude-code"}},"disabledExtensions":["@gent/skills"]}',
-        )
-        const live = ConfigService.Live.pipe(
-          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
-          Layer.provide(BunServices.layer),
-        )
-        yield* Effect.gen(function* () {
-          const cfg = yield* ConfigService
-          const result = yield* cfg.get()
-          const cowork = result.driverOverrides?.[AgentName.make("cowork")]
-          if (Predicate.isUndefined(cowork))
-            return yield* Effect.die(new Error("expected cowork override"))
-          expect(cowork._tag).toBe("External")
-          expect(cowork.id).toBe("acp-claude-code")
-          // The sibling setting must survive: a dropped config takes it too.
-          expect(result.disabledExtensions).toEqual(["@gent/skills"])
-          // Re-encoding writes only the new spelling back.
-          yield* cfg.setDriverOverride(
-            AgentName.make("helper"),
-            ModelDriverRef.make({ id: "anthropic" }),
+    // A config on disk can hold two retired driver shapes. `readConfigOrEmpty`
+    // turns ANY decode failure into an empty config, and the next `set()`
+    // encodes that empty config over the user's file — so a rejected shape
+    // silently destroys unrelated settings.
+    it.scopedLive(
+      "a stored external driver override loads as no override and warns once; a lowercase model ref still loads",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const cwd = yield* fs.makeTempDirectoryScoped()
+          const home = yield* fs.makeTempDirectoryScoped()
+          const otherProject = yield* fs.makeTempDirectoryScoped()
+          const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+          yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+          // Written by hand, exactly as an older gent left it on disk.
+          yield* fs.writeFileString(
+            userConfigPath,
+            '{"driverOverrides":{"cowork":{"_tag":"external","id":"acp-claude-code"},"helper":{"_tag":"External","id":"acp-opencode"},"legacy":{"_tag":"model","id":"anthropic"}},"disabledExtensions":["@gent/skills"]}',
           )
-          const persisted = yield* fs.readFileString(userConfigPath)
-          expect(persisted).toContain('"External"')
-          expect(persisted).not.toContain('"external"')
-          expect(persisted).toContain("@gent/skills")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(live))
-      }).pipe(Effect.provide(BunServices.layer)),
+          const projectConfigPath = path.join(otherProject, ConfigService.CONFIG_RELATIVE)
+          yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
+          yield* fs.writeFileString(
+            projectConfigPath,
+            '{"driverOverrides":{"main":{"_tag":"External","id":"acp-claude-code"}}}',
+          )
+          const warnings: Array<string> = []
+          const captureLogger = Logger.make(({ message }) => {
+            let rendered = String(message)
+            if (Array.isArray(message)) rendered = message.map((entry) => String(entry)).join(" ")
+            if (rendered.includes("removed external driver")) warnings.push(rendered)
+          })
+          const live = ConfigService.Live.pipe(
+            Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+            Layer.provide(BunServices.layer),
+          )
+          yield* Effect.gen(function* () {
+            const cfg = yield* ConfigService
+            const result = yield* cfg.get()
+            // A removed driver is no override: the agent uses its default model.
+            expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeUndefined()
+            expect(result.driverOverrides?.[AgentName.make("helper")]).toBeUndefined()
+            expect(result.driverOverrides?.[AgentName.make("legacy")]).toEqual(
+              DriverRef.make({ id: "anthropic" }),
+            )
+            // The sibling setting must survive: a dropped config takes it too.
+            expect(result.disabledExtensions).toEqual(["@gent/skills"])
+            // A project config is read on every call for its cwd; it warns once.
+            const project = yield* cfg.get(otherProject)
+            yield* cfg.get(otherProject)
+            expect(project.driverOverrides?.[AgentName.make("main")]).toBeUndefined()
+            expect(warnings).toHaveLength(2)
+            // Re-encoding writes only live refs, in the current spelling.
+            yield* cfg.setDriverOverride(
+              AgentName.make("helper"),
+              DriverRef.make({ id: "anthropic" }),
+            )
+            const persisted = yield* fs.readFileString(userConfigPath)
+            expect(persisted).not.toContain("xternal")
+            expect(persisted).not.toContain('"model"')
+            expect(persisted).toContain("@gent/skills")
+          }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            Effect.provide(
+              Layer.provideMerge(
+                live,
+                // The test preload silences logs; this test reads the warning.
+                Layer.merge(
+                  Logger.layer([captureLogger]),
+                  Layer.succeed(References.MinimumLogLevel, "Warn"),
+                ),
+              ),
+            ),
+          )
+        }).pipe(Effect.provide(BunServices.layer)),
     )
 
     // `readConfigOrEmpty` maps ANY decode failure to an empty config, and the
@@ -286,7 +328,7 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           // A mutation must not succeed against a config that never loaded.
           const outcome = yield* Effect.exit(
-            cfg.setDriverOverride(AgentName.make("main"), ModelDriverRef.make({ id: "anthropic" })),
+            cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" })),
           )
           expect(outcome._tag).toBe("Failure")
           // The user's settings are still on disk, byte for byte.
@@ -302,12 +344,9 @@ describe("user configuration", () => {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride(
           AgentName.make("cowork"),
-          ExternalDriverRef.make({ id: "acp-claude-code" }),
+          DriverRef.make({ id: "anthropic-proxy" }),
         )
-        yield* cfg.setDriverOverride(
-          AgentName.make("cowork"),
-          ModelDriverRef.make({ id: "anthropic" }),
-        )
+        yield* cfg.setDriverOverride(AgentName.make("cowork"), DriverRef.make({ id: "anthropic" }))
         const result = yield* cfg.get()
         expect(result.driverOverrides?.[AgentName.make("cowork")]?._tag).toBe("Model")
       }).pipe(Effect.provide(ConfigService.Test())),
@@ -318,11 +357,11 @@ describe("user configuration", () => {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride(
           AgentName.make("cowork"),
-          ExternalDriverRef.make({ id: "acp-claude-code" }),
+          DriverRef.make({ id: "anthropic-proxy" }),
         )
         yield* cfg.setDriverOverride(
           AgentName.make("deepwork"),
-          ExternalDriverRef.make({ id: "acp-opencode" }),
+          DriverRef.make({ id: "openai-proxy" }),
         )
         const result = yield* cfg.get()
         expect(Object.keys(result.driverOverrides ?? {})).toHaveLength(2)
@@ -334,11 +373,11 @@ describe("user configuration", () => {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride(
           AgentName.make("cowork"),
-          ExternalDriverRef.make({ id: "acp-claude-code" }),
+          DriverRef.make({ id: "anthropic-proxy" }),
         )
         yield* cfg.setDriverOverride(
           AgentName.make("deepwork"),
-          ExternalDriverRef.make({ id: "acp-opencode" }),
+          DriverRef.make({ id: "openai-proxy" }),
         )
         yield* cfg.clearDriverOverride(AgentName.make("cowork"))
         const result = yield* cfg.get()
@@ -352,7 +391,7 @@ describe("user configuration", () => {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride(
           AgentName.make("cowork"),
-          ExternalDriverRef.make({ id: "acp-claude-code" }),
+          DriverRef.make({ id: "anthropic-proxy" }),
         )
         yield* cfg.clearDriverOverride(AgentName.make("cowork"))
         const result = yield* cfg.get()
@@ -374,12 +413,9 @@ describe("user configuration", () => {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride(
           AgentName.make("cowork"),
-          ExternalDriverRef.make({ id: "acp-claude-code" }),
+          DriverRef.make({ id: "anthropic-proxy" }),
         )
-        yield* cfg.setDriverOverride(
-          AgentName.make("helper"),
-          ModelDriverRef.make({ id: "anthropic" }),
-        )
+        yield* cfg.setDriverOverride(AgentName.make("helper"), DriverRef.make({ id: "anthropic" }))
         const result = yield* cfg.get()
         expect(result.driverOverrides?.[AgentName.make("cowork")]).toBeDefined()
         expect(result.driverOverrides?.[AgentName.make("helper")]).toBeDefined()
@@ -438,7 +474,7 @@ describe("user configuration", () => {
         const cfg = yield* ConfigService
         yield* cfg.setDriverOverride(
           AgentName.make("cowork"),
-          ExternalDriverRef.make({ id: "acp-claude-code" }),
+          DriverRef.make({ id: "anthropic-proxy" }),
         )
         const result = yield* cfg.get()
         expect(result.agents?.[AgentName.make("main")]).toEqual({ reasoningEffort: "high" })
@@ -469,15 +505,15 @@ describe("user configuration", () => {
         Effect.gen(function* () {
           const configDir = path.join(cwd, ".gent")
           const configText = encodeJson({
-            driverOverrides: { [agent]: { _tag: "External", id: driverId } },
+            driverOverrides: { [agent]: { _tag: "Model", id: driverId } },
           })
           yield* fs.makeDirectory(configDir, { recursive: true })
           yield* fs.writeFileString(path.join(configDir, "config.json"), configText)
         })
 
-      yield* writeProjectConfig(launch, "cowork", "acp-launch-driver")
-      yield* writeProjectConfig(projectA, "cowork", "acp-projectA-driver")
-      yield* writeProjectConfig(projectB, "cowork", "acp-projectB-driver")
+      yield* writeProjectConfig(launch, "cowork", "launch-driver")
+      yield* writeProjectConfig(projectA, "cowork", "projectA-driver")
+      yield* writeProjectConfig(projectB, "cowork", "projectB-driver")
 
       const live = ConfigService.Live.pipe(
         Layer.provide(RuntimeEnvironment.Live({ cwd: launch, home })),
@@ -486,13 +522,10 @@ describe("user configuration", () => {
       return { live, projectA, projectB }
     })
 
-    const expectExternalOverride = (cfg: UserConfig, agent: string, expectedId: string): void => {
+    const expectDriverOverride = (cfg: UserConfig, agent: string, expectedId: string): void => {
       const override = cfg.driverOverrides?.[AgentName.make(agent)]
       if (Predicate.isUndefined(override)) {
         return Effect.runSync(Effect.die(new Error(`expected ${agent} override`)))
-      }
-      if (override._tag !== "External") {
-        return Effect.runSync(Effect.die(new Error("expected external driver")))
       }
       expect(override.id).toBe(expectedId)
     }
@@ -503,7 +536,7 @@ describe("user configuration", () => {
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
           const result = yield* cfg.get()
-          expectExternalOverride(result, "cowork", "acp-launch-driver")
+          expectDriverOverride(result, "cowork", "launch-driver")
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
@@ -515,7 +548,7 @@ describe("user configuration", () => {
         yield* Effect.gen(function* () {
           const cfg = yield* ConfigService
           const result = yield* cfg.get(projectA)
-          expectExternalOverride(result, "cowork", "acp-projectA-driver")
+          expectDriverOverride(result, "cowork", "projectA-driver")
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
@@ -528,8 +561,8 @@ describe("user configuration", () => {
           const cfg = yield* ConfigService
           const a = yield* cfg.get(projectA)
           const b = yield* cfg.get(projectB)
-          expectExternalOverride(a, "cowork", "acp-projectA-driver")
-          expectExternalOverride(b, "cowork", "acp-projectB-driver")
+          expectDriverOverride(a, "cowork", "projectA-driver")
+          expectDriverOverride(b, "cowork", "projectB-driver")
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
@@ -567,7 +600,7 @@ describe("user configuration", () => {
 const cowork = AgentDefinition.make({ name: AgentName.make("cowork") })
 const hardcoded = AgentDefinition.make({
   name: AgentName.make("hardcoded"),
-  driver: ExternalDriverRef.make({ id: "acp-claude-code" }),
+  driver: DriverRef.make({ id: "anthropic-proxy" }),
 })
 
 describe("configured driver override routing", () => {
@@ -577,14 +610,14 @@ describe("configured driver override routing", () => {
       const { driverOverrides } = yield* cfg.get()
       const result = resolveAgentDriver(cowork, driverOverrides)
       expect(result.source).toBe("config")
-      expect(result.driver?._tag).toBe("External")
-      expect(result.driver?.id).toBe("acp-claude-code")
+      expect(result.driver?._tag).toBe("Model")
+      expect(result.driver?.id).toBe("anthropic-proxy")
     }).pipe(
       Effect.provide(
         ConfigService.Test(
           new UserConfig({
             driverOverrides: {
-              [AgentName.make("cowork")]: ExternalDriverRef.make({ id: "acp-claude-code" }),
+              [AgentName.make("cowork")]: DriverRef.make({ id: "anthropic-proxy" }),
             },
           }),
         ),
@@ -598,13 +631,13 @@ describe("configured driver override routing", () => {
       const { driverOverrides } = yield* cfg.get()
       const result = resolveAgentDriver(hardcoded, driverOverrides)
       expect(result.source).toBe("agent")
-      expect(result.driver?.id).toBe("acp-claude-code")
+      expect(result.driver?.id).toBe("anthropic-proxy")
     }).pipe(
       Effect.provide(
         ConfigService.Test(
           new UserConfig({
             driverOverrides: {
-              [AgentName.make("hardcoded")]: ModelDriverRef.make({ id: "anthropic" }),
+              [AgentName.make("hardcoded")]: DriverRef.make({ id: "anthropic" }),
             },
           }),
         ),
@@ -627,7 +660,7 @@ describe("configured driver override routing", () => {
       const cfg = yield* ConfigService
       yield* cfg.setDriverOverride(
         AgentName.make("cowork"),
-        ExternalDriverRef.make({ id: "acp-claude-code" }),
+        DriverRef.make({ id: "anthropic-proxy" }),
       )
       const before = (yield* cfg.get()).driverOverrides
       expect(resolveAgentDriver(cowork, before).source).toBe("config")
