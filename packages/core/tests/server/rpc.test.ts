@@ -982,6 +982,10 @@ const NudgeInput = Schema.Struct({
   /** Marks the sender claims beside the client origin. */
   customType: Schema.optional(Schema.String),
   joinedTurn: Schema.optional(Schema.Boolean),
+  /** Steer the message into the branch instead of queueing it. */
+  steer: Schema.optional(Schema.Boolean),
+  /** The steer's request id; a repeat is a no-op. */
+  requestId: Schema.optional(RequestId),
 })
 
 /**
@@ -994,10 +998,8 @@ const NudgeInput = Schema.Struct({
  */
 const makeOriginProbe = () => {
   const armed = MutableRef.make(Option.none<ExtensionContextService>())
-  const nudgeWith = (ctx: ExtensionContextService, input: typeof NudgeInput.Type) =>
-    ctx.Session.send({
-      delivery: "queue",
-      sourceId: `nudge:${input.label}`,
+  const nudgeWith = (ctx: ExtensionContextService, input: typeof NudgeInput.Type) => {
+    const fields = {
       content: input.label,
       metadata: {
         fromClient: true,
@@ -1007,7 +1009,16 @@ const makeOriginProbe = () => {
       wake: true,
       sessionId: input.sessionId,
       branchId: input.branchId,
-    })
+    }
+    if (input.steer === true) {
+      return ctx.Session.send({
+        delivery: "steer",
+        ...fields,
+        ...(Predicate.isNotUndefined(input.requestId) && { requestId: input.requestId }),
+      })
+    }
+    return ctx.Session.send({ delivery: "queue", sourceId: `nudge:${input.label}`, ...fields })
+  }
   const extension: LoadedExtension = {
     ...InteractionProbeExtension,
     manifest: { id: originProbeId },
@@ -1583,6 +1594,90 @@ describe("interaction.respondInteraction", () => {
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15_000,
+  )
+
+  it.live(
+    "a slash command's steer in a spawned child asks while the request runs; a steer from a context kept past it declines",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("approval_probe", { text: "approve from the child's slash steer?" }),
+            textStep("child steer command done"),
+            toolCallStep("approval_probe", { text: "approve from a steer that outlived it?" }),
+            textStep("late steer done"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [makeOriginProbe()],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const origin = originClient(client)
+          const top = yield* client.session.create({ cwd: "/tmp" })
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: top.sessionId,
+            parentBranchId: top.branchId,
+          })
+          const opening = (messages: ReadonlyArray<Message>, label: string) =>
+            messages.find((message) =>
+              message.parts.some((part) => part.type === "text" && part.text === label),
+            )
+
+          // The steer is admitted before the request ends, so it keeps the
+          // client origin of the user who typed the command.
+          yield* origin.approves(
+            child,
+            origin.call("nudge", child, {
+              label: "/steer in the child",
+              steer: true,
+              requestId: RequestId.make("slash-steer"),
+            }),
+            "approve from the child's slash steer?",
+            "child steer command done",
+          )
+          const commanded = opening(
+            (yield* client.session.getSnapshot(child)).messages,
+            "/steer in the child",
+          )
+          expect(commanded?.metadata).toMatchObject({
+            fromClient: true,
+            extensionId: originProbeId,
+          })
+
+          // The same request id again is a no-op: the steer already ran.
+          yield* origin.call("nudge", child, {
+            label: "/steer in the child",
+            steer: true,
+            requestId: RequestId.make("slash-steer"),
+          })
+          const repeated = yield* client.session.getSnapshot(child)
+          expect(
+            repeated.messages.filter((message) =>
+              message.parts.some(
+                (part) => part.type === "text" && part.text === "/steer in the child",
+              ),
+            ),
+          ).toHaveLength(1)
+          expect(repeated.runtime._tag).toBe("Idle")
+
+          // A context kept past its request steers as an extension.
+          yield* origin.call("arm", child, {})
+          const late = yield* origin.declines(
+            child,
+            origin.call("fire", top, { label: "a steer after the request ended", steer: true }),
+            "late steer done",
+          )
+          expect(
+            opening(late, "a steer after the request ended")?.metadata?.fromClient,
+          ).toBeUndefined()
+          expect(toolResultTexts(late).at(-1)).toContain("no user started this turn")
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
   )
 
   it.live(

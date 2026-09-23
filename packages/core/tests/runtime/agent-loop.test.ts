@@ -2244,6 +2244,7 @@ const makeHarness = (
       }),
       startedRef: yield* Ref.make(true),
       turnSettled: () => Effect.succeed(false),
+      messageStored: () => Effect.succeed(false),
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
@@ -4663,6 +4664,7 @@ describe("wake admission", () => {
         }),
         startedRef: yield* Ref.make(true),
         turnSettled: (messageId) => Effect.succeed(messageId === MessageId.make("settled")),
+        messageStored: () => Effect.succeed(false),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),

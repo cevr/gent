@@ -248,8 +248,6 @@ export const steerAgentLoop = (command: SteerCommand) =>
         workspaceId: DefaultWorkspaceId,
         commandId: ActorCommandId.make(command.requestId),
         command,
-        // A test steer comes from no client request.
-        clientRequest: Option.getOrUndefined(Option.none()),
       }),
     )
   })

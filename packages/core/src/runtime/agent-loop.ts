@@ -27,7 +27,7 @@ import {
   TxSubscriptionRef,
 } from "effect"
 import {
-  type ActorCommandId,
+  ActorCommandId,
   type BranchId,
   ClientRequestGrant,
   type InteractionRequestId,
@@ -559,6 +559,8 @@ type LoopInboxContext = {
   readonly startedRef: Ref.Ref<boolean>
   /** Whether this message's turn already has its receipt (a stored duration). */
   readonly turnSettled: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
+  /** Whether this message is stored: a steering item joined a turn or ran as one. */
+  readonly messageStored: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
 }
 
 export type LoopInbox = {
@@ -599,9 +601,10 @@ export type LoopInbox = {
   /**
    * Queue one steering item and answer with the phase the loop was in *before*
    * the append, which is what a caller must test to decide on a wake. Reading
-   * the phase separately would race a turn that ended in between.
+   * the phase separately would race a turn that ended in between. None: the
+   * item was already delivered (a repeat of its request id), and nothing changed.
    */
-  readonly steer: (item: QueuedTurnItem) => Effect.Effect<LoopState, AgentLoopError>
+  readonly steer: (item: QueuedTurnItem) => Effect.Effect<Option.Option<LoopState>, AgentLoopError>
   /**
    * Hand a running step the steering it may take, and forget it once the
    * caller's `join` has written it to the transcript.
@@ -828,13 +831,16 @@ export const makeLoopInbox = (
       }),
     )
 
-    const steer = Effect.fn("LoopInbox.steer")((item: QueuedTurnItem) =>
-      commitQueueTransaction("queued steering", (s) => ({
-        value: s.state,
+    // Delivery stores the message before it drops the item, and the drop takes
+    // this permit, so under it an item is either still queued or stored.
+    const steer = Effect.fn("LoopInbox.steer")(function* (item: QueuedTurnItem) {
+      if (yield* scope.messageStored(item.message.id)) return Option.none<LoopState>()
+      return yield* commitQueueTransactionHeld("queued steering", (s) => ({
+        value: Option.some(s.state),
         next: { ...s, queue: appendSteeringItem(s.queue, item) },
         persist: true,
-      })),
-    )
+      }))
+    }, scope.queuePersistenceSemaphore.withPermits(1))
 
     const dropSteeringDelivered = (delivered: ReadonlyArray<QueuedTurnItem>) => {
       if (delivered.length === 0) return Effect.void
@@ -1321,9 +1327,21 @@ type DequeueFollowUp = (input: {
   sourceId: string
 }) => Effect.Effect<boolean, AgentLoopError>
 
+/**
+ * Steers the loop's own branch re-entrantly. The grant is read at admission,
+ * inside the caller, so a client request's steer is admitted while it is live.
+ */
+type InterjectCommand = Extract<SteerCommandType, { readonly _tag: "Interject" }>
+
+type SteerOwnBranch = (
+  command: InterjectCommand,
+  clientRequest: Option.Option<ClientRequestGrant>,
+) => Effect.Effect<void, AgentLoopError>
+
 interface AgentLoopFollowUpService {
   readonly enqueue: EnqueueFollowUp
   readonly dequeue: DequeueFollowUp
+  readonly steer: SteerOwnBranch
 }
 
 class AgentLoopFollowUp extends Context.Service<AgentLoopFollowUp, AgentLoopFollowUpService>()(
@@ -1436,8 +1454,15 @@ const makeAgentLoopBehavior = (
           return dequeueFollowUpOn(input).pipe(provideLoopClient)
         },
         send: (input) => submitUserMessage(input).pipe(provideLoopClient),
-        steer: (command, clientRequest) =>
-          steerLoop(command, clientRequest).pipe(provideLoopClient),
+        steer: (command, clientRequest) => {
+          // A steer into the loop's own branch is admitted here, before the
+          // caller goes on, so a client request's grant is read while it runs.
+          // Any other target is its actor's, and carries no grant.
+          if (command._tag === "Interject" && isOwnBranch(command)) {
+            return followUp.steer(command, Option.fromUndefinedOr(clientRequest))
+          }
+          return steerLoop(command).pipe(provideLoopClient)
+        },
       },
     })
 
@@ -1535,6 +1560,13 @@ const makeAgentLoopBehavior = (
           Effect.map((message) => Predicate.isNotUndefined(message?.turnDurationMs)),
           asAgentLoopError("Cannot read submitted message"),
         ),
+      messageStored: (messageId) =>
+        messageStorage
+          .getMessage(messageId)
+          .pipe(
+            Effect.map(Predicate.isNotUndefined),
+            asAgentLoopError("Cannot read steered message"),
+          ),
     })
 
     const recordTurnFailure = (cause: Cause.Cause<unknown>, messageId: MessageId) =>
@@ -2293,6 +2325,10 @@ const buildAgentLoopActorHandlers = (config: {
             Effect.provideService(AgentLoopFollowUp, {
               enqueue: (input) =>
                 reentrantHandle.pipe(Effect.flatMap((h) => admitFollowUp(h, input))),
+              steer: (command, clientRequest) =>
+                reentrantHandle.pipe(
+                  Effect.flatMap((h) => admitInterjection(h, command, clientRequest)),
+                ),
               dequeue: (input) =>
                 reentrantHandle.pipe(
                   Effect.flatMap((h) =>
@@ -2456,10 +2492,47 @@ const buildAgentLoopActorHandlers = (config: {
       Predicate.isTagged("Interrupt"),
     )
 
+    const interjectionItem = Effect.fn("AgentLoopActor.interjectionItem")(function* (
+      commandId: ActorCommandId,
+      command: InterjectCommand,
+    ) {
+      const message = Message.cases.interjection.make({
+        id: interjectionMessageIdForCommand(commandId),
+        sessionId: command.sessionId,
+        branchId: command.branchId,
+        role: "user",
+        parts: [Prompt.textPart({ text: command.message })],
+        createdAt: yield* DateTime.nowAsDate,
+        ...Record.filter({ metadata: command.metadata }, Predicate.isNotUndefined),
+      })
+      const item: QueuedTurnItem = { message, wake: command.wake }
+      return item
+    })
+
+    /**
+     * Re-entrant steer into this branch (see `admitFollowUp`). The origin is
+     * decided at admission, while the caller runs; a wake starts after the
+     * caller's permit is released.
+     */
+    const admitInterjection = Effect.fn("AgentLoopActor.admitInterjection")(function* (
+      handle: AgentLoopBehavior,
+      command: InterjectCommand,
+      clientRequest: Option.Option<ClientRequestGrant>,
+    ) {
+      yield* ensureTarget(command)
+      yield* markWrite
+      const item = yield* interjectionItem(ActorCommandId.make(command.requestId), command)
+      const { result: before } = yield* admitWithOrigin(item, clientRequest, (admitted) =>
+        handle.inbox.steer(admitted),
+      )
+      if (command.wake !== true || Option.isNone(before) || before.value._tag !== "Idle") return
+      yield* Ref.set(wakeRequested, true)
+      yield* drainWake(handle).pipe(provideActorWorkspace, Effect.forkIn(actorScope))
+    })
+
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
       commandId: ActorCommandId,
       command: SteerCommandType,
-      clientRequest: Option.Option<ClientRequestGrant>,
     ) {
       yield* ensureTarget(command)
       yield* markWrite
@@ -2479,19 +2552,7 @@ const buildAgentLoopActorHandlers = (config: {
           return
 
         case "Interject": {
-          const interjectMessage = Message.cases.interjection.make({
-            id: interjectionMessageIdForCommand(commandId),
-            sessionId: command.sessionId,
-            branchId: command.branchId,
-            role: "user",
-            parts: [Prompt.textPart({ text: command.message })],
-            createdAt: yield* DateTime.nowAsDate,
-            ...Record.filter({ metadata: command.metadata }, Predicate.isNotUndefined),
-          })
-          const item: QueuedTurnItem = {
-            message: interjectMessage,
-            wake: command.wake,
-          }
+          const item = yield* interjectionItem(commandId, command)
           // Steering joins the running turn at its next step boundary; the open
           // stream is not interrupted.
           //
@@ -2504,10 +2565,8 @@ const buildAgentLoopActorHandlers = (config: {
           // and steered second would race a turn that ended in between.
           // `startTurn` re-reads the state under its own permit, so it is a
           // no-op when a turn did begin meanwhile.
-          const { result: before } = yield* admitWithOrigin(item, clientRequest, (admitted) =>
-            handle.inbox.steer(admitted),
-          )
-          if (command.wake !== true || before._tag !== "Idle") return
+          const before = yield* handle.inbox.steer(item)
+          if (command.wake !== true || Option.isNone(before) || before.value._tag !== "Idle") return
           const next = yield* handle.inbox.takeIfIdle
           if (Option.isNone(next)) return
           yield* handle.startTurn(next.value).pipe(orCleanup(handle))
@@ -2543,11 +2602,7 @@ const buildAgentLoopActorHandlers = (config: {
           }).pipe(provideActorWorkspace),
       ),
       Steer: Effect.fn("AgentLoop.Steer")(({ operation }: HandlerRequest<SteerInput>) =>
-        applySteer(
-          operation.commandId,
-          operation.command,
-          Option.fromUndefinedOr(operation.clientRequest),
-        ).pipe(provideActorWorkspace),
+        applySteer(operation.commandId, operation.command).pipe(provideActorWorkspace),
       ),
       RespondInteraction: Effect.fn("AgentLoop.RespondInteraction")(
         ({ operation }: HandlerRequest<RespondInteractionInput>) =>
