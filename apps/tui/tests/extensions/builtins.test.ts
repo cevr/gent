@@ -36,7 +36,7 @@ import {
 } from "../extension-test-harness-boundary"
 import { createSignal } from "solid-js"
 
-// ── ../file-tag.test ────────────────────────────────────────────────────────
+// ── file tag ────────────────────────────────────────────────────────────────
 
 describe("getFileTag", () => {
   test("returns [ts] for TypeScript files", () => {
@@ -115,7 +115,7 @@ describe("getFileTag", () => {
   })
 })
 
-// ── ../file-finder-db-dir.test ──────────────────────────────────────────────
+// ── file finder db dir ──────────────────────────────────────────────────────
 
 /**
  * The finder keeps its frecency and history databases where the caller says.
@@ -163,7 +163,7 @@ const contextLayer = (deps: Partial<ClientContextDeps> = {}) =>
     ...deps,
   })
 
-// ── ../driver-transport.test ────────────────────────────────────────────────
+// ── driver transport ────────────────────────────────────────────────────────
 
 /**
  * `/driver` routes through `transport.driverList/driverSet/driverClear`.
@@ -394,7 +394,7 @@ export const makeHerdrTestServer = Effect.fn("Test.makeHerdrServer")(function* (
   }
 })
 
-// ── ../herdr.test ───────────────────────────────────────────────────────────
+// ── herdr ───────────────────────────────────────────────────────────────────
 
 const config = (socketPath: string) =>
   ConfigProvider.fromUnknown({

@@ -2,7 +2,7 @@ import { describe, expect, test } from "effect-bun-test"
 import { Option } from "effect"
 import { countDiffLines, getEditUnifiedDiff, getFiletype } from "../src/tool-renderers"
 
-// ── edit-utils.test ─────────────────────────────────────────────────────────
+// ── edit utils ──────────────────────────────────────────────────────────────
 
 describe("getFiletype", () => {
   test("maps common extensions", () => {

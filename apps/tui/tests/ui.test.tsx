@@ -28,7 +28,7 @@ import { BranchPicker, modelRows, SettingsPicker } from "../src/pickers"
 import { ThreadPane, type ThreadWindow } from "../src/extensions/thread-view.client"
 import type { Branch } from "@gent/sdk"
 
-// ── components/select-list.test ─────────────────────────────────────────────
+// ── select list ─────────────────────────────────────────────────────────────
 
 /**
  * The one selectable list every pane mounts.
@@ -452,7 +452,7 @@ describe("select list rows", () => {
   )
 })
 
-// ── components/docked-pane-frame.test ───────────────────────────────────────
+// ── docked pane frame ───────────────────────────────────────────────────────
 
 /**
  * The ruled frame the docked panes share.

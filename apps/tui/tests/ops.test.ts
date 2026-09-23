@@ -43,7 +43,7 @@ import { SqlClient } from "effect/unstable/sql"
 import { GentPlatform } from "@gent/core/host"
 import { ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protocol"
 
-// ── client-logs.test ────────────────────────────────────────────────────────
+// ── client logs ─────────────────────────────────────────────────────────────
 
 /**
  * The client log file and the doctor's log section.
@@ -257,7 +257,7 @@ describe("inspect logs", () => {
   )
 })
 
-// ── local-health.test ───────────────────────────────────────────────────────
+// ── local health ────────────────────────────────────────────────────────────
 
 const absentServer = ServerLockStatus.cases.None.make({})
 

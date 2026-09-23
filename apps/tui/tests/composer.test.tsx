@@ -39,7 +39,7 @@ import {
 import { builtinClientModules } from "../src/extensions/builtins"
 import { rankAutocompleteItems } from "../src/autocomplete"
 
-// ── shell.test ──────────────────────────────────────────────────────────────
+// ── shell ───────────────────────────────────────────────────────────────────
 
 const testLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
 const shellTest = it.scopedLive.layer(testLayer)
@@ -184,7 +184,7 @@ describe("executeShell", () => {
   )
 })
 
-// ── paste-indicator.test ────────────────────────────────────────────────────
+// ── paste indicator ─────────────────────────────────────────────────────────
 
 // The paste manager is per-controller: each composer owns its id counter and
 // store, so every test makes its own rather than resetting shared state.
@@ -339,7 +339,7 @@ describe("paste workflow integration", () => {
   })
 })
 
-// ── composer-frame-anchor.test ──────────────────────────────────────────────
+// ── composer frame anchor ───────────────────────────────────────────────────
 
 /**
  * The status row's right-hand labels hold their place.
@@ -410,7 +410,7 @@ describe("the status row anchors its right-hand labels", () => {
   )
 })
 
-// ── composer-render.test ────────────────────────────────────────────────────
+// ── composer render ─────────────────────────────────────────────────────────
 
 /**
  * Registers the `/` contribution the popup draws from. Without a contribution
@@ -603,7 +603,7 @@ describe("Composer renderer", () => {
   )
 })
 
-// ── components/autocomplete-popup.test ──────────────────────────────────────
+// ── autocomplete popup ──────────────────────────────────────────────────────
 
 /**
  * The autocomplete popup under the composer: its rows come from extension
@@ -749,7 +749,7 @@ describe("AutocompletePopup renderer", () => {
   )
 })
 
-// ── components/composer-ghost.test ──────────────────────────────────────────
+// ── composer ghost ──────────────────────────────────────────────────────────
 
 /**
  * The ghost line: the completion Tab would take, drawn muted under the input.
@@ -919,7 +919,7 @@ describe("Composer ghost line", () => {
   )
 })
 
-// ── components/composer-slash-enter.test ────────────────────────────────────
+// ── composer slash enter ────────────────────────────────────────────────────
 
 /**
  * Enter on a slash command name runs it.

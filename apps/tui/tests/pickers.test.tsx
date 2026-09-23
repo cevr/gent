@@ -28,7 +28,7 @@ import type { Branch } from "@gent/sdk"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 
-// ── components/pickers.test ─────────────────────────────────────────────────
+// ── pickers ─────────────────────────────────────────────────────────────────
 
 /**
  * The two centred pickers: fork-from-message and resume-branch.
@@ -209,7 +209,7 @@ describe("Branch picker", () => {
   )
 })
 
-// ── components/settings-picker.test ─────────────────────────────────────────
+// ── settings picker ─────────────────────────────────────────────────────────
 
 /**
  * The docked settings pane behind `/model` and `/think`.
@@ -360,7 +360,7 @@ describe("Settings picker", () => {
   )
 })
 
-// ── prompt-search-render.test ───────────────────────────────────────────────
+// ── prompt search render ────────────────────────────────────────────────────
 
 const openPalette = (entries: readonly string[], onEvent: (event: PromptSearchEvent) => void) =>
   Effect.promise(() =>

@@ -20,7 +20,7 @@ import { waitForFrame } from "../helpers-boundary"
 import { provideClientServices } from "../extension-test-harness-boundary"
 import { makeThreadController } from "../../src/extensions/thread-view.client"
 
-// ── ../components/agents-controller.test ────────────────────────────────────
+// ── agents controller ───────────────────────────────────────────────────────
 
 /**
  * Detail fetching for the agents view.
@@ -162,7 +162,7 @@ describe("Agents controller stored rows", () => {
   )
 })
 
-// ── ../components/agents-pane.test ──────────────────────────────────────────
+// ── agents pane ─────────────────────────────────────────────────────────────
 
 /**
  * Keyboard navigation for the agents overlay.
@@ -790,7 +790,7 @@ describe("Agents pane framing", () => {
   )
 })
 
-// ── ../components/subagent-tray.test ────────────────────────────────────────
+// ── subagent tray ───────────────────────────────────────────────────────────
 
 /**
  * The subagent tray under the status line.
@@ -1031,7 +1031,7 @@ describe("Subagent tray", () => {
   )
 })
 
-// ── ../components/pane-stale-reply.test ─────────────────────────────────────
+// ── pane stale reply ────────────────────────────────────────────────────────
 
 /**
  * Docked panes must not write a previous session's rows, and must not write an

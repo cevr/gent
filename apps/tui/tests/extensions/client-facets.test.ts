@@ -17,7 +17,7 @@ import {
 import { createMockRuntime, renderWithProviders } from "../render-harness-boundary"
 import { inRuntime, waitUntil } from "../helpers-boundary"
 
-// ── ../extension-lifecycle.test ─────────────────────────────────────────────
+// ── extension lifecycle ─────────────────────────────────────────────────────
 
 const throwCleanup = (): never => Effect.runSync(Effect.die("boom"))
 
@@ -68,7 +68,7 @@ describe("transport-only extension widgets", () => {
   )
 })
 
-// ── ../client-session-resource.test ─────────────────────────────────────────
+// ── client session resource ─────────────────────────────────────────────────
 
 type SessionIdentity = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
@@ -160,7 +160,7 @@ describe("sessionQuery", () => {
   )
 })
 
-// ── ../client-runtime.test ──────────────────────────────────────────────────
+// ── client runtime ──────────────────────────────────────────────────────────
 
 /**
  * `makeClientRuntime` is the one runtime every client-extension surface

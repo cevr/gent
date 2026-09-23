@@ -15,7 +15,7 @@ import {
   runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
 
-// ── ../fork-pane.test ───────────────────────────────────────────────────────
+// ── fork pane ───────────────────────────────────────────────────────────────
 
 /** Casts queue here so the test drains them inside its own Effect. */
 const makeCastQueue = () => {

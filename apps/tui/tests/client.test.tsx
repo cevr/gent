@@ -50,7 +50,7 @@ import { useSessionFeed } from "../src/session"
 import { useExtensionUI } from "../src/extensions/host"
 import { ClientContext, type ClientRuntime } from "../src/extensions/client-facets"
 
-// ── agent-lifecycle.test ────────────────────────────────────────────────────
+// ── agent lifecycle ─────────────────────────────────────────────────────────
 
 const makeMessage = (role: "user" | "assistant") =>
   Message.cases.regular.make({
@@ -124,7 +124,7 @@ describe("reduceAgentLifecycle", () => {
   })
 })
 
-// ── session-settings-state.test ─────────────────────────────────────────────
+// ── session settings state ──────────────────────────────────────────────────
 
 const absent = Option.getOrUndefined(Option.none())
 
@@ -164,7 +164,7 @@ describe("session settings", () => {
   })
 })
 
-// ── client-provider-contract.test ───────────────────────────────────────────
+// ── client provider contract ────────────────────────────────────────────────
 
 /**
  * The merged client provider's contract.
@@ -299,7 +299,7 @@ describe("ClientProvider contract", () => {
   )
 })
 
-// ── client-session-metrics.test ─────────────────────────────────────────────
+// ── client session metrics ──────────────────────────────────────────────────
 
 /**
  * Session metrics must not cross a session boundary.
@@ -533,7 +533,7 @@ describe("ClientProvider session metrics", () => {
   )
 })
 
-// ── client-session-state.test ───────────────────────────────────────────────
+// ── client session state ────────────────────────────────────────────────────
 
 class ClientSessionStateTestError extends Schema.TaggedError<ClientSessionStateTestError>()(
   "ClientSessionStateTestError",
@@ -1135,7 +1135,7 @@ describe("ClientProvider session lifecycle", () => {
   )
 })
 
-// ── use-session-feed.test ───────────────────────────────────────────────────
+// ── use session feed ────────────────────────────────────────────────────────
 
 type FeedClient = Parameters<typeof useSessionFeed>[2]
 

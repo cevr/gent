@@ -18,8 +18,6 @@ import { useExtensionUI } from "../../src/extensions/host"
 import { createMockClient, renderWithProviders } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 
-// ── delegate.client.test ────────────────────────────────────────────────────
-
 /**
  * A child never blocks its parent: `delegate.start` settles at admission, and
  * the child's result arrives later as a `child-completion` message. Native

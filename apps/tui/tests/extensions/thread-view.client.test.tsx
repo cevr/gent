@@ -25,7 +25,7 @@ import { childTaskText } from "@gent/extensions/client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 
-// ── ../components/thread-view.test ──────────────────────────────────────────
+// ── thread view ─────────────────────────────────────────────────────────────
 
 /**
  * The thread view over sessions and context windows.

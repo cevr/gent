@@ -42,7 +42,7 @@ import { BunServices } from "@effect/platform-bun"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import os from "node:os"
 
-// ── context-window.test ─────────────────────────────────────────────────────
+// ── context window ──────────────────────────────────────────────────────────
 
 // ── Context window % computation (extracted logic) ───────────────────
 
@@ -127,7 +127,7 @@ describe("context window utilization", () => {
   })
 })
 
-// ── file-refs.test ──────────────────────────────────────────────────────────
+// ── file refs ───────────────────────────────────────────────────────────────
 
 describe("parseFileRefs", () => {
   test("parses simple file reference", () => {
@@ -334,7 +334,7 @@ describe("expandFileRefs", () => {
   )
 })
 
-// ── format-duration.test ────────────────────────────────────────────────────
+// ── format duration ─────────────────────────────────────────────────────────
 
 describe("formatDuration", () => {
   describe("compact", () => {
@@ -382,7 +382,7 @@ describe("formatDuration", () => {
   })
 })
 
-// ── format-error.test ───────────────────────────────────────────────────────
+// ── format error ────────────────────────────────────────────────────────────
 
 describe("formatError", () => {
   test("ClientError → message", () => {
@@ -428,7 +428,7 @@ describe("formatError", () => {
   })
 })
 
-// ── format-tool.test ────────────────────────────────────────────────────────
+// ── format tool ─────────────────────────────────────────────────────────────
 
 const HOME = os.homedir()
 const absent = Option.getOrUndefined(Option.none())
@@ -592,7 +592,7 @@ describe("toolArgSummary", () => {
   })
 })
 
-// ── generic-format.test ─────────────────────────────────────────────────────
+// ── generic format ──────────────────────────────────────────────────────────
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
@@ -629,7 +629,7 @@ describe("formatGenericToolText", () => {
   })
 })
 
-// ── message-list-utils.test ─────────────────────────────────────────────────
+// ── message list utils ──────────────────────────────────────────────────────
 
 describe("truncatePath", () => {
   test("returns short paths unchanged", () => {
@@ -974,7 +974,7 @@ describe("progressive disclosure helpers", () => {
   })
 })
 
-// ── truncate.test ───────────────────────────────────────────────────────────
+// ── truncate ────────────────────────────────────────────────────────────────
 
 /**
  * The one column-budget truncation.

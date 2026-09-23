@@ -7,7 +7,7 @@ import { formatRemaining, WakeTray, wakeTrayLines } from "../../src/extensions/w
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
 
-// ── ../components/wake-tray.test ────────────────────────────────────────────
+// ── wake tray ───────────────────────────────────────────────────────────────
 
 /**
  * The wake tray under the status line: one dim line per pending alarm or

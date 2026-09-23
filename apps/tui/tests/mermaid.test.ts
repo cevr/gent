@@ -1,7 +1,7 @@
 import { describe, expect, test } from "effect-bun-test"
 import { extractMermaidBlocks, MermaidViewerState, transitionMermaidViewer } from "../src/mermaid"
 
-// ── mermaid.test ────────────────────────────────────────────────────────────
+// ── mermaid blocks ──────────────────────────────────────────────────────────
 
 describe("extractMermaidBlocks", () => {
   test("extracts single block with correct source/startIndex/endIndex", () => {
@@ -66,7 +66,7 @@ describe("extractMermaidBlocks", () => {
   })
 })
 
-// ── mermaid-viewer-state.test ───────────────────────────────────────────────
+// ── mermaid viewer state ────────────────────────────────────────────────────
 
 describe("transitionMermaidViewer", () => {
   test("open resets viewer state", () => {

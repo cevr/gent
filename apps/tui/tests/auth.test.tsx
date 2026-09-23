@@ -31,7 +31,7 @@ import {
 import { waitForFrame } from "./helpers-boundary"
 import { onMount } from "solid-js"
 
-// ── auth-state.test ─────────────────────────────────────────────────────────
+// ── auth state ──────────────────────────────────────────────────────────────
 
 const provider = {
   provider: ProviderId.make("anthropic"),
@@ -191,7 +191,7 @@ describe("auth-state", () => {
   })
 })
 
-// ── auth-route.test ─────────────────────────────────────────────────────────
+// ── auth route ──────────────────────────────────────────────────────────────
 
 const absent = Option.getOrUndefined(Option.none())
 const nullValue = Option.getOrNull(Option.none())

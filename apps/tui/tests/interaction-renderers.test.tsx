@@ -19,7 +19,7 @@ import { waitForFrame } from "./helpers-boundary"
 import { BunFileSystem } from "@effect/platform-bun"
 import { EnvProvider } from "../src/workspace"
 
-// ── components/interaction-renderers/ask-user.test ──────────────────────────
+// ── ask user ────────────────────────────────────────────────────────────────
 
 const interaction = (text: string) =>
   ({
@@ -99,7 +99,7 @@ describe("AskUserRenderer", () => {
   )
 })
 
-// ── components/interaction-renderers/handoff.test ───────────────────────────
+// ── handoff ─────────────────────────────────────────────────────────────────
 
 describe("HandoffRenderer", () => {
   it.live("renders confirmation with summary", () =>
@@ -177,7 +177,7 @@ describe("HandoffRenderer", () => {
   )
 })
 
-// ── components/interaction-renderers/prompt.test ────────────────────────────
+// ── prompt ──────────────────────────────────────────────────────────────────
 
 describe("PromptRenderer", () => {
   it.scopedLive.layer(BunFileSystem.layer)(

@@ -59,9 +59,7 @@ import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { clientContributions, defineClientExtension } from "../src/extensions/client-facets"
 
-// ── message-list.test ───────────────────────────────────────────────────────
-
-// ── split-footer-height.test ────────────────────────────────────────────────
+// ── split footer height ─────────────────────────────────────────────────────
 
 /**
  * The split footer must always leave the terminal room to scroll.
@@ -126,7 +124,7 @@ describe("split footer height", () => {
   )
 })
 
-// ── reasoning-text.test ─────────────────────────────────────────────────────
+// ── reasoning text ──────────────────────────────────────────────────────────
 
 /**
  * Reasoning summaries must read as separate lines.
@@ -183,7 +181,7 @@ describe("reasoning text", () => {
   )
 })
 
-// ── session-event-indicator.test ────────────────────────────────────────────
+// ── session event indicator ─────────────────────────────────────────────────
 
 describe("session event labels", () => {
   test("formats retrying progress", () => {
@@ -247,7 +245,7 @@ describe("worked-for row", () => {
   })
 })
 
-// ── sdk-utilities.test ──────────────────────────────────────────────────────
+// ── tool interaction projection ─────────────────────────────────────────────
 
 const absent = Option.getOrUndefined(Option.none())
 let messageIndex = 0
@@ -468,7 +466,7 @@ describe("projectMessagesWithToolInteractions", () => {
   })
 })
 
-// ── message-list-render.test ────────────────────────────────────────────────
+// ── message list render ─────────────────────────────────────────────────────
 
 const syntaxStyle = () => SyntaxStyle.create()
 
@@ -2275,7 +2273,7 @@ describe("read_session row", () => {
   )
 })
 
-// ── native-transcript-markdown.test ─────────────────────────────────────────
+// ── native transcript markdown ──────────────────────────────────────────────
 
 const assistant = (id: string, content: string): ListMessage => ({
   _tag: "regular-message",
@@ -2348,7 +2346,7 @@ describe("native transcript markdown", () => {
   )
 })
 
-// ── native-transcript-footer-room.test ──────────────────────────────────────
+// ── native transcript footer room ───────────────────────────────────────────
 
 /** A long resumed session: a model switch, four child completions, a cell with two ops. */
 const longHistory = (): SessionItem[] => {
@@ -2468,7 +2466,7 @@ describe("native transcript footer room", () => {
   )
 })
 
-// ── native-transcript-mouse.test ────────────────────────────────────────────
+// ── native transcript mouse ─────────────────────────────────────────────────
 
 describe("native transcript mouse tracking", () => {
   it.live("native history leaves the wheel to the terminal; the expanded view takes it back", () =>
@@ -2502,7 +2500,7 @@ describe("native transcript mouse tracking", () => {
   )
 })
 
-// ── native-transcript-fingerprint.test ──────────────────────────────────────
+// ── native transcript fingerprint ───────────────────────────────────────────
 
 /**
  * A committed item keeps its fingerprint when the feed rebuilds it.
@@ -2678,7 +2676,7 @@ describe("native transcript rebuild", () => {
   )
 })
 
-// ── native-transcript-commit.test ───────────────────────────────────────────
+// ── native transcript commit ────────────────────────────────────────────────
 
 /**
  * Native history hands a completed item to scrollback and only then drops it
