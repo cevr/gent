@@ -9,13 +9,14 @@ export interface BlanketDisableFinding {
 
 /**
  * oxlint honors both spellings, `eslint-disable` and `oxlint-disable`, so each
- * pattern matches both. A blanket directive names no rule; a block directive
- * disables its rules to the end of the file or the next enable.
+ * pattern matches both. A blanket directive names no rule; a file-wide
+ * directive, written as a block or a line comment, disables its rules to the
+ * end of the file or the next enable.
  */
 export const blanketDisableDirective =
   /(?:\/\*\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:\*\/|--|$))|(?:\/\/\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:--|$))/
 
-export const blockDisableDirective = /\/\*\s*(?:es|ox)lint-disable(?:\s|$)/
+export const blockDisableDirective = /(?:\/\*|\/\/)\s*(?:es|ox)lint-disable(?:\s|$)/
 
 const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)(?:\/|\.|\b)/
 

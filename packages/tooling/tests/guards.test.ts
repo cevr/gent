@@ -91,6 +91,21 @@ describe("blanket eslint disable checker", () => {
     ).toEqual([])
   })
 
+  test("flags a file-wide disable written as a line comment, in both spellings", () => {
+    // oxlint honours `// <tool>-disable <rule>` to the end of the file, the
+    // same as the block form.
+    const oxDirective = ["oxlint", "disable"].join("-")
+    expect(
+      findBannedEslintDisableBlocks(
+        "sample.ts",
+        [`// ${directive} effect/noNullish`, `// ${oxDirective} effect/noNullish`].join("\n"),
+      ),
+    ).toEqual([
+      { file: "sample.ts", line: 1 },
+      { file: "sample.ts", line: 2 },
+    ])
+  })
+
   test("allows block comments only in explicit fixture files", () => {
     expect(
       findBannedEslintDisableBlocks(
