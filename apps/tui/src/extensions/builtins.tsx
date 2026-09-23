@@ -219,8 +219,8 @@ export const rankListed = <E,>(
  * fff ranks them and keeps the pick history. Where fff cannot run, the shared
  * matcher ranks the listing instead.
  *
- * The list is read when the popup opens (an empty filter) and reused for each
- * keystroke after, so typing does not relist the tree. A path is written as
+ * The list is read once per open (`onOpen`), whatever filter the popup opens
+ * on, and reused for each keystroke after, so typing does not relist the tree. A path is written as
  * the composer reads it back (`formatFileRef`), and a directory row completes
  * to `@dir/` so the popup keeps going inside it.
  */
@@ -318,6 +318,9 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
       readonly session: string
       readonly fiber: Fiber.Fiber<ReadonlyArray<string>>
     }>()
+    // Each open starts a new listing generation; a read from an earlier open
+    // never becomes the listing of this one.
+    let opened = 0
     /**
      * The session a key was typed in, read once per key. The listing request
      * names it, so a switch while the key is being served cannot send the
@@ -334,7 +337,7 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
         session,
       }
     }
-    const fetchListing = ({ key: session, session: asked }: Asker) =>
+    const fetchListing = ({ key: session, session: asked }: Asker, generation: number) =>
       Option.match(asked, {
         onNone: () => Effect.succeed<ReadonlyArray<string>>([]),
         onSome: (active) => transport.request(ref(FilesRpc.List), {}, active),
@@ -344,7 +347,7 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
         Effect.orElseSucceed((): ReadonlyArray<string> => []),
         Effect.tap((paths) =>
           Effect.sync(() => {
-            listing = Option.some({ session, paths })
+            if (generation === opened) listing = Option.some({ session, paths })
           }),
         ),
       )
@@ -353,7 +356,7 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
         const session = asker.key
         const inFlight = Option.filter(pending, (read) => read.session === session)
         if (Option.isSome(inFlight)) return yield* Fiber.join(inFlight.value.fiber)
-        const fiber = yield* lifecycle.scoped(Effect.forkScoped(fetchListing(asker)))
+        const fiber = yield* lifecycle.scoped(Effect.forkScoped(fetchListing(asker, opened)))
         pending = Option.some({ session, fiber })
         return yield* Fiber.join(fiber).pipe(
           Effect.ensuring(
@@ -385,13 +388,12 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
         Effect.gen(function* () {
           const asker = askingSession()
           const cwd = yield* workspace.sessionCwd
+          const paths = yield* listingFor(asker)
           if (filter.length === 0) {
-            const paths = yield* readListing(asker)
             // Opening the popup starts the scan, so the first typed key finds it ready.
             yield* lifecycle.scoped(Effect.forkScoped(Effect.ignore(finderFor(cwd))))
             return topLevel(paths).slice(0, MAX_RESULTS).map(formatMatch)
           }
-          const paths = yield* listingFor(asker)
           const ranked = yield* finderFor(cwd).pipe(
             Effect.tap((entry) => entry.scanned),
             Effect.flatMap((entry) =>
@@ -416,6 +418,13 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
           )
           return ranked.map(formatMatch)
         }),
+      // The listing lives for one open: whatever filter the popup opens on,
+      // it ranks a list read since then.
+      onOpen: () => {
+        opened++
+        listing = Option.none()
+        pending = Option.none()
+      },
       formatInsertion: (id: string) => {
         // A file ends the reference. A directory keeps completing inside
         // itself, so a quoted one leaves its quote open for the next segment.

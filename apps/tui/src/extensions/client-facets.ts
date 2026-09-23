@@ -763,6 +763,12 @@ export interface AutocompleteContribution {
   readonly formatInsertion?: (id: string) => string
   /** Called after an item is selected. Use for side effects like frecency tracking. */
   readonly onSelect?: (id: string, filter: string) => void
+  /**
+   * Called each time the popup opens on this prefix, before its first
+   * `items`. A source that caches between keys drops the cache here, so the
+   * reader never ranks a list older than the popup, whatever filter it opens on.
+   */
+  readonly onOpen?: () => void
 }
 
 // ── Buckets ──

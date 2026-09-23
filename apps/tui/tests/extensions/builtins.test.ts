@@ -137,6 +137,10 @@ const withFilesPopup = <A>(
     ) => Effect.Effect<ReadonlyArray<AutocompleteItem>, never, ClientRuntimeServices>
     readonly insertion: (id: string) => string
     readonly select: (id: string, filter: string) => void
+    /** What the popup does when it mounts. */
+    readonly open: () => void
+    /** The server's listing from now on. */
+    readonly relist: (next: ReadonlyArray<string>) => void
     readonly reads: () => number
   }) => Effect.Effect<A, never, ClientRuntimeServices>,
   options: {
@@ -157,6 +161,7 @@ const withFilesPopup = <A>(
       yield* fs.writeFileString(path.join(sessionCwd, file), file)
     }
     let reads = 0
+    let listed = paths
     return yield* provideClientServices(
       Effect.gen(function* () {
         const contributions = yield* builtinFiles.setup
@@ -170,7 +175,11 @@ const withFilesPopup = <A>(
           Option.getOrThrow(Option.fromUndefinedOr(source.formatInsertion))(id)
         const select = (id: string, filter: string) =>
           Option.getOrThrow(Option.fromUndefinedOr(source.onSelect))(id, filter)
-        return yield* body({ items, insertion, select, reads: () => reads })
+        const open = () => Option.map(Option.fromUndefinedOr(source.onOpen), (onOpen) => onOpen())
+        const relist = (next: ReadonlyArray<string>) => {
+          listed = next
+        }
+        return yield* body({ items, insertion, select, open, relist, reads: () => reads })
       }).pipe(Effect.orDie),
       {
         // The session is rooted outside the launch directory: fff scans the session's.
@@ -179,7 +188,10 @@ const withFilesPopup = <A>(
         requestEffect: () =>
           Effect.sync(() => {
             reads++
-          }).pipe(Effect.andThen(options.gate ?? Effect.void), Effect.as(paths)),
+          }).pipe(
+            Effect.andThen(options.gate ?? Effect.void),
+            Effect.andThen(Effect.sync(() => listed)),
+          ),
       },
     )
   })
@@ -406,6 +418,26 @@ describe("files popup", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  filesTest("reopening the popup mid-path offers a file listed since the last open", () =>
+    Effect.gen(function* () {
+      const shown = yield* withFilesPopup(
+        ["src/old.ts"],
+        (popup) =>
+          Effect.gen(function* () {
+            popup.open()
+            yield* popup.items("")
+            yield* popup.items("src/")
+            popup.relist(["src/old.ts", "src/new.ts"])
+            // The popup closed; the reader reopens it on a path already typed.
+            popup.open()
+            return yield* popup.items("src/")
+          }),
+        { unlisted: ["src/new.ts"] },
+      )
+      expect(shown.map((item) => item.id)).toContain("src/new.ts")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   filesTest("a file the listing leaves out is not offered", () =>
     Effect.gen(function* () {
       const shown = yield* withFilesPopup(["src/kept.ts"], (popup) => popup.items("ts"), {
@@ -437,18 +469,22 @@ describe("files popup", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  filesTest("typing after the popup opens reuses its listing", () =>
+  filesTest("keys typed inside one open reuse its listing; the next open reads again", () =>
     Effect.gen(function* () {
       const reads = yield* withFilesPopup(["src/a.ts", "src/b.ts"], (popup) =>
         Effect.gen(function* () {
+          popup.open()
           yield* popup.items("")
           yield* popup.items("s")
           yield* popup.items("sa")
           yield* popup.items("")
-          return popup.reads()
+          const inOneOpen = popup.reads()
+          popup.open()
+          yield* popup.items("")
+          return [inOneOpen, popup.reads()]
         }),
       )
-      expect(reads).toBe(2)
+      expect(reads).toEqual([1, 2])
     }).pipe(Effect.timeout("10 seconds")),
   )
 

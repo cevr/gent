@@ -36,7 +36,7 @@ import {
   renderFrame,
   renderWithProviders as renderHarness,
 } from "./render-harness-boundary"
-import { createSignal, type JSX, onMount } from "solid-js"
+import { createSignal, type JSX, onMount, Show } from "solid-js"
 import { PromptSearchState } from "../src/pickers"
 import { type ClientContextValue, type SessionIdentity, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
@@ -992,6 +992,52 @@ function KeyProbe(props: { readonly onKey: (name: string) => void }) {
 }
 
 describe("AutocompletePopup renderer", () => {
+  it.live("each open tells the source once, before its first fetch", () =>
+    Effect.gen(function* () {
+      const seen: Array<string> = []
+      const [open, setOpen] = createSignal(true)
+      const [filter, setFilter] = createSignal("src/")
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            const ui = useExtensionUI()
+            ui.setDynamicAutocomplete([
+              {
+                prefix: "@",
+                title: "Files",
+                onOpen: () => seen.push("open"),
+                items: (typed) => {
+                  seen.push(`items ${typed}`)
+                  return [{ id: `${typed}x`, label: `@${typed}x` }]
+                },
+              },
+            ])
+            return (
+              <Show when={open()}>
+                <AutocompletePopup
+                  state={{ type: "@", filter: filter(), triggerPos: 0 }}
+                  onSelect={() => {}}
+                  onComplete={() => {}}
+                  onClose={() => {}}
+                  onGhostChange={() => {}}
+                />
+              </Show>
+            )
+          },
+          { width: 80, height: 24 },
+        ),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("@src/x"), "first open")
+      setFilter("src/a")
+      yield* waitForFrame(setup, (frame) => frame.includes("@src/ax"), "typed key")
+      setOpen(false)
+      yield* Effect.promise(() => setup.renderOnce())
+      setOpen(true)
+      yield* waitForFrame(setup, (frame) => frame.includes("@src/ax"), "second open")
+      expect(seen).toEqual(["open", "items src/", "items src/a", "open", "items src/a"])
+    }),
+  )
+
   it.live("wraps the cursor at both ends through the shared list", () =>
     Effect.gen(function* () {
       const picked: Array<string> = []

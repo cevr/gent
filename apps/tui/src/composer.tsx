@@ -314,18 +314,30 @@ export function AutocompletePopup(props: AutocompletePopupProps) {
   // contribution for the prefix, drops duplicate ids, and turns one
   // contribution's failure into no rows from it plus one log line.
 
+  // The prefix this popup has opened on. A mount is an open, and so is a
+  // switch to another prefix while mounted; each tells its contributions once,
+  // before their first fetch.
+  let openedOn = Option.none<string>()
+  const openOn = (prefix: string) => {
+    if (Option.contains(openedOn, prefix)) return
+    openedOn = Option.some(prefix)
+    for (const contribution of contributions()) contribution.onOpen?.()
+  }
+
   // Fetch items from all contributions for this prefix, keyed on [prefix, filter]
   const [items] = createResource(
     (): readonly [string, string] => [props.state.type, props.state.filter],
-    ([_prefix, filter]): Promise<AutocompleteItem[]> =>
-      runAutocompleteContributions(
+    ([prefix, filter]): Promise<AutocompleteItem[]> => {
+      openOn(prefix)
+      return runAutocompleteContributions(
         contributions(),
         filter,
         extensionUI.clientRuntime,
-        (prefix, reason) => {
-          log.error("autocomplete.contribution.failed", { prefix, error: reason })
+        (failed, reason) => {
+          log.error("autocomplete.contribution.failed", { prefix: failed, error: reason })
         },
-      ),
+      )
+    },
   )
 
   // Use .latest for stale-while-revalidate: keeps showing previous results
