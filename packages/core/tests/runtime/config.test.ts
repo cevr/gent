@@ -451,6 +451,45 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    it.scopedLive("a driver write keeps unknown keys inside the overrides it touches", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const readRaw = fs
+          .readFileString(userConfigPath)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* fs.writeFileString(
+            userConfigPath,
+            encodeJson({
+              driverOverrides: {
+                main: { _tag: "Model", id: "openai", futureOption: true },
+                helper: { _tag: "Model", id: "openai", futureOption: "kept" },
+              },
+            }),
+          )
+          // One override changes; the other does not. Both keep their unknown key.
+          yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
+          expect(yield* readRaw).toEqual({
+            driverOverrides: {
+              main: { _tag: "Model", id: "anthropic", futureOption: true },
+              helper: { _tag: "Model", id: "openai", futureOption: "kept" },
+            },
+          })
+          // Clearing one override deletes that entry, and only that entry.
+          yield* cfg.clearDriverOverride(AgentName.make("main"))
+          expect(yield* readRaw).toEqual({
+            driverOverrides: { helper: { _tag: "Model", id: "openai", futureOption: "kept" } },
+          })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive("a write without a fresh read refuses a config broken after startup", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem

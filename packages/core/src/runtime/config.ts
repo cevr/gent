@@ -163,17 +163,52 @@ const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
 const RawConfigJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
 type RawConfig = typeof RawConfigJson.Type
 
+const isRawObject = Schema.is(Schema.Record(Schema.String, Schema.Unknown))
+
+/** The raw keys of an entry that neither decoded side knows. */
+const unknownKeys = (raw: RawConfig, before: RawConfig, after: RawConfig): RawConfig =>
+  Object.fromEntries(Object.entries(raw).filter(([key]) => !(key in before) && !(key in after)))
+
+/**
+ * A changed record-of-struct field (`driverOverrides`, `agents`). Its keys
+ * follow `after`: an entry the decode dropped (a retired driver ref) or the
+ * change cleared is removed. An entry `before` also decoded keeps the raw
+ * keys gent does not know, under the encoded `after` entry.
+ */
+const mergeEntries = (raw: RawConfig, before: RawConfig, after: RawConfig): RawConfig =>
+  Object.fromEntries(
+    Object.entries(after).map(([key, now]) => {
+      const current = raw[key]
+      const was = before[key]
+      if (isRawObject(current) && isRawObject(was) && isRawObject(now)) {
+        return [key, { ...unknownKeys(current, was, now), ...now }]
+      }
+      return [key, now]
+    }),
+  )
+
+/** The `UserConfig` fields that are a record of struct entries. */
+const ENTRY_FIELDS: ReadonlySet<string> = new Set(["driverOverrides", "agents"])
+
 /**
  * `raw` with each `UserConfig` field that differs between `before` and
  * `after` (both encoded) set to its `after` value, or removed when `after`
- * leaves it out. Every other key of `raw` is kept as it is.
+ * leaves it out. A changed entry field keeps the unknown keys inside its
+ * entries (`mergeEntries`). Every other key of `raw` is kept as it is.
  */
 const mergeChangedFields = (raw: RawConfig, before: RawConfig, after: RawConfig): RawConfig => {
   const merged = { ...raw }
   for (const key of Object.keys(UserConfig.fields)) {
-    if (Equal.equals(before[key], after[key])) continue
-    if (key in after) merged[key] = after[key]
-    else delete merged[key]
+    const now = after[key]
+    if (Equal.equals(before[key], now)) continue
+    if (!(key in after)) delete merged[key]
+    else {
+      const current = raw[key]
+      const was = before[key]
+      if (ENTRY_FIELDS.has(key) && isRawObject(current) && isRawObject(was) && isRawObject(now)) {
+        merged[key] = mergeEntries(current, was, now)
+      } else merged[key] = now
+    }
   }
   return merged
 }
