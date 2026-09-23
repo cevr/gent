@@ -12,6 +12,7 @@ import {
   Option,
   Predicate,
   Redacted,
+  Ref,
   Result,
   Schema,
   Scope,
@@ -23,6 +24,7 @@ import {
   type HttpBody,
   HttpClient,
   HttpClientRequest,
+  type HttpClientResponse,
   HttpRouter,
   HttpServerRequest,
   HttpServerResponse,
@@ -56,6 +58,7 @@ import {
   EMPTY_CREDENTIAL_CELL,
   explainCredentialFailure,
   freshCredentials,
+  HttpResponseField,
   isTransientTokenStatus,
   makeCredentialCache,
   type CredentialStore,
@@ -151,12 +154,13 @@ export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
 }) {}
 
 /**
- * ChatGPT OAuth reaches the Codex backend for GPT-5 models and GPT-6 Astra.
+ * ChatGPT OAuth reaches the Codex backend for the GPT-5 and GPT-6 families
+ * (Astra, Sol and Luna: learn.chatgpt.com/docs/models, read 2026-09-23).
  * Chat aliases and pro tiers are API-only. The catalog itself comes from
- * models.dev, so new GPT-5 releases need no list update here.
+ * models.dev, so new releases in these families need no list update here.
  */
 const isOpenAIOAuthModel = (modelName: string): boolean =>
-  (modelName.startsWith("gpt-5") || modelName === "gpt-6-astra") &&
+  (modelName.startsWith("gpt-5") || modelName.startsWith("gpt-6-")) &&
   !modelName.endsWith("-chat-latest") &&
   !modelName.endsWith("-pro")
 
@@ -1276,6 +1280,7 @@ const OPENAI_ACCEPTED_EFFORTS: ReadonlyArray<{
   // GPT-5.2, 5.4 and 5.5 Pro. Anchored, so o1-pro and o3-pro fall to the o-series row.
   { pattern: /^gpt-5\.\d+-pro(-|$)/, accepts: ["medium", "high", "xhigh"] },
   { pattern: /^gpt-6-astra(-|$)/, accepts: ["low", "medium", "high", "xhigh", "max"] },
+  { pattern: /^gpt-6-(sol|luna)(-|$)/, accepts: ["none", "low", "medium", "high", "xhigh", "max"] },
   { pattern: /^gpt-5\.6(-|$)/, accepts: ["none", "low", "medium", "high", "xhigh", "max"] },
   { pattern: /codex-max|^gpt-5\.[2-9]-codex/, accepts: ["low", "medium", "high", "xhigh"] },
   { pattern: /codex|^o\d/, accepts: ["low", "medium", "high"] },
@@ -1322,9 +1327,13 @@ const buildOpenAiResponsesConfig = (
   if (Option.isSome(hints)) {
     const cacheKey = Option.fromUndefinedOr(hints.value.cacheKey)
     if (Option.isSome(cacheKey)) config = { ...config, prompt_cache_key: cacheKey.value }
+    // `max_output_tokens` counts reasoning tokens too, so on a reasoning
+    // model a small cap (the 768-token compaction summary) is shared with
+    // the thinking the effort floor still asks for.
     const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
     if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
-    // OpenAI's reasoning models reject `temperature`.
+    // OpenAI's reasoning models reject `temperature`. GPT-5.1 and 5.2 take it
+    // at effort `none`; it is dropped there too, as one rule per model.
     const temperature = Option.fromNullishOr(hints.value.temperature)
     if (Option.isSome(temperature) && !openAiModelReasons(modelName, hints.value)) {
       config = { ...config, temperature: temperature.value }
@@ -1340,20 +1349,110 @@ const buildOpenAiResponsesConfig = (
   return config
 }
 
+// ── Reasoning summary refusal ──
+
+/**
+ * OpenAI gives reasoning summaries only to a verified organization: "you may
+ * need to complete organization verification" (developers.openai.com/api/docs/
+ * guides/reasoning, read 2026-09-23). An unverified one gets HTTP 400,
+ * `invalid_request_error` with `param: "reasoning.summary"` and
+ * `code: "unsupported_value"`. The summary is optional, so the API-key client
+ * retries that request once without it and leaves it out from then on.
+ */
+const SummaryRefusal = Schema.fromJsonString(
+  Schema.Struct({
+    error: Schema.Struct({
+      param: Schema.Literal("reasoning.summary"),
+      code: Schema.Literal("unsupported_value"),
+    }),
+  }),
+)
+const decodeSummaryRefusal = Schema.decodeUnknownOption(SummaryRefusal)
+
+/** Drives the one retry after a summary refusal; carries the refusal for when no retry is left. */
+class SummaryRefusedError extends Schema.TaggedError<SummaryRefusedError>(
+  "@gent/extensions/src/openai/SummaryRefusedError",
+)("SummaryRefusedError", {
+  response: HttpResponseField,
+}) {}
+
+/** The request with `reasoning.summary` removed; any other body as it is. */
+const withoutReasoningSummary = (
+  req: HttpClientRequest.HttpClientRequest,
+): HttpClientRequest.HttpClientRequest => {
+  const parsed = tryReadJsonBody(req.body)
+  if (Option.isNone(parsed)) return req
+  const reasoning = parsed.value["reasoning"]
+  if (!isRecord(reasoning) || !("summary" in reasoning)) return req
+  const { summary: _summary, ...kept } = reasoning
+  const encoded = new TextEncoder().encode(encodeCodexBody({ ...parsed.value, reasoning: kept }))
+  return HttpClientRequest.bodyUint8Array(req, encoded, "application/json")
+}
+
+/** Fails a summary refusal after recording it; any other response passes. */
+const refusalCheck = (
+  refused: Ref.Ref<boolean>,
+  response: HttpClientResponse.HttpClientResponse,
+): Effect.Effect<void, SummaryRefusedError> => {
+  if (response.status !== 400) return Effect.void
+  return response.text.pipe(
+    Effect.orElseSucceed(() => ""),
+    Effect.map(decodeSummaryRefusal),
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: () =>
+          Ref.set(refused, true).pipe(
+            Effect.andThen(Effect.fail(new SummaryRefusedError({ response }))),
+          ),
+      }),
+    ),
+  )
+}
+
+/**
+ * The API-key client: leaves the summary out once `refused` is set, and sets
+ * it on a summary refusal and retries once. `refused` lives as long as the
+ * driver, so a later turn does not pay the refused request again.
+ */
+const summaryRefusalClient =
+  (refused: Ref.Ref<boolean>) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+    client.pipe(
+      HttpClient.mapRequestEffect((req) =>
+        Effect.map(Ref.get(refused), (off) => {
+          if (off) return withoutReasoningSummary(req)
+          return req
+        }),
+      ),
+      HttpClient.transformResponse((effect) =>
+        effect.pipe(
+          Effect.tap((response) => refusalCheck(refused, response)),
+          Effect.retry({ while: (e) => e._tag === "SummaryRefusedError", times: 1 }),
+          Effect.catchTag("SummaryRefusedError", (e) => Effect.succeed(e.response)),
+        ),
+      ),
+    )
+
 // ── Layer construction helpers ──
 
 /**
  * API-key path: the Responses client with the key as Bearer auth over
- * `FetchHttpClient`. No Codex transform — the Codex backend rewrite + OAuth
- * headers are specific to the ChatGPT OAuth path.
+ * `FetchHttpClient`, with the summary-refusal retry. No Codex transform — the
+ * Codex backend rewrite + OAuth headers are specific to the ChatGPT OAuth path.
  */
 const makeApiKeyOpenAIResolution = (
   modelName: string,
   config: OpenAiResponsesConfig,
   apiKey: string,
+  summaryRefused: Ref.Ref<boolean>,
 ) => {
+  const httpClientLayer = Layer.effect(
+    HttpClient.HttpClient,
+    Effect.map(HttpClient.HttpClient, summaryRefusalClient(summaryRefused)),
+  ).pipe(Layer.provide(FetchHttpClient.layer))
   const clientLayer = OpenAiResponsesClient.layer({ apiKey: Redacted.make(apiKey) }).pipe(
-    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(httpClientLayer),
   )
   return AiModel.make(
     "openai",
@@ -1426,148 +1525,156 @@ export const buildOpenAIModelDriver = (
   pendingCallbacks: Map<string, PendingCallbackEntry>,
   envApiKey: Option.Option<string>,
   catalog: CatalogSource,
-): ModelDriverContribution => ({
-  id: "openai",
-  name: "OpenAI",
-  envCredential: "OPENAI_API_KEY",
-  retry: {
-    ...DEFAULT_RETRY_POLICY,
-    // An accepted request can still end with an error event inside the stream; OpenAI names its code.
-    transientStreamEvent: Schema.Struct({
-      code: Schema.Literals(["server_error", "rate_limit_exceeded"]),
-    }),
-  },
-  resolveModel: (modelName, authInfo, hints) =>
-    Effect.gen(function* () {
-      const auth = Option.fromNullishOr(authInfo)
-      // Stored OAuth — handle inline with token refresh. Both paths speak the
-      // Responses API through @effect/ai-openai; OAuth adds the Codex rewrite.
-      if (Option.isSome(auth) && auth.value._tag === "Oauth") {
-        const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
-        if (!isOpenAIOAuthModel(modelName)) {
-          return yield* new ProviderAuthError({
-            message: `Model "${modelName}" not available with ChatGPT OAuth`,
-          })
-        }
-        const creds = yield* makeOpenAICredentialCache(credentialCellRef, realIO, auth.value.update)
-        yield* checkCredentials(creds)
-        return AiModel.make("openai", modelName, makeOauthOpenAILayer(modelName, config, creds))
-      }
-
-      // Stored API key takes precedence over env var
-      const apiKey = apiKeyFrom(auth, envApiKey)
-
-      if (Option.isSome(apiKey)) {
-        const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
-        return makeApiKeyOpenAIResolution(modelName, config, apiKey.value)
-      }
-
-      // Fail closed — no stored OAuth, no stored API key, no env var.
-      // Previous versions fell through to `OpenAiClient.layer({})` and let
-      // the unauthenticated request fail late as a generic HTTP error,
-      // masking the real auth failure for non-TUI callers.
-      return yield* new ProviderAuthError({
-        message:
-          "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",
-      })
-    }),
-  listModels: (authInfo) =>
-    driverListModels(catalog, "openai")().pipe(
-      Effect.map((models) => {
-        // When OAuth is active, filter to allowed models + zero pricing
+): ModelDriverContribution => {
+  // Set once OpenAI refuses this key's organization a reasoning summary.
+  const summaryRefused = Ref.makeUnsafe(false)
+  return {
+    id: "openai",
+    name: "OpenAI",
+    envCredential: "OPENAI_API_KEY",
+    retry: {
+      ...DEFAULT_RETRY_POLICY,
+      // An accepted request can still end with an error event inside the stream; OpenAI names its code.
+      transientStreamEvent: Schema.Struct({
+        code: Schema.Literals(["server_error", "rate_limit_exceeded"]),
+      }),
+    },
+    resolveModel: (modelName, authInfo, hints) =>
+      Effect.gen(function* () {
         const auth = Option.fromNullishOr(authInfo)
-        if (Option.isNone(auth) || auth.value._tag !== "Oauth") return models
-        return models
-          .filter((model) => {
-            const parts = model.id.split("/", 2)
-            const modelName = Option.fromNullishOr(parts[1])
-            return Option.isSome(modelName) && isOpenAIOAuthModel(modelName.value)
-          })
-          .map((model) => Model.make({ ...model, pricing: { input: 0, output: 0 } }))
-      }),
-    ),
-  auth: {
-    methods: [
-      AuthMethod.make({ type: "oauth", label: "ChatGPT Pro/Plus (browser)" }),
-      AuthMethod.make({
-        type: "oauth",
-        label: "ChatGPT Pro/Plus (device code)",
-      }),
-      AuthMethod.make({ type: "api", label: "Manually enter API key" }),
-    ],
-    authorize: (
-      ctx,
-    ): Effect.Effect<Option.Option<ProviderAuthorizationResult>, ProviderAuthError> =>
-      Effect.gen(function* () {
-        const allocate = Option.fromNullishOr(OAUTH_ALLOCATORS[ctx.methodIndex])
-        if (Option.isNone(allocate)) return Option.none()
-        const { flow, close } = yield* allocate.value.pipe(
-          Effect.mapError(
-            (e) =>
-              new ProviderAuthError({
-                message: `OpenAI OAuth authorization failed: ${e.message}`,
-                cause: e,
-              }),
-          ),
-        )
-        // 5-minute TTL on abandoned auth attempts. Without this an
-        // abandoned flow leaves the redirect HTTP server resident
-        // until extension teardown. The fiber both clears the map
-        // entry and closes the OAuth scope (tears down the listener).
-        // It is detached: `authorize` returns at once, and a child fiber
-        // would stop with it. `callback` interrupts it.
-        const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
-          Effect.flatMap(() =>
-            Effect.gen(function* () {
-              pendingCallbacks.delete(ctx.authorizationId)
-              yield* close
-            }),
-          ),
-          Effect.forkDetach,
-        )
-        pendingCallbacks.set(ctx.authorizationId, {
-          flow,
-          close,
-          timeoutFiber,
+        // Stored OAuth — handle inline with token refresh. Both paths speak the
+        // Responses API through @effect/ai-openai; OAuth adds the Codex rewrite.
+        if (Option.isSome(auth) && auth.value._tag === "Oauth") {
+          const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
+          if (!isOpenAIOAuthModel(modelName)) {
+            return yield* new ProviderAuthError({
+              message: `Model "${modelName}" not available with ChatGPT OAuth`,
+            })
+          }
+          const creds = yield* makeOpenAICredentialCache(
+            credentialCellRef,
+            realIO,
+            auth.value.update,
+          )
+          yield* checkCredentials(creds)
+          return AiModel.make("openai", modelName, makeOauthOpenAILayer(modelName, config, creds))
+        }
+
+        // Stored API key takes precedence over env var
+        const apiKey = apiKeyFrom(auth, envApiKey)
+
+        if (Option.isSome(apiKey)) {
+          const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
+          return makeApiKeyOpenAIResolution(modelName, config, apiKey.value, summaryRefused)
+        }
+
+        // Fail closed — no stored OAuth, no stored API key, no env var.
+        // Previous versions fell through to `OpenAiClient.layer({})` and let
+        // the unauthenticated request fail late as a generic HTTP error,
+        // masking the real auth failure for non-TUI callers.
+        return yield* new ProviderAuthError({
+          message:
+            "OpenAI credentials unavailable: no ChatGPT OAuth, stored API key, or OPENAI_API_KEY env var",
         })
-        return Option.some(flow.authorization)
       }),
-    callback: (ctx) =>
-      Effect.gen(function* () {
-        const entry = pendingCallbacks.get(ctx.authorizationId)
-        pendingCallbacks.delete(ctx.authorizationId)
-        const pendingEntry = Option.fromNullishOr(entry)
-        if (Option.isNone(pendingEntry)) {
-          return yield* new ProviderAuthError({
-            message: "OpenAI OAuth callback state is missing or expired",
-          })
-        }
-        yield* Fiber.interrupt(pendingEntry.value.timeoutFiber)
-        const result = yield* pendingEntry.value.flow.callback(ctx.code).pipe(
-          Effect.mapError(
-            (e) =>
-              new ProviderAuthError({
-                message: `OpenAI OAuth callback failed: ${e.message}`,
-                cause: e,
+    listModels: (authInfo) =>
+      driverListModels(catalog, "openai")().pipe(
+        Effect.map((models) => {
+          // When OAuth is active, filter to allowed models + zero pricing
+          const auth = Option.fromNullishOr(authInfo)
+          if (Option.isNone(auth) || auth.value._tag !== "Oauth") return models
+          return models
+            .filter((model) => {
+              const parts = model.id.split("/", 2)
+              const modelName = Option.fromNullishOr(parts[1])
+              return Option.isSome(modelName) && isOpenAIOAuthModel(modelName.value)
+            })
+            .map((model) => Model.make({ ...model, pricing: { input: 0, output: 0 } }))
+        }),
+      ),
+    auth: {
+      methods: [
+        AuthMethod.make({ type: "oauth", label: "ChatGPT Pro/Plus (browser)" }),
+        AuthMethod.make({
+          type: "oauth",
+          label: "ChatGPT Pro/Plus (device code)",
+        }),
+        AuthMethod.make({ type: "api", label: "Manually enter API key" }),
+      ],
+      authorize: (
+        ctx,
+      ): Effect.Effect<Option.Option<ProviderAuthorizationResult>, ProviderAuthError> =>
+        Effect.gen(function* () {
+          const allocate = Option.fromNullishOr(OAUTH_ALLOCATORS[ctx.methodIndex])
+          if (Option.isNone(allocate)) return Option.none()
+          const { flow, close } = yield* allocate.value.pipe(
+            Effect.mapError(
+              (e) =>
+                new ProviderAuthError({
+                  message: `OpenAI OAuth authorization failed: ${e.message}`,
+                  cause: e,
+                }),
+            ),
+          )
+          // 5-minute TTL on abandoned auth attempts. Without this an
+          // abandoned flow leaves the redirect HTTP server resident
+          // until extension teardown. The fiber both clears the map
+          // entry and closes the OAuth scope (tears down the listener).
+          // It is detached: `authorize` returns at once, and a child fiber
+          // would stop with it. `callback` interrupts it.
+          const timeoutFiber = yield* Effect.sleep(Duration.minutes(5)).pipe(
+            Effect.flatMap(() =>
+              Effect.gen(function* () {
+                pendingCallbacks.delete(ctx.authorizationId)
+                yield* close
               }),
-          ),
-          Effect.ensuring(pendingEntry.value.close),
-        )
-        const signedIn: OpenAICredentials = {
-          access: result.access,
-          refresh: result.refresh,
-          expires: result.expires,
-          accountId: Option.fromNullishOr(result.accountId),
-        }
-        yield* replaceHeldCredential(
-          OpenAICredentials,
-          credentialCellRef,
-          signedIn,
-          ctx.persist(result),
-        )
-      }),
-  },
-})
+            ),
+            Effect.forkDetach,
+          )
+          pendingCallbacks.set(ctx.authorizationId, {
+            flow,
+            close,
+            timeoutFiber,
+          })
+          return Option.some(flow.authorization)
+        }),
+      callback: (ctx) =>
+        Effect.gen(function* () {
+          const entry = pendingCallbacks.get(ctx.authorizationId)
+          pendingCallbacks.delete(ctx.authorizationId)
+          const pendingEntry = Option.fromNullishOr(entry)
+          if (Option.isNone(pendingEntry)) {
+            return yield* new ProviderAuthError({
+              message: "OpenAI OAuth callback state is missing or expired",
+            })
+          }
+          yield* Fiber.interrupt(pendingEntry.value.timeoutFiber)
+          const result = yield* pendingEntry.value.flow.callback(ctx.code).pipe(
+            Effect.mapError(
+              (e) =>
+                new ProviderAuthError({
+                  message: `OpenAI OAuth callback failed: ${e.message}`,
+                  cause: e,
+                }),
+            ),
+            Effect.ensuring(pendingEntry.value.close),
+          )
+          const signedIn: OpenAICredentials = {
+            access: result.access,
+            refresh: result.refresh,
+            expires: result.expires,
+            accountId: Option.fromNullishOr(result.accountId),
+          }
+          yield* replaceHeldCredential(
+            OpenAICredentials,
+            credentialCellRef,
+            signedIn,
+            ctx.persist(result),
+          )
+        }),
+    },
+  }
+}
 
 export const OpenAIExtension = defineExtension({
   id: "@gent/provider-openai",

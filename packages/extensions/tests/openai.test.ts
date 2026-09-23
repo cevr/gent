@@ -2053,6 +2053,8 @@ describe("OpenAI reasoning hints", () => {
           "gpt-5-mini",
           "gpt-5.1-codex",
           "gpt-6-astra",
+          "gpt-6-sol",
+          "gpt-6-luna",
         ]
         const lowest = [
           Option.some("none"),
@@ -2060,6 +2062,8 @@ describe("OpenAI reasoning hints", () => {
           Option.some("minimal"),
           Option.some("low"),
           Option.some("low"),
+          Option.some("none"),
+          Option.some("none"),
         ]
         expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), reasoningModels)).toEqual(lowest)
         expect(yield* effortsFor(makeOAuthInfo(), reasoningModels)).toEqual(lowest)
@@ -2872,7 +2876,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
       }),
   )
-  it.live("OAuth resolves the Astra review model", () =>
+  it.live("OAuth resolves the GPT-6 family: Astra, Sol and Luna", () =>
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
@@ -2882,16 +2886,18 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         Option.none(),
         testCatalogSource(),
       )
-      const model = yield* driver.resolveModel("gpt-6-astra", makeOAuthInfo())
-      const fetchState = makeFakeFetchState()
-      yield* runOne(model, fetchState)
-      expect(
-        fetchState.captured.some(
-          (request) =>
-            request.url === "https://chatgpt.com/backend-api/codex/responses" &&
-            request.body?.includes("gpt-6-astra"),
-        ),
-      ).toBe(true)
+      for (const modelName of ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]) {
+        const model = yield* driver.resolveModel(modelName, makeOAuthInfo())
+        const fetchState = makeFakeFetchState()
+        yield* runOne(model, fetchState)
+        expect(
+          fetchState.captured.some(
+            (request) =>
+              request.url === "https://chatgpt.com/backend-api/codex/responses" &&
+              request.body?.includes(modelName),
+          ),
+        ).toBe(true)
+      }
     }),
   )
   it.live("OAuth resolveModel rejects models the Codex backend does not serve", () =>
@@ -3041,6 +3047,72 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
           reasoning: { effort: "minimal", summary: "auto" },
         })
       }),
+  )
+  it.live(
+    "an organization OpenAI refuses summaries to gets one retry without the summary, and later requests leave it out",
+    () =>
+      Effect.gen(function* () {
+        const credentialCellRef =
+          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+        const driver = buildOpenAIModelDriver(
+          credentialCellRef,
+          noopCallbacks(),
+          Option.none(),
+          testCatalogSource(),
+        )
+        const hints: ProviderHints = { reasoning: "high" }
+        // The documented refusal: developers.openai.com/api/docs/guides/reasoning.
+        const refusal = encodeExternalJson({
+          error: {
+            message: "Your organization must be verified to generate reasoning summaries.",
+            type: "invalid_request_error",
+            param: "reasoning.summary",
+            code: "unsupported_value",
+          },
+        })
+        const responder = (req: { readonly body?: string }) => {
+          if (req.body?.includes('"summary"') === true) {
+            return { status: 400, body: refusal, headers: { "content-type": "application/json" } }
+          }
+          return openaiResponsesHappyResponse()
+        }
+        const summaries = (state: FakeFetchState) =>
+          state.captured.map((req) => req.body?.includes('"summary"') === true)
+        const first = makeFakeFetchState()
+        const model = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), hints)
+        yield* oneGenerate(model, first, responder)
+        expect(summaries(first)).toEqual([true, false])
+        const later = makeFakeFetchState()
+        const again = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), hints)
+        yield* oneGenerate(again, later, responder)
+        expect(summaries(later)).toEqual([false])
+      }),
+  )
+  it.live("any other 400 is not retried and keeps the summary", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+      )
+      const state = makeFakeFetchState()
+      const model = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), {
+        reasoning: "high",
+      })
+      const other = encodeExternalJson({
+        error: { message: "bad", type: "invalid_request_error", param: "input" },
+      })
+      const exit = yield* oneGenerate(model, state, () => ({
+        status: 400,
+        body: other,
+        headers: { "content-type": "application/json" },
+      })).pipe(Effect.exit)
+      expect(exit._tag).toBe("Failure")
+      expect(state.captured.length).toBe(1)
+    }),
   )
   it.live("an API-key request to a model that does not reason keeps its temperature", () =>
     Effect.gen(function* () {
