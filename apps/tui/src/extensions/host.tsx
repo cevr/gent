@@ -175,26 +175,29 @@ export function ExtensionUIProvider(props: {
     lifecycle: { addCleanup },
   })
 
-  if (props.scope) {
-    Effect.runSync(
-      Scope.addFinalizer(
-        props.scope,
-        Effect.promise(() => clientRuntime.dispose()),
-      ),
-    )
-  }
-
-  // Run widget-registered cleanups (Solid root disposers, pulse
-  // unsubscribes) FIRST, then dispose the per-provider runtime so layer
-  // finalizers run and any in-flight Effects are interrupted. Without
-  // this ordering, runtime disposal would yank `ClientContext` out
-  // from under widget cleanups that still need it.
-  onCleanup(() => {
+  // One disposer for both owners: the provider unmount and the UI scope at
+  // shutdown. It runs widget-registered cleanups (Solid root disposers, pulse
+  // unsubscribes) FIRST, then disposes the per-provider runtime so layer
+  // finalizers run and in-flight Effects are interrupted. Without this
+  // ordering, runtime disposal would yank `ClientContext` out from under
+  // widget cleanups that still need it. The first caller wins.
+  let disposed: Option.Option<Promise<void>> = Option.none()
+  const dispose = (): Promise<void> => {
+    if (Option.isSome(disposed)) return disposed.value
     for (const fn of cleanups) {
       Effect.runSync(Effect.ignore(Effect.try(fn)))
     }
     cleanups.length = 0
-    void clientRuntime.dispose()
+    const done = clientRuntime.dispose()
+    disposed = Option.some(done)
+    return done
+  }
+
+  if (props.scope) {
+    Effect.runSync(Scope.addFinalizer(props.scope, Effect.promise(dispose)))
+  }
+  onCleanup(() => {
+    void dispose()
   })
 
   onMount(() => {

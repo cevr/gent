@@ -63,8 +63,6 @@ export class ClientSetupError extends Schema.TaggedError<ClientSetupError>()("Cl
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
-// ── Transport ─────────────────────────────────────────────────────────────
-
 // ── Dependencies ──────────────────────────────────────────────────────────
 
 /**
@@ -113,6 +111,27 @@ const unknownActivity = (): ClientActivitySnapshot => ({ state: "unknown" })
 
 // ── transport facet ─────────────────────────────────────────────────────────
 
+export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
+
+/**
+ * Per-loop detail, for one loop at a time.
+ *
+ * Enumerating every loop must not fan out into N snapshot reads, so listings
+ * carry identity and liveness only and a client asks for this separately —
+ * for the row a reader is actually looking at. A session that has never
+ * streamed reads zero turns, zero cost and its resolved model.
+ */
+export interface ExtensionAgentDetail {
+  /** Runtime state tag, e.g. `"Idle"` / `"Running"`. */
+  readonly status: string
+  readonly model: string
+  readonly turns: number
+  readonly costUsd: number
+  readonly durationMs: number
+  /** Messages the last projection left out of the model's view; 0 before a turn has run. */
+  readonly omittedMessages: number
+}
+
 /**
  * `ClientContext.transport` — the typed transport surface for client extensions.
  *
@@ -138,28 +157,6 @@ const unknownActivity = (): ClientActivitySnapshot => ({ state: "unknown" })
  * The TUI's `ExtensionUIProvider` builds one `ManagedRuntime` per provider
  * with `makeClientRuntime`, and `loadTuiExtensions` runs each setup on it.
  */
-
-export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
-
-/**
- * Per-loop detail, for one loop at a time.
- *
- * Enumerating every loop must not fan out into N snapshot reads, so listings
- * carry identity and liveness only and a client asks for this separately —
- * for the row a reader is actually looking at. Every field is optional
- * because a session that has never streamed has no model and no cost yet.
- */
-export interface ExtensionAgentDetail {
-  /** Runtime state tag, e.g. `"Idle"` / `"Running"`. */
-  readonly status: Option.Option<string>
-  readonly model: Option.Option<string>
-  readonly turns: number
-  readonly costUsd: number
-  readonly durationMs: number
-  /** Messages the last projection left out of the model's view; 0 before a turn has run. */
-  readonly omittedMessages: number
-}
-
 export interface ClientTransport {
   /** Active (sessionId, branchId); `None` before a session is mounted. */
   readonly currentSession: () => Option.Option<ActiveExtensionSession>
@@ -386,8 +383,8 @@ const agentDetailAt = (
     client.session.getSnapshot({ sessionId: key.sessionId, branchId: key.branchId }),
   ).pipe(
     Effect.map((snapshot) => ({
-      status: Option.some(snapshot.runtime._tag),
-      model: Option.some(snapshot.resolvedModelId),
+      status: snapshot.runtime._tag,
+      model: snapshot.resolvedModelId,
       turns: snapshot.metrics.turns,
       costUsd: snapshot.metrics.costUsd,
       durationMs: snapshot.metrics.durationMs,

@@ -1,15 +1,20 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Option, Schema } from "effect"
+import { Deferred, Effect, Exit, Option, Schema, Scope } from "effect"
 import { createMemo, createRoot, createSignal } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
-import { ClientContext, sessionQuery } from "../../src/extensions/client-facets"
+import {
+  ClientContext,
+  clientContributions,
+  defineClientExtension,
+  sessionQuery,
+} from "../../src/extensions/client-facets"
 import { makeClientRuntime } from "../../src/extensions/host"
 import {
   makeClientTestTransport,
   makePaneSlot,
   provideClientServices,
 } from "../extension-test-harness-boundary"
-import { createMockRuntime } from "../render-harness-boundary"
+import { createMockRuntime, renderWithProviders } from "../render-harness-boundary"
 import { runRuntimeEffectBoundary } from "../run-effect-boundary"
 
 // ── ../extension-lifecycle.test ─────────────────────────────────────────────
@@ -37,6 +42,28 @@ describe("transport-only extension widgets", () => {
       lifecycle.addCleanup(() => calls.push("after-throw"))
       yield* Effect.forEach(cleanups, (cleanup) => Effect.sync(cleanup).pipe(Effect.ignoreCause))
       expect(calls).toEqual(["before-throw", "after-throw"])
+    }),
+  )
+  it.live("closing the UI scope at shutdown runs extension cleanups before the runtime ends", () =>
+    Effect.gen(function* () {
+      const calls: string[] = []
+      const registered = yield* Deferred.make<void>()
+      const tracked = defineClientExtension("@test/cleanup-at-shutdown", {
+        setup: Effect.gen(function* () {
+          const { lifecycle } = yield* ClientContext
+          lifecycle.addCleanup(() => calls.push("cleanup"))
+          yield* lifecycle.scoped(
+            Effect.addFinalizer(() => Effect.sync(() => calls.push("runtime"))),
+          )
+          yield* Deferred.done(registered, Exit.void)
+          return clientContributions()
+        }),
+      })
+      const uiScope = yield* Scope.make()
+      yield* Effect.promise(() => renderWithProviders(() => [], { builtins: [tracked], uiScope }))
+      yield* Deferred.await(registered).pipe(Effect.timeout("2 seconds"))
+      yield* Scope.close(uiScope, Exit.void)
+      expect(calls).toEqual(["cleanup", "runtime"])
     }),
   )
 })

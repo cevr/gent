@@ -813,7 +813,7 @@ describe("FX transcript treatment", () => {
         const goalMessage: ListMessage = {
           ...userMessage("regular-message", "goal-held", "RAW-GOAL-TEXT keep going.", "queued"),
           pendingMode: absent,
-          metadata: { customType: "goal-context", extensionId: "@gent/goal" },
+          metadata: { customType: "goal-context" },
         }
         const items: SessionItem[] = [
           goalMessage,
@@ -888,7 +888,7 @@ describe("FX transcript treatment", () => {
           "queued",
         ),
         pendingMode: absent,
-        metadata: { customType: "goal-context", extensionId: "@gent/goal" },
+        metadata: { customType: "goal-context" },
       }
       const collapsedFrame = yield* renderLoaded([goalMessage])
       expect(collapsedFrame).toContain("goal continuation")
@@ -911,7 +911,6 @@ describe("FX transcript treatment", () => {
         pendingMode: absent,
         metadata: {
           customType: "wake",
-          extensionId: "@gent/wake",
           details: { outcome: "fired", note: "Run bun test and report." },
         },
       }
@@ -936,7 +935,6 @@ describe("FX transcript treatment", () => {
         pendingMode: absent,
         metadata: {
           customType: "session-message",
-          extensionId: "@gent/session-tools",
           details: {
             from: { sessionId: "0199aabbccdd", name: "auth\n\nrefactor", relation: "parent" },
           },
@@ -971,7 +969,6 @@ describe("FX transcript treatment", () => {
         pendingMode: absent,
         metadata: {
           customType: "session-message",
-          extensionId: "@gent/session-tools",
           details: { from },
         },
       }
@@ -1001,7 +998,6 @@ describe("FX transcript treatment", () => {
         pendingMode: absent,
         metadata: {
           customType: "session-message",
-          extensionId: "@gent/session-tools",
           details: { from },
         },
       }

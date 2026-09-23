@@ -38,8 +38,8 @@ const row = (id: string, live = true): AgentRowEntry => ({
 })
 
 const detail = (turns: number): ExtensionAgentDetail => ({
-  status: Option.none(),
-  model: Option.none(),
+  status: "Idle",
+  model: "anthropic/claude-sonnet-5",
   turns,
   costUsd: 0,
   durationMs: 0,
@@ -269,8 +269,8 @@ describe("Agents pane navigation", () => {
                     asked.push(value.sessionId)
                     setDetail(
                       Option.some({
-                        status: Option.some("Running"),
-                        model: Option.some("anthropic/claude-sonnet-5"),
+                        status: "Running",
+                        model: "anthropic/claude-sonnet-5",
                         turns: 7,
                         costUsd: 0.125,
                         durationMs: 93_000,
@@ -325,8 +325,8 @@ describe("Agents pane navigation", () => {
               reload: () => {},
               detail: () =>
                 Option.some({
-                  status: Option.some("Running"),
-                  model: Option.none(),
+                  status: "Running",
+                  model: "anthropic/claude-sonnet-5",
                   turns: 1,
                   costUsd: 0,
                   durationMs: 0,
@@ -461,8 +461,8 @@ describe("Agents pane reopen", () => {
           (key) => {
             asked.push(key.sessionId)
             return Effect.succeed({
-              status: Option.none(),
-              model: Option.none(),
+              status: "Idle",
+              model: "anthropic/claude-sonnet-5",
               turns: turns(),
               costUsd: 0,
               durationMs: 0,
@@ -527,8 +527,8 @@ describe("Agents pane framing", () => {
                 reload: () => {},
                 detail: () =>
                   Option.some({
-                    status: Option.none(),
-                    model: Option.some("anthropic/claude-sonnet-5"),
+                    status: "Idle",
+                    model: "anthropic/claude-sonnet-5",
                     turns: 7,
                     costUsd: 0.125,
                     durationMs: 93_000,

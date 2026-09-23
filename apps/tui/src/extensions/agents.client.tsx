@@ -312,13 +312,10 @@ const indentFor = (depth: number): string => "  ".repeat(Math.max(0, depth))
 
 /** What the selected row is doing, from its detail read; other rows carry nothing. */
 const activityFor = (detail: Option.Option<ExtensionAgentDetail>): string =>
-  Option.match(
-    Option.flatMap(detail, (value) => value.status),
-    {
-      onNone: () => "",
-      onSome: (status) => status.toLowerCase(),
-    },
-  )
+  Option.match(detail, {
+    onNone: () => "",
+    onSome: (value) => value.status.toLowerCase(),
+  })
 
 /** Right-aligned age from the row's last update; blank when the row never ran. */
 const ageFor = (row: AgentRowEntry, now: number): string =>
@@ -383,10 +380,7 @@ const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string =>
     onNone: () => "",
     onSome: (value) => {
       const parts = [
-        ...Option.match(value.model, {
-          onNone: () => [],
-          onSome: (model) => [shortModel(model)],
-        }),
+        shortModel(value.model),
         formatTurns(value.turns),
         formatCost(value.costUsd),
         formatDuration(value.durationMs, "padded"),

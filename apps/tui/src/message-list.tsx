@@ -45,7 +45,7 @@ import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { GenericToolRenderer, type ToolCall } from "./tool-renderers"
 import { useExtensionUI } from "./extensions/host"
 import type { MessageRenderer, MessageRowProps } from "./extensions/client-facets"
-import type { ImagePartProjection } from "@gent/core/protocol"
+import { CONTEXT_WINDOW_MESSAGE_TYPE, type ImagePartProjection } from "@gent/core/protocol"
 import { replaceMermaidBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
@@ -303,7 +303,6 @@ const rowCounts = (call: ToolCall): string => {
 
 interface MessageMetadataInfo {
   customType?: string
-  extensionId?: string
   hidden?: boolean
   details?: unknown
 }
@@ -353,7 +352,7 @@ const isMessageItem = Predicate.or(
 /** The runtime's own user-role messages collapse to one line; an extension draws its own kinds. */
 const runtimeRows = new Map<string, MessageRenderer>([
   [
-    "context-window",
+    CONTEXT_WINDOW_MESSAGE_TYPE,
     (props) => <CollapsedRow label={windowLabel(decodeHandoffDetails(props.details))} />,
   ],
   ["model-change", () => <CollapsedRow label="⇄ model changed" />],
