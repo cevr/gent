@@ -6,7 +6,6 @@ import {
   Layer,
   Option,
   Path,
-  Predicate,
   Ref,
   Result,
   Schema,
@@ -235,26 +234,23 @@ const retiredOverrideAgents = (content: string): ReadonlyArray<string> =>
 
 interface ConfigServiceService {
   /**
-   * Resolve the merged user + project config. Pass `cwd` whenever the
-   * consumer is acting *on behalf of a specific session* — a multi-cwd
-   * server (sessions in /a, /b, /c) cannot rely on the launch-cwd's
-   * `.gent/config.json` to carry project overrides for everyone.
-   * The in-memory user config is reused; only the
-   * project file changes between cwds, falling back to an empty
-   * project config if the file is missing or unparsable. Without `cwd`,
-   * returns the cached project config from the server's launch cwd.
+   * The merged user + project config as the files are now, so a hand edit
+   * reaches the next read without a restart. Pass `cwd` whenever the
+   * consumer acts for a session: a multi-cwd server (sessions in /a, /b, /c)
+   * cannot rely on the launch cwd's `.gent/config.json` to carry project
+   * overrides for everyone. Without `cwd`, reads the launch cwd's project
+   * config. A file that does not decode reads as `getFresh` says.
    */
   readonly get: (cwd?: string) => Effect.Effect<UserConfig>
   /**
-   * Read user and project config from disk without using the launch snapshot.
-   * A file that does not decode never stops the read: it is reported in
-   * `failures` and read as the last user config that loaded (user) or as
-   * empty (project).
+   * `get` with the files that did not load. A file that does not decode
+   * never stops the read: it is reported in `failures` and read as the last
+   * user config that loaded (user) or as empty (project).
    */
   readonly getFresh: (cwd: string) => Effect.Effect<FreshConfig>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
-   *  The write starts from the user config on disk now, not the launch
-   *  snapshot, so a hand edit made while gent runs survives. Fails with
+   *  The write starts from the user config on disk now, so a hand edit
+   *  made while gent runs survives. Fails with
    *  `ConfigLoadError` when that file does not decode (writing would discard
    *  every setting in it) and with `ConfigWriteError` when the file cannot be
    *  replaced. */
@@ -307,14 +303,14 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       const runtimeEnvironment = yield* RuntimeEnvironment
       const home = runtimeEnvironment.home
       const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
-      const projectConfigPath = path.join(runtimeEnvironment.cwd, ConfigService.CONFIG_RELATIVE)
 
       const UserConfigJson = Schema.fromJsonString(UserConfig)
       const defaultUserConfig = new UserConfig({})
 
-      // State: user + project configs
+      // The last user config that decoded. It stands in for a user file that
+      // stops decoding, and it orders writers. Reads take the files as they
+      // are now, so a hand edit reaches the next read without a restart.
       const userConfigRef = yield* SynchronizedRef.make<UserConfig>(new UserConfig({}))
-      const projectConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
 
       const ensureUserConfig = Effect.gen(function* () {
         const exists = yield* fs.exists(userConfigPath)
@@ -361,9 +357,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           Effect.flatMap((content) => Schema.decodeEffect(UserConfigJson)(content)),
         )
 
-      const readConfigOrEmpty = (filePath: string): Effect.Effect<UserConfig> =>
-        readConfigFile(filePath).pipe(Effect.catchEager(() => Effect.succeed(new UserConfig({}))))
-
       const readConfigFresh = (filePath: string): Effect.Effect<UserConfig, ConfigLoadError> =>
         readConfigFile(filePath).pipe(
           Effect.mapError(
@@ -371,27 +364,19 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           ),
         )
 
-      // Load config from disk (merges project over user).
-      //
-      // A config that will not decode reads as empty, so a broken file
-      // cannot stop a turn. Writes never start from this snapshot: each one
-      // reads the user file again and refuses when it does not decode.
-      const loadConfig = Effect.gen(function* () {
-        const projectConfig = yield* readConfigOrEmpty(projectConfigPath)
-        const userConfig = yield* readConfigFresh(userConfigPath).pipe(
-          Effect.catchEager((error) =>
-            Effect.logWarning("Config load failed — writes refused until it is fixed").pipe(
-              Effect.annotateLogs({ path: userConfigPath, error: error.message }),
-              Effect.as(new UserConfig({})),
-            ),
+      // Seed the last-decoded user config. A user file that will not decode
+      // reads as empty, so a broken file cannot stop a turn. Writes never
+      // start from this snapshot: each one reads the user file again and
+      // refuses when it does not decode.
+      const loadUserConfig = readConfigFresh(userConfigPath).pipe(
+        Effect.catchEager((error) =>
+          Effect.logWarning("Config load failed — writes refused until it is fixed").pipe(
+            Effect.annotateLogs({ path: userConfigPath, error: error.message }),
+            Effect.as(new UserConfig({})),
           ),
-        )
-
-        yield* SynchronizedRef.set(userConfigRef, userConfig)
-        yield* Ref.set(projectConfigRef, projectConfig)
-
-        return mergeConfigs(userConfig, projectConfig)
-      }).pipe(Effect.asVoid)
+        ),
+        Effect.flatMap((userConfig) => SynchronizedRef.set(userConfigRef, userConfig)),
+      )
 
       // Replace the user config through a staged sibling, so a reader (or a
       // crash) never sees a half-written file. Only the fields the update
@@ -419,15 +404,7 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
 
       // Initial load
       yield* ensureUserConfig
-      yield* loadConfig
-
-      // Read a project config from an arbitrary cwd — used by `get(cwd)`
-      // so consumers acting on behalf of a session in `<sessionCwd>` see
-      // that cwd's per-project overrides instead of the server's launch
-      // cwd. Falls back to an empty UserConfig on missing / unparsable
-      // file so a misconfigured project never blocks dispatch.
-      const readProjectConfigAt = (cwd: string): Effect.Effect<UserConfig> =>
-        readConfigOrEmpty(path.join(cwd, ConfigService.CONFIG_RELATIVE))
+      yield* loadUserConfig
 
       const mutateUserConfig = (
         decide: (current: UserConfig) => {
@@ -457,47 +434,40 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           }),
         )
 
+      // The user and project files as they are now, merged. A user file that
+      // does not decode reads as the last one that did; a project file that
+      // does not decode sets nothing.
+      const readFresh = Effect.fn("ConfigService.readFresh")(function* (cwd: string) {
+        const failures: Array<ConfigLoadError> = []
+        const userRead = yield* Effect.result(readConfigFresh(userConfigPath))
+        let user: UserConfig
+        if (Result.isSuccess(userRead)) {
+          user = userRead.success
+          // Publish only a fully decoded snapshot; user config is shared by
+          // every cwd.
+          yield* SynchronizedRef.set(userConfigRef, user)
+        } else {
+          failures.push(userRead.failure)
+          user = yield* SynchronizedRef.get(userConfigRef)
+        }
+        const projectRead = yield* Effect.result(
+          readConfigFresh(path.join(cwd, ConfigService.CONFIG_RELATIVE)),
+        )
+        let project = new UserConfig({})
+        if (Result.isSuccess(projectRead)) project = projectRead.success
+        else failures.push(projectRead.failure)
+        return { config: mergeConfigs(user, project), failures }
+      })
+
       const service: ConfigServiceService = {
         get: Effect.fn("ConfigService.get")(function* (cwd) {
-          const user = yield* SynchronizedRef.get(userConfigRef)
-          // No cwd, or cwd matches the server's launch cwd: short-circuit
-          // to the cached project ref so launch-cwd callers don't pay an
-          // extra disk read per request.
-          if (Predicate.isUndefined(cwd) || cwd === runtimeEnvironment.cwd) {
-            const project = yield* Ref.get(projectConfigRef)
-            return mergeConfigs(user, project)
-          }
-          const project = yield* readProjectConfigAt(cwd)
-          return mergeConfigs(user, project)
+          const fresh = yield* readFresh(
+            Option.getOrElse(Option.fromUndefinedOr(cwd), () => runtimeEnvironment.cwd),
+          )
+          return fresh.config
         }),
 
-        getFresh: Effect.fn("ConfigService.getFresh")(function* (cwd) {
-          const failures: Array<ConfigLoadError> = []
-          const userRead = yield* Effect.result(readConfigFresh(userConfigPath))
-          let user: UserConfig
-          if (Result.isSuccess(userRead)) {
-            user = userRead.success
-            // Publish only a fully decoded snapshot; user config is shared by
-            // all profile keys.
-            yield* SynchronizedRef.set(userConfigRef, user)
-          } else {
-            failures.push(userRead.failure)
-            user = yield* SynchronizedRef.get(userConfigRef)
-          }
-          const projectRead = yield* Effect.result(
-            readConfigFresh(path.join(cwd, ConfigService.CONFIG_RELATIVE)),
-          )
-          // A project file that does not load sets nothing, the same as in
-          // `get(cwd)`.
-          let project = new UserConfig({})
-          if (Result.isSuccess(projectRead)) project = projectRead.success
-          else failures.push(projectRead.failure)
-          // The cached project snapshot is launch-cwd only; other cwds read
-          // their own file on every `get(cwd)` call. It follows this read,
-          // or a broken file would leave the old settings active.
-          if (cwd === runtimeEnvironment.cwd) yield* Ref.set(projectConfigRef, project)
-          return { config: mergeConfigs(user, project), failures }
-        }),
+        getFresh: readFresh,
 
         setDriverOverride: Effect.fn("ConfigService.setDriverOverride")(function* (agent, driver) {
           yield* mutateUserConfig((current) => ({

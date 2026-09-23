@@ -621,7 +621,8 @@ reshapes an agent per name (`modelId`, `reasoningEffort`, `contextLength`, tool 
 addendum); project entries shadow user entries and a run's `RunSpec.overrides`
 shadows both, so a workspace pins its orchestrator model under `main` and its
 children's model under `delegate`, and a `delegate.start` call can still pick a
-different model and effort for one child. The loop has no `cell` name rule
+different model and effort for one child. Each turn reads the config files as
+they are then, so an edit reaches the next turn without a restart. The loop has no `cell` name rule
 for selection or allow lists. The server root still composes the extension before
 the extension package builtins; its branch lifetime and worker build still belong
 to core. Test presets that exercise host tools directly omit it.

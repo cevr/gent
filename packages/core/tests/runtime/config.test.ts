@@ -772,6 +772,42 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    it.scopedLive("a hand edit reaches the next read without a restart", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const project = yield* fs.makeTempDirectoryScoped()
+        const write = (root: string, agents: UserConfig["agents"]) =>
+          Effect.gen(function* () {
+            yield* fs.makeDirectory(path.join(root, ".gent"), { recursive: true })
+            yield* fs.writeFileString(
+              path.join(root, ".gent", "config.json"),
+              encodeJson({ agents }),
+            )
+          })
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+          Layer.provide(BunServices.layer),
+        )
+        const delegate = AgentName.make("delegate")
+        const main = AgentName.make("main")
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          expect((yield* cfg.get()).agents).toBeUndefined()
+          // The server is running when the files change, as in a live session.
+          yield* write(project, { [delegate]: { maxSteps: 3 } })
+          yield* write(home, { [main]: { reasoningEffort: "low" } })
+          for (const read of [cfg.get(), cfg.get(project)]) {
+            const agents = (yield* read).agents
+            expect(agents?.[delegate]).toEqual({ maxSteps: 3 })
+            expect(agents?.[main]).toEqual({ reasoningEffort: "low" })
+          }
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.live("a write that does not name agents keeps the stored ones", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
