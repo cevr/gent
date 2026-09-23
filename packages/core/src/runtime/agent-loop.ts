@@ -503,6 +503,21 @@ const projectRuntimeState = (s: AgentLoopState): SessionRuntimeState => {
 }
 
 /**
+ * The loop already holds this message's turn: reserved, running, parked on
+ * an interaction, or in flight. A running turn gave up its in-flight slot
+ * when it started, so the phase is what names it then.
+ */
+const turnAdmitted = (s: AgentLoopState, messageId: MessageId): boolean =>
+  s.queue.inFlight?.message.id === messageId ||
+  phaseHolds(s.state, messageId) ||
+  (Predicate.isNotUndefined(s.startingState) && phaseHolds(s.startingState, messageId))
+
+const phaseHolds = (phase: LoopState, messageId: MessageId): boolean => {
+  if (phase._tag === "Idle") return false
+  return phase.message.id === messageId
+}
+
+/**
  * Whether a caller may take a turn for this branch right now.
  *
  * Idle is not enough on its own. `startingState` holds an item another caller
@@ -512,6 +527,7 @@ const projectRuntimeState = (s: AgentLoopState): SessionRuntimeState => {
  * `Running` when it finally starts, with its item in neither the queue nor the
  * transcript. Both admission paths ask this one question.
  */
+
 export const canStartTurnNow = (s: AgentLoopState): boolean =>
   s.state._tag === "Idle" && Predicate.isUndefined(s.startingState)
 
@@ -541,6 +557,8 @@ type LoopInboxContext = {
   readonly queuePersistenceSemaphore: Semaphore.Semaphore
   readonly persistenceFailures: TxSubscriptionRef.TxSubscriptionRef<PersistenceFailureMark>
   readonly startedRef: Ref.Ref<boolean>
+  /** Whether this message's turn already has its receipt (a stored duration). */
+  readonly turnSettled: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
 }
 
 export type LoopInbox = {
@@ -562,7 +580,11 @@ export type LoopInbox = {
   readonly writeInitialQueue: Effect.Effect<void, AgentLoopError>
   /**
    * Accept one item. `Some` means the caller reserved the start and must run
-   * the turn; `None` means the item is queued and something else will take it.
+   * the turn; `None` means the item is queued and something else will take it,
+   * or that its turn is already admitted, running or settled: a replay is not
+   * a new turn. The settled read and the admission hold one queue permit, and
+   * a turn stores its receipt before it leaves the phase, so no turn settles
+   * between them.
    */
   readonly admit: (
     item: QueuedTurnItem,
@@ -644,7 +666,8 @@ export const makeLoopInbox = (
         error: Option.some(error),
       }))
 
-    const commitQueueTransaction = <A>(
+    /** A queue transaction; the caller holds the queue permit. */
+    const commitQueueTransactionHeld = <A>(
       operation: string,
       decide: (state: AgentLoopState) => {
         readonly value: A
@@ -664,7 +687,15 @@ export const makeLoopInbox = (
           mergeConcurrentLoopMetadata(base, current, decision.next),
         )
         return decision.value
-      }).pipe(scope.queuePersistenceSemaphore.withPermits(1))
+      })
+
+    const commitQueueTransaction = <A>(
+      operation: string,
+      decide: Parameters<typeof commitQueueTransactionHeld<A>>[1],
+    ): Effect.Effect<A, AgentLoopError> =>
+      commitQueueTransactionHeld(operation, decide).pipe(
+        scope.queuePersistenceSemaphore.withPermits(1),
+      )
 
     /**
      * Move the loop to its next phase.
@@ -700,9 +731,13 @@ export const makeLoopInbox = (
       options: { readonly queueOnly: boolean },
     ) {
       const startedAtMs = yield* Clock.currentTimeMillis
-      return yield* commitQueueTransaction<Option.Option<RunningState> | AgentLoopError>(
+      if (yield* scope.turnSettled(item.message.id)) return Option.none<RunningState>()
+      return yield* commitQueueTransactionHeld<Option.Option<RunningState> | AgentLoopError>(
         "reserved or queued follow-up",
         (current) => {
+          if (turnAdmitted(current, item.message.id)) {
+            return { value: Option.none(), next: current, persist: false }
+          }
           // Build the next queue first: a retry of a queued id replaces in
           // place, so only an admission that grows the queue past the cap fails.
           const nextQueue = appendFollowUpQueueState(current.queue, item)
@@ -752,7 +787,7 @@ export const makeLoopInbox = (
           },
         ),
       )
-    })
+    }, scope.queuePersistenceSemaphore.withPermits(1))
 
     const writeInitialQueue = Effect.suspend(
       Effect.fn("LoopInbox.writeInitialQueue")(function* () {
@@ -1494,6 +1529,11 @@ const makeAgentLoopBehavior = (
       queuePersistenceSemaphore,
       persistenceFailures,
       startedRef,
+      turnSettled: (messageId) =>
+        messageStorage.getMessage(messageId).pipe(
+          Effect.map((message) => Predicate.isNotUndefined(message?.turnDurationMs)),
+          asAgentLoopError("Cannot read submitted message"),
+        ),
     })
 
     const recordTurnFailure = (cause: Cause.Cause<unknown>, messageId: MessageId) =>
@@ -1912,7 +1952,6 @@ const buildAgentLoopActorHandlers = (config: {
     const brandedWorkspaceId = workspaceId
     const provideActorWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(Effect.provideService(CurrentWorkspaceId, brandedWorkspaceId))
-    const messageStorage = yield* MessageStorage
     const queueStorage = yield* AgentLoopQueueStorage
     const operations = yield* SessionOperationStorage
     const sessionProfileCacheOption = yield* Effect.serviceOption(SessionProfileCache)
@@ -2176,9 +2215,9 @@ const buildAgentLoopActorHandlers = (config: {
       input: FollowUpInput,
     ) {
       yield* markWrite
+      // A settled or running message id is not a new turn: the inbox makes a
+      // replayed follow-up a no-op.
       const item = yield* buildFollowUpItem(input)
-      // A settled message id is not a new turn: a replayed follow-up is a no-op.
-      if (yield* turnAlreadyCompleted(item.message.id)) return
       yield* admitWithOrigin(item, Option.fromUndefinedOr(input.clientRequest), (admitted) =>
         handle.inbox.admit(admitted, { queueOnly: true }),
       )
@@ -2196,8 +2235,6 @@ const buildAgentLoopActorHandlers = (config: {
     ) {
       const wasAlreadyWarm = yield* markWrite
       const built = yield* buildFollowUpItem(input)
-      // A settled message id is not a new turn: a replayed follow-up is a no-op.
-      if (yield* turnAlreadyCompleted(built.message.id)) return
       const { result: reserved, item } = yield* admitWithOrigin(
         built,
         Option.fromUndefinedOr(input.clientRequest),
@@ -2383,13 +2420,6 @@ const buildAgentLoopActorHandlers = (config: {
     )
     yield* Actor.registerState(registeredState)
 
-    /** A message whose turn already ran is not a new turn; a retried submit sees it done. */
-    const turnAlreadyCompleted = (messageId: MessageId) =>
-      messageStorage.getMessage(messageId).pipe(
-        Effect.map((message) => Predicate.isNotUndefined(message?.turnDurationMs)),
-        asAgentLoopError("Cannot read submitted message"),
-      )
-
     /**
      * Admit one submitted turn: target check, warm mark, reservation, and the
      * start when the reservation grants it.
@@ -2398,7 +2428,6 @@ const buildAgentLoopActorHandlers = (config: {
       Effect.gen(function* () {
         yield* ensureTarget(operation.message)
         yield* markWrite
-        if (yield* turnAlreadyCompleted(operation.message.id)) return
         const item: QueuedTurnItem = { message: operation.message }
         yield* reserveAndStart(handle, item, { queueOnly: false })
       })

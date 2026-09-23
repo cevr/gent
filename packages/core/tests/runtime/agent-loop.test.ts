@@ -2243,6 +2243,7 @@ const makeHarness = (
         error: Option.none<AgentLoopError>(),
       }),
       startedRef: yield* Ref.make(true),
+      turnSettled: () => Effect.succeed(false),
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
@@ -4661,6 +4662,7 @@ describe("wake admission", () => {
           error: Option.none<AgentLoopError>(),
         }),
         startedRef: yield* Ref.make(true),
+        turnSettled: (messageId) => Effect.succeed(messageId === MessageId.make("settled")),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),
@@ -4724,6 +4726,26 @@ describe("wake admission", () => {
       (index) => inbox.admit({ message: queuedMessage(`full-${index}`, `item ${index}`) }),
       { discard: true },
     )
+
+  // A replayed follow-up whose turn runs or ran is not a new turn. The running
+  // turn gave up its in-flight slot when it started, so only the phase names it.
+  it.effect("re-admitting the running turn's id queues nothing", () =>
+    withInbox((inbox) =>
+      Effect.gen(function* () {
+        yield* inbox.admit({ message: queuedMessage("busy", "busy (replay)") })
+        expect((yield* inbox.queue).followUp).toEqual([])
+      }),
+    ),
+  )
+
+  it.effect("re-admitting a settled turn's id queues nothing", () =>
+    withInbox((inbox) =>
+      Effect.gen(function* () {
+        yield* inbox.admit({ message: queuedMessage("settled", "settled (replay)") })
+        expect((yield* inbox.queue).followUp).toEqual([])
+      }),
+    ),
+  )
 
   it.effect("a full follow-up queue accepts a retry of a queued id in place", () =>
     withInbox((inbox) =>
