@@ -3049,7 +3049,7 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
       }),
   )
   it.live(
-    "an organization OpenAI refuses summaries to gets one retry without the summary, and later requests leave it out",
+    "an organization OpenAI refuses summaries to gets one retry without the summary, later requests on that key leave it out, and another key still asks",
     () =>
       Effect.gen(function* () {
         const credentialCellRef =
@@ -3086,6 +3086,11 @@ describe("buildOpenAIModelDriver — API-key path is plain SDK", () => {
         const again = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-1234"), hints)
         yield* oneGenerate(again, later, responder)
         expect(summaries(later)).toEqual([false])
+        // The refusal belongs to the first key's organization, not to the driver.
+        const otherKey = makeFakeFetchState()
+        const other = yield* driver.resolveModel("gpt-5", makeApiAuthInfo("sk-test-5678"), hints)
+        yield* oneGenerate(other, otherKey, () => openaiResponsesHappyResponse())
+        expect(summaries(otherKey)).toEqual([true])
       }),
   )
   it.live("any other 400 is not retried and keeps the summary", () =>

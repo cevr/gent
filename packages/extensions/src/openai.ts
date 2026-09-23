@@ -8,6 +8,7 @@ import {
   Encoding,
   Exit,
   Fiber,
+  HashSet,
   Layer,
   Option,
   Predicate,
@@ -1357,7 +1358,9 @@ const buildOpenAiResponsesConfig = (
  * guides/reasoning, read 2026-09-23). An unverified one gets HTTP 400,
  * `invalid_request_error` with `param: "reasoning.summary"` and
  * `code: "unsupported_value"`. The summary is optional, so the API-key client
- * retries that request once without it and leaves it out from then on.
+ * retries that request once without it and leaves it out from then on for
+ * that key. Verification belongs to the organization behind a key, so the
+ * refusal is recorded against the key's SHA-256 fingerprint, never the key.
  */
 const SummaryRefusal = Schema.fromJsonString(
   Schema.Struct({
@@ -1389,9 +1392,23 @@ const withoutReasoningSummary = (
   return HttpClientRequest.bodyUint8Array(req, encoded, "application/json")
 }
 
-/** Fails a summary refusal after recording it; any other response passes. */
+/** The driver-owned record of refused keys, by fingerprint. */
+type RefusedKeys = Ref.Ref<HashSet.HashSet<string>>
+
+/** Hex SHA-256 of the key: what the refusal record holds instead of the key. */
+const keyFingerprint = (apiKey: string): Effect.Effect<string, never, Crypto.Crypto> =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const digest = yield* crypto
+      .digest("SHA-256", new TextEncoder().encode(apiKey))
+      .pipe(Effect.orDie)
+    return Encoding.encodeHex(digest)
+  })
+
+/** Fails a summary refusal after recording it for the key; any other response passes. */
 const refusalCheck = (
-  refused: Ref.Ref<boolean>,
+  refused: RefusedKeys,
+  keyId: string,
   response: HttpClientResponse.HttpClientResponse,
 ): Effect.Effect<void, SummaryRefusedError> => {
   if (response.status !== 400) return Effect.void
@@ -1402,7 +1419,7 @@ const refusalCheck = (
       Option.match({
         onNone: () => Effect.void,
         onSome: () =>
-          Ref.set(refused, true).pipe(
+          Ref.update(refused, HashSet.add(keyId)).pipe(
             Effect.andThen(Effect.fail(new SummaryRefusedError({ response }))),
           ),
       }),
@@ -1411,23 +1428,24 @@ const refusalCheck = (
 }
 
 /**
- * The API-key client: leaves the summary out once `refused` is set, and sets
- * it on a summary refusal and retries once. `refused` lives as long as the
- * driver, so a later turn does not pay the refused request again.
+ * The API-key client for the key `keyId` names: leaves the summary out once
+ * `refused` holds the key, and adds it on a summary refusal and retries once.
+ * `refused` lives as long as the driver, so a later turn on the same key does
+ * not pay the refused request again, and another key is not affected.
  */
 const summaryRefusalClient =
-  (refused: Ref.Ref<boolean>) =>
+  (refused: RefusedKeys, keyId: string) =>
   (client: HttpClient.HttpClient): HttpClient.HttpClient =>
     client.pipe(
       HttpClient.mapRequestEffect((req) =>
-        Effect.map(Ref.get(refused), (off) => {
-          if (off) return withoutReasoningSummary(req)
+        Effect.map(Ref.get(refused), (keys) => {
+          if (HashSet.has(keys, keyId)) return withoutReasoningSummary(req)
           return req
         }),
       ),
       HttpClient.transformResponse((effect) =>
         effect.pipe(
-          Effect.tap((response) => refusalCheck(refused, response)),
+          Effect.tap((response) => refusalCheck(refused, keyId, response)),
           Effect.retry({ while: (e) => e._tag === "SummaryRefusedError", times: 1 }),
           Effect.catchTag("SummaryRefusedError", (e) => Effect.succeed(e.response)),
         ),
@@ -1445,12 +1463,16 @@ const makeApiKeyOpenAIResolution = (
   modelName: string,
   config: OpenAiResponsesConfig,
   apiKey: string,
-  summaryRefused: Ref.Ref<boolean>,
+  refusedKeys: RefusedKeys,
 ) => {
   const httpClientLayer = Layer.effect(
     HttpClient.HttpClient,
-    Effect.map(HttpClient.HttpClient, summaryRefusalClient(summaryRefused)),
-  ).pipe(Layer.provide(FetchHttpClient.layer))
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient
+      const keyId = yield* keyFingerprint(apiKey)
+      return summaryRefusalClient(refusedKeys, keyId)(client)
+    }),
+  ).pipe(Layer.provide([FetchHttpClient.layer, BunCrypto.layer]))
   const clientLayer = OpenAiResponsesClient.layer({ apiKey: Redacted.make(apiKey) }).pipe(
     Layer.provide(httpClientLayer),
   )
@@ -1526,8 +1548,8 @@ export const buildOpenAIModelDriver = (
   envApiKey: Option.Option<string>,
   catalog: CatalogSource,
 ): ModelDriverContribution => {
-  // Set once OpenAI refuses this key's organization a reasoning summary.
-  const summaryRefused = Ref.makeUnsafe(false)
+  // The keys whose organization OpenAI refused a reasoning summary, by fingerprint.
+  const refusedKeys: RefusedKeys = Ref.makeUnsafe(HashSet.empty())
   return {
     id: "openai",
     name: "OpenAI",
@@ -1565,7 +1587,7 @@ export const buildOpenAIModelDriver = (
 
         if (Option.isSome(apiKey)) {
           const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
-          return makeApiKeyOpenAIResolution(modelName, config, apiKey.value, summaryRefused)
+          return makeApiKeyOpenAIResolution(modelName, config, apiKey.value, refusedKeys)
         }
 
         // Fail closed — no stored OAuth, no stored API key, no env var.
