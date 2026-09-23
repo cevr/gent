@@ -51,6 +51,7 @@ import {
   ToolSourceRevision,
 } from "../domain/capability.js"
 import {
+  ApprovalService,
   CurrentExtensionHostContext,
   emptyErasedResourceLayer,
   type ErasedResourceLayer,
@@ -1046,6 +1047,23 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
 }) {
   const toolRunner = yield* ToolRunner
   const hostCtx = yield* CurrentExtensionHostContext
+  // Each call owns what it asks: an answer goes back to the call that asked.
+  // A root with no approval flow has no interactions to own.
+  const approval = yield* Effect.serviceOption(ApprovalService)
+  const branch = { sessionId: params.sessionId, branchId: params.branchId }
+  if (Option.isSome(approval)) {
+    yield* approval.value.beginStep(
+      branch,
+      params.toolCalls.map((toolCall) => ToolCallId.make(toolCall.id)),
+    )
+  }
+  const ownCall =
+    (toolCallId: ToolCallId) =>
+    <A, E, R>(self: Effect.Effect<A, E, R>) =>
+      Option.match(approval, {
+        onNone: () => self,
+        onSome: (service) => service.ownCall(branch, toolCallId)(self),
+      })
   const exits = yield* Effect.forEach(
     params.toolCalls,
     (toolCall) =>
@@ -1080,6 +1098,7 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
                 toolCallId: toolCallInput.toolCallId,
               }),
               Effect.provideService(TurnInterruptSignal, params.interruption),
+              ownCall(toolCallInput.toolCallId),
             )
         }),
       ),

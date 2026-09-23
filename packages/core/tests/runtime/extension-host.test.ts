@@ -208,7 +208,9 @@ describe("ambient extension host context", () => {
         present: () => Effect.succeed({ approved: true }),
         pendingRequestId: () => Effect.die("not used"),
         storeResolution: () => Effect.die("not used"),
-        rehydrate: () => Effect.void,
+        rehydrate: () => Effect.die("not used"),
+        beginStep: () => Effect.die("not used"),
+        ownCall: () => (self) => self,
       }),
     ),
   )

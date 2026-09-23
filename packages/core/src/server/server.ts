@@ -134,12 +134,7 @@ import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent
 import { type AgentName, DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
-import {
-  type ApprovalDecision,
-  decodeInteractionDecision,
-  decodeInteractionParams,
-  InteractionRequestMismatchError,
-} from "../domain/interaction.js"
+import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { omitUndefined } from "../domain/guards.js"
 import { SingleRunner } from "effect/unstable/cluster"
 import {
@@ -1751,24 +1746,10 @@ export const createDependencies = (config: DependenciesConfig) => {
 
           let recovered = 0
           for (const record of pending) {
-            const params = yield* decodeInteractionParams(record.paramsJson).pipe(Effect.option)
-            if (Option.isNone(params)) continue
-            let decision = Option.none<ApprovalDecision>()
-            if (!Predicate.isUndefined(record.decisionJson)) {
-              decision = yield* decodeInteractionDecision(record.decisionJson).pipe(Effect.option)
-            }
-            yield* approvalService
-              .rehydrate(
-                record.requestId,
-                params.value,
-                {
-                  sessionId: record.sessionId,
-                  branchId: record.branchId,
-                },
-                Option.getOrUndefined(decision),
-              )
-              .pipe(Effect.catchEager(() => Effect.void))
-            if (Option.isSome(decision)) {
+            // A row that no longer decodes stays in storage and is skipped.
+            const answered = yield* approvalService.rehydrate(record).pipe(Effect.option)
+            if (Option.isNone(answered)) continue
+            if (answered.value) {
               yield* sessionRuntime
                 .respondInteraction({
                   sessionId: record.sessionId,

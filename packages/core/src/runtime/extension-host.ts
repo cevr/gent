@@ -1992,7 +1992,9 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
         pendingRequestId: () =>
           Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
         storeResolution: () => Effect.void,
-        rehydrate: () => Effect.void,
+        rehydrate: () => Effect.succeed(false),
+        beginStep: () => Effect.void,
+        ownCall: () => (self) => self,
       }),
     )
   }

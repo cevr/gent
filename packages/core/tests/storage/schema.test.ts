@@ -39,7 +39,7 @@ const tableExists = (table: string) =>
   })
 
 const widgetMigrations: FeatureMigrations = {
-  "021_widgets": Effect.gen(function* () {
+  "022_widgets": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     yield* sql.unsafe(`CREATE TABLE widgets (id TEXT PRIMARY KEY)`)
   }),

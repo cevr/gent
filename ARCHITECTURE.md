@@ -543,6 +543,7 @@ Key properties:
 
 - **No Deferred, no blocked fiber.** `WaitingForInteraction` is a cold state — no background turn work. The machine is checkpointed and survives restarts.
 - **Crash-safe resume.** `rehydrate()` rebuilds the in-memory context lookup and re-publishes the event. If the process dies before wake, `listPending()` in `InteractionStorage` provides the pending requests for recovery.
+- **An answer goes to its owner.** The owner of a request is the tool call that asked and the index of that ask in the call's run; the row stores both (`owner_tool_call_id`, `owner_occurrence`, nullable for older rows). A branch shows one request at a time. Other owners queue in the order they asked, and a call that asks the same question never takes another call's answer. An answer whose owner ends its run without taking it is settled as abandoned, so the next owner asks. A dispatching tool's inner call (a cell) resumes by its request id and is refused, not queued, while another request is open.
 - **Exact replay.** Resume uses the saved assistant message, call ID, input, and
   binding. Completed sibling results are reused with their structured values.
   Only unfinished calls execute again. A pending call can repeat work before its
