@@ -19,6 +19,7 @@ import {
   type ImagePartProjection,
   type Message,
   type Session,
+  type SessionSnapshot,
   SessionId,
 } from "@gent/core/protocol"
 import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
@@ -121,8 +122,8 @@ export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly b
  * streamed reads zero turns, zero cost and its resolved model.
  */
 export interface ExtensionAgentDetail {
-  /** Runtime state tag, e.g. `"Idle"` / `"Running"`. */
-  readonly status: string
+  /** What the loop is doing: its runtime state tag. */
+  readonly status: SessionSnapshot["runtime"]["_tag"]
   readonly model: string
   readonly turns: number
   readonly costUsd: number
