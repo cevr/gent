@@ -34,6 +34,7 @@ import {
   createMockRuntime,
   renderFrame,
   renderWithProviders,
+  applySnapshotAgent,
 } from "./render-harness-boundary"
 import { onMount } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
@@ -564,7 +565,7 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      clientContext.selectAgent(AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       const frame = yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -1457,7 +1458,7 @@ describe("App auth gate", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate"),
       )
-      clientContext.selectAgent(AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,

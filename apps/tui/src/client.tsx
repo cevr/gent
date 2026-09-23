@@ -578,14 +578,6 @@ interface ClientActionValue {
   sendMessage: (content: string) => void
   // Steering (fire-and-forget)
   steer: (command: SteerCommandInput) => void
-  /**
-   * Choose the agent the next turn starts with.
-   *
-   * Local to this UI: it names what a new turn begins as, so there is no
-   * running turn to instruct and nothing to send. A turn already streaming
-   * keeps the agent it started with.
-   */
-  selectAgent: (agent: AgentName) => void
 }
 
 export type ClientContextValue = ClientTransportValue &
@@ -1354,10 +1346,6 @@ export function ClientProvider(props: ClientProviderProps) {
         ),
       )
     },
-    selectAgent: (agent) => {
-      setAgentStore({ agent: Option.some(agent) })
-    },
-
     steer: (command) => {
       const currentSession = sessionOption()
       if (Option.isNone(currentSession)) return
