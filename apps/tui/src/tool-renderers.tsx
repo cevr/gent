@@ -474,7 +474,8 @@ const BashOutputSchema = Schema.Struct({
   status: Schema.optional(Schema.Literals(["blocked", "background"])),
 })
 
-function parseBashOutput(
+/** The one bash result decoder: a row's header, its count and its body all read it. */
+export function parseBashOutput(
   output: ToolRendererProps["toolCall"]["output"],
 ): Option.Option<BashOutput> {
   return Option.map(decodeToolOutputOption(BashOutputSchema, output), (decoded) => ({
