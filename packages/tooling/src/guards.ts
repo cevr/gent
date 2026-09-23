@@ -3103,7 +3103,266 @@ export interface UndeclaredImportFinding {
 }
 
 /** The package an `@gent/...` specifier names: `@gent/core/protocol` → `@gent/core`. */
-const WORKSPACE_SPECIFIER = /(?:\bfrom|\bimport)\s*\(?\s*["'](@gent\/[a-z0-9-]+)(?:\/[^"']*)?["']/g
+const WORKSPACE_PACKAGE = /^(@gent\/[a-z0-9-]+)(?:\/.*)?$/
+
+interface SourceToken {
+  readonly kind: "word" | "string" | "punct"
+  readonly value: string
+  readonly line: number
+}
+
+/** After these, a `/` starts a regular expression, not a division. */
+const REGEX_AFTER_WORDS = new Set([
+  "return",
+  "typeof",
+  "case",
+  "do",
+  "else",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "yield",
+  "await",
+])
+
+const WORD_CHAR = /[A-Za-z0-9_$]/
+
+/** A lexer's cursor: the source, the position, and the tokens read so far. */
+interface Lexer {
+  readonly text: string
+  index: number
+  line: number
+  readonly tokens: Array<SourceToken>
+  /** One entry per open template `${`: the brace depth inside that expression. */
+  readonly templateDepths: Array<number>
+}
+
+const charAt = (lexer: Lexer, offset: number): string => lexer.text.charAt(lexer.index + offset)
+
+const atEnd = (lexer: Lexer): boolean => lexer.index >= lexer.text.length
+
+const CLOSING_PUNCT = new Set([")", "]", "}"])
+
+/** A `/` starts a regular expression unless it follows a value. */
+const regexAllowed = (lexer: Lexer): boolean =>
+  Option.match(Option.fromNullishOr(lexer.tokens.at(-1)), {
+    onNone: () => true,
+    onSome: (previous) => {
+      if (previous.kind === "string") return false
+      if (previous.kind === "word") return REGEX_AFTER_WORDS.has(previous.value)
+      return !CLOSING_PUNCT.has(previous.value)
+    },
+  })
+
+/** Skip template text (just past a backtick or a closing `}`) to its end or a `${`. */
+const skipTemplateText = (lexer: Lexer): void => {
+  while (!atEnd(lexer)) {
+    const char = charAt(lexer, 0)
+    if (char === "\\") {
+      lexer.index += 2
+      continue
+    }
+    if (char === "\n") lexer.line++
+    if (char === "`") {
+      lexer.index++
+      return
+    }
+    if (char === "$" && charAt(lexer, 1) === "{") {
+      lexer.index += 2
+      lexer.templateDepths.push(0)
+      return
+    }
+    lexer.index++
+  }
+}
+
+const skipWhitespace = (lexer: Lexer): boolean => {
+  const char = charAt(lexer, 0)
+  if (!/\s/.test(char)) return false
+  if (char === "\n") lexer.line++
+  lexer.index++
+  return true
+}
+
+const skipLineComment = (lexer: Lexer): boolean => {
+  if (!(charAt(lexer, 0) === "/" && charAt(lexer, 1) === "/")) return false
+  while (!atEnd(lexer) && charAt(lexer, 0) !== "\n") lexer.index++
+  return true
+}
+
+const skipBlockComment = (lexer: Lexer): boolean => {
+  if (!(charAt(lexer, 0) === "/" && charAt(lexer, 1) === "*")) return false
+  lexer.index += 2
+  while (!atEnd(lexer) && !(charAt(lexer, 0) === "*" && charAt(lexer, 1) === "/")) {
+    if (charAt(lexer, 0) === "\n") lexer.line++
+    lexer.index++
+  }
+  lexer.index += 2
+  return true
+}
+
+const skipTemplate = (lexer: Lexer): boolean => {
+  if (charAt(lexer, 0) !== "`") return false
+  lexer.index++
+  skipTemplateText(lexer)
+  return true
+}
+
+/** A quoted string; it ends at an unescaped newline, so a stray quote spoils one line. */
+const readString = (lexer: Lexer): boolean => {
+  const quote = charAt(lexer, 0)
+  if (quote !== "'" && quote !== '"') return false
+  const line = lexer.line
+  let value = ""
+  lexer.index++
+  while (!atEnd(lexer) && charAt(lexer, 0) !== quote && charAt(lexer, 0) !== "\n") {
+    if (charAt(lexer, 0) === "\\") {
+      value += charAt(lexer, 1)
+      lexer.index += 2
+      continue
+    }
+    value += charAt(lexer, 0)
+    lexer.index++
+  }
+  lexer.index++
+  lexer.tokens.push({ kind: "string", value, line })
+  return true
+}
+
+/** A regular expression literal, kept as an empty string token so it names no module. */
+const readRegex = (lexer: Lexer): boolean => {
+  if (charAt(lexer, 0) !== "/" || !regexAllowed(lexer)) return false
+  let inClass = false
+  lexer.index++
+  while (!atEnd(lexer) && charAt(lexer, 0) !== "\n") {
+    const current = charAt(lexer, 0)
+    if (current === "\\") {
+      lexer.index += 2
+      continue
+    }
+    if (current === "/" && !inClass) break
+    if (current === "[") inClass = true
+    if (current === "]") inClass = false
+    lexer.index++
+  }
+  lexer.index++
+  while (WORD_CHAR.test(charAt(lexer, 0))) lexer.index++
+  lexer.tokens.push({ kind: "string", value: "", line: lexer.line })
+  return true
+}
+
+const readWord = (lexer: Lexer): boolean => {
+  if (!WORD_CHAR.test(charAt(lexer, 0))) return false
+  let value = ""
+  while (!atEnd(lexer) && WORD_CHAR.test(charAt(lexer, 0))) {
+    value += charAt(lexer, 0)
+    lexer.index++
+  }
+  lexer.tokens.push({ kind: "word", value, line: lexer.line })
+  return true
+}
+
+/** A `}` that closes a template `${`: resume the template text after it. */
+const closeTemplateExpression = (lexer: Lexer): boolean => {
+  if (charAt(lexer, 0) !== "}" || lexer.templateDepths.at(-1) !== 0) return false
+  lexer.templateDepths.pop()
+  lexer.index++
+  skipTemplateText(lexer)
+  return true
+}
+
+const readPunct = (lexer: Lexer): boolean => {
+  const char = charAt(lexer, 0)
+  const last = lexer.templateDepths.length - 1
+  const depth = lexer.templateDepths[last] ?? 0
+  if (char === "{" && last >= 0) lexer.templateDepths[last] = depth + 1
+  if (char === "}" && last >= 0) lexer.templateDepths[last] = depth - 1
+  lexer.tokens.push({ kind: "punct", value: char, line: lexer.line })
+  lexer.index++
+  return true
+}
+
+/** In order: the first scanner that accepts the current character consumes it. */
+const SCANNERS: ReadonlyArray<(lexer: Lexer) => boolean> = [
+  skipWhitespace,
+  skipLineComment,
+  skipBlockComment,
+  skipTemplate,
+  readString,
+  readRegex,
+  readWord,
+  closeTemplateExpression,
+  readPunct,
+]
+
+/**
+ * Tokens of a TypeScript source, with comments, template text, and regular
+ * expressions dropped. Only words, string literals, and punctuation remain,
+ * which is all an import scan reads.
+ */
+const sourceTokens = (text: string): ReadonlyArray<SourceToken> => {
+  const lexer: Lexer = { text, index: 0, line: 1, tokens: [], templateDepths: [] }
+  while (!atEnd(lexer)) SCANNERS.some((scan) => scan(lexer))
+  return lexer.tokens
+}
+
+export interface ModuleReference {
+  readonly specifier: string
+  readonly line: number
+}
+
+const isPunct = (token: Option.Option<SourceToken>, value: string): boolean =>
+  Option.exists(token, (current) => current.kind === "punct" && current.value === value)
+
+/** The string token that names the module for the keyword at `position`, if any. */
+const specifierAt = (
+  tokens: ReadonlyArray<SourceToken>,
+  position: number,
+): Option.Option<SourceToken> => {
+  const tokenAt = (offset: number) => Option.fromNullishOr(tokens[position + offset])
+  const stringAt = (offset: number) =>
+    Option.filter(tokenAt(offset), (token) => token.kind === "string")
+  const keyword = tokens[position]
+  if (keyword?.kind !== "word") return Option.none()
+  // `x.from "…"` and `x.import(…)` are not module syntax; `module.require(…)` is.
+  const member = isPunct(tokenAt(-1), ".")
+  const called = isPunct(tokenAt(1), "(")
+  if (keyword.value === "require" && called) return stringAt(2)
+  if (member) return Option.none()
+  if (keyword.value === "from") return stringAt(1)
+  if (keyword.value !== "import") return Option.none()
+  if (called) return stringAt(2)
+  return stringAt(1)
+}
+
+/**
+ * Every module a source names: `import … from`, `export … from`, a bare
+ * `import "x"`, `import("x")` (dynamic or in a type), and `require("x")`,
+ * including `import type`. Comments and ordinary strings name no module.
+ */
+export const moduleReferences = (text: string): ReadonlyArray<ModuleReference> => {
+  const tokens = sourceTokens(text)
+  return tokens.flatMap((_, position) =>
+    Option.match(specifierAt(tokens, position), {
+      onNone: () => [],
+      onSome: (token) => [{ specifier: token.value, line: token.line }],
+    }),
+  )
+}
+
+/** The path a relative specifier names from `file`, or none for a package specifier. */
+const relativeTarget = (file: string, specifier: string): Option.Option<string> => {
+  if (!specifier.startsWith("./") && !specifier.startsWith("../")) return Option.none()
+  const segments = file.split("/").slice(0, -1)
+  for (const part of specifier.split("/")) {
+    if (part === "..") segments.pop()
+    else if (part !== "." && part !== "") segments.push(part)
+  }
+  return Option.some(segments.join("/"))
+}
 
 const declaredWorkspaceNames = (manifest: WorkspaceManifest): ReadonlySet<string> =>
   new Set([
@@ -3114,12 +3373,14 @@ const declaredWorkspaceNames = (manifest: WorkspaceManifest): ReadonlySet<string
   ])
 
 /**
- * A file that imports a workspace package its own manifest does not declare.
- * Turbo orders and caches tasks by the declared graph, so an undeclared edge
- * lets a cached typecheck replay green after the imported package broke it.
- * Core's test harness once called `@gent/sdk`, which depends on core: a cycle
- * no manifest showed. `manifests` is keyed by package directory
- * (`packages/core`). Fixture trees and the guard tests hold source as data, not imports.
+ * A file that imports a workspace package its own manifest does not declare,
+ * or reaches across its workspace root with a relative path. Turbo orders and
+ * caches tasks by the declared graph, so an undeclared edge lets a cached
+ * typecheck replay green after the imported package broke it. Core's test
+ * harness once called `@gent/sdk`, which depends on core: a cycle no manifest
+ * showed. A relative path into another workspace is the same edge without a
+ * name. `manifests` is keyed by package directory (`packages/core`). Fixture
+ * trees hold source as data, not imports.
  */
 export const findUndeclaredWorkspaceImports = (
   manifests: ReadonlyMap<string, WorkspaceManifest>,
@@ -3128,22 +3389,31 @@ export const findUndeclaredWorkspaceImports = (
   const findings: Array<UndeclaredImportFinding> = []
   for (const [file, text] of sourceTexts) {
     if (file.includes("/fixtures/")) continue
-    // The guard tests hold source text as string literals; none is an import.
-    if (file.startsWith("packages/tooling/tests/guards")) continue
     const owner = Option.fromNullishOr([...manifests].find(([dir]) => file.startsWith(`${dir}/`)))
     if (Option.isNone(owner)) continue
     const [dir, manifest] = owner.value
     const declared = declaredWorkspaceNames(manifest)
-    for (const [index, line] of text.split("\n").entries()) {
-      for (const match of line.matchAll(WORKSPACE_SPECIFIER)) {
-        const imported = Option.fromNullishOr(match[1])
-        if (Option.isNone(imported) || declared.has(imported.value)) continue
+    for (const { specifier, line } of moduleReferences(text)) {
+      const target = relativeTarget(file, specifier)
+      if (Option.isSome(target)) {
+        if (target.value.startsWith(`${dir}/`)) continue
         findings.push({
           file,
-          line: index + 1,
-          message: `imports \`${imported.value}\`, which ${dir}/package.json does not declare; declare it without a cycle, or move the code to a package that does`,
+          line,
+          message: `reaches \`${specifier}\` across the ${dir} workspace root; import a declared package entry instead`,
         })
+        continue
       }
+      const imported = Option.flatMap(
+        Option.fromNullishOr(WORKSPACE_PACKAGE.exec(specifier)),
+        (match) => Option.fromNullishOr(match[1]),
+      )
+      if (Option.isNone(imported) || declared.has(imported.value)) continue
+      findings.push({
+        file,
+        line,
+        message: `imports \`${imported.value}\`, which ${dir}/package.json does not declare; declare it without a cycle, or move the code to a package that does`,
+      })
     }
   }
   return findings

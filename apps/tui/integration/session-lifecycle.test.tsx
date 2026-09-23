@@ -8,12 +8,12 @@ import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness
 import {
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   LanguageModelLayers,
+  testAgent,
 } from "@gent/core/test-utils"
-import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, repoRoot } from "./helpers"
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
-  _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents })
+  _baseLocalLayerWithProvider(p, { agents: [testAgent] })
 function StateProbe(props: { readonly onReady: (ctx: { client: ClientContextValue }) => void }) {
   const client = useClient()
   onMount(() => {

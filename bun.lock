@@ -69,7 +69,9 @@
         "@gent/core": "workspace:*",
       },
       "peerDependencies": {
+        "@effect/platform-bun": "catalog:",
         "effect": "catalog:",
+        "effect-bun-test": "catalog:",
       },
     },
     "packages/core": {

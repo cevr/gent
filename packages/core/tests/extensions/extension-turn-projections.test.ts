@@ -8,7 +8,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Data, Effect } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
+import { testAgent } from "../helpers/test-preset"
 import type {
   ExtensionHookHandler,
   ExtensionTurnContext,
@@ -25,7 +25,7 @@ import { testExtensionHostContext } from "../../src/test-utils/harness"
 const turnCtx: ExtensionTurnContext = {
   sessionId: SessionId.make("s"),
   branchId: BranchId.make("b"),
-  agent: builtinAgent,
+  agent: testAgent,
   allTools: [],
   interactive: true,
 }

@@ -12,7 +12,6 @@ import {
   SkillsRpc,
 } from "../src/skills.js"
 import { BunServices } from "@effect/platform-bun"
-import { narrowR } from "../../core/tests/helpers/effect"
 import { ref } from "@gent/core/extensions/api"
 import {
   LanguageModelLayers,
@@ -160,33 +159,29 @@ describe("SkillsExtension via RPC", () => {
     15_000,
   )
   it.live("turn projection contributes loaded skills to the prompt", () =>
-    narrowR(
-      Effect.gen(function* () {
-        const contributions = yield* collectTestContributions(SkillsExtension.setup)
+    Effect.gen(function* () {
+      const contributions = yield* collectTestContributions(SkillsExtension.setup)
 
-        const turnProjection = Option.fromUndefinedOr(
-          contributions.hooks?.find((slot) => slot.kind === "turnProjection"),
-        )
-        if (Option.isNone(turnProjection)) {
-          return yield* Effect.die(new Error("expected skills turn projection"))
-        }
-        const result = yield* narrowR(
-          turnProjection.value.hook
-            .handler()
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-            .pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie),
-        )
+      const turnProjection = Option.fromUndefinedOr(
+        contributions.hooks?.find((slot) => slot.kind === "turnProjection"),
+      )
+      if (Option.isNone(turnProjection)) {
+        return yield* Effect.die(new Error("expected skills turn projection"))
+      }
+      const result = yield* turnProjection.value.hook
+        .handler()
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        .pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie)
 
-        const section = Option.flatMap(Option.fromUndefinedOr(result.promptSections), (sections) =>
-          Option.fromUndefinedOr(sections.find((s) => s.id === "skills")),
-        )
-        if (Option.isNone(section)) {
-          return yield* Effect.die(new Error("expected skills prompt section"))
-        }
-        expect(section.value.content).toContain("effect-v4")
-        expect(section.value.content).toContain("react")
-      }),
-    ),
+      const section = Option.flatMap(Option.fromUndefinedOr(result.promptSections), (sections) =>
+        Option.fromUndefinedOr(sections.find((s) => s.id === "skills")),
+      )
+      if (Option.isNone(section)) {
+        return yield* Effect.die(new Error("expected skills prompt section"))
+      }
+      expect(section.value.content).toContain("effect-v4")
+      expect(section.value.content).toContain("react")
+    }),
   )
 
   it.live(

@@ -44,7 +44,7 @@ import {
   Session,
   type SteerCommand,
 } from "../../src/domain/message"
-import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { e2ePreset } from "../helpers/test-preset"
 import {
   BranchStorage,
   MessageStorage,

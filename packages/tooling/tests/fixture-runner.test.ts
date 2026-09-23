@@ -203,8 +203,19 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-bun-outside-adapter",
     invalid: "packages/core/src/runtime/host-facts.invalid.ts",
     valid: "packages/core/src/runtime/host-facts.valid.ts",
-    // os, bun, crypto and url imports, process.cwd, and a hand-rolled file path
-    expectedCount: 6,
+    // Eight host module imports (os, bun, crypto and url, with and without
+    // node:, and a side-effect import), process.cwd and globalThis.process.cwd,
+    // a hand-rolled file path, a dynamic import, three require forms, and
+    // bare createHash, randomBytes and fileURLToPath calls
+    expectedCount: 18,
+  },
+  {
+    rule: "gent/no-bun-outside-adapter",
+    invalid: "packages/extensions/src/host-facts.invalid.ts",
+    // The test harness backs the platform, so it is exempt
+    valid: "packages/core/src/test-utils/host-facts.valid.ts",
+    // os import, process.cwd, and bare createHash, randomBytes and fileURLToPath
+    expectedCount: 5,
   },
   {
     rule: "gent/no-bun-outside-adapter",

@@ -21,7 +21,7 @@ import {
   Scope,
 } from "effect"
 import { AgentName, BranchId, ModelDriverRef, SessionId } from "@gent/core/protocol"
-import { AllBuiltinAgents } from "../../../../packages/extensions/tests/helpers/builtin-agents.js"
+import { testAgent } from "@gent/core/test-utils"
 import {
   type ClientActivitySnapshot,
   ClientContext,
@@ -184,7 +184,7 @@ const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("
 const driverListReply = {
   drivers: [{ _tag: "Model", id: "model:sonnet" }],
   overrides: {},
-  agents: AllBuiltinAgents,
+  agents: [testAgent],
 }
 
 /**

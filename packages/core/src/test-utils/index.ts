@@ -21,10 +21,12 @@ export {
   runToolWithCtx,
   staticToolBinding,
   storedEvents,
+  testAgent,
   testHostFacts,
   testLeafContext,
   testToolContext,
   type TestToolContext,
+  testTurnExtension,
 } from "./harness.js"
 export {
   type CapturedRequest,

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, FileSystem, Schema, Stream } from "effect"
-import { narrowR } from "../../core/tests/helpers/effect"
 import { AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import {
@@ -68,7 +67,6 @@ describe("AskUser Tool", () => {
         expect(result.answers[0]).toEqual(["Option A"])
         expect(result.cancelled).toBeUndefined()
       }),
-      narrowR,
     )
   })
 
@@ -91,7 +89,6 @@ describe("AskUser Tool", () => {
         expect(result.answers).toEqual([["Option A", "Option B"], ["Option C"]])
         expect(result.cancelled).toBeUndefined()
       }),
-      narrowR,
     )
   })
 
@@ -102,7 +99,6 @@ describe("AskUser Tool", () => {
       Effect.map((result) => {
         expect(result.answers).toEqual([["not-json {{{"]])
       }),
-      narrowR,
     )
   })
 
@@ -125,7 +121,6 @@ describe("AskUser Tool", () => {
         expect(result.cancelled).toBe(true)
         expect(result.answers).toEqual([])
       }),
-      narrowR,
     )
   })
 })
@@ -143,80 +138,72 @@ describe("Prompt Tool", () => {
   it.scopedLive(
     "review mode: writes the content under .gent/prompts and returns the decision",
     () =>
-      narrowR(
-        Effect.gen(function* () {
-          const cwd = yield* makeTempDirectoryScoped("prompt-review")
-          const ctx = testToolContext({ cwd, Interaction: interactionDeciding({ approved: true }) })
-          const result = yield* runToolWithCtx(
-            PromptTool,
-            { mode: "review", content: "## Plan\n- Step 1", title: "Release Plan" },
-            ctx,
-          )
-          expect(result.mode).toBe("review")
-          if (result.mode !== "review") return
-          expect(result.decision).toBe("yes")
-          expect(result.path.startsWith(`${cwd}/.gent/prompts/release-plan-`)).toBe(true)
-          const fs = yield* FileSystem.FileSystem
-          expect(yield* fs.readFileString(result.path)).toBe("# Release Plan\n\n## Plan\n- Step 1")
-        }).pipe(Effect.provide(BunServices.layer)),
-      ),
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDirectoryScoped("prompt-review")
+        const ctx = testToolContext({ cwd, Interaction: interactionDeciding({ approved: true }) })
+        const result = yield* runToolWithCtx(
+          PromptTool,
+          { mode: "review", content: "## Plan\n- Step 1", title: "Release Plan" },
+          ctx,
+        )
+        expect(result.mode).toBe("review")
+        if (result.mode !== "review") return
+        expect(result.decision).toBe("yes")
+        expect(result.path.startsWith(`${cwd}/.gent/prompts/release-plan-`)).toBe(true)
+        const fs = yield* FileSystem.FileSystem
+        expect(yield* fs.readFileString(result.path)).toBe("# Release Plan\n\n## Plan\n- Step 1")
+      }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("review mode: an edit decision stores the edited content", () =>
-    narrowR(
-      Effect.gen(function* () {
-        const cwd = yield* makeTempDirectoryScoped("prompt-edit")
-        const ctx = testToolContext({
-          cwd,
-          Interaction: interactionDeciding({
-            approved: true,
-            notes: "edit",
-            editedContent: "revised",
-          }),
-        })
-        const result = yield* runToolWithCtx(PromptTool, { mode: "review", content: "draft" }, ctx)
-        expect(result.mode).toBe("review")
-        if (result.mode !== "review") return
-        expect(result.decision).toBe("edit")
-        expect(result.content).toBe("revised")
-        const fs = yield* FileSystem.FileSystem
-        expect(yield* fs.readFileString(result.path)).toBe("revised")
-      }).pipe(Effect.provide(BunServices.layer)),
-    ),
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDirectoryScoped("prompt-edit")
+      const ctx = testToolContext({
+        cwd,
+        Interaction: interactionDeciding({
+          approved: true,
+          notes: "edit",
+          editedContent: "revised",
+        }),
+      })
+      const result = yield* runToolWithCtx(PromptTool, { mode: "review", content: "draft" }, ctx)
+      expect(result.mode).toBe("review")
+      if (result.mode !== "review") return
+      expect(result.decision).toBe("edit")
+      expect(result.content).toBe("revised")
+      const fs = yield* FileSystem.FileSystem
+      expect(yield* fs.readFileString(result.path)).toBe("revised")
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.live("confirm mode: a rejected approval is a no", () =>
-    narrowR(
-      runToolWithCtx(
-        PromptTool,
-        { mode: "confirm", content: "Proceed?" },
-        testToolContext({ Interaction: interactionDeciding({ approved: false }) }),
-      ).pipe(
-        Effect.map((result) => {
-          expect(result.mode).toBe("confirm")
-          if (result.mode === "confirm") expect(result.decision).toBe("no")
-        }),
-      ),
+    runToolWithCtx(
+      PromptTool,
+      { mode: "confirm", content: "Proceed?" },
+      testToolContext({ Interaction: interactionDeciding({ approved: false }) }),
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.mode).toBe("confirm")
+        if (result.mode === "confirm") expect(result.decision).toBe("no")
+      }),
     ),
   )
 
   it.live("present mode: returns shown status", () =>
-    narrowR(
-      runToolWithCtx(
-        PromptTool,
-        { mode: "present", content: "Info" },
-        testToolContext({
-          Interaction: {
-            approve: () => Effect.die("interaction.approve not wired"),
-            present: () => Effect.void,
-          },
-        }),
-      ).pipe(
-        Effect.map((result) => {
-          expect(result.mode).toBe("present")
-          if (result.mode === "present") expect(result.status).toBe("shown")
-        }),
-      ),
+    runToolWithCtx(
+      PromptTool,
+      { mode: "present", content: "Info" },
+      testToolContext({
+        Interaction: {
+          approve: () => Effect.die("interaction.approve not wired"),
+          present: () => Effect.void,
+        },
+      }),
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.mode).toBe("present")
+        if (result.mode === "present") expect(result.status).toBe("shown")
+      }),
     ),
   )
 })
@@ -507,21 +494,19 @@ describe("HandoffTool", () => {
       approve: () => Effect.succeed({ approved: true }),
     })
 
-    return narrowR(
-      runToolWithCtx(
-        HandoffTool,
-        {
-          context: "Current task: implement auth. Key files: src/auth.ts",
-          reason: "context window filling up",
-        },
-        ctx,
-      ).pipe(
-        Effect.map((result) => {
-          expect(result.handoff).toBe(true)
-          expect(result.summary).toContain("implement auth")
-          expect(result.parentSessionId).toBe(SessionId.make("test-session"))
-        }),
-      ),
+    return runToolWithCtx(
+      HandoffTool,
+      {
+        context: "Current task: implement auth. Key files: src/auth.ts",
+        reason: "context window filling up",
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.handoff).toBe(true)
+        expect(result.summary).toContain("implement auth")
+        expect(result.parentSessionId).toBe(SessionId.make("test-session"))
+      }),
     )
   })
 
@@ -530,19 +515,17 @@ describe("HandoffTool", () => {
       approve: () => Effect.succeed({ approved: false }),
     })
 
-    return narrowR(
-      runToolWithCtx(
-        HandoffTool,
-        {
-          context: "Current task: implement auth",
-        },
-        ctx,
-      ).pipe(
-        Effect.map((result) => {
-          expect(result.handoff).toBe(false)
-          expect(result.reason).toBe("User rejected handoff")
-        }),
-      ),
+    return runToolWithCtx(
+      HandoffTool,
+      {
+        context: "Current task: implement auth",
+      },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.handoff).toBe(false)
+        expect(result.reason).toBe("User rejected handoff")
+      }),
     )
   })
 })

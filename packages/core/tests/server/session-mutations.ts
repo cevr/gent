@@ -23,7 +23,7 @@ import {
   StorageError,
 } from "../../src/storage/storage"
 import { createE2ELayer, createRpcClient } from "../../src/test-utils/harness"
-import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { e2ePreset } from "../helpers/test-preset"
 
 export const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 export const datePlusMillis = (date: Date, millis: number): Date =>

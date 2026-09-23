@@ -2430,4 +2430,60 @@ describe("undeclared workspace imports", () => {
     )
     expect(findings).toEqual([])
   })
+
+  const linesOf = (file: string, text: string) =>
+    findUndeclaredWorkspaceImports(manifests, new Map([[file, text]])).map(
+      (finding) => finding.line,
+    )
+
+  test("an import whose specifier sits on a later line is a finding", () => {
+    const text = ["import {", "  Gent,", "} from", `  "${sdkImport}"`].join("\n")
+    expect(linesOf("packages/core/src/a.ts", text)).toEqual([4])
+    expect(
+      linesOf(
+        "packages/core/src/b.ts",
+        ["const sdk = require(", `  "${sdkImport}",`, ")"].join("\n"),
+      ),
+    ).toEqual([2])
+  })
+
+  test("require, dynamic import, type import, and export-from are findings", () => {
+    const text = [
+      `const sdk = require("${sdkImport}")`,
+      `const lazy = import("${sdkImport}")`,
+      `import type { GentServer } from "${sdkImport}"`,
+      `export { Gent } from "${sdkImport}"`,
+      `type Client = typeof import("${sdkImport}")`,
+    ].join("\n")
+    expect(linesOf("packages/core/src/a.ts", text)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  test("an import inside a comment, a string, or a template is not a finding", () => {
+    const text = [
+      `// import { Gent } from "${sdkImport}"`,
+      `/* import { Gent } from "${sdkImport}" */`,
+      `const example = 'import { Gent } from "${sdkImport}"'`,
+      'const shown = `import { Gent } from "' + sdkImport + '" ${1}`',
+      "const pattern = /[\"']/",
+    ].join("\n")
+    expect(linesOf("packages/core/src/a.ts", text)).toEqual([])
+  })
+
+  test("a relative import that leaves its workspace root is a finding", () => {
+    expect(
+      linesOf(
+        "packages/sdk/tests/client.test.ts",
+        'import { narrowR } from "../../core/tests/helpers/effect"',
+      ),
+    ).toEqual([1])
+    expect(
+      linesOf(
+        "packages/core/tests/extensions/api.test.ts",
+        'import notes from "../../../../examples/extensions/session-notes"',
+      ),
+    ).toEqual([1])
+    expect(
+      linesOf("packages/core/tests/runtime/a.test.ts", 'import { x } from "../../src/runtime/x"'),
+    ).toEqual([])
+  })
 })

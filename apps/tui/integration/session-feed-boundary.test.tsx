@@ -12,14 +12,14 @@ import {
 import {
   baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
   LanguageModelLayers,
+  testAgent,
 } from "@gent/core/test-utils"
-import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import { waitForFrame, makeSessionState, repoRoot } from "./helpers"
 const absentReasoningLevel = Option.getOrUndefined(Option.none())
 const absentModelId = Option.getOrUndefined(Option.none())
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
-  _baseLocalLayerWithProvider(p, { agents: AllBuiltinAgents })
+  _baseLocalLayerWithProvider(p, { agents: [testAgent] })
 describe("session feed boundary", () => {
   it.live(
     "projects streaming state and assistant output",

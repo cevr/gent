@@ -39,7 +39,13 @@ import {
   ToolCallId,
   ToolId,
 } from "../domain/ids.js"
-import { type AgentDefinition } from "../domain/agent.js"
+import {
+  AgentDefinition,
+  DEFAULT_AGENT_NAME,
+  DEFAULT_MODEL_ID,
+  Model,
+  parseModelId,
+} from "../domain/agent.js"
 import { Auth, ModelRegistry } from "../runtime/provider.js"
 import {
   getToolMetadata,
@@ -91,7 +97,7 @@ import {
   getEventSessionId,
   matchesEventFilter,
 } from "../domain/event.js"
-import type { LanguageModel } from "effect/unstable/ai"
+import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import { buildServerRoot, ServerRootPlatformLayer } from "../server/server-root.js"
 
@@ -193,6 +199,45 @@ const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
       yield* host.register("agent", ...agents)
     }),
   })
+
+/** The agent a test runs when it names none: `main`, on the default model. */
+export const testAgent = AgentDefinition.make({
+  name: DEFAULT_AGENT_NAME,
+  description: "Test agent",
+})
+
+const [defaultProviderId, defaultModelName] = Option.getOrThrow(parseModelId(DEFAULT_MODEL_ID))
+
+/**
+ * What an `extensionInputs` preset needs for a turn to run: the test agent and
+ * a driver that lists the default model. `createE2ELayer` registers `agents`
+ * only for pre-loaded extensions. The driver's model is never called; the test
+ * hands the runtime its own language model through `providerLayer`.
+ */
+export const testTurnExtension = defineExtension({
+  id: "test-turn",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("agent", testAgent)
+    yield* host.register("modelDriver", {
+      id: defaultProviderId,
+      name: "Test driver",
+      listModels: () =>
+        Effect.succeed([
+          new Model({
+            id: DEFAULT_MODEL_ID,
+            name: "Test model",
+            provider: defaultProviderId,
+            contextLength: 128_000,
+          }),
+        ]),
+      resolveModel: () =>
+        Effect.succeed(
+          AiModel.make(defaultProviderId, defaultModelName, LanguageModelLayers.failing),
+        ),
+    })
+  }),
+})
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 const dieEffect = (label: string) => Effect.die(`${label} not wired in test`)

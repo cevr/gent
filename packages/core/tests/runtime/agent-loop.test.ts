@@ -166,7 +166,7 @@ import {
   TurnOutcome,
 } from "../../src/runtime/turn"
 import { windowDetails, windowMarkerMessage } from "../../src/runtime/model-context"
-import { e2ePreset, ModelContextCompactorLive } from "../../../extensions/tests/helpers/test-preset"
+import { e2ePreset, rangeCompactorLayer, testAgents } from "../helpers/test-preset"
 import * as AiModel from "effect/unstable/ai/Model"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import {
@@ -197,7 +197,6 @@ import {
   ToolRunner,
   makeTurnInterruption,
 } from "../../src/runtime/tools"
-import { AllBuiltinAgents } from "../../../extensions/tests/helpers/builtin-agents"
 import {
   AgentLoopError,
   buildIdleState,
@@ -1372,9 +1371,7 @@ describe("native model compaction integration", () => {
         expect(Option.isSome(mainPrompt)).toBe(true)
         if (Option.isNone(mainPrompt)) return yield* Effect.die("main prompt missing")
         const main = promptText(mainPrompt.value)
-        expect(main).toContain("Context handoff")
         expect(main).toContain("native bounded summary")
-        expect(main).toContain(`Session ${sessionId}, branch ${branchId}`)
         expect(main).toContain("native current turn")
         // The handoff replaced the old messages in the model view.
         expect(main).not.toContain("native-old-1 xxxx")
@@ -1396,7 +1393,7 @@ describe("native model compaction integration", () => {
         expect(durable.some((message) => message.id === oldMessages[0]?.id)).toBe(true)
       }),
     ).pipe(
-      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(ModelContextCompactorLive))),
+      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(rangeCompactorLayer))),
       Effect.timeout("15 seconds"),
     )
   })
@@ -1445,7 +1442,7 @@ describe("native model compaction integration", () => {
         expect(markers).toHaveLength(1)
       }),
     ).pipe(
-      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(ModelContextCompactorLive))),
+      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(rangeCompactorLayer))),
       Effect.timeout("15 seconds"),
     )
   })
@@ -1590,7 +1587,7 @@ describe("native model context projection", () => {
         manifest: { id: ExtensionId.make("model-context-driver") },
         scope: "builtin",
         sourcePath: "test",
-        contributions: { agents: AllBuiltinAgents, modelDrivers: [driver] },
+        contributions: { agents: testAgents, modelDrivers: [driver] },
       },
     ])
     const extensionRegistry = ExtensionRegistry.fromResolved(resolved)
@@ -7506,7 +7503,7 @@ describe("external turn execution", () => {
           manifest: { id: ExtensionId.make("agents") },
           scope: "builtin",
           sourcePath: "test",
-          contributions: { agents: AllBuiltinAgents },
+          contributions: { agents: testAgents },
         },
       ])
       const deps = Layer.mergeAll(

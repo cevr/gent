@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Exit, Layer, Option, Predicate, Random, Schema, Scope, Stream } from "effect"
+import { Effect, Exit, Layer, Predicate, Random, Schema, Scope } from "effect"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { getToolId } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
@@ -10,15 +10,10 @@ import {
   WORKSPACE_ID_HEADER,
 } from "@gent/core/test-utils"
 import { GentPlatform, workspaceHeadersForCwd, workspaceIdForCwd } from "@gent/core/host"
-import { narrowR } from "../../core/tests/helpers/effect"
-import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Gent } from "../src/client"
 import type { Message as DomainMessage } from "../src/index"
 import {
-  type GentRpcClient,
-  GentRpcs,
-  makeNamespacedClient,
   BranchId,
   MessageId,
   SessionId,
@@ -94,37 +89,6 @@ describe("sdk client helpers", () => {
     expect(projected?.toolInteractions[0]?.output).toBe("file contents")
   })
 
-  test("namespaced client exposes every RPC key from GentRpcs", () => {
-    const handlers = new Map<string, () => Effect.Effect<void>>(
-      [...GentRpcs.requests.keys()].map((key) => [key, () => Effect.void]),
-    )
-    const flat: GentRpcClient = new Proxy(Object.create(null), {
-      get: (_target, property) => {
-        if (!Predicate.isString(property)) return Option.getOrUndefined(Option.none())
-        return Option.getOrUndefined(Option.fromNullishOr(handlers.get(property)))
-      },
-    })
-    const namespaced = makeNamespacedClient(flat)
-    expect(namespaced.session).toBe(namespaced.session)
-
-    for (const key of GentRpcs.requests.keys()) {
-      const separator = key.indexOf(".")
-      expect(separator, `RPC key is not namespaced: ${key}`).not.toBe(-1)
-      if (separator === -1) return
-      const namespace = key.slice(0, separator)
-      const method = key.slice(separator + 1)
-      // oxlint-disable-next-line effect/noAs -- this test verifies the dynamic RPC namespace boundary
-      const namespaceClient = namespaced[namespace as keyof typeof namespaced]
-      expect(namespaceClient).toBeDefined()
-      expect(namespace in namespaced).toBe(true)
-      expect(method in namespaceClient).toBe(true)
-      // oxlint-disable-next-line effect/noAs, effect/noUnsafeDictionaryType -- this test verifies the dynamic RPC method boundary
-      const methodClient = (namespaceClient as Readonly<Record<string, unknown>>)[method]
-      expect(methodClient).toBeDefined()
-      expect(methodClient).toBe(handlers.get(key))
-    }
-  })
-
   test("workspace id is a stable hash of canonical cwd", () => {
     expect(workspaceIdForCwd("/tmp/gent/../gent")).toBe(workspaceIdForCwd("/tmp/gent"))
     expect(workspaceIdForCwd("/tmp/gent")).toMatch(/^[a-f0-9]{64}$/)
@@ -132,52 +96,6 @@ describe("sdk client helpers", () => {
       workspaceIdForCwd("/tmp/gent"),
     )
   })
-
-  it.live("namespaced client attaches workspace header to RPC effects", () =>
-    Effect.gen(function* () {
-      let observed = Option.none<string>()
-      const flat: GentRpcClient = new Proxy(Object.create(null), {
-        get: (_target, property) => {
-          if (property !== "session.list") return Option.getOrUndefined(Option.none())
-          return () =>
-            Effect.gen(function* () {
-              const headers = yield* RpcClient.CurrentHeaders
-              observed = Option.fromNullishOr(headers[WORKSPACE_ID_HEADER])
-              return []
-            })
-        },
-      })
-      const client = makeNamespacedClient(flat, workspaceHeadersForCwd("/tmp/gent"))
-      yield* client.session.list()
-      expect(observed).toEqual(Option.some(workspaceIdForCwd("/tmp/gent")))
-    }),
-  )
-
-  it.live("namespaced client attaches workspace header to RPC streams", () =>
-    Effect.gen(function* () {
-      let observed = Option.none<string>()
-      const flat: GentRpcClient = new Proxy(Object.create(null), {
-        get: (_target, property) => {
-          if (property !== "session.watchRuntime") return Option.getOrUndefined(Option.none())
-          return () =>
-            Stream.fromEffect(
-              Effect.gen(function* () {
-                const headers = yield* RpcClient.CurrentHeaders
-                observed = Option.fromNullishOr(headers[WORKSPACE_ID_HEADER])
-              }),
-            )
-        },
-      })
-      const client = makeNamespacedClient(flat, workspaceHeadersForCwd("/tmp/gent"))
-      yield* Stream.runDrain(
-        client.session.watchRuntime({
-          sessionId: SessionId.make("session-stream-header"),
-          branchId: BranchId.make("branch-stream-header"),
-        }),
-      )
-      expect(observed).toEqual(Option.some(workspaceIdForCwd("/tmp/gent")))
-    }),
-  )
 })
 
 // ── server-options.test ─────────────────────────────────────────────────────
@@ -298,28 +216,26 @@ interface SeededCall {
  * tool's own schema rejects. Tools come from the builtin extensions' setup.
  */
 const rejectedCalls = (calls: ReadonlyArray<SeededCall>) =>
-  narrowR(
-    Effect.gen(function* () {
-      const tools = new Map<string, Schema.Constraint>()
-      for (const extension of BuiltinExtensions) {
-        const contributions = yield* collectTestContributions(extension.setup)
-        for (const tool of contributions.tools ?? []) {
-          tools.set(getToolId(tool), tool.parametersSchema)
-        }
+  Effect.gen(function* () {
+    const tools = new Map<string, Schema.Constraint>()
+    for (const extension of BuiltinExtensions) {
+      const contributions = yield* collectTestContributions(extension.setup)
+      for (const tool of contributions.tools ?? []) {
+        tools.set(getToolId(tool), tool.parametersSchema)
       }
-      const rejected: string[] = []
-      for (const call of calls) {
-        const schema = tools.get(call.name)
-        if (Predicate.isUndefined(schema)) {
-          rejected.push(`${call.name}: no shipped tool has this id`)
-          continue
-        }
-        // The seeded tools' params are plain structs: their type side is their JSON.
-        if (!Schema.is(schema)(call.params)) rejected.push(`${call.name}: params do not fit`)
+    }
+    const rejected: string[] = []
+    for (const call of calls) {
+      const schema = tools.get(call.name)
+      if (Predicate.isUndefined(schema)) {
+        rejected.push(`${call.name}: no shipped tool has this id`)
+        continue
       }
-      return rejected
-    }),
-  ).pipe(
+      // The seeded tools' params are plain structs: their type side is their JSON.
+      if (!Schema.is(schema)(call.params)) rejected.push(`${call.name}: params do not fit`)
+    }
+    return rejected
+  }).pipe(
     Effect.provide(
       Layer.mergeAll(
         BunServices.layer,

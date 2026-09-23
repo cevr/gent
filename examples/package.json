@@ -4,12 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../packages/tooling/src/test-log-preload.ts --reporter=dots tests"
   },
   "dependencies": {
     "@gent/core": "workspace:*"
   },
   "peerDependencies": {
-    "effect": "catalog:"
+    "@effect/platform-bun": "catalog:",
+    "effect": "catalog:",
+    "effect-bun-test": "catalog:"
   }
 }

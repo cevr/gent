@@ -222,6 +222,34 @@ const HOST_MODULE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ["url", "Turn a file URL into a path with Effect `Path.fromFileUrl`."],
 ])
 
+/** Host functions protected source calls bare only after importing them from a host module. */
+const HOST_FUNCTION_MESSAGES: ReadonlyMap<string, string> = new Map([
+  ["createHash", "Digests come from `GentPlatform.hash`."],
+  ["randomBytes", "Random bytes come from Effect `Crypto`."],
+  ["fileURLToPath", "Turn a file URL into a path with Effect `Path.fromFileUrl`."],
+])
+
+/** The module a `require("x")` or `module.require("x")` call names. */
+const requireSourceOf = (node: AstNode): string | undefined => {
+  let callee = getNodeField(node, "callee")
+  if (callee?.type === "MemberExpression") callee = getNodeField(callee, "property")
+  if (callee?.type !== "Identifier" || getStringField(callee, "name") !== "require")
+    return undefined
+  const [arg] = getNodeArrayField(node, "arguments") ?? []
+  if (arg === undefined) return undefined
+  return getStringField(arg, "value")
+}
+
+/** A bare call to a host function: `createHash(...)`, not `platform.createHash(...)`. */
+const hostFunctionMessage = (node: AstNode): string | undefined => {
+  const callee = getNodeField(node, "callee")
+  if (callee?.type !== "Identifier") return undefined
+  const name = getStringField(callee, "name")
+  if (name === undefined) return undefined
+  const message = HOST_FUNCTION_MESSAGES.get(name)
+  return message === undefined ? undefined : `\`${name}()\` is not allowed here. ${message}`
+}
+
 const hostModuleMessage = (source: string): string | undefined => {
   const message = HOST_MODULE_MESSAGES.get(source.replace(/^node:/, ""))
   return message === undefined ? undefined : `\`${source}\` is not allowed here. ${message}`
@@ -243,13 +271,24 @@ const isImportMetaUrlConstruction = (node: AstNode | undefined): boolean => {
   )
 }
 
-/** `object.property` for an identifier-rooted member expression. */
+/**
+ * The name a member expression's object resolves to: `process` for both
+ * `process` and `globalThis.process`.
+ */
+const hostObjectName = (object: AstNode | undefined): string | undefined => {
+  if (object?.type === "Identifier") return getStringField(object, "name")
+  if (object?.type !== "MemberExpression") return undefined
+  const root = getNodeField(object, "object")
+  const prop = getNodeField(object, "property")
+  if (root?.type !== "Identifier" || getStringField(root, "name") !== "globalThis") return undefined
+  return prop?.type === "Identifier" ? getStringField(prop, "name") : undefined
+}
+
+/** `object.property` for an identifier-rooted (or `globalThis`-rooted) member expression. */
 const hostMember = (
   node: AstNode,
 ): { readonly object: string; readonly property: string | undefined } | undefined => {
-  const object = getNodeField(node, "object")
-  if (object?.type !== "Identifier") return undefined
-  const objectName = getStringField(object, "name")
+  const objectName = hostObjectName(getNodeField(node, "object"))
   if (objectName === undefined) return undefined
   const prop = getNodeField(node, "property")
   let property: string | undefined
@@ -1099,6 +1138,13 @@ const plugin: Plugin = {
         return {
           ImportDeclaration: reportHostModule,
           ImportExpression: reportHostModule,
+          CallExpression(node) {
+            if (!protectedFile || !isAstNode(node)) return
+            const source = requireSourceOf(node)
+            const message =
+              source === undefined ? hostFunctionMessage(node) : hostModuleMessage(source)
+            if (message !== undefined) context.report({ message, node })
+          },
           MemberExpression(node) {
             if (!isAstNode(node)) return
             if (protectedFile && isImportMetaUrlConstruction(getNodeField(node, "object"))) {
