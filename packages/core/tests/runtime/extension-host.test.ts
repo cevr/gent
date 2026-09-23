@@ -26,7 +26,6 @@ import {
   testHostFacts,
   testToolContext,
   ensureStorageParents,
-  testExtensionFiles,
 } from "../../src/test-utils/index"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
@@ -1003,7 +1002,7 @@ const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
 )
 
 const fsLayer = Layer.provideMerge(
-  Layer.mergeAll(BunFileSystem.layer, Path.layer, BunGentPlatformLive),
+  Layer.mergeAll(BunFileSystem.layer, Path.layer, BunCrypto.layer, BunGentPlatformLive),
   childProcessSpawnerLive,
 )
 
@@ -1546,15 +1545,12 @@ describe("extension capability registries", () => {
         id: "context-facade",
         input: Schema.Struct({}),
         output: Schema.Struct({
-          parentEnvValue: Schema.String,
-          processFailed: Schema.Boolean,
           followUpQueued: Schema.Boolean,
           interactionPresented: Schema.Boolean,
         }),
         execute: () =>
           Effect.gen(function* () {
             const extensionCtx = yield* ExtensionContext
-            const processExit = yield* Effect.exit(extensionCtx.Process.run("echo", ["hi"]))
             const followUpExit = yield* Effect.exit(
               extensionCtx.Session.send({ delivery: "queue", sourceId: "request", content: "ok" }),
             )
@@ -1562,8 +1558,6 @@ describe("extension capability registries", () => {
               extensionCtx.Interaction.present({ content: "ok", title: "request" }),
             )
             return {
-              parentEnvValue: extensionCtx.Process.parentEnv["TEST_VALUE"] ?? "",
-              processFailed: Exit.isFailure(processExit),
               followUpQueued: Exit.isSuccess(followUpExit),
               interactionPresented: Exit.isSuccess(interactionExit),
             }
@@ -1577,14 +1571,11 @@ describe("extension capability registries", () => {
         testExtensionHostContext({
           sessionId: SessionId.make("request-session"),
           branchId: BranchId.make("request-branch"),
-          host: { ...testExtensionHostContext().host, parentEnv: { TEST_VALUE: "visible" } },
           Session: { send: () => Effect.void },
           Interaction: { present: () => Effect.void },
         }),
       )
       expect(result).toEqual({
-        parentEnvValue: "visible",
-        processFailed: true,
         followUpQueued: true,
         interactionPresented: true,
       })
@@ -1616,11 +1607,11 @@ describe("extension capability registries", () => {
         id: "context-request",
         slash: { name: "Context Request", description: "Request with host context service" },
         input: Schema.Struct({}),
-        output: Schema.Struct({ hasRunProcess: Schema.Boolean }),
+        output: Schema.Struct({ hasSessionSend: Schema.Boolean }),
         execute: () =>
           Effect.gen(function* () {
             const extensionCtx = yield* ExtensionContext
-            return { hasRunProcess: "run" in extensionCtx.Process }
+            return { hasSessionSend: "send" in extensionCtx.Session }
           }),
       })
       const ext: LoadedExtension = {
@@ -1639,7 +1630,7 @@ describe("extension capability registries", () => {
           branchId: BranchId.make("request-context-branch"),
         }),
       )
-      expect(result).toEqual({ hasRunProcess: true })
+      expect(result).toEqual({ hasSessionSend: true })
     }))
 
   test("higher-scope slash request shadows lower-scope slash request", () =>
@@ -1949,14 +1940,14 @@ describe("runtime slots", () => {
 
   test("systemPrompt receives host authority through ExtensionContext", () =>
     Effect.gen(function* () {
-      const sawProcessAuthority = yield* Ref.make(false)
+      const sawHostAuthority = yield* Ref.make(false)
       const slots = compileExtensionHooks([
         makeExtExtensionHooks("readonly", "project", {
           hooks: [
             hook("systemPrompt", () =>
               Effect.gen(function* () {
                 const ctx = yield* ExtensionContext
-                yield* Ref.set(sawProcessAuthority, "run" in ctx.Process)
+                yield* Ref.set(sawHostAuthority, "send" in ctx.Session)
                 return "readonly"
               }),
             ),
@@ -1972,7 +1963,7 @@ describe("runtime slots", () => {
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
 
       expect(result).toBe("readonly")
-      expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
+      expect(yield* Ref.get(sawHostAuthority)).toBe(true)
     }))
 
   test("turnAfter isolates failing hooks; all handlers still run", () => {
@@ -2030,14 +2021,14 @@ describe("runtime slots", () => {
 
   test("turnAfter receives host authority through ExtensionContext", () =>
     Effect.gen(function* () {
-      const sawProcessAuthority = yield* Ref.make(false)
+      const sawHostAuthority = yield* Ref.make(false)
       const slots = compileExtensionHooks([
         makeExtExtensionHooks("readonly-lifecycle", "project", {
           hooks: [
             hook("turnAfter", () =>
               Effect.gen(function* () {
                 const ctx = yield* ExtensionContext
-                yield* Ref.set(sawProcessAuthority, "run" in ctx.Process)
+                yield* Ref.set(sawHostAuthority, "send" in ctx.Session)
               }),
             ),
           ],
@@ -2059,7 +2050,7 @@ describe("runtime slots", () => {
         } satisfies TurnAfterInput)
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
 
-      expect(yield* Ref.get(sawProcessAuthority)).toBe(true)
+      expect(yield* Ref.get(sawHostAuthority)).toBe(true)
     }))
 
   test("turnAfter hooks run inside lifecycle capability context", () =>
@@ -2146,45 +2137,6 @@ describe("host session facet", () => {
       Effect.provide(
         Layer.merge(
           SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-        ),
-      ),
-    ),
-  )
-})
-
-describe("test Files facet path parity", () => {
-  // The test facet used to spell posix rules out by hand. It resolved a
-  // relative path from `/` rather than the process cwd, and it dropped a
-  // leading `..` from a join, so a test could pass against rules production
-  // never applies. Both facets now read the same `Path` service.
-  it.live("resolves and joins exactly as the production facet does", () =>
-    Effect.gen(function* () {
-      const provider = yield* makeExtensionHostContextProvider({
-        host: testHostFacts().host,
-      })
-      const production = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID }).Files
-      const stub = testExtensionFiles()
-
-      // A relative path resolves from the process cwd, not from the root.
-      expect(stub.resolve("relative.txt")).toBe(production.resolve("relative.txt"))
-      expect(stub.resolve("relative.txt").startsWith(process.cwd())).toBe(true)
-      expect(stub.resolve("relative.txt")).not.toBe("/relative.txt")
-
-      // A leading `..` survives a relative join instead of being swallowed.
-      expect(stub.join("..", "file")).toBe(production.join("..", "file"))
-      expect(stub.join("..", "file")).toBe("../file")
-
-      // The rest of the surface agrees too.
-      expect(stub.resolve("/base", "sub")).toBe(production.resolve("/base", "sub"))
-      expect(stub.join("/a", "b", "..", "c")).toBe(production.join("/a", "b", "..", "c"))
-      expect(stub.dirname("/a/b/c.txt")).toBe(production.dirname("/a/b/c.txt"))
-      expect(stub.dirname("bare.txt")).toBe(production.dirname("bare.txt"))
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          Path.layer,
           RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ),
       ),
@@ -2287,14 +2239,14 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
     }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.live("runtime-loaded setup receives host process facade", () =>
+  it.live("runtime-loaded setup receives host facts and no process facade", () =>
     Effect.gen(function* () {
-      const sawProcessAuthority = yield* Effect.sync(() => ({ value: false }))
+      const sawHostFacts = yield* Effect.sync(() => ({ value: false }))
       const extension: GentExtension = {
         manifest: { id: ExtensionId.make("@gent/test-public-setup") },
         setup: Effect.gen(function* () {
           const host = yield* ExtensionHost
-          sawProcessAuthority.value = "runProcess" in host.Process && "parentEnv" in host.Process
+          sawHostFacts.value = "osInfo" in host.host && !("Process" in host)
         }),
       }
 
@@ -2308,7 +2260,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
         "/tmp/home",
       )
 
-      expect(sawProcessAuthority.value).toBe(true)
+      expect(sawHostFacts.value).toBe(true)
     }).pipe(Effect.provide(fsLayer)),
   )
 

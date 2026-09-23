@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
 import {
   defineExtension,
   ExtensionContext,
@@ -180,10 +180,12 @@ export const PromptTool = tool({
     // review: persist the content to a file the user can edit, then ask.
     const slug = Option.match(title, { onNone: () => "prompt", onSome: slugify })
     const seed = Option.getOrElse(Option.fromUndefinedOr(ctx.toolCallId), () => "prompt")
-    const path = ctx.Files.resolve(ctx.cwd, ".gent", "prompts", `${slug}-${seed}.md`)
+    const fs = yield* FileSystem.FileSystem
+    const pathService = yield* Path.Path
+    const path = pathService.resolve(ctx.cwd, ".gent", "prompts", `${slug}-${seed}.md`)
     const text = withTitle(title, params.content)
-    yield* ctx.Files.makeDirectory(ctx.Files.dirname(path), { recursive: true })
-    yield* ctx.Files.write(path, text)
+    yield* fs.makeDirectory(pathService.dirname(path), { recursive: true })
+    yield* fs.writeFileString(path, text)
 
     const decision = yield* ctx.Interaction.approve({
       text,
@@ -194,10 +196,12 @@ export const PromptTool = tool({
 
     const submitted = Option.fromUndefinedOr(decision.editedContent)
     if (Option.isSome(submitted)) {
-      yield* ctx.Files.write(path, submitted.value)
+      yield* fs.writeFileString(path, submitted.value)
       return { mode: "review", decision: "edit", path, content: submitted.value }
     }
-    const edited = yield* ctx.Files.read(path).pipe(Effect.catchEager(() => Effect.succeed(text)))
+    const edited = yield* fs
+      .readFileString(path)
+      .pipe(Effect.catchEager(() => Effect.succeed(text)))
     return { mode: "review", decision: "edit", path, content: edited }
   }),
 })

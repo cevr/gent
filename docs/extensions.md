@@ -87,7 +87,8 @@ Public authoring surface:
 | Agents          | `defineAgent`, `AgentName`, `ModelId`, run-spec helpers                      |
 | Stable ids      | `ExtensionId`, `ToolCallId`                                                  |
 | Errors          | capability/provider-auth/agent-run author-facing errors                      |
-| Host facts      | `ExtensionHost.host` and `ExtensionHost.Process`                             |
+| Host facts      | `ExtensionHost.host`                                                         |
+| Processes       | `runProcess`, `ProcessError` over the Effect `ChildProcessSpawner`           |
 | Serialization   | Message/output projection helpers safe to expose across extension boundaries |
 
 There is no builtin-internal surface. Shipped extensions are useful defaults,
@@ -111,12 +112,15 @@ const program = Effect.gen(function* () {
 ```
 
 `ExtensionContext` is the host-owned facade. It exposes session, agent,
-interaction, process, file index, file lock, and state-pulse accessors
-(`Session`, `Agent`, `Interaction`, `Process`, `Files`, `FileLock`, `State`)
+interaction, file lock, and state-pulse accessors
+(`Session`, `Agent`, `Interaction`, `FileLock`, `State`)
 plus stable invocation facts such as `sessionId`, `branchId`, `cwd`, and
-`home`. The `Files` / `FileLock` / `State` facets wrap the host-internal
-`FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so authors
-never reach into runtime Tags. `ctx.State.changed()` uses the current
+`home`. The `FileLock` / `State` facets wrap the host-internal
+`FileLockService` and `ExtensionStatePublisher` so authors
+never reach into runtime Tags. No facet duplicates an Effect platform
+service: files, paths, processes, and ids come from `FileSystem`, `Path`,
+`ChildProcessSpawner`, and `Crypto`, and a relative path resolves against
+`ctx.cwd` with `path.resolve(ctx.cwd, p)`. `ctx.State.changed()` uses the current
 extension identity, session, and branch supplied by the host. If an
 extension needs private state, it
 should import its own service Tag from a `defineResource(...)` layer and
@@ -140,13 +144,12 @@ refuses it: a turn that waits on its own loop never returns, so it takes
 `"queue"`. `ctx.Session.stop({ sessionId?, branchId?, messageId? })` stops a
 running turn.
 
-`ExtensionHost.host` and `ExtensionHost.Process` are the only public host
-platform views at setup time. They expose small, serializable facts and narrow
-host probes such as OS info, executable path, home directory, command-name
-candidates, and loopback port probing.
-Extensions do not yield `GentPlatform`, import `runProcess`, or reach into
-`@gent/core/runtime/*`; process authority is available only through
-`yield* ExtensionContext` and its `Process` facade. When extensions need more
+`ExtensionHost.host` is the only public host platform view at setup time. It
+exposes small, serializable facts such as OS info, executable path, and home
+directory.
+Extensions do not yield `GentPlatform` or reach into `@gent/core/runtime/*`.
+A command runs through `runProcess` from `@gent/core/extensions/api`, which
+needs the Effect `ChildProcessSpawner` in the requirement union. When extensions need more
 host authority, the design answer is a new public authoring primitive or a
 host-owned runtime feature.
 

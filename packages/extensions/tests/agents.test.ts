@@ -41,7 +41,7 @@ const systemText = (prompt: Prompt.Prompt): string =>
     .map((message) => message.content)
     .join("\n")
 
-/** The helpers read the paths and Files facade off the context, as a turn does. */
+/** The helpers read home and cwd off the context and files off the platform, as a turn does. */
 const instructionsIn = (home: string, cwd: string) =>
   readProjectInstructions().pipe(
     Effect.provideService(ExtensionContext, testLeafContext(testToolContext({ home, cwd }))),
@@ -84,7 +84,7 @@ describe("project instructions", () => {
       expect(yield* instructionsIn(home, cwd)).toBe(
         "home rules\n---\nproject rules\n---\nlocal rules",
       )
-    }).pipe(Effect.provide(BunFileSystem.layer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("an empty AGENTS.md defers to CLAUDE.md beside it", () =>
@@ -94,7 +94,7 @@ describe("project instructions", () => {
       yield* writeFile(`${cwd}/AGENTS.md`, "  \n")
       yield* writeFile(`${cwd}/CLAUDE.md`, "fallback rules")
       expect(yield* instructionsIn(home, cwd)).toBe("fallback rules")
-    }).pipe(Effect.provide(BunFileSystem.layer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("the Claude user file stands in only when every gent location is empty", () =>
@@ -105,7 +105,7 @@ describe("project instructions", () => {
       expect(yield* instructionsIn(home, cwd)).toBe("global rules")
       yield* writeFile(`${cwd}/AGENTS.md`, "project rules")
       expect(yield* instructionsIn(home, cwd)).toBe("project rules")
-    }).pipe(Effect.provide(BunFileSystem.layer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("no file at all yields no prompt section", () =>
@@ -115,7 +115,7 @@ describe("project instructions", () => {
       const text = yield* instructionsIn(home, cwd)
       expect(text).toBe("")
       expect(projectInstructionsSection(text)).toEqual([])
-    }).pipe(Effect.provide(BunFileSystem.layer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   // The shipped preset carries @gent/agents, so this is the production path.
@@ -241,7 +241,7 @@ describe("FsToolsExtension via model turn", () => {
           const cwd = yield* fs.makeTempDirectoryScoped()
           const filePath = path.join(cwd, "out.txt")
           yield* fs.writeFileString(filePath, "previous result")
-          const content = "produced via real ExtensionFilesService"
+          const content = "produced via the real write tool"
 
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
             toolCallStep("write", { path: filePath, content, atomic: true }),

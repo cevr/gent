@@ -1,4 +1,4 @@
-import { Effect, Option, Predicate, Schema } from "effect"
+import { Crypto, Effect, Option, Predicate, Schema } from "effect"
 import {
   BranchId,
   defineExtension,
@@ -257,6 +257,7 @@ interface CreateGoalInput {
 const createGoal = (input: CreateGoalInput) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
+    const crypto = yield* Crypto.Crypto
     const objective = yield* validateObjective(input.objective)
     const tokenBudget = yield* validateBudget(input.tokenBudget)
     const goal = yield* modifyGoal((current) =>
@@ -268,7 +269,7 @@ const createGoal = (input: CreateGoalInput) =>
         }
         const time = yield* now
         const created: GoalState = {
-          goalId: yield* ctx.Process.randomId,
+          goalId: yield* crypto.randomUUIDv7,
           branchId: ctx.branchId,
           objective,
           status: "active",

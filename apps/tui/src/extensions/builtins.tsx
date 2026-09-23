@@ -228,7 +228,7 @@ export const searchFiles = (
   })
 
 /** Track a selection for frecency learning. No-op if no finder for `cwd`. */
-export const trackSelection = (cwd: string, query: string, filePath: string): void => {
+const trackSelection = (cwd: string, query: string, filePath: string): void => {
   const entry = Option.fromNullishOr(finders.get(cwd))
   if (Option.isNone(entry)) return
   entry.value.finder.trackQuery(query, filePath)

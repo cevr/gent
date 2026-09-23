@@ -1,6 +1,7 @@
 import {
   Cause,
   Context,
+  Crypto,
   DateTime,
   Effect,
   Exit,
@@ -22,15 +23,12 @@ import {
   type ExtensionContext,
   type ExtensionContributions,
   type ExtensionFileLockServiceApi,
-  type ExtensionFilesService,
   type ExtensionHook,
   ExtensionHost,
   type ExtensionHostContext,
   type ExtensionHostPlatform,
-  ExtensionHostProcessError,
   ExtensionLoadError,
   type ExtensionLoaderServices,
-  type ExtensionProcessService,
   type ExtensionScope,
   extensionServiceError,
   ExtensionServiceError,
@@ -45,7 +43,6 @@ import {
   isClientFile,
   type LoadedExtension,
   makeCollectingExtensionHost,
-  makeFileWriter,
   mapExtensionServiceError,
   provideExtensionServices,
   type ResourceScope,
@@ -94,7 +91,7 @@ import {
   type ProviderAuthInfo,
 } from "../domain/driver.js"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { GentPlatform, runProcess } from "./gent-platform.js"
+import { GentPlatform } from "./gent-platform.js"
 import {
   ConfigService,
   GENT_CONFIG_DIRECTORY,
@@ -923,49 +920,17 @@ export const buildResourceLayer = (
 
 // ── host-platform ───────────────────────────────────────────────────────────
 
-const hasTimedOut = Schema.is(Schema.Struct({ timedOut: Schema.Literal(true) }))
-
-const toHostProcessError =
-  (command: string) =>
-  (error: Parameters<typeof causeMessage>[0]): ExtensionHostProcessError => {
-    const fields = {
-      command,
-      message: causeMessage(error),
-      cause: error,
+export const makeExtensionHostPlatform: Effect.Effect<ExtensionHostPlatform, never, GentPlatform> =
+  Effect.gen(function* () {
+    const platform = yield* GentPlatform
+    return {
+      osInfo: yield* platform.osInfo,
+      execPath: yield* platform.execPath,
+      homeDirectory: yield* platform.homeDirectory,
+      randomId: platform.randomId,
+      pathListSeparator: yield* platform.pathListSeparator,
     }
-    if (hasTimedOut(error)) {
-      return new ExtensionHostProcessError({ ...fields, timedOut: true })
-    }
-    return new ExtensionHostProcessError(fields)
-  }
-
-export const makeExtensionHostPlatform: Effect.Effect<
-  ExtensionHostPlatform,
-  never,
-  GentPlatform | ChildProcessSpawner
-> = Effect.gen(function* () {
-  const platform = yield* GentPlatform
-  // Captured once so the facade's runProcess keeps a `never` R channel.
-  const spawner = yield* ChildProcessSpawner
-  const osInfo = yield* platform.osInfo
-  const execPath = yield* platform.execPath
-  const homeDirectory = yield* platform.homeDirectory
-  const parentEnv = yield* platform.env
-  const pathListSeparator = yield* platform.pathListSeparator
-  return {
-    osInfo,
-    execPath,
-    homeDirectory,
-    parentEnv,
-    randomId: platform.randomId,
-    pathListSeparator,
-    runProcess: (command, args, options) =>
-      runProcess(command, args, options).pipe(
-        Effect.provideService(ChildProcessSpawner, spawner),
-        Effect.mapError(toHostProcessError(command)),
-      ),
-  }
-})
+  })
 
 // ── loader ──────────────────────────────────────────────────────────────────
 
@@ -1735,6 +1700,7 @@ export class SessionProfileCache extends Context.Service<
     | FileSystem.FileSystem
     | Path.Path
     | ChildProcessSpawner
+    | Crypto.Crypto
     | ConfigService
     | ScopeType.Scope
     | GentPlatform
@@ -1746,6 +1712,7 @@ export class SessionProfileCache extends Context.Service<
         const fs = yield* FileSystem.FileSystem
         const pathSvc = yield* Path.Path
         const spawner = yield* ChildProcessSpawner
+        const crypto = yield* Crypto.Crypto
         const platform = yield* GentPlatform
         // Every profile's resources close with this server scope.
         const serverScope = yield* Scope.Scope
@@ -1757,6 +1724,7 @@ export class SessionProfileCache extends Context.Service<
           Context.add(FileSystem.FileSystem, fs),
           Context.add(Path.Path, pathSvc),
           Context.add(ChildProcessSpawner, spawner),
+          Context.add(Crypto.Crypto, crypto),
           Context.add(ConfigService, configService),
           Context.add(GentPlatform, platform),
         )
@@ -2115,87 +2083,6 @@ export const makeExtensionHostContextProvider = (
         ),
       ).pipe(Effect.mapError(sessionError(operation)), Effect.asVoid)
 
-    const Process: ExtensionProcessService = {
-      randomId: host.randomId,
-      run: (command, args, options) =>
-        mapExtensionServiceError(
-          "ExtensionProcess",
-          "run",
-          host.runProcess(command, args, options),
-        ),
-      parentEnv: host.parentEnv,
-    }
-
-    // The file facets read their platform services optionally, so a root that
-    // ships no file system still assembles a context; the facet reports the
-    // absence only when something calls it.
-    const fs = yield* facet(FileSystem.FileSystem, "FileSystem")
-    const pathOption = yield* Effect.serviceOption(Path.Path)
-    // `resolve`, `join` and `dirname` are synchronous in the facet, so an
-    // absent path service can only be reported as a defect at call time.
-    const onPath = <A>(use: (path: Path.Path) => A): A =>
-      Option.match(pathOption, {
-        onNone: (): A => {
-          // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- The facet's path helpers are synchronous, so an unwired path service can only surface as a defect here.
-          throw new Error("Path not available")
-        },
-        onSome: use,
-      })
-    const writeFile = (
-      fileSystem: FileSystem.FileSystem,
-      path: string,
-      content: string,
-      options?: { readonly atomic?: boolean },
-    ) =>
-      makeFileWriter(fileSystem, (target) => onPath((p) => p.dirname(target)))(
-        path,
-        content,
-        options,
-      )
-    const Files: ExtensionFilesService = {
-      read: (path) =>
-        mapExtensionServiceError(
-          "ExtensionFiles",
-          "read",
-          fs((s) => s.readFileString(path)),
-        ),
-      write: (path, content, options) =>
-        mapExtensionServiceError(
-          "ExtensionFiles",
-          "write",
-          fs((s) => writeFile(s, path, content, options)),
-        ),
-      exists: (path) =>
-        mapExtensionServiceError(
-          "ExtensionFiles",
-          "exists",
-          fs((s) => s.exists(path)),
-        ),
-      stat: (path) =>
-        mapExtensionServiceError(
-          "ExtensionFiles",
-          "stat",
-          fs((s) =>
-            s.stat(path).pipe(
-              Effect.map((info) => ({
-                type: info.type,
-                size: info.size,
-                mtime: Option.getOrUndefined(info.mtime),
-              })),
-            ),
-          ),
-        ),
-      makeDirectory: (path, options) =>
-        mapExtensionServiceError(
-          "ExtensionFiles",
-          "makeDirectory",
-          fs((s) => s.makeDirectory(path, options)),
-        ),
-      resolve: (...paths) => onPath((p) => p.resolve(...paths)),
-      join: (...paths) => onPath((p) => p.join(...paths)),
-      dirname: (path) => onPath((p) => p.dirname(path)),
-    }
-
     const fileLockOption = yield* Effect.serviceOption(FileLockService)
     const FileLock: ExtensionFileLockServiceApi = Option.match(fileLockOption, {
       onNone: () => ({ withLock: (_path, effect) => effect }),
@@ -2219,8 +2106,6 @@ export const makeExtensionHostContextProvider = (
       cwd: runInfo.sessionCwd ?? environment.cwd,
       home: environment.home,
       host,
-      Process,
-      Files,
       FileLock,
 
       State: ((extensionId) =>

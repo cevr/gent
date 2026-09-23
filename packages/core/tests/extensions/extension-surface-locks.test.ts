@@ -4,7 +4,8 @@
  * One intentional lock pack for the public extension authoring surface:
  * 1. capability factory shapes stay honest
  * 2. Promise handlers stay out of Effect-returning seams
- * 3. ExtensionContext stays the single host-authority import
+ * 3. ExtensionContext stays the single host-authority import; files,
+ *    paths, processes, and ids are the Effect platform services themselves
  *
  * Runtime composition has separate behavior tests; this file only locks the
  * public extension authoring surface.
@@ -12,6 +13,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { Context, Effect, Layer, Schema } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import type * as PublicExtensionApi from "@gent/core/extensions/api"
 import type { AnyExtensionHook } from "../../src/domain/extension.js"
 import {
@@ -23,6 +25,7 @@ import {
   ExtensionId,
   makeRunSpec,
   request,
+  runProcess,
   tool,
   ToolCallId,
   type RequestInput,
@@ -366,12 +369,12 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("ExtensionContext.Files exposes listFiles only", () => {
-    type FilesService = PublicExtensionApi.ExtensionContextService["Files"]
-    // @ts-expect-error — searchFiles was removed; fuzzy search lives in TUI utils, not ExtensionFiles
-    type _SearchFiles = FilesService["searchFiles"]
-    // @ts-expect-error — trackSelection was removed; frecency learning lives in TUI utils, not ExtensionFiles
-    type _TrackSelection = FilesService["trackSelection"]
+  test("ExtensionContext carries no facet for an Effect platform service", () => {
+    type Ctx = PublicExtensionApi.ExtensionContextService
+    // @ts-expect-error — the Files facet was removed; extensions yield FileSystem.FileSystem and Path.Path
+    type _Files = Ctx["Files"]
+    // @ts-expect-error — the Process facet was removed; extensions run commands over ChildProcessSpawner and mint ids with Crypto
+    type _Process = Ctx["Process"]
     expect(true).toBe(true)
   })
 
@@ -490,10 +493,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadTodo = typeof PublicExtensionApi.Todo
     // @ts-expect-error — todo ids belong to @gent/todo, not core author API
     type _BadTodoId = typeof PublicExtensionApi.TodoId
-    // @ts-expect-error — process spawning is host/internal plumbing; authors use ExtensionContext.Process
-    type _BadRunProcess = typeof PublicExtensionApi.runProcess
-    // @ts-expect-error — process errors are paired with the non-public process runner
-    type _BadProcessError = typeof PublicExtensionApi.ProcessError
     // @ts-expect-error — host platform is internal authority; public extensions use ExtensionContext facets
     type _BadGentPlatform = typeof PublicExtensionApi.GentPlatform
     // @ts-expect-error — platform live layers are composition-root plumbing
@@ -518,9 +517,9 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadEventEnvelope = PublicExtensionApi.EventEnvelope
     // @ts-expect-error — interaction wire state is client/runtime plumbing
     type _BadActiveInteraction = PublicExtensionApi.ActiveInteraction
-    // @ts-expect-error — raw host platform includes process authority; authors use setup facts or ExtensionContext.Process
+    // @ts-expect-error — the raw host platform is loop plumbing; authors read setup facts on host.host
     type _BadExtensionHostPlatform = PublicExtensionApi.ExtensionHostPlatform
-    // @ts-expect-error — raw process errors are mapped through ExtensionServiceError in public facades
+    // @ts-expect-error — the host process error was removed with the Process facet; runProcess fails with ProcessError
     type _BadExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
     // @ts-expect-error — host file lock Tag is private; extensions reach file locks through ExtensionContext.FileLock
     type _BadFileLockService = typeof PublicExtensionApi.FileLockService
@@ -558,7 +557,7 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("setup host exposes host facts on host.host and process authority on host.Process", () => {
+  test("setup host exposes host facts on host.host and no process facade", () => {
     const setup = Effect.gen(function* () {
       const host = yield* ExtensionHost
       const platform = host.host.osInfo.platform
@@ -566,20 +565,14 @@ describe("Effect-purity locks (compile-time)", () => {
       const cwd = host.cwd
       // @ts-expect-error — setup does not see its source path
       void host.source
-      void host.Process.parentEnv
-      void host.Process.runProcess
+      // @ts-expect-error — setup has no process facade; commands run over ChildProcessSpawner
+      void host.Process
       // @ts-expect-error — host facts do not carry the parent process env
       void host.host.parentEnv
       // @ts-expect-error — host facts cannot signal host processes
       void host.host.signalPid
-      // @ts-expect-error — process signalling is not an extension authority
-      void host.Process.signalPid
       // @ts-expect-error — host facts cannot spawn host processes
       host.host.runProcess("git", ["status"])
-      // @ts-expect-error — port probes are not an extension authority
-      void host.Process.isPortFree
-      // @ts-expect-error — liveness probes are not an extension authority
-      void host.Process.isPidAlive
       return `${platform}:${home.length}:${cwd}`
     })
     void setup
@@ -601,19 +594,14 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("process authority is imported as ExtensionContext.Process", () => {
-    tool({
-      id: "process-authority-tool",
-      description: "process",
-      params: Schema.Struct({}),
-      output: Schema.String,
-      execute: () =>
-        Effect.gen(function* () {
-          const ctx = yield* ExtensionContext
-          yield* ctx.Process.run("git", ["status"])
-          return "ok"
-        }),
-    })
+  test("a command runs over the Effect ChildProcessSpawner", () => {
+    const run = runProcess("git", ["status"])
+    const withSpawner: Effect.Effect<
+      { readonly exitCode: number },
+      PublicExtensionApi.ProcessError,
+      ChildProcessSpawner.ChildProcessSpawner
+    > = run
+    void withSpawner
     expect(true).toBe(true)
   })
 

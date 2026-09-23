@@ -4,7 +4,7 @@
  * No orchestration code lives here; the model runs the recipe.
  */
 
-import { Effect, Schema } from "effect"
+import { Crypto, Effect, Path, Schema } from "effect"
 import {
   defineExtension,
   ExtensionContext,
@@ -81,7 +81,9 @@ const command = (params: {
     execute: (input: string) =>
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
-        const outputPath = ctx.Files.resolve(
+        const path = yield* Path.Path
+        const crypto = yield* Crypto.Crypto
+        const outputPath = path.resolve(
           ctx.cwd,
           ".gent",
           "results",
@@ -94,7 +96,7 @@ const command = (params: {
         )
         yield* ctx.Session.send({
           delivery: "queue",
-          sourceId: `${params.id}:${yield* ctx.Process.randomId}`,
+          sourceId: `${params.id}:${yield* crypto.randomUUIDv7}`,
           content: params.recipe(input.trim(), quotedPath),
         })
       }),

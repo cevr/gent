@@ -11,9 +11,11 @@ import {
   Ref,
   Schema,
   Semaphore,
+  Sink,
   Stream,
 } from "effect"
-import { BunFileSystem } from "@effect/platform-bun"
+import { ChildProcessSpawner } from "effect/unstable/process"
+import { BunServices } from "@effect/platform-bun"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
 import {
   finishPart,
@@ -284,7 +286,7 @@ describe("wake", () => {
           )
           expect(woken.messages.filter((m) => m.role === "assistant").length).toBe(2)
           expect(yield* fs.readFileString(`${home}/.gent/wakes/${branchId}.json`)).toBe("[]")
-        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("12 seconds")),
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
       ),
     15_000,
   )
@@ -334,7 +336,7 @@ describe("wake", () => {
           expect(text).toContain("matched after")
           expect(text).toContain("build 42 green")
           expect(text).toContain("read the result file")
-        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("12 seconds")),
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
       ),
     15_000,
   )
@@ -672,7 +674,7 @@ const readFile = (home: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     return yield* fs.readFileString(`${home}/.gent/wakes/${branchId}.json`)
-  }).pipe(Effect.provide(BunFileSystem.layer))
+  }).pipe(Effect.provide(BunServices.layer))
 
 describe("monitor guardrail", () => {
   test("monitor runs shell commands, so it does not claim to be readonly", () => {
@@ -703,7 +705,7 @@ describe("monitor guardrail", () => {
       const fs = yield* FileSystem.FileSystem
       expect(yield* fs.exists(`${home}/.gent/wakes/${branchId}.json`)).toBe(false)
     }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
       Effect.timeout("8 seconds"),
     ),
   )
@@ -733,7 +735,7 @@ describe("wake store", () => {
       expect(yield* readFile(home)).toBe("[]")
     }).pipe(
       // The timer lives in the resource scope; that scope must outlive the tool call.
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
       Effect.timeout("8 seconds"),
     ),
   )
@@ -771,7 +773,7 @@ describe("wake store", () => {
         yield* TestClock.adjust("4 seconds")
         expect(yield* firedCount).toBe(2)
       }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
         Effect.timeout("8 seconds"),
       ),
   )
@@ -817,7 +819,7 @@ describe("wake store", () => {
         expect(yield* readFile(home)).not.toContain(once.wakeId)
         expect(yield* readFile(home)).toContain(repeat.wakeId)
       }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
         Effect.timeout("8 seconds"),
       ),
   )
@@ -853,7 +855,7 @@ describe("wake store", () => {
       expect(again).toBe(0)
       expect(yield* alarms.pending).toEqual(["later"])
     }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
       Effect.timeout("8 seconds"),
     ),
   )
@@ -865,17 +867,32 @@ describe("wake store", () => {
         const home = yield* makeTempDirectoryScoped("wake-uncleared-")
         const queued = yield* Ref.make<ReadonlyArray<string>>([])
         const ran = yield* Ref.make<ReadonlyArray<string>>([])
-        const base = contextWith(home, queued)
-        const ctx: ExtensionContextService = testLeafContext({
-          ...base,
-          Process: {
-            ...base.Process,
-            run: (_command, args) =>
-              Ref.update(ran, (all) => [...all, args.join(" ")]).pipe(
-                Effect.as({ exitCode: 1, stdout: "", stderr: "" }),
-              ),
-          },
-        })
+        const ctx: ExtensionContextService = testLeafContext(contextWith(home, queued))
+        // Records each command a monitor spawns and never runs it.
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            if (command._tag === "StandardCommand") {
+              yield* Ref.update(ran, (all) => [...all, command.args.join(" ")])
+            }
+            return ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+              isRunning: Effect.succeed(false),
+              kill: () => Effect.void,
+              stdin: Sink.drain,
+              stdout: Stream.empty,
+              stderr: Stream.empty,
+              all: Stream.empty,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+              unref: Effect.succeed(Effect.void),
+            })
+          }),
+        )
+        const rearm = rearmPendingAlarms().pipe(
+          Effect.provideService(ExtensionContext, ctx),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        )
         const fs = yield* FileSystem.FileSystem
         yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
         const monitor = { everySeconds: 1, deadline: 60_000, note: "check" }
@@ -893,7 +910,7 @@ describe("wake store", () => {
             },
           ]),
         )
-        const armed = yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
+        const armed = yield* rearm
         expect(armed).toBe(2)
         const alarms = yield* WakeAlarms
         expect([...(yield* alarms.pending)].sort()).toEqual(["approved", "old-safe"])
@@ -913,10 +930,10 @@ describe("wake store", () => {
           expect(blocked.content).toContain("never approved")
         }
         // Blocked stays blocked: a second re-arm neither runs nor re-notices it.
-        yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
+        yield* rearm
         expect(yield* Ref.get(ran)).not.toContain("-c rm -rf build")
       }).pipe(
-        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
         Effect.timeout("8 seconds"),
       ),
   )
@@ -944,7 +961,7 @@ describe("wake store", () => {
       const missing = yield* runToolWithCtx(CancelTool, { wakeId: "nope" }, ctx).pipe(Effect.exit)
       expect(Exit.isFailure(missing)).toBe(true)
     }).pipe(
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunFileSystem.layer, TestClock.layer())),
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
       Effect.timeout("8 seconds"),
     ),
   )

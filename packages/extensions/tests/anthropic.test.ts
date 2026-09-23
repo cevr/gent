@@ -47,7 +47,6 @@ import {
   SynchronizedRef,
 } from "effect"
 import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
-import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { testHostFacts } from "@gent/core-internal/test-utils/index"
@@ -109,14 +108,6 @@ const testPlatformLayer = Layer.succeed(
   AnthropicPlatform.of({
     platform: "darwin",
     home: "/tmp/gent-test-home",
-    parentEnv: {},
-    runProcess: (command) =>
-      Effect.fail(
-        new ExtensionHostProcessError({
-          command,
-          message: "test runProcess unavailable",
-        }),
-      ),
     env: {},
   }),
 )
@@ -763,8 +754,6 @@ const buildCreds = (io: AnthropicCredentialIO): Promise<CredentialCache<ClaudeCr
     AnthropicPlatform.of({
       platform: host.osInfo.platform,
       home: host.homeDirectory,
-      parentEnv: host.parentEnv,
-      runProcess: host.runProcess,
       env: {},
     }),
   )
@@ -1424,8 +1413,6 @@ const testPlatformLayerCredentialService = (): Layer.Layer<AnthropicPlatform> =>
     AnthropicPlatform.of({
       platform: host.osInfo.platform,
       home: host.homeDirectory,
-      parentEnv: host.parentEnv,
-      runProcess: host.runProcess,
       env: {},
     }),
   )
@@ -2374,13 +2361,12 @@ describe("getModelBetas", () => {
  * non-default `GENT_HOME`.
  */
 
-type SetupFacts = Pick<ExtensionHostService, "host" | "Process">
+type SetupFacts = Pick<ExtensionHostService, "host">
 
 const makeCtxWithSplitHome = (gentHome: string, osHome: string): SetupFacts => {
   const facts = testHostFacts({ home: gentHome })
   return {
     host: { ...facts.host, homeDirectory: osHome },
-    Process: facts.host,
   }
 }
 
@@ -2395,13 +2381,6 @@ describe("AnthropicPlatform.fromSetup", () => {
     const ctx = makeCtxWithSplitHome("/tmp/gent-home", "/Users/test-os-home")
     const platform = AnthropicPlatform.fromSetup(ctx, {})
     expect(platform.platform).toBe("darwin")
-  })
-
-  test("forwards parentEnv and runProcess from Process", () => {
-    const ctx = makeCtxWithSplitHome("/tmp/gent-home", "/Users/test-os-home")
-    const platform = AnthropicPlatform.fromSetup(ctx, {})
-    expect(platform.parentEnv).toEqual({})
-    expect(platform.runProcess).toBe(ctx.Process.runProcess)
   })
 
   test("carries per-instance env snapshot", () => {
@@ -2461,14 +2440,6 @@ const FUTURE_MS = 1_800_000_000_000
 const testPlatform = AnthropicPlatform.of({
   platform: "darwin",
   home: "/tmp/gent-test-home",
-  parentEnv: {},
-  runProcess: (command) =>
-    Effect.fail(
-      new ExtensionHostProcessError({
-        command,
-        message: "test runProcess unavailable",
-      }),
-    ),
   env: {},
 })
 const buildAnthropicModelDriver = (

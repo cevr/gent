@@ -48,7 +48,6 @@ const PlatformCompiledBin: Layer.Layer<GentPlatform> = Layer.effect(
       pid: Effect.succeed(1),
       execPath: Effect.succeed(COMPILED_BIN_PATH),
       homeDirectory: Effect.succeed("/tmp"),
-      env: Effect.succeed({}),
       pathListSeparator: Effect.succeed(":"),
       signal: () => Effect.void,
       hash: (_alg, input) => {

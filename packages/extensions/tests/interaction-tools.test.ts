@@ -14,7 +14,7 @@ import {
   textStep,
   toolCallStep,
 } from "@gent/core-internal/test-utils/language-model"
-import { BunFileSystem } from "@effect/platform-bun"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import type { ApprovalDecision } from "@gent/core-internal/domain/interaction.js"
 import type { ExtensionContextService } from "@gent/core/extensions/api"
 import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
@@ -159,8 +159,9 @@ describe("Prompt Tool", () => {
           if (result.mode !== "review") return
           expect(result.decision).toBe("yes")
           expect(result.path.startsWith(`${cwd}/.gent/prompts/release-plan-`)).toBe(true)
-          expect(yield* ctx.Files.read(result.path)).toBe("# Release Plan\n\n## Plan\n- Step 1")
-        }).pipe(Effect.provide(BunFileSystem.layer)),
+          const fs = yield* FileSystem.FileSystem
+          expect(yield* fs.readFileString(result.path)).toBe("# Release Plan\n\n## Plan\n- Step 1")
+        }).pipe(Effect.provide(BunServices.layer)),
       ),
   )
 
@@ -181,8 +182,9 @@ describe("Prompt Tool", () => {
         if (result.mode !== "review") return
         expect(result.decision).toBe("edit")
         expect(result.content).toBe("revised")
-        expect(yield* ctx.Files.read(result.path)).toBe("revised")
-      }).pipe(Effect.provide(BunFileSystem.layer)),
+        const fs = yield* FileSystem.FileSystem
+        expect(yield* fs.readFileString(result.path)).toBe("revised")
+      }).pipe(Effect.provide(BunServices.layer)),
     ),
   )
 
