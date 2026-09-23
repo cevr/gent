@@ -341,11 +341,14 @@ const makeToolOperationStorage = Effect.gen(function* () {
   ) {
     return yield* Effect.gen(function* () {
       yield* ownCell(cell)
+      // Operation ids are the worker's call numbers stored as text: sort them
+      // as numbers, or call 10 comes before call 2. A receipt's place is its
+      // only link to the call in the source.
       const rows = yield* sql<typeof OperationAddressRow.Type>`
             SELECT operation_id FROM cell_tool_operations
             WHERE assistant_message_id = ${cell.assistantMessageId}
               AND cell_tool_call_id = ${cell.toolCallId}
-            ORDER BY operation_id
+            ORDER BY CAST(operation_id AS INTEGER), operation_id
           `
       return yield* Effect.forEach(rows, (raw) =>
         Effect.gen(function* () {

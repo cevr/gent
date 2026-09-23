@@ -1614,6 +1614,70 @@ describe("cell approvals", () => {
   )
 })
 
+describe("cell receipts", () => {
+  it.scopedLive(
+    "a cell with ten or more host calls lists its receipts in call order",
+    () =>
+      Effect.gen(function* () {
+        const extensions: ReadonlyArray<LoadedExtension> = [
+          {
+            manifest: { id: ExtensionId.make("cell-receipt-order") },
+            scope: "builtin",
+            sourcePath: "cell-receipt-order",
+            artifactIdentity: LoadedArtifactIdentity.make("cell-receipt-order-source"),
+            contributions: {
+              tools: [
+                CellTool,
+                tool({
+                  id: "mark",
+                  description: "Record a mark",
+                  params: Schema.String,
+                  output: Schema.Boolean,
+                  execute: () => Effect.succeed(true),
+                  summary: (mark) => `marked ${mark}`,
+                }),
+              ],
+            },
+          },
+        ]
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", {
+            code: "for (let i = 1; i <= 12; i++) await tools.mark(String(i)); 'marked'",
+          }),
+          textStep("Marks recorded"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          extensions,
+          providerLayer,
+          extensionInputs: [],
+          branchTools: CellBranchTools,
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "Mark twelve times" })
+        yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runDrain,
+        )
+        const result = (yield* client.message.list({ branchId }))
+          .flatMap((message) => message.parts)
+          .find((part) => part.type === "tool-result" && part.name === "cell")
+        if (Predicate.isUndefined(result) || result.type !== "tool-result")
+          return yield* Effect.die("Missing cell result")
+        const receipts = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ operations: Schema.Array(Schema.Struct({ summary: Schema.String })) }),
+        )(result.result)
+        expect(receipts.operations.map((receipt) => receipt.summary)).toEqual(
+          Array.from({ length: 12 }, (_, index) => `marked ${index + 1}`),
+        )
+      }).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      ),
+    18000,
+  )
+})
+
 // ── cell/cell-tool-call.test ────────────────────────────────────────────────
 
 const extensionId = ExtensionId.make("cell-test")
