@@ -29,6 +29,7 @@ import {
   type PackageJson,
   workspaceManifests,
   RETIRED_SURFACES,
+  workspaceTsconfigs,
 } from "../src/guards"
 import { scanTrackedTexts } from "../src/check-guardrails"
 import { Option } from "effect"
@@ -2506,17 +2507,42 @@ const VALID_MANIFESTS: ReadonlyArray<readonly [string, PackageJson]> = [
   ["examples/package.json", { private: true }],
 ]
 
+const PACKAGE_NAMES = new Map([
+  ["packages/core/package.json", "@gent/core"],
+  ["packages/extensions/package.json", "@gent/extensions"],
+  ["packages/sdk/package.json", "@gent/sdk"],
+  ["apps/tui/package.json", "@gent/tui"],
+  ["apps/server/package.json", "@gent/server-http"],
+  ["packages/e2e/package.json", "@gent/e2e"],
+  ["packages/tooling/package.json", "@gent/tooling"],
+  ["examples/package.json", "@gent/examples"],
+])
+
 /** The workspace with `changes` laid over the valid manifests, less the `removed` ones. */
 const packageSurface = (
   changes: ReadonlyArray<readonly [string, PackageJson]>,
   options: {
     readonly paths?: Readonly<Record<string, ReadonlyArray<string>>>
+    /** The tsconfig that sets `paths`; the root one by default. */
+    readonly pathsIn?: string
     readonly removed?: ReadonlyArray<string>
   } = {},
 ) => {
-  const manifests = new Map<string, PackageJson>([...VALID_MANIFESTS, ...changes])
+  // A change keeps the package's name unless it sets one.
+  const withName = ([file, manifest]: readonly [string, PackageJson]): [string, PackageJson] => [
+    file,
+    { name: PACKAGE_NAMES.get(file), ...manifest },
+  ]
+  const manifests = new Map<string, PackageJson>([
+    ...VALID_MANIFESTS.map(withName),
+    ...changes.map(withName),
+  ])
   for (const file of options.removed ?? []) manifests.delete(file)
-  return findPackageSurfaceFindings(manifests, { compilerOptions: { paths: options.paths ?? {} } })
+  const tsconfigs = new Map([
+    ["tsconfig.json", {}],
+    [options.pathsIn ?? "tsconfig.json", { compilerOptions: { paths: options.paths ?? {} } }],
+  ])
+  return findPackageSurfaceFindings(manifests, tsconfigs)
 }
 
 /** The file and the key a package surface finding names, as `<file> <key>`. */
@@ -2721,6 +2747,43 @@ describe("package entry points", () => {
     expect(messages(packageSurface([], { removed: ["examples/package.json"] }))).toEqual([
       "package-surface row examples/package.json names no workspace package; drop the row",
     ])
+  })
+
+  test("a package whose name is not its row's alias is reported", () => {
+    expect(
+      messages(
+        packageSurface([
+          [
+            "packages/sdk/package.json",
+            { name: "@gent/client", exports: { ".": "./src/index.ts" } },
+          ],
+        ]),
+      ),
+    ).toEqual([
+      "name: the package is @gent/client, its package-surface row names @gent/sdk; make them agree",
+    ])
+  })
+
+  test("a package tsconfig's path alias is reported in that tsconfig", () => {
+    expect(
+      packageSurface([], {
+        pathsIn: "packages/sdk/tsconfig.json",
+        paths: { "@gent/core/protocol": ["../core/src/protocol.ts"] },
+      }).map(pathOf),
+    ).toEqual(['packages/sdk/tsconfig.json compilerOptions.paths["@gent/core/protocol"]'])
+  })
+
+  test("every tsconfig but a fixture's is read for path aliases", () => {
+    expect(
+      workspaceTsconfigs([
+        "tsconfig.json",
+        "packages/sdk/tsconfig.json",
+        "packages/e2e/tsconfig.json",
+        "packages/sdk/tsconfig.build.json",
+        "testbeds/gamut/fixture/tsconfig.json",
+        "packages/tooling/fixtures/apps/tsconfig.json",
+      ]),
+    ).toEqual(["tsconfig.json", "packages/sdk/tsconfig.json", "packages/e2e/tsconfig.json"])
   })
 
   test("any tsconfig path alias is reported: packages resolve through exports", () => {

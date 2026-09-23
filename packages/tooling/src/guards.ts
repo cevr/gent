@@ -2940,11 +2940,12 @@ export const findUnconsumedExports = (
 // ---------------------------------------------------------------------------
 
 export interface PackageJson {
+  readonly name?: string
   readonly private?: boolean
   readonly exports?: Readonly<Record<string, string>>
 }
 
-interface TsConfigJson {
+export interface TsConfigJson {
   readonly compilerOptions?: {
     readonly paths?: Readonly<Record<string, ReadonlyArray<string>>>
   }
@@ -3053,6 +3054,13 @@ const packageFindings = (
   packageJson: PackageJson,
 ): ReadonlyArray<Finding> => {
   const findings: Array<Finding> = []
+  if (packageJson.name !== surface.alias) {
+    findings.push({
+      file: surface.packageJson,
+      line: 1,
+      message: `name: the package is ${Option.getOrElse(Option.fromNullishOr(packageJson.name), () => "unnamed")}, its package-surface row names ${surface.alias}; make them agree`,
+    })
+  }
   if (surface.mustBePrivate && packageJson.private !== true) {
     findings.push({
       file: surface.packageJson,
@@ -3087,14 +3095,26 @@ const packageFindings = (
 /**
  * `@gent/*` resolves one way: through each package's `exports`, which the
  * rows above check. A `paths` alias is a second resolution TypeScript alone
- * reads, so it could publish a module the `exports` check never sees.
+ * reads, so it could publish a module the `exports` check never sees. Every
+ * tsconfig counts: a package tsconfig that sets `paths` replaces the root's.
  */
-const pathFindings = (tsconfigJson: TsConfigJson): ReadonlyArray<Finding> =>
-  Object.keys(tsconfigJson.compilerOptions?.paths ?? {}).map((key) => ({
-    file: "tsconfig.json",
-    line: 1,
-    message: `compilerOptions.paths["${key}"]: workspace packages resolve through their package.json exports; drop the alias`,
-  }))
+const pathFindings = (tsconfigs: ReadonlyMap<string, TsConfigJson>): ReadonlyArray<Finding> =>
+  [...tsconfigs].flatMap(([file, tsconfig]) =>
+    Object.keys(tsconfig.compilerOptions?.paths ?? {}).map((key) => ({
+      file,
+      line: 1,
+      message: `compilerOptions.paths["${key}"]: workspace packages resolve through their package.json exports; drop the alias`,
+    })),
+  )
+
+/**
+ * The tsconfigs the paths check reads: every tracked one except the fixtures,
+ * which are apps and lint subjects of their own, not workspace resolution.
+ */
+export const workspaceTsconfigs = (trackedFiles: ReadonlyArray<string>): ReadonlyArray<string> =>
+  trackedFiles.filter(
+    (file) => /(?:^|\/)tsconfig\.json$/.test(file) && !/(?:^|\/)fixtures?\//.test(file),
+  )
 
 /**
  * Check every workspace manifest against its row. `packageJsons` holds every
@@ -3103,7 +3123,7 @@ const pathFindings = (tsconfigJson: TsConfigJson): ReadonlyArray<Finding> =>
  */
 export const findPackageSurfaceFindings = (
   packageJsons: ReadonlyMap<string, PackageJson>,
-  tsconfigJson: TsConfigJson,
+  tsconfigs: ReadonlyMap<string, TsConfigJson>,
 ): ReadonlyArray<Finding> => {
   const rows = new Set(PACKAGE_SURFACES.map((surface) => surface.packageJson))
   const unlisted = [...packageJsons.keys()]
@@ -3125,5 +3145,5 @@ export const findPackageSurfaceFindings = (
       onSome: (packageJson) => packageFindings(surface, packageJson),
     }),
   )
-  return [...unlisted, ...checked, ...pathFindings(tsconfigJson)]
+  return [...unlisted, ...checked, ...pathFindings(tsconfigs)]
 }
