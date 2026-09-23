@@ -59,7 +59,6 @@ import {
 import {
   type BranchId,
   ExtensionId,
-  type InteractionRequestId,
   MessageId,
   ProcessGenerationId,
   RequestId,
@@ -2044,8 +2043,6 @@ export class ApprovalService extends Context.Service<ApprovalService, Interactio
           }))
           return Effect.succeed(decision)
         },
-        pendingRequestId: () =>
-          Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
         storeResolution: () => Effect.succeed(false),
         rehydrate: () => Effect.succeed(false),
         answered: () => Effect.succeed(false),

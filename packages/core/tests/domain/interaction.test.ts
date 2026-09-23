@@ -59,6 +59,24 @@ const asCall =
       .beginStep(branch, [ToolCallId.make(id)])
       .pipe(Effect.andThen(service.ownCall(branch, ToolCallId.make(id))(self)))
 
+/**
+ * The request the branch shows now. A reply to an id nobody asked is refused
+ * and names the shown request, so the lookup changes nothing.
+ */
+const shownRequest = (
+  service: InteractionService,
+  branch: { readonly sessionId: SessionId; readonly branchId: BranchId },
+) =>
+  service
+    .storeResolution(branch, InteractionRequestId.make("no-such-request"), { approved: false })
+    .pipe(
+      Effect.flip,
+      Effect.map((error) => {
+        if (error._tag !== "InteractionRequestMismatchError") return Option.none()
+        return Option.fromUndefinedOr(error.expectedRequestId)
+      }),
+    )
+
 // ============================================================================
 // Interaction Request — cold interaction mechanics
 // ============================================================================
@@ -296,7 +314,7 @@ describe("Interaction Request", () => {
         expect(Cause.pretty(exit.cause)).toContain("Failed to persist interaction request")
       }
       expect(presented).toEqual([])
-      expect(yield* interaction.pendingRequestId({ sessionId, branchId })).toBeUndefined()
+      expect(yield* shownRequest(interaction, { sessionId, branchId })).toEqual(Option.none())
       const pending = yield* is.listOpen({ sessionId, branchId })
       expect(pending.map((record) => record.requestId)).toEqual([
         InteractionRequestId.make("req-existing-pending"),
@@ -599,7 +617,7 @@ describe("Interaction Request", () => {
       yield* interaction.storeResolution(branch, first, { approved: true })
       const second = yield* pendingId(yield* ask("Delete b.txt?"))
       expect(second).not.toBe(first)
-      expect(yield* interaction.pendingRequestId(branch)).toBe(second)
+      expect(yield* shownRequest(interaction, branch)).toEqual(Option.some(second))
     }).pipe(Effect.provide(storageLive)),
   )
 
@@ -665,7 +683,7 @@ describe("Interaction Request", () => {
       expect(Option.isSome(third)).toBe(true)
       if (Option.isNone(third)) return
       const z = yield* pendingId(third.value)
-      expect(yield* interaction.pendingRequestId(branch)).toBe(z)
+      expect(yield* shownRequest(interaction, branch)).toEqual(Option.some(z))
     }).pipe(Effect.provide(storageLive)),
   )
 
@@ -752,7 +770,7 @@ describe("Interaction Request", () => {
       expect(yield* interaction.storeResolution(branch, requestId, { approved: true })).toBe(true)
       // The step runs again and its call takes the answer: the branch shows no request.
       expect((yield* run(interaction.present({ text: "Go?" }, branch))).approved).toBe(true)
-      expect(yield* interaction.pendingRequestId(branch)).toBeUndefined()
+      expect(yield* shownRequest(interaction, branch)).toEqual(Option.none())
       expect(yield* interaction.storeResolution(branch, requestId, { approved: true })).toBe(false)
       const changed = yield* Effect.flip(
         interaction.storeResolution(branch, requestId, { approved: false }),
@@ -792,7 +810,7 @@ describe("Interaction Request", () => {
       )
       yield* interaction.endTurn(branch)
       expect(dismissed).toEqual([open])
-      expect(yield* interaction.pendingRequestId(branch)).toBeUndefined()
+      expect(yield* shownRequest(interaction, branch)).toEqual(Option.none())
       expect(yield* is.listOpen(branch)).toEqual([])
     }).pipe(Effect.provide(storageLive)),
   )
@@ -838,7 +856,7 @@ describe("Interaction Request", () => {
       )(Effect.all([inner("First?"), inner("Second?")], { concurrency: 2 })).pipe(Effect.forkChild)
       const first = yield* Queue.take(presented)
       // The second inner call waits for the slot; it does not refuse or park.
-      expect(yield* interaction.pendingRequestId(branch)).toBe(first)
+      expect(yield* shownRequest(interaction, branch)).toEqual(Option.some(first))
       yield* interaction.storeResolution(branch, first, { approved: true, notes: "one" })
       const second = yield* Queue.take(presented)
       expect(second).not.toBe(first)
@@ -910,7 +928,7 @@ describe("Interaction Request", () => {
       const resumed = yield* ask("Delete b.txt?", Option.some(first))
       const second = yield* Queue.take(presented)
       expect(second).not.toBe(first)
-      expect(yield* interaction.pendingRequestId(branch)).toBe(second)
+      expect(yield* shownRequest(interaction, branch)).toEqual(Option.some(second))
       yield* interaction.storeResolution(branch, second, { approved: true, notes: "b" })
       expect((yield* Fiber.join(resumed).pipe(Effect.timeout("2 seconds"))).notes).toBe("b")
       expect(taken).toEqual([second])

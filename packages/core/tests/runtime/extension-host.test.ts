@@ -211,7 +211,6 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provideService(ApprovalService, {
         present: () => Effect.succeed({ approved: true }),
-        pendingRequestId: () => Effect.die("not used"),
         storeResolution: () => Effect.die("not used"),
         rehydrate: () => Effect.die("not used"),
         answered: () => Effect.die("not used"),

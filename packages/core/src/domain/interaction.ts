@@ -198,11 +198,6 @@ export interface InteractionService {
     | InteractionOwnerMissingError
     | InteractionSlotBusyError
   >
-  readonly pendingRequestId: (ctx: {
-    sessionId: SessionId
-    branchId: BranchId
-    // oxlint-disable-next-line effect/noNullish -- The public interaction lookup preserves undefined for no pending request.
-  }) => Effect.Effect<InteractionRequestId | undefined>
   /**
    * Store the answer to a request the branch shows. The first answer wins,
    * in storage and in memory; true when this reply stored it. The same answer
@@ -960,18 +955,6 @@ export const makeInteractionService = (
           if (open.value.open.admitted && !open.value.answered)
             yield* config.onDismiss(open.value.open.requestId, branchRef)
         }),
-
-      pendingRequestId: (ctx) =>
-        Ref.get(state).pipe(
-          Effect.map((current) =>
-            Option.getOrUndefined(
-              branchOf(current, contextKey(ctx)).open.pipe(
-                Option.filter((open) => open.admitted),
-                Option.map((open) => open.requestId),
-              ),
-            ),
-          ),
-        ),
 
       rehydrate: Effect.fn("InteractionService.rehydrate")(function* (
         record: InteractionRequestRecord,
