@@ -18,7 +18,12 @@ import {
   type RunSpec,
   type SessionId,
 } from "@gent/core/protocol"
-import { formatGenericToolText, toolArgSummary, type ToolInput } from "./utils.js"
+import {
+  CellOperationReceipts,
+  formatGenericToolText,
+  toolArgSummary,
+  type ToolInput,
+} from "./utils.js"
 import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
 import { randomId } from "./utils"
 
@@ -30,6 +35,8 @@ interface HeadlessToolCall {
   readonly status: "running" | "completed" | "error"
   readonly summary: Option.Option<string>
   readonly output: Option.Option<string>
+  /** A cell whose admitted calls already printed as their own lines; its receipts would repeat them. */
+  readonly operationsPrinted?: boolean
 }
 
 type HeadlessToolRenderer = (toolCall: HeadlessToolCall) => Option.Option<string>
@@ -106,13 +113,6 @@ const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
   return Option.some(`[tool ${status}: bash${exit}]\n${renderedOutput}`)
 }
 
-const CellOperationReceipts = Schema.Array(
-  Schema.Struct({
-    tool: Schema.String,
-    outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
-    summary: Schema.String,
-  }),
-)
 const decodeReceipts = Schema.decodeUnknownOption(CellOperationReceipts)
 
 const receiptGlyph = (outcome: "succeeded" | "failed" | "incomplete") => {
@@ -134,7 +134,11 @@ const CellHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
   let status = "done"
   if (toolCall.status === "error") status = "error"
   const lines: string[] = [`[tool ${status}: cell]`]
-  const receipts = Option.getOrElse(decodeReceipts(parsed.value["operations"]), () => [])
+  let receipts = Option.match(decodeReceipts(parsed.value), {
+    onNone: () => [],
+    onSome: (value) => value.operations ?? [],
+  })
+  if (toolCall.operationsPrinted === true) receipts = []
   for (const receipt of receipts) {
     let line = `  ${receiptGlyph(receipt.outcome)} ${receipt.tool}`
     if (receipt.summary.length > 0) line = `${line} ${receipt.summary}`
@@ -196,6 +200,8 @@ export const runHeadless = (
       // the run instead of exiting 0 on an empty transcript.
       const done = yield* Deferred.make<boolean>()
       const activeTools = new Map<string, HeadlessToolCall>()
+      // Cells whose admitted calls printed their own lines.
+      const cellsWithPrintedOperations = new Set<string>()
       const renderTool = (toolCall: HeadlessToolCall, parentToolCallId?: string) => {
         const rendered = renderHeadlessToolCall(toolCall)
         if (Predicate.isUndefined(parentToolCallId)) return writeStdout(`${rendered}\n`)
@@ -223,8 +229,10 @@ export const runHeadless = (
                   output: Option.none(),
                 }
                 activeTools.set(String(event.toolCallId), toolCall)
-                if (Predicate.isUndefined(event.parentToolCallId)) yield* writeStdout("\n")
-                yield* renderTool(toolCall, event.parentToolCallId)
+                // A cell-admitted call prints once, when it ends.
+                if (Predicate.isNotUndefined(event.parentToolCallId)) break
+                yield* writeStdout("\n")
+                yield* renderTool(toolCall)
                 break
               }
               case "ToolCallSucceeded": {
@@ -237,8 +245,11 @@ export const runHeadless = (
                   status: "completed",
                   summary: Option.fromNullishOr(event.summary),
                   output: Option.fromNullishOr(event.output),
+                  operationsPrinted: cellsWithPrintedOperations.delete(String(event.toolCallId)),
                 }
                 activeTools.delete(String(event.toolCallId))
+                if (Predicate.isNotUndefined(event.parentToolCallId))
+                  cellsWithPrintedOperations.add(String(event.parentToolCallId))
                 yield* renderTool(toolCall, event.parentToolCallId)
                 break
               }
@@ -252,8 +263,11 @@ export const runHeadless = (
                   status: "error",
                   summary: Option.fromNullishOr(event.summary),
                   output: Option.fromNullishOr(event.output),
+                  operationsPrinted: cellsWithPrintedOperations.delete(String(event.toolCallId)),
                 }
                 activeTools.delete(String(event.toolCallId))
+                if (Predicate.isNotUndefined(event.parentToolCallId))
+                  cellsWithPrintedOperations.add(String(event.parentToolCallId))
                 yield* renderTool(toolCall, event.parentToolCallId)
                 break
               }

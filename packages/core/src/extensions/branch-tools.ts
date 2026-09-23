@@ -99,4 +99,4 @@ export { CurrentInteractionOwner, type InteractionOwnership } from "../domain/in
 export { ApprovalDecisionSchema, InteractionRequestRecord } from "../domain/interaction.js"
 
 // Ids and domain values a feature names.
-export { InteractionRequestId, ToolId } from "../domain/ids.js"
+export { InteractionRequestId } from "../domain/ids.js"

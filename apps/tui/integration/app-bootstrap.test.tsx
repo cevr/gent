@@ -5,8 +5,8 @@ import { onMount } from "solid-js"
 import { App, resolveInitialState, resolveInteractiveBootstrap } from "../src/app"
 import { type ClientContextValue, useClient } from "../src/client"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
-import { baseLocalLayer as _baseLocalLayer, testAgent } from "@gent/core/test-utils"
-const baseLocalLayer = () => _baseLocalLayer({ agents: [testAgent] })
+import { baseLocalLayer, testAgent } from "@gent/core/test-utils"
+const localLayer = () => baseLocalLayer({ agents: [testAgent] })
 import { Gent } from "@gent/sdk"
 import { waitForFrame, repoRoot } from "./helpers"
 function StateProbe(props: { readonly onReady: (ctx: { client: ClientContextValue }) => void }) {
@@ -22,7 +22,7 @@ describe("app bootstrap", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { client } = yield* Gent.test(baseLocalLayer())
+          const { client } = yield* Gent.test(localLayer())
           const first = yield* client.session.create({ cwd: repoRoot })
           // gent/no-sleep: allow real-clock gap so the second session's createdAt sorts strictly after the first
           yield* Effect.sleep("5 millis")
@@ -49,7 +49,7 @@ describe("app bootstrap", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { client } = yield* Gent.test(baseLocalLayer())
+          const { client } = yield* Gent.test(localLayer())
           const state = yield* resolveInitialState({
             client,
             cwd: repoRoot,
@@ -72,7 +72,7 @@ describe("app bootstrap", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { client, runtime } = yield* Gent.test(baseLocalLayer())
+          const { client, runtime } = yield* Gent.test(localLayer())
           // Simulate what main.tsx now does before render: resolve bootstrap
           const { bootstrap } = yield* resolveInteractiveBootstrap({
             client,

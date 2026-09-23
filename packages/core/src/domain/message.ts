@@ -2,7 +2,7 @@ import { Option, Predicate, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import { AgentName, ModelId, ReasoningEffort, RunSpecSchema } from "./agent.js"
-import type { EventEnvelope, Usage } from "./event.js"
+import type { EventEnvelope, ToolCallStarted, Usage } from "./event.js"
 import * as Response from "effect/unstable/ai/Response"
 
 // ── head-tail ───────────────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ const DateFromNumber = Schema.Union([Schema.DateFromMillis, Schema.Date])
 
 export const decodeDateFromMillis = Schema.decodeUnknownEffect(DateFromNumber)
 
-export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteraction")({
+const ToolInteractionFields = {
   id: ToolCallId,
   toolName: Schema.String,
   status: Schema.Literals(["running", "completed", "error"]),
@@ -105,6 +105,21 @@ export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteract
   output: Schema.UndefinedOr(Schema.String),
   /** Wall time between the started and terminal receipts; absent while running or without receipts. */
   durationMs: Schema.UndefinedOr(Schema.Finite),
+}
+
+/** One call a cell admitted, read from its stored tool receipts. */
+const ToolOperation = Schema.Struct(ToolInteractionFields)
+type ToolOperation = typeof ToolOperation.Type
+
+export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteraction")({
+  ...ToolInteractionFields,
+  /**
+   * The calls a cell admitted, from the branch's tool receipts. Wire only,
+   * never stored. Each carries what its collapsed row draws: bounded scalar
+   * input and summary, never the output. Absent when the branch has no
+   * receipts for them, as on a fork, which copies messages but not events.
+   */
+  operations: Schema.optional(Schema.Array(ToolOperation)),
 }) {}
 
 export const MessagePart = Schema.Union([
@@ -717,30 +732,136 @@ const findResultForToolCall = (
 ): Option.Option<ToolResultState> =>
   Option.fromUndefinedOr(pairings.get(`${callMessageIndex}:${callPartIndex}`))
 
-/** Wall time per tool call, from its started receipt to its terminal receipt. */
-export const toolCallDurations = (
-  events: ReadonlyArray<EventEnvelope>,
-): ReadonlyMap<ToolCallId, number> => {
+/** What a branch's tool receipts add to its messages: durations, and the calls each cell admitted. */
+interface ToolCallReceipts {
+  readonly durations: ReadonlyMap<ToolCallId, number>
+  /** Keyed by `callKey` of the admitting cell, in start order. */
+  readonly operations: ReadonlyMap<string, ReadonlyArray<ToolOperation>>
+}
+
+/**
+ * A call's identity in a branch: the assistant message that holds it plus its
+ * id, as cell storage keys a cell. A provider can reuse a call id across
+ * steps. Historical receipts carry no message id and key by the call id alone.
+ */
+const callKey = (assistantMessageId: Option.Option<MessageId>, toolCallId: string): string =>
+  `${Option.getOrElse(assistantMessageId, () => "")}\u0000${toolCallId}`
+
+/**
+ * An operation's input as its collapsed row reads it: top-level scalar fields,
+ * each string cut to the summary bound. Nested values stay on the branch.
+ */
+// oxlint-disable-next-line effect/noNullish -- ToolInteraction.input is an UndefinedOr wire field; absent input stays absent.
+type BoundedInput = string | Readonly<Record<string, string | number | boolean>> | undefined
+
+// oxlint-disable-next-line effect/noUnknownParameters -- Tool input is an external model value; only its scalar fields are kept.
+const boundedInput = (input: unknown): BoundedInput => {
+  if (Predicate.isString(input)) return clipSummary(input)
+  if (!Predicate.isObject(input) || Array.isArray(input))
+    return Option.getOrUndefined(Option.none<string>())
+  const kept: Record<string, string | number | boolean> = {}
+  for (const [key, value] of Object.entries(input)) {
+    if (Predicate.isString(value)) kept[key] = clipSummary(value)
+    else if (Predicate.isNumber(value) || Predicate.isBoolean(value)) kept[key] = value
+  }
+  return kept
+}
+
+const noReceipts: ToolCallReceipts = { durations: new Map(), operations: new Map() }
+
+/**
+ * One fold over a branch's tool receipts. A duration is the gap from a call's
+ * started receipt to its terminal one. A receipt with a `parentToolCallId` is
+ * a call a cell admitted; it lands under that cell with its own input and
+ * result, as the live feed draws it.
+ */
+/** Where an admitted operation sits: under its cell's key, at its start order. */
+interface OperationSlot {
+  readonly parent: string
+  readonly index: number
+}
+
+/** Place one admitted call under its cell. The snapshot carries what the collapsed op row draws; the full output stays on the branch. */
+const admitOperation = (
+  event: ToolCallStarted,
+  operations: Map<string, Array<ToolOperation>>,
+  slots: Map<string, OperationSlot>,
+): void => {
+  if (Predicate.isUndefined(event.parentToolCallId)) return
+  const message = Option.fromUndefinedOr(event.assistantMessageId)
+  const key = callKey(message, event.toolCallId)
+  if (slots.has(key)) return
+  const parent = callKey(message, event.parentToolCallId)
+  const siblings = operations.get(parent) ?? []
+  slots.set(key, { parent, index: siblings.length })
+  siblings.push({
+    id: event.toolCallId,
+    toolName: event.toolName,
+    status: "running",
+    input: boundedInput(event.input),
+    summary: Option.getOrUndefined(Option.none<string>()),
+    output: Option.getOrUndefined(Option.none<string>()),
+    durationMs: Option.getOrUndefined(Option.none<number>()),
+  })
+  operations.set(parent, siblings)
+}
+
+export const toolCallReceipts = (events: ReadonlyArray<EventEnvelope>): ToolCallReceipts => {
   const started = new Map<ToolCallId, number>()
   const durations = new Map<ToolCallId, number>()
+  const operations = new Map<string, Array<ToolOperation>>()
+  const slots = new Map<string, OperationSlot>()
   for (const envelope of events) {
     const event = envelope.event
     if (event._tag === "ToolCallStarted") {
       started.set(event.toolCallId, envelope.createdAt)
+      admitOperation(event, operations, slots)
       continue
     }
     if (event._tag !== "ToolCallSucceeded" && event._tag !== "ToolCallFailed") continue
     const startedAt = started.get(event.toolCallId)
-    if (Predicate.isUndefined(startedAt)) continue
-    durations.set(event.toolCallId, Math.max(0, envelope.createdAt - startedAt))
+    const durationMs = Option.getOrUndefined(
+      Option.map(Option.fromUndefinedOr(startedAt), (at) => Math.max(0, envelope.createdAt - at)),
+    )
+    if (Predicate.isNotUndefined(durationMs)) durations.set(event.toolCallId, durationMs)
+    const position = slots.get(
+      callKey(Option.fromUndefinedOr(event.assistantMessageId), event.toolCallId),
+    )
+    if (Predicate.isUndefined(position)) continue
+    const siblings = operations.get(position.parent)
+    const current = siblings?.[position.index]
+    if (Predicate.isUndefined(siblings) || Predicate.isUndefined(current)) continue
+    let status: ToolOperation["status"] = "completed"
+    if (event._tag === "ToolCallFailed") status = "error"
+    siblings[position.index] = {
+      ...current,
+      status,
+      summary: Option.getOrUndefined(
+        Option.map(Option.fromUndefinedOr(event.summary), clipSummary),
+      ),
+      durationMs,
+    }
   }
-  return durations
+  return { durations, operations }
+}
+
+/** A settled cell's operation with no terminal receipt ended with the cell: it failed, it is not running. */
+const settledOperations = (
+  operations: ReadonlyArray<ToolOperation>,
+  parentStatus: ToolInteraction["status"],
+): ReadonlyArray<ToolOperation> => {
+  if (parentStatus === "running") return operations
+  return operations.map((operation) => {
+    if (operation.status !== "running") return operation
+    return { ...operation, status: "error" }
+  })
 }
 
 const messagePartsToolInteractions = (
+  messageId: MessageId,
   parts: ReadonlyArray<MessagePart>,
   resultForToolCall: (partIndex: number) => Option.Option<ToolResultState>,
-  durations: ReadonlyMap<ToolCallId, number>,
+  receipts: ToolCallReceipts,
 ): ReadonlyArray<ToolInteraction> => {
   const interactions: ToolInteraction[] = []
   for (const [partIndex, part] of parts.entries()) {
@@ -753,6 +874,14 @@ const messagePartsToolInteractions = (
       status = "completed"
       if (result.value.isError) status = "error"
     }
+    const operations = Option.fromUndefinedOr(
+      receipts.operations.get(callKey(Option.some(messageId), id)),
+    ).pipe(
+      Option.orElse(() =>
+        Option.fromUndefinedOr(receipts.operations.get(callKey(Option.none(), id))),
+      ),
+      Option.map((found) => settledOperations(found, status)),
+    )
     interactions.push({
       id,
       toolName: toolCall.toolName,
@@ -760,7 +889,11 @@ const messagePartsToolInteractions = (
       input: toolCall.input,
       summary: Option.getOrUndefined(Option.map(result, (value) => value.summary)),
       output: Option.getOrUndefined(Option.map(result, (value) => value.output)),
-      durationMs: durations.get(id),
+      durationMs: receipts.durations.get(id),
+      ...Option.match(operations, {
+        onNone: () => ({}),
+        onSome: (value) => ({ operations: value }),
+      }),
     })
   }
   return interactions
@@ -768,7 +901,7 @@ const messagePartsToolInteractions = (
 
 export const projectMessagesWithToolInteractions = (
   messages: ReadonlyArray<Message>,
-  durations: ReadonlyMap<ToolCallId, number> = new Map(),
+  receipts: ToolCallReceipts = noReceipts,
 ): ReadonlyArray<ProjectedMessage> => {
   const resultMap = buildToolResultMapFromMessages(messages)
   const pairings = buildToolResultPairings(messages, resultMap)
@@ -776,9 +909,10 @@ export const projectMessagesWithToolInteractions = (
     projectMessage(
       message,
       messagePartsToolInteractions(
+        message.id,
         message.parts,
         (partIndex) => findResultForToolCall(index, partIndex, pairings),
-        durations,
+        receipts,
       ),
     ),
   )

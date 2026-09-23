@@ -1472,14 +1472,21 @@ const isMessage = Predicate.or(
 
 // ── Build messages from raw ──
 
-/** Widen the projected segments with the live tool payloads they name. */
+/**
+ * A projected call as the feed's own mutable record. The live feed attaches
+ * later operations to it, so its operations list is a fresh array.
+ */
+const toToolCall = ({ operations, ...call }: ToolInteraction): ToolCall => {
+  if (Predicate.isUndefined(operations)) return { ...call }
+  return { ...call, operations: operations.map((operation) => ({ ...operation })) }
+}
+
+/** Widen the projected segments with the tool payloads they name. */
 const buildSegments = (
   projected: ReadonlyArray<MessageSegment>,
-  toolInteractions: ReadonlyArray<ToolInteraction>,
+  toolCalls: ReadonlyArray<ToolCall>,
 ): AssistantSegment[] => {
-  const interactionsById = new Map(
-    toolInteractions.map((interaction) => [String(interaction.id), interaction]),
-  )
+  const interactionsById = new Map(toolCalls.map((call) => [String(call.id), call]))
   return projected.flatMap((segment) =>
     Match.value(segment).pipe(
       Match.tagsExhaustive({
@@ -1502,12 +1509,11 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
   const filteredMsgs = msgs.filter((m) => m.role !== "tool")
 
   return filteredMsgs.map((m) => {
-    const toolCalls = [...m.toolInteractions]
+    const toolCalls = m.toolInteractions.map(toToolCall)
     let toolCallsOption = Option.none<typeof toolCalls>()
     if (toolCalls.length > 0) toolCallsOption = Option.some(toolCalls)
     let segments = Option.none<AssistantSegment[]>()
-    if (m.role === "assistant")
-      segments = Option.some(buildSegments(m.segments, m.toolInteractions))
+    if (m.role === "assistant") segments = Option.some(buildSegments(m.segments, toolCalls))
     if (m._tag === "interjection")
       return {
         _tag: "interjection-message",

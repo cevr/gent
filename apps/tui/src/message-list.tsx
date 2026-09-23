@@ -1,6 +1,7 @@
 import {
   type ActivityCall,
   type ActivityOperation,
+  CellOperationReceipts,
   decodeToolOutputOption,
   formatActivityHeader,
   formatCellRowLabel,
@@ -205,17 +206,6 @@ function SessionEventIndicator(props: SessionEventIndicatorProps) {
 
 export type { ToolCall }
 export type { DisclosureLevel }
-
-const CellOperationReceipts = Schema.Struct({
-  operations: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        tool: Schema.String,
-        outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
-      }),
-    ),
-  ),
-})
 
 const CellFailure = Schema.Struct({
   display: Schema.optional(Schema.String),
