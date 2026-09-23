@@ -124,7 +124,7 @@ import {
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
   resolveTurnProfile as resolveSessionTurnProfile,
-  type RunOpener,
+  RunOpener,
   SessionProfileCache,
   type SessionProfileCacheService,
   sessionWorkingDirectory,
@@ -1440,10 +1440,10 @@ const makeAgentLoopBehavior = (
       },
     })
 
-    const resolveTurnProfile = (run: RunOpener) =>
+    const resolveTurnProfile = (opener: RunOpener) =>
       provideAgentLoopRuntimeContext(runtimeContext)(
         resolveSessionTurnProfile({
-          ...run,
+          opener,
           sessionId,
           branchId,
           profileCache,
@@ -1478,9 +1478,9 @@ const makeAgentLoopBehavior = (
       // The branch's Resources are built over this profile's services, so
       // the loop holds its lease until the branch closes. No turn's origin
       // reaches them.
-      const profile = yield* resolveTurnProfile({ openedByClient: true }).pipe(
-        Scope.provide(loopScope),
-      )
+      const profile = yield* resolveTurnProfile(
+        RunOpener.cases.Turn.make({ openedByClient: true }),
+      ).pipe(Scope.provide(loopScope))
       return yield* Effect.uninterruptible(
         Layer.build(
           buildResourceLayer(profile.turnExtensionRegistry.getResolved().extensions, "branch"),
@@ -2585,7 +2585,9 @@ const buildAgentLoopActorHandlers = (config: {
             // A request comes from a client, which can answer, and sends to
             // its own branch as that client until the request ends.
             const grant = yield* holdClientRequest()
-            const environment = yield* handle.resolveTurnProfile({ clientRequest: { grant } })
+            const environment = yield* handle.resolveTurnProfile(
+              RunOpener.cases.ClientRequest.make({ grant }),
+            )
             const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
             const capabilityId = RpcId.make(operation.capabilityId)
             let input: unknown = Option.getOrUndefined(Option.none())

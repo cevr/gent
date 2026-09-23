@@ -59,7 +59,7 @@ import {
 } from "../domain/extension.js"
 import {
   type BranchId,
-  type ClientRequestGrant,
+  ClientRequestGrant,
   ExtensionId,
   MessageId,
   ProcessGenerationId,
@@ -2397,30 +2397,25 @@ interface ExtensionHostContextInput {
 }
 
 /**
- * A client's extension request while it runs: the grant its branch's loop
- * holds live until the request ends (`ClientRequestGrant`).
- */
-interface ClientRequest {
-  readonly grant: ClientRequestGrant
-}
-
-/**
  * What opened a run. A turn knows whether a client sent its opening message.
  * A client's extension request (a slash command, say) is client-opened, and
  * while it runs a message it sends to its own branch keeps the client origin
+ * through the grant its branch's loop holds live until the request ends
  * (`clientRequestGrant`).
  */
-export type RunOpener =
-  | { readonly openedByClient: boolean }
-  | { readonly clientRequest: ClientRequest }
+export const RunOpener = Schema.TaggedUnion({
+  Turn: { openedByClient: Schema.Boolean },
+  ClientRequest: { grant: ClientRequestGrant },
+})
+export type RunOpener = typeof RunOpener.Type
 
-const clientRequestOf = (opener: RunOpener): Option.Option<ClientRequest> => {
-  if ("clientRequest" in opener) return Option.some(opener.clientRequest)
+const clientRequestOf = (opener: RunOpener): Option.Option<ClientRequestGrant> => {
+  if (opener._tag === "ClientRequest") return Option.some(opener.grant)
   return Option.none()
 }
 
 const runOpenedByClient = (opener: RunOpener): boolean => {
-  if ("clientRequest" in opener) return true
+  if (opener._tag === "ClientRequest") return true
   return opener.openedByClient
 }
 
@@ -2434,8 +2429,8 @@ interface MakeExtensionHostContextRunInfo {
    * an approval in it.
    */
   readonly interactive: boolean
-  /** Some when a client's extension request opened this run. */
-  readonly clientRequest: Option.Option<ClientRequest>
+  /** The live grant, when a client's extension request opened this run. */
+  readonly clientRequest: Option.Option<ClientRequestGrant>
 }
 
 /** Builds the `ExtensionHostContext` for one run of one branch. */
@@ -2567,7 +2562,7 @@ export const makeExtensionHostContextProvider = (
     ) =>
       Option.getOrUndefined(
         Option.filter(
-          Option.map(runInfo.clientRequest, (request) => request.grant),
+          runInfo.clientRequest,
           () => target.sessionId === runInfo.sessionId && target.branchId === runInfo.branchId,
         ),
       )
@@ -2898,15 +2893,14 @@ export const sessionWorkingDirectory = (
  * and the host defaults apply. A storage lookup failure falls back to them as well.
  * The caller's scope holds the profile's lease for as long as it uses it.
  */
-export const resolveTurnProfile = (
-  params: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly profileCache?: SessionProfileCacheService
-    readonly hostProvider: ExtensionHostContextProvider
-    readonly defaults: TurnProfileDefaults
-  } & RunOpener,
-): Effect.Effect<
+export const resolveTurnProfile = (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly profileCache?: SessionProfileCacheService
+  readonly hostProvider: ExtensionHostContextProvider
+  readonly defaults: TurnProfileDefaults
+  readonly opener: RunOpener
+}): Effect.Effect<
   AgentLoopTurnProfile,
   never,
   ExtensionRegistry | SessionStorage | ScopeType.Scope
@@ -2918,14 +2912,14 @@ export const resolveTurnProfile = (
     const sessionCwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
     const interactive = turnCanAsk({
       sessionIsSpawned: Option.exists(session, isSpawnedSession),
-      openedByClient: runOpenedByClient(params),
+      openedByClient: runOpenedByClient(params.opener),
     })
     const runInfo = {
       sessionId: params.sessionId,
       branchId: params.branchId,
       sessionCwd: Option.getOrUndefined(sessionCwd),
       interactive,
-      clientRequest: clientRequestOf(params),
+      clientRequest: clientRequestOf(params.opener),
     }
     const profile = yield* Option.match(
       Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),

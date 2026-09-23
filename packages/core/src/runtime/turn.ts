@@ -68,7 +68,7 @@ import {
   type ExtensionRegistryService,
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
-  type RunOpener,
+  RunOpener,
 } from "./extension-host.js"
 import type * as Response from "effect/unstable/ai/Response"
 import { credentialFailureMessage, type ProviderAuthError } from "../domain/driver.js"
@@ -2396,9 +2396,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const receipt = yield* appendTurnReceipt(end)
       if (Option.isNone(receipt)) return
       const context = yield* scope.branchContext
-      const turnProfile = yield* scope.resolveTurnProfile({
-        openedByClient: openedByClient(state.message),
-      })
+      const turnProfile = yield* scope.resolveTurnProfile(
+        RunOpener.cases.Turn.make({ openedByClient: openedByClient(state.message) }),
+      )
       const agentName = yield* sessionAgentName(scope.sessionId)
       yield* emitTurnAfter({ ...end, ...receipt.value, agentName }).pipe(
         underTurnProfile(turnProfile),
@@ -3010,9 +3010,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       // Whether a user can answer comes from what opened the turn and
       // whether its session was spawned (`turnCanAsk`).
-      const turnProfile = yield* scope.resolveTurnProfile({
-        openedByClient: openedByClient(state.message),
-      })
+      const turnProfile = yield* scope.resolveTurnProfile(
+        RunOpener.cases.Turn.make({ openedByClient: openedByClient(state.message) }),
+      )
 
       const provideTurnContext = underTurnProfile(turnProfile)
 

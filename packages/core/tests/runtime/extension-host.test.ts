@@ -62,6 +62,7 @@ import {
   provideCurrentHostCtx,
   resolveExtensions,
   resolveTurnProfile,
+  RunOpener,
   type SessionProfile,
   SessionProfileCache,
   type SessionProfileCacheService,
@@ -1194,7 +1195,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-profile"),
           branchId: BranchId.make("branch-runtime-context-profile"),
-          openedByClient: true,
+          opener: RunOpener.cases.Turn.make({ openedByClient: true }),
           profileCache,
           hostProvider,
           defaults: { baseSections: [] },
@@ -1225,7 +1226,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
-          openedByClient: true,
+          opener: RunOpener.cases.Turn.make({ openedByClient: true }),
           hostProvider,
           defaults,
         })
@@ -1261,7 +1262,7 @@ describe("resolveTurnProfile", () => {
           resolveTurnProfile({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            openedByClient: true,
+            opener: RunOpener.cases.Turn.make({ openedByClient: true }),
             hostProvider,
             defaults: { baseSections: [] },
           }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
@@ -1330,7 +1331,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
-          openedByClient: true,
+          opener: RunOpener.cases.Turn.make({ openedByClient: true }),
           profileCache: fakeProfileCache,
           hostProvider,
           defaults: { baseSections: [] },
@@ -2802,7 +2803,7 @@ describe("client request origin", () => {
         sessionId: SESSION_ID,
         branchId: BRANCH_ID,
         interactive: true,
-        clientRequest: Option.some({ grant }),
+        clientRequest: Option.some(grant),
       })
       const sends = Effect.all([
         ctx.Session.send({ delivery: "queue", sourceId: "held", content: "queued" }),
