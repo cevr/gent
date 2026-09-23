@@ -148,3 +148,10 @@ delegate children, completions reached the parent, red app `17 pass, 0 fail`.
 Receipts on the way: the `@gent/core-internal` guard for shipped extensions
 now has zero exceptions (`bae12d8d`). Live run found a gap, not a
 regression: `read_session` cannot find the caller's own session id.
+
+### Pass 2 results
+
+| Candidate      | Status                                                                                                                                                                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Delivery verb  | done `29e75d69`, merged `6c5c4454`: `Session.send` takes `delivery: "turn" \| "queue" \| "steer"`, `Session.stop` writes `Cancel`; facade verbs `steer` and `queueFollowUp` gone. Review P2 (no input decode) fixed `da6ba1f1`, red first |
+| Cell namespace | in progress on `cell-namespace`                                                                                                                                                                                                           |
