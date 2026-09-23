@@ -1326,6 +1326,82 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("a custom xargs replace string stands for the input", () => {
+    for (const command of [
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I % sh -c %",
+      "echo 'reset --hard' | xargs -I % git %",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs --replace=X sh -c X",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -J % sh -c %",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -i% sh -c %",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs --replace sh -c {}",
+      "cat /nonexistent/gent-probe-x | xargs -I % sh -c %",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "echo a | xargs -I % echo %",
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs -I % echo {}",
+      // Without a replace option, `{}` is text xargs passes as it is.
+      "echo 'rm -rf /nonexistent/gent-probe-x' | xargs sh -c {}",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("unreadable xargs input that supplies the command through a runner asks", () => {
+    const u = "cat /nonexistent/gent-probe-x |"
+    for (const command of [
+      `${u} xargs env`,
+      `${u} xargs nohup`,
+      `${u} xargs -L1 timeout 5`,
+      `${u} xargs -I{} sudo {}`,
+      `${u} xargs -I{} git {}`,
+      `${u} xargs -I % git -C /nonexistent/gent-probe-x %`,
+      `${u} xargs env git`,
+      `${u} parallel git {}`,
+      `${u} xargs git`,
+      `${u} xargs git checkout`,
+      "parallel :::: /nonexistent/gent-probe-x",
+      "parallel git :::: /nonexistent/gent-probe-x",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      `${u} xargs rm`,
+      `${u} xargs env grep x`,
+      `${u} xargs git add`,
+      `${u} xargs -I{} git -C {} status`,
+      `${u} xargs sudo ls`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("xargs with one word or line per command classifies each command alone", () => {
+    for (const command of [
+      "echo 'a b' | xargs -n1 git checkout",
+      "echo 'a b' | xargs -n 1 git checkout",
+      "echo 'a b' | xargs --max-args=1 git checkout",
+      "printf 'a\\nb\\n' | xargs -L1 git checkout",
+      "printf 'a\\nb\\n' | xargs -I{} git checkout {}",
+      "printf 'a\\nb\\n' | parallel git checkout",
+      "parallel git checkout ::: a b",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of [
+      "echo 'a b' | xargs git checkout",
+      "echo 'a b' | xargs -n2 git checkout",
+      "echo 'a b' | xargs -L1 git checkout",
+      "printf 'a b\\n' | xargs -I{} git checkout {}",
+      "printf 'x\\n-rf /nonexistent/gent-probe-x\\n' | xargs -L1 rm",
+      // `--max-lines` takes its value only after `=`: `rm` is the command.
+      "xargs --max-lines rm -rf /nonexistent/gent-probe-x",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
   test("printf with only %s directives prints its arguments into the input", () => {
     expect(
       classifyBashCommand("printf '%s\\n' -rf /nonexistent/gent-probe-x | xargs rm").level,
