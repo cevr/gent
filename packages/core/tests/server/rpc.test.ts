@@ -45,8 +45,8 @@ import {
   ModelDriverRef,
 } from "../../src/domain/agent"
 import { Gent } from "@gent/sdk"
-import { createE2ELayer, createRpcHarness, createToolTestLayer } from "../../src/test-utils/index"
-import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
+import { createE2ELayer, createRpcHarness } from "../../src/test-utils/index"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import {
   BranchId,
   ExtensionId,
@@ -1077,9 +1077,12 @@ describe("extension command RPCs", () => {
       ],
     }),
   }
-  const layer = createToolTestLayer({ ...toolPreset, extensions: [TestCommandsExtension] }).pipe(
-    Layer.provideMerge(ApprovalService.Test()),
-  )
+  const layer = createE2ELayer({
+    agents: [],
+    providerLayer: LanguageModelLayers.debug(),
+    extensionInputs: [TestCommandsExtension],
+    toolRunner: "test",
+  })
   it.live("extension author API does not export capability authority providers", () =>
     Effect.sync(() => {
       expect("CapabilityAccess" in ExtensionApi).toBe(false)

@@ -1306,7 +1306,6 @@ const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform.ts",
   "packages/core/src/runtime/gent-platform-bun.ts",
   "packages/core/src/server/server-root.ts",
-  "packages/core/src/test-utils/index.ts",
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])
