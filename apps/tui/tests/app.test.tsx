@@ -1917,6 +1917,29 @@ describe("TUI renderer surfaces", () => {
       expect(frame).toContain("@gent/plan")
     }),
   )
+  // The status row and the activity report read `isReconnecting`, so both
+  // wire states that mean "not connected yet" have to answer true.
+  it.live("isReconnecting follows the connecting and reconnecting states", () =>
+    Effect.gen(function* () {
+      const lifecycle = createMutableRuntime(
+        ConnectionState.cases.Connected.make({ generation: 0 }),
+      )
+      const ReconnectProbe = () => {
+        const client = useClient()
+        return <text>{`reconnecting:${String(client.isReconnecting())}`}</text>
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ReconnectProbe />, { runtime: lifecycle.runtime }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "connected")
+      lifecycle.emit(ConnectionState.cases.Reconnecting.make({ attempt: 1, generation: 1 }))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "reconnecting")
+      lifecycle.emit(ConnectionState.cases.Connected.make({ generation: 1 }))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:false"), "reconnected")
+      lifecycle.emit(ConnectionState.cases.Connecting.make({}))
+      yield* waitForFrame(setup, (frame) => frame.includes("reconnecting:true"), "connecting")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("ConnectionWidget refreshes extension status after reconnect generation changes", () =>
     Effect.gen(function* () {
       const lifecycle = createMutableRuntime(

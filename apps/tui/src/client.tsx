@@ -17,7 +17,7 @@ import {
   type Branch,
   type BranchTreeNode,
   buildLogPaths,
-  type ConnectionState,
+  ConnectionState,
   ensureLogDir,
   resolveLogDir,
   type ExtensionHealthSnapshot,
@@ -411,8 +411,8 @@ export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate =>
   }
 }
 
-const isReconnectingState = (state: ConnectionState): boolean =>
-  Predicate.isTagged("connecting")(state) || Predicate.isTagged("reconnecting")(state)
+/** Not connected yet, or not any more: both mean the next reply may not come. */
+const isReconnectingState = ConnectionState.isAnyOf(["Connecting", "Reconnecting"])
 
 /**
  * What this UI can ask a running loop to do.
