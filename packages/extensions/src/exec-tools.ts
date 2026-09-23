@@ -790,28 +790,84 @@ const gitSubcommandIndexes = (words: ReadonlyArray<string>): Array<number> => {
   return indexes
 }
 
-const FORCE_PUSH_TOKEN = /^(-[a-zA-Z]*f[a-zA-Z]*|--force.*|\+.+)$/
-const DELETE_PUSH_TOKEN = /^(-[a-zA-Z]*d[a-zA-Z]*|--delete|--mirror|--prune|:.+)$/
-
-/** Checkout options whose value is the next word. */
-const CHECKOUT_OPTIONS_WITH_VALUE = new Set(["-b", "-B", "--orphan", "--conflict"])
-
-/** The words of a checkout that are not options or option values. */
-const checkoutPositionals = (args: ReadonlyArray<string>): ReadonlyArray<string> => {
-  const positionals: Array<string> = []
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index] ?? ""
-    if (CHECKOUT_OPTIONS_WITH_VALUE.has(arg)) index++
-    else if (!arg.startsWith("-")) positionals.push(arg)
-  }
-  return positionals
+/** The options and operands of one git subcommand. */
+interface GitArguments {
+  /** Letters of every short option cluster (`-fd` holds `f` and `d`). */
+  readonly shorts: ReadonlySet<string>
+  /** Long option names as written, without `--` and `=value`. */
+  readonly longs: ReadonlyArray<string>
+  /** Operands before `--`. */
+  readonly operands: ReadonlyArray<string>
+  /** Operands after `--`. */
+  readonly pathspecs: ReadonlyArray<string>
 }
 
-/** A short option cluster (`-fb`) or long option that holds `short` or equals one of `long`. */
-const hasOption = (args: ReadonlyArray<string>, short: string, ...long: ReadonlyArray<string>) =>
-  args.some(
-    (arg) => long.includes(arg) || (/^-[a-zA-Z]+$/.test(arg) && arg.slice(1).includes(short)),
-  )
+/** The options of a subcommand that take the next word (or the rest of a short cluster) as a value. */
+interface GitValueOptions {
+  readonly short?: string
+  readonly long?: ReadonlyArray<string>
+}
+
+/**
+ * Git reads any unambiguous prefix of a long option as that option
+ * (`--ha` is `--hard`). A written name that is a prefix of `name` is read as
+ * `name`. An ambiguous prefix makes git exit with an error, so reading it as
+ * the risky option asks for approval of a command that would do nothing.
+ */
+const abbreviates = (written: string, name: string) =>
+  written.length > 0 && name.startsWith(written)
+
+/** Record one option word; returns true when the next word is its value. */
+const readGitOption = (
+  arg: string,
+  valued: GitValueOptions,
+  shorts: Set<string>,
+  longs: Array<string>,
+): boolean => {
+  if (arg.startsWith("--")) {
+    const [name = ""] = arg.slice(2).split("=", 1)
+    longs.push(name)
+    return !arg.includes("=") && (valued.long ?? []).some((option) => abbreviates(name, option))
+  }
+  for (let at = 1; at < arg.length; at++) {
+    const letter = arg.charAt(at)
+    shorts.add(letter)
+    // The rest of the cluster is the value; a bare letter takes the next word.
+    if ((valued.short ?? "").includes(letter)) return at === arg.length - 1
+  }
+  return false
+}
+
+const parseGitArguments = (
+  args: ReadonlyArray<string>,
+  valued: GitValueOptions = {},
+): GitArguments => {
+  const shorts = new Set<string>()
+  const longs: Array<string> = []
+  const operands: Array<string> = []
+  let options = args
+  let pathspecs: ReadonlyArray<string> = []
+  const separator = args.indexOf("--")
+  if (separator !== -1) {
+    options = args.slice(0, separator)
+    pathspecs = args.slice(separator + 1)
+  }
+  for (let index = 0; index < options.length; index++) {
+    const arg = options[index] ?? ""
+    if (arg.startsWith("-") && arg.length > 1) {
+      if (readGitOption(arg, valued, shorts, longs)) index++
+    } else {
+      operands.push(arg)
+    }
+  }
+  return { shorts, longs, operands, pathspecs }
+}
+
+const hasShort = (parsed: GitArguments, ...letters: ReadonlyArray<string>) =>
+  letters.some((letter) => parsed.shorts.has(letter))
+
+const hasLong = (parsed: GitArguments, ...names: ReadonlyArray<string>) =>
+  parsed.longs.some((written) => names.some((name) => abbreviates(written, name)))
 
 const destructive = (reason: string) => Option.some<BashRisk>({ level: "destructive", reason })
 
@@ -823,51 +879,104 @@ const destructiveWhen = (condition: boolean, reason: string): Option.Option<Bash
 /** The risk of each git subcommand that can lose work or reach a remote. */
 const GIT_SUBCOMMAND_RISKS = {
   push: (args: ReadonlyArray<string>): Option.Option<BashRisk> => {
-    if (args.some((arg) => FORCE_PUSH_TOKEN.test(arg))) return destructive("git push --force")
-    if (args.some((arg) => DELETE_PUSH_TOKEN.test(arg))) {
+    const parsed = parseGitArguments(args, {
+      short: "o",
+      long: ["push-option", "receive-pack", "exec", "repo"],
+    })
+    const refspecs = [...parsed.operands, ...parsed.pathspecs]
+    if (
+      hasShort(parsed, "f") ||
+      hasLong(parsed, "force", "force-with-lease", "force-if-includes") ||
+      refspecs.some((refspec) => /^\+./.test(refspec))
+    ) {
+      return destructive("git push --force")
+    }
+    if (
+      hasShort(parsed, "d") ||
+      hasLong(parsed, "delete", "mirror", "prune") ||
+      refspecs.some((refspec) => /^:./.test(refspec))
+    ) {
       return destructive("git push that can delete remote refs")
     }
     return Option.some({ level: "external", reason: "git push" })
   },
   reset: (args: ReadonlyArray<string>) =>
-    destructiveWhen(args.includes("--hard"), "git reset --hard"),
-  clean: () => destructive("git clean"),
+    destructiveWhen(hasLong(parseGitArguments(args), "hard"), "git reset --hard"),
+  clean: (args: ReadonlyArray<string>) => {
+    const parsed = parseGitArguments(args, { short: "e", long: ["exclude"] })
+    return destructiveWhen(!hasShort(parsed, "n") && !hasLong(parsed, "dry-run"), "git clean")
+  },
   // A branch switch (`git checkout main`, `-b feat origin/main`) keeps work.
   // Paths do not: a tree-ish plus a path, `--ours`/`--theirs`, a merge
-  // checkout, or a force. One bare word stays safe: the classifier cannot
-  // tell a path from a branch without the file system.
-  checkout: (args: ReadonlyArray<string>) =>
-    destructiveWhen(
-      args.includes("--") ||
-        args.includes(".") ||
+  // checkout, or a force. `-B` resets an existing branch. One bare word stays
+  // safe: the classifier cannot tell a path from a branch without the file
+  // system.
+  checkout: (args: ReadonlyArray<string>) => {
+    const parsed = parseGitArguments(args, {
+      short: "bB",
+      long: ["orphan", "conflict", "pathspec-from-file"],
+    })
+    return destructiveWhen(
+      parsed.pathspecs.length > 0 ||
+        parsed.operands.includes(".") ||
         args[0] === "-" ||
-        checkoutPositionals(args).length >= 2 ||
-        hasOption(args, "f", "--force") ||
-        hasOption(args, "p", "--patch") ||
-        hasOption(args, "m", "--merge", "--ours", "--theirs"),
+        parsed.operands.length >= 2 ||
+        hasShort(parsed, "f", "p", "m", "B") ||
+        hasLong(
+          parsed,
+          "force",
+          "patch",
+          "merge",
+          "ours",
+          "theirs",
+          "conflict",
+          "pathspec-from-file",
+        ),
       "git checkout that discards working-tree changes",
-    ),
+    )
+  },
   // Every form can lose work: the default and `--worktree` overwrite the
   // working tree, and `--staged` drops staged content the tree may not hold.
   restore: () => destructive("git restore (can discard changes)"),
-  switch: (args: ReadonlyArray<string>) =>
-    destructiveWhen(
-      hasOption(args, "f", "--force", "--discard-changes"),
-      "git switch --discard-changes",
-    ),
-  // `-D`, `-d --force` and `-f <branch> <commit>` all drop or move unmerged commits.
-  branch: (args: ReadonlyArray<string>) =>
-    destructiveWhen(
-      hasOption(args, "D") || hasOption(args, "f", "--force"),
-      "git branch -D/--force (can drop unmerged commits)",
-    ),
-  stash: (args: ReadonlyArray<string>) =>
-    destructiveWhen(args[0] === "drop" || args[0] === "clear", `git stash ${args[0] ?? ""}`),
-  add: (args: ReadonlyArray<string>) =>
-    destructiveWhen(
-      args.some((arg) => arg === "-A" || arg === "--all" || arg === "."),
+  switch: (args: ReadonlyArray<string>) => {
+    const parsed = parseGitArguments(args, {
+      short: "cC",
+      long: ["create", "force-create", "orphan", "conflict"],
+    })
+    return destructiveWhen(
+      hasShort(parsed, "f", "C") || hasLong(parsed, "force", "discard-changes", "force-create"),
+      "git switch --discard-changes/--force-create",
+    )
+  },
+  // `-D`, `-d --force`, `-f <branch> <commit>`, `-M` and `-C` drop, move or
+  // overwrite a branch.
+  branch: (args: ReadonlyArray<string>) => {
+    const parsed = parseGitArguments(args, { short: "u", long: ["set-upstream-to"] })
+    return destructiveWhen(
+      hasShort(parsed, "D", "M", "C", "f") || hasLong(parsed, "force"),
+      "git branch -D/-M/-C/--force (can drop or overwrite a branch)",
+    )
+  },
+  stash: (args: ReadonlyArray<string>) => {
+    const action = parseGitArguments(args, { short: "m", long: ["message"] }).operands[0] ?? ""
+    return destructiveWhen(action === "drop" || action === "clear", `git stash ${action}`)
+  },
+  worktree: (args: ReadonlyArray<string>) => {
+    const parsed = parseGitArguments(args)
+    return destructiveWhen(
+      parsed.operands[0] === "remove" && (hasShort(parsed, "f") || hasLong(parsed, "force")),
+      "git worktree remove --force (discards the worktree's changes)",
+    )
+  },
+  add: (args: ReadonlyArray<string>) => {
+    const parsed = parseGitArguments(args)
+    return destructiveWhen(
+      hasShort(parsed, "A") ||
+        hasLong(parsed, "all") ||
+        [...parsed.operands, ...parsed.pathspecs].includes("."),
       "git add everything (stages files other agents may own)",
-    ),
+    )
+  },
 }
 
 const isRiskySubcommand = (subcommand: string): subcommand is keyof typeof GIT_SUBCOMMAND_RISKS =>

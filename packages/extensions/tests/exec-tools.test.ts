@@ -394,6 +394,64 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand("ls && git push").level).toBe("external")
   })
 
+  // Git reads any unambiguous prefix of a long option as that option.
+  test("a shortened destructive long option is that option", () => {
+    for (const command of [
+      "git reset --ha",
+      "git reset --h",
+      "git switch --disc main",
+      "git switch --force-c main origin/main",
+      "git checkout --for other",
+      "git checkout --the a.txt",
+      "git checkout --ou a.txt",
+      "git checkout --conflict=merge a.ts",
+      "git checkout --pat a.ts",
+      "git push --del origin feature",
+      "git push --mirr",
+      "git push --pru origin",
+      "git push --forc origin main",
+      "git push --force-w=main origin main",
+      "git branch --for main HEAD~1",
+      "git add --al",
+      'git reset $"--hard"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a git command that moves or overwrites an existing branch is destructive", () => {
+    for (const command of [
+      "git checkout -B main origin/main",
+      "git switch -C main origin/main",
+      "git switch --force-create main origin/main",
+      "git branch -M main",
+      "git branch -C old main",
+      "git stash -q drop",
+      "git worktree remove --force ../wt",
+      "git worktree remove -f ../wt",
+      "git checkout HEAD --pathspec-from-file=list.txt",
+      "git checkout -fq main",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("an option value or a dry run is not a destructive flag", () => {
+    for (const command of [
+      "git checkout -bfeat origin/main",
+      "git checkout -b fix-D origin/main",
+      "git switch -cfeat",
+      "git clean -n",
+      "git clean -fdn",
+      "git clean --dry-run -fd",
+      "git checkout main --",
+      "git worktree remove ../wt",
+      "git stash push -m drop",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("a flag after a redirection operator stays in its command", () => {
     for (const command of [
       "git push &>/dev/null --force",
