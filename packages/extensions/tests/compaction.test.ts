@@ -81,13 +81,17 @@ const promptText = (prompt: Prompt.Prompt): string =>
     })
     .join("\n")
 
-const summaryProvider = (text: string, capture?: (prompt: Prompt.Prompt) => void) =>
+const summaryProvider = (
+  text: string,
+  capture?: (prompt: Prompt.Prompt) => void,
+  finishReason: "stop" | "length" = "stop",
+) =>
   LanguageModelLayers.testStream((options) => {
     if (Predicate.isNotUndefined(capture)) capture(Prompt.make(options.prompt))
     return Effect.succeed(
       Stream.fromIterable([
         textDeltaPart(text),
-        finishPart({ finishReason: "stop", usage: { inputTokens: 120, outputTokens: 8 } }),
+        finishPart({ finishReason, usage: { inputTokens: 120, outputTokens: 8 } }),
       ]),
     )
   })
@@ -331,6 +335,44 @@ describe("context handoff", () => {
       const refused = yield* attempt(summaryProvider(overBound))
       expect(Option.map(refused, (error) => error.reason)).toEqual(Option.some("SummaryOversize"))
     }).pipe(Effect.timeout("10 seconds"))
+  })
+
+  it.scopedLive("a summary cut at the provider cap is marked as cut", () =>
+    Effect.gen(function* () {
+      const result = yield* compact()
+      expect(result.notice).toContain("Summary:\nhalf a sent")
+      expect(result.notice).toContain("[Summary cut at the output limit.]")
+    }).pipe(
+      Effect.provide(summaryProvider("half a sent", () => {}, "length")),
+      Effect.timeout("10 seconds"),
+    ),
+  )
+
+  it.scopedLive("the provider cap leaves room for dense tokens under the summary bound", () => {
+    let requested = Option.none<number>()
+    return Effect.gen(function* () {
+      const model = yield* LanguageModel.LanguageModel
+      const compactor = yield* ModelContextCompactor
+      yield* compactor.compact({
+        modelId,
+        sessionId,
+        branchId,
+        history: history(),
+        kept: [],
+        budget: budget(),
+        summaryModel: (maxTokens) => {
+          requested = Option.some(maxTokens)
+          return Effect.succeed(model)
+        },
+      })
+      // A summary that fills the cap at 5 characters per token still passes
+      // the 4-characters-per-token estimate bound.
+      const cap = Option.getOrThrow(requested)
+      expect(Math.ceil((cap * 5) / 4)).toBeLessThanOrEqual(MODEL_COMPACTION_OUTPUT_TOKENS)
+    }).pipe(
+      Effect.provide(Layer.mergeAll(ModelContextCompactorLive, summaryProvider("focused"))),
+      Effect.timeout("10 seconds"),
+    )
   })
 
   it.scopedLive("an empty, oversized, or failed summary is a compaction error", () => {
