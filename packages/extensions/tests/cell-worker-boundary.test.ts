@@ -32,7 +32,10 @@ const makeHarness = Effect.gen(function* () {
       send: (response) => Queue.offer(responses, response).pipe(Effect.asVoid),
       endCellOutput: () => Effect.void,
     }),
-    Effect.provideService(CellWorkerEnvironment, { workingDirectory: process.cwd() }),
+    Effect.provideService(CellWorkerEnvironment, {
+      workingDirectory: process.cwd(),
+      uncaught: Stream.empty,
+    }),
     Effect.forkScoped,
   )
   expect((yield* Queue.take(responses))._tag).toBe("Ready")
@@ -314,7 +317,10 @@ const makeKernel = (host: typeof CellHost.Service, ...tools: ReadonlyArray<strin
   Effect.gen(function* () {
     const kernel = yield* makeBunCellEvaluator.pipe(
       Effect.provideService(CellHost, host),
-      Effect.provideService(CellWorkerEnvironment, { workingDirectory: process.cwd() }),
+      Effect.provideService(CellWorkerEnvironment, {
+        workingDirectory: process.cwd(),
+        uncaught: Stream.empty,
+      }),
     )
     yield* kernel.setCatalog(catalogOf(...tools).tools)
     yield* Effect.addFinalizer(() => kernel.reset)

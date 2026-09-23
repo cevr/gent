@@ -1047,6 +1047,45 @@ describe("cell worker process", () => {
   )
 
   it.scopedLive(
+    "a late throw or an unawaited rejection reaches the cell output and the worker lives",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+          maximumReplacements: 0,
+        })
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("broken"),
+          call: () =>
+            Effect.fail(
+              new CellEvaluationError({ phase: "execute", message: "service down", output: "" }),
+            ),
+        })
+        const run = (source: string) =>
+          kernel.evaluate(source).pipe(Effect.provideService(CellOperationHost, host))
+        const settle = "await new Promise((resolve) => setTimeout(resolve, 150))"
+        // A timer throws after its cell ended; the next cell carries the error.
+        const timer = yield* run(
+          "var kept = 5; setTimeout(() => { throw new Error('late timer') }, 20); 1",
+        )
+        const afterTimer = yield* run(`${settle}; kept`)
+        expect(`${timer.display}\n${afterTimer.display}`).toContain("late timer")
+        expect(afterTimer.display).toContain("5")
+        // A rejection nobody awaits.
+        const dropped = yield* run("Promise.reject(new Error('dropped promise')); 2")
+        const afterDropped = yield* run(`${settle}; kept`)
+        expect(`${dropped.display}\n${afterDropped.display}`).toContain("dropped promise")
+        // A host call the cell never awaits fails while the cell still runs.
+        const orphan = yield* run(`tools.broken({}); ${settle}; 3`)
+        expect(orphan.display).toContain("service down")
+        expect(orphan.display).toContain("3")
+        yield* kernel.close
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "process output past the display limit keeps its tail, so a trailing error survives",
     () =>
       Effect.gen(function* () {
