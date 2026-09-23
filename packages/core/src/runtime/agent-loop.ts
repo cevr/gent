@@ -1887,6 +1887,7 @@ const makeAgentLoopBehavior = (
  *
  * **Execution id key** per op:
  * - `Submit` — `message.id` (live-only)
+ * - `SubmitAndWait` — `message.id` (live-only; the reply waits for the turn)
  * - `SubmitDurable` — `message.id` (persisted; actor owns request idempotency)
  * - `QueueFollowUp` — `message.id` (live-only)
  * - `Steer` — `commandId` (persisted; actor owns request idempotency)
