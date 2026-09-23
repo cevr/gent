@@ -404,20 +404,21 @@ describe("a child's completion", () => {
     12_000,
   )
 
-  it.live("a child cannot delegate further", () =>
+  it.live("a child cannot delegate further, and gets no tool that waits on the user", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const childTools = yield* Deferred.make<ReadonlyArray<string>>()
+        const parentTools = yield* Deferred.make<ReadonlyArray<string>>()
         const providerLayer = LanguageModelLayers.testStream((options) => {
           const texts = promptTexts(options.prompt)
+          const names = options.tools.map((tool) => tool.name)
           if (texts[0]?.endsWith(childTask) === true) {
-            return Deferred.succeed(
-              childTools,
-              options.tools.map((tool) => tool.name),
-            ).pipe(Effect.as(reply("could not delegate")))
+            return Deferred.succeed(childTools, names).pipe(Effect.as(reply("could not delegate")))
           }
           if (!promptToolCallIds(options.prompt).includes("start-1")) {
-            return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            return Deferred.succeed(parentTools, names).pipe(
+              Effect.as(toolStep("delegate.start", { todo: childTask }, "start-1")),
+            )
           }
           return Effect.succeed(reply("done"))
         })
@@ -426,6 +427,10 @@ describe("a child's completion", () => {
         const tools = yield* Deferred.await(childTools)
         expect(tools).toContain("bash")
         expect(tools.filter((name) => name.startsWith("delegate."))).toEqual([])
+        // Nobody answers a non-interactive child: a confirm or a handoff would park it for good.
+        const waitsOnUser = ["ask_user", "prompt", "handoff"]
+        expect(tools.filter((name) => waitsOnUser.includes(name))).toEqual([])
+        expect(yield* Deferred.await(parentTools)).toEqual(expect.arrayContaining(waitsOnUser))
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
