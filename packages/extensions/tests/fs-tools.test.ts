@@ -758,6 +758,22 @@ describe("file encodings", () => {
       }),
   )
 
+  encodingTest("a CRLF search in a mixed file replaces only the CRLF sites", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/mixed.txt`
+      yield* fs.writeFileString(filePath, "a\nb\n--\na\r\nb\r\n")
+      const result = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "a\r\nb", newString: "X", replaceAll: true },
+        stubCtx,
+      )
+      expect(result.replacements).toBe(1)
+      expect(yield* fs.readFileString(filePath)).toBe("a\nb\n--\nX\r\n")
+    }),
+  )
+
   // Bytes the decoder can only show as U+FFFD: a rewrite of the text would not
   // give them back.
   const malformed: ReadonlyArray<[string, Uint8Array]> = [

@@ -1122,10 +1122,14 @@ const lineEndingAt = (content: string, index: number): string => {
 }
 
 /**
- * Match on the LF view, so line endings never decide a match; a search the
- * view misses (one typed with a bare CR) is tried on the file as written.
+ * Match the file as written first, so a search that names its line endings
+ * touches only the lines that have them. A search the file misses is tried on
+ * the LF view, where line endings never decide a match; one the view misses
+ * too (typed with a bare CR) goes through the looser tiers on the file.
  */
 const findEditMatch = (content: string, oldString: string): Option.Option<MatchResult> => {
+  const exact = literalMatch("exact", content, oldString)
+  if (Option.isSome(exact)) return exact
   const view = lineFeedView(content)
   const viewed = Option.map(
     findMatch(view.text, oldString.replaceAll("\r\n", "\n")),
