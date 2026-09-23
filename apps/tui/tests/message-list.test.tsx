@@ -2199,7 +2199,7 @@ describe("transcript block spacing", () => {
       input: { code: `const r = await tools.bash({ command: "${command}" }); r` },
       summary: absent,
       output: encodeJson({
-        display: `{ stdout: '${stdout}', stderr: '', exitCode: 0 }`,
+        display: `{ stdout: '${stdout.replaceAll("\n", "\\n")}', stderr: '', exitCode: 0 }`,
         bindings: ["r"],
         truncated: false,
       }),
@@ -2239,8 +2239,8 @@ describe("transcript block spacing", () => {
   }
   const items: SessionItem[] = [
     cellStep(1, "git status --short", ""),
-    cellStep(2, "seq 1 3", "1\\n2\\n3\\n"),
-    cellStep(3, "git log --oneline -1", "497f1c6 ledgerline\\n"),
+    cellStep(2, "seq 1 3", "1\n2\n3\n"),
+    cellStep(3, "git log --oneline -1", "497f1c6 ledgerline\n"),
     answer,
   ]
   const views: ReadonlyArray<{ disclosure: DisclosureLevel; fullDetail: boolean }> = [
@@ -2282,6 +2282,76 @@ describe("transcript block spacing", () => {
         }),
     )
   }
+
+  it.live("native history keeps one blank line between committed blocks in full disclosure", () =>
+    Effect.gen(function* () {
+      const savedText: string[] = []
+      const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("collapsed")
+      let extensionsLoaded = () => false
+      const history: SessionItem[] = [
+        userMessage("regular-message", "cells-prompt", "run three steps", "queued"),
+        ...items,
+      ]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            const renderer = useRenderer()
+            extensionsLoaded = useExtensionUI().loaded
+            const capture = (event: CliRendererExternalOutputEvent) => {
+              savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(true)))
+            }
+            renderer.on("external_output", capture)
+            onCleanup(() => renderer.off("external_output", capture))
+            return (
+              <NativeTranscript
+                items={history}
+                streaming={false}
+                footerHeight={3}
+                expanded={false}
+                disclosure={disclosure()}
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible) => (
+                  <MessageList
+                    items={visible}
+                    disclosure={disclosure()}
+                    syntaxStyle={syntaxStyle}
+                    streaming={false}
+                  />
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width: 100, height: 20 },
+        ),
+      )
+      yield* Effect.promise(() => setup.flush()).pipe(
+        Effect.repeat({ until: () => extensionsLoaded() }),
+        Effect.timeout("3 seconds"),
+      )
+      // Each level change replays the whole history; the last replay is the one on screen.
+      const levels: ReadonlyArray<DisclosureLevel> = ["preview", "full"]
+      for (const level of levels) {
+        savedText.splice(0)
+        setDisclosure(level)
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.promise(() => setup.flush())
+      }
+      const lines = (savedText.join("") + renderFrame(setup))
+        .split("\n")
+        .map((line) => line.trimEnd())
+      const body = lines.slice(0, lines.findLastIndex((line) => line.length > 0) + 1)
+      const blankRuns = body
+        .join("\n")
+        .split(/[^\n]+/)
+        .map((run) => Math.max(0, run.length - 1))
+        .filter((run) => run > 0)
+      expect(body.some((line) => line.includes("git log --oneline -1"))).toBe(true)
+      expect(blankRuns).toEqual(Array.from({ length: history.length - 1 }, () => 1))
+    }),
+  )
 })
 
 const GrepToolRenderer = Option.getOrThrow(
