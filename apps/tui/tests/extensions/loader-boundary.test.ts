@@ -42,6 +42,8 @@ import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // esli
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
 import { BunServices } from "@effect/platform-bun"
+import { BuiltinExtensions } from "@gent/extensions"
+import { collectTestContributions } from "@gent/core/test-utils"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
@@ -1494,4 +1496,34 @@ describe("session UI state", () => {
     expect(withPicker.state.overlay).toEqual({ _tag: "model" })
     expect(closed.state.overlay).toEqual({ _tag: "none" })
   })
+})
+
+// ── tool renderer reach ─────────────────────────────────────────────────────
+
+describe("tool renderer reach", () => {
+  it.live("every builtin tool renderer names a tool a shipped extension registers", () =>
+    Effect.gen(function* () {
+      // The model sees only `cell`, and a cell hands each op to the renderer
+      // registered for its tool: a renderer is reachable exactly when its name
+      // is a real tool id.
+      const loaded = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: builtinClientModules,
+          userDir: "/tmp/u-renderer-reach",
+          projectDir: "/tmp/p-renderer-reach",
+        }),
+      )
+      const toolIds = new Set<string>()
+      for (const extension of BuiltinExtensions) {
+        const contributions = yield* collectTestContributions(extension.setup, {
+          cwd: "/tmp",
+          home: "/tmp",
+        })
+        for (const tool of contributions.tools ?? []) toolIds.add(tool.id)
+      }
+      expect(loaded.failures).toEqual([])
+      expect(loaded.renderers.has("delegate.start")).toBe(true)
+      expect([...loaded.renderers.keys()].filter((name) => !toolIds.has(name))).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
 })

@@ -23,7 +23,7 @@ import {
 } from "solid-js"
 import { useRequiredContext } from "../utils"
 import { builtinClientModules } from "./builtins"
-import type { ToolRenderer } from "../tool-renderers"
+import { ToolRenderersProvider } from "../tool-renderers"
 import type { Command } from "../commands"
 import {
   type ClientExtensionFailure,
@@ -77,7 +77,6 @@ interface ExtensionUIContextValue {
    * mounted; with no session mounted, no pane opens.
    */
   readonly setPaneOwner: (owner: Option.Option<PaneOwner>) => void
-  readonly renderers: Accessor<Map<string, ToolRenderer>>
   /** Message-row renderers by `metadata.customType`. */
   readonly messageRenderers: Accessor<Map<string, MessageRenderer>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
@@ -323,7 +322,6 @@ export function ExtensionUIProvider(props: {
     <ExtensionUIContext.Provider
       value={{
         loaded,
-        renderers: () => resolved().renderers,
         messageRenderers: () => resolved().messageRenderers,
         widgets: () => resolved().widgets,
         commands: () => resolvedCommands().commands,
@@ -338,7 +336,9 @@ export function ExtensionUIProvider(props: {
         clientRuntime,
       }}
     >
-      {props.children}
+      <ToolRenderersProvider value={() => resolved().renderers}>
+        {props.children}
+      </ToolRenderersProvider>
     </ExtensionUIContext.Provider>
   )
 }

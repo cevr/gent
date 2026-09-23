@@ -35,7 +35,7 @@ import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
-import { EditToolRenderer, ReadToolRenderer } from "../src/tool-renderers"
+import { EditToolRenderer, ReadToolRenderer, useToolRenderers } from "../src/tool-renderers"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
@@ -579,9 +579,9 @@ const compactionMessage = (): ListMessage => ({
 })
 
 function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: boolean }) {
-  const extensionUI = useExtensionUI()
+  const renderers = useToolRenderers()
   return (
-    <Show when={extensionUI.renderers().size > 0} fallback={<text>loading renderers</text>}>
+    <Show when={renderers().size > 0} fallback={<text>loading renderers</text>}>
       <MessageList
         items={props.items}
         disclosure="collapsed"
@@ -1258,9 +1258,9 @@ describe("FX transcript treatment", () => {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => {
-            const extensionUI = useExtensionUI()
+            const renderers = useToolRenderers()
             return (
-              <Show when={extensionUI.renderers().size > 0}>
+              <Show when={renderers().size > 0}>
                 <MessageList
                   items={items}
                   disclosure={disclosure()}

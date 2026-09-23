@@ -42,7 +42,7 @@ import {
 } from "solid-js"
 import type { ScrollBoxRenderable, ScrollbackSurface, SyntaxStyle } from "@opentui/core"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
-import { GenericToolRenderer, type ToolCall } from "./tool-renderers"
+import { GenericToolRenderer, RegisteredToolCall, type ToolCall } from "./tool-renderers"
 import { useExtensionUI } from "./extensions/host"
 import type { MessageRenderer, MessageRowProps } from "./extensions/client-facets"
 import {
@@ -641,14 +641,10 @@ function ToolCallGroup(props: {
 
 function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
   const { theme } = useTheme()
-  const ext = useExtensionUI()
-  const toolName = () => props.toolCall.toolName.toLowerCase()
-  const hasRenderer = () => ext.renderers().has(toolName())
-  const Renderer = () => ext.renderers().get(toolName())
-
   return (
-    <Show
-      when={hasRenderer()}
+    <RegisteredToolCall
+      toolCall={props.toolCall}
+      expanded={props.expanded}
       fallback={
         <Show
           when={props.expanded}
@@ -668,18 +664,7 @@ function SingleToolCall(props: { toolCall: ToolCall; expanded: boolean }) {
           </ToolCallIdentityProvider>
         </Show>
       }
-    >
-      {(() => {
-        const R = Option.fromNullishOr(Renderer())
-        if (Option.isNone(R)) return <></>
-        const RendererComponent = R.value
-        return (
-          <ToolCallIdentityProvider id={props.toolCall.id}>
-            <RendererComponent toolCall={props.toolCall} expanded={props.expanded} />
-          </ToolCallIdentityProvider>
-        )
-      })()}
-    </Show>
+    />
   )
 }
 

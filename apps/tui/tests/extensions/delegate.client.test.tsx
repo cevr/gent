@@ -567,4 +567,119 @@ describe("delegate row in the transcript", () => {
       expect(renderFrame(setup)).toContain("read")
     }),
   )
+
+  it.live("a cell's ops draw through the renderers registered for their tools", () =>
+    Effect.gen(function* () {
+      const childTool = EventEnvelope.make({
+        id: EventId.make(1),
+        createdAt: 0,
+        event: AgentEvent.cases.ToolCallStarted.make({
+          sessionId: childRow.sessionId,
+          branchId: childRow.branchId,
+          toolCallId: ToolCallId.make("child-read"),
+          toolName: "read",
+          input: { path: "CHILD-NOTE.md" },
+        }),
+      })
+      const client = createMockClient({
+        session: {
+          events: (input: { readonly sessionId: SessionId }) => {
+            if (input.sessionId === childRow.sessionId) return Stream.make(childTool)
+            return Stream.empty
+          },
+        },
+        extension: {
+          request: (input: { readonly capabilityId: string }) => {
+            if (input.capabilityId !== delegateChildrenRef.capabilityId)
+              return Effect.succeed(Option.getOrUndefined(Option.none()))
+            return Effect.succeed([childRow])
+          },
+        },
+      })
+      const absent = Option.getOrUndefined(Option.none<string>())
+      // The model sees only `cell`; delegate.start and read run inside it.
+      const cell: ToolCall = {
+        id: "cell-call",
+        toolName: "cell",
+        status: "completed",
+        input: { code: "await tools.delegate.start(...)" },
+        summary: absent,
+        output: absent,
+        operations: [
+          {
+            id: toolCallId,
+            toolName: "delegate.start",
+            status: "completed",
+            input: { todo: "review the loader" },
+            summary: "CHILD-HANDLE-SUMMARY",
+            output: absent,
+          },
+          {
+            id: "cell-read-op",
+            toolName: "read",
+            status: "completed",
+            input: { path: "/tmp/op-read.md" },
+            summary: "OP-READ-SUMMARY",
+            output: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+              content: Array.from({ length: 40 }, (_, i) => `OP-READ-LINE-${i + 1}`).join("\n"),
+              lineCount: 40,
+            }),
+          },
+          {
+            id: "cell-unknown-op",
+            toolName: "no_renderer_tool",
+            status: "completed",
+            input: {},
+            summary: "UNKNOWN-OP-SUMMARY",
+            output: absent,
+          },
+        ],
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[
+                {
+                  _tag: "regular-message",
+                  id: "assistant-cell",
+                  role: "assistant",
+                  content: "",
+                  reasoning: "",
+                  images: [],
+                  createdAt: 0,
+                  toolCalls: [cell],
+                  segments: [{ _tag: "tool-call", toolCall: cell }],
+                },
+              ]}
+              disclosure="full"
+              syntaxStyle={() => SyntaxStyle.create()}
+              streaming={false}
+            />
+          ),
+          { client, initialSession: sessionNamed("parent"), width: 100, height: 80 },
+        ),
+      )
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          (text) =>
+            text.includes("CHILD-NOTE.md") &&
+            text.includes("OP-READ-LINE-40") &&
+            text.includes("UNKNOWN-OP-SUMMARY"),
+          "cell ops through their renderers",
+        ),
+      )
+      // The delegate renderer draws the child tree and the read renderer the file
+      // body; neither op falls back to its one-line receipt. The op with no
+      // renderer keeps its line.
+      expect(frame).not.toContain("✓ delegate.start")
+      expect(frame).not.toContain("✓ read OP-READ-SUMMARY")
+      expect(frame).toContain("✓ no_renderer_tool UNKNOWN-OP-SUMMARY")
+      // An op is a collapsed sub-row: it draws its own header and an excerpt,
+      // never its full body, even inside the full cell body.
+      expect(frame).toContain("#cell-read-op")
+      expect(frame).not.toContain("OP-READ-LINE-20")
+    }),
+  )
 })

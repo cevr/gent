@@ -1,9 +1,9 @@
 import type { JSX } from "@opentui/solid"
 import { createPatch } from "diff"
 import { Match, Option, Schema } from "effect"
-import { createMemo, For, type JSX as SolidJSX, Show } from "solid-js"
+import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
-import { GutterText, ToolFrame } from "./ui"
+import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
 import { formatHeadTail, headTail } from "@gent/core/protocol"
 import {
   decodeToolOutput,
@@ -46,6 +46,38 @@ export interface ToolRendererProps {
 }
 
 export type ToolRenderer = (props: ToolRendererProps) => JSX.Element
+
+// ── registered renderer lookup ──────────────────────────────────────────────
+
+/** The registered tool renderers by tool name. The extension host provides them. */
+const ToolRenderersContext = createContext<() => ReadonlyMap<string, ToolRenderer>>(() => new Map())
+export const ToolRenderersProvider = ToolRenderersContext.Provider
+export const useToolRenderers = () => useContext(ToolRenderersContext)
+
+/**
+ * The one renderer lookup, for a transcript call and for an op a cell admitted:
+ * the renderer registered for the call's tool name, else `fallback`.
+ */
+export function RegisteredToolCall(props: {
+  toolCall: ToolCall
+  expanded: boolean
+  fallback: JSX.Element
+}) {
+  const renderers = useToolRenderers()
+  const renderer = () => renderers().get(props.toolCall.toolName.toLowerCase())
+  return (
+    <Show when={renderer()} fallback={props.fallback}>
+      {(Renderer) => {
+        const Component = Renderer()
+        return (
+          <ToolCallIdentityProvider id={props.toolCall.id}>
+            <Component toolCall={props.toolCall} expanded={props.expanded} />
+          </ToolCallIdentityProvider>
+        )
+      }}
+    </Show>
+  )
+}
 
 // ── diff helpers ────────────────────────────────────────────────────────────
 
@@ -346,17 +378,13 @@ function CellToolRenderer(props: ToolRendererProps) {
     return first
   })
 
-  // Live operations come from nested events; saved results carry receipts.
-  const operations = createMemo((): ReadonlyArray<OperationLine> => {
-    const live = Option.fromNullishOr(props.toolCall.operations)
-    if (Option.isSome(live) && live.value.length > 0) {
-      return live.value.map((call) => ({
-        tool: call.toolName,
-        outcome: liveOutcome(call.status),
-        summary: call.summary ?? "",
-      }))
-    }
-    return Option.match(
+  // Live operations are the calls the cell admitted, with their input and output;
+  // a saved result carries only receipts.
+  const liveOperations = createMemo((): ReadonlyArray<ToolCall> =>
+    Option.getOrElse(Option.fromNullishOr(props.toolCall.operations), () => []),
+  )
+  const receipts = createMemo((): ReadonlyArray<OperationLine> =>
+    Option.match(
       decodeToolOutputOption(
         Schema.Struct({ operations: Schema.optional(Schema.Array(OperationReceipt)) }),
         props.toolCall.output,
@@ -365,8 +393,8 @@ function CellToolRenderer(props: ToolRendererProps) {
         onNone: () => [],
         onSome: (value) => value.operations ?? [],
       },
-    )
-  })
+    ),
+  )
 
   const failure = createMemo(() =>
     data().pipe(
@@ -403,20 +431,42 @@ function CellToolRenderer(props: ToolRendererProps) {
     return theme.error
   }
 
+  const OperationRow = (line: OperationLine) => (
+    <text>
+      <span style={{ fg: outcomeColor(line.outcome) }}>{outcomeGlyph(line.outcome)} </span>
+      <span style={{ fg: theme.text, bold: true }}>{line.tool}</span>
+      <Show when={line.summary.length > 0}>
+        <span style={{ fg: theme.textMuted }}> {line.summary}</span>
+      </Show>
+    </text>
+  )
+
+  // Each live op draws through the renderer registered for its tool, as a
+  // collapsed sub-row: its header and its summary, never its full body. An op
+  // with no renderer keeps its one-line receipt.
   const Operations = () => (
-    <Show when={operations().length > 0}>
+    <Show
+      when={liveOperations().length > 0}
+      fallback={
+        <Show when={receipts().length > 0}>
+          <box flexDirection="column">
+            <For each={receipts()}>{(line) => OperationRow(line)}</For>
+          </box>
+        </Show>
+      }
+    >
       <box flexDirection="column">
-        <For each={operations()}>
-          {(operation) => (
-            <text>
-              <span style={{ fg: outcomeColor(operation.outcome) }}>
-                {outcomeGlyph(operation.outcome)}{" "}
-              </span>
-              <span style={{ fg: theme.text, bold: true }}>{operation.tool}</span>
-              <Show when={operation.summary.length > 0}>
-                <span style={{ fg: theme.textMuted }}> {operation.summary}</span>
-              </Show>
-            </text>
+        <For each={liveOperations()}>
+          {(call) => (
+            <RegisteredToolCall
+              toolCall={call}
+              expanded={false}
+              fallback={OperationRow({
+                tool: call.toolName,
+                outcome: liveOutcome(call.status),
+                summary: call.summary ?? "",
+              })}
+            />
           )}
         </For>
       </box>
