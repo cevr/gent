@@ -1347,7 +1347,10 @@ describe("cell worker process", () => {
         const binaryPath = yield* platform.execPath
         const directory = yield* fs.makeTempDirectoryScoped()
         const workerPath = path.join(directory, "stalled.js")
-        yield* fs.writeFileString(workerPath, "console.error(process.pid); while (true) {}")
+        yield* fs.writeFileString(
+          workerPath,
+          "process.stderr.write(String(process.pid)); while (true) {}",
+        )
         const error = yield* openCellProcess({
           worker: CellWorker.cases.Script.make({ runtimePath: binaryPath, scriptPath: workerPath }),
           cwd: packageDirectory,
