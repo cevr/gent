@@ -14,6 +14,7 @@ import {
   assistantMessageIdForTurn,
   BranchId,
   dateFromMillis,
+  DEFAULT_AGENT_NAME,
   EventEnvelope,
   Message,
   MessageId,
@@ -624,6 +625,46 @@ describe("ClientProvider session lifecycle", () => {
       })
     }),
   )
+  it.live("a new session after resuming another agent's session starts as the default agent", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      const client = createMockClient({
+        session: {
+          create: () =>
+            Effect.succeed({
+              sessionId: SessionId.make("session-new"),
+              branchId: BranchId.make("branch-new"),
+              name: "New",
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          client,
+          initialSession: {
+            id: SessionId.make("session-resumed"),
+            activeBranchId: BranchId.make("branch-resumed"),
+            name: "Resumed",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+          initialAgent: AgentName.make("deepwork"),
+        }),
+      )
+      if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
+      const active = ctx.value
+      expect(active.agent()).toBe(AgentName.make("deepwork"))
+      active.createSession()
+      yield* Effect.promise(() =>
+        waitForRenderedFrame(
+          setup,
+          () => active.session()?.sessionId === SessionId.make("session-new"),
+          "new session active",
+        ),
+      )
+      expect(active.agent()).toBe(DEFAULT_AGENT_NAME)
+    }),
+  )
   it.live("runtime idle clears finishing activity only for the current branch", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
@@ -778,44 +819,44 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.isError()).toBe(true)
     }),
   )
-  it.live("switchSession activates the target session immediately and seeds the target agent", () =>
-    Effect.gen(function* () {
-      let ctx = Option.none<ClientContextValue>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          initialSession: {
-            id: SessionId.make("session-a"),
-            activeBranchId: BranchId.make("branch-a"),
-            name: "A",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(0),
+  it.live(
+    "switchSession activates the target session at once; its agent waits for the snapshot",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+            {
+              initialSession: {
+                id: SessionId.make("session-a"),
+                activeBranchId: BranchId.make("branch-a"),
+                name: "A",
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(0),
+              },
+            },
+          ),
+        )
+        const client = yield* requireClientSessionState(ctx)
+        client.switchSession(SessionId.make("session-b"), BranchId.make("branch-b"), "B")
+        const state = yield* waitForState(
+          setup,
+          () => client.sessionState(),
+          (current) => current.status === "active",
+        )
+        expect(state).toEqual({
+          status: "active",
+          session: {
+            sessionId: SessionId.make("session-b"),
+            branchId: BranchId.make("branch-b"),
+            name: "B",
+            modelId: absent,
+            reasoningLevel: absent,
           },
-        }),
-      )
-      const client = yield* requireClientSessionState(ctx)
-      client.switchSession(
-        SessionId.make("session-b"),
-        BranchId.make("branch-b"),
-        "B",
-        AgentName.make("deepwork"),
-      )
-      const state = yield* waitForState(
-        setup,
-        () => client.sessionState(),
-        (current) => current.status === "active",
-      )
-      expect(state).toEqual({
-        status: "active",
-        session: {
-          sessionId: SessionId.make("session-b"),
-          branchId: BranchId.make("branch-b"),
-          name: "B",
-          modelId: absent,
-          reasoningLevel: absent,
-        },
-      })
-      expect(client.agent()).toBe(AgentName.make("deepwork"))
-    }),
+        })
+        expect(client.agent()).toBeUndefined()
+      }),
   )
   it.live("model() and agent() read the snapshot's server-resolved model and session agent", () =>
     Effect.gen(function* () {
@@ -936,7 +977,6 @@ describe("ClientProvider session lifecycle", () => {
         SessionId.make("session-target"),
         BranchId.make("branch-target"),
         "Target",
-        AgentName.make("deepwork"),
       )
       client.applySessionSnapshot({
         sessionId: SessionId.make("session-source"),
@@ -973,7 +1013,7 @@ describe("ClientProvider session lifecycle", () => {
           reasoningLevel: absent,
         },
       })
-      expect(client.agent()).toBe(AgentName.make("deepwork"))
+      expect(client.agent()).toBeUndefined()
       expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
       expect(client.cost()).toBe(0)
       expect(client.sessionMetrics().latestInputTokens).toBe(0)
@@ -998,7 +1038,6 @@ describe("ClientProvider session lifecycle", () => {
         SessionId.make("session-branch-race"),
         BranchId.make("branch-new"),
         "New",
-        AgentName.make("deepwork"),
       )
       client.applySessionSnapshot({
         sessionId: SessionId.make("session-branch-race"),
@@ -1036,7 +1075,7 @@ describe("ClientProvider session lifecycle", () => {
           reasoningLevel: absent,
         },
       })
-      expect(client.agent()).toBe(AgentName.make("deepwork"))
+      expect(client.agent()).toBeUndefined()
       expect(client.cost()).toBe(0)
       expect(client.sessionMetrics().latestInputTokens).toBe(0)
     }),
@@ -1081,12 +1120,7 @@ describe("ClientProvider session lifecycle", () => {
         (state) =>
           state.status === "active" && client.model() === "anthropic/claude-haiku-4-5-20251001",
       )
-      client.switchSession(
-        SessionId.make("session-next"),
-        BranchId.make("branch-next"),
-        "N",
-        AgentName.make("deepwork"),
-      )
+      client.switchSession(SessionId.make("session-next"), BranchId.make("branch-next"), "N")
       expect(client.model()).not.toBe("anthropic/claude-haiku-4-5-20251001")
     }),
   )

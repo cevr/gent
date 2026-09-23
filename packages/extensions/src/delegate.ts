@@ -117,8 +117,6 @@ export const DelegateEntry = Schema.Struct({
    * start is sent, so a start that crashed in between is re-sent.
    */
   submitted: Schema.Boolean,
-  /** The run spec the start was admitted with; a re-sent start uses it again. */
-  runSpec: Schema.optionalKey(RunSpecSchema),
   completed: Schema.optionalKey(ChildOutcome),
   /** The parent has the completion: the message is on the parent branch, or the parent stopped the child. */
   delivered: Schema.Boolean,
@@ -633,7 +631,7 @@ interface AdmitParams {
   /** The tool call that owns the child. The same id admits the same child once. */
   readonly requestId?: RequestId
   readonly toolCallId?: ToolCallId
-  /** `overrides`, `parentToolCallId`. */
+  /** The child's run overrides; the child's admission keeps them for every turn. */
   readonly runSpec?: RunSpec
 }
 
@@ -676,10 +674,6 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
             message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished children`,
           })
         }
-        const runSpec = makeRunSpec({
-          ...params.runSpec,
-          ...Record.filter({ parentToolCallId: params.toolCallId }, Predicate.isNotUndefined),
-        })
         // The child is its agent for every turn it runs, not only this one.
         const child = yield* ctx.Session.create({
           name: childName(params.prompt),
@@ -688,7 +682,7 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           admission: {
             agent: DELEGATE_AGENT_NAME,
             interactive: false,
-            runSpec: childRunSpec(runSpec),
+            runSpec: childRunSpec(makeRunSpec(params.runSpec)),
           },
           ...Record.filter(
             { requestId: params.requestId, historyBranchId: params.historyBranchId },
@@ -704,7 +698,6 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           agentName: DELEGATE_AGENT_NAME,
           prompt: params.prompt,
           ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
-          runSpec,
           private: false,
           submitted: false,
           delivered: false,

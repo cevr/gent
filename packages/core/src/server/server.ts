@@ -531,6 +531,18 @@ const makeSessionMutationsService: Effect.Effect<
   })
 
   /**
+   * An admission that names nothing is no admission. Stored as `{}`, it would
+   * also stop a handoff from inheriting its parent's.
+   */
+  const requestedAdmission = (
+    admission: CreateSessionInput["admission"],
+  ): CreateSessionInput["admission"] =>
+    Option.fromUndefinedOr(admission).pipe(
+      Option.filter((value) => !Object.values(value).every(Predicate.isUndefined)),
+      Option.getOrUndefined,
+    )
+
+  /**
    * Check the parent a create names and admit the child's depth. Returns the
    * thread the new session joins: the parent's for a handoff
    * (`continueThread`), none otherwise, so storage starts a new one. A handoff
@@ -540,6 +552,7 @@ const makeSessionMutationsService: Effect.Effect<
   const admitParent = Effect.fn("SessionMutations.admitParent")(function* (
     input: CreateSessionInput,
   ) {
+    const admission = requestedAdmission(input.admission)
     if (Predicate.isUndefined(input.parentSessionId)) {
       if (!Predicate.isUndefined(input.parentBranchId)) {
         return yield* new NotFoundError({ message: "parentBranchId requires parentSessionId" })
@@ -547,7 +560,7 @@ const makeSessionMutationsService: Effect.Effect<
       if (input.continueThread === true) {
         return yield* new NotFoundError({ message: "continueThread requires parentSessionId" })
       }
-      return { threadId: Option.none<SessionId>(), admission: input.admission }
+      return { threadId: Option.none<SessionId>(), admission }
     }
     const parentSessionId = input.parentSessionId
     const parent = yield* sessionStorage.getSession(parentSessionId)
@@ -572,11 +585,11 @@ const makeSessionMutationsService: Effect.Effect<
       }
     }
     if (input.continueThread !== true) {
-      return { threadId: Option.none<SessionId>(), admission: input.admission }
+      return { threadId: Option.none<SessionId>(), admission }
     }
     return {
       threadId: Option.some(parent.threadId ?? parent.id),
-      admission: input.admission ?? parent.admission,
+      admission: admission ?? parent.admission,
     }
   })
 

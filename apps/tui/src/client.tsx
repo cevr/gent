@@ -504,7 +504,7 @@ interface ClientSessionValue {
   createSession: () => void
   /** Open the session a confirmed handoff produces: linked to the current one, seeded with the summary. */
   openHandoffSession: (summary: string) => void
-  switchSession: (sessionId: SessionId, branchId: BranchId, name: string, agent?: AgentName) => void
+  switchSession: (sessionId: SessionId, branchId: BranchId, name: string) => void
   clearSession: () => void
   /** Replace the session's settings from its current ones; the server reply is folded back. */
   updateSessionSettings: (
@@ -640,10 +640,6 @@ interface ClientProviderProps extends ParentProps {
 }
 
 export function ClientProvider(props: ClientProviderProps) {
-  const defaultAgent = Option.getOrElse(
-    Option.fromNullishOr(props.initialAgent),
-    () => DEFAULT_AGENT_NAME,
-  )
   const client = props.client
   const runtime = props.runtime
   const log = props.log
@@ -661,8 +657,15 @@ export function ClientProvider(props: ClientProviderProps) {
     onNone: SessionState.none,
     onSome: SessionState.active,
   })
-  let initialAgent = Option.some(defaultAgent)
-  if (Option.isSome(initialSession)) initialAgent = Option.fromNullishOr(props.initialAgent)
+  // The agent startup resolved for the startup session holds until its
+  // snapshot lands. It seeds this session only: a later create or clear
+  // starts as the default agent.
+  const initialAgent = Option.orElse(Option.fromNullishOr(props.initialAgent), () =>
+    Option.match(initialSession, {
+      onNone: () => Option.some(DEFAULT_AGENT_NAME),
+      onSome: () => Option.none(),
+    }),
+  )
   const [sessionState, setSessionState] = createSignal<SessionState>(initialSessionState)
   const dispatchSession = (event: Parameters<typeof transitionSessionState>[1]) => {
     setSessionState((current) => transitionSessionState(current, event))
@@ -1071,7 +1074,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.sync(() => {
             // Create always transitions out of a prior session (or from
             // "none"), so extension health is cleared unconditionally.
-            resetForSession({ agent: Option.some(defaultAgent), clearExtensionHealth: true })
+            resetForSession({ agent: Option.some(DEFAULT_AGENT_NAME), clearExtensionHealth: true })
             dispatchSession(
               SessionStateEvent.cases.CreateSucceeded.make({
                 session: {
@@ -1120,10 +1123,11 @@ export function ClientProvider(props: ClientProviderProps) {
       })
     },
 
-    switchSession: (sessionId, branchId, name, agent) => {
+    switchSession: (sessionId, branchId, name) => {
       const currentSessionId = Option.map(sessionOption(), (value) => value.sessionId)
       resetForSession({
-        agent: Option.fromNullishOr(agent),
+        // The session's snapshot names its agent.
+        agent: Option.none(),
         // A branch switch within one session keeps that session's health.
         clearExtensionHealth:
           Option.isNone(currentSessionId) || currentSessionId.value !== sessionId,
@@ -1143,7 +1147,7 @@ export function ClientProvider(props: ClientProviderProps) {
 
     clearSession: () => {
       dispatchSession(SessionStateEvent.cases.Clear.make({}))
-      resetForSession({ agent: Option.some(defaultAgent), clearExtensionHealth: true })
+      resetForSession({ agent: Option.some(DEFAULT_AGENT_NAME), clearExtensionHealth: true })
     },
 
     listMessages: Effect.gen(function* () {

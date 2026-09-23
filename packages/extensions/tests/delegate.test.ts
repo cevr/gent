@@ -719,7 +719,6 @@ describe("a start nobody waits for", () => {
               agentName: DELEGATE_AGENT_NAME,
               prompt: childTask,
               toolCallId: ToolCallId.make("written-ahead"),
-              runSpec,
               private: false,
               submitted: false,
               delivered: false,
@@ -840,6 +839,15 @@ describe("a start nobody waits for", () => {
       ),
     12_000,
   )
+
+  test("a registry row that still carries its run spec decodes", () => {
+    // Rows kept the start's run spec, with its parent tool call, until nothing read it.
+    const row = Schema.decodeSync(registryCodec)(
+      `[{"requestId":"start-1","sessionId":"child","branchId":"child-branch","agentName":"${DELEGATE_AGENT_NAME}","prompt":"task","toolCallId":"start-1","runSpec":{"overrides":{"maxModelAttempts":32},"parentToolCallId":"start-1"},"private":false,"submitted":true,"delivered":true}]`,
+    )
+    expect(row[0]?.requestId).toBe(RequestId.make("start-1"))
+    expect(row[0]?.submitted).toBe(true)
+  })
 
   test("a registry row an older binary wrote, private and claimed, still decodes", () => {
     // The bytes an older binary wrote: a private extraction child its waiter still claimed.

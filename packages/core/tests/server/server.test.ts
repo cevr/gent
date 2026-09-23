@@ -2979,6 +2979,18 @@ describe("message.send", () => {
     ),
   )
 
+  it.live("a create whose admission names nothing stores no admission", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const created = yield* client.session.create({ cwd: process.cwd(), admission: {} })
+        const stored = yield* client.session.get({ sessionId: created.sessionId })
+        expect(stored?.admission).toBeUndefined()
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   it.live("config agent overrides set the model and effort, and a runSpec still wins", () =>
     Effect.scoped(
       Effect.gen(function* () {

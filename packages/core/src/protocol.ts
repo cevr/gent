@@ -7,8 +7,6 @@ export {
   DriverRef,
   ReasoningEffort,
   resolveAgentModel,
-  type RunSpec,
-  RunSpecSchema,
 } from "./domain/agent.js"
 export { AuthAuthorization, AuthMethod, AuthProviderInfo } from "./runtime/provider.js"
 export {

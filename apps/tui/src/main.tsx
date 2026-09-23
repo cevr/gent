@@ -26,13 +26,7 @@ import {
   shutdownLog,
 } from "./client"
 import { LinkOpener, OsService } from "./os"
-import {
-  RunSpecSchema,
-  AgentName as AgentNameSchema,
-  type AgentName,
-  type ProviderId,
-  type RunSpec,
-} from "@gent/core/protocol"
+import { AgentName as AgentNameSchema, type AgentName, type ProviderId } from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
@@ -186,10 +180,6 @@ const gentFlags = {
     Flag.withDescription("Agent to use for headless mode (default: main)"),
     Flag.optional,
   ),
-  runSpec: Flag.string("run-spec").pipe(
-    Flag.withDescription("JSON-encoded RunSpec (internal, used by subprocess runner)"),
-    Flag.optional,
-  ),
 }
 
 /**
@@ -210,7 +200,6 @@ const runGent = ({
   prompt,
   promptArg,
   agent,
-  runSpec: runSpecJson,
 }: {
   readonly connect: Option.Option<string>
   readonly session: Option.Option<string>
@@ -222,7 +211,6 @@ const runGent = ({
   readonly prompt: Option.Option<string>
   readonly promptArg: Option.Option<string>
   readonly agent: Option.Option<string>
-  readonly runSpec: Option.Option<string>
 }) =>
   Effect.gen(function* () {
     const cwd = process.cwd()
@@ -275,21 +263,10 @@ const runGent = ({
     })
 
     if (headless) {
-      const decodedRunSpec = yield* Option.match(runSpecJson, {
-        onNone: () => Effect.succeed(Option.none<RunSpec>()),
-        onSome: (runSpec) =>
-          Schema.decodeEffect(Schema.fromJsonString(RunSpecSchema))(runSpec).pipe(
-            Effect.asSome,
-            Effect.mapError(
-              (e) => new CliStartupError({ message: `Invalid --run-spec: ${String(e)}`, cause: e }),
-            ),
-          ),
-      })
-      // The agent is a session property: the flags shape a new session only.
-      const admitsAgent = Option.isSome(requestedAgent) || Option.isSome(decodedRunSpec)
-      if (admitsAgent && Option.isSome(session)) {
+      // The agent is a session property: the flag shapes a new session only.
+      if (Option.isSome(requestedAgent) && Option.isSome(session)) {
         return yield* new CliStartupError({
-          message: "--agent and --run-spec apply to a new session; drop --session to use them",
+          message: "--agent applies to a new session; drop --session to use it",
         })
       }
       yield* bundle.runtime.lifecycle.waitForReady
@@ -301,20 +278,18 @@ const runGent = ({
         headless,
         prompt,
         promptArg,
-        admission: Record.filter(
+        // No flag, no admission: the session stores none rather than `{}`.
+        ...Record.filter(
           {
-            agent: Option.getOrUndefined(requestedAgent),
-            runSpec: Option.getOrUndefined(decodedRunSpec),
+            admission: Option.getOrUndefined(
+              Option.map(requestedAgent, (name) => ({ agent: name })),
+            ),
           },
           Predicate.isNotUndefined,
         ),
       })
 
-      const startupAuth = yield* resolveStartupAuthState({
-        client: bundle.client,
-        state,
-        requestedAgent: Option.getOrUndefined(requestedAgent),
-      })
+      const startupAuth = yield* resolveStartupAuthState({ client: bundle.client, state })
       const missingProviders = startupAuth.missingProviders
 
       if (missingProviders.length > 0 && !debug && !Option.isSome(connect)) {
@@ -457,7 +432,6 @@ const resume = Command.make(
       prompt,
       promptArg: Option.none(),
       agent: Option.none(),
-      runSpec: Option.none(),
     }),
 )
 
