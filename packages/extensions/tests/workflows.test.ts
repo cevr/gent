@@ -3,7 +3,7 @@
  * prompt that runs as a model turn through the per-request scope.
  */
 import { describe, expect, it } from "effect-bun-test"
-import { Effect, Fiber, FileSystem, Path, Stream } from "effect"
+import { Effect, Fiber, FileSystem, Path, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
   LanguageModelLayers,
@@ -11,9 +11,12 @@ import {
   textStep,
   toolCallStep,
   createRpcHarness,
+  waitFor,
 } from "@gent/core/test-utils"
 import { WORKFLOWS_EXTENSION_ID } from "../src/workflows.js"
 import { e2ePreset } from "./helpers/test-preset"
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 describe("WorkflowsExtension via RPC", () => {
   it.scopedLive(
@@ -213,6 +216,84 @@ describe("WorkflowsExtension via RPC", () => {
         expect(savedPlan).toContain("Do not depend on kernel bindings")
         expect(savedPlan).not.toContain("atomic: true")
       }).pipe(Effect.timeout("8 seconds")),
+    10_000,
+  )
+
+  it.live(
+    "a slash command typed in a spawned child runs as its user: /handoff and /plan keep their interactive tools",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("child warmed"),
+            toolCallStep("handoff", { context: "carry on from the child" }),
+            textStep("handed off"),
+            toolCallStep("prompt", { mode: "confirm", content: "approve the plan?" }),
+            textStep("plan confirmed"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          const toolResult = (toolName: string, reply: string) =>
+            Effect.gen(function* () {
+              const snapshot = yield* waitFor(
+                client.session.getSnapshot(child),
+                (current) =>
+                  current.runtime._tag === "Idle" &&
+                  current.messages.some((message) =>
+                    message.parts.some((part) => part.type === "text" && part.text === reply),
+                  ),
+                5_000,
+                `reply ${reply}`,
+              )
+              return snapshot.messages.flatMap((message) =>
+                message.parts.flatMap((part) => {
+                  if (part.type === "tool-result" && part.name === toolName)
+                    return [encodeJson(part.result)]
+                  return []
+                }),
+              )
+            })
+          // A child the user opens has run before: its loop is warm.
+          yield* client.message.send({ ...child, content: "warm the child" })
+          yield* toolResult("none", "child warmed")
+          const commands: ReadonlyArray<{
+            readonly capabilityId: string
+            readonly toolName: string
+            readonly reply: string
+            readonly expected: string
+          }> = [
+            {
+              capabilityId: "handoff-command",
+              toolName: "handoff",
+              reply: "handed off",
+              expected: '"handoff":true',
+            },
+            {
+              capabilityId: "plan-command",
+              toolName: "prompt",
+              reply: "plan confirmed",
+              expected: '"decision":"yes"',
+            },
+          ]
+          for (const { capabilityId, toolName, reply, expected } of commands) {
+            yield* client.extension.request({
+              ...child,
+              extensionId: WORKFLOWS_EXTENSION_ID,
+              capabilityId,
+              input: "",
+            })
+            const [result] = yield* toolResult(toolName, reply)
+            expect(result).toContain(expected)
+          }
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
     10_000,
   )
 })
