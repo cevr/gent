@@ -141,7 +141,6 @@ const configUpdates = {
 /**
  * Merge user + project configs. Per-field semantics:
  *   - disabledExtensions: concatenated (user first — historical order).
- *   - trustedProjects: user config only; project config cannot grant trust.
  *   - driverOverrides, agents: object spread; project entries shadow user
  *     entries key-by-key. Idempotent set/clear is the load-bearing property —
  *     `Record<agent, DriverRef>` (vs `Array`) means `driver.set` / `clear`
@@ -155,7 +154,6 @@ const mergeConfigs = (user: UserConfig, project: UserConfig): UserConfig =>
     ]),
     driverOverrides: nonEmptyRecord({ ...user.driverOverrides, ...project.driverOverrides }),
     agents: nonEmptyRecord({ ...user.agents, ...project.agents }),
-    trustedProjects: user.trustedProjects,
   })
 
 /** A config file as JSON, with every key, known to `UserConfig` or not. */
