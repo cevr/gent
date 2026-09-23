@@ -900,7 +900,7 @@ const MISTRAL_COMPAT_URL = "https://api.mistral.ai/v1"
 type OpenAiCompatConfig = Required<Parameters<typeof OpenAiLanguageModel.layer>[0]>["config"]
 
 export const readOptionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
-  Config.option(Config.string(name)).pipe(Effect.orElseSucceed(() => Option.none()))
+  Config.option(Config.nonEmptyString(name)).pipe(Effect.orElseSucceed(() => Option.none()))
 
 /** Sampling limits every OpenAI-compatible driver sends; reasoning effort is the driver's own mapping. */
 export const buildOpenAiCompatConfig = (

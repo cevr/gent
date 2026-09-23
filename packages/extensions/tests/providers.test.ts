@@ -1,5 +1,15 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema } from "effect"
+import {
+  ConfigProvider,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Path,
+  Ref,
+  Schema,
+} from "effect"
 import {
   Model,
   type ModelDriverContribution,
@@ -95,6 +105,38 @@ describe("OpenAI-compatible provider drivers", () => {
       expect(request.url).toBe("https://api.mistral.ai/v1/chat/completions")
       expect(request.headers["authorization"]).toBe("Bearer mistral-key")
       expect(request.body).not.toContain("prompt_cache_key")
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  // `export MISTRAL_API_KEY=` clears a key in many shells. The provider list
+  // reads it as unset, so the driver must too: no request with an empty key.
+  it.live("an empty env key is no credential", () =>
+    Effect.gen(function* () {
+      const contributions = yield* collectTestContributions(MistralExtension.setup).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({ env: { MISTRAL_API_KEY: "" } }),
+        ),
+      )
+      const driver = onlyDriver(contributions.modelDrivers ?? [])
+      const resolved = yield* driver.resolveModel("mistral-large-latest").pipe(Effect.flip)
+      expect(resolved.message).toContain("MISTRAL_API_KEY")
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.live("a set env key is the credential when nothing is stored", () =>
+    Effect.gen(function* () {
+      const contributions = yield* collectTestContributions(MistralExtension.setup).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({ env: { MISTRAL_API_KEY: "mistral-env-key" } }),
+        ),
+      )
+      const driver = onlyDriver(contributions.modelDrivers ?? [])
+      const model = yield* driver.resolveModel("mistral-large-latest")
+      const fetchState = makeFakeFetchState()
+      yield* runOne(model, fetchState)
+      expect(fetchState.captured.at(-1)!.headers["authorization"]).toBe("Bearer mistral-env-key")
     }).pipe(Effect.provide(platformLayer)),
   )
 })
