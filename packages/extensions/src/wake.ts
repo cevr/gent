@@ -981,6 +981,7 @@ export const WakeRpc = defineRequests(WAKE_EXTENSION_ID, {
     id: "wake.pending",
     description:
       "The alarms and monitors still pending on the current branch, and the notices not yet read",
+    answersDuringTurn: true,
     input: Schema.Struct({}),
     output: WakePending,
     execute: () => listPending(),

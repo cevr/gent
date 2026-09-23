@@ -4849,7 +4849,7 @@ describe("agent-loop actor commands", () => {
       )
       const readProbe = request({
         id: "read-probe",
-        readonly: true,
+        answersDuringTurn: true,
         input: Schema.String,
         output: Schema.String,
         execute: (value: string) => Effect.succeed(`read ${value}`),

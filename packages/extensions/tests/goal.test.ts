@@ -174,6 +174,47 @@ describe("goals", () => {
       ),
     15_000,
   )
+
+  it.live(
+    "the goal reads while a turn runs",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            { ...textStep("working"), gated: true },
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "work" })
+          yield* controls.waitForCall(0)
+          const snapshot = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: GOAL_EXTENSION_ID,
+              capabilityId: "goal.get",
+              input: {},
+            })
+            .pipe(
+              Effect.timeoutOrElse({
+                duration: "2 seconds",
+                orElse: () => Effect.die(new Error("goal.get waited for the turn")),
+              }),
+            )
+          expect(yield* Schema.decodeUnknownEffect(GoalSnapshot)(snapshot)).toEqual({})
+          yield* controls.emitAll(0)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle" && current.messages.length === 2,
+            5_000,
+            "the turn ended",
+          )
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
 })
 
 // ── goal store ──────────────────────────────────────────────────────────────

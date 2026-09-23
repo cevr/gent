@@ -265,6 +265,44 @@ describe("SkillsExtension via RPC", () => {
       ),
     10_000,
   )
+
+  it.live(
+    "the skill list answers while a turn runs",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            { ...textStep("working"), gated: true },
+          ])
+          // The shipped extensions, so the session's agent can run a turn.
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            layerOverrides: skillsLayerOverride,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "work" })
+          yield* controls.waitForCall(0)
+          const rawReply = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: ref(SkillsRpc.ListSkills).extensionId,
+              capabilityId: ref(SkillsRpc.ListSkills).capabilityId,
+              input: {},
+            })
+            .pipe(
+              Effect.timeoutOrElse({
+                duration: "2 seconds",
+                orElse: () => Effect.die(new Error("skills-list waited for the turn")),
+              }),
+            )
+          const reply = yield* Schema.decodeUnknownEffect(Schema.Array(SkillEntry))(rawReply)
+          expect(reply.map((s) => s.name)).toEqual(["effect-v4", "react"])
+          yield* controls.emitAll(0)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
 })
 
 // ── bundled skills ──────────────────────────────────────────────────────────

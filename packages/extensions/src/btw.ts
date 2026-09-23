@@ -299,6 +299,8 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
     id: "btw.fork",
     description:
       "Fork this branch into a parallel child session seeded with its context; an empty question forks without asking",
+    // The fork is its own session; this branch's loop state is not touched.
+    answersDuringTurn: true,
     input: ForkInput,
     output: ForkOutput,
     execute: Effect.fn("BtwRpc.Fork")(function* (input: ForkInput) {
@@ -368,6 +370,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
     id: "btw.ask",
     description:
       "Ask the fork opened from this branch a follow-up; refused while the fork is still replying",
+    answersDuringTurn: true,
     input: AskInput,
     output: Schema.Struct({ asked: Schema.Boolean }),
     execute: Effect.fn("BtwRpc.Ask")(function* (input: AskInput) {
@@ -388,6 +391,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
     id: "btw.progress",
     description:
       "The fork opened from this branch: its turns after the fork point and the reply streaming now",
+    answersDuringTurn: true,
     input: Schema.Struct({}),
     output: ForkProgress,
     execute: Effect.fn("BtwRpc.Progress")(function* () {

@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Effect, Exit, Option, Predicate, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Option, Predicate, Queue, Schema, Stream } from "effect"
 import * as AiError from "effect/unstable/ai/AiError"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
@@ -292,44 +292,79 @@ describe("btw forks", () => {
   )
 
   it.live(
-    "the reply streams into progress while the fork is still replying",
+    "the fork answers, streams and takes a follow-up while the session's own turn runs",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer, controls } = yield* LanguageModelLayers.signal(
-            "First sentence. Second sentence.",
-          )
+          // The session's turn holds its stream until the end of the test; the
+          // fork's reply comes one chunk per `forkGate` offer.
+          const sessionTurnStarted = yield* Deferred.make<void>()
+          const releaseSessionTurn = yield* Deferred.make<void>()
+          const forkGate = yield* Queue.unbounded<"continue">()
+          const forkStreamStarts = yield* Queue.unbounded<"started">()
+          let calls = 0
+          const forkReply = (text: string) =>
+            Stream.fromEffect(Queue.offer(forkStreamStarts, "started")).pipe(
+              Stream.flatMap(() =>
+                Stream.fromIterable([
+                  ...text
+                    .split(/(?<=[.!?])\s+/)
+                    .filter((chunk) => chunk.length > 0)
+                    .map((chunk) => textDeltaPart(`${chunk} `)),
+                  finishPart({ finishReason: "stop" }),
+                ]).pipe(Stream.mapEffect((part) => Queue.take(forkGate).pipe(Effect.as(part)))),
+              ),
+            )
+          const providerLayer = LanguageModelLayers.testStream(() => {
+            calls += 1
+            if (calls === 1) {
+              return Effect.succeed(
+                Stream.fromEffect(
+                  Deferred.succeed(sessionTurnStarted, void 0).pipe(
+                    Effect.andThen(Deferred.await(releaseSessionTurn)),
+                  ),
+                ).pipe(
+                  Stream.flatMap(() =>
+                    Stream.fromIterable([
+                      textDeltaPart("Hello back"),
+                      finishPart({ finishReason: "stop" }),
+                    ]),
+                  ),
+                ),
+              )
+            }
+            if (calls === 2) return Effect.succeed(forkReply("First sentence. Second sentence."))
+            return Effect.succeed(forkReply("Again."))
+          })
           const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
           const pane = btw(harness)
+          const midTurn = <A, E>(label: string, effect: Effect.Effect<A, E>) =>
+            effect.pipe(
+              Effect.timeoutOrElse({
+                duration: "2 seconds",
+                orElse: () => Effect.die(new Error(`${label} waited for the session's turn`)),
+              }),
+            )
+          const emitForkChunk = Queue.offer(forkGate, "continue")
           yield* harness.client.message.send({
             sessionId: harness.sessionId,
             branchId: harness.branchId,
             content: "Hello there",
           })
-          yield* controls.waitForStreamStart
-          yield* controls.emitAll
-          yield* waitFor(
-            harness.client.session.getSnapshot({
-              sessionId: harness.sessionId,
-              branchId: harness.branchId,
-            }),
-            (current) => current.runtime._tag === "Idle" && current.messages.length === 2,
-            5_000,
-            "first turn idle",
-          )
-          expect(yield* pane.progress).toEqual({})
+          yield* Deferred.await(sessionTurnStarted)
+          expect(yield* midTurn("btw.progress", pane.progress)).toEqual({})
 
-          yield* pane.fork("Say two sentences.")
+          yield* midTurn("btw.fork", pane.fork("Say two sentences."))
           // A follow-up is refused while the fork replies.
-          const refused = yield* Effect.exit(pane.ask("Another?"))
+          const refused = yield* Effect.exit(midTurn("btw.ask", pane.ask("Another?")))
           expect(Exit.isFailure(refused)).toBe(true)
           if (Exit.isFailure(refused)) {
             expect(Cause.pretty(refused.cause)).toContain("still replying")
           }
-          yield* controls.waitForStreamStart
-          yield* controls.emitNext
+          yield* Queue.take(forkStreamStarts)
+          yield* emitForkChunk
           const partial = yield* waitFor(
-            pane.progress,
+            midTurn("btw.progress", pane.progress),
             (current) => (current.fork?.turns.at(-1)?.answer.length ?? 0) > 0,
             5_000,
             "first chunk visible",
@@ -338,7 +373,8 @@ describe("btw forks", () => {
           expect(partial.fork?.turns).toEqual([
             { question: "Say two sentences.", answer: "First sentence. " },
           ])
-          yield* controls.emitAll
+          yield* emitForkChunk
+          yield* emitForkChunk
           const finished = yield* pane.replied(1)
           expect(Option.map(finished, (fork) => fork.turns.at(-1)?.answer)).toEqual(
             Option.some("First sentence. Second sentence. "),
@@ -346,9 +382,32 @@ describe("btw forks", () => {
           expect(Option.flatMap(finished, (fork) => Option.fromUndefinedOr(fork.error))).toEqual(
             Option.none(),
           )
-        }).pipe(Effect.timeout("8 seconds")),
+
+          expect(yield* midTurn("btw.ask", pane.ask("Again?"))).toEqual({ asked: true })
+          yield* Queue.take(forkStreamStarts)
+          yield* emitForkChunk
+          yield* emitForkChunk
+          yield* pane.replied(2)
+
+          // The session's turn was running the whole time.
+          const running = yield* harness.client.session.getSnapshot({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+          })
+          expect(running.runtime._tag).not.toBe("Idle")
+          yield* Deferred.succeed(releaseSessionTurn, void 0)
+          yield* waitFor(
+            harness.client.session.getSnapshot({
+              sessionId: harness.sessionId,
+              branchId: harness.branchId,
+            }),
+            (current) => current.runtime._tag === "Idle" && current.messages.length === 2,
+            5_000,
+            "session turn idle",
+          )
+        }).pipe(Effect.timeout("12 seconds")),
       ),
-    10_000,
+    15_000,
   )
 
   it.live("an empty question forks without a model call; a new fork replaces the last", () =>

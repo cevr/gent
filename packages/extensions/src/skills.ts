@@ -427,6 +427,7 @@ export const SkillsRpc = defineRequests(SKILLS_EXTENSION_ID, {
   ListSkills: request({
     id: "skills-list",
     description: "List loaded skills",
+    answersDuringTurn: true,
     input: Schema.Struct({}),
     output: Schema.Array(SkillEntry),
     execute: Effect.fn("SkillsRpc.ListSkills")(function* () {

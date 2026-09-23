@@ -1759,7 +1759,7 @@ export const FilesRpc = defineRequests(FS_TOOLS_EXTENSION_ID, {
   List: request({
     id: "files-list",
     description: "List the session's files, relative to its cwd, sorted",
-    readonly: true,
+    answersDuringTurn: true,
     input: Schema.Struct({}),
     output: Schema.Array(Schema.String),
     execute: Effect.fn("FilesRpc.List")(function* () {

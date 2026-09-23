@@ -546,7 +546,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
     id: "list-agents",
     description: "List agent loops, live and stored, as display rows",
     // The tray and pane read this while the session's own turn is running.
-    readonly: true,
+    answersDuringTurn: true,
     input: ListAgentsInput,
     output: ListAgentsOutput,
     execute: Effect.fn("AgentsViewRpc.ListAgents")(function* (input) {

@@ -188,6 +188,71 @@ describe("wake", () => {
   )
 
   it.live(
+    "an alarm set mid-turn is listed before the turn ends",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const secondStepStarted = yield* Deferred.make<void>()
+          const releaseTurn = yield* Deferred.make<void>()
+          let calls = 0
+          const providerLayer = LanguageModelLayers.testStream(() => {
+            calls += 1
+            if (calls === 1) {
+              return Effect.succeed(
+                Stream.fromIterable([
+                  toolCallPart(
+                    "wake",
+                    { afterSeconds: 600, mode: "notify", note: "stretch" },
+                    { toolCallId: ToolCallId.make("mid-turn-1") },
+                  ),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            // The turn's next step holds until the listing is read.
+            return Effect.succeed(
+              Stream.fromEffect(
+                Deferred.succeed(secondStepStarted, void 0).pipe(
+                  Effect.andThen(Deferred.await(releaseTurn)),
+                ),
+              ).pipe(Stream.flatMap(() => replyStream("set"))),
+            )
+          })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "remind me" })
+          yield* Deferred.await(secondStepStarted)
+          const pending = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: WAKE_EXTENSION_ID,
+              capabilityId: WakeRpc.Pending.id,
+              input: {},
+            })
+            .pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(WakePending)),
+              Effect.timeoutOrElse({
+                duration: "2 seconds",
+                orElse: () => Effect.die(new Error("wake.pending waited for the turn")),
+              }),
+            )
+          expect(pending.entries).toMatchObject([{ note: "stretch" }])
+          yield* Deferred.succeed(releaseTurn, void 0)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle" && answered(current.messages, "set"),
+            5_000,
+            "the turn ended",
+          )
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
     "a notify alarm leaves a notice the user sees at once and the next turn reads, without starting one",
     () =>
       Effect.scoped(

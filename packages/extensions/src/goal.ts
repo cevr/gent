@@ -195,6 +195,7 @@ export const GoalRpc = defineRequests(GOAL_EXTENSION_ID, {
   Get: request({
     id: "goal.get",
     description: "Read the goal of the current branch",
+    answersDuringTurn: true,
     input: Schema.Struct({}),
     output: GoalSnapshot,
     execute: Effect.fn("GoalRpc.Get")(function* () {
