@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, Effect, Option, Predicate, Schedule } from "effect"
+import { DateTime, type Duration, Effect, Option, Predicate, Schedule } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
 import { type AgentRowEntry, AgentsViewRpc, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
 import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
@@ -43,13 +43,6 @@ import {
  * @module
  */
 
-interface SubtreeCounts {
-  readonly total: number
-  readonly running: number
-  readonly idle: number
-  readonly inactive: number
-}
-
 /** Descendants of `root` at any depth, in the server's parent-before-child order. */
 const subtreeRows = (
   rows: ReadonlyArray<AgentRowEntry>,
@@ -72,17 +65,15 @@ const subtreeRows = (
   }
 }
 
-/** Section counts over every row descending from `root`; the root itself is not counted. */
-export const subtreeCounts = (
-  rows: ReadonlyArray<AgentRowEntry>,
-  root: Option.Option<{ readonly sessionId: string }>,
-): SubtreeCounts => {
-  const counts = { total: 0, running: 0, idle: 0, inactive: 0 }
-  for (const row of subtreeRows(rows, root)) {
-    counts.total += 1
-    counts[row.section] += 1
-  }
-  return counts
+/**
+ * What a loop itself is doing. A row's section can differ: a parent is
+ * grouped with its running children so the tree stays whole, while its own
+ * loop is idle. Every count, glyph and tray line reads this, never the section.
+ */
+const ownState = (row: AgentRowEntry): AgentRowEntry["section"] => {
+  if (!row.live) return "inactive"
+  if (Predicate.isUndefined(row.status) || row.status === "Idle") return "idle"
+  return "running"
 }
 
 const TRAY_HINT = "^t agents"
@@ -152,7 +143,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
   const tick = useSpinnerClock()
   const running = () =>
     subtreeRows(props.controller.rows(), props.controller.current()).filter(
-      (row) => row.section === "running",
+      (row) => ownState(row) === "running",
     )
   // Switching sessions changes whose subtree the tray lists; refetch for it.
   createEffect(
@@ -209,7 +200,8 @@ const AGENTS_VIEW_EXTENSION_ID = "@gent/agents-view"
  * Rows plus the load state, held in the setup closure.
  *
  * The tray and the pane read the same rows, so they live here rather than in
- * either component.
+ * either component. The controller also owns when they are read again: the
+ * tray and the open pane refresh on the same triggers.
  */
 interface AgentsController {
   readonly rows: () => ReadonlyArray<AgentRowEntry>
@@ -235,18 +227,23 @@ interface AgentsController {
 /** The agents pane's name in the host's one pane slot. */
 const AGENTS_PANE = "agents.pane"
 
+type RowKey = Pick<AgentRowEntry, "sessionId" | "branchId">
+
+const sameKey = (left: RowKey, right: RowKey): boolean =>
+  left.sessionId === right.sessionId && left.branchId === right.branchId
+
 export const makeAgentsController = (
   fetchRows: (
     query: string,
   ) => Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }>,
-  fetchDetail: (
-    key: Pick<AgentRowEntry, "sessionId" | "branchId">,
-  ) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
+  fetchDetail: (key: RowKey) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
+  /** The slow clock a child's own turns are read on; they raise no event in this session. */
+  pollEvery: Duration.Input = "2 seconds",
 ): Effect.Effect<AgentsController, never, ClientContext> =>
   Effect.gen(function* () {
-    const { transport, shell } = yield* ClientContext
+    const { transport, shell, lifecycle } = yield* ClientContext
     // The pane refetches across session switches (on `current()` changing and on
-    // a 2 s poll), so the session query owns the guard that drops a reply for the
+    // the poll), so the session query owns the guard that drops a reply for the
     // session the shell already left.
     const empty: ReadonlyArray<AgentRowEntry> = []
     // The filter the reader typed; a reload re-reads under it.
@@ -260,41 +257,85 @@ export const makeAgentsController = (
       query = next
       listing.refresh()
     }
+    const open = () => shell.pane.isOpen(AGENTS_PANE)
 
     const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
-    // Arrow keys move faster than a round trip, so replies can land out of order.
-    // Only the reply for the row still selected is allowed to win; anything else
-    // would show one row's cost next to another row's name.
-    const [pending, setPending] = createSignal(Option.none<string>())
-
-    const select = (row: Option.Option<AgentRowEntry>) => {
-      // A detail read goes through the loop actor, and an actor read spawns the
-      // entity: asking a stored session what it is doing would make it live.
-      // Only rows that already have a loop are asked.
-      if (Option.isNone(row) || !row.value.live) {
-        setPending(Option.none())
-        setDetail(Option.none())
-        return
-      }
-      const key = { sessionId: row.value.sessionId, branchId: row.value.branchId }
-      const token = `${key.sessionId.length}:${key.sessionId}:${key.branchId}`
-      if (Option.contains(pending(), token)) return
-      setPending(Option.some(token))
-      setDetail(Option.none())
+    // The row the cursor is on, while it has a loop to ask.
+    let selected = Option.none<RowKey>()
+    // Arrow keys move faster than a round trip, and a poll re-reads the row
+    // the cursor is on, so replies can land out of order. Only the newest read
+    // may write; anything else would show one row's cost next to another
+    // row's name, or an older turn over a newer one.
+    let generation = 0
+    const readDetail = (key: RowKey) => {
+      const issued = ++generation
       shell.cast(
         fetchDetail(key).pipe(
           Effect.match({
-            // A detail read that fails leaves the line blank rather than
+            // A detail read that fails leaves the line as it is rather than
             // replacing the list with an error: the rows are still correct.
             onFailure: () => {},
             onSuccess: (next) => {
-              if (!Option.contains(pending(), token)) return
+              if (issued !== generation) return
               setDetail(Option.some(next))
             },
           }),
         ),
       )
     }
+
+    const select = (row: Option.Option<AgentRowEntry>) => {
+      // A detail read goes through the loop actor, and an actor read spawns the
+      // entity: asking a stored session what it is doing would make it live.
+      // Only rows that already have a loop are asked.
+      if (Option.isNone(row) || !row.value.live) {
+        selected = Option.none()
+        generation++
+        setDetail(Option.none())
+        return
+      }
+      const key = { sessionId: row.value.sessionId, branchId: row.value.branchId }
+      // One read per selection: a re-render that hands back the same row asks nothing.
+      if (Option.exists(selected, (current) => sameKey(current, key))) return
+      selected = Option.some(key)
+      setDetail(Option.none())
+      readDetail(key)
+    }
+
+    /**
+     * Read again what is showing: the open pane under its filter, with the
+     * selected row's detail on the same tick, or the tray's whole listing.
+     */
+    const tick = (): void => {
+      if (!open()) {
+        refresh("")
+        return
+      }
+      listing.refresh()
+      const key = selected.pipe(
+        Option.filter((current) =>
+          listing.value().some((row) => row.live && sameKey(row, current)),
+        ),
+      )
+      if (Option.isSome(key)) readDetail(key.value)
+    }
+
+    // A delegate pulse in the current session means its subtree changed.
+    lifecycle.addCleanup(
+      transport.onExtensionStateChanged((pulse) => {
+        if (pulse.extensionId === DELEGATE_EXTENSION_ID) tick()
+      }),
+    )
+    // A child's own turns raise no event in this session, so while the pane is
+    // open or the tray has children the listing is re-read on a slow clock.
+    // The read is a registry lookup per loop, cheap enough to poll.
+    yield* lifecycle.scoped(
+      Effect.forkScoped(
+        Effect.sync(() => {
+          if (open() || subtreeRows(listing.value(), transport.currentSession()).length > 0) tick()
+        }).pipe(Effect.repeat(Schedule.spaced(pollEvery))),
+      ),
+    )
 
     return {
       rows: listing.value,
@@ -305,7 +346,7 @@ export const makeAgentsController = (
       reload: listing.refresh,
       detail,
       select,
-      open: () => shell.pane.isOpen(AGENTS_PANE),
+      open,
     }
   })
 
@@ -326,23 +367,16 @@ const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> 
   rows.forEach((row, index) => {
     const previous = rows[index - 1]
     if (Option.isNone(Option.fromNullishOr(previous)) || previous?.section !== row.section) {
-      const count = rows.filter((entry) => entry.section === row.section).length
+      // A section counts the loops that are in its state themselves: an idle
+      // parent grouped with its running children is not one more running.
+      const count = rows.filter(
+        (entry) => entry.section === row.section && ownState(entry) === row.section,
+      ).length
       items.push({ kind: "heading", section: row.section, count })
     }
     items.push({ kind: "row", row, index })
   })
   return items
-}
-
-/**
- * What a loop itself is doing. A row's section can differ: a parent is
- * grouped with its running children so the tree stays whole, while its own
- * loop is idle.
- */
-const ownState = (row: AgentRowEntry): AgentRowEntry["section"] => {
-  if (!row.live) return "inactive"
-  if (Predicate.isUndefined(row.status) || row.status === "Idle") return "idle"
-  return "running"
 }
 
 /** "1 running, 0 idle, 3 inactive" for the pane title: each loop counted by what it does itself. */
@@ -536,7 +570,7 @@ export function AgentsPane(props: {
       .join("  ")
     let activity = ""
     if (selected) activity = activityFor(props.controller.detail())
-    let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(row.section)} ${nameFor(row)}`
+    let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(ownState(row))} ${nameFor(row)}`
     if (activity.length > 0) left = `${left}  ·  ${activity}`
     const width = Math.max(0, rowWidth() - right.length - 2)
     return { left: `${truncate(left, width).padEnd(width)}  `, right }
@@ -544,7 +578,7 @@ export function AgentsPane(props: {
 
   const rightColor = (row: AgentRowEntry, selected: boolean) => {
     if (selected || Option.contains(armed(), row.sessionId))
-      return lineColor(row, row.section, selected)
+      return lineColor(row, ownState(row), selected)
     return theme.textMuted
   }
 
@@ -564,7 +598,8 @@ export function AgentsPane(props: {
           if (selected()) return theme.primary
           return "transparent"
         }
-        const section = () => item.row.section
+        // The row draws what its own loop does; its section only places it.
+        const section = () => ownState(item.row)
         return (
           <box id={id} backgroundColor={background()} paddingLeft={1}>
             {/* One row, one line: the age is right-aligned into the budget, so
@@ -645,7 +680,7 @@ export function AgentsPane(props: {
 
 export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
   setup: Effect.gen(function* () {
-    const { transport, shell, lifecycle } = yield* ClientContext
+    const { transport, shell } = yield* ClientContext
 
     const controller = yield* makeAgentsController(
       (query) =>
@@ -655,27 +690,6 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
         ),
       (key) =>
         transport.agentDetail(key).pipe(Effect.mapError((error) => ({ message: String(error) }))),
-    )
-
-    // A delegate pulse in the current session means its subtree changed.
-    // The pane owns its own query while open, so only a closed pane refetches.
-    lifecycle.addCleanup(
-      transport.onExtensionStateChanged((pulse) => {
-        if (pulse.extensionId !== DELEGATE_EXTENSION_ID) return
-        if (!controller.open()) controller.refresh("")
-      }),
-    )
-    // A child's own turns raise no event in this session, so while the tray
-    // shows children the listing is re-read on a slow clock. The read is a
-    // registry lookup per loop, cheap enough to poll.
-    yield* lifecycle.scoped(
-      Effect.forkScoped(
-        Effect.sync(() => {
-          if (controller.open()) return
-          if (subtreeCounts(controller.rows(), controller.current()).total === 0) return
-          controller.refresh("")
-        }).pipe(Effect.repeat(Schedule.spaced("2 seconds"))),
-      ),
     )
 
     return clientContributions(

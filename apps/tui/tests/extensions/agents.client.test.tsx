@@ -3,21 +3,24 @@ import { describe, expect, it } from "effect-bun-test"
 import { Clock, Deferred, Effect, Option } from "effect"
 import { createSignal } from "solid-js"
 import { BranchId, dateFromMillis, Session, SessionId } from "@gent/core/protocol"
-import type { AgentRowEntry } from "@gent/extensions/client"
+import { type AgentRowEntry, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
 import {
   AgentsPane,
   countsLabel,
   detailLabel,
   makeAgentsController,
   SubagentTray,
-  subtreeCounts,
   trayLines,
 } from "../../src/extensions/agents.client"
 import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 import { usePickerGeometry } from "../../src/ui"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
-import { waitForFrame } from "../helpers-boundary"
-import { provideClientServices } from "../extension-test-harness-boundary"
+import { waitForFrame, waitUntil } from "../helpers-boundary"
+import {
+  makeClientTestTransport,
+  makePaneSlot,
+  provideClientServices,
+} from "../extension-test-harness-boundary"
 import { makeThreadController } from "../../src/extensions/thread-view.client"
 
 // ── agents controller ───────────────────────────────────────────────────────
@@ -159,6 +162,113 @@ describe("Agents controller stored rows", () => {
       expect(asked).toEqual([])
       expect(controller.detail()).toEqual(Option.none())
     }),
+  )
+})
+
+describe("Agents pane refresh while open", () => {
+  const parentKey = {
+    sessionId: SessionId.make("parent"),
+    branchId: BranchId.make("parent-branch"),
+  }
+
+  it.scopedLive("a child that finishes while the pane is open is read again, with its detail", () =>
+    Effect.gen(function* () {
+      // The child's own turn raises no event in the parent's session, so only
+      // the poll can see it end. The pane is open the whole time.
+      let status: "Running" | "Idle" = "Running"
+      let turns = 0
+      const sectionOf = {
+        Running: "running",
+        Idle: "idle",
+      } satisfies Record<"Running" | "Idle", AgentRowEntry["section"]>
+      const section = () => sectionOf[status]
+      const listed = (): ReadonlyArray<AgentRowEntry> => [
+        { ...row("parent"), section: section(), status: "Idle" },
+        { ...row("child"), section: section(), status, parentSessionId: parentKey.sessionId },
+      ]
+      const pane = makePaneSlot()
+      pane.open("agents.pane")
+      const controller = yield* provideClientServices(
+        makeAgentsController(
+          () => Effect.sync(listed),
+          () => Effect.sync(() => ({ ...detail(turns), status })),
+          "20 millis",
+        ),
+        { currentSession: () => Option.some(parentKey), shell: { pane } },
+      )
+      controller.refresh("")
+      yield* waitUntil(() => controller.rows().length === 2, "first listing")
+      controller.select(Option.some(listed()[1] ?? row("child")))
+      yield* waitUntil(
+        () => Option.exists(controller.detail(), (value) => value.status === "Running"),
+        "child detail running",
+      )
+
+      status = "Idle"
+      turns = 1
+      yield* waitUntil(
+        () => controller.rows().every((entry) => entry.status === "Idle"),
+        "listing after the child finished",
+      )
+      yield* waitUntil(
+        () =>
+          Option.exists(
+            controller.detail(),
+            (value) => value.status === "Idle" && value.turns === 1,
+          ),
+        "selected detail after the child finished",
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "a delegate pulse re-reads the open pane under its filter, the tray under none",
+    () =>
+      Effect.gen(function* () {
+        const asked: Array<string> = []
+        const pulses = new Set<
+          (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void
+        >()
+        const pane = makePaneSlot()
+        const controller = yield* provideClientServices(
+          makeAgentsController(
+            (query) => {
+              asked.push(query)
+              return Effect.succeed([])
+            },
+            () => Effect.never,
+            // No poll in this test: only the pulse reads.
+            "1 hour",
+          ),
+          {
+            currentSession: () => Option.some(parentKey),
+            shell: { pane },
+            transport: {
+              ...makeClientTestTransport({ currentSession: () => Option.some(parentKey) }),
+              onExtensionStateChanged: (cb) => {
+                pulses.add(cb)
+                return () => {
+                  pulses.delete(cb)
+                }
+              },
+            },
+          },
+        )
+        const pulse = (extensionId: string) => {
+          for (const cb of pulses) cb({ ...parentKey, extensionId })
+        }
+
+        pane.open("agents.pane")
+        controller.refresh("dep")
+        pulse(DELEGATE_EXTENSION_ID)
+        pulse("@gent/other")
+        expect(asked).toEqual(["dep", "dep"])
+
+        // Closed, the pulse feeds the tray, which lists the whole subtree.
+        pane.close("agents.pane")
+        pulse(DELEGATE_EXTENSION_ID)
+        expect(asked).toEqual(["dep", "dep", ""])
+      }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -799,14 +909,20 @@ describe("Agents pane framing", () => {
  * the agents pane lists; hidden while nothing runs, and while the pane is open.
  */
 
-const root = (id: string, section: AgentRowEntry["section"]): AgentRowEntry => ({
-  sessionId: SessionId.make(id),
-  branchId: BranchId.make(`${id}-branch`),
-  section,
-  live: section !== "inactive",
-  depth: 0,
-  sideThread: false,
-})
+/** A row whose own loop is in `section`: a live row carries the status the listing reads. */
+const root = (id: string, section: AgentRowEntry["section"]): AgentRowEntry => {
+  const entry: AgentRowEntry = {
+    sessionId: SessionId.make(id),
+    branchId: BranchId.make(`${id}-branch`),
+    section,
+    live: section !== "inactive",
+    depth: 0,
+    sideThread: false,
+  }
+  if (section === "running") return { ...entry, status: "Running" }
+  if (section === "idle") return { ...entry, status: "Idle" }
+  return entry
+}
 
 const child = (id: string, section: AgentRowEntry["section"], parent: string): AgentRowEntry => ({
   ...root(id, section),
@@ -823,21 +939,6 @@ const rows = [
   child("other-child", "running", "other-root"),
 ]
 
-describe("subtreeCounts", () => {
-  it.live("counts descendants at any depth and skips the root and other trees", () =>
-    Effect.sync(() => {
-      expect(subtreeCounts(rows, Option.some({ sessionId: "root" }))).toEqual({
-        total: 3,
-        running: 1,
-        idle: 1,
-        inactive: 1,
-      })
-      expect(subtreeCounts(rows, Option.some({ sessionId: "grandchild" })).total).toBe(0)
-      expect(subtreeCounts(rows, Option.none()).total).toBe(0)
-    }),
-  )
-})
-
 describe("agents pane counts and detail", () => {
   it.live("a parent grouped with its running children counts as idle", () =>
     Effect.sync(() => {
@@ -853,7 +954,10 @@ describe("agents pane counts and detail", () => {
 
   it.live("a working loop names the turn it is on, not finished turns and time", () =>
     Effect.sync(() => {
-      const detail = (status: string, turns: number): ExtensionAgentDetail => ({
+      const detail = (
+        status: ExtensionAgentDetail["status"],
+        turns: number,
+      ): ExtensionAgentDetail => ({
         status,
         model: "anthropic/claude-sonnet-5",
         turns,
@@ -865,6 +969,66 @@ describe("agents pane counts and detail", () => {
         "claude-sonnet-5  ·  turn 1 running  ·  $0.028",
       )
       expect(detailLabel(Option.some(detail("Idle", 2)))).toContain("2 turns  ·  $0.028")
+    }),
+  )
+})
+
+describe("idle middle parent", () => {
+  // main → A → B. A started B and its own turn ended; only B works. The
+  // server groups main and A with B so the tree stays whole.
+  const nested: ReadonlyArray<AgentRowEntry> = [
+    { ...root("main", "running"), status: "Idle", name: "main" },
+    { ...child("a", "running", "main"), status: "Idle", depth: 1 },
+    { ...child("b", "running", "a"), status: "Running", depth: 2 },
+  ]
+  const controllerOver = (open: () => boolean) => ({
+    rows: () => nested,
+    current: () =>
+      Option.some({ sessionId: SessionId.make("main"), branchId: BranchId.make("main-branch") }),
+    error: () => Option.none(),
+    loading: () => false,
+    refresh: () => {},
+    reload: () => {},
+    detail: () => Option.none(),
+    select: () => {},
+    open,
+  })
+
+  it.live("the tray lists only the grandchild that works", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <SubagentTray controller={controllerOver(() => false)} />),
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "tray")
+      expect(frame).toContain("working · delegate: b task")
+      expect(frame).not.toContain("a task")
+    }),
+  )
+
+  it.live("the pane counts it idle in its title, its heading and its glyph", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <AgentsPane
+              open={true}
+              controller={controllerOver(() => true)}
+              onSelect={() => {}}
+              onToggle={() => {}}
+              onDelete={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          { width: 100, height: 20 },
+        ),
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("Agents"), "pane")
+      expect(frame).toContain("1 running, 2 idle, 0 inactive")
+      expect(frame).toContain("Running (1)")
+      // An idle loop draws the still dot; only the working one pulses.
+      const lineOf = (name: string) => frame.split("\n").find((line) => line.includes(name)) ?? ""
+      expect(lineOf("delegate: a task")).toContain("• delegate: a task")
+      expect(lineOf("delegate: b task")).not.toContain("• delegate: b task")
     }),
   )
 })
