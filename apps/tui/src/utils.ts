@@ -228,6 +228,18 @@ export const isConnectionLoss = (error: GentClientRpcError): boolean => {
 }
 
 /**
+ * The request id of a send whose reply was lost: the server may have run it,
+ * so the same text sent again must reuse the id. None for an answered failure.
+ */
+export const lostRequest = (
+  error: GentClientRpcError,
+  requestId: string,
+): Option.Option<string> => {
+  if (isConnectionLoss(error)) return Option.some(requestId)
+  return Option.none()
+}
+
+/**
  * How a send retries a lost connection: four more tries from 200 ms. Every
  * try carries the first request id, so a try that landed with a lost reply
  * does not run the message a second time. An answer from the server (a

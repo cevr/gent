@@ -1392,9 +1392,13 @@ describe("ClientProvider send", () => {
       return { client: yield* requireClient(ctx), requestIds }
     })
   const verbs = {
-    send: (client: ClientContextValue) => client.sendMessage(target, "once"),
+    send: (client: ClientContextValue) => client.sendMessage(target, "once", "request-once"),
     steer: (client: ClientContextValue) =>
-      client.steer(target, SteerCommandInput.cases.Interject.make({ message: "once" })),
+      client.steer(
+        target,
+        SteerCommandInput.cases.Interject.make({ message: "once" }),
+        "request-once",
+      ),
   }
   const lost = {
     "a socket close": new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),

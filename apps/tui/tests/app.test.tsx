@@ -1,6 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
 import { Cause, Deferred, Effect, Exit, Option, Schema } from "effect"
+import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
+import { SocketCloseError } from "effect/unstable/socket/Socket"
 import {
   AgentName,
   BranchId,
@@ -1672,6 +1674,56 @@ describe("App auth gate", () => {
       expect(attempts[1]?.content).toBe(initialPrompt)
       setup.renderer.destroy()
     }),
+  )
+  it.live(
+    "a startup prompt whose replies were lost goes again under its request id",
+    () =>
+      Effect.gen(function* () {
+        const ids: Array<string> = []
+        const initialPrompt = "lost on the way back"
+        const client = createMockClient({
+          message: {
+            send: (input: { readonly content: string; readonly requestId?: string }) =>
+              Effect.suspend(() => {
+                ids.push(input.requestId ?? "<missing>")
+                // The first send and its four retries: admitted, reply lost.
+                if (ids.length <= 5) {
+                  return Effect.fail(
+                    new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
+                  )
+                }
+                return Effect.void
+              }),
+          },
+        })
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(() => <App missingAuthProviders={[]} />, {
+            client,
+            runtime: createMockRuntime(),
+            initialAgent: AgentName.make("cowork"),
+            initialSession: {
+              id: SessionId.make("session-a"),
+              activeBranchId: BranchId.make("branch-a"),
+              name: "A",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+            initialPrompt: Option.some(initialPrompt),
+          }),
+        )
+        yield* waitForFrame(
+          setup,
+          (frame) => frame.includes(`┃ ${initialPrompt}`),
+          "prompt back in the draft",
+          8_000,
+        )
+        expect(ids).toHaveLength(5)
+        setup.mockInput.pressEnter()
+        yield* waitForFrame(setup, () => ids.length === 6, "sent by the reader")
+        expect(new Set(ids).size).toBe(1)
+        setup.renderer.destroy()
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
   )
   it.live("a renamed session does not refetch the extension slash commands", () =>
     Effect.gen(function* () {

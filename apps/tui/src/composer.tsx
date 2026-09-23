@@ -34,6 +34,8 @@ import {
   formatError,
   INLINE_MAX_BYTES,
   INLINE_MAX_LINES,
+  lostRequest,
+  randomId,
   truncate,
   useRequiredContext,
 } from "./utils"
@@ -792,7 +794,7 @@ function useComposerController(): ComposerController {
   }
   const refuse = (
     target: SessionIdentity,
-    refused: { readonly order: number; readonly text: string; readonly shell: boolean },
+    refused: Parameters<typeof refusals.refuse>[1],
     reason: string,
   ) => {
     client.setErrorIn(target, reason)
@@ -810,7 +812,7 @@ function useComposerController(): ComposerController {
     if (Option.isNone(drafted)) return
     const target = drafted.value
     const order = refusals.nextOrder()
-    refusals.submitted(target.branchId)
+    refusals.submitted(target.branchId, text)
     // The command leaves the composer before it runs, so a second Enter
     // finds an empty draft instead of running it again.
     sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
@@ -831,24 +833,35 @@ function useComposerController(): ComposerController {
         Effect.flatMap((userMessage) =>
           // The command has run, and its side effects are done. A refused send
           // gives back the output as a message, never the command to run again.
-          sc
-            .onSubmit(userMessage, "queue", target)
-            .pipe(
-              Effect.catchEager((error) =>
-                Effect.sync(() =>
-                  refuse(
-                    target,
-                    { order, text: userMessage, shell: false },
-                    `The command ran; its output was not sent. ${formatError(error)}`,
+          randomId.pipe(
+            Effect.flatMap((requestId) =>
+              sc.onSubmit(userMessage, "queue", target, requestId).pipe(
+                Effect.catchEager((error) =>
+                  Effect.sync(() =>
+                    refuse(
+                      target,
+                      {
+                        order,
+                        text: userMessage,
+                        shell: false,
+                        requestId: lostRequest(error, requestId),
+                      },
+                      `The command ran; its output was not sent. ${formatError(error)}`,
+                    ),
                   ),
                 ),
               ),
             ),
+          ),
         ),
         // Nothing ran: the command comes back to run.
         Effect.catchEager((error) =>
           Effect.sync(() => {
-            refuse(target, { order, text, shell: true }, shellRefusal(error))
+            refuse(
+              target,
+              { order, text, shell: true, requestId: Option.none() },
+              shellRefusal(error),
+            )
           }),
         ),
       ),
@@ -874,17 +887,28 @@ function useComposerController(): ComposerController {
     client.log.info("composer.submit.requested", { contentLength: text.length, mode })
     history.add(text)
     const order = refusals.nextOrder()
-    refusals.submitted(target.branchId)
+    // A refused text sent again unchanged after a lost reply keeps its id.
+    const reused = refusals.submitted(target.branchId, text)
     // The message leaves the composer before its `@file` refs expand, so a
     // second Enter finds an empty draft instead of sending it again.
     clearInput()
     cast(
-      client.cwdOf(target.sessionId).pipe(
-        Effect.flatMap((cwd) => expandFileRefs(text, cwd)),
-        // A send the server rejects comes back to the composer with the reason.
-        Effect.flatMap((expanded) => sc.onSubmit(expanded, mode, target)),
-        Effect.catchEager((error) =>
-          Effect.sync(() => refuse(target, { order, text, shell: false }, formatError(error))),
+      Option.match(reused, { onNone: () => randomId, onSome: Effect.succeed }).pipe(
+        Effect.flatMap((requestId) =>
+          client.cwdOf(target.sessionId).pipe(
+            Effect.flatMap((cwd) => expandFileRefs(text, cwd)),
+            // A send the server rejects comes back to the composer with the reason.
+            Effect.flatMap((expanded) => sc.onSubmit(expanded, mode, target, requestId)),
+            Effect.catchEager((error) =>
+              Effect.sync(() =>
+                refuse(
+                  target,
+                  { order, text, shell: false, requestId: lostRequest(error, requestId) },
+                  formatError(error),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     )

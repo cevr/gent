@@ -60,6 +60,7 @@ import {
   formatError,
   formatTokens,
   formatToolInput,
+  lostRequest,
   randomId,
   SEND_RETRY,
   useRequiredContext,
@@ -135,7 +136,8 @@ import { useExtensionUI } from "./extensions/host"
  */
 interface StartupPrompt {
   readonly content: string
-  readonly refuse: (target: SessionIdentity, reason: string) => void
+  /** `lost` is the request id when the reply was lost, not answered. */
+  readonly refuse: (target: SessionIdentity, reason: string, lost: Option.Option<string>) => void
 }
 
 interface SessionShellValue {
@@ -527,6 +529,12 @@ interface RefusedSubmission {
   readonly order: number
   readonly text: string
   readonly shell: boolean
+  /**
+   * The request id of a send whose reply was lost: the server may have run it.
+   * The same text sent again reuses it, so the server's dedup runs it once.
+   * A refusal the server answered has none; its text goes again as new.
+   */
+  readonly requestId: Option.Option<string>
 }
 
 /** The composer on screen for a branch: what it holds, and how to replace it. */
@@ -548,8 +556,11 @@ interface ComposerRefusals {
   readonly nextOrder: () => number
   readonly link: (branchId: BranchId, link: ComposerLink) => () => void
   readonly refuse: (branchId: BranchId, refused: RefusedSubmission) => void
-  /** A submit took the whole draft, refused texts included. */
-  readonly submitted: (branchId: BranchId) => void
+  /**
+   * A submit took the whole draft, refused texts included. When it sends one
+   * refused text unchanged whose reply was lost, this is that send's request id.
+   */
+  readonly submitted: (branchId: BranchId, text: string) => Option.Option<string>
 }
 
 interface ComposerMemory {
@@ -666,8 +677,15 @@ export function ComposerMemoryProvider(props: ParentProps) {
         onNone: () => drafts.set(branchId, merged.draft),
       })
     },
-    submitted: (branchId) => {
+    submitted: (branchId, text) => {
+      const block = Option.fromUndefinedOr(blocks.get(branchId))
       blocks.delete(branchId)
+      return Option.flatMap(block, (current) =>
+        Option.flatMap(
+          Option.fromUndefinedOr(current.entries.find((entry) => entry.text.trim() === text)),
+          (entry) => entry.requestId,
+        ),
+      )
     },
   }
   const value: ComposerMemory = { drafts, refusals, history: makePromptHistoryStore() }
@@ -2246,7 +2264,11 @@ export function useSessionFeed(
                 Effect.retry(SEND_RETRY),
                 Effect.catchEager((err) =>
                   Effect.sync(() =>
-                    prompt.refuse({ sessionId: session, branchId: branch }, formatError(err)),
+                    prompt.refuse(
+                      { sessionId: session, branchId: branch },
+                      formatError(err),
+                      lostRequest(err, requestId),
+                    ),
                   ),
                 ),
               )
@@ -2526,6 +2548,7 @@ export interface SessionController {
     content: string,
     mode: "queue" | "interject",
     target: SessionIdentity,
+    requestId: string,
   ) => Effect.Effect<void, GentClientRpcError>
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
   onRestoreQueue: () => void
@@ -2832,9 +2855,14 @@ export function createSessionController(props: {
         const order = refusals.nextOrder()
         return {
           content,
-          refuse: (target, reason) => {
+          refuse: (target, reason, lost) => {
             client.setErrorIn(target, reason)
-            refusals.refuse(target.branchId, { order, text: content, shell: false })
+            refusals.refuse(target.branchId, {
+              order,
+              text: content,
+              shell: false,
+              requestId: lost,
+            })
           },
         }
       }),
@@ -3014,6 +3042,7 @@ export function createSessionController(props: {
     content: string,
     mode: "queue" | "interject",
     target: SessionIdentity,
+    requestId: string,
   ): Effect.Effect<void, GentClientRpcError> => {
     // Interjecting steers the stream in view, so it holds only while the
     // drafted-in session is still the one streaming; otherwise the message queues there.
@@ -3021,14 +3050,25 @@ export function createSessionController(props: {
       sameIdentity(current, target),
     )
     if (mode === "interject" && stillHere && client.isStreaming()) {
-      return client.steer(target, SteerCommandInput.cases.Interject.make({ message: content }))
+      return client.steer(
+        target,
+        SteerCommandInput.cases.Interject.make({ message: content }),
+        requestId,
+      )
     }
-    return client.sendMessage(target, content)
+    return client.sendMessage(target, content, requestId)
   }
   /** Cancel the turn streaming in the session in view. */
   const cancelTurn = () => {
     Option.map(client.sessionIdentity(), (target) =>
-      cast(client.steer(target, SteerCommandInput.cases.Cancel.make({})).pipe(client.surfaceError)),
+      cast(
+        randomId.pipe(
+          Effect.flatMap((requestId) =>
+            client.steer(target, SteerCommandInput.cases.Cancel.make({}), requestId),
+          ),
+          client.surfaceError,
+        ),
+      ),
     )
   }
 

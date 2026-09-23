@@ -588,12 +588,19 @@ interface ClientActionValue {
   /**
    * Send to the session the content was drafted in, not whichever is active
    * when it lands. A rejected send fails, so the caller can give the text back.
+   * The caller names the request id: a text sent again after a lost reply
+   * reuses it, so the server's dedup runs it once.
    */
-  sendMessage: (target: SessionIdentity, content: string) => Effect.Effect<void, GentClientRpcError>
+  sendMessage: (
+    target: SessionIdentity,
+    content: string,
+    requestId: string,
+  ) => Effect.Effect<void, GentClientRpcError>
   /** Steer the target's loop; a rejected command fails for the caller to report. */
   steer: (
     target: SessionIdentity,
     command: SteerCommandInput,
+    requestId: string,
   ) => Effect.Effect<void, GentClientRpcError>
 }
 
@@ -1403,8 +1410,7 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const actionValue: ClientActionValue = {
-    sendMessage: Effect.fn("TUI.sendMessage")(function* (s, content) {
-      const requestId = yield* randomId
+    sendMessage: Effect.fn("TUI.sendMessage")(function* (s, content, requestId) {
       log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
       yield* client.message
         .send({
@@ -1415,8 +1421,7 @@ export function ClientProvider(props: ClientProviderProps) {
         })
         .pipe(Effect.retry(SEND_RETRY))
     }),
-    steer: Effect.fn("TUI.steer")(function* (s, command) {
-      const requestId = yield* randomId
+    steer: Effect.fn("TUI.steer")(function* (s, command, requestId) {
       const fullCommand: SteerCommand = {
         ...command,
         sessionId: s.sessionId,

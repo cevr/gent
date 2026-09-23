@@ -49,6 +49,8 @@ import {
 } from "../src/extensions/client-facets"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { rankAutocompleteItems } from "../src/autocomplete"
+import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
+import { SocketCloseError } from "effect/unstable/socket/Socket"
 
 // ── shell ───────────────────────────────────────────────────────────────────
 
@@ -450,7 +452,12 @@ function Contribute() {
 }
 function TestComposer(props: {
   readonly suspended?: boolean
-  readonly onSubmit: (content: string, mode: "queue" | "interject", target: SessionIdentity) => void
+  readonly onSubmit: (
+    content: string,
+    mode: "queue" | "interject",
+    target: SessionIdentity,
+    requestId: string,
+  ) => void
   /** What the send answers; a failure stands for a send the server rejected. */
   readonly sendResult?: Effect.Effect<void, GentClientRpcError>
   readonly children?: JSX.Element
@@ -485,8 +492,13 @@ function TestComposer(props: {
       setInteractionState((current) =>
         transitionComposerInteraction(current, event, ext.autocompleteItems()),
       ),
-    onSubmit: (content: string, mode: "queue" | "interject", target: SessionIdentity) =>
-      Effect.sync(() => props.onSubmit(content, mode, target)).pipe(
+    onSubmit: (
+      content: string,
+      mode: "queue" | "interject",
+      target: SessionIdentity,
+      requestId: string,
+    ) =>
+      Effect.sync(() => props.onSubmit(content, mode, target, requestId)).pipe(
         Effect.andThen(props.sendResult ?? Effect.void),
       ),
     onSlashCommand: (_cmd: string, _args: string) => Effect.void,
@@ -1017,6 +1029,103 @@ describe("Composer submit", () => {
       setup.mockInput.pressEnter()
       yield* waitForFrame(setup, () => sends === 2, "sent again")
       expect(submitted[1]).toBe(`first send\n\n${pasted}`)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // The server admitted the send and ran its turn, but every reply was lost.
+  // The text comes back, and Enter sends it again under the first request id,
+  // so the server's dedup makes it one message. An edited text is a new one.
+  submitTest("a send whose reply was lost goes again under its first request id", () =>
+    Effect.gen(function* () {
+      const admitted = new Map<string, string>()
+      const ids: Array<string> = []
+      let sends = 0
+      const lost = new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) })
+      const sendResult = Effect.suspend(() => {
+        sends++
+        if (sends === 1) return Effect.fail(lost)
+        return Effect.void
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <TestComposer
+            onSubmit={(content, _mode, _target, requestId) => {
+              ids.push(requestId)
+              // The server's dedup: one message per request id.
+              if (!admitted.has(requestId)) admitted.set(requestId, content)
+            }}
+            sendResult={sendResult}
+          />
+        )),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("send once"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ send once"), "text back")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => sends === 2, "sent again")
+      expect(ids).toHaveLength(2)
+      expect(ids[1]).toBe(ids[0])
+      expect([...admitted.values()]).toEqual(["send once"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  submitTest("an edited text whose reply was lost goes as a new request", () =>
+    Effect.gen(function* () {
+      const ids: Array<string> = []
+      let sends = 0
+      const lost = new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) })
+      const sendResult = Effect.suspend(() => {
+        sends++
+        if (sends === 1) return Effect.fail(lost)
+        return Effect.void
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <TestComposer
+            onSubmit={(_content, _mode, _target, requestId) => ids.push(requestId)}
+            sendResult={sendResult}
+          />
+        )),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("send once"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ send once"), "text back")
+      yield* Effect.promise(() => setup.mockInput.typeText(" more"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => sends === 2, "sent again")
+      expect(ids).toHaveLength(2)
+      expect(ids[1]).not.toBe(ids[0])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  submitTest("a refused send goes again under a new request id", () =>
+    Effect.gen(function* () {
+      const ids: Array<string> = []
+      let sends = 0
+      const sendResult = Effect.suspend(() => {
+        sends++
+        if (sends === 1) return Effect.fail(refusedSend)
+        return Effect.void
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <TestComposer
+            onSubmit={(_content, _mode, _target, requestId) => ids.push(requestId)}
+            sendResult={sendResult}
+          />
+        )),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("send again"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("┃ send again"), "text back")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => sends === 2, "sent again")
+      expect(ids).toHaveLength(2)
+      expect(ids[1]).not.toBe(ids[0])
     }).pipe(Effect.timeout("10 seconds")),
   )
 
