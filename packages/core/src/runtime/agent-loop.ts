@@ -226,6 +226,7 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * | ----------------------- | -------------------------------------------------------------------- |
  * | `admit`                 | Batching, the depth ceiling, the idle test, the start reservation     |
  * | `take` / `takeIfIdle`   | Steering-before-follow-up order, the in-flight slot, re-stamping      |
+ * | `claimStart`            | Whose reservation a start spends; a lost start goes back in the queue |
  * | `settle`                | Which message the in-flight slot named, and whether a row changed     |
  * | `steer`                 | Where a steering item goes, and the phase a caller must test to wake  |
  * | `deliverSteering`       | What a step may take, and the final-step hold                         |
@@ -592,10 +593,20 @@ export type LoopInbox = {
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
   ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
-  /** Take the next item only while nothing else holds or has reserved the loop. */
+  /**
+   * Take the next item only while nothing else holds or has reserved the loop.
+   * `Some` also reserves the start for that item, as `admit` does.
+   */
   readonly takeIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   /** Take the next item; the caller already owns the turn lane. */
   readonly take: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
+  /**
+   * True when the caller may start this item now: the loop is idle and holds
+   * no reservation, or holds this item's own. False puts the item back in the
+   * queue (a no-op when the loop already holds it), so a start that lost its
+   * race never drops what it carried.
+   */
+  readonly claimStart: (item: QueuedTurnItem) => Effect.Effect<boolean, AgentLoopError>
   /** True when this message was the in-flight admission and is now settled. */
   readonly settle: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   /**
@@ -807,11 +818,26 @@ export const makeLoopInbox = (
       readonly onlyIfIdle: boolean
     }) {
       const queuedCreatedAt = yield* DateTime.nowAsDate
+      const startedAtMs = yield* Clock.currentTimeMillis
       return yield* commitQueueTransaction("dequeued turn", (s) => {
         if (options.onlyIfIdle && !canStartTurnNow(s)) {
           return { value: Option.none(), next: s, persist: false }
         }
         const { queue, nextItem } = takeNextQueuedTurn(s.queue, queuedCreatedAt)
+        // An idle take races other admissions, so it reserves the start in the
+        // same transaction, as `admit` does: an admission that arrives before
+        // the caller starts the turn queues behind it.
+        if (options.onlyIfIdle && Option.isSome(nextItem)) {
+          return {
+            value: nextItem,
+            next: {
+              ...s,
+              queue,
+              startingState: buildRunningState(nextItem.value, { startedAtMs }),
+            },
+            persist: queue !== s.queue,
+          }
+        }
         return {
           value: nextItem,
           next: { ...s, queue },
@@ -819,6 +845,19 @@ export const makeLoopInbox = (
         }
       })
     })
+
+    const claimStart = Effect.fn("LoopInbox.claimStart")((item: QueuedTurnItem) =>
+      commitQueueTransaction("returned an unstarted turn", (s) => {
+        const reservedForItem =
+          Predicate.isUndefined(s.startingState) || phaseHolds(s.startingState, item.message.id)
+        if (s.state._tag === "Idle" && reservedForItem) {
+          return { value: true, next: s, persist: false }
+        }
+        if (turnAdmitted(s, item.message.id)) return { value: false, next: s, persist: false }
+        const queue = appendFollowUpQueueState(s.queue, item)
+        return { value: false, next: { ...s, queue }, persist: queue !== s.queue }
+      }),
+    )
 
     const settle = Effect.fn("LoopInbox.settle")((messageId: MessageId) =>
       commitQueueTransaction("cleared in-flight turn", (s) => {
@@ -900,6 +939,7 @@ export const makeLoopInbox = (
       admit,
       takeIfIdle: takeFromState({ onlyIfIdle: true }),
       take: takeFromState({ onlyIfIdle: false }),
+      claimStart,
       settle,
       steer,
       deliverSteering,
@@ -1178,8 +1218,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
 
   const startTurn = Effect.fn("AgentLoop.startTurn")((item: QueuedTurnItem) =>
     Effect.gen(function* () {
-      const state = yield* scope.inbox.phase
-      if (state._tag !== "Idle") return
+      if (!(yield* scope.inbox.claimStart(item))) return
       yield* scope.turnInterruption.beginTurn
       yield* advanceOrIdle(Option.some(item))
     }).pipe(scope.sideMutationSemaphore.withPermits(1)),
@@ -2563,8 +2602,9 @@ const buildAgentLoopActorHandlers = (config: {
           // *before* the append, so the idle test is made on that. The start
           // belongs here, inside the actor: a caller that read the state first
           // and steered second would race a turn that ended in between.
-          // `startTurn` re-reads the state under its own permit, so it is a
-          // no-op when a turn did begin meanwhile.
+          // `takeIfIdle` reserves the start, and `startTurn` claims it under
+          // its own permit: a turn that began meanwhile gets the item back
+          // in its queue.
           const before = yield* handle.inbox.steer(item)
           if (command.wake !== true || Option.isNone(before) || before.value._tag !== "Idle") return
           const next = yield* handle.inbox.takeIfIdle

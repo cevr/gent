@@ -2196,6 +2196,8 @@ const makeHarness = (
     readonly answered?: ReadonlySet<InteractionRequestId>
     readonly sessionAgent?: Effect.Effect<AgentName, AgentLoopError>
     readonly completeFailedTurn?: (state: RunningState) => Effect.Effect<void>
+    /** Settle the in-flight slot after each turn, as the real `runTurn` does. */
+    readonly settles?: boolean
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -2244,6 +2246,7 @@ const makeHarness = (
           yield* Ref.update(ranTurns, (ids) => [...ids, String(state.message.id)])
           const interrupted = yield* turnInterruption.interrupted
           yield* Ref.update(interruptedTurns, (all) => [...all, interrupted])
+          if (options.settles === true) yield* inbox.settle(state.message.id).pipe(Effect.orDie)
           return TurnOutcome.cases.Done.make({})
         }),
       sessionAgent: options.sessionAgent ?? Effect.succeed(DEFAULT_AGENT_NAME),
@@ -2253,6 +2256,7 @@ const makeHarness = (
     const setPhase = (next: LoopState) => inbox.moveToPhase(next)
     return {
       worker,
+      inbox,
       phase,
       queue,
       setPhase,
@@ -2352,6 +2356,71 @@ describe("a turn whose agent cannot be read", () => {
         expect((yield* Ref.get(harness.interruptedTurns))[0]).toBe(false)
         yield* Fiber.interrupt(loop)
       }),
+  )
+})
+
+describe("a wake and a submit that race for an idle loop", () => {
+  it.live("the submit a wake beat to the start is queued and runs next", () =>
+    Effect.gen(function* () {
+      const steered = queuedItem("steer-from-slash-command")
+      const submitted = queuedItem("user-submit")
+      const harness = yield* makeHarness(
+        { state: buildIdleState(), queue: { ...emptyLoopQueueState(), steering: [steered] } },
+        { settles: true },
+      )
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      // An extension request holds the loop while it runs.
+      yield* harness.sideMutationSemaphore.take(1)
+      // Its own-branch wake takes the item, then waits for the permit.
+      const wake = yield* Effect.forkChild(
+        Effect.gen(function* () {
+          const next = yield* harness.inbox.takeIfIdle
+          if (Option.isSome(next)) yield* harness.worker.startTurn(next.value)
+        }),
+      )
+      yield* harness.queue.pipe(
+        Effect.repeat({
+          until: (queue) => Predicate.isNotUndefined(queue.inFlight),
+          schedule: Schedule.spaced("1 millis"),
+        }),
+        Effect.timeout("2 seconds"),
+      )
+      // A user's Submit arrives in that window.
+      const reserved = yield* harness.inbox.admit(submitted, { queueOnly: false })
+      // The wake reserved the start when it took its item, so the submit queues.
+      expect(Option.isNone(reserved)).toBe(true)
+      const submit = yield* Effect.forkChild(
+        Effect.gen(function* () {
+          if (Option.isSome(reserved)) yield* harness.worker.startTurn(submitted)
+        }),
+      )
+      yield* harness.sideMutationSemaphore.release(1)
+      yield* Fiber.join(wake)
+      yield* Fiber.join(submit)
+      yield* Ref.get(harness.ranTurns).pipe(
+        Effect.repeat({ until: (ids) => ids.length >= 2, schedule: Schedule.spaced("5 millis") }),
+        Effect.timeout("1 second"),
+        Effect.ignore,
+      )
+      expect(yield* Ref.get(harness.ranTurns)).toEqual(["steer-from-slash-command", "user-submit"])
+      yield* Fiber.interrupt(loop)
+    }),
+  )
+
+  it.effect("a start that finds the loop busy puts its item back in the queue", () =>
+    Effect.gen(function* () {
+      const running = queuedItem("running")
+      const late = queuedItem("late")
+      const harness = yield* makeHarness({
+        state: buildRunningState(running, { startedAtMs: 1 }),
+        queue: emptyLoopQueueState(),
+      })
+      yield* harness.worker.startTurn(late)
+      expect((yield* harness.queue).followUp.map((item) => String(item.message.id))).toEqual([
+        "late",
+      ])
+      expect((yield* harness.phase)._tag).toBe("Running")
+    }),
   )
 })
 
