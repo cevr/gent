@@ -126,14 +126,12 @@ describe("FileLockService", () => {
         const held = yield* Effect.forkChild(
           lock.withLock(
             "/held/path",
-            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            Deferred.succeed(entered, void 0).pipe(Effect.andThen(Deferred.await(release))),
           ),
         )
         yield* Deferred.await(entered)
         expect(yield* lock.currentSize).toBe(1)
-        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-        yield* Deferred.succeed(release, undefined)
+        yield* Deferred.succeed(release, void 0)
         yield* Fiber.join(held)
         expect(yield* lock.currentSize).toBe(0)
       }),
