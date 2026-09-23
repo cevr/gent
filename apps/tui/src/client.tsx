@@ -242,7 +242,6 @@ export const SessionStateEvent = Schema.TaggedUnion({
   Activated: { session: SessionSchema },
   Clear: {},
   UpdateName: { name: Schema.String },
-  UpdateBranch: { branchId: BranchId },
   /** The session's cwd, read after a switch; ignored once the shell left that session. */
   UpdateCwd: { sessionId: SessionId, cwd: Schema.String },
   UpdateSettings: {
@@ -278,8 +277,6 @@ export function transitionSessionState(
       return SessionState.none()
     case "UpdateName":
       return mapActive(state, (session) => ({ ...session, name: event.name }))
-    case "UpdateBranch":
-      return mapActive(state, (session) => ({ ...session, branchId: event.branchId }))
     case "UpdateCwd":
       return mapActive(state, (session) => {
         if (session.sessionId !== event.sessionId) return session
@@ -839,9 +836,8 @@ export function ClientProvider(props: ClientProviderProps) {
    * {@link SessionMetrics} is one value for the same reason: its two halves
    * cannot be cleared apart.
    *
-   * `switchSession` is the one caller that can land back on the session it is
-   * already on, and extension health belongs to the session rather than the
-   * branch, so it says whether to clear it.
+   * Extension health belongs to the session rather than the branch, so a
+   * branch switch within one session says not to clear it.
    */
   const resetForSession = (input: {
     readonly agent: Option.Option<AgentName>
@@ -1057,14 +1053,6 @@ export function ClientProvider(props: ClientProviderProps) {
         break
       }
 
-      case "BranchSwitched": {
-        const s = sessionOption()
-        if (Option.isSome(s) && event.sessionId === s.value.sessionId) {
-          dispatchSession(SessionStateEvent.cases.UpdateBranch.make({ branchId: event.toBranchId }))
-        }
-        break
-      }
-
       case "SessionSettingsUpdated": {
         const s = sessionOption()
         if (Option.isSome(s) && event.sessionId === s.value.sessionId) {
@@ -1200,6 +1188,10 @@ export function ClientProvider(props: ClientProviderProps) {
 
     switchSession: (sessionId, branchId, name) => {
       const current = sessionOption()
+      // Choosing the session already in view changes nothing. A reset here
+      // would clear its status, metrics and settings, and no snapshot comes to
+      // restore them: the identity did not change, so the feed does not re-run.
+      if (Option.exists(current, (value) => sameIdentity(value, { sessionId, branchId }))) return
       const currentSessionId = Option.map(current, (value) => value.sessionId)
       // A branch switch stays in the session's directory; another session's
       // directory is read when something asks for it.

@@ -665,6 +665,82 @@ describe("ClientProvider session lifecycle", () => {
       expect(active.agent()).toBe(AgentName.make("deepwork"))
     }),
   )
+  it.live("choosing the session already in view keeps its settings, status and metrics", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClientSessionState(ctx)
+      const model = ModelId.make("openai/gpt-5.6-luna")
+      client.applySessionSnapshot({
+        ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
+        modelId: model,
+        reasoningLevel: "high",
+        runtime: { _tag: "Running", queue: emptyQueueSnapshot() },
+      })
+      client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
+      const state = client.sessionState()
+      if (state.status !== "active") return yield* Effect.die("no active session")
+      expect(sessionSettings(state.session)).toEqual({ modelId: model, reasoningLevel: "high" })
+      expect(client.isStreaming()).toBe(true)
+      expect(client.cost()).toBe(1.5)
+      expect(client.agent()).toBe(AgentName.make("cowork"))
+      expect(client.sessionMetrics().latestInputTokens).toBe(9_000)
+      expect(Option.isSome(client.sessionMetrics().context)).toBe(true)
+    }),
+  )
+  it.live(
+    "a branch switch event moves to the new branch with the old branch's metrics dropped",
+    () =>
+      Effect.gen(function* () {
+        let ctx = Option.none<ClientContextValue>()
+        yield* Effect.promise(() =>
+          renderWithProviders(
+            () => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />,
+            {
+              initialSession: {
+                id: FIRST.sessionId,
+                activeBranchId: FIRST.branchId,
+                name: "First",
+                createdAt: dateFromMillis(0),
+                updatedAt: dateFromMillis(0),
+              },
+            },
+          ),
+        )
+        const client = yield* requireClientSessionState(ctx)
+        client.applySessionSnapshot({
+          ...snapshotOf(FIRST, { costUsd: 1.5, lastInputTokens: 9_000, context: busyContext }),
+          runtime: { _tag: "Running", queue: emptyQueueSnapshot() },
+        })
+        const nextBranch = BranchId.make("branch-metrics-next")
+        // The feed's order: the event goes to the client, then the feed routes.
+        client.applySessionEvent(
+          makeEnvelope(
+            1,
+            AgentEvent.cases.BranchSwitched.make({
+              sessionId: FIRST.sessionId,
+              fromBranchId: FIRST.branchId,
+              toBranchId: nextBranch,
+            }),
+          ),
+        )
+        client.switchSession(FIRST.sessionId, nextBranch, "First")
+        expect(client.session()?.branchId).toBe(nextBranch)
+        expect(client.isStreaming()).toBe(false)
+        expect(client.cost()).toBe(0)
+        expect(Option.isNone(client.sessionMetrics().context)).toBe(true)
+      }),
+  )
   it.live("runtime idle clears finishing activity only for the current branch", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
@@ -1350,6 +1426,40 @@ describe("ClientProvider errors", () => {
       client.setErrorIn(SECOND, "send refused")
       client.applySessionSnapshot(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0 }))
       expect(client.error()).toBe("send refused")
+    }),
+  )
+
+  it.live("an error cleared on screen does not come back after a switch to the same session", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
+      client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
+      client.setErrorIn(FIRST, "send refused")
+      expect(client.error()).toBe("send refused")
+      // A later turn replaces the error on screen.
+      client.applySessionEvent(
+        makeEnvelope(
+          1,
+          StreamStarted.make({ sessionId: FIRST.sessionId, branchId: FIRST.branchId }),
+        ),
+      )
+      expect(client.isStreaming()).toBe(true)
+      client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
+      client.switchSession(FIRST.sessionId, FIRST.branchId, "First")
+      client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
+      expect(client.error()).toBeNull()
     }),
   )
 
