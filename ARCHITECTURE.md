@@ -541,7 +541,9 @@ session has a parent and no client opened it. A top-level session's user
 watches every turn there, so its wake, monitor and delegate-completion turns
 ask. In a child session, only a turn a client opened asks (a user who prompts
 or steers the child); a turn its parent's `delegate.start` or `session.send`,
-a wake or a monitor opened declines. The origin is trusted: the server stamps
+a wake or a monitor opened declines. A `/btw` fork is a child of the session
+it forks, and `btw` opens each of its turns with `Session.send`, so a fork
+turn declines too: the `/btw` pane shows the fork's reply, not its approvals. The origin is trusted: the server stamps
 `metadata.fromClient` on every message a client sends (`message.send`, a
 session's initial prompt, a `steer.command` interjection) over whatever the
 client set, and removes a client-supplied `extensionId`; an extension's

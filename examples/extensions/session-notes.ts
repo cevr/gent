@@ -107,7 +107,6 @@ export default defineExtension({
               content: notes.map((note) => `- ${note}`).join("\n"),
             },
           ],
-          toolPolicy: { include: ["session_note_add"] },
         }
       }),
     )
