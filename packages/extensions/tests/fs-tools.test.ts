@@ -1298,6 +1298,84 @@ describe("git decides the listing inside a work tree", () => {
   }
 })
 
+describe("the listing outside a work tree", () => {
+  for (const { name, layer } of bothLayers) {
+    it.scopedLive(`${name}: the .gitignore rules decide, and dotfiles are listed`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        yield* writeTree(
+          tmpDir,
+          [".env", ".github/ci.yml", "a.ts", "dist/o.js", "node_modules/x/i.js"],
+          { ".gitignore": "dist/\n" },
+        )
+
+        expect(yield* listed(tmpDir)).toEqual([
+          ".env",
+          ".github/ci.yml",
+          ".gitignore",
+          "a.ts",
+          "node_modules/x/i.js",
+        ])
+        expect(yield* listed(tmpDir, `${tmpDir}/dist`)).toEqual(["o.js"])
+      }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
+    )
+  }
+})
+
+/** A native search result that names `paths`, in this order. */
+const nativeResult = (
+  paths: ReadonlyArray<string>,
+): ReturnType<NativeFileFinder["fileSearch"]> => ({
+  ok: true,
+  value: {
+    items: paths.map((relativePath) => ({
+      relativePath,
+      fileName: relativePath.split("/").at(-1) ?? relativePath,
+      size: 1,
+      modified: 0,
+      accessFrecencyScore: 0,
+      modificationFrecencyScore: 0,
+      totalFrecencyScore: 0,
+      gitStatus: "clean",
+    })),
+    scores: [],
+    totalMatched: paths.length,
+    totalFiles: paths.length,
+  },
+})
+
+describe("the native index orders the listing", () => {
+  for (const { inWorkTree, where } of [
+    { inWorkTree: false, where: "outside a work tree" },
+    { inWorkTree: true, where: "inside a work tree" },
+  ]) {
+    it.scopedLive(`${where}: files the index names come first, in its order`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        if (inWorkTree) yield* runProcess("git", ["init", "-q", tmpDir])
+        yield* writeTree(tmpDir, ["a.ts", "b.ts", "c.ts"], {})
+        const search = spyOn(NativeFileFinder.prototype, "fileSearch").mockReturnValue(
+          nativeResult(["c.ts", "gone.ts", "a.ts"]),
+        )
+        yield* Effect.addFinalizer(() => Effect.sync(() => search.mockRestore()))
+
+        const result = yield* runToolWithCtx(
+          GrepTool,
+          { pattern: "x", path: tmpDir },
+          testToolContext({ cwd: tmpDir }),
+        )
+        expect(result.matches.map((match) => match.file.slice(tmpDir.length + 1))).toEqual([
+          "c.ts",
+          "a.ts",
+          "b.ts",
+        ])
+      }).pipe(Effect.provide(LiveLayer), Effect.timeout("4 seconds")),
+    )
+  }
+})
+
 describe("symbolic links", () => {
   for (const { name, layer } of bothLayers) {
     for (const { inWorkTree, where } of [
@@ -1576,7 +1654,7 @@ describe("grep's native file index", () => {
     }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
   )
 
-  it.scopedLive("a failing native search falls back to the walk", () =>
+  it.scopedLive("a failing native listing leaves the files unordered", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()

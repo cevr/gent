@@ -30,11 +30,11 @@ import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 /**
  * Indexed file discovery for the grep tool.
  *
- * Inside a git work tree git decides which files are listed, and the native
- * index (`@ff-labs/fff-bun`, one cached finder per search root) only orders
- * them. Outside a work tree the native index lists, with a `.gitignore`-aware
- * FileSystem walk as the per-call fallback. The layer always succeeds: a
- * missing native module or a per-call native failure degrades to the walk.
+ * Git decides which files are listed inside a work tree, and a
+ * `.gitignore`-aware FileSystem walk decides outside one. The native index
+ * (`@ff-labs/fff-bun`, one cached finder per search root) only orders them.
+ * The layer always succeeds: a missing native module or a failed native
+ * listing leaves the files unordered.
  */
 
 interface IndexedFile {
@@ -257,10 +257,10 @@ const entryKind = (
 /**
  * Outside a git work tree, and for an explicitly named ignored target, the
  * walk matches `.gitignore` lines itself. It reads every `.gitignore` from
- * `root` down, as git does: the ones
- * on the way from `root` to `cwd` and the ones inside the walked tree. A
- * `cwd` inside an ignored directory lists nothing, as the native index does;
- * `listIgnoredTargets` then lists it from its own root.
+ * `root` down, as git does: the ones on the way from `root` to `cwd` and the
+ * ones inside the walked tree. A `cwd` inside an ignored directory is listed
+ * from its own root, as ripgrep searches a named path: the rules inside it
+ * still apply.
  */
 const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSystem | Path.Path> =
   Effect.gen(function* () {
@@ -289,7 +289,11 @@ const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSys
         let base = ""
         for (const part of fromRoot.split(path.sep).filter((segment) => segment.length > 0)) {
           base = joinRelative(base, part)
-          if (isGitignored(base, true, rules)) return []
+          if (isGitignored(base, true, rules)) {
+            fromRoot = ""
+            rules = yield* loadRules(cwd, "")
+            break
+          }
           rules = [...rules, ...(yield* loadRules(path.join(root, base), base))]
         }
 
@@ -673,14 +677,14 @@ const inIndexOrder = (
 }
 
 /**
- * One listing rule for both paths. Inside a git work tree, git's listing
- * decides which files grep may read; the native index, when present, only
- * orders them. An ignored `cwd` (an explicit `dist/`, or a session started in
- * one) is walked from its own root, as ripgrep searches a named path: git
- * would list none of its untracked files. Outside a work tree the native
- * index lists, with the walk as its per-call fallback, and an explicit target
- * the root's index skips is walked from its own root. The walk has a bound
- * and holds no watcher, so listing ignored targets never evicts a finder.
+ * One listing rule for both paths: an ignore authority decides which files
+ * grep may read, and the native index, when present, only orders them, most
+ * recently used first. Inside a git work tree the authority is git's own
+ * listing; outside one it is the `.gitignore` matcher walk. An ignored `cwd`
+ * (an explicit `dist/`, or a session started in one) is walked from its own
+ * root, as ripgrep searches a named path: git would list none of its
+ * untracked files. The walk has a bound and holds no watcher, so listing
+ * ignored targets never evicts a finder.
  */
 const makeFileIndex = (
   native: Option.Option<FileIndexService>,
@@ -694,31 +698,30 @@ const makeFileIndex = (
     const platform = yield* Effect.context<
       FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
     >()
-    const walkTarget = (cwd: string) => walk.listFiles({ root: cwd, cwd })
-    const outsideWorkTree = Option.match(native, {
-      onNone: () => walk,
-      onSome: (index) => withFallback(index, walk),
-    })
+    const inNativeOrder = (
+      files: ReadonlyArray<IndexedFile>,
+      params: { readonly root: string; readonly cwd: string },
+    ) =>
+      Option.match(native, {
+        onNone: () => Effect.succeed(files),
+        onSome: (index) =>
+          index.listFiles(params).pipe(
+            Effect.map((ordered) => inIndexOrder(files, ordered)),
+            Effect.orElseSucceed(() => files),
+          ),
+      })
 
     const listFiles = Effect.fn("FileIndex.listFiles")(function* (params: {
       readonly root: string
       readonly cwd: string
     }) {
       const ignored = yield* gitIgnoresDirectory(params.cwd)
-      if (Option.getOrElse(ignored, () => false)) return yield* walkTarget(params.cwd)
-
-      const gitFiles = yield* listGitFiles(params.cwd)
-      if (Option.isSome(gitFiles)) {
-        if (Option.isNone(native)) return gitFiles.value
-        const ordered = yield* native.value
-          .listFiles(params)
-          .pipe(Effect.orElseSucceed((): ReadonlyArray<IndexedFile> => []))
-        return inIndexOrder(gitFiles.value, ordered)
+      if (Option.getOrElse(ignored, () => false)) {
+        return yield* walk.listFiles({ root: params.cwd, cwd: params.cwd })
       }
-
-      const files = yield* outsideWorkTree.listFiles(params)
-      if (files.length > 0 || params.root === params.cwd) return files
-      return yield* walkTarget(params.cwd)
+      const gitFiles = yield* listGitFiles(params.cwd)
+      if (Option.isSome(gitFiles)) return yield* inNativeOrder(gitFiles.value, params)
+      return yield* inNativeOrder(yield* walk.listFiles(params), params)
     })
 
     return {
@@ -726,15 +729,7 @@ const makeFileIndex = (
     }
   })
 
-/** Wrap a primary service with per-method fallback on FileIndexError. */
-const withFallback = (primary: FileIndexService, fallback: FileIndexService): FileIndexService => ({
-  listFiles: (params) =>
-    primary
-      .listFiles(params)
-      .pipe(Effect.catchTag("FileIndexError", () => fallback.listFiles(params))),
-})
-
-/** Native-first with per-call fallback. Finder databases live under `${home}/.gent/fff`. */
+/** The file index, with the native index when the module loads. Finder databases live under `${home}/.gent/fff`. */
 export const FileIndexLive = (options: {
   readonly home: string
 }): Layer.Layer<
