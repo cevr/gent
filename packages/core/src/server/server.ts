@@ -130,6 +130,7 @@ import {
   resolveExistingSessionBranch,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
+import type { AgentName } from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import { resolveSessionSettings, sessionAgentDefinition } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
@@ -379,7 +380,10 @@ const makeSessionMutationsService: Effect.Effect<
   /**
    * Run one mutation once per request id. A retry replays the receipt; the
    * receipt is written in the same transaction as the work, and checked again
-   * inside it so two concurrent retries cannot both do the work.
+   * inside it so two concurrent retries cannot both do the work. `admit`
+   * runs before the transaction and only when no receipt exists: a check
+   * that must not hold the write lock, and that a replay must not repeat,
+   * because the receipt already answers the retry.
    */
   const eventPublisher = yield* EventPublisher
   const once = <A, E, R>(
@@ -387,12 +391,14 @@ const makeSessionMutationsService: Effect.Effect<
     { requestId }: { readonly requestId?: RequestId },
     subject: (result: A) => { readonly sessionId: SessionId; readonly branchId: BranchId },
     work: Effect.Effect<{ readonly envelope: EventEnvelope; readonly result: A }, E, R>,
+    admit: Effect.Effect<void, E, R> = Effect.void,
   ): Effect.Effect<{ readonly result: A; readonly fresh: boolean }, E | StorageError, R> =>
     Effect.gen(function* () {
       if (!Predicate.isUndefined(requestId)) {
         const existing = yield* sessionOperationStorage.getReceipt(operation, requestId)
         if (!Predicate.isUndefined(existing)) return { result: existing, fresh: false }
       }
+      yield* admit
       const committed = yield* storageTransaction(
         Effect.gen(function* () {
           if (!Predicate.isUndefined(requestId)) {
@@ -598,15 +604,32 @@ const makeSessionMutationsService: Effect.Effect<
 
   /**
    * A session's agent names every turn it runs, and no verb changes it, so
-   * a name the session's profile does not know fails the create before
-   * anything is stored. A handoff's inherited agent passed this check when
-   * its first session was made.
+   * the agent the session will store must be one its own cwd's profile
+   * knows. That is the named agent, or for a handoff the parent's agent,
+   * which it inherits: a handoff can move to a project that has no such
+   * agent. The check resolves a profile, so it runs outside the storage
+   * transaction; `admitParent` checks the parent again inside it.
    */
   const admitAgent = Effect.fn("SessionMutations.admitAgent")(function* (
     input: CreateSessionInput,
   ) {
-    const agent = input.admission?.agent
-    if (Predicate.isUndefined(agent)) return
+    const inherited = Effect.gen(function* () {
+      if (input.continueThread !== true || Predicate.isUndefined(input.parentSessionId)) {
+        return Option.none<AgentName>()
+      }
+      const parent = yield* sessionStorage.getSession(input.parentSessionId)
+      return Option.fromUndefinedOr(parent?.admission?.agent)
+    })
+    // A create that names an admission stores it, so its agent is the one.
+    const effective = yield* Option.match(
+      Option.fromUndefinedOr(requestedAdmission(input.admission)),
+      {
+        onNone: () => inherited,
+        onSome: (admission) => Effect.succeed(Option.fromUndefinedOr(admission.agent)),
+      },
+    )
+    if (Option.isNone(effective)) return
+    const agent = effective.value
     const registry = yield* Option.match(profileCache, {
       onNone: () => resolveRegistryForCwd(Option.fromUndefinedOr(input.cwd)),
       onSome: (cache) =>
@@ -623,7 +646,6 @@ const makeSessionMutationsService: Effect.Effect<
   const createSession = Effect.fn("SessionMutations.createSession")(function* (
     input: CreateSessionInput,
   ) {
-    yield* admitAgent(input)
     const committed = yield* once(
       DurableOperations.createSession,
       input,
@@ -696,6 +718,7 @@ const makeSessionMutationsService: Effect.Effect<
         }
         return { envelope, result }
       }),
+      admitAgent(input),
     )
     if (committed.fresh) {
       yield* Effect.logInfo("session.created").pipe(

@@ -53,7 +53,8 @@ import {
 } from "../../src/storage/storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { ConfigService, UserConfig } from "../../src/runtime/config"
-import { ExtensionRegistry } from "../../src/runtime/extension-host"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
+import type { LoadedExtension } from "../../src/domain/extension.js"
 import { makeRequestDeduper, SessionRuntimeError } from "../../src/runtime/session"
 import {
   collectSessionEvents,
@@ -72,6 +73,7 @@ import {
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SessionMutations } from "../../src/domain/extension"
 import {
+  AgentDefinition,
   AgentName,
   DEFAULT_MAX_AGENT_RUN_DEPTH,
   ModelId,
@@ -2027,6 +2029,57 @@ describe("requestId idempotency", () => {
       const all = yield* sessions.listSessions
       expect(all).toHaveLength(1)
     }).pipe(Effect.provide(sessionMutationsLayer), Effect.timeout("4 seconds")),
+  )
+
+  it.live("a retried create replays its receipt after its agent is gone", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const reviewer = AgentName.make("reviewer")
+        const reviewerExtension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/reviewer-agent") },
+          scope: "project",
+          sourcePath: "test",
+          contributions: { agents: [AgentDefinition.make({ name: reviewer })] },
+        }
+        // One database; the process that retries no longer loads the agent.
+        const shared = yield* Layer.build(
+          Layer.mergeAll(
+            SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+              Layer.provide(GentPlatform.Test()),
+            ),
+            sessionRuntimeLayer(),
+            EventStore.Memory,
+            EventPublisher.Test(),
+            AgentLoopSessionGovernance.Live,
+            LanguageModelLayers.debug(),
+            ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+            GentPlatform.Test(),
+          ),
+        )
+        const create = (registry: Layer.Layer<ExtensionRegistry>, requestId: string) =>
+          Effect.flatMap(SessionMutations, (mutations) =>
+            mutations.createSession({
+              cwd: "/tmp/retry",
+              admission: { agent: reviewer },
+              requestId,
+            }),
+          ).pipe(
+            Effect.provide(
+              Layer.provide(
+                SessionMutationsLive,
+                Layer.merge(Layer.succeedContext(shared), registry),
+              ),
+            ),
+          )
+        const withReviewer = ExtensionRegistry.fromResolved(resolveExtensions([reviewerExtension]))
+        const first = yield* create(withReviewer, "req-retry")
+        const retried = yield* create(ExtensionRegistry.Test(), "req-retry")
+        expect(retried.sessionId).toBe(first.sessionId)
+        // A fresh create is still checked.
+        const error = yield* create(ExtensionRegistry.Test(), "req-fresh").pipe(Effect.flip)
+        expect(error.message).toBe("Unknown agent: reviewer")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
 
   it.live("distinct createSession requestIds create distinct sessions", () =>
