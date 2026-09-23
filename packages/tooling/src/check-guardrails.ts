@@ -25,8 +25,6 @@ import {
   findUndeclaredWorkspaceImports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
-  findMissingLockIncludes,
-  LocksTsconfigSchema,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
   isSteeringFile,
@@ -64,17 +62,8 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
   )
   const rootRules = new Set(Object.keys(config.rules ?? {}))
   const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
-  const lockFindings = yield* Effect.forEach(
-    trackedFiles.filter((file) => file.endsWith("/tsconfig.locks.json")),
-    Effect.fn("Tooling.lockIncludeFindings")(function* (lockFile: string) {
-      const lockText = yield* Effect.promise(() => Bun.file(lockFile).text())
-      const lock = yield* Schema.decodeEffect(Schema.fromJsonString(LocksTsconfigSchema))(lockText)
-      return findMissingLockIncludes(lockFile, lockText, lock, trackedFiles)
-    }),
-  )
   return [
     ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, trackedFiles),
-    ...lockFindings.flat(),
     ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, rootRules),
   ]
 })

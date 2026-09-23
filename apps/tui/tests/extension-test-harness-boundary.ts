@@ -35,8 +35,6 @@ export interface ClientExtensionHarnessOptions {
   readonly workspace?: { readonly cwd: string; readonly home: string }
 }
 
-const waitForDeferred = <A, E>(deferred: Deferred.Deferred<A, E>) => Deferred.await(deferred)
-
 export const makeActiveSessionRef = (value?: ActiveClientSession): ActiveClientSessionRef => ({
   value,
 })
@@ -62,7 +60,7 @@ export const makeClientTestTransport = (
         const requestEffect = Option.fromNullishOr(opts.requestEffect)
         if (Option.isSome(requestEffect)) return requestEffect.value().pipe(Effect.orDie)
         const requestDeferred = Option.fromNullishOr(opts.requestDeferred)
-        if (Option.isSome(requestDeferred)) return waitForDeferred(requestDeferred.value)
+        if (Option.isSome(requestDeferred)) return Deferred.await(requestDeferred.value)
         return Effect.succeed(opts.requestReply)
       },
     },

@@ -14,6 +14,7 @@ import {
   Ref,
   Schema,
   Stream,
+  Schema as S,
 } from "effect"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
@@ -64,6 +65,8 @@ import {
   setupExtensions,
   type TurnProfileDefaults,
   validateLoadedExtensions,
+  loadRuntimeProfileDeclarations,
+  type RuntimeProfileInputs,
 } from "../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import {
@@ -126,6 +129,7 @@ import {
   registerContributions,
   type SystemPromptInput,
   type TurnAfterInput,
+  type ExtensionHookHandler,
 } from "../../src/domain/extension"
 import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/unstable/cluster"
@@ -134,7 +138,7 @@ import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 
-// ── ambient-host-context.test ───────────────────────────────────────────────
+// ── ambient host context ─────────────────────────────────────────────────────
 
 /**
  * The ambient host context resolves each facet from its own service Tag.
@@ -374,7 +378,7 @@ describe("ambient extension host context", () => {
   )
 })
 
-// ── session-profile.test ────────────────────────────────────────────────────
+// ── session profile resolution ───────────────────────────────────────────────
 
 class SessionProfileResourceMarker extends Context.Service<
   SessionProfileResourceMarker,
@@ -672,7 +676,7 @@ describe("session profile resolution", () => {
   )
 })
 
-// ── session-runtime-context.test ────────────────────────────────────────────
+// ── turn profile resolution ──────────────────────────────────────────────────
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
@@ -885,7 +889,7 @@ describe("resolveTurnProfile", () => {
   )
 })
 
-// ── ../drivers/driver-registry.test ─────────────────────────────────────────
+// ── driver resolution ────────────────────────────────────────────────────────
 
 /**
  * Driver resolution — model drivers resolve into the extension registry with
@@ -1067,7 +1071,7 @@ describe("driver resolution", () => {
   )
 })
 
-// ── ../extensions/activation.test ───────────────────────────────────────────
+// ── extension activation isolation ───────────────────────────────────────────
 
 const childProcessSpawnerLive = BunChildProcessSpawner.layer.pipe(
   Layer.provide(Layer.merge(BunFileSystem.layer, Path.layer)),
@@ -1552,7 +1556,7 @@ describe("extension activation isolation", () => {
   )
 })
 
-// ── ../extensions/capability-host.test ──────────────────────────────────────
+// ── capability registries ────────────────────────────────────────────────────
 
 /**
  * Extension capability registry regression locks.
@@ -1957,7 +1961,7 @@ describe("extension capability registries", () => {
     }))
 })
 
-// ── ../extensions/extension-hooks.test ──────────────────────────────────────
+// ── runtime slots ────────────────────────────────────────────────────────────
 
 const stubHostCtx = testExtensionHostContext()
 
@@ -2194,7 +2198,7 @@ describe("runtime slots", () => {
     }))
 })
 
-// ── ../extensions/host-facet-survivors.test ─────────────────────────────────
+// ── host session facet ───────────────────────────────────────────────────────
 
 /**
  * `ctx.Session.listBranches` is a host-wired facet verb with no other direct
@@ -2241,7 +2245,7 @@ describe("host session facet", () => {
   )
 })
 
-// ── ../extensions/loader.test ───────────────────────────────────────────────
+// ── extension setup ──────────────────────────────────────────────────────────
 
 describe("setupExtension", () => {
   it.scopedLive("requires user trust before project module code runs", () =>
@@ -2629,7 +2633,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
   )
 })
 
-// ── ../extensions/prompt-slots.test ─────────────────────────────────────────
+// ── prompt slots ─────────────────────────────────────────────────────────────
 
 const ext = (
   id: string,
@@ -2669,7 +2673,7 @@ describe("prompt slots", () => {
       ))
 })
 
-// ── ../extensions/registry.test ─────────────────────────────────────────────
+// ── extension resolution ─────────────────────────────────────────────────────
 
 // Test helper: build a no-op model Capability directly. The `tool({...})`
 // factory rejects metadata-free tool records, so fixtures here construct the
@@ -3290,7 +3294,7 @@ describe("resolveExtensions — slash command discovery", () => {
   })
 })
 
-// ── ../extensions/resource-host.test ────────────────────────────────────────
+// ── resources ────────────────────────────────────────────────────────────────
 
 /**
  * ResourceHost — service/lifecycle Resource tests.
@@ -3451,7 +3455,7 @@ describe("buildResourceLayer lifecycle", () => {
   )
 })
 
-// ── ../extensions/runtime-hooks.test ────────────────────────────────────────
+// ── runtime hooks ────────────────────────────────────────────────────────────
 
 const stubCtx = testExtensionHostContext()
 
@@ -3537,7 +3541,7 @@ describe("runtime hooks", () => {
     }))
 })
 
-// ── ../extensions/scope-precedence.test ─────────────────────────────────────
+// ── scope precedence ─────────────────────────────────────────────────────────
 
 /**
  * Scope precedence regression locks.
@@ -3657,7 +3661,7 @@ describe("scope precedence", () => {
   })
 })
 
-// ── ../extensions/memory/agent-override.test ────────────────────────────────
+// ── session agent ────────────────────────────────────────────────────────────
 
 const makeTestExtensions = () => {
   const mainAgent = AgentDefinition.make({
@@ -4066,4 +4070,597 @@ describe("addressed session verbs via RPC", () => {
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
   )
+})
+
+// ── turn projection hooks ────────────────────────────────────────────────────
+
+/**
+ * Explicit turn-projection hook regression locks.
+ *
+ * Locks the explicit turn-projection contract:
+ *  - `hook("turnProjection", handler)` contributes prompt sections + tool policy
+ *  - failures/defects are isolated so later extensions still run
+ */
+
+const hookCtx = {
+  projection: { agent: testAgent },
+  host: testExtensionHostContext({
+    sessionId: SessionId.make("s"),
+    branchId: BranchId.make("b"),
+    cwd: "/tmp",
+    home: "/tmp",
+  }),
+}
+
+const compile = (extensions: ReadonlyArray<LoadedExtension>) => compileExtensionHooks(extensions)
+
+const hookExt = <E, R>(
+  id: string,
+  scope: "builtin" | "user" | "project",
+  contribution: ExtensionHookHandler<"turnProjection", E, R>,
+): LoadedExtension => ({
+  manifest: { id: ExtensionId.make(id) },
+  scope,
+  sourcePath: `/test/${id}`,
+  contributions: {
+    hooks: [hook("turnProjection", contribution)],
+  },
+})
+
+class HookBoom extends Data.TaggedError("@gent/core/tests/runtime/extension-host.test/HookBoom") {}
+
+describe("turn projection hooks", () => {
+  const test = it.live.layer(BunServices.layer)
+
+  test("contribute prompt sections and tool policy in scope order", () =>
+    Effect.gen(function* () {
+      const compiled = compile([
+        hookExt("builtin-hook", "builtin", () =>
+          Effect.succeed({
+            promptSections: [{ id: "shared", content: "builtin", priority: 50 }],
+            toolPolicy: { include: ["builtin-tool"] },
+          }),
+        ),
+        hookExt("project-hook", "project", () =>
+          Effect.succeed({
+            promptSections: [
+              { id: "shared", content: "project", priority: 50 },
+              { id: "project-only", content: "project-only", priority: 60 },
+            ],
+            toolPolicy: { modelSet: ["project-visible"] },
+          }),
+        ),
+      ])
+
+      const result = yield* compiled
+        .resolveTurnProjection(hookCtx.projection)
+        .pipe(Effect.provideService(CurrentExtensionHostContext, hookCtx.host))
+      expect(result.promptSections).toEqual([
+        { id: "shared", content: "project", priority: 50 },
+        { id: "project-only", content: "project-only", priority: 60 },
+      ])
+      expect(result.policyFragments).toEqual([
+        { include: ["builtin-tool"] },
+        { modelSet: ["project-visible"] },
+      ])
+    }))
+
+  test("failing hook is logged + skipped while later hooks continue", () =>
+    Effect.gen(function* () {
+      const compiled = compile([
+        hookExt("bad-hook", "builtin", () => Effect.fail(new HookBoom())),
+        hookExt("good-hook", "project", () =>
+          Effect.succeed({
+            promptSections: [{ id: "good", content: "still-runs", priority: 50 }],
+            toolPolicy: { include: ["still-runs"] },
+          }),
+        ),
+      ])
+
+      const result = yield* compiled
+        .resolveTurnProjection(hookCtx.projection)
+        .pipe(Effect.provideService(CurrentExtensionHostContext, hookCtx.host))
+      expect(result.promptSections).toEqual([{ id: "good", content: "still-runs", priority: 50 }])
+      expect(result.policyFragments).toEqual([{ include: ["still-runs"] }])
+    }))
+
+  test("defecting hook is logged + skipped", () =>
+    Effect.gen(function* () {
+      const compiled = compile([
+        hookExt("defect-hook", "builtin", () => Effect.die(new Error("defect"))),
+        hookExt("good-hook", "project", () =>
+          Effect.succeed({
+            promptSections: [{ id: "good", content: "after-defect", priority: 50 }],
+          }),
+        ),
+      ])
+
+      const result = yield* compiled
+        .resolveTurnProjection(hookCtx.projection)
+        .pipe(Effect.provideService(CurrentExtensionHostContext, hookCtx.host))
+      expect(result.promptSections).toEqual([{ id: "good", content: "after-defect", priority: 50 }])
+      expect(result.policyFragments).toEqual([])
+    }))
+
+  test("empty hook result does not affect prompt sections or policy", () =>
+    Effect.gen(function* () {
+      const compiled = compile([hookExt("empty-hook", "builtin", () => Effect.succeed({}))])
+
+      const result = yield* compiled
+        .resolveTurnProjection(hookCtx.projection)
+        .pipe(Effect.provideService(CurrentExtensionHostContext, hookCtx.host))
+      expect(result.promptSections).toEqual([])
+      expect(result.policyFragments).toEqual([])
+    }))
+})
+
+// ── live session profiles ────────────────────────────────────────────────────
+
+/** Profile behavior through the production live cache and child adapter. */
+
+const sharedLayer = Layer.mergeAll(
+  fsLayer,
+  ConfigService.Test(),
+  SqliteStorage.TestWithSql(() => Layer.empty, {}),
+)
+
+// Build a fresh production cache in the test's owning scope.
+const openProfile = Effect.fn("RuntimeProfileTest.openProfile")(function* (
+  inputs: RuntimeProfileInputs,
+  // Only a test about a failing extension turns this off.
+  failOnExtensionFailure = true,
+) {
+  const context = yield* Layer.build(
+    SessionProfileCache.Live({ ...inputs, failOnExtensionFailure }),
+  )
+  const cache = Context.get(context, SessionProfileCache)
+  const profile = yield* cache.resolve(inputs.cwd)
+  return { ...profile, profile }
+})
+
+// Dynamic prompt section: the hook Effect yields a service from the
+// extension's Resource layer. The service Tag is `ReadOnly`-branded so the
+// prompt hook only receives a read surface.
+interface FakeProviderApi {
+  readonly text: () => string
+}
+class FakeProvider extends Context.Service<FakeProvider, FakeProviderApi>()(
+  "@gent/core/tests/runtime/extension-host.test/FakeProvider",
+) {}
+
+interface ScopedProbeApi {
+  readonly instance: number
+}
+class ScopedProbe extends Context.Service<ScopedProbe, ScopedProbeApi>()(
+  "@gent/core/tests/runtime/extension-host.test/ScopedProbe",
+) {}
+
+interface PureProbeApi {
+  readonly value: string
+}
+class PureProbe extends Context.Service<PureProbe, PureProbeApi>()(
+  "@gent/core/tests/runtime/extension-host.test/PureProbe",
+) {}
+
+interface PrecedenceProbeApi {
+  readonly value: string
+}
+class PrecedenceProbe extends Context.Service<PrecedenceProbe, PrecedenceProbeApi>()(
+  "@gent/core/tests/runtime/extension-host.test/PrecedenceProbe",
+) {}
+
+const fakeProviderLive = Layer.succeed(FakeProvider, {
+  text: () => "dynamic-from-service",
+} satisfies FakeProviderApi)
+
+const dynamicExtension = defineExtension({
+  id: "@gent/test-runtime-profile-dynamic",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register(
+      "resource",
+      defineResource({
+        id: "test/runtime-profile/fake-provider",
+        scope: "process",
+        layer: fakeProviderLive,
+      }),
+    )
+    yield* host.on("turnProjection", () =>
+      Effect.gen(function* () {
+        const fp = yield* FakeProvider
+        return {
+          promptSections: [{ id: "rp-dynamic-section", priority: 60, content: fp.text() }],
+        }
+      }),
+    )
+  }),
+})
+
+describe("live Profile", () => {
+  const test = it.live.layer(BunServices.layer)
+
+  test("loads declarations without building resource layers before boot activation", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.makeTempDirectoryScoped()
+        let nextInstance = 0
+        const events: Array<readonly [string, number]> = []
+
+        const resourceExtension = defineExtension({
+          id: "@gent/test-runtime-profile/declaration-resource",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+              defineResource({
+                id: "test/runtime-profile/declaration-resource",
+                scope: "process",
+                layer: Layer.effect(
+                  ScopedProbe,
+                  Effect.acquireRelease(
+                    Effect.sync(() => {
+                      const instance = ++nextInstance
+                      events.push(["acquire", instance])
+                      return ScopedProbe.of({ instance })
+                    }),
+                    (probe) => Effect.sync(() => events.push(["release", probe.instance])),
+                  ),
+                ),
+              }) as never,
+            )
+          }),
+        })
+        const validTool = tool({
+          id: "rp-declaration-collision",
+          description: "valid collision fixture",
+          params: S.Struct({}),
+          output: S.String,
+          execute: () => Effect.succeed("ok"),
+        })
+        const invalidTool = tool({
+          id: "rp-declaration-collision",
+          description: "invalid collision fixture",
+          params: S.Struct({}),
+          output: S.String,
+          execute: () => Effect.succeed("ok"),
+        })
+        const validExtension = defineExtension({
+          id: "@gent/test-runtime-profile/declaration-valid",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("tool", validTool)
+          }),
+        })
+        const invalidExtension = defineExtension({
+          id: "@gent/test-runtime-profile/declaration-invalid",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("tool", invalidTool)
+          }),
+        })
+        const inputs = {
+          cwd: home,
+          home,
+          platform: "darwin",
+          extensions: [resourceExtension, validExtension, invalidExtension],
+        }
+        const declarations = yield* loadRuntimeProfileDeclarations(inputs)
+        expect(events).toEqual([])
+        expect(declarations.extensionDeclarations.failed).toContainEqual(
+          expect.objectContaining({
+            manifest: { id: "@gent/test-runtime-profile/declaration-invalid" },
+            phase: "validation",
+          }),
+        )
+
+        // The collision is the subject, so the build keeps going past it.
+        const runtimeExit = yield* Effect.exit(Effect.scoped(openProfile(inputs, false)))
+        expect(runtimeExit._tag).toBe("Success")
+        if (runtimeExit._tag === "Success") {
+          expect(runtimeExit.value.profile.resolved.failedExtensions).toContainEqual(
+            expect.objectContaining({
+              manifest: { id: "@gent/test-runtime-profile/declaration-invalid" },
+              phase: "validation",
+            }),
+          )
+        }
+        expect(events).toEqual([
+          ["acquire", 1],
+          ["release", 1],
+        ])
+      }),
+    ).pipe(Effect.provide(sharedLayer)))
+
+  test("a user extension that fails to import reaches extension health", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const dir = path.join(home, ".gent", "extensions")
+        yield* fs.makeDirectory(path.join(dir, "folder-broken"), { recursive: true })
+        yield* fs.writeFileString(path.join(dir, "broken.ts"), "export const = ;\n")
+        yield* fs.writeFileString(
+          path.join(dir, "folder-broken", "index.ts"),
+          "export const notAnExtension = 1\n",
+        )
+        // An untrusted project directory fails its files the same way.
+        const cwd = path.join(home, "project")
+        const projectDir = path.join(cwd, ".gent", "extensions")
+        yield* fs.makeDirectory(projectDir, { recursive: true })
+        yield* fs.writeFileString(path.join(projectDir, "local.ts"), "export default 1\n")
+        const inputs = { cwd, home, platform: "darwin", extensions: [] }
+
+        const declarations = yield* loadRuntimeProfileDeclarations(inputs)
+        expect(declarations.extensionDeclarations.failed).toEqual([
+          expect.objectContaining({
+            manifest: { id: "broken" },
+            scope: "user",
+            sourcePath: path.join(dir, "broken.ts"),
+            phase: "load",
+          }),
+          expect.objectContaining({
+            manifest: { id: "folder-broken" },
+            scope: "user",
+            phase: "load",
+          }),
+          expect.objectContaining({
+            manifest: { id: "local" },
+            scope: "project",
+            phase: "load",
+            error: expect.stringContaining("not trusted"),
+          }),
+        ])
+
+        // A disabled id silences its file.
+        const quiet = yield* loadRuntimeProfileDeclarations({
+          ...inputs,
+          disabledExtensions: ["broken", "folder-broken", "local"],
+        })
+        expect(quiet.extensionDeclarations.failed).toEqual([])
+
+        // A test root that fails on a failed extension sees the import failure too.
+        const strict = yield* Effect.exit(Effect.scoped(openProfile(inputs)))
+        expect(strict._tag).toBe("Failure")
+      }),
+    ).pipe(Effect.provide(sharedLayer)))
+
+  test("live Profile builds a process resource layer once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let starts = 0
+        const extension = defineExtension({
+          id: "@gent/test-runtime-profile-start-once",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+              defineResource({
+                id: "test/runtime-profile/start-once",
+                scope: "process",
+                layer: Layer.effectDiscard(
+                  Effect.sync(() => {
+                    starts += 1
+                  }),
+                ),
+              }) as never,
+            )
+          }),
+        })
+
+        yield* openProfile({
+          cwd: "/tmp",
+          home: "/tmp",
+          platform: "darwin",
+          extensions: [extension],
+        })
+
+        expect(starts).toBe(1)
+      }),
+    ).pipe(Effect.provide(sharedLayer)))
+
+  test("live Profile preserves one scoped resource instance for hooks and shutdown", () =>
+    Effect.gen(function* () {
+      let nextInstance = 0
+      const events: Array<readonly [string, number]> = []
+      const extension = defineExtension({
+        id: "@gent/test-runtime-profile-resource-identity",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+            defineResource({
+              id: "test/runtime-profile/resource-identity",
+              scope: "process",
+              layer: Layer.effect(
+                ScopedProbe,
+                Effect.acquireRelease(
+                  Effect.sync(() => {
+                    const instance = ++nextInstance
+                    events.push(["acquire", instance])
+                    return ScopedProbe.of({ instance })
+                  }),
+                  (probe) => Effect.sync(() => events.push(["release", probe.instance])),
+                ),
+              ),
+            }) as never,
+            // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+            defineResource({
+              id: "test/runtime-profile/resource-identity/pure",
+              scope: "process",
+              layer: Layer.succeed(PureProbe, { value: "pure" } satisfies PureProbeApi),
+            }) as never,
+          )
+          yield* host.on("turnProjection", () =>
+            Effect.gen(function* () {
+              const probe = yield* ScopedProbe
+              const pureProbe = yield* PureProbe
+              events.push(["capability", probe.instance])
+              return {
+                promptSections: [{ id: "pure-probe", priority: 1, content: pureProbe.value }],
+              }
+            }),
+          )
+        }),
+      })
+
+      const exit = yield* Effect.exit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* openProfile({
+              cwd: "/tmp",
+              home: "/tmp",
+              platform: "darwin",
+              extensions: [extension],
+            })
+
+            const hookCtx = {
+              projection: {
+                sessionId: SessionId.make("s"),
+                branchId: BranchId.make("b"),
+                agent: testAgent,
+                agentName: AgentName.make("cowork"),
+                allTools: [],
+              },
+              host: testExtensionHostContext({
+                sessionId: SessionId.make("s"),
+                branchId: BranchId.make("b"),
+                cwd: "/tmp",
+                home: "/tmp",
+              }),
+            }
+
+            // The turn provides the profile's layer context, which carries the
+            // built process resources, exactly as the agent loop does.
+            const result = yield* runtime.registryService
+              .getResolved()
+              .extensionHooks.resolveTurnProjection(hookCtx.projection)
+              .pipe(
+                Effect.provideService(CurrentExtensionHostContext, hookCtx.host),
+                Effect.provideContext(runtime.layerContext),
+              )
+            expect(result.promptSections).toEqual([
+              { id: "pure-probe", priority: 1, content: "pure" },
+            ])
+            expect(events).toEqual([
+              ["acquire", 1],
+              ["capability", 1],
+            ])
+          }),
+        ),
+      )
+
+      expect(exit._tag).toBe("Success")
+      expect(events).toEqual([
+        ["acquire", 1],
+        ["capability", 1],
+        ["release", 1],
+      ])
+    }).pipe(Effect.provide(sharedLayer)))
+
+  test("resource assembly follows resolved extension order for acquired and pure services", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let starts = 0
+        const activatedExtension = defineExtension({
+          id: "@gent/test-runtime-profile-precedence/activated",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+              defineResource({
+                id: "test/runtime-profile/precedence/activated",
+                scope: "process",
+                layer: Layer.effect(
+                  PrecedenceProbe,
+                  Effect.sync(() => {
+                    starts += 1
+                    return { value: "activated" } satisfies PrecedenceProbeApi
+                  }),
+                ),
+              }) as never,
+            )
+          }),
+        })
+        const pureExtension = defineExtension({
+          id: "@gent/test-runtime-profile-precedence/pure",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register(
+              "resource",
+              // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
+              defineResource({
+                id: "test/runtime-profile/precedence/pure",
+                scope: "process",
+                layer: Layer.succeed(PrecedenceProbe, {
+                  value: "pure",
+                } satisfies PrecedenceProbeApi),
+              }) as never,
+            )
+          }),
+        })
+
+        for (const { extensions, expected } of [
+          { extensions: [activatedExtension, pureExtension], expected: "pure" },
+          { extensions: [pureExtension, activatedExtension], expected: "pure" },
+        ]) {
+          const runtime = yield* openProfile({
+            cwd: "/tmp",
+            home: "/tmp",
+            platform: "darwin",
+            extensions,
+          })
+          expect(Context.get(runtime.layerContext, PrecedenceProbe).value).toBe(expected)
+        }
+
+        expect(starts).toBe(2)
+      }),
+    ).pipe(Effect.provide(sharedLayer)))
+
+  test("resource-backed turnProjection resolves through the profile registry", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layerContext } = yield* openProfile({
+          cwd: "/tmp",
+          home: "/tmp",
+          platform: "darwin",
+          extensions: [dynamicExtension],
+        })
+        const registryService = Context.get(layerContext, ExtensionRegistry)
+
+        const hookCtx = {
+          projection: {
+            sessionId: SessionId.make("s"),
+            branchId: BranchId.make("b"),
+            agent: testAgent,
+            agentName: AgentName.make("cowork"),
+            allTools: [],
+          },
+          host: testExtensionHostContext({
+            sessionId: SessionId.make("s"),
+            branchId: BranchId.make("b"),
+            cwd: "/tmp",
+            home: "/tmp",
+          }),
+        }
+        const result = yield* registryService
+          .getResolved()
+          .extensionHooks.resolveTurnProjection(hookCtx.projection)
+          .pipe(
+            Effect.provideService(CurrentExtensionHostContext, hookCtx.host),
+            Effect.provideContext(layerContext),
+          )
+
+        expect(result.promptSections).toContainEqual({
+          id: "rp-dynamic-section",
+          priority: 60,
+          content: "dynamic-from-service",
+        })
+      }),
+    ).pipe(Effect.provide(sharedLayer)))
 })

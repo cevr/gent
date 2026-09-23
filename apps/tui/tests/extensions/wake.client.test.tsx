@@ -5,7 +5,7 @@ import { createSignal } from "solid-js"
 import type { WakePendingType } from "@gent/extensions/client"
 import { formatRemaining, WakeTray, wakeTrayLines } from "../../src/extensions/wake.client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
-import { waitForRenderedFrame } from "../helpers-boundary"
+import { waitForFrame } from "../helpers-boundary"
 
 // ── ../components/wake-tray.test ────────────────────────────────────────────
 
@@ -123,16 +123,12 @@ describe("Wake tray", () => {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <WakeTray pending={value} now={() => 1_000_000} />),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("alarm in"), "tray"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("alarm in"), "tray")
       const frame = renderFrame(setup)
       expect(frame).toContain("◷ alarm in 1m 35s · check the deploy")
       expect(frame).toContain("◉ monitor every 1m 00s")
       setValue(Option.some({ now: 1_000_000, entries: [] }))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => !renderFrame(setup).includes("alarm in"), "tray hidden"),
-      )
+      yield* waitForFrame(setup, () => !renderFrame(setup).includes("alarm in"), "tray hidden")
     }),
   )
 })

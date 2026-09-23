@@ -23,7 +23,7 @@ import {
 } from "../../src/extensions/thread-view.client"
 import { childTaskText } from "@gent/extensions/client"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
-import { waitForRenderedFrame } from "../helpers-boundary"
+import { waitForFrame } from "../helpers-boundary"
 
 // ── ../components/thread-view.test ──────────────────────────────────────────
 
@@ -257,9 +257,7 @@ describe("thread pane", () => {
         )),
       )
 
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("2 windows"), "thread pane"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("2 windows"), "thread pane")
       expect(renderFrame(setup)).toContain("what happened before")
       setup.mockInput.pressArrow("up")
       yield* Effect.promise(() => setup.renderOnce())
@@ -267,7 +265,7 @@ describe("thread pane", () => {
       expect(Option.map(selected, (value) => value.index)).toEqual(Option.some(1))
 
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() => waitForRenderedFrame(setup, () => !open(), "thread pane closed"))
+      yield* waitForFrame(setup, () => !open(), "thread pane closed")
       expect(renderFrame(setup)).not.toContain("Thread")
     }),
   )

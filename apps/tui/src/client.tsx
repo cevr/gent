@@ -5,7 +5,7 @@ import {
   Effect,
   Exit,
   Fiber,
-  FileSystem,
+  type FileSystem,
   type Logger,
   Option,
   type PlatformError,
@@ -158,15 +158,7 @@ export const createClientLog = (services: Context.Context<unknown>): ClientLog =
 // ── client trace logging ────────────────────────────────────────────────────
 
 /**
- * Client-side Effect trace logger.
- *
- * Writes the SDK's JSON line format to CLIENT_LOG_PATH, the same file
- * `clientLog` appends to, so all TUI logs land in one place and `gent doctor`
- * reads the server and client logs with one parser.
- */
-
-/**
- * Batched JSON file logger at CLIENT_LOG_PATH; flushes on scope close.
+ * Batched JSON file logger at `path`; flushes on scope close.
  *
  * Creates the log directory first: `makeJsonFileLogger` opens the file and
  * does not make its parent, so the directory has to exist before the open.
@@ -178,18 +170,14 @@ export const makeClientTraceLogger = (
   Logger.Logger<unknown, void>,
   PlatformError.PlatformError,
   FileSystem.FileSystem | Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    yield* Effect.ignore(fs.makeDirectory(dir, { recursive: true }))
-    return yield* makeJsonFileLogger(path)
-  })
+> => Effect.andThen(ensureLogDir(dir), makeJsonFileLogger(path))
 
-export const clientTraceLogger: Effect.Effect<
-  Logger.Logger<unknown, void>,
-  PlatformError.PlatformError,
-  FileSystem.FileSystem | Scope.Scope
-> = Effect.andThen(ensureLogDir(CLIENT_LOG_DIR), makeJsonFileLogger(CLIENT_LOG_PATH))
+/**
+ * The TUI's Effect trace logger. Writes the SDK's JSON line format to
+ * CLIENT_LOG_PATH, the file `clientLog` appends to, so all TUI logs land in one
+ * place and `gent doctor` reads server and client logs with one parser.
+ */
+export const clientTraceLogger = makeClientTraceLogger(CLIENT_LOG_DIR, CLIENT_LOG_PATH)
 
 // ── agent state ─────────────────────────────────────────────────────────────
 
