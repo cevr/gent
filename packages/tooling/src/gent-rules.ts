@@ -157,8 +157,14 @@ const AUTHORING_ENTRY = /^@gent\/core\/extensions\/(?:api|branch-tools)$/
 const PROTOCOL_ENTRY = /^@gent\/core\/protocol$/
 const TEST_UTILS_ENTRY = /^@gent\/core\/test-utils(?:\/|$)/
 const EXTENSIONS_PACKAGE = /^@gent\/extensions(?:\/|$)/
-/** The TUI host's own Solid contexts: the client provider and the extension host. */
-const TUI_HOST_CONTEXT_PATH = /\/apps\/tui\/src\/(?:client|extensions\/host)(?:\.tsx?|\.js)?$/
+/**
+ * A TUI client extension: a shipped `*.client.*` module or the builtin roster
+ * that lists them. Both author against `@gent/tui/extensions`, as a user
+ * extension does.
+ */
+const TUI_CLIENT_EXTENSION_FILE = /\/apps\/tui\/src\/extensions\/(?:[^/]+\.client|builtins)\.tsx?$/
+/** The one relative target a client extension may name: a sibling client extension. */
+const TUI_CLIENT_EXTENSION_MODULE = /\/apps\/tui\/src\/extensions\/[^/]+\.client(?:\.tsx?|\.js)?$/
 
 /** The module specifier of an import, re-export, or dynamic import. */
 const importSourceOf = (node: AstNode): string | undefined => {
@@ -653,9 +659,13 @@ const plugin: Plugin = {
      *   a relative path; it goes through the entry that publishes the name.
      * - The TUI host (`apps/tui/src/` outside `extensions/`) never reads
      *   `@gent/extensions`. One extension's view belongs in its client
-     *   extension, which reaches the host only through `ClientContext`: a
-     *   TUI client extension never reads the host's Solid contexts
-     *   (`client.tsx`, `extensions/host.tsx`), which a user extension cannot.
+     *   extension, which reaches the TUI only through `@gent/tui/extensions`,
+     *   as a user extension does: a TUI client extension (`*.client.*` and
+     *   the `builtins.tsx` roster) names no TUI module by relative path
+     *   except a sibling client extension.
+     *
+     * Every module form counts: `import`, `export ... from`, `import(...)`
+     * and `typeof import(...)`.
      *
      * Exempt: the two authoring entries themselves, which assemble the public
      * API from core internals, and the TUI's client extension loader, which is
@@ -671,8 +681,7 @@ const plugin: Plugin = {
         if (!extensionFile && !productFile && !outsideCore) return {}
         const tuiExtension = filename.includes("apps/tui/src/extensions/")
         const tuiHost = !tuiExtension && productFile && filename.includes("/apps/tui/src/")
-        const tuiClientExtension =
-          tuiExtension && !filename.endsWith("apps/tui/src/extensions/host.tsx")
+        const tuiClientExtension = TUI_CLIENT_EXTENSION_FILE.test(filename)
 
         const extensionMessage = (
           source: string,
@@ -687,8 +696,7 @@ const plugin: Plugin = {
           return `Extensions must import from "@gent/core/extensions/api" or "@gent/core/extensions/branch-tools". Forbidden: "${source}"`
         }
 
-        const report = (node: AstNode) => {
-          const source = importSourceOf(node)
+        const report = (node: AstNode, source: string | undefined) => {
           if (source === undefined) return
           const resolved = resolvedRelativeSource(filename, source)
           const readsTestUtils =
@@ -711,21 +719,23 @@ const plugin: Plugin = {
             message === undefined &&
             tuiClientExtension &&
             resolved !== undefined &&
-            TUI_HOST_CONTEXT_PATH.test(resolved)
+            !TUI_CLIENT_EXTENSION_MODULE.test(resolved)
           ) {
-            message = `A client extension reads the host through ClientContext, not its Solid contexts. Forbidden: "${source}"`
+            message = `A client extension reaches the TUI through "@gent/tui/extensions", as a user extension does; a relative import may name only a sibling client extension. Forbidden: "${source}"`
           }
           if (message === undefined && tuiHost && EXTENSIONS_PACKAGE.test(source)) {
             message = `The TUI host reads no extension module; move the view into a client extension under apps/tui/src/extensions/. Forbidden: "${source}"`
           }
           if (message !== undefined) context.report({ message, node })
         }
+        const reportSource = (node: AstNode) => report(node, importSourceOf(node))
 
         return {
-          ImportDeclaration: report,
-          ExportNamedDeclaration: report,
-          ExportAllDeclaration: report,
-          ImportExpression: report,
+          ImportDeclaration: reportSource,
+          ExportNamedDeclaration: reportSource,
+          ExportAllDeclaration: reportSource,
+          ImportExpression: reportSource,
+          TSImportType: (node) => report(node, importTypeSourceOf(node)),
         }
       },
     },
@@ -1472,7 +1482,8 @@ const plugin: Plugin = {
      *
      * What is reported: a `CallExpression` whose callee is the identifier
      * bound by an `effect-bun-test` import, under whatever local name that
-     * import gives it. A member call such as `it.live(...)` is the correct
+     * import gives it, or `ns.it` through a namespace import of the package.
+     * A member call such as `it.live(...)` is the correct
      * form and is untouched, and so is a file that never imports `it` from
      * `effect-bun-test` — the `it` from `bun:test` is callable.
      */
@@ -1482,6 +1493,24 @@ const plugin: Plugin = {
         // makes something other than "it". Empty until an import binds it,
         // so a file that never imports from effect-bun-test reports nothing.
         const inertNames = new Set<string>()
+        // `import * as ebt from "effect-bun-test"` makes `ebt.it(...)` the same call.
+        const namespaces = new Set<string>()
+        const inertCallee = (callee: AstNode | undefined): string | undefined => {
+          if (callee?.type === "Identifier") {
+            const name = getStringField(callee, "name")
+            return name !== undefined && inertNames.has(name) ? name : undefined
+          }
+          if (callee?.type !== "MemberExpression") return undefined
+          const object = getNodeField(callee, "object")
+          const property = getNodeField(callee, "property")
+          const namespace =
+            object?.type === "Identifier" ? getStringField(object, "name") : undefined
+          if (namespace === undefined || !namespaces.has(namespace)) return undefined
+          if (property?.type !== "Identifier" || getStringField(property, "name") !== "it") {
+            return undefined
+          }
+          return `${namespace}.it`
+        }
         return {
           ImportDeclaration(node) {
             if (!isAstNode(node)) return
@@ -1489,6 +1518,12 @@ const plugin: Plugin = {
             if (source === undefined || getStringField(source, "value") !== "effect-bun-test")
               return
             for (const specifier of getNodeArrayField(node, "specifiers") ?? []) {
+              if (specifier.type === "ImportNamespaceSpecifier") {
+                const local = getNodeField(specifier, "local")
+                const localName = local === undefined ? undefined : getStringField(local, "name")
+                if (localName !== undefined) namespaces.add(localName)
+                continue
+              }
               if (specifier.type !== "ImportSpecifier") continue
               const imported = getNodeField(specifier, "imported")
               if (imported === undefined) continue
@@ -1504,10 +1539,8 @@ const plugin: Plugin = {
           },
           CallExpression(node) {
             if (!isAstNode(node)) return
-            const callee = getNodeField(node, "callee")
-            if (callee?.type !== "Identifier") return
-            const name = getStringField(callee, "name")
-            if (name === undefined || !inertNames.has(name)) return
+            const name = inertCallee(getNodeField(node, "callee"))
+            if (name === undefined) return
             context.report({
               message: `\`${name}(...)\` from "effect-bun-test" is not callable — it is the object holding \`${name}.live\`, \`${name}.scopedLive\`, \`${name}.effect\` and \`${name}.scoped\`. Calling it throws while the module loads, so Bun registers none of this file's tests and reports the loss as an error attributed to no test. Use \`test(...)\` from "bun:test" for a synchronous body, or \`${name}.live\` / \`${name}.scopedLive\` for one that returns an Effect.`,
               node,
