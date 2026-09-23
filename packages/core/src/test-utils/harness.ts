@@ -210,16 +210,14 @@ export const testAgent = AgentDefinition.make({
 const [defaultProviderId, defaultModelName] = Option.getOrThrow(parseModelId(DEFAULT_MODEL_ID))
 
 /**
- * What an `extensionInputs` preset needs for a turn to run: the test agent and
- * a driver that lists the default model. `createE2ELayer` registers `agents`
- * only for pre-loaded extensions. The driver's model is never called; the test
+ * What an `extensionInputs` preset needs for a turn to run beside `agents:
+ * [testAgent]`: a driver that lists the default model. The driver's model is never called; the test
  * hands the runtime its own language model through `providerLayer`.
  */
 export const testTurnExtension = defineExtension({
   id: "test-turn",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("agent", testAgent)
     yield* host.register("modelDriver", {
       id: defaultProviderId,
       name: "Test driver",
@@ -771,12 +769,19 @@ const wrapExtensionInput = (
 const extensionInputsForConfig = (
   config: E2ELayerConfig,
 ): ReadonlyArray<GentExtension<ExtensionSetupServices>> => {
+  // No agents, no extension: a health or registry listing sees only what the test loads.
+  const agents = [config.agents]
+    .filter((list) => list.length > 0)
+    .map((list) => testAgentsExtension(list))
   if (Predicate.isUndefined(config.extensions)) {
-    return config.extensionInputs.map((extension) =>
-      wrapExtensionInput(extension, config.layerOverrides),
-    )
+    return [
+      ...agents,
+      ...config.extensionInputs.map((extension) =>
+        wrapExtensionInput(extension, config.layerOverrides),
+      ),
+    ]
   }
-  return [testAgentsExtension(config.agents), ...config.extensions.map(fromLoadedExtension)]
+  return [...agents, ...config.extensions.map(fromLoadedExtension)]
 }
 
 const approvalOverrideForConfig = (config: E2ELayerConfig) => {

@@ -52,8 +52,6 @@ export const main = AgentDefinition.make({
   reasoningEffort: "max",
 })
 
-export const CoreAgents = [main] satisfies ReadonlyArray<AgentDefinition>
-
 /** Sorts after the environment section and before extension sections such as skills. */
 const PROJECT_INSTRUCTIONS_PRIORITY = 70
 
@@ -127,7 +125,7 @@ export const AgentsExtension = defineExtension({
   id: "@gent/agents",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
-    yield* host.register("agent", ...CoreAgents)
+    yield* host.register("agent", main)
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
         const text = yield* readProjectInstructions()

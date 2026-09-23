@@ -1839,6 +1839,7 @@ describe("extension command RPCs", () => {
             const { client, sessionId } = yield* createRpcHarness({
               ...e2ePreset,
               providerLayer,
+              agents: [],
               extensionInputs: [failingExtension],
               // This test is about the failure report, so the load must survive it.
               allowFailedExtensions: true,

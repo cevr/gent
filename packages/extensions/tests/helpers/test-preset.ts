@@ -1,21 +1,20 @@
 /**
- * Test preset — provides extension config for core integration tests.
- * Imports from @gent/extensions so test-utils don't need to.
+ * The shipped extensions as E2E presets for extension tests. The builtin
+ * agents extension contributes the agents, so `agents` stays empty.
  */
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 
 export { ModelContextCompactorLive } from "../../src/compaction.js"
 import { CELL_EXTENSION_ID } from "../../src/cell.js"
-import { AllBuiltinAgents } from "./builtin-agents.js"
 import type { E2ELayerConfig } from "@gent/core/test-utils"
 
 /**
- * The shipped composition: every builtin extension, and the branch-tool
+ * The shipped composition: every builtin extension (the agents among them), and the branch-tool
  * feature the cell surface among them runs on. Named together because a
  * `cell` tool whose storage and kernel are missing fails on first use.
  */
 export const shippedPreset = {
-  agents: AllBuiltinAgents,
+  agents: [],
   extensionInputs: BuiltinExtensions,
   branchTools: CellBranchTools,
 } satisfies Pick<E2ELayerConfig, "agents" | "extensionInputs" | "branchTools">
@@ -25,7 +24,7 @@ export const shippedPreset = {
  * model calls host tools directly; the same bound execution path serves cells.
  */
 export const e2ePreset = {
-  agents: AllBuiltinAgents,
+  agents: [],
   extensionInputs: BuiltinExtensions.filter(
     (extension) => extension.manifest.id !== CELL_EXTENSION_ID,
   ),
