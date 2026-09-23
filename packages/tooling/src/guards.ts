@@ -1710,7 +1710,9 @@ export const findTuiSessionIdentityReads = (file: string, text: string): Readonl
  *
  * The inventory is checked in both directions: a suppression comment with no
  * approved entry fails the guard, and an approved entry with no matching
- * comment anywhere in the tree fails it too, so the table cannot drift.
+ * comment anywhere in the tree fails it too, so the table cannot drift. One
+ * entry approves every identical comment in its file, so an entry listed twice
+ * fails as well.
  */
 
 /** `next-line` suppresses the following line; `file` suppresses the whole module. */
@@ -1747,11 +1749,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
   },
   {
     file: "apps/tui/src/client.tsx",
-    scope: "next-line",
-    text: "nodeBuiltinImport:off",
-  },
-  {
-    file: "apps/tui/tests/extensions/loader-boundary.test.ts",
     scope: "next-line",
     text: "nodeBuiltinImport:off",
   },
@@ -1893,20 +1890,45 @@ const containsComment = (text: string, comment: string): boolean =>
  */
 export const findUnusedSuppressionApprovals = (
   sources: ReadonlyMap<string, string>,
+  entries: ReadonlyArray<ApprovedSuppressionEntry> = approvedSuppressionEntries,
 ): ReadonlyArray<Finding> => {
   const entryLines = Option.getOrElse(
     Option.fromNullishOr(sources.get(GUARDS_FILE)),
     () => "",
   ).split("\n")
-  return approvedSuppressionEntries.flatMap((entry) => {
+  const listed = new Map<string, number>()
+  return entries.flatMap((entry) => {
     const comment = approvedComment(entry)
+    const key = `${entry.file}\n${comment}`
+    const nth = (listed.get(key) ?? 0) + 1
+    listed.set(key, nth)
+    const at = (): number => {
+      const lines = [...entryLines.entries()]
+        .filter(
+          ([index, text]) =>
+            text.includes(`file: "${entry.file}"`) &&
+            entryLines
+              .slice(index, index + 4)
+              .some((next) => next.includes(`text: "${entry.text}"`)),
+        )
+        .map(([index]) => index + 1)
+      return Option.getOrElse(Option.fromNullishOr(lines.at(nth - 1)), () => 1)
+    }
+    if (nth > 1) {
+      return [
+        {
+          file: GUARDS_FILE,
+          line: at(),
+          message: `approved suppression for ${entry.file} is listed twice; one entry approves every identical comment, so drop the duplicate: ${comment}`,
+        },
+      ]
+    }
     const source = Option.fromNullishOr(sources.get(entry.file))
     if (Option.exists(source, (text) => containsComment(text, comment))) return []
-    const line = entryLines.findIndex((text) => text.includes(`text: "${entry.text}"`)) + 1
     return [
       {
         file: GUARDS_FILE,
-        line: Math.max(line, 1),
+        line: at(),
         message: `approved suppression for ${entry.file} has no matching comment there; drop the entry: ${comment}`,
       },
     ]

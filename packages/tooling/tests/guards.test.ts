@@ -1379,6 +1379,18 @@ describe("suppression inventory guard", () => {
     ).toMatchObject([{ file: membraneFile, line: 1 }])
   })
 
+  test("an entry listed twice is reported once, at the duplicate", () => {
+    const text = "strictEffectProvide:off"
+    const findings = findUnusedSuppressionApprovals(
+      new Map([[membraneFile, `${nextLine} ${text}\n`]]),
+      [
+        { file: membraneFile, scope: "next-line", text },
+        { file: membraneFile, scope: "next-line", text },
+      ],
+    )
+    expect(messages(findings)).toEqual([expect.stringContaining("is listed twice")])
+  })
+
   test("approved entry with no matching comment in its file is unused", () => {
     const findings = findUnusedSuppressionApprovals(new Map([[membraneFile, "export {}\n"]]))
     expect(messages(findings)).toContainEqual(expect.stringContaining(membraneComment))
