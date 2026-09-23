@@ -1613,7 +1613,7 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }),
   )
-  it.live("a startup prompt whose send failed is sent again under the same request id", () =>
+  it.live("a startup prompt the server refuses comes back to the draft with its reason", () =>
     Effect.gen(function* () {
       let ctx: Option.Option<ClientContextValue> = Option.none()
       const attempts: Array<{ readonly content: string; readonly requestId?: string }> = []
@@ -1624,7 +1624,7 @@ describe("App auth gate", () => {
             Effect.suspend(() => {
               attempts.push(input)
               if (attempts.length === 1) {
-                return Effect.fail(new ProviderAuthError({ message: "connection lost" }))
+                return Effect.fail(new ProviderAuthError({ message: "send refused" }))
               }
               return Effect.void
             }),
@@ -1655,22 +1655,21 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
+      // The refusal is an answer: the prompt comes back as a draft, with why.
       yield* waitForFrame(
         setup,
-        () => attempts.some((message) => message.content === initialPrompt),
-        "sent message",
+        (frame) =>
+          frame.includes(`┃ ${initialPrompt}`) &&
+          Option.exists(Option.fromNullishOr(clientContext.error()), (error) =>
+            error.includes("send refused"),
+          ),
+        "prompt back in the draft",
       )
-      // Nothing else changes: the send itself goes again.
-      yield* waitForFrame(setup, () => attempts.length >= 2, "second send")
-      // The send landed; one more mount must not send again.
-      clientContext.switchSession(SessionId.make("session-a"), BranchId.make("branch-b"), "A")
-      yield* Effect.promise(() => setup.renderOnce())
-      // gent/no-sleep: allow real-clock gap so a third send, if one starts, lands before the assertion
-      yield* Effect.sleep("50 millis")
-      yield* Effect.promise(() => setup.renderOnce())
-      expect(attempts).toHaveLength(2)
-      expect(attempts[0]?.requestId).toBeDefined()
-      expect(attempts[1]?.requestId).toBe(attempts[0]?.requestId)
+      expect(attempts).toHaveLength(1)
+      // The reader sends it; nothing sends it on its own.
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => attempts.length === 2, "sent by the reader")
+      expect(attempts[1]?.content).toBe(initialPrompt)
       setup.renderer.destroy()
     }),
   )

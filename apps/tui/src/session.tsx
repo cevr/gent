@@ -128,22 +128,23 @@ import { useExtensionUI } from "./extensions/host"
  * @module
  */
 
-/** One startup prompt, held by one send at a time. */
+/**
+ * The startup prompt as a submission. It is sent once; a send that fails is
+ * refused as a composer submission is: it comes back to the draft of the
+ * branch it was sent from, with its reason.
+ */
 interface StartupPrompt {
   readonly content: string
-  /** The id of a send that failed. The next send uses it, so the prompt cannot run twice. */
-  readonly requestId: Option.Option<string>
-  /** Report the send's end. A failed send gives the prompt back to the shell. */
-  readonly settle: (sent: boolean, requestId: string) => void
+  readonly refuse: (target: SessionIdentity, reason: string) => void
 }
 
 interface SessionShellValue {
   /**
    * The `-p` prompt, if this is the session the startup flags named and no
-   * send holds it. A session view that mounts again gets nothing while a send
-   * is in flight or after one landed.
+   * one took it yet. A session view that mounts again gets nothing: the
+   * prompt goes out once, and a failed send gives it to the draft.
    */
-  readonly takePrompt: (sessionId: SessionId) => Option.Option<StartupPrompt>
+  readonly takePrompt: (sessionId: SessionId) => Option.Option<string>
 }
 
 const SessionShellContext = createContext<SessionShellValue>()
@@ -155,22 +156,14 @@ interface SessionShellProviderProps {
 }
 
 export function SessionShellProvider(props: ParentProps<SessionShellProviderProps>) {
-  let failedRequestId = Option.none<string>()
-  let held = false
+  let taken = false
   const value: SessionShellValue = {
     takePrompt: (sessionId) => {
       const owns = Option.exists(props.initialSessionId, (boot) => boot === sessionId)
-      if (!owns || held) return Option.none()
+      if (!owns || taken) return Option.none()
       return Option.map(props.initialPrompt, (content) => {
-        held = true
-        return {
-          content,
-          requestId: failedRequestId,
-          settle: (sent, requestId) => {
-            held = sent
-            failedRequestId = Option.some(requestId)
-          },
-        }
+        taken = true
+        return content
       })
     },
   }
@@ -2244,24 +2237,17 @@ export function useSessionFeed(
         })
         client.runtime.cast(
           Effect.gen(function* () {
-            const requestId = yield* Option.match(prompt.requestId, {
-              onNone: () => randomId,
-              onSome: Effect.succeed,
-            })
+            const requestId = yield* randomId
             yield* client.client.message
               .send({ sessionId: session, branchId: branch, content: prompt.content, requestId })
               .pipe(
-                // A lost connection retries under the one request id; the
-                // shell takes the prompt back after the last try.
+                // A lost connection retries under the one request id; after
+                // the last try the prompt is refused like a composer send.
                 Effect.retry(SEND_RETRY),
-                Effect.andThen(Effect.sync(() => prompt.settle(true, requestId))),
                 Effect.catchEager((err) =>
-                  Effect.sync(() => {
-                    // The shell holds the prompt again; the next ready stream sends it.
-                    prompt.settle(false, requestId)
-                    if (Option.isNone(currentKey) || currentKey.value !== key) return
-                    client.setConnectionIssue(formatConnectionIssue(err))
-                  }),
+                  Effect.sync(() =>
+                    prompt.refuse({ sessionId: session, branchId: branch }, formatError(err)),
+                  ),
                 ),
               )
           }),
@@ -2573,6 +2559,7 @@ export function createSessionController(props: {
   const command = useCommand()
   const ext = useExtensionUI()
   const shell = useSessionShell()
+  const refusals = useComposerRefusals()
   const { cast } = useRuntime()
   const renderer = useRenderer()
   const env = useEnv()
@@ -2838,7 +2825,19 @@ export function createSessionController(props: {
       },
       onQueueSnapshot: (queue) => updateControllerState((state) => setQueue(state, queue)),
     },
-    () => shell.takePrompt(props.sessionId),
+    // The startup prompt is a submission: it takes its place in send order,
+    // and a refused one comes back to the draft of its branch with its reason.
+    () =>
+      Option.map(shell.takePrompt(props.sessionId), (content): StartupPrompt => {
+        const order = refusals.nextOrder()
+        return {
+          content,
+          refuse: (target, reason) => {
+            client.setErrorIn(target, reason)
+            refusals.refuse(target.branchId, { order, text: content, shell: false })
+          },
+        }
+      }),
     // Gate prompt send on auth resolution and on the branch picker — the feed
     // waits for the stream plus this signal.
     () => !authGatePending() && !branchPickerOpen(),
