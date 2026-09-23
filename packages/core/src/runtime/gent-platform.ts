@@ -35,11 +35,9 @@ import { causeMessage } from "../domain/guards.js"
  *                          ids and cache keys; `md5` for non-cryptographic
  *                          memoization. Sync because content-addressed
  *                          SQLite chunking is sync.
- *   - `randomBytes(n)`   — cryptographically secure random bytes for OAuth
- *                          PKCE / state nonces.
- *   - `fileURLToPath(u)` — `file://` URL → absolute filesystem path. Used by
- *                          extensions that need to resolve `import.meta.resolve(...)`
- *                          to an on-disk path.
+ *
+ * Random bytes come from Effect `Crypto`, and `file://` URLs become paths
+ * through Effect `Path.fromFileUrl`; neither is a platform fact.
  *
  * The `GentPlatform.Test(prefix)` layer mints deterministic ids
  * (`${prefix}-00000001`, ...) and stubs the rest with safe defaults so
@@ -88,8 +86,6 @@ interface GentPlatformApi {
   readonly pathListSeparator: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
-  readonly randomBytes: (length: number) => Effect.Effect<Uint8Array>
-  readonly fileURLToPath: (url: string) => string
 }
 
 export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>()(
@@ -134,18 +130,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
             let width = 32
             if (algorithm === "sha256") width = 64
             return seed.repeat(Math.ceil(width / 8)).slice(0, width)
-          },
-          randomBytes: (length) =>
-            Ref.updateAndGet(counter, (n) => n + 1).pipe(
-              Effect.map((n) => {
-                const bytes = new Uint8Array(length)
-                for (let i = 0; i < length; i += 1) bytes[i] = (n + i) & 0xff
-                return bytes
-              }),
-            ),
-          fileURLToPath: (url) => {
-            if (url.startsWith("file://")) return url.slice("file://".length)
-            return url
           },
         })
       }),

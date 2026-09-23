@@ -1,9 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Effect, FileSystem, Layer, Option, Path, Predicate, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Predicate, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import SessionNotesExtension, {
-  AddNoteTool,
-} from "../../../../examples/extensions/session-notes.js"
 import {
   defineExtension,
   defineResource,
@@ -29,93 +26,8 @@ import {
 } from "../../src/runtime/extension-host"
 import { collectTestContributions, testExtensionHostContext } from "../../src/test-utils/harness"
 import * as AiTool from "effect/unstable/ai/Tool"
-import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
+import { testAgent } from "../helpers/test-preset"
 import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
-
-// ── authoring-reference.test ────────────────────────────────────────────────
-
-const sessionNotesSourceUrl = new URL(
-  "../../../../examples/extensions/session-notes.ts",
-  import.meta.url,
-)
-
-const loadedFrom = (
-  ext: GentExtension,
-  contributions: LoadedExtension["contributions"],
-): LoadedExtension => ({
-  manifest: { id: ext.manifest.id },
-  scope: "project",
-  sourcePath: "/project/.gent/extensions/session-notes.ts",
-  contributions,
-})
-
-describe("extension authoring reference", () => {
-  it.live("one-file public API example contributes tool, slash request, state, and hook", () =>
-    Effect.gen(function* () {
-      const contributions = yield* collectTestContributions(SessionNotesExtension.setup)
-      const loaded = loadedFrom(SessionNotesExtension, contributions)
-      const resolved = resolveExtensions([loaded])
-      const resourceLayer = buildResourceLayer([loaded], "process")
-
-      expect(String(SessionNotesExtension.manifest.id)).toBe("session-notes")
-      expect(contributions.resources ?? []).toHaveLength(1)
-      expect(contributions.tools ?? []).toHaveLength(1)
-      expect(contributions.requests ?? []).toHaveLength(1)
-      expect(contributions.hooks ?? []).toHaveLength(1)
-      expect(String(getToolId((contributions.tools ?? [])[0]!))).toBe("session_note_add")
-
-      const command = resolved.slashCommands[0]
-      expect(command?.name).toBe("notes")
-      expect(command?.displayName).toBe("Session Notes")
-      expect(command?.extensionId).toBe(ExtensionId.make("session-notes"))
-      expect(command?.capabilityId).toBe("session-notes-summary")
-
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const context = yield* Layer.build(resourceLayer)
-          const metadata = getToolMetadata(AddNoteTool)
-          const toolEffect = metadata.effect({ text: "ship the authoring loop" })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          const toolResult = yield* toolEffect.pipe(Effect.provide(context))
-          expect(toolResult).toEqual({ count: 1, latest: "ship the authoring loop" })
-
-          const hookSlot = (contributions.hooks ?? [])[0]!
-          expect(hookSlot.kind).toBe("turnProjection")
-          if (hookSlot.kind !== "turnProjection") return
-          const projection = yield* hookSlot.hook
-            .handler({ agent: builtinAgent })
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-            .pipe(Effect.provide(context))
-          expect(projection.promptSections?.[0]?.id).toBe("session-notes")
-          expect(projection.promptSections?.[0]?.content).toContain("ship the authoring loop")
-          expect(projection.toolPolicy?.include).toEqual(["session_note_add"])
-        }),
-      )
-    }),
-  )
-
-  it.live("reference example source imports only the public extension API", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const source = yield* fs.readFileString(yield* path.fromFileUrl(sessionNotesSourceUrl))
-      expect(source).toContain('from "@gent/core/extensions/api"')
-      expect(source).not.toContain("@gent/core/host")
-      expect(source).not.toContain("@gent/core/src")
-    }).pipe(Effect.provide(BunServices.layer)),
-  )
-
-  it.live("public package path is enough to write the representative extension shape", () =>
-    Effect.sync(() => {
-      const input = Schema.Struct({ text: Schema.String })
-      const output = Schema.Struct({ count: Schema.Finite })
-      void input
-      void output
-      void SessionNotesExtension
-      expect(true).toBe(true)
-    }),
-  )
-})
 
 // ── define-extension.test ───────────────────────────────────────────────────
 
@@ -177,7 +89,7 @@ describe("defineExtension", () => {
         setup: Effect.gen(function* () {
           const host = yield* ExtensionHost
           yield* host.register("tool", myTool)
-          yield* host.register("agent", builtinAgent)
+          yield* host.register("agent", testAgent)
           yield* host.on("systemPrompt", (input) => Effect.succeed(`${input.basePrompt} [suffix]`))
           yield* host.register(
             "resource",
@@ -260,7 +172,7 @@ describe("defineExtension", () => {
         setup: Effect.gen(function* () {
           const host = yield* ExtensionHost
           yield* host.register("tool", namedTool("first"), namedTool("second"))
-          yield* host.register("agent", builtinAgent)
+          yield* host.register("agent", testAgent)
           yield* host.register("tool", namedTool("third"))
         }),
       })
@@ -351,7 +263,7 @@ describe("defineExtension", () => {
 
       const compiled = compileExtensionHooks([loaded])
       const result = yield* compiled
-        .resolveSystemPrompt({ basePrompt: "yo", agent: builtinAgent })
+        .resolveSystemPrompt({ basePrompt: "yo", agent: testAgent })
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
       expect(result).toBe("yo!!")
     }))

@@ -11,6 +11,7 @@ import {
   Predicate,
   Ref,
   Schema,
+  type Scope,
   Stream,
 } from "effect"
 import { BranchId, MessageId, type RequestId, SessionId } from "../domain/ids.js"
@@ -80,6 +81,8 @@ import {
   type SwitchBranchInput,
   type SteerCommand as TransportSteerCommand,
   type UpdateSessionSettingsInput,
+  type GentNamespacedClient,
+  makeNamespacedClient,
 } from "./rpc.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { SqlClient } from "effect/unstable/sql"
@@ -153,7 +156,8 @@ import {
   MODEL_CHANGE_MESSAGE_TYPE,
   settledMessages,
 } from "../runtime/model-context.js"
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc"
+import { RpcSerialization, RpcServer, RpcTest } from "effect/unstable/rpc"
+import type { Headers } from "effect/unstable/http"
 
 // ── connection-tracker ──────────────────────────────────────────────────────
 
@@ -1450,6 +1454,19 @@ const RpcHandlers = GentRpcs.toLayer(
 )
 
 export const RpcHandlersLive = Layer.merge(RpcHandlers, WorkspaceRpcMiddleware.Live)
+
+/**
+ * A client that calls built handlers directly, with no socket in between.
+ * The SDK's in-process client and the test harness both use it.
+ */
+export const makeInProcessClient = (
+  handlerContext: Context.Context<Layer.Success<typeof RpcHandlersLive>>,
+  headers: Headers.Input,
+): Effect.Effect<GentNamespacedClient, never, Scope.Scope> =>
+  RpcTest.makeClient(GentRpcs).pipe(
+    Effect.provide(handlerContext),
+    Effect.map((flat) => makeNamespacedClient(flat, headers)),
+  )
 
 // ── dependencies ────────────────────────────────────────────────────────────
 

@@ -8,9 +8,7 @@
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
-    "@gent/sdk": "workspace:*",
-    "msgpackr": "catalog:",
-    "multipasta": "catalog:"
+    "@gent/sdk": "workspace:*"
   },
   "peerDependencies": {
     "effect": "catalog:"

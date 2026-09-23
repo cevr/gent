@@ -7,10 +7,15 @@ export interface BlanketDisableFinding {
   readonly line: number
 }
 
+/**
+ * oxlint honors both spellings, `eslint-disable` and `oxlint-disable`, so each
+ * pattern matches both. A blanket directive names no rule; a block directive
+ * disables its rules to the end of the file or the next enable.
+ */
 export const blanketDisableDirective =
-  /(?:\/\*\s*eslint-disable(?:-next-line|-line)?\s*(?:\*\/|--|$))|(?:\/\/\s*eslint-disable(?:-next-line|-line)?\s*(?:--|$))/
+  /(?:\/\*\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:\*\/|--|$))|(?:\/\/\s*(?:es|ox)lint-disable(?:-next-line|-line)?\s*(?:--|$))/
 
-export const blockDisableDirective = /\/\*\s*eslint-disable(?:\s|$)/
+export const blockDisableDirective = /\/\*\s*(?:es|ox)lint-disable(?:\s|$)/
 
 const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)(?:\/|\.|\b)/
 
@@ -1151,7 +1156,6 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
   ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
   ["GENT_IDLE_TIMEOUT_MS", "the launcher of a shared server sets its idle window"],
-  ["GENT_BUILD_FINGERPRINT", "an operator pins the build fingerprint to override the computed one"],
 ])
 
 /** `Config.string("GENT_NAME")` and friends -- the shapes that read a variable. */
@@ -1261,19 +1265,10 @@ const activeSourceFile = (file: string): boolean =>
 const referenceExtensionFile = (file: string): boolean =>
   file.startsWith("examples/extensions/") && sourceFile(file)
 
-const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\b/,
-    message: "Bun platform layers may only be provided by platform roots",
-  },
-]
-
-const bannedTransportContractPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /\b(?:SessionInfo|BranchInfo)\b/,
-    message: "Transport session DTOs mirror domain types",
-  },
-]
+const platformLayerPattern: BannedPattern = {
+  pattern: /\b(?:BunPlatformLive|BunGentPlatformLive)\b/,
+  message: "Bun platform layers may only be provided by platform roots",
+}
 
 const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
   {
@@ -1284,63 +1279,6 @@ const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
   {
     pattern: /(?:^|\s)from\s+["'](?:\.\.\/){2,}/,
     message: "Reference extensions must not reach out of examples/extensions with relative imports",
-  },
-]
-
-const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /\b(?:globalThis\.)?process\.cwd\s*\(/,
-    message:
-      "Host working directory facts are adapter-only; use RuntimeEnvironment or GentPlatform",
-  },
-  {
-    pattern: /\bfrom\s+["'](?:node:)?os["']/,
-    message: "Host OS module imports are adapter-only; use GentPlatform",
-  },
-  {
-    pattern: /\bfrom\s+["']bun["']/,
-    message: "Direct `bun` package imports are adapter-only; use Effect platform services",
-  },
-  {
-    // Cover every acquisition form for the crypto specifier:
-    //   `from "node:crypto"`        — static `import … from`
-    //   `import "node:crypto"`      — bare side-effect import
-    //   `import("node:crypto")`     — dynamic import
-    //   `require("node:crypto")`    — CJS require
-    // The shared prefix is `from`/`import`/`require` followed by the quoted
-    // specifier (with optional `(` for the call forms). Plain string usage
-    // of `"crypto"` as data (param names, identifiers) does not trip.
-    pattern: /(?:\bfrom\s+|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'](?:node:)?crypto["']/,
-    message:
-      "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
-  },
-  {
-    pattern: /(?:\bfrom\s+|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'](?:node:)?url["']/,
-    message:
-      "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
-  },
-  {
-    pattern: /(?<![.\w])createHash\s*\(/,
-    message:
-      "Direct createHash() is adapter-only; yield GentPlatform and call platform.hash(algorithm, input)",
-  },
-  {
-    pattern: /(?<![.\w])randomBytes\s*\(/,
-    message:
-      "Direct randomBytes() is adapter-only; yield GentPlatform and call platform.randomBytes(n) (or use the Web Crypto global `crypto.getRandomValues` if you need a sync Uint8Array)",
-  },
-  {
-    pattern: /(?<![.\w])fileURLToPath\s*\(/,
-    message:
-      "Direct fileURLToPath() is adapter-only; yield GentPlatform and call platform.fileURLToPath(url)",
-  },
-  {
-    // Bare `new URL(import.meta.url).pathname` (or `.href`) is a hand-rolled
-    // fileURLToPath that bypasses the platform adapter and breaks under
-    // Windows file URLs (extra leading slash on drive paths).
-    pattern: /new\s+URL\s*\(\s*import\.meta\.url\s*\)/,
-    message:
-      "Bare `new URL(import.meta.url)` is a hand-rolled fileURLToPath; yield GentPlatform and call platform.fileURLToPath(import.meta.url)",
   },
 ]
 
@@ -1357,20 +1295,6 @@ const platformProviderRootFiles = new Set([
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])
-
-const protectedHostFactFile = (file: string): boolean =>
-  (file.startsWith("packages/core/src/") || file.startsWith("packages/extensions/src/")) &&
-  !file.includes("/test-utils/") &&
-  file !== "packages/core/src/runtime/gent-platform-bun.ts" &&
-  file !== "packages/core/src/runtime/gent-platform.ts" &&
-  // The workspace id is a wire constant, not a host fact. A client and its
-  // server derive it in separate processes and must agree byte for byte, so
-  // it is pinned to node:crypto sha256 rather than routed through
-  // GentPlatform.hash, which a future adapter could implement differently.
-  // This is the sole owner of that derivation; see its JSDoc.
-  file !== "packages/core/src/server/workspace-rpc.ts" &&
-  // The cell worker entry is a process entrypoint; it reads its own working directory once.
-  file !== "packages/extensions/src/cell-worker-boundary.ts"
 
 /**
  * `apps/server/src/main.ts` is a launcher, not a composition root. It reads
@@ -1397,18 +1321,9 @@ const bannedLauncherPatterns: ReadonlyArray<BannedPattern> = [
 const launcherFiles = new Set(["apps/server/src/main.ts"])
 
 const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
-  const patterns = bannedActiveSourcePatterns.filter(
-    ({ pattern }) =>
-      !(
-        platformProviderRootFiles.has(file) &&
-        pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b"
-      ),
-  )
-  if (protectedHostFactFile(file)) patterns.push(...bannedProtectedHostFactPatterns)
+  const patterns: BannedPattern[] = []
+  if (!platformProviderRootFiles.has(file)) patterns.push(platformLayerPattern)
   if (launcherFiles.has(file)) patterns.push(...bannedLauncherPatterns)
-  if (file === "packages/core/src/server/rpc.ts") {
-    patterns.push(...bannedTransportContractPatterns)
-  }
   return patterns
 }
 
@@ -1444,6 +1359,10 @@ export const findPlatformDuplicationViolations = (
  * Each row names what was removed and what replaced it. A row matches a source
  * line, an import specifier's module basename, or the file path itself. The
  * guard source is exempt: the table names every retired surface on purpose.
+ *
+ * Retired `Bun.*` members (`Bun.Glob`, `Bun.randomUUIDv7` outside the platform
+ * adapter) are banned by the `gent/no-bun-outside-adapter` rule in
+ * `lint/gent-rules.ts` instead, because only the AST sees a member access.
  *
  * @module
  */
@@ -1691,6 +1610,20 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     match: /^packages\/sdk\/src\/(?:server-registry|worker-http)\.ts$/,
     scope: "shipped",
     message: "SDK worker registry/http split is deleted; use server lock and server entrypoints",
+  },
+  {
+    on: "line",
+    match: identifiers("BunCronRuntimeLive"),
+    scope: "shipped-and-tests",
+    message:
+      "the cron runtime layer is removed; scheduling belongs to the kernel, and the cell reaches Bun.cron directly",
+  },
+  {
+    on: "line",
+    match: identifiers("SessionInfo", "BranchInfo"),
+    scope: "shipped",
+    message:
+      "the transport session DTOs are removed; the contract carries the domain Session and Branch schemas",
   },
 ]
 
@@ -3152,3 +3085,338 @@ export const findPackageSurfaceFindings = (
       ],
     }),
   )
+
+// ---------------------------------------------------------------------------
+// Workspace imports a package does not declare
+// ---------------------------------------------------------------------------
+
+/** The manifest fields that name a workspace package and what it depends on. */
+export interface WorkspaceManifest {
+  readonly name: string
+  readonly dependencies?: Readonly<Record<string, string>>
+  readonly devDependencies?: Readonly<Record<string, string>>
+  readonly peerDependencies?: Readonly<Record<string, string>>
+}
+
+export interface UndeclaredImportFinding {
+  readonly file: string
+  readonly line: number
+  readonly message: string
+}
+
+/** The package an `@gent/...` specifier names: `@gent/core/protocol` → `@gent/core`. */
+const WORKSPACE_PACKAGE = /^(@gent\/[a-z0-9-]+)(?:\/.*)?$/
+
+interface SourceToken {
+  readonly kind: "word" | "string" | "punct"
+  readonly value: string
+  readonly line: number
+}
+
+/** After these, a `/` starts a regular expression, not a division. */
+const REGEX_AFTER_WORDS = new Set([
+  "return",
+  "typeof",
+  "case",
+  "do",
+  "else",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "yield",
+  "await",
+])
+
+const WORD_CHAR = /[A-Za-z0-9_$]/
+
+/** A lexer's cursor: the source, the position, and the tokens read so far. */
+interface Lexer {
+  readonly text: string
+  index: number
+  line: number
+  readonly tokens: Array<SourceToken>
+  /** One entry per open template `${`: the brace depth inside that expression. */
+  readonly templateDepths: Array<number>
+}
+
+const charAt = (lexer: Lexer, offset: number): string => lexer.text.charAt(lexer.index + offset)
+
+const atEnd = (lexer: Lexer): boolean => lexer.index >= lexer.text.length
+
+const CLOSING_PUNCT = new Set([")", "]", "}"])
+
+/** A `/` starts a regular expression unless it follows a value. */
+const regexAllowed = (lexer: Lexer): boolean =>
+  Option.match(Option.fromNullishOr(lexer.tokens.at(-1)), {
+    onNone: () => true,
+    onSome: (previous) => {
+      if (previous.kind === "string") return false
+      if (previous.kind === "word") return REGEX_AFTER_WORDS.has(previous.value)
+      return !CLOSING_PUNCT.has(previous.value)
+    },
+  })
+
+/** Skip template text (just past a backtick or a closing `}`) to its end or a `${`. */
+const skipTemplateText = (lexer: Lexer): void => {
+  while (!atEnd(lexer)) {
+    const char = charAt(lexer, 0)
+    if (char === "\\") {
+      lexer.index += 2
+      continue
+    }
+    if (char === "\n") lexer.line++
+    if (char === "`") {
+      lexer.index++
+      return
+    }
+    if (char === "$" && charAt(lexer, 1) === "{") {
+      lexer.index += 2
+      lexer.templateDepths.push(0)
+      return
+    }
+    lexer.index++
+  }
+}
+
+const skipWhitespace = (lexer: Lexer): boolean => {
+  const char = charAt(lexer, 0)
+  if (!/\s/.test(char)) return false
+  if (char === "\n") lexer.line++
+  lexer.index++
+  return true
+}
+
+const skipLineComment = (lexer: Lexer): boolean => {
+  if (!(charAt(lexer, 0) === "/" && charAt(lexer, 1) === "/")) return false
+  while (!atEnd(lexer) && charAt(lexer, 0) !== "\n") lexer.index++
+  return true
+}
+
+const skipBlockComment = (lexer: Lexer): boolean => {
+  if (!(charAt(lexer, 0) === "/" && charAt(lexer, 1) === "*")) return false
+  lexer.index += 2
+  while (!atEnd(lexer) && !(charAt(lexer, 0) === "*" && charAt(lexer, 1) === "/")) {
+    if (charAt(lexer, 0) === "\n") lexer.line++
+    lexer.index++
+  }
+  lexer.index += 2
+  return true
+}
+
+const skipTemplate = (lexer: Lexer): boolean => {
+  if (charAt(lexer, 0) !== "`") return false
+  lexer.index++
+  skipTemplateText(lexer)
+  return true
+}
+
+/** A quoted string; it ends at an unescaped newline, so a stray quote spoils one line. */
+const readString = (lexer: Lexer): boolean => {
+  const quote = charAt(lexer, 0)
+  if (quote !== "'" && quote !== '"') return false
+  const line = lexer.line
+  let value = ""
+  lexer.index++
+  while (!atEnd(lexer) && charAt(lexer, 0) !== quote && charAt(lexer, 0) !== "\n") {
+    if (charAt(lexer, 0) === "\\") {
+      value += charAt(lexer, 1)
+      lexer.index += 2
+      continue
+    }
+    value += charAt(lexer, 0)
+    lexer.index++
+  }
+  lexer.index++
+  lexer.tokens.push({ kind: "string", value, line })
+  return true
+}
+
+/** A regular expression literal, kept as an empty string token so it names no module. */
+const readRegex = (lexer: Lexer): boolean => {
+  if (charAt(lexer, 0) !== "/" || !regexAllowed(lexer)) return false
+  let inClass = false
+  lexer.index++
+  while (!atEnd(lexer) && charAt(lexer, 0) !== "\n") {
+    const current = charAt(lexer, 0)
+    if (current === "\\") {
+      lexer.index += 2
+      continue
+    }
+    if (current === "/" && !inClass) break
+    if (current === "[") inClass = true
+    if (current === "]") inClass = false
+    lexer.index++
+  }
+  lexer.index++
+  while (WORD_CHAR.test(charAt(lexer, 0))) lexer.index++
+  lexer.tokens.push({ kind: "string", value: "", line: lexer.line })
+  return true
+}
+
+const readWord = (lexer: Lexer): boolean => {
+  if (!WORD_CHAR.test(charAt(lexer, 0))) return false
+  let value = ""
+  while (!atEnd(lexer) && WORD_CHAR.test(charAt(lexer, 0))) {
+    value += charAt(lexer, 0)
+    lexer.index++
+  }
+  lexer.tokens.push({ kind: "word", value, line: lexer.line })
+  return true
+}
+
+/** A `}` that closes a template `${`: resume the template text after it. */
+const closeTemplateExpression = (lexer: Lexer): boolean => {
+  if (charAt(lexer, 0) !== "}" || lexer.templateDepths.at(-1) !== 0) return false
+  lexer.templateDepths.pop()
+  lexer.index++
+  skipTemplateText(lexer)
+  return true
+}
+
+const readPunct = (lexer: Lexer): boolean => {
+  const char = charAt(lexer, 0)
+  const last = lexer.templateDepths.length - 1
+  const depth = lexer.templateDepths[last] ?? 0
+  if (char === "{" && last >= 0) lexer.templateDepths[last] = depth + 1
+  if (char === "}" && last >= 0) lexer.templateDepths[last] = depth - 1
+  lexer.tokens.push({ kind: "punct", value: char, line: lexer.line })
+  lexer.index++
+  return true
+}
+
+/** In order: the first scanner that accepts the current character consumes it. */
+const SCANNERS: ReadonlyArray<(lexer: Lexer) => boolean> = [
+  skipWhitespace,
+  skipLineComment,
+  skipBlockComment,
+  skipTemplate,
+  readString,
+  readRegex,
+  readWord,
+  closeTemplateExpression,
+  readPunct,
+]
+
+/**
+ * Tokens of a TypeScript source, with comments, template text, and regular
+ * expressions dropped. Only words, string literals, and punctuation remain,
+ * which is all an import scan reads.
+ */
+const sourceTokens = (text: string): ReadonlyArray<SourceToken> => {
+  const lexer: Lexer = { text, index: 0, line: 1, tokens: [], templateDepths: [] }
+  while (!atEnd(lexer)) SCANNERS.some((scan) => scan(lexer))
+  return lexer.tokens
+}
+
+export interface ModuleReference {
+  readonly specifier: string
+  readonly line: number
+}
+
+const isPunct = (token: Option.Option<SourceToken>, value: string): boolean =>
+  Option.exists(token, (current) => current.kind === "punct" && current.value === value)
+
+/** The string token that names the module for the keyword at `position`, if any. */
+const specifierAt = (
+  tokens: ReadonlyArray<SourceToken>,
+  position: number,
+): Option.Option<SourceToken> => {
+  const tokenAt = (offset: number) => Option.fromNullishOr(tokens[position + offset])
+  const stringAt = (offset: number) =>
+    Option.filter(tokenAt(offset), (token) => token.kind === "string")
+  const keyword = tokens[position]
+  if (keyword?.kind !== "word") return Option.none()
+  // `x.from "…"` and `x.import(…)` are not module syntax; `module.require(…)` is.
+  const member = isPunct(tokenAt(-1), ".")
+  const called = isPunct(tokenAt(1), "(")
+  if (keyword.value === "require" && called) return stringAt(2)
+  if (member) return Option.none()
+  if (keyword.value === "from") return stringAt(1)
+  if (keyword.value !== "import") return Option.none()
+  if (called) return stringAt(2)
+  return stringAt(1)
+}
+
+/**
+ * Every module a source names: `import … from`, `export … from`, a bare
+ * `import "x"`, `import("x")` (dynamic or in a type), and `require("x")`,
+ * including `import type`. Comments and ordinary strings name no module.
+ */
+export const moduleReferences = (text: string): ReadonlyArray<ModuleReference> => {
+  const tokens = sourceTokens(text)
+  return tokens.flatMap((_, position) =>
+    Option.match(specifierAt(tokens, position), {
+      onNone: () => [],
+      onSome: (token) => [{ specifier: token.value, line: token.line }],
+    }),
+  )
+}
+
+/** The path a relative specifier names from `file`, or none for a package specifier. */
+const relativeTarget = (file: string, specifier: string): Option.Option<string> => {
+  if (!specifier.startsWith("./") && !specifier.startsWith("../")) return Option.none()
+  const segments = file.split("/").slice(0, -1)
+  for (const part of specifier.split("/")) {
+    if (part === "..") segments.pop()
+    else if (part !== "." && part !== "") segments.push(part)
+  }
+  return Option.some(segments.join("/"))
+}
+
+const declaredWorkspaceNames = (manifest: WorkspaceManifest): ReadonlySet<string> =>
+  new Set([
+    manifest.name,
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.devDependencies ?? {}),
+    ...Object.keys(manifest.peerDependencies ?? {}),
+  ])
+
+/**
+ * A file that imports a workspace package its own manifest does not declare,
+ * or reaches across its workspace root with a relative path. Turbo orders and
+ * caches tasks by the declared graph, so an undeclared edge lets a cached
+ * typecheck replay green after the imported package broke it. Core's test
+ * harness once called `@gent/sdk`, which depends on core: a cycle no manifest
+ * showed. A relative path into another workspace is the same edge without a
+ * name. `manifests` is keyed by package directory (`packages/core`). Fixture
+ * trees hold source as data, not imports.
+ */
+export const findUndeclaredWorkspaceImports = (
+  manifests: ReadonlyMap<string, WorkspaceManifest>,
+  sourceTexts: ReadonlyMap<string, string>,
+): ReadonlyArray<UndeclaredImportFinding> => {
+  const findings: Array<UndeclaredImportFinding> = []
+  for (const [file, text] of sourceTexts) {
+    if (file.includes("/fixtures/")) continue
+    const owner = Option.fromNullishOr([...manifests].find(([dir]) => file.startsWith(`${dir}/`)))
+    if (Option.isNone(owner)) continue
+    const [dir, manifest] = owner.value
+    const declared = declaredWorkspaceNames(manifest)
+    for (const { specifier, line } of moduleReferences(text)) {
+      const target = relativeTarget(file, specifier)
+      if (Option.isSome(target)) {
+        if (target.value.startsWith(`${dir}/`)) continue
+        findings.push({
+          file,
+          line,
+          message: `reaches \`${specifier}\` across the ${dir} workspace root; import a declared package entry instead`,
+        })
+        continue
+      }
+      const imported = Option.flatMap(
+        Option.fromNullishOr(WORKSPACE_PACKAGE.exec(specifier)),
+        (match) => Option.fromNullishOr(match[1]),
+      )
+      if (Option.isNone(imported) || declared.has(imported.value)) continue
+      findings.push({
+        file,
+        line,
+        message: `imports \`${imported.value}\`, which ${dir}/package.json does not declare; declare it without a cycle, or move the code to a package that does`,
+      })
+    }
+  }
+  return findings
+}

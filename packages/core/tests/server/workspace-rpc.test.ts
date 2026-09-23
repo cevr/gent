@@ -18,7 +18,7 @@ import {
   workspaceHeadersForCwd,
   workspaceIdForCwd,
 } from "../../src/server/workspace-rpc"
-import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { e2ePreset } from "../helpers/test-preset"
 
 const validWorkspaceId = WorkspaceId.make("a".repeat(64))
 const otherWorkspaceId = WorkspaceId.make("b".repeat(64))

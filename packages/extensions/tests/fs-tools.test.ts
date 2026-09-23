@@ -18,7 +18,6 @@ import {
 } from "../src/fs-tools.js"
 import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
-import { narrowR } from "../../core/tests/helpers/effect"
 
 // ── fs-tools/read.test ──────────────────────────────────────────────────────
 
@@ -337,15 +336,13 @@ describe("EditTool execution", () => {
       const dir = yield* fs.makeTempDirectoryScoped()
       const filePath = path.join(dir, "test.txt")
       yield* fs.writeFileString(filePath, "hello world\ngoodbye world\n")
-      const result = yield* narrowR(
-        runToolWithCtx(
-          EditTool,
-          { path: filePath, oldString: "hello world", newString: "hi there" },
-          stubCtx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+      const result = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "hello world", newString: "hi there" },
+        stubCtx,
       )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        .pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(1)
       expect(result.path).toBe(filePath)
       const content = yield* fs.readFileString(filePath)
@@ -359,15 +356,13 @@ describe("EditTool execution", () => {
       const dir = yield* fs.makeTempDirectoryScoped()
       const filePath = path.join(dir, "test.txt")
       yield* fs.writeFileString(filePath, "foo bar foo baz foo\n")
-      const result = yield* narrowR(
-        runToolWithCtx(
-          EditTool,
-          { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
-          stubCtx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+      const result = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "foo", newString: "qux", replaceAll: true },
+        stubCtx,
       )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        .pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(3)
       const content = yield* fs.readFileString(filePath)
       expect(content).toBe("qux bar qux baz qux\n")
@@ -380,16 +375,14 @@ describe("EditTool execution", () => {
       const dir = yield* fs.makeTempDirectoryScoped()
       const filePath = path.join(dir, "test.txt")
       yield* fs.writeFileString(filePath, "hello world\n")
-      const exit = yield* narrowR(
-        Effect.exit(
-          runToolWithCtx(
-            EditTool,
-            { path: filePath, oldString: "not here", newString: "replaced" },
-            stubCtx,
-          )
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-            .pipe(Effect.provide(editLayer)),
-        ),
+      const exit = yield* Effect.exit(
+        runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "not here", newString: "replaced" },
+          stubCtx,
+        )
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(editLayer)),
       )
       expect(exit._tag).toBe("Failure")
     }),
@@ -401,12 +394,10 @@ describe("EditTool execution", () => {
       const dir = yield* fs.makeTempDirectoryScoped()
       const filePath = path.join(dir, "test.txt")
       yield* fs.writeFileString(filePath, "foo bar foo\n")
-      const exit = yield* narrowR(
-        Effect.exit(
-          runToolWithCtx(EditTool, { path: filePath, oldString: "foo", newString: "baz" }, stubCtx)
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-            .pipe(Effect.provide(editLayer)),
-        ),
+      const exit = yield* Effect.exit(
+        runToolWithCtx(EditTool, { path: filePath, oldString: "foo", newString: "baz" }, stubCtx)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          .pipe(Effect.provide(editLayer)),
       )
       expect(exit._tag).toBe("Failure")
     }),
@@ -418,15 +409,13 @@ describe("EditTool execution", () => {
       const dir = yield* fs.makeTempDirectoryScoped()
       const filePath = path.join(dir, "test.txt")
       yield* fs.writeFileString(filePath, "line1\nline2\n")
-      const result = yield* narrowR(
-        runToolWithCtx(
-          EditTool,
-          { path: filePath, oldString: "line1\\nline2", newString: "merged" },
-          stubCtx,
-        )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          .pipe(Effect.provide(editLayer)),
+      const result = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "line1\\nline2", newString: "merged" },
+        stubCtx,
       )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        .pipe(Effect.provide(editLayer))
       expect(result.replacements).toBe(1)
       const content = yield* fs.readFileString(filePath)
       expect(content).toBe("merged\n")

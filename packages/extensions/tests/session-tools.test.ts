@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, Option, Stream } from "effect"
 import { AgentsExtension } from "../src/agents.js"
-import { getBuiltinAgent } from "./helpers/builtin-agents.js"
+import { builtinAgent } from "./helpers/builtin-agents.js"
 import { type SystemPromptInput, messagePartsDisplayText } from "@gent/core/extensions/api"
 import {
   collectTestContributions,
@@ -57,7 +57,7 @@ describe("SessionToolsExtension", () => {
       const systemPrompt = yield* getSystemPrompt
       const prompt = yield* systemPrompt({
         basePrompt: "base",
-        agent: getBuiltinAgent("cowork")!,
+        agent: builtinAgent,
         interactive: true,
       } satisfies SystemPromptInput)
       expect(prompt).toContain("## Session naming")
@@ -69,7 +69,7 @@ describe("SessionToolsExtension", () => {
       const systemPrompt = yield* getSystemPrompt
       const prompt = yield* systemPrompt({
         basePrompt: "base",
-        agent: getBuiltinAgent("cowork")!,
+        agent: builtinAgent,
         interactive: false,
       } satisfies SystemPromptInput)
       expect(prompt).toBe("base")

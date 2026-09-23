@@ -35,8 +35,7 @@ import {
   textStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { createE2ELayer } from "../../src/test-utils/harness"
-import { Gent } from "@gent/sdk"
+import { createE2ELayer, createRpcClient } from "../../src/test-utils/harness"
 import {
   messagePartsText,
   Branch,
@@ -45,7 +44,7 @@ import {
   Session,
   type SteerCommand,
 } from "../../src/domain/message"
-import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { e2ePreset } from "../helpers/test-preset"
 import {
   BranchStorage,
   MessageStorage,
@@ -958,7 +957,7 @@ describe("session.delete", () => {
       Effect.gen(function* () {
         const { layer: providerLayer, controls } =
           yield* LanguageModelLayers.signal("delete me later")
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const created = yield* client.session.create({ cwd: process.cwd() })
         const runtimeClosed = yield* collectSessionEvents(
           client.session.watchRuntime({
@@ -1243,7 +1242,7 @@ describe("session.delete", () => {
 // a hash of the user text; without it a message's own wording decides whether
 // the turn retries.
 const makeDebugClient = () =>
-  Gent.test(
+  createRpcClient(
     createE2ELayer({
       ...e2ePreset,
       providerLayer: LanguageModelLayers.debug({ retries: false }),
@@ -1432,7 +1431,7 @@ describe("session event stream", () => {
         Effect.gen(function* () {
           const { layer: providerLayer, controls } =
             yield* LanguageModelLayers.signal("handoff payload.")
-          const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+          const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
           const created = yield* client.session.create({ cwd: process.cwd() })
 
           const snapshot = yield* client.session.getSnapshot({
@@ -1493,7 +1492,7 @@ describe("session event stream", () => {
 const makeSignalClient = (reply: string) =>
   Effect.gen(function* () {
     const { layer: providerLayer, controls } = yield* LanguageModelLayers.signal(reply)
-    const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+    const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
     return { client, controls }
   })
 
@@ -2144,7 +2143,7 @@ describe("requestId idempotency", () => {
   it.live("duplicate public branch.create requestId converges through RPC handlers", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
         )
         const created = yield* client.session.create({ cwd: "/tmp/rpc-branch-create-idem" })
@@ -2170,7 +2169,7 @@ describe("requestId idempotency", () => {
   it.live("duplicate public branch.switch requestId converges through RPC handlers", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
         )
         const created = yield* client.session.create({ cwd: "/tmp/rpc-branch-switch-idem" })
@@ -2202,7 +2201,7 @@ describe("requestId idempotency", () => {
   it.live("duplicate public branch.fork requestId converges through RPC handlers", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
         )
         const created = yield* client.session.create({ cwd: "/tmp/rpc-branch-fork-idem" })
@@ -2246,7 +2245,7 @@ describe("requestId idempotency", () => {
   it.live("duplicate public steer Interject requestId queues at most once", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
         )
         const created = yield* client.session.create({ cwd: "/tmp/rpc-steer-idem" })
@@ -2290,7 +2289,7 @@ describe("requestId idempotency", () => {
   it.live("duplicate public queue.drain requestId replays the original snapshot", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer: LanguageModelLayers.debug() }),
         )
         const created = yield* client.session.create({ cwd: "/tmp/rpc-drain-idem" })
@@ -2788,7 +2787,7 @@ describe("message.send", () => {
             },
           },
         ])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const created = yield* client.session.create({ cwd: process.cwd() })
 
         yield* client.message.send({
@@ -2860,7 +2859,7 @@ describe("message.send", () => {
             },
           }),
         )
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer, configServiceLayer }),
         )
         const created = yield* client.session.create({ cwd: process.cwd() })
@@ -2928,7 +2927,7 @@ describe("message.send", () => {
             },
           }),
         )
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({ ...e2ePreset, providerLayer, configServiceLayer }),
         )
         const created = yield* client.session.create({ cwd: process.cwd() })
@@ -3016,7 +3015,7 @@ describe("message.send", () => {
               },
             },
           ])
-          const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+          const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
           const created = yield* client.session.create({ cwd: process.cwd() })
           const notices = () =>
             client.session
@@ -3079,7 +3078,7 @@ describe("message.send", () => {
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           textStep("should not run"),
         ])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const created = yield* client.session.create({ cwd: process.cwd() })
 
         yield* client.session.delete({ sessionId: created.sessionId })
@@ -3112,7 +3111,7 @@ describe("Session snapshot across RPC boundaries", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+          const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
 
           const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
 

@@ -122,6 +122,17 @@
                 "strictEffectProvide": "off"
               }
             }
+          },
+          {
+            "include": ["testbeds/gamut/gamut.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "asyncFunction": "off",
+                "globalConsole": "off",
+                "globalDate": "off",
+                "nodeBuiltinImport": "off"
+              }
+            }
           }
         ]
       }

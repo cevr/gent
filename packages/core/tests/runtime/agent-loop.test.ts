@@ -55,6 +55,7 @@ import {
 } from "../../src/domain/agent"
 import {
   createE2ELayer,
+  createRpcClient,
   createRpcHarness,
   ensureStorageParents,
   RecordingEventStore,
@@ -162,7 +163,7 @@ import {
   TurnOutcome,
 } from "../../src/runtime/turn"
 import { windowDetails, windowMarkerMessage } from "../../src/runtime/model-context"
-import { e2ePreset, ModelContextCompactorLive } from "../../../extensions/tests/helpers/test-preset"
+import { e2ePreset, rangeCompactorLayer, testAgents } from "../helpers/test-preset"
 import * as AiModel from "effect/unstable/ai/Model"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { type ModelDriverContribution, ProviderAuthError } from "../../src/domain/driver"
@@ -186,7 +187,6 @@ import {
   ToolRunner,
   makeTurnInterruption,
 } from "../../src/runtime/tools"
-import { AllBuiltinAgents } from "../../../extensions/tests/helpers/builtin-agents"
 import {
   AgentLoop,
   AgentLoop as AgentLoopActor,
@@ -200,7 +200,6 @@ import {
 import * as AiError from "effect/unstable/ai/AiError"
 import { StorageError } from "../../src/domain/errors"
 import { Database } from "bun:sqlite"
-import { Gent } from "@gent/sdk"
 import type { LanguageModel } from "effect/unstable/ai"
 import { narrowR } from "../helpers/effect"
 import { SingleRunner } from "effect/unstable/cluster"
@@ -1506,9 +1505,7 @@ describe("native model compaction integration", () => {
         expect(Option.isSome(mainPrompt)).toBe(true)
         if (Option.isNone(mainPrompt)) return yield* Effect.die("main prompt missing")
         const main = promptText(mainPrompt.value)
-        expect(main).toContain("Context handoff")
         expect(main).toContain("native bounded summary")
-        expect(main).toContain(`Session ${sessionId}, branch ${branchId}`)
         expect(main).toContain("native current turn")
         // The handoff replaced the old messages in the model view.
         expect(main).not.toContain("native-old-1 xxxx")
@@ -1530,7 +1527,7 @@ describe("native model compaction integration", () => {
         expect(durable.some((message) => message.id === oldMessages[0]?.id)).toBe(true)
       }),
     ).pipe(
-      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(ModelContextCompactorLive))),
+      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(rangeCompactorLayer))),
       Effect.timeout("15 seconds"),
     )
   })
@@ -1579,7 +1576,7 @@ describe("native model compaction integration", () => {
         expect(markers).toHaveLength(1)
       }),
     ).pipe(
-      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(ModelContextCompactorLive))),
+      Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(rangeCompactorLayer))),
       Effect.timeout("15 seconds"),
     )
   })
@@ -1724,7 +1721,7 @@ describe("native model context projection", () => {
         manifest: { id: ExtensionId.make("model-context-driver") },
         scope: "builtin",
         sourcePath: "test",
-        contributions: { agents: AllBuiltinAgents, modelDrivers: [driver] },
+        contributions: { agents: testAgents, modelDrivers: [driver] },
       },
     ])
     const extensionRegistry = ExtensionRegistry.fromResolved(resolved)
@@ -1802,7 +1799,7 @@ describe("model resolution failure", () => {
         manifest: { id: ExtensionId.make("signed-out-driver") },
         scope: "builtin",
         sourcePath: "test",
-        contributions: { agents: AllBuiltinAgents, modelDrivers: [driver] },
+        contributions: { agents: testAgents, modelDrivers: [driver] },
       },
     ])
     return Effect.gen(function* () {
@@ -2681,7 +2678,7 @@ describe("turn record", () => {
           toolCallStep("resume_probe", { label: "one" }),
           textStep("DONE-AFTER-TOOL"),
         ])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer: provider.layer,
@@ -2737,7 +2734,7 @@ describe("turn record", () => {
         ])
         const started = yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: firstProvider.layer,
@@ -2760,7 +2757,7 @@ describe("turn record", () => {
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: secondProvider.layer,
@@ -2815,7 +2812,7 @@ describe("turn record", () => {
         ])
         const started = yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: firstProvider.layer,
@@ -2846,7 +2843,7 @@ describe("turn record", () => {
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: secondProvider.layer,
@@ -2897,7 +2894,7 @@ describe("turn record", () => {
         ])
         const started = yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: firstProvider.layer,
@@ -2939,7 +2936,7 @@ describe("turn record", () => {
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: secondProvider.layer,

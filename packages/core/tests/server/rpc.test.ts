@@ -17,16 +17,21 @@ import {
 import {
   DriverListResult,
   ExtensionProtocolError,
+  type GentRpcClient,
   GentRpcs,
+  makeNamespacedClient,
   SessionRpcs,
   SlashCommandInfo,
 } from "../../src/server/rpc"
 import {
   WorkspaceRpcMiddleware,
   CurrentWorkspaceId,
+  WORKSPACE_ID_HEADER,
+  workspaceHeadersForCwd,
   workspaceIdForCwd,
 } from "../../src/server/workspace-rpc"
 import { describe, expect, it } from "effect-bun-test"
+import { RpcClient } from "effect/unstable/rpc"
 import { finishPart, textDeltaPart, Auth, AuthError, AuthMethod } from "../../src/runtime/provider"
 import {
   LanguageModelLayers,
@@ -36,9 +41,8 @@ import {
   waitFor,
 } from "../../src/test-utils/language-model"
 import { AgentName, DEFAULT_AGENT_NAME, DriverRef } from "../../src/domain/agent"
-import { Gent } from "@gent/sdk"
-import { createE2ELayer, createRpcHarness } from "../../src/test-utils/harness"
-import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { createE2ELayer, createRpcClient, createRpcHarness } from "../../src/test-utils/harness"
+import { e2ePreset } from "../helpers/test-preset"
 import {
   BranchId,
   ExtensionId,
@@ -137,7 +141,7 @@ describe("RPC contract schemas", () => {
  * Driver routing RPCs — `driver.list` / `driver.set` / `driver.clear`
  * acceptance tests.
  *
- * Drives the full transport boundary (Gent.test → RpcServer → handler →
+ * Drives the full transport boundary (createRpcClient → RpcServer → handler →
  * ConfigService + ExtensionRegistry) so the tests catch wiring bugs the
  * unit tests on `ConfigService.setDriverOverride` don't cover.
  */
@@ -147,7 +151,7 @@ describe("ExtensionRpcs", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const before = yield* client.driver.list({})
         expect(before).toBeInstanceOf(DriverListResult)
         expect(before.drivers[0]?._tag).toBeDefined()
@@ -165,7 +169,7 @@ describe("ExtensionRpcs", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list({})).drivers
         const someModel = drivers.find((d) => d._tag === "Model")
         if (Predicate.isUndefined(someModel)) {
@@ -185,7 +189,7 @@ describe("ExtensionRpcs", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const result = yield* client.driver
           .set({
             agentName: DEFAULT_AGENT_NAME,
@@ -201,7 +205,7 @@ describe("ExtensionRpcs", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const drivers = (yield* client.driver.list({})).drivers
         const someModel = drivers.find((d) => d._tag === "Model")
         if (Predicate.isUndefined(someModel)) {
@@ -222,7 +226,7 @@ describe("ExtensionRpcs", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         yield* client.driver.clear({ agentName: AgentName.make("does-not-exist") })
         const after = yield* client.driver.list({})
         expect(after.overrides).toEqual({})
@@ -410,7 +414,7 @@ describe("auth.listProviders", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const providers = yield* client.auth.listProviders({})
         expect(providers.length).toBeGreaterThan(0)
       }).pipe(Effect.timeout("4 seconds")),
@@ -420,7 +424,7 @@ describe("auth.listProviders", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const session = yield* client.session.create({})
         yield* client.session.delete({ sessionId: session.sessionId })
         const exit = yield* Effect.exit(
@@ -442,7 +446,7 @@ describe("auth persistence RPC failures", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -461,7 +465,7 @@ describe("auth persistence RPC failures", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -480,7 +484,7 @@ describe("auth persistence RPC failures", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -499,7 +503,7 @@ describe("auth persistence RPC failures", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -525,7 +529,7 @@ describe("auth persistence RPC failures", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* Gent.test(
+        const { client } = yield* createRpcClient(
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
@@ -606,7 +610,7 @@ describe("interaction.respondInteraction", () => {
         ])
         const first = yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: firstProvider.layer,
@@ -655,7 +659,7 @@ describe("interaction.respondInteraction", () => {
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: secondProvider.layer,
@@ -737,7 +741,7 @@ describe("interaction.respondInteraction", () => {
         ])
         const first = yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: firstProvider.layer,
@@ -796,7 +800,7 @@ describe("interaction.respondInteraction", () => {
         const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { client } = yield* Gent.test(
+            const { client } = yield* createRpcClient(
               createE2ELayer({
                 ...e2ePreset,
                 providerLayer: secondProvider.layer,
@@ -848,7 +852,7 @@ describe("interaction.respondInteraction", () => {
             toolCallStep("approval_probe", { text: "approve deploy?" }),
             textStep(finalReply),
           ])
-          const { client } = yield* Gent.test(
+          const { client } = yield* createRpcClient(
             createE2ELayer({
               ...e2ePreset,
               providerLayer,
@@ -1835,6 +1839,7 @@ describe("extension command RPCs", () => {
             const { client, sessionId } = yield* createRpcHarness({
               ...e2ePreset,
               providerLayer,
+              agents: [],
               extensionInputs: [failingExtension],
               // This test is about the failure report, so the load must survive it.
               allowFailedExtensions: true,
@@ -2156,6 +2161,87 @@ describe("extension command RPCs", () => {
           }).pipe(Effect.timeout("4 seconds")),
         ),
       )
+    }),
+  )
+})
+
+// ── namespaced-client.test ──────────────────────────────────────────────────
+
+describe("namespaced client", () => {
+  test("namespaced client exposes every RPC key from GentRpcs", () => {
+    const handlers = new Map<string, () => Effect.Effect<void>>(
+      [...GentRpcs.requests.keys()].map((key) => [key, () => Effect.void]),
+    )
+    const flat: GentRpcClient = new Proxy(Object.create(null), {
+      get: (_target, property) => {
+        if (!Predicate.isString(property)) return Option.getOrUndefined(Option.none())
+        return Option.getOrUndefined(Option.fromNullishOr(handlers.get(property)))
+      },
+    })
+    const namespaced = makeNamespacedClient(flat)
+    expect(namespaced.session).toBe(namespaced.session)
+
+    for (const key of GentRpcs.requests.keys()) {
+      const separator = key.indexOf(".")
+      expect(separator, `RPC key is not namespaced: ${key}`).not.toBe(-1)
+      if (separator === -1) return
+      const namespace = key.slice(0, separator)
+      const method = key.slice(separator + 1)
+      // oxlint-disable-next-line effect/noAs -- this test verifies the dynamic RPC namespace boundary
+      const namespaceClient = namespaced[namespace as keyof typeof namespaced]
+      expect(namespaceClient).toBeDefined()
+      expect(namespace in namespaced).toBe(true)
+      expect(method in namespaceClient).toBe(true)
+      // oxlint-disable-next-line effect/noAs, effect/noUnsafeDictionaryType -- this test verifies the dynamic RPC method boundary
+      const methodClient = (namespaceClient as Readonly<Record<string, unknown>>)[method]
+      expect(methodClient).toBeDefined()
+      expect(methodClient).toBe(handlers.get(key))
+    }
+  })
+
+  it.live("namespaced client attaches workspace header to RPC effects", () =>
+    Effect.gen(function* () {
+      let observed = Option.none<string>()
+      const flat: GentRpcClient = new Proxy(Object.create(null), {
+        get: (_target, property) => {
+          if (property !== "session.list") return Option.getOrUndefined(Option.none())
+          return () =>
+            Effect.gen(function* () {
+              const headers = yield* RpcClient.CurrentHeaders
+              observed = Option.fromNullishOr(headers[WORKSPACE_ID_HEADER])
+              return []
+            })
+        },
+      })
+      const client = makeNamespacedClient(flat, workspaceHeadersForCwd("/tmp/gent"))
+      yield* client.session.list()
+      expect(observed).toEqual(Option.some(workspaceIdForCwd("/tmp/gent")))
+    }),
+  )
+
+  it.live("namespaced client attaches workspace header to RPC streams", () =>
+    Effect.gen(function* () {
+      let observed = Option.none<string>()
+      const flat: GentRpcClient = new Proxy(Object.create(null), {
+        get: (_target, property) => {
+          if (property !== "session.watchRuntime") return Option.getOrUndefined(Option.none())
+          return () =>
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                const headers = yield* RpcClient.CurrentHeaders
+                observed = Option.fromNullishOr(headers[WORKSPACE_ID_HEADER])
+              }),
+            )
+        },
+      })
+      const client = makeNamespacedClient(flat, workspaceHeadersForCwd("/tmp/gent"))
+      yield* Stream.runDrain(
+        client.session.watchRuntime({
+          sessionId: SessionId.make("session-stream-header"),
+          branchId: BranchId.make("branch-stream-header"),
+        }),
+      )
+      expect(observed).toEqual(Option.some(workspaceIdForCwd("/tmp/gent")))
     }),
   )
 })

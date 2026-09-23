@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Headers } from "effect/unstable/http"
 import { RpcMiddleware } from "effect/unstable/rpc"
 // @effect-diagnostics nodeBuiltinImport:off — the workspace id is a wire constant, see workspaceIdForCwd
+// oxlint-disable-next-line gent/no-bun-outside-adapter -- a client and its server derive the wire id in separate processes; it is pinned to node:crypto sha256, not an adapter's hash
 import { createHash } from "node:crypto"
 // @effect-diagnostics nodeBuiltinImport:off — the workspace id canonicalizes its cwd before hashing
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- sync, context-free canonicalization: the wire id must not depend on a Path layer being wired
@@ -26,12 +27,13 @@ export const DefaultWorkspaceId: WorkspaceId = WorkspaceId.make("0".repeat(64))
  * wire constant, not a host fact: it is pinned to `node:crypto` sha256 over
  * the resolved path rather than routed through `GentPlatform.hash`, because
  * a platform adapter that hashed differently would split the workspace
- * silently. `packages/tooling` exempts this file from the crypto guard for
+ * silently. The import and the call carry line-local lint suppressions for
  * exactly that reason.
  *
  * Sync because SDK client construction needs it outside an Effect context.
  */
 export const workspaceIdForCwd = (cwd: string): WorkspaceId =>
+  // oxlint-disable-next-line gent/no-bun-outside-adapter -- the wire id is pinned to node:crypto sha256; see above
   WorkspaceId.make(createHash("sha256").update(resolvePath(cwd)).digest("hex"))
 
 /**

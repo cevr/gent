@@ -15,5 +15,5 @@ export {
   workspaceHeadersForCwd,
   workspaceIdForCwd,
 } from "./server/workspace-rpc.js"
-export { RpcHandlersLive, StateLocation } from "./server/server.js"
+export { makeInProcessClient, RpcHandlersLive, StateLocation } from "./server/server.js"
 export { buildServerRoot } from "./server/server-root.js"

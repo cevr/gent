@@ -32,7 +32,7 @@ import {
   type QueueSnapshot,
   type SteerCommand,
 } from "../../src/domain/message"
-import { AllBuiltinAgents } from "../../../extensions/tests/helpers/builtin-agents.js"
+import { testAgents } from "../helpers/test-preset"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../src/domain/extension"
 import {
@@ -83,7 +83,7 @@ export const makeExtRegistry = (
       scope: "builtin",
       sourcePath: "test",
       contributions: {
-        agents: [...AllBuiltinAgents, helperAgent],
+        agents: [...testAgents, helperAgent],
         tools,
         resources,
       },

@@ -111,8 +111,7 @@ import {
   getToolMetadata,
   isToolCapability,
 } from "../../src/domain/capability"
-import { builtinAgent, getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
-import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { e2ePreset, testAgent } from "../helpers/test-preset"
 import { ref } from "../../src/extensions/api.js"
 import {
   type AnyResourceContribution,
@@ -1870,7 +1869,7 @@ describe("runtime slots", () => {
     return slots
       .resolveSystemPrompt({
         basePrompt: "base",
-        agent: getBuiltinAgent("cowork")!,
+        agent: testAgent,
       } satisfies SystemPromptInput)
       .pipe(
         Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
@@ -1895,7 +1894,7 @@ describe("runtime slots", () => {
     return slots
       .resolveSystemPrompt({
         basePrompt: "base",
-        agent: getBuiltinAgent("cowork")!,
+        agent: testAgent,
       } satisfies SystemPromptInput)
       .pipe(
         Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
@@ -1923,7 +1922,7 @@ describe("runtime slots", () => {
       const result = yield* slots
         .resolveSystemPrompt({
           basePrompt: "base",
-          agent: getBuiltinAgent("cowork")!,
+          agent: testAgent,
         })
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
 
@@ -2492,17 +2491,15 @@ describe("prompt slots", () => {
       ext("u", "user", "[user]"),
     ])
 
-    return compiled
-      .resolveSystemPrompt({ basePrompt: "x", agent: getBuiltinAgent("cowork")! })
-      .pipe(
-        Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
-        Effect.tap((result) => Effect.sync(() => expect(result).toBe("x[builtin][user][project]"))),
-      )
+    return compiled.resolveSystemPrompt({ basePrompt: "x", agent: testAgent }).pipe(
+      Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
+      Effect.tap((result) => Effect.sync(() => expect(result).toBe("x[builtin][user][project]"))),
+    )
   })
 
   test("empty turn hooks are a no-op", () =>
     compileExtensionHooks([])
-      .resolveSystemPrompt({ basePrompt: "x", agent: getBuiltinAgent("cowork")! })
+      .resolveSystemPrompt({ basePrompt: "x", agent: testAgent })
       .pipe(
         Effect.provideService(CurrentExtensionHostContext, stubHostCtx),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("x"))),
@@ -3438,16 +3435,16 @@ describe("scope precedence", () => {
 
     test("agent with same name: project shadows builtin", () => {
       const projectAgent = AgentDefinition.make({
-        name: builtinAgent.name,
+        name: testAgent.name,
         description: "shadowed",
       })
 
       const resolved = resolveExtensions([
-        extScopePrecedence("a", "builtin", { agents: [builtinAgent] }),
+        extScopePrecedence("a", "builtin", { agents: [testAgent] }),
         extScopePrecedence("b", "project", { agents: [projectAgent] }),
       ])
       return Effect.sync(() =>
-        expect(resolved.agents.get(builtinAgent.name)?.description).toBe("shadowed"),
+        expect(resolved.agents.get(testAgent.name)?.description).toBe("shadowed"),
       )
     })
 
@@ -3489,7 +3486,7 @@ describe("scope precedence", () => {
         make("u", "user"),
       ])
 
-      return compiled.resolveSystemPrompt({ basePrompt: "x", agent: builtinAgent }).pipe(
+      return compiled.resolveSystemPrompt({ basePrompt: "x", agent: testAgent }).pipe(
         Effect.provideService(CurrentExtensionHostContext, stubCtx),
         Effect.tap((result) => Effect.sync(() => expect(result).toBe("x[builtin][user][project]"))),
       )

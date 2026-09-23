@@ -2,7 +2,9 @@
  * Example: One-file session notes extension.
  *
  * Demonstrates the public authoring loop:
- *   - process-scoped extension state (a Ref behind the extension's own Tag)
+ *   - process-scoped extension state (a Ref behind the extension's own Tag).
+ *     One Ref serves the whole process, so every session sees the same notes.
+ *     Key the state by `ExtensionContext.sessionId` to keep notes per session.
  *   - one model-callable tool
  *   - one slash-presented request
  *   - one turn projection hook
@@ -21,11 +23,11 @@ interface NotesState {
 }
 
 class SessionNotesState extends Context.Service<SessionNotesState, Ref.Ref<NotesState>>()(
-  "gent/examples/extensions/session-notes/SessionNotesState",
+  "@gent/examples/extensions/session-notes/SessionNotesState",
 ) {}
 
 const NoteInput = Schema.Struct({
-  text: Schema.String.annotate({ description: "Note text to remember for this session" }),
+  text: Schema.String.annotate({ description: "Note text to remember" }),
 })
 
 const NoteOutput = Schema.Struct({
@@ -35,10 +37,10 @@ const NoteOutput = Schema.Struct({
 
 export const AddNoteTool = tool({
   id: "session_note_add",
-  description: "Remember a short note for this session",
+  description: "Remember a short note, shared by every session in this process",
   params: NoteInput,
   output: NoteOutput,
-  promptSnippet: "Remember session-local notes that may help later turns.",
+  promptSnippet: "Remember notes that may help later turns.",
   execute: ({ text }) =>
     Effect.gen(function* () {
       const state = yield* SessionNotesState

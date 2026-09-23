@@ -1,5 +1,6 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { AgentDefinition, AgentName } from "../../src/domain/agent"
 import { ExtensionId, SessionId } from "../../src/domain/ids"
 import type { Session } from "../../src/domain/message"
 import {
@@ -137,6 +138,31 @@ describe("extension tool test layer", () => {
               }),
             }),
           ),
+        }),
+      ),
+    ),
+  )
+})
+
+// ── e2e-layer-agents.test ───────────────────────────────────────────────────
+
+describe("createE2ELayer agents", () => {
+  const reviewer = AgentDefinition.make({
+    name: AgentName.make("reviewer"),
+    description: "Agent named only in the layer config",
+  })
+
+  it.scopedLive("registers the configured agents beside extension inputs", () =>
+    Effect.gen(function* () {
+      const registry = yield* ExtensionRegistry
+      expect(registry.getResolved().agents.get("reviewer")).toBe(reviewer)
+    }).pipe(
+      Effect.provide(
+        createE2ELayer({
+          providerLayer: LanguageModelLayers.debug(),
+          agents: [reviewer],
+          extensionInputs: [defineExtension({ id: "no-agents", setup: Effect.void })],
+          toolRunner: "test",
         }),
       ),
     ),

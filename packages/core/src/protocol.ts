@@ -71,7 +71,13 @@ export {
 } from "./runtime/model-context.js"
 export { NotFoundError, ProviderError, StorageError } from "./domain/errors.js"
 export { GentRpcError } from "./server/rpc.js"
-export { type GentClientRpcError, type GentRpcClient, GentRpcs } from "./server/rpc.js"
+export {
+  type GentClientRpcError,
+  type GentNamespacedClient,
+  type GentRpcClient,
+  GentRpcs,
+  makeNamespacedClient,
+} from "./server/rpc.js"
 export {
   BranchTreeNode,
   ConnectionState,

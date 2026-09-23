@@ -9,6 +9,7 @@ export {
   captureTurnTools,
   collectTestContributions,
   createE2ELayer,
+  createRpcClient,
   createRpcHarness,
   type E2ELayerConfig,
   ensureStorageParents,
@@ -20,10 +21,12 @@ export {
   runToolWithCtx,
   staticToolBinding,
   storedEvents,
+  testAgent,
   testHostFacts,
   testLeafContext,
   testToolContext,
   type TestToolContext,
+  testTurnExtension,
 } from "./harness.js"
 export {
   type CapturedRequest,

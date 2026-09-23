@@ -6,7 +6,7 @@ import {
   ModelId,
   ProviderId,
 } from "../../src/domain/agent"
-import { BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
+import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { describe, expect, it } from "effect-bun-test"
 import type { LanguageModel } from "effect/unstable/ai"
 import {
@@ -15,7 +15,6 @@ import {
   Deferred,
   Effect,
   Fiber,
-  FileSystem,
   Layer,
   Option,
   Predicate,
@@ -36,19 +35,12 @@ import {
   ModelResolver,
   TEST_MODEL_CONTEXT_LIMIT_TOKENS,
 } from "../../src/runtime/provider"
-import {
-  LanguageModelLayers,
-  textStep,
-  toolCallStep,
-  waitFor,
-} from "../../src/test-utils/language-model"
+import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import { AgentEvent, EventPublisherLive } from "../../src/domain/event"
 import {
   baseLocalLayerWithProvider,
   type CallRecord,
-  createE2ELayer,
   createRpcHarness,
-  ensureStorageParents,
   RecordingEventStore,
   SequenceRecorder,
 } from "../../src/test-utils/harness"
@@ -92,7 +84,7 @@ import {
 } from "../../src/storage/storage"
 import { SessionRuntime } from "../../src/runtime/session"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
-import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
+import { e2ePreset } from "../helpers/test-preset"
 
 // ── session-runtime.test ────────────────────────────────────────────────────
 
@@ -1145,61 +1137,5 @@ describe("branch-scoped resources", () => {
       expect(second).toBe("instance:1")
       expect(nextInstance).toBe(1)
     }).pipe(Effect.scoped),
-  )
-})
-
-// ── ../extensions/exec-tools-background.test ────────────────────────────────
-
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
-
-describe("exec-tools background runtime", () => {
-  it.live("drops background bash completion after session deletion", () =>
-    Effect.gen(function* () {
-      const sessionId = SessionId.make("exec-bg-deleted-session")
-      const branchId = BranchId.make("exec-bg-deleted-branch")
-      const markerPath = `/tmp/gent-${sessionId}-background-done`
-      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-        toolCallStep("bash", {
-          command: `sleep 0.3; touch ${markerPath}; printf stale-background-completion`,
-          run_in_background: true,
-        }),
-        textStep("background command started"),
-      ])
-      const layer = createE2ELayer({ ...e2ePreset, providerLayer }).pipe(
-        Layer.provideMerge(BunFileSystem.layer),
-      )
-
-      yield* Effect.gen(function* () {
-        const runtime = yield* SessionRuntime
-        const sessions = yield* SessionStorage
-        const messages = yield* MessageStorage
-        const fs = yield* FileSystem.FileSystem
-
-        yield* fs.remove(markerPath).pipe(Effect.catchEager(() => Effect.void))
-        yield* ensureStorageParents({ sessionId, branchId })
-        yield* runtime.sendUserMessage({
-          sessionId,
-          branchId,
-          commandId: ActorCommandId.make("turn:start background command"),
-          content: "start background command",
-          agentOverride: DEFAULT_AGENT_NAME,
-        })
-        yield* sessions.deleteSession(sessionId)
-
-        yield* waitFor(
-          fs.exists(markerPath),
-          (exists) => exists,
-          2_000,
-          "background command marker",
-        )
-        const remaining = yield* messages.listMessages(branchId)
-        const stale = remaining.filter((message) =>
-          encodeJson(message.parts).includes("stale-background-completion"),
-        )
-        expect(stale).toEqual([])
-        yield* fs.remove(markerPath).pipe(Effect.catchEager(() => Effect.void))
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer), Effect.timeout("5 seconds"))
-    }),
   )
 })

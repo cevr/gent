@@ -28,7 +28,7 @@ import {
   ModelId,
   SessionId,
 } from "@gent/core/protocol"
-import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
+import { testAgent } from "@gent/core/test-utils"
 
 const noop = () => {}
 const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
@@ -110,7 +110,7 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
       list: () => noRpcError([]),
     },
     driver: {
-      list: () => noRpcError({ drivers: [], overrides: {}, agents: AllBuiltinAgents }),
+      list: () => noRpcError({ drivers: [], overrides: {}, agents: [testAgent] }),
     },
     auth: {
       listProviders: () => noRpcError([]),

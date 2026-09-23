@@ -15,7 +15,13 @@ import * as ChildProcessSpawnerNs from "effect/unstable/process/ChildProcessSpaw
 import { dateFromMillis } from "@gent/core/protocol"
 import { BunGentPlatformLive } from "@gent/core/test-utils"
 import { GentPlatform } from "@gent/core/host"
-import { BuildFingerprint, LaunchConfig, serverLock, ServerLockEntry } from "../src/server"
+import {
+  BuildFingerprint,
+  dataPaths,
+  LaunchConfig,
+  serverLock,
+  ServerLockEntry,
+} from "../src/server"
 import { BunServices } from "@effect/platform-bun"
 import { hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
@@ -56,13 +62,6 @@ const PlatformCompiledBin: Layer.Layer<GentPlatform> = Layer.effect(
         let h = 5381
         for (let i = 0; i < text.length; i += 1) h = (h * 33) ^ text.charCodeAt(i)
         return (h >>> 0).toString(16).padStart(64, "0")
-      },
-      randomBytes: (length) => Effect.succeed(new Uint8Array(length)),
-      fileURLToPath: (url) => {
-        if (url.startsWith("file://")) {
-          return url.slice("file://".length)
-        }
-        return url
       },
     })
   }),
@@ -114,9 +113,9 @@ describe("BuildFingerprint", () => {
 
         const program = Effect.gen(function* () {
           const bf = yield* BuildFingerprint
-          const fp1 = yield* bf.local
-          const fp2 = yield* bf.local
-          const fp3 = yield* bf.local
+          const fp1 = yield* bf.current
+          const fp2 = yield* bf.current
+          const fp3 = yield* bf.current
           return { fp1, fp2, fp3, statCalls: yield* Ref.get(counter) }
         })
 
@@ -134,17 +133,14 @@ describe("BuildFingerprint", () => {
   it.live("Test layer returns deterministic fingerprint", () =>
     Effect.gen(function* () {
       const bf = yield* BuildFingerprint
-      const local = yield* bf.local
-      const resolved = yield* bf.resolved
-      expect(local).toBe("test-fingerprint")
-      expect(resolved).toBe("test-fingerprint")
+      expect(yield* bf.current).toBe("test-fingerprint")
     }).pipe(Effect.provide(BuildFingerprint.Test())),
   )
 
   it.live("Test layer with override returns custom fingerprint", () =>
     Effect.gen(function* () {
       const bf = yield* BuildFingerprint
-      const fp = yield* bf.local
+      const fp = yield* bf.current
       expect(fp).toBe("custom-fp")
     }).pipe(Effect.provide(BuildFingerprint.Test("custom-fp"))),
   )
@@ -362,32 +358,68 @@ const makeEntry = (overrides?: Partial<ServerLockEntry>) =>
   })
 
 describe("Build Fingerprint", () => {
-  it.live("BuildFingerprint.local returns a non-empty string", () =>
+  it.live("BuildFingerprint.current returns a non-empty string", () =>
     Effect.gen(function* () {
       const bf = yield* BuildFingerprint
-      const fp = yield* bf.local
+      const fp = yield* bf.current
       expect(fp).toBeTruthy()
       expect(fp.length).toBeGreaterThan(0)
     }).pipe(Effect.provide(PlatformLayer)),
   )
 
-  it.live("BuildFingerprint.local is cached across calls", () =>
+  it.live("BuildFingerprint.current is cached across calls", () =>
     Effect.gen(function* () {
       const bf = yield* BuildFingerprint
-      const fp1 = yield* bf.local
-      const fp2 = yield* bf.local
+      const fp1 = yield* bf.current
+      const fp2 = yield* bf.current
       expect(fp1).toBe(fp2)
     }).pipe(Effect.provide(PlatformLayer)),
   )
-
-  it.live("BuildFingerprint.resolved resolves to a string", () =>
-    Effect.gen(function* () {
-      const bf = yield* BuildFingerprint
-      const fp = yield* bf.resolved
-      expect(fp.length).toBeGreaterThan(0)
-    }).pipe(Effect.provide(PlatformLayer)),
-  )
 })
+
+/**
+ * Trap SIGTERM to this process. With `exits`, a trapped SIGTERM marks the pid
+ * gone, so the liveness probe that follows sees the server exit; without it,
+ * the pid stays alive, as a server that ignores SIGTERM does.
+ */
+const signalTrap =
+  (exits: boolean) =>
+  <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<
+    { readonly result: A; readonly signals: ReadonlyArray<string | number> },
+    E,
+    R | Scope.Scope
+  > =>
+    Effect.gen(function* () {
+      const signals: Array<string | number> = []
+      // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
+      const originalKill = process.kill
+      const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
+        if (pid !== process.pid) return originalKill(pid, signal)
+        if (signal === "SIGTERM") {
+          signals.push(signal)
+          return true
+        }
+        // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- the trap keeps process.kill's contract: a gone pid throws ESRCH
+        if (exits && signals.length > 0) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" })
+        return originalKill(pid, signal)
+      }
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          process.kill = replacement
+        }),
+        () =>
+          Effect.sync(() => {
+            process.kill = originalKill
+          }),
+      )
+      const result = yield* effect
+      return { result, signals }
+    })
+
+const withSignalTrap = signalTrap(true)
+const withIgnoredSigterm = signalTrap(false)
 
 describe("Server Lock", () => {
   it.scopedLive(
@@ -474,8 +506,8 @@ describe("Server Lock", () => {
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        const dbPath = `${home}/data.db`
-        const buildFingerprint = yield* (yield* BuildFingerprint).local
+        const dbPath = (yield* dataPaths(home)).dbPath
+        const buildFingerprint = yield* (yield* BuildFingerprint).current
         const entry = makeEntry({ dbPath, buildFingerprint })
         const fakeOwner = yield* Effect.acquireRelease(
           Effect.sync(() =>
@@ -507,7 +539,7 @@ describe("Server Lock", () => {
 
         const server = yield* Gent.server({
           cwd: `${process.cwd()}/other-workspace`,
-          state: Gent.state.sqlite({ home, dbPath: `${home}/other.db` }),
+          state: Gent.state.sqlite({ home }),
           provider: Gent.provider.mock(),
         })
         expect(server._tag).toBe("Attached")
@@ -516,41 +548,150 @@ describe("Server Lock", () => {
     ),
   )
 
-  it.scopedLive("a second sqlite Gent.server on the same dbPath attaches to the live owner", () =>
+  it.scopedLive(
+    "a second sqlite Gent.server on the same data directory attaches to the live owner",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const options = {
+            cwd: home,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }
+
+          const owner = yield* Gent.server(options)
+          expect(owner._tag).toBe("Owned")
+          const ownerStatus = yield* (yield* Gent.client(owner)).client.runtime.status()
+
+          const attached = yield* Gent.server(options)
+          expect(attached._tag).toBe("Attached")
+          expect(attached.url).toBe(owner.url)
+
+          const response = yield* Effect.promise(() =>
+            Bun.fetch(`${attached.url.replace("/rpc", "")}/_gent/identity`),
+          )
+          const identity = yield* Effect.promise(() => response.json()).pipe(
+            Effect.flatMap(
+              Schema.decodeUnknownEffect(
+                Schema.Struct({ serverId: Schema.String, pid: Schema.Finite }),
+              ),
+            ),
+          )
+          expect(identity.serverId).toBe(ownerStatus.serverId)
+          expect(identity.pid).toBe(ownerStatus.pid)
+        }),
+      ),
+  )
+
+  it.scopedLive(
+    "the lock and the identity endpoint name one build, so a second server attaches",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const options = {
+            cwd: home,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }
+          const owner = yield* Gent.server(options)
+          expect(owner._tag).toBe("Owned")
+          const entry = Option.getOrThrow(yield* serverLock.read(home))
+          const response = yield* Effect.promise(() =>
+            Bun.fetch(`${owner.url.replace("/rpc", "")}/_gent/identity`),
+          )
+          const identity = yield* Effect.promise(() => response.json()).pipe(
+            Effect.flatMap(
+              Schema.decodeUnknownEffect(Schema.Struct({ buildFingerprint: Schema.String })),
+            ),
+          )
+          expect(identity.buildFingerprint).toBe(entry.buildFingerprint)
+          const second = yield* Gent.server(options)
+          expect(second._tag).toBe("Attached")
+        }).pipe(
+          // An environment that names a build fingerprint must not split the two records.
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnvRecord({ GENT_BUILD_FINGERPRINT: "operator-pinned" }),
+          ),
+        ),
+      ),
+  )
+
+  it.scopedLive("a lock that names another database is replaced, not attached", () =>
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        const dbPath = `${home}/data.db`
-        const options = {
-          cwd: home,
-          state: Gent.state.sqlite({ home, dbPath }),
-          provider: Gent.provider.mock(),
-        }
-
-        const owner = yield* Gent.server(options)
-        expect(owner._tag).toBe("Owned")
-        const ownerStatus = yield* (yield* Gent.client(owner)).client.runtime.status()
-
-        const attached = yield* Gent.server(options)
-        expect(attached._tag).toBe("Attached")
-        expect(attached.url).toBe(owner.url)
-
-        const response = yield* Effect.promise(() =>
-          Bun.fetch(`${attached.url.replace("/rpc", "")}/_gent/identity`),
-        )
-        const identity = yield* Effect.promise(() => response.json()).pipe(
-          Effect.flatMap(
-            Schema.decodeUnknownEffect(
-              Schema.Struct({ serverId: Schema.String, pid: Schema.Finite }),
-            ),
+        const ownDb = (yield* dataPaths(home)).dbPath
+        const buildFingerprint = yield* (yield* BuildFingerprint).current
+        const entry = makeEntry({ dbPath: `${ownDb}.other`, buildFingerprint })
+        const foreignOwner = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
+            Bun.serve({
+              port: 0,
+              fetch: () =>
+                Response.json({
+                  serverId: entry.serverId,
+                  pid: entry.pid,
+                  hostname: entry.hostname,
+                  dbPath: entry.dbPath,
+                  buildFingerprint: entry.buildFingerprint,
+                }),
+            }),
           ),
+          (server) => Effect.promise(() => server.stop(true)),
         )
-        expect(identity.serverId).toBe(ownerStatus.serverId)
-        expect(identity.pid).toBe(ownerStatus.pid)
+        yield* serverLock.write(
+          home,
+          new ServerLockEntry({ ...entry, rpcUrl: `${new URL(foreignOwner.url).origin}/rpc` }),
+        )
+
+        const { result: server } = yield* Gent.server({
+          cwd: home,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        }).pipe(withSignalTrap)
+        expect(server._tag).toBe("Owned")
+        expect(Option.getOrThrow(yield* serverLock.read(home)).dbPath).toBe(ownDb)
       }),
     ),
   )
 })
+
+/**
+ * Write `entry` as the lock, pointed at an identity endpoint that answers with
+ * the entry's own identity, changed by `overrides`.
+ */
+const lockWithIdentity = (
+  home: string,
+  entry: ServerLockEntry,
+  overrides: { readonly pid?: number },
+) =>
+  Effect.gen(function* () {
+    const endpoint = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
+        Bun.serve({
+          port: 0,
+          fetch: () =>
+            Response.json({
+              serverId: entry.serverId,
+              pid: entry.pid,
+              hostname: entry.hostname,
+              dbPath: entry.dbPath,
+              buildFingerprint: entry.buildFingerprint,
+              ...overrides,
+            }),
+        }),
+      ),
+      (server) => Effect.promise(() => server.stop(true)),
+    )
+    const locked = new ServerLockEntry({ ...entry, rpcUrl: `${new URL(endpoint.url).origin}/rpc` })
+    yield* serverLock.write(home, locked)
+    return locked
+  })
 
 describe("Server Lock Ownership", () => {
   it.scopedLive("status reads a live pid as alive and a gone pid as stale", () =>
@@ -568,115 +709,57 @@ describe("Server Lock Ownership", () => {
     ),
   )
 
-  it.scopedLive("PID-reused stale server locks are removed without SIGTERM", () =>
+  it.scopedLive(
+    "a live holder that does not prove its identity blocks a new server; nothing is signalled",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const buildFingerprint = yield* (yield* BuildFingerprint).current
+          const dbPath = (yield* dataPaths(home)).dbPath
+          // The pid is alive, but the endpoint names another process: a server
+          // that cannot be confirmed may still hold the database.
+          const holder = yield* lockWithIdentity(home, makeEntry({ dbPath, buildFingerprint }), {
+            pid: 99999999,
+          })
+          const { result, signals } = yield* Gent.server({
+            cwd: home,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }).pipe(Effect.flip, withSignalTrap)
+          expect(result._tag).toBe("@gent/core/GentConnectionError")
+          expect(result.message).toContain(String(holder.pid))
+          expect(signals).toEqual([])
+          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
+        }),
+      ),
+  )
+
+  it.scopedLive("a holder still running after SIGTERM blocks a new server", () =>
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
-        const entry = makeEntry({
-          pid: process.pid,
-          buildFingerprint: "stale-fingerprint",
-        })
-        const fakeOwner = yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
-            Bun.serve({
-              port: 0,
-              fetch: (request) => {
-                if (new URL(request.url).pathname !== "/_gent/identity") {
-                  return new Response("not found", { status: 404 })
-                }
-                return Response.json({
-                  serverId: entry.serverId,
-                  pid: 99999999,
-                  hostname: entry.hostname,
-                  dbPath: entry.dbPath,
-                  buildFingerprint: entry.buildFingerprint,
-                })
-              },
-            }),
-          ),
-          (server) => Effect.promise(() => server.stop(true)),
+        // Another build on the same database: the resolver must stop it first.
+        const dbPath = (yield* dataPaths(home)).dbPath
+        const holder = yield* lockWithIdentity(
+          home,
+          makeEntry({ dbPath, buildFingerprint: "another-build" }),
+          {},
         )
-        const fakeOwnerUrl = new URL(fakeOwner.url)
-        const entryWithEndpoint = new ServerLockEntry({
-          ...entry,
-          rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
-        })
-        yield* serverLock.write(home, entryWithEndpoint)
-
-        const signals: Array<{ pid: number; signal: string | number }> = []
-        // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
-        const originalKill = process.kill
-        const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
-          if (signal === "SIGTERM") {
-            signals.push({ pid, signal })
-            return true
-          }
-          return originalKill(pid, signal)
-        }
-
-        yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            process.kill = replacement
-          }),
-          () =>
-            Effect.sync(() => {
-              process.kill = originalKill
-            }),
-        )
-        yield* Gent.server({
-          cwd: process.cwd(),
-          state: Gent.state.sqlite({ home, dbPath: entry.dbPath }),
+        const { result, signals } = yield* Gent.server({
+          cwd: home,
+          state: Gent.state.sqlite({ home }),
           provider: Gent.provider.mock(),
-        })
-
-        expect(signals).toEqual([])
-        const after = Option.getOrThrow(yield* serverLock.read(home))
-        expect(after.serverId).not.toBe(entryWithEndpoint.serverId)
+        }).pipe(Effect.flip, withIgnoredSigterm)
+        expect(result._tag).toBe("@gent/core/GentConnectionError")
+        expect(signals).toEqual(["SIGTERM"])
+        expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
       }),
     ),
   )
 })
 
 describe("serverLock.stop", () => {
-  /**
-   * Trap SIGTERM to this process. A trapped SIGTERM marks the pid gone, so the
-   * liveness probe that follows sees the server exit.
-   */
-  const withSignalTrap = <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<
-    { readonly result: A; readonly signals: ReadonlyArray<string | number> },
-    E,
-    R | Scope.Scope
-  > =>
-    Effect.gen(function* () {
-      const signals: Array<string | number> = []
-      // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
-      const originalKill = process.kill
-      const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
-        if (pid !== process.pid) return originalKill(pid, signal)
-        if (signal === "SIGTERM") {
-          signals.push(signal)
-          return true
-        }
-        // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- the trap keeps process.kill's contract: a gone pid throws ESRCH
-        if (signals.length > 0) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" })
-        return originalKill(pid, signal)
-      }
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          process.kill = replacement
-        }),
-        () =>
-          Effect.sync(() => {
-            process.kill = originalKill
-          }),
-      )
-      const result = yield* effect
-      return { result, signals }
-    })
-
   /** An identity endpoint that answers with `identity`; the lock points at it. */
   const lockWithEndpoint = (home: string, identity: (entry: ServerLockEntry) => object) =>
     Effect.gen(function* () {

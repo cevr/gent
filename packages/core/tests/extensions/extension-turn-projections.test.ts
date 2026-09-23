@@ -8,7 +8,7 @@
 import { describe, it, expect } from "effect-bun-test"
 import { Data, Effect } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
+import { testAgent } from "../helpers/test-preset"
 import type { ExtensionHookHandler, LoadedExtension } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
 import { BranchId, SessionId, ExtensionId } from "../../src/domain/ids"
@@ -19,7 +19,7 @@ import {
 import { testExtensionHostContext } from "../../src/test-utils/harness"
 
 const hookCtx = {
-  projection: { agent: builtinAgent },
+  projection: { agent: testAgent },
   host: testExtensionHostContext({
     sessionId: SessionId.make("s"),
     branchId: BranchId.make("b"),

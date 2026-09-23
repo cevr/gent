@@ -1,0 +1,17 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "typecheck": {
+      "inputs": [
+        "extensions/**/*.ts",
+        "tests/**/*.ts",
+        "tsconfig.json",
+        "../tsconfig.json",
+        "package.json"
+      ]
+    },
+    "test": {
+      "inputs": ["extensions/**/*.ts", "tests/**/*.ts", "package.json"]
+    }
+  }
+}

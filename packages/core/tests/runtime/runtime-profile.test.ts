@@ -3,7 +3,7 @@ import { BranchId, SessionId } from "../../src/domain/ids"
 import { describe, it, expect } from "effect-bun-test"
 import { Context, Effect, FileSystem, Layer, Path, Schema as S } from "effect"
 import { BunFileSystem, BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
-import { getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
+import { testAgent } from "../helpers/test-preset"
 import {
   AgentName,
   ExtensionHost,
@@ -356,7 +356,7 @@ describe("live Profile", () => {
               projection: {
                 sessionId: SessionId.make("s"),
                 branchId: BranchId.make("b"),
-                agent: getBuiltinAgent("cowork")!,
+                agent: testAgent,
                 agentName: AgentName.make("cowork"),
                 allTools: [],
               },
@@ -471,7 +471,7 @@ describe("live Profile", () => {
           projection: {
             sessionId: SessionId.make("s"),
             branchId: BranchId.make("b"),
-            agent: getBuiltinAgent("cowork")!,
+            agent: testAgent,
             agentName: AgentName.make("cowork"),
             allTools: [],
           },

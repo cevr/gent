@@ -39,7 +39,13 @@ import {
   ToolCallId,
   ToolId,
 } from "../domain/ids.js"
-import { type AgentDefinition } from "../domain/agent.js"
+import {
+  AgentDefinition,
+  DEFAULT_AGENT_NAME,
+  DEFAULT_MODEL_ID,
+  Model,
+  parseModelId,
+} from "../domain/agent.js"
 import { Auth, ModelRegistry } from "../runtime/provider.js"
 import {
   getToolMetadata,
@@ -70,7 +76,8 @@ import { type AgentLoopTurnProfile, runAgentLoopTurnProfile } from "../runtime/t
 import { SessionRuntime } from "../runtime/session.js"
 import { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
 import { LanguageModelLayers } from "./language-model.js"
-import { StateLocation } from "../server/server.js"
+import { makeInProcessClient, RpcHandlersLive, StateLocation } from "../server/server.js"
+import { workspaceHeadersForCwd } from "../server/workspace-rpc.js"
 import { Branch, type Message, Session } from "../domain/message.js"
 import type { StorageError } from "../domain/errors.js"
 import {
@@ -90,11 +97,10 @@ import {
   getEventSessionId,
   matchesEventFilter,
 } from "../domain/event.js"
-import type { LanguageModel } from "effect/unstable/ai"
+import { type LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import type { GentPlatform } from "../runtime/gent-platform.js"
 import { buildServerRoot } from "../server/server-root.js"
 import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
-import { Gent } from "@gent/sdk"
 
 // ── extension-host-context ──────────────────────────────────────────────────
 
@@ -194,6 +200,43 @@ const testAgentsExtension = (agents: ReadonlyArray<AgentDefinition>) =>
       yield* host.register("agent", ...agents)
     }),
   })
+
+/** The agent a test runs when it names none: `main`, on the default model. */
+export const testAgent = AgentDefinition.make({
+  name: DEFAULT_AGENT_NAME,
+  description: "Test agent",
+})
+
+const [defaultProviderId, defaultModelName] = Option.getOrThrow(parseModelId(DEFAULT_MODEL_ID))
+
+/**
+ * What an `extensionInputs` preset needs for a turn to run beside `agents:
+ * [testAgent]`: a driver that lists the default model. The driver's model is never called; the test
+ * hands the runtime its own language model through `providerLayer`.
+ */
+export const testTurnExtension = defineExtension({
+  id: "test-turn",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.register("modelDriver", {
+      id: defaultProviderId,
+      name: "Test driver",
+      listModels: () =>
+        Effect.succeed([
+          new Model({
+            id: DEFAULT_MODEL_ID,
+            name: "Test model",
+            provider: defaultProviderId,
+            contextLength: 128_000,
+          }),
+        ]),
+      resolveModel: () =>
+        Effect.succeed(
+          AiModel.make(defaultProviderId, defaultModelName, LanguageModelLayers.failing),
+        ),
+    })
+  }),
+})
 
 const dieStub = (label: string) => () => Effect.die(`${label} not wired in test`)
 const dieEffect = (label: string) => Effect.die(`${label} not wired in test`)
@@ -726,12 +769,19 @@ const wrapExtensionInput = (
 const extensionInputsForConfig = (
   config: E2ELayerConfig,
 ): ReadonlyArray<GentExtension<ExtensionSetupServices>> => {
+  // No agents, no extension: a health or registry listing sees only what the test loads.
+  const agents = [config.agents]
+    .filter((list) => list.length > 0)
+    .map((list) => testAgentsExtension(list))
   if (Predicate.isUndefined(config.extensions)) {
-    return config.extensionInputs.map((extension) =>
-      wrapExtensionInput(extension, config.layerOverrides),
-    )
+    return [
+      ...agents,
+      ...config.extensionInputs.map((extension) =>
+        wrapExtensionInput(extension, config.layerOverrides),
+      ),
+    ]
   }
-  return [testAgentsExtension(config.agents), ...config.extensions.map(fromLoadedExtension)]
+  return [...agents, ...config.extensions.map(fromLoadedExtension)]
 }
 
 const approvalOverrideForConfig = (config: E2ELayerConfig) => {
@@ -785,7 +835,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
 
 /**
  * In-process integration layer: the E2E root with the stub tool runner and
- * the scripted debug model. Use with `Gent.test()`.
+ * the scripted debug model. Use with `createRpcClient()`.
  */
 
 interface InProcessLayerConfig {
@@ -815,15 +865,15 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 
 /**
  * RPC acceptance harness — exercises the full per-request scope path that
- * production uses (`Gent.test → RpcServer → registry dispatch → handler`).
+ * production uses (`createRpcClient → RpcServer → registry dispatch → handler`).
  *
  * Use this for new extension RPC tests instead of hand-composing
- * `Gent.test(createE2ELayer({...}))` + a session-create call. Direct-runtime
+ * `createRpcClient(createE2ELayer({...}))` + a session-create call. Direct-runtime
  * tests via `makeActorRuntimeLayer` bypass the per-request scope boundary
  * production uses; this harness asserts that boundary.
  *
  * The harness is intentionally thin: it folds the four lines every RPC test
- * already writes (build E2E layer → Gent.test → session.create → return
+ * already writes (build E2E layer → createRpcClient → session.create → return
  * client + ids) into a single yield. Pass `cwd` to override the default
  * `/tmp` working directory.
  *
@@ -855,10 +905,23 @@ interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner"> {
 export const createRpcHarness = (config: RpcHarnessConfig) =>
   Effect.gen(function* () {
     const { cwd, ...layerConfig } = config
-    const layer = createE2ELayer(layerConfig)
-    const { client, runtime } = yield* Gent.test(layer)
+    const { client } = yield* createRpcClient(createE2ELayer(layerConfig))
     const { sessionId, branchId } = yield* client.session.create({
       cwd: cwd ?? "/tmp",
     })
-    return { client, runtime, sessionId, branchId }
+    return { client, sessionId, branchId }
+  })
+
+/**
+ * An in-process RPC client over `handlersLayer`: the production handlers, the
+ * workspace middleware, and a namespaced client, with no socket. The SDK's
+ * `Gent.test` is the same path for callers outside core.
+ */
+export const createRpcClient = <E, R>(
+  handlersLayer: Layer.Layer<Layer.Services<typeof RpcHandlersLive>, E, R>,
+) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(Layer.provide(RpcHandlersLive, handlersLayer))
+    const client = yield* makeInProcessClient(context, workspaceHeadersForCwd(process.cwd()))
+    return { client }
   })

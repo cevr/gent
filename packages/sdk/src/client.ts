@@ -1,16 +1,18 @@
-import { Effect, Layer, Match, Option, Predicate, Stream } from "effect"
+import { Effect, Layer, Match, Option, Predicate } from "effect"
 import type { Context, Scope } from "effect"
-import { RpcClient, RpcTest, RpcSerialization } from "effect/unstable/rpc"
-import { Headers } from "effect/unstable/http"
+import { RpcClient, RpcSerialization } from "effect/unstable/rpc"
+import type { Headers } from "effect/unstable/http"
 import { Socket } from "effect/unstable/socket"
 import {
   ConnectionState,
   GentConnectionError,
   GentRpcs,
   type GentLifecycle,
+  type GentNamespacedClient,
   type GentRpcClient,
+  makeNamespacedClient,
 } from "@gent/core/protocol"
-import { RpcHandlersLive, workspaceHeadersForCwd } from "@gent/core/host"
+import { makeInProcessClient, RpcHandlersLive, workspaceHeadersForCwd } from "@gent/core/host"
 import {
   awaitServerShutdown,
   resolveServer,
@@ -22,131 +24,6 @@ import {
 } from "./server.js"
 // `runtime-boundary.ts` owns the Effect→Promise edge for `GentRuntime.run`.
 import { makeGentRuntime as makeRuntime, type GentRuntime } from "./runtime-boundary.js"
-
-// ---------------------------------------------------------------------------
-// Namespaced client — typed nested view over the flat RPC transport
-// ---------------------------------------------------------------------------
-
-/**
- * Extract all unique namespace prefixes from a union of dotted string keys.
- * E.g. "session.create" | "branch.list" → "session" | "branch"
- */
-type Namespaces<K extends string> = K extends `${infer NS}.${string}` ? NS : never
-
-/**
- * Given a namespace prefix and a flat client, extract the methods under that namespace.
- * "session" + { "session.create": fn, "session.list": fn, "branch.list": fn }
- * → { create: fn, list: fn }
- */
-type NamespaceMethods<NS extends string, T> = {
-  [K in keyof T as K extends `${NS}.${infer Method}` ? Method : never]: T[K]
-}
-
-/**
- * Restructure a flat dotted-key client into nested namespaces.
- * { "session.create": fn, "branch.list": fn } → { session: { create: fn }, branch: { list: fn } }
- */
-type NamespacedClient<T> = {
-  readonly [NS in Namespaces<Extract<keyof T, string>>]: Readonly<NamespaceMethods<NS, T>>
-}
-
-export type GentNamespacedClient = NamespacedClient<GentRpcClient>
-type RpcMethod = (
-  ...args: ReadonlyArray<never>
-) => Effect.Effect<never, never, never> | Stream.Stream<never, never, never>
-
-// ---------------------------------------------------------------------------
-// Adapter factory — builds a GentNamespacedClient from the flat RPC transport
-// ---------------------------------------------------------------------------
-
-const rpcKeys = (): ReadonlyArray<string> => [...GentRpcs.requests.keys()]
-
-const splitRpcKey = (key: string) => {
-  const separator = key.indexOf(".")
-  if (separator === -1) return { namespace: key, method: Option.none<string>() }
-  return {
-    namespace: key.slice(0, separator),
-    method: Option.some(key.slice(separator + 1)),
-  }
-}
-
-const namespaceMethods = (namespace: string): ReadonlyArray<string> =>
-  rpcKeys().flatMap((key) => {
-    const parsed = splitRpcKey(key)
-    if (parsed.namespace === namespace && Option.isSome(parsed.method)) {
-      return [parsed.method.value]
-    }
-    return []
-  })
-
-const makeNamespace = (flat: GentRpcClient, namespace: string, headers?: Headers.Input) => {
-  const methods = namespaceMethods(namespace)
-  const headersOption = Option.fromNullishOr(headers)
-  const absent = Option.getOrUndefined(Option.none())
-  return new Proxy(Object.create(null), {
-    get: (_target, property) => {
-      if (!Predicate.isString(property)) return absent
-      const method = Reflect.get(flat, `${namespace}.${property}`)
-      if (Option.isNone(headersOption) || !Predicate.isFunction(method)) return method
-      // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion, effect/noAs -- Runtime key comes from GentRpcs.requests; wrapping preserves the underlying RPC method shape.
-      const call = method as RpcMethod
-      return (...args: ReadonlyArray<never>) => {
-        const result = call(...args)
-        if (Stream.isStream(result)) {
-          return Stream.updateService(
-            result,
-            RpcClient.CurrentHeaders,
-            Headers.merge(Headers.fromInput(headersOption.value)),
-          )
-        }
-        return RpcClient.withHeaders(result, headersOption.value)
-      }
-    },
-    has: (_target, property) => Predicate.isString(property) && methods.includes(property),
-    ownKeys: () => methods,
-    getOwnPropertyDescriptor: (_target, property) => {
-      if (Predicate.isString(property) && methods.includes(property)) {
-        return { enumerable: true, configurable: true }
-      }
-      return absent
-    },
-  })
-}
-
-export const makeNamespacedClient = (
-  flat: GentRpcClient,
-  headers?: Headers.Input,
-): GentNamespacedClient => {
-  const namespaceCache = new Map<string, object>()
-  const namespaces = [
-    ...new Set(
-      rpcKeys().flatMap((key) => {
-        const { namespace } = splitRpcKey(key)
-        if (namespace === "") return []
-        return [namespace]
-      }),
-    ),
-  ]
-  const absent = Option.getOrUndefined(Option.none())
-  return new Proxy(Object.create(null), {
-    get: (_target, property) => {
-      if (!Predicate.isString(property) || !namespaces.includes(property)) return absent
-      const existing = Option.fromNullishOr(namespaceCache.get(property))
-      if (Option.isSome(existing)) return existing.value
-      const created = makeNamespace(flat, property, headers)
-      namespaceCache.set(property, created)
-      return created
-    },
-    has: (_target, property) => Predicate.isString(property) && namespaces.includes(property),
-    ownKeys: () => namespaces,
-    getOwnPropertyDescriptor: (_target, property) => {
-      if (Predicate.isString(property) && namespaces.includes(property)) {
-        return { enumerable: true, configurable: true }
-      }
-      return absent
-    },
-  })
-}
 
 // ---------------------------------------------------------------------------
 // Static lifecycle for non-supervised connections
@@ -174,11 +51,10 @@ const inProcessBundle = <Services>(
   headers: Headers.Input,
 ): Effect.Effect<GentClientBundle<Services>, never, Services | Scope.Scope> =>
   Effect.gen(function* () {
-    // oxlint-disable-next-line effect/noInlineProvide -- the in-process client uses the handler context its caller built
-    const rpcClient = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(handlerContext))
+    const client = yield* makeInProcessClient(handlerContext, headers)
     const services = yield* Effect.context<Services>()
     return {
-      client: makeNamespacedClient(rpcClient, headers),
+      client,
       runtime: makeRuntime(
         services,
         staticLifecycle(ConnectionState.cases.Connected.make({ generation: 0 })),

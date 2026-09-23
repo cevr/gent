@@ -39,6 +39,8 @@ import {
   textStep,
   toolCallStep,
   waitFor,
+  createE2ELayer,
+  createRpcClient,
   createRpcHarness,
   runToolWithCtx,
   testToolContext,
@@ -905,5 +907,48 @@ describe("ExecToolsExtension (bash) via model turn", () => {
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15_000,
+  )
+})
+
+describe("background bash after session deletion", () => {
+  it.scopedLive.layer(BunFileSystem.layer)(
+    "a completion that lands after the session is deleted starts no turn",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-bg-deleted-" })
+        const markerPath = `${directory}/done`
+        const release = `${directory}/release`
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("bash", {
+            command: `while ! test -f ${release}; do sleep 0.02; done; touch ${markerPath}; printf stale-background-completion`,
+            run_in_background: true,
+          }),
+          textStep("background command started"),
+          // A live session answers the completion notice with this step.
+          textStep("received completion"),
+        ])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const { sessionId, branchId } = yield* client.session.create({ cwd: directory })
+        const completed = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "start background command" })
+        yield* Fiber.join(completed)
+        yield* client.session.delete({ sessionId })
+        // The job outlives its session: it finishes only after the delete.
+        yield* fs.writeFileString(release, "go")
+        yield* waitFor(fs.exists(markerPath), (exists) => exists, 2_000, "background marker")
+        // Absence has no event to wait for: a live session starts the third
+        // model call within this window; a deleted one must not.
+        const answered = yield* Effect.exit(
+          controls.waitForCall(2).pipe(Effect.timeout("1 second")),
+        )
+        expect(answered._tag).toBe("Failure")
+      }).pipe(Effect.timeout("8 seconds")),
+    10_000,
   )
 })

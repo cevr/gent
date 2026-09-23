@@ -5,9 +5,8 @@ import { onMount } from "solid-js"
 import { App, resolveInitialState, resolveInteractiveBootstrap } from "../src/app"
 import { type ClientContextValue, useClient } from "../src/client"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
-import { baseLocalLayer as _baseLocalLayer } from "@gent/core/test-utils"
-import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
-const baseLocalLayer = () => _baseLocalLayer({ agents: AllBuiltinAgents })
+import { baseLocalLayer as _baseLocalLayer, testAgent } from "@gent/core/test-utils"
+const baseLocalLayer = () => _baseLocalLayer({ agents: [testAgent] })
 import { Gent } from "@gent/sdk"
 import { waitForFrame, repoRoot } from "./helpers"
 function StateProbe(props: { readonly onReady: (ctx: { client: ClientContextValue }) => void }) {

@@ -3,7 +3,8 @@
   "private": true,
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "examples"
   ],
   "type": "module",
   "scripts": {
@@ -22,15 +23,12 @@
     "gamut": "bun testbeds/gamut/gamut.ts",
     "prepare": "lefthook install && effect-tsgo patch"
   },
-  "dependencies": {
-    "msgpackr": "catalog:",
-    "multipasta": "catalog:"
-  },
   "devDependencies": {
     "@effect/platform-bun": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@effect/tsgo": "0.41.0",
+    "@oxlint/plugins": "^1.82.0",
     "@types/bun": "^1.4.2",
     "@types/picomatch": "catalog:",
     "concurrently": "^10.0.5",
@@ -60,8 +58,6 @@
     "effect-encore": "^0.31.0",
     "effect-machine": "0.27.0",
     "effect-wide-event": "0.3.0",
-    "msgpackr": "^2.1.0",
-    "multipasta": "^0.2.8",
     "picomatch": "^4.0.7",
     "@types/picomatch": "^4.0.3",
     "effect-bun-test": "0.3.0",

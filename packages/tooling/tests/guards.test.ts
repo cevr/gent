@@ -22,6 +22,7 @@ import {
   findUnadaptedSeams,
   findUnadmittedChildSessionWriters,
   findUnconsumedExports,
+  findUndeclaredWorkspaceImports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
   findMissingLockIncludes,
@@ -76,6 +77,19 @@ describe("blanket eslint disable checker", () => {
         `/* ${directive} @typescript-eslint/no-unsafe-type-assertion -- boundary */`,
       ),
     ).toEqual([{ file: "sample.ts", line: 1 }])
+  })
+
+  test("flags the oxlint spelling of blanket and block comments", () => {
+    const oxDirective = ["oxlint", "disable"].join("-")
+    expect(findBlanketEslintDisables("sample.ts", `// ${oxDirective}-next-line`)).toEqual([
+      { file: "sample.ts", line: 1 },
+    ])
+    expect(
+      findBannedEslintDisableBlocks("sample.ts", `/* ${oxDirective} effect/noNullish -- reason */`),
+    ).toEqual([{ file: "sample.ts", line: 1 }])
+    expect(
+      findBannedEslintDisableBlocks("sample.ts", `// ${oxDirective}-next-line effect/noNullish`),
+    ).toEqual([])
   })
 
   test("allows block comments only in explicit fixture files", () => {
@@ -691,7 +705,7 @@ describe("pre-commit hook runs the guards", () => {
 // ── lint-config-guards.test ─────────────────────────────────────────────────
 
 const CONFIG = ".oxlintrc.json"
-const PLUGIN = "lint/no-direct-env.ts"
+const PLUGIN = "lint/gent-rules.ts"
 
 const messages = (findings: ReadonlyArray<{ readonly message: string }>): ReadonlyArray<string> =>
   findings.map((finding) => finding.message)
@@ -944,41 +958,6 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
-  test("flags session transport dto names only in the transport contract", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/server/rpc.ts",
-        "export class SessionInfo {}",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/server/rpc.ts",
-        line: 1,
-        message: "Transport session DTOs mirror domain types",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/domain/example.ts",
-        "export class SessionInfo {}",
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/server/rpc.ts",
-        "export class BranchInfo {}",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/server/rpc.ts",
-        line: 1,
-        message: "Transport session DTOs mirror domain types",
-      },
-    ])
-  })
-
   test("flags Bun platform providers outside platform roots", () => {
     expect(
       findPlatformDuplicationViolations(
@@ -996,307 +975,7 @@ describe("platform duplication guards", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/core/src/server/server-root.ts",
-        "const PlatformLayer = Layer.mergeAll(BunCronRuntimeLive, BunGentPlatformLive)",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags direct bun package imports in core/extensions sources", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/skills/skills.ts",
-        'import { $ } from "bun"',
-      ),
-    ).toEqual([
-      {
-        file: "packages/extensions/src/skills/skills.ts",
-        line: 1,
-        message: "Direct `bun` package imports are adapter-only; use Effect platform services",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "import { something } from 'bun'",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message: "Direct `bun` package imports are adapter-only; use Effect platform services",
-      },
-    ])
-
-    // bun:test, bun:sqlite, and other subpath imports must remain legal
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        ['import { describe } from "bun:test"', 'import { Database } from "bun:sqlite"'].join("\n"),
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/gent-platform-bun.ts",
-        'import { $ } from "bun"',
-      ),
-    ).toEqual([])
-  })
-
-  test("flags protected package working directory and OS module facts", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "const cwd = process.cwd()",
-          "const fallback = globalThis.process.cwd()",
-          'import os from "node:os"',
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "Host working directory facts are adapter-only; use RuntimeEnvironment or GentPlatform",
-      },
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 2,
-        message:
-          "Host working directory facts are adapter-only; use RuntimeEnvironment or GentPlatform",
-      },
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 3,
-        message: "Host OS module imports are adapter-only; use GentPlatform",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/bad.ts",
-        ['import os from "os"', "const cwd = process.cwd()"].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/extensions/src/bad.ts",
-        line: 1,
-        message: "Host OS module imports are adapter-only; use GentPlatform",
-      },
-      {
-        file: "packages/extensions/src/bad.ts",
-        line: 2,
-        message:
-          "Host working directory facts are adapter-only; use RuntimeEnvironment or GentPlatform",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/gent-platform-bun.ts",
-        ['import os from "node:os"', "const cwd = process.cwd()"].join("\n"),
-      ),
-    ).toEqual([])
-  })
-
-  test("flags protected node:crypto and node:url module imports", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/storage/example.ts",
-        [
-          'import { createHash } from "node:crypto"',
-          'import { fileURLToPath } from "node:url"',
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/storage/example.ts",
-        line: 1,
-        message:
-          "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
-      },
-      {
-        file: "packages/core/src/storage/example.ts",
-        line: 2,
-        message:
-          "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/bad.ts",
-        ['import { randomBytes } from "crypto"', 'import { fileURLToPath } from "url"'].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/extensions/src/bad.ts",
-        line: 1,
-        message:
-          "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
-      },
-      {
-        file: "packages/extensions/src/bad.ts",
-        line: 2,
-        message:
-          "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/gent-platform-bun.ts",
-        [
-          'import { createHash, randomBytes } from "node:crypto"',
-          'import { fileURLToPath } from "node:url"',
-        ].join("\n"),
-      ),
-    ).toEqual([])
-  })
-
-  test("flags every acquisition form for crypto/url specifiers", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          'import "node:crypto"',
-          'const c = await import("node:crypto")',
-          'const u = require("node:url")',
-          'const s = require("url")',
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
-      },
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 2,
-        message:
-          "Host crypto module imports are adapter-only; yield GentPlatform and call platform.hash(...) or platform.randomBytes(...)",
-      },
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 3,
-        message:
-          "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
-      },
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 4,
-        message:
-          "Host url module imports are adapter-only; yield GentPlatform and call platform.fileURLToPath(...)",
-      },
-    ])
-
-    // Plain string usage of "crypto" or "url" as data (param names, log
-    // messages, branded ids) must not trip the guard.
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          'const moduleName = "url"',
-          'logger.info("crypto subsystem ready")',
-          'type Tag = "node:crypto-fact"',
-        ].join("\n"),
-      ),
-    ).toEqual([])
-  })
-
-  test("flags direct hash, randomBytes, and fileURLToPath calls in protected packages", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/memory/vault.ts",
-        [
-          "const h = createHash('sha256')",
-          "const bytes = randomBytes(32)",
-          "const p = fileURLToPath(url)",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/extensions/src/memory/vault.ts",
-        line: 1,
-        message:
-          "Direct createHash() is adapter-only; yield GentPlatform and call platform.hash(algorithm, input)",
-      },
-      {
-        file: "packages/extensions/src/memory/vault.ts",
-        line: 2,
-        message:
-          "Direct randomBytes() is adapter-only; yield GentPlatform and call platform.randomBytes(n) (or use the Web Crypto global `crypto.getRandomValues` if you need a sync Uint8Array)",
-      },
-      {
-        file: "packages/extensions/src/memory/vault.ts",
-        line: 3,
-        message:
-          "Direct fileURLToPath() is adapter-only; yield GentPlatform and call platform.fileURLToPath(url)",
-      },
-    ])
-
-    // Test-utils are exempt — they back the platform itself.
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/test-utils/example.ts",
-        "const h = createHash('sha256')",
-      ),
-    ).toEqual([])
-
-    // Adapter root is exempt.
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/gent-platform-bun.ts",
-        ["const h = createHash('sha256')", "const p = fileURLToPath(url)"].join("\n"),
-      ),
-    ).toEqual([])
-
-    // The platform interface file (with JSDoc method references) is also exempt.
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/gent-platform.ts",
-        ["// - randomBytes(n) — secure random", "// - fileURLToPath(url) — convert URL"].join("\n"),
-      ),
-    ).toEqual([])
-
-    // Method calls on a platform instance are NOT bare calls — must not trip.
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/example.ts",
-        [
-          "yield* platform.hash('sha256', input)",
-          "yield* platform.randomBytes(32)",
-          "platform.fileURLToPath(url)",
-          "gentPlatform.fileURLToPath(import.meta.resolve('x'))",
-        ].join("\n"),
-      ),
-    ).toEqual([])
-  })
-
-  test("flags bare new URL(import.meta.url) as a hand-rolled fileURLToPath", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/server/example.ts",
-        "const here = new URL(import.meta.url).pathname",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/server/example.ts",
-        line: 1,
-        message:
-          "Bare `new URL(import.meta.url)` is a hand-rolled fileURLToPath; yield GentPlatform and call platform.fileURLToPath(import.meta.url)",
-      },
-    ])
-
-    // Routed through the platform: NOT a hand-rolled path — must not trip.
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/example.ts",
-        "const here = platform.fileURLToPath(import.meta.url)",
+        "const PlatformLayer = Layer.mergeAll(BunGentPlatformLive)",
       ),
     ).toEqual([])
   })
@@ -1447,6 +1126,9 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
   ["packages/core/src/domain/x.ts", "const w = makeFileWriter(fs)", "makeFileWriter"],
   ["packages/core/tests/x.test.ts", "const f = testExtensionFiles()", "testExtensionFiles"],
   ["packages/core/tests/x.test.ts", "const p = testExtensionProcess()", "testExtensionProcess"],
+  ["packages/core/tests/x.test.ts", "Layer.provide(BunCronRuntimeLive)", "BunCronRuntimeLive"],
+  ["packages/core/src/server/rpc.ts", "export class SessionInfo {}", "SessionInfo"],
+  ["packages/core/src/domain/x.ts", "type B = BranchInfo", "BranchInfo"],
 ]
 
 const RETIRED_PATHS: ReadonlyArray<string> = [
@@ -2714,5 +2396,94 @@ describe("a namesake does not vouch for an export", () => {
       usedElsewhere,
     ])
     expect(findings).toEqual([])
+  })
+})
+
+// ── undeclared-workspace-imports.test ───────────────────────────────────────
+
+describe("undeclared workspace imports", () => {
+  const manifests = new Map([
+    ["packages/core", { name: "@gent/core" }],
+    ["packages/sdk", { name: "@gent/sdk", dependencies: { "@gent/core": "workspace:*" } }],
+  ])
+  const sdkImport = ["@gent", "sdk"].join("/")
+  const coreImport = ["@gent", "core", "protocol"].join("/")
+
+  test("a core file that imports the SDK is a finding", () => {
+    const findings = findUndeclaredWorkspaceImports(
+      manifests,
+      new Map([["packages/core/src/test-utils/harness.ts", `import { Gent } from "${sdkImport}"`]]),
+    )
+    expect(findings.map((finding) => [finding.file, finding.line])).toEqual([
+      ["packages/core/src/test-utils/harness.ts", 1],
+    ])
+  })
+
+  test("a declared dependency, a self import, and a fixture tree pass", () => {
+    const findings = findUndeclaredWorkspaceImports(
+      manifests,
+      new Map([
+        ["packages/sdk/src/client.ts", `import { GentRpcs } from "${coreImport}"`],
+        ["packages/core/tests/entry.test.ts", `import { waitFor } from "@gent/core/test-utils"`],
+        ["packages/core/fixtures/app.ts", `import { Gent } from "${sdkImport}"`],
+      ]),
+    )
+    expect(findings).toEqual([])
+  })
+
+  const linesOf = (file: string, text: string) =>
+    findUndeclaredWorkspaceImports(manifests, new Map([[file, text]])).map(
+      (finding) => finding.line,
+    )
+
+  test("an import whose specifier sits on a later line is a finding", () => {
+    const text = ["import {", "  Gent,", "} from", `  "${sdkImport}"`].join("\n")
+    expect(linesOf("packages/core/src/a.ts", text)).toEqual([4])
+    expect(
+      linesOf(
+        "packages/core/src/b.ts",
+        ["const sdk = require(", `  "${sdkImport}",`, ")"].join("\n"),
+      ),
+    ).toEqual([2])
+  })
+
+  test("require, dynamic import, type import, and export-from are findings", () => {
+    const text = [
+      `const sdk = require("${sdkImport}")`,
+      `const lazy = import("${sdkImport}")`,
+      `import type { GentServer } from "${sdkImport}"`,
+      `export { Gent } from "${sdkImport}"`,
+      `type Client = typeof import("${sdkImport}")`,
+    ].join("\n")
+    expect(linesOf("packages/core/src/a.ts", text)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  test("an import inside a comment, a string, or a template is not a finding", () => {
+    const text = [
+      `// import { Gent } from "${sdkImport}"`,
+      `/* import { Gent } from "${sdkImport}" */`,
+      `const example = 'import { Gent } from "${sdkImport}"'`,
+      'const shown = `import { Gent } from "' + sdkImport + '" ${1}`',
+      "const pattern = /[\"']/",
+    ].join("\n")
+    expect(linesOf("packages/core/src/a.ts", text)).toEqual([])
+  })
+
+  test("a relative import that leaves its workspace root is a finding", () => {
+    expect(
+      linesOf(
+        "packages/sdk/tests/client.test.ts",
+        'import { narrowR } from "../../core/tests/helpers/effect"',
+      ),
+    ).toEqual([1])
+    expect(
+      linesOf(
+        "packages/core/tests/extensions/api.test.ts",
+        'import notes from "../../../../examples/extensions/session-notes"',
+      ),
+    ).toEqual([1])
+    expect(
+      linesOf("packages/core/tests/runtime/a.test.ts", 'import { x } from "../../src/runtime/x"'),
+    ).toEqual([])
   })
 })

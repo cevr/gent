@@ -1003,9 +1003,6 @@ const build = (
  * `buildKeychainTransformClient` factory has the same shape.
  */
 
-// Preserve vendor JSON fields that this transport adapter does not interpret.
-/* oxlint-disable effect/noUnknownParameters, effect/noUnsafeDictionaryType */
-
 // ── Codex routing ──
 
 /**
@@ -1058,6 +1055,7 @@ const ensureBetaToken = (existing: Option.Option<string>, requiredToken: string)
  *   - `store: false` to prevent server-side conversation persistence
  */
 const isInstructionItem = (
+  // oxlint-disable-next-line effect/noUnknownParameters -- preserve vendor JSON fields that this transport adapter does not interpret
   item: unknown,
 ): item is { role: "system" | "developer"; content?: unknown } => {
   if (!isRecord(item)) return false
@@ -1065,6 +1063,7 @@ const isInstructionItem = (
   return role === "system" || role === "developer"
 }
 
+// oxlint-disable-next-line effect/noUnknownParameters -- preserve vendor JSON fields that this transport adapter does not interpret
 const textFromContent = (content: unknown): Option.Option<string> => {
   if (Predicate.isString(content)) return Option.some(content)
   if (!Array.isArray(content)) return Option.none()
@@ -1082,6 +1081,7 @@ const textFromContent = (content: unknown): Option.Option<string> => {
 }
 
 const splitInstructions = (
+  // oxlint-disable-next-line effect/noUnknownParameters -- preserve vendor JSON fields that this transport adapter does not interpret
   input: unknown,
 ): Option.Option<{ instructions: string[]; input: unknown[] }> => {
   if (!Array.isArray(input)) return Option.none()
@@ -1115,6 +1115,7 @@ const CodexBodyJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.
 const decodeCodexBody = Schema.decodeUnknownOption(CodexBodyJson)
 const encodeCodexBody = Schema.encodeSync(CodexBodyJson)
 
+// oxlint-disable-next-line effect/noUnsafeDictionaryType -- preserve vendor JSON fields that this transport adapter does not interpret
 const tryReadJsonBody = (body: HttpBody.HttpBody): Option.Option<Record<string, unknown>> => {
   if (body._tag !== "Uint8Array") return Option.none()
   return decodeCodexBody(new TextDecoder().decode(body.body))
@@ -1235,8 +1236,6 @@ export const buildCodexTransformClient =
       ),
       recoverUnauthorized(creds),
     )
-
-/* oxlint-enable effect/noUnknownParameters, effect/noUnsafeDictionaryType */
 
 // ── extension ───────────────────────────────────────────────────────────────
 

@@ -21,8 +21,8 @@ const resolveLaunch = Effect.gen(function* () {
   let idleShutdown = Option.none<IdleShutdownSpec>()
   if (isManaged) idleShutdown = Option.some({ idleMs: launch.idleTimeoutMs })
 
-  // `GENT_DATA_DIR` reaches the database path through the SDK, which owns it.
-  let state = Gent.state.sqlite({ home: Option.getOrUndefined(launch.home) })
+  // `GENT_DATA_DIR` and the home directory reach the database path through the SDK, which owns them.
+  let state = Gent.state.sqlite()
   if (launch.persistenceMode === "memory") state = Gent.state.memory()
 
   return {
