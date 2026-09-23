@@ -1968,6 +1968,17 @@ export function useSessionFeed(
         return
 
       case "ErrorOccurred":
+        // A notice leaves the turn running: a muted row, no retry settled.
+        if (event.notice === true) {
+          if (live) client.log.warn("sessionFeed.notice", { error: event.error, seq: eventSeq })
+          appendSessionEvent(setStore, {
+            _tag: "notice",
+            text: event.error,
+            createdAt: stampedAt,
+            seq: eventSeq++,
+          })
+          return
+        }
         resolveRetryingEvents(setStore)
         if (live) client.log.error("sessionFeed.error", { error: event.error, seq: eventSeq })
         appendSessionEvent(setStore, {
