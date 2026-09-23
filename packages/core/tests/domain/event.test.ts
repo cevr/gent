@@ -176,7 +176,6 @@ describe("EventPublisher", () => {
       yield* Effect.gen(function* () {
         const publisher = yield* EventPublisher
         yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(persisted).toEqual([TAG.OuterEvent])
       expect(broadcasted).toEqual([TAG.OuterEvent])
@@ -213,7 +212,6 @@ describe("EventPublisher", () => {
         expect(early._tag).toBe("None")
         yield* Deferred.succeed(releaseBroadcast, void 0)
         yield* Fiber.join(fiber)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.scoped, Effect.provide(layer))
     }),
   )
@@ -247,7 +245,6 @@ describe("EventPublisher", () => {
         yield* Fiber.join(first)
         yield* Fiber.join(second)
         expect(yield* Ref.get(broadcastCount)).toBe(1)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.scoped, Effect.provide(layer))
     }),
   )
@@ -277,7 +274,6 @@ describe("EventPublisher", () => {
         const failed = yield* Effect.exit(publisher.deliver(envelope))
         expect(failed._tag).toBe("Failure")
         yield* publisher.deliver(envelope)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(yield* Ref.get(attempts)).toBe(2)
     }),
@@ -305,7 +301,6 @@ describe("EventPublisher server layer", () => {
       yield* Effect.gen(function* () {
         const publisher = yield* EventPublisher
         yield* publisher.publish(makeEvent("FallbackEvent", "session-secondary", "branch-1"))
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(persisted).toEqual([TAG.FallbackEvent])
       expect(broadcasted).toEqual([TAG.FallbackEvent])

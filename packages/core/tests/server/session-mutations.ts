@@ -58,7 +58,6 @@ export const makeRpcHandlersClient = (
         ),
       ),
     )
-    // oxlint-disable-next-line effect/noInlineProvide -- This test composes the handler context for this client.
     const client = yield* RpcTest.makeClient(GentRpcs).pipe(Effect.provide(context))
     const inWorkspace = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       RpcClient.withHeaders(effect, { [WORKSPACE_ID_HEADER]: rpcTestWorkspaceId })

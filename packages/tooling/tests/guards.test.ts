@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
   adaptedSeamsIn,
-  ASSEMBLY_SITES,
   collectExportFacts,
   type ExportFacts,
   findAliasTestLayers,
@@ -22,7 +21,6 @@ import {
   findUnadaptedSeams,
   findUnadmittedChildSessionWriters,
   findUnconsumedExports,
-  findUndeclaredWorkspaceImports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
   findUnusedSuppressionApprovals,
@@ -41,7 +39,7 @@ describe("blanket eslint disable checker", () => {
   test("flags blanket file comments", () => {
     expect(
       findBlanketEslintDisables("sample.ts", `/* ${directive} */\nexport const x = 1`),
-    ).toEqual([{ file: "sample.ts", line: 1 }])
+    ).toMatchObject([{ file: "sample.ts", line: 1 }])
   })
 
   test("flags blanket line comments", () => {
@@ -54,7 +52,7 @@ describe("blanket eslint disable checker", () => {
           "export const y = 2",
         ].join("\n"),
       ),
-    ).toEqual([{ file: "sample.ts", line: 2 }])
+    ).toMatchObject([{ file: "sample.ts", line: 2 }])
   })
 
   test("allows rule-named suppressions", () => {
@@ -75,20 +73,35 @@ describe("blanket eslint disable checker", () => {
         "sample.ts",
         `/* ${directive} @typescript-eslint/no-unsafe-type-assertion -- boundary */`,
       ),
-    ).toEqual([{ file: "sample.ts", line: 1 }])
+    ).toMatchObject([{ file: "sample.ts", line: 1 }])
   })
 
   test("flags the oxlint spelling of blanket and block comments", () => {
     const oxDirective = ["oxlint", "disable"].join("-")
-    expect(findBlanketEslintDisables("sample.ts", `// ${oxDirective}-next-line`)).toEqual([
+    expect(findBlanketEslintDisables("sample.ts", `// ${oxDirective}-next-line`)).toMatchObject([
       { file: "sample.ts", line: 1 },
     ])
     expect(
       findBannedEslintDisableBlocks("sample.ts", `/* ${oxDirective} effect/noNullish -- reason */`),
-    ).toEqual([{ file: "sample.ts", line: 1 }])
+    ).toMatchObject([{ file: "sample.ts", line: 1 }])
     expect(
       findBannedEslintDisableBlocks("sample.ts", `// ${oxDirective}-next-line effect/noNullish`),
     ).toEqual([])
+  })
+
+  test("flags a file-wide disable written as a line comment, in both spellings", () => {
+    // oxlint honours `// <tool>-disable <rule>` to the end of the file, the
+    // same as the block form.
+    const oxDirective = ["oxlint", "disable"].join("-")
+    expect(
+      findBannedEslintDisableBlocks(
+        "sample.ts",
+        [`// ${directive} effect/noNullish`, `// ${oxDirective} effect/noNullish`].join("\n"),
+      ),
+    ).toMatchObject([
+      { file: "sample.ts", line: 1 },
+      { file: "sample.ts", line: 2 },
+    ])
   })
 
   test("allows block comments only in explicit fixture files", () => {
@@ -270,6 +283,25 @@ describe("child-session depth guard", () => {
     expect(findings).toHaveLength(1)
   })
 
+  test("flags a writer that names parentSessionId by shorthand", () => {
+    for (const literal of [
+      "new Session({ id, parentSessionId, createdAt: now })",
+      "new Session({\n  id,\n  parentSessionId\n})",
+    ]) {
+      expect(
+        findUnadmittedChildSessionWriters("packages/core/src/server/server.ts", literal),
+      ).toHaveLength(1)
+    }
+  })
+
+  test("ignores a row that only names a longer field", () => {
+    const findings = findUnadmittedChildSessionWriters(
+      "packages/core/src/server/server.ts",
+      "new Session({ id, parentSessionIdHint: x })",
+    )
+    expect(findings).toEqual([])
+  })
+
   test("ignores a root session row", () => {
     const findings = findUnadmittedChildSessionWriters(
       "packages/core/src/server/server.ts",
@@ -320,12 +352,6 @@ describe("core feature independence guard", () => {
       'import { CellExecution } from "./cell-execution.js"',
     )
     expect(findings).toEqual([])
-  })
-
-  test("allows the sites that assemble an application", () => {
-    for (const site of ASSEMBLY_SITES) {
-      expect(findCoreFeatureIndependenceFindings(site, CELL_IMPORT)).toEqual([])
-    }
   })
 
   test("ignores files outside core", () => {
@@ -704,7 +730,7 @@ describe("pre-commit hook runs the guards", () => {
 // ── lint config ─────────────────────────────────────────────────────────────
 
 const CONFIG = ".oxlintrc.json"
-const PLUGIN = "lint/gent-rules.ts"
+const PLUGIN = "packages/tooling/src/gent-rules.ts"
 
 const messages = (findings: ReadonlyArray<{ readonly message: string }>): ReadonlyArray<string> =>
   findings.map((finding) => finding.message)
@@ -791,12 +817,15 @@ describe("a defined rule must be enabled", () => {
 })
 
 describe("a read variable must have a writer", () => {
+  const none: ReadonlyMap<string, string> = new Map()
+
   test("a variable something in the tree sets is silent", () => {
     const findings = findReadersWithoutWriters(
       new Map([
         ["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_CHILD_ID"))\n`],
         ["packages/sdk/src/spawn.ts", `const env = { GENT_CHILD_ID: id }\n`],
       ]),
+      none,
     )
     expect(findings).toEqual([])
   })
@@ -805,31 +834,154 @@ describe("a read variable must have a writer", () => {
     // GENT_TRACE_ID outlived its writer and kept an unreachable branch alive.
     const findings = findReadersWithoutWriters(
       new Map([["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`]]),
+      none,
     )
     expect(messages(findings)).toEqual([
       expect.stringContaining("`GENT_ORPHAN` is read but nothing in the tree sets it"),
     ])
   })
 
-  test("a variable a person sets by hand is allowed, with its reason", () => {
+  test("every reader shape is seen: the name last, broken across lines, or behind a helper", () => {
     const findings = findReadersWithoutWriters(
-      new Map([["packages/sdk/src/logger.ts", `Config.option(Config.string("GENT_LOG_LEVEL"))\n`]]),
+      new Map([
+        [
+          "packages/sdk/src/reader.ts",
+          [
+            `const mode = Config.literals(["a", "b"], "GENT_PROBE_B")`,
+            `const level = Config.literals(NAMES,`,
+            `  "GENT_PROBE_C",`,
+            `)`,
+            `const dir = optionalEnv("GENT_PROBE_D")`,
+            `const link = process.env["GENT_PROBE_E"] === "1"`,
+          ].join("\n"),
+        ],
+      ]),
+      none,
+    )
+    expect(findings.map((finding) => [finding.line, finding.message.split("`")[1]])).toEqual([
+      [1, "GENT_PROBE_B"],
+      [3, "GENT_PROBE_C"],
+      [5, "GENT_PROBE_D"],
+      [6, "GENT_PROBE_E"],
+    ])
+  })
+
+  test("a direct property read is a read: process.env.X and Bun.env.X", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        [
+          "packages/sdk/src/reader.ts",
+          [`const a = process.env.GENT_PROBE_G`, `const b = Bun.env.GENT_PROBE_H ?? "x"`].join(
+            "\n",
+          ),
+        ],
+      ]),
+      none,
+    )
+    expect(findings.map((finding) => [finding.line, finding.message.split("`")[1]])).toEqual([
+      [1, "GENT_PROBE_G"],
+      [2, "GENT_PROBE_H"],
+    ])
+  })
+
+  test("a string that shows the assignment in another production file sets nothing", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        ["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`],
+        [
+          "packages/sdk/src/help.ts",
+          `console.log("run with GENT_ORPHAN=1")\nconst hint = "GENT_ORPHAN: on"\n`,
+        ],
+      ]),
+      none,
+    )
+    expect(messages(findings)).toEqual([
+      expect.stringContaining("`GENT_ORPHAN` is read but nothing in the tree sets it"),
+    ])
+  })
+
+  test("each real writer shape sets the variable", () => {
+    const reader = [
+      `Config.string("GENT_W_SPAWN")`,
+      `Config.string("GENT_W_ASSIGN")`,
+      `Config.string("GENT_W_INDEX")`,
+      `Config.string("GENT_W_SCRIPT")`,
+    ].join("\n")
+    const findings = findReadersWithoutWriters(
+      new Map([
+        ["packages/sdk/src/reader.ts", reader],
+        [
+          "packages/sdk/src/spawn.ts",
+          `Bun.spawn(["gent"], {\n  env: { ...process.env, GENT_W_SPAWN: "1" },\n})\n`,
+        ],
+        [
+          "packages/sdk/src/boot.ts",
+          `process.env.GENT_W_ASSIGN = "1"\nBun.env["GENT_W_INDEX"] = "1"\n`,
+        ],
+        ["apps/tui/package.json", `{ "scripts": { "dev": "GENT_W_SCRIPT=1 bun run x" } }\n`],
+      ]),
+      none,
     )
     expect(findings).toEqual([])
   })
 
-  test("only a test sets it, so the production reader is still reported", () => {
-    // A test that sets a variable proves the reader works, not that anything
-    // in production supplies it.
+  test("a shell prefix outside a package script sets nothing", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        ["packages/sdk/src/reader.ts", `Config.string("GENT_W_TEXT")\n`],
+        ["packages/sdk/src/help.ts", `const usage = "GENT_W_TEXT=1 gent"\n`],
+      ]),
+      none,
+    )
+    expect(messages(findings)).toEqual([expect.stringContaining("`GENT_W_TEXT`")])
+  })
+
+  test("a comment that shows how to set a variable, or a message naming it, is not a writer", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        [
+          "packages/sdk/src/reader.ts",
+          [
+            `// run with GENT_PROBE_F=1 to enable`,
+            `Config.string("GENT_PROBE_F")`,
+            "fail(`invalid GENT_PROBE_F: ${reason}`)",
+          ].join("\n"),
+        ],
+      ]),
+      none,
+    )
+    expect(messages(findings)).toEqual([expect.stringContaining("`GENT_PROBE_F`")])
+  })
+
+  test("a variable the operator sets is allowed, with its reason", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([["packages/sdk/src/logger.ts", `Config.option(Config.string("GENT_LOG_LEVEL"))\n`]]),
+      new Map([["GENT_LOG_LEVEL", "a developer sets this by hand"]]),
+    )
+    expect(findings).toEqual([])
+  })
+
+  test("only test support sets it, so the production reader is still reported", () => {
+    // A test, the e2e fixtures, or the core harness setting a variable proves
+    // the reader works, not that anything in production supplies it.
     const findings = findReadersWithoutWriters(
       new Map([
         ["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_TEST_ONLY"))\n`],
         ["packages/sdk/tests/reader.test.ts", `const env = { GENT_TEST_ONLY: "1" }\n`],
+        ["packages/e2e/src/pty-fixture.ts", `const env = { GENT_TEST_ONLY: "1" }\n`],
+        ["packages/core/src/test-utils/harness.ts", `env["GENT_TEST_ONLY"] = "1"\n`],
       ]),
+      none,
     )
-    expect(messages(findings)).toEqual([
-      expect.stringContaining("`GENT_TEST_ONLY` is read but nothing in the tree sets it"),
-    ])
+    expect(findings.map((finding) => finding.file)).toEqual(["packages/sdk/src/reader.ts"])
+  })
+
+  test("a test that names a variable is not a reader", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([["packages/sdk/tests/reader.test.ts", `expect(e).toContain("GENT_NAMED")\n`]]),
+      none,
+    )
+    expect(findings).toEqual([])
   })
 
   test("every reader of one dead variable is reported, not just the first", () => {
@@ -838,10 +990,28 @@ describe("a read variable must have a writer", () => {
         ["packages/sdk/src/a.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`],
         ["packages/sdk/src/b.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`],
       ]),
+      none,
     )
     expect(findings.map((finding) => finding.file)).toEqual([
       "packages/sdk/src/a.ts",
       "packages/sdk/src/b.ts",
+    ])
+  })
+
+  test("an operator entry nothing reads, or that production sets, is reported", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        ["packages/sdk/src/reader.ts", `Config.string("GENT_SET_HERE")\n`],
+        ["packages/sdk/src/spawn.ts", `const env = { GENT_SET_HERE: "1" }\n`],
+      ]),
+      new Map([
+        ["GENT_UNREAD", "nobody"],
+        ["GENT_SET_HERE", "nobody"],
+      ]),
+    )
+    expect(messages(findings)).toEqual([
+      expect.stringContaining("`GENT_UNREAD` is allowed as operator-set, but nothing reads it"),
+      expect.stringContaining("`GENT_SET_HERE` is allowed as operator-set, but the tree sets it"),
     ])
   })
 })
@@ -854,38 +1024,6 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "packages/core/tests/runtime/example.test.ts",
         "Layer.provide(BunPlatformLive)",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags private imports in reference extension examples", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "examples/extensions/example.ts",
-        [
-          'import { Builtin } from "@gent/extensions/src/todo"',
-          'import { helper } from "../../packages/core/src/domain/helper"',
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "examples/extensions/example.ts",
-        line: 1,
-        message:
-          "Reference extensions must stand alone instead of importing shipped extension internals",
-      },
-      {
-        file: "examples/extensions/example.ts",
-        line: 2,
-        message:
-          "Reference extensions must not reach out of examples/extensions with relative imports",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "examples/extensions/session-notes.ts",
-        'import { defineExtension } from "@gent/core/extensions/api"',
       ),
     ).toEqual([])
   })
@@ -933,54 +1071,6 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "packages/core/src/server/server-root.ts",
         "const PlatformLayer = Layer.mergeAll(BunGentPlatformLive)",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags a server launcher that composes instead of calling Gent.server", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "apps/server/src/main.ts",
-        [
-          'import { buildServerRoot } from "@gent/core/host"',
-          'import { BuiltinExtensions } from "@gent/extensions"',
-          "const root = yield* buildServerRoot(config)",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "apps/server/src/main.ts",
-        line: 1,
-        message:
-          "The server launcher composes nothing; import @gent/sdk and pass the shape through GentServerOptions",
-      },
-      // The same line names the builder too — both rules report it.
-      {
-        file: "apps/server/src/main.ts",
-        line: 1,
-        message: "The server launcher calls Gent.server, never buildServerRoot",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 2,
-        message:
-          "The server launcher does not name extensions; Gent.server defaults to the builtin set",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 3,
-        message: "The server launcher calls Gent.server, never buildServerRoot",
-      },
-    ])
-
-    // The launcher reading its environment and calling the SDK is clean.
-    expect(
-      findPlatformDuplicationViolations(
-        "apps/server/src/main.ts",
-        [
-          'import { Gent } from "@gent/sdk"',
-          "const server = yield* Gent.server(launch.options)",
-        ].join("\n"),
       ),
     ).toEqual([])
   })
@@ -1281,6 +1371,13 @@ describe("TUI session identity guard", () => {
     )
   })
 
+  test("an emitter's `.on(` is not a reactive scope", () => {
+    const text = ['  emitter.on("change", () => {', "    render(client.session())", "  })"].join(
+      "\n",
+    )
+    expect(linesOfTuiIdentity(text)).toEqual([])
+  })
+
   test("flags the record read in a createEffect body", () => {
     const text = [
       "  createEffect(() => {",
@@ -1353,12 +1450,13 @@ describe("TUI session identity guard", () => {
 const nextLine = ["// @effect", "diagnostics-next-line"].join("-")
 const membraneFile = "packages/core/src/runtime/extension-host.ts"
 const membraneComment = `${nextLine} anyUnknownInErrorContext:off`
+type Entries = NonNullable<Parameters<typeof findUnusedSuppressionApprovals>[1]>
 
 describe("suppression inventory guard", () => {
   test("flags effect diagnostics outside reviewed files", () => {
     expect(
       findSuppressionInventoryFindings("sample.ts", `${nextLine} strictEffectProvide:off`),
-    ).toEqual([{ file: "sample.ts", line: 1, kind: "effect-diagnostics" }])
+    ).toMatchObject([{ file: "sample.ts", line: 1 }])
   })
 
   test("allows exact reviewed effect diagnostics independent of line churn", () => {
@@ -1375,28 +1473,69 @@ describe("suppression inventory guard", () => {
   test("flags a different rule in a reviewed file", () => {
     expect(
       findSuppressionInventoryFindings(membraneFile, `${nextLine} strictEffectProvide:off`),
-    ).toEqual([{ file: membraneFile, line: 1, kind: "effect-diagnostics" }])
+    ).toMatchObject([{ file: membraneFile, line: 1 }])
+  })
+
+  test("an entry listed twice is reported once, at the duplicate", () => {
+    const text = "strictEffectProvide:off"
+    const findings = findUnusedSuppressionApprovals(
+      new Map([[membraneFile, `${nextLine} ${text}\n`]]),
+      [
+        { file: membraneFile, scope: "next-line", text },
+        { file: membraneFile, scope: "next-line", text },
+      ],
+    )
+    expect(messages(findings)).toEqual([expect.stringContaining("is listed twice")])
   })
 
   test("approved entry with no matching comment in its file is unused", () => {
     const findings = findUnusedSuppressionApprovals(new Map([[membraneFile, "export {}\n"]]))
-    expect(findings).toContainEqual({ file: membraneFile, comment: membraneComment })
+    expect(messages(findings)).toContainEqual(expect.stringContaining(membraneComment))
   })
 
   test("approved entry whose file is not scanned is unused", () => {
     const findings = findUnusedSuppressionApprovals(new Map())
-    expect(findings).toContainEqual({ file: membraneFile, comment: membraneComment })
+    expect(messages(findings)).toContainEqual(expect.stringContaining(membraneComment))
   })
 
   test("approved entry with a matching comment is not reported", () => {
     const findings = findUnusedSuppressionApprovals(
-      new Map([[membraneFile, `const x = 1\n  ${membraneComment}\nconst y = 2\n`]]),
+      new Map([[membraneFile, `const x = 1\n  ${nextLine} probeRule:off\nconst y = 2\n`]]),
+      [{ file: membraneFile, scope: "next-line", text: "probeRule:off" }],
     )
-    expect(
-      findings.filter(
-        (finding) => finding.file === membraneFile && finding.comment === membraneComment,
-      ),
-    ).toEqual([])
+    expect(findings).toEqual([])
+  })
+
+  describe("an entry counts its identical comments", () => {
+    const comment = `${nextLine} probeRule:off`
+    const counted: Entries = [
+      { file: membraneFile, scope: "next-line", text: "probeRule:off", count: 2 },
+    ]
+    const holding = (sites: number) => Array.from({ length: sites }, () => comment).join("\n")
+
+    test("the approved count of sites passes both directions", () => {
+      expect(findSuppressionInventoryFindings(membraneFile, holding(2), counted)).toEqual([])
+      expect(
+        findUnusedSuppressionApprovals(new Map([[membraneFile, holding(2)]]), counted),
+      ).toEqual([])
+    })
+
+    test("count + 1: the new site is reported at its line", () => {
+      expect(findSuppressionInventoryFindings(membraneFile, holding(3), counted)).toMatchObject([
+        { file: membraneFile, line: 3, message: expect.stringContaining("new site") },
+      ])
+    })
+
+    test("count - 1: the entry is reported, with the count to set", () => {
+      expect(
+        messages(findUnusedSuppressionApprovals(new Map([[membraneFile, holding(1)]]), counted)),
+      ).toEqual([expect.stringContaining("set the count to 1")])
+    })
+
+    test("absent count means one site", () => {
+      const single: Entries = [{ file: membraneFile, scope: "next-line", text: "probeRule:off" }]
+      expect(findSuppressionInventoryFindings(membraneFile, holding(2), single)).toHaveLength(1)
+    })
   })
 })
 
@@ -1595,7 +1734,6 @@ void Orphan
       },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([1])
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("@gent/core/extensions/branch-tools")
   })
 
@@ -1631,7 +1769,6 @@ describe("the TUI app surface", () => {
       { file: TUI_CONSUMER, text: `import { formatTokens } from "../utils"\n` },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([2])
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`orphan`")
   })
 
@@ -1703,7 +1840,6 @@ export const plantedDeadSdkExport = "nothing imports this"
     expect(findings).toHaveLength(1)
     expect(findings[0]?.file).toBe(SDK_FILE)
     expect(findings[0]?.line).toBe(3)
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`plantedDeadSdkExport`")
   })
 
@@ -1732,6 +1868,76 @@ export const plantedDeadSdkExport = "nothing imports this"
         {
           file: "packages/core/tests/runtime/provider.test.ts",
           text: `import { retrySchedule } from "../../src/runtime/retry"\n`,
+        },
+      ]),
+    ).toEqual([])
+  })
+
+  test("a name another file mentions only in a comment is still reported", () => {
+    const findings = findingsFor([
+      { file: SDK_FILE, text: `export const commentedOnly = 1\n` },
+      {
+        file: SDK_CONSUMER,
+        text: `// commentedOnly used to live here\n/** see commentedOnly */\nexport const other = 1\n`,
+      },
+    ])
+    expect(findings.map((finding) => finding.message)).toContainEqual(
+      expect.stringContaining("`commentedOnly`"),
+    )
+  })
+
+  test("a TUI extension-entry name read only inside the TUI source is reported", () => {
+    const entry = "apps/tui/src/extensions.ts"
+    const findings = findingsFor([
+      {
+        file: entry,
+        text: `export { clientOnly } from "./extensions/host"\nexport { authored } from "./extensions/api"\n`,
+      },
+      {
+        file: "apps/tui/src/app.tsx",
+        text: `import { clientOnly } from "./extensions"\nuse(clientOnly)\n`,
+      },
+      {
+        file: "packages/extensions/src/client.ts",
+        text: `import { authored } from "@gent/tui/extensions"\nuse(authored)\n`,
+      },
+    ])
+    expect(findings).toMatchObject([{ file: entry, line: 1 }])
+    expect(findings[0]?.message).toContain("clientOnly")
+  })
+
+  test("a comment inside a template interpolation does not keep a name alive", () => {
+    const findings = findingsFor([
+      { file: SDK_FILE, text: `export const vanished = 1\n` },
+      {
+        file: SDK_CONSUMER,
+        text: "export const shown = `a ${/* vanished */ 1} b ${`c ${2 /* vanished */}`}`\n",
+      },
+    ])
+    expect(findings.map((finding) => finding.message)).toContainEqual(
+      expect.stringContaining("`vanished`"),
+    )
+  })
+
+  test("a name read inside a template interpolation is live", () => {
+    expect(
+      findingsFor([
+        { file: SDK_FILE, text: `export const interpolated = 1\n` },
+        {
+          file: "apps/tui/src/app.tsx",
+          text: "const label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
+        },
+      ]),
+    ).toEqual([])
+  })
+
+  test("a name another file reads beside a URL in a string is live", () => {
+    expect(
+      findingsFor([
+        { file: SDK_FILE, text: `export const fetchedName = 1\n` },
+        {
+          file: "apps/tui/src/app.tsx",
+          text: `const url = "https://example.test"; use(fetchedName)\n`,
         },
       ]),
     ).toEqual([])
@@ -1790,7 +1996,6 @@ const use = Effect.gen(function* () {
 `
     const findings = findingsFor([{ file: "packages/extensions/src/wake/index.ts", text: source }])
     expect(findings.map((finding) => finding.line)).toEqual([1, 2])
-    expect(findings.every((finding) => finding.enforced)).toBe(true)
   })
 
   test("a service another extension module yields keeps its export", () => {
@@ -1827,7 +2032,6 @@ export const handoff = tool({ run: () => "HandoffError happened" })
       },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([2])
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`HandoffError`")
     expect(findings[0]?.message).toContain("delete it")
   })
@@ -1888,12 +2092,11 @@ export const signal = () => {
     ).toEqual([])
   })
 
-  test("a constant nothing names, not even its own file, is reported and enforced", () => {
+  test("a constant nothing names, not even its own file, is reported", () => {
     const findings = findingsFor([
       { file: TEST_UTILS_FILE, text: `export const DebugSlowLanguageModelDelayMs = 250\n` },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([1])
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`DebugSlowLanguageModelDelayMs`")
   })
 
@@ -1947,7 +2150,6 @@ describe("public extension API entry point", () => {
     expect(findings).toHaveLength(1)
     expect(findings[0]?.file).toBe(API_FILE)
     expect(findings[0]?.line).toBe(6)
-    expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain('"CapabilityNotFoundError"')
   })
 
@@ -2038,7 +2240,6 @@ const x: Api.ToolCapability = Api.tool({})`,
         text: `import { GentObservability } from "@gent/sdk"`,
       },
     ])
-    expect(findings.map((finding) => finding.enforced)).toEqual([true])
     expect(findings[0]?.message).toContain('"GentObservability"')
     expect(findings[0]?.message).toContain("@gent/sdk")
   })
@@ -2067,7 +2268,6 @@ const x: Api.ToolCapability = Api.tool({})`,
         text: `import { WakeRpc } from "@gent/extensions/client.js"`,
       },
     ])
-    expect(findings.map((finding) => finding.enforced)).toEqual([true])
     expect(findings[0]?.message).toContain('"WakeEntry"')
     expect(findings[0]?.message).toContain("@gent/extensions/client")
   })
@@ -2103,6 +2303,10 @@ const packageSurface = (
   entries: ReadonlyArray<readonly [string, PackageJson]>,
   paths: Readonly<Record<string, ReadonlyArray<string>>>,
 ) => findPackageSurfaceFindings(new Map(entries), { compilerOptions: { paths } })
+
+/** The file and the key a package surface finding names, as `<file> <key>`. */
+const pathOf = (finding: { readonly file: string; readonly message: string }): string =>
+  `${finding.file} ${finding.message.split(": ")[0]}`
 
 describe("chained entry points", () => {
   const PROTOCOL_FILE = "packages/core/src/protocol.ts"
@@ -2149,10 +2353,8 @@ describe("package entry points", () => {
             {
               exports: {
                 "./extensions/api": "./src/extensions/api.ts",
-                "./extensions/api.js": "./src/extensions/api.ts",
                 "./host": "./src/host.ts",
                 "./protocol": "./src/protocol.ts",
-                "./protocol.js": "./src/protocol.ts",
                 "./test-utils": "./src/test-utils/index.ts",
               },
             },
@@ -2160,14 +2362,33 @@ describe("package entry points", () => {
         ],
         {
           "@gent/core/extensions/api": ["./packages/core/src/extensions/api.ts"],
-          "@gent/core/extensions/api.js": ["./packages/core/src/extensions/api.ts"],
           "@gent/core/protocol": ["./packages/core/src/protocol.ts"],
-          "@gent/core/protocol.js": ["./packages/core/src/protocol.ts"],
           "@gent/core/host": ["./packages/core/src/host.ts"],
           "@gent/core/test-utils": ["./packages/core/src/test-utils/index.ts"],
         },
       ),
     ).toEqual([])
+  })
+
+  test("the TUI exposes only its client-extension entry", () => {
+    const findings = packageSurface(
+      [
+        [
+          "apps/tui/package.json",
+          {
+            exports: { "./extensions": "./src/extensions.ts", "./client": "./src/client.tsx" },
+          },
+        ],
+      ],
+      {
+        "@gent/tui/extensions": ["./apps/tui/src/extensions.ts"],
+        "@gent/tui/client": ["./apps/tui/src/client.tsx"],
+      },
+    )
+    expect(findings.map(pathOf)).toEqual([
+      'apps/tui/package.json exports["./client"]',
+      'tsconfig.json compilerOptions.paths["@gent/tui/client"]',
+    ])
   })
 
   test("flags public internal core exports and tsconfig aliases", () => {
@@ -2185,7 +2406,7 @@ describe("package entry points", () => {
           ],
         ],
         { "@gent/core/domain/ids": ["./packages/core/src/domain/ids.ts"] },
-      ).map((finding) => finding.path),
+      ).map(pathOf),
     ).toEqual([
       'packages/core/package.json exports["./domain/ids"]',
       'tsconfig.json compilerOptions.paths["@gent/core/domain/ids"]',
@@ -2200,7 +2421,7 @@ describe("package entry points", () => {
           "@gent/core/protocol/*": ["./packages/core/src/*"],
           "@gent/core/unknown": ["./packages/core/src/domain/ids.ts"],
         },
-      ).map((finding) => finding.path),
+      ).map(pathOf),
     ).toEqual([
       'packages/core/package.json exports["./protocol/*"]',
       'tsconfig.json compilerOptions.paths["@gent/core/protocol/*"]',
@@ -2247,17 +2468,21 @@ describe("package entry points", () => {
       ),
     ).toEqual([
       {
-        path: "packages/extensions/package.json private",
-        message: "@gent/extensions must stay private; it is not a published contract",
+        file: "packages/extensions/package.json",
+        line: 1,
+        message: "private: @gent/extensions must stay private; it is not a published contract",
       },
       {
-        path: 'packages/extensions/package.json exports["./todo-storage"]',
-        message: "@gent/extensions may only expose its supported entry points: ., ./client",
-      },
-      {
-        path: 'tsconfig.json compilerOptions.paths["@gent/extensions/todo-storage"]',
+        file: "packages/extensions/package.json",
+        line: 1,
         message:
-          "Do not give TypeScript a public-looking @gent/extensions path for an internal module",
+          'exports["./todo-storage"]: @gent/extensions may only expose its supported entry points: ., ./client',
+      },
+      {
+        file: "tsconfig.json",
+        line: 1,
+        message:
+          'compilerOptions.paths["@gent/extensions/todo-storage"]: Do not give TypeScript a public-looking @gent/extensions path for an internal module',
       },
     ])
   })
@@ -2283,8 +2508,9 @@ describe("package entry points", () => {
       ),
     ).toEqual([
       {
-        path: 'packages/sdk/package.json exports["./rpcs"]',
-        message: "@gent/sdk may only expose its supported entry points: .",
+        file: "packages/sdk/package.json",
+        line: 1,
+        message: 'exports["./rpcs"]: @gent/sdk may only expose its supported entry points: .',
       },
     ])
   })
@@ -2375,94 +2601,5 @@ describe("a namesake does not vouch for an export", () => {
       usedElsewhere,
     ])
     expect(findings).toEqual([])
-  })
-})
-
-// ── undeclared workspace imports ────────────────────────────────────────────
-
-describe("undeclared workspace imports", () => {
-  const manifests = new Map([
-    ["packages/core", { name: "@gent/core" }],
-    ["packages/sdk", { name: "@gent/sdk", dependencies: { "@gent/core": "workspace:*" } }],
-  ])
-  const sdkImport = ["@gent", "sdk"].join("/")
-  const coreImport = ["@gent", "core", "protocol"].join("/")
-
-  test("a core file that imports the SDK is a finding", () => {
-    const findings = findUndeclaredWorkspaceImports(
-      manifests,
-      new Map([["packages/core/src/test-utils/harness.ts", `import { Gent } from "${sdkImport}"`]]),
-    )
-    expect(findings.map((finding) => [finding.file, finding.line])).toEqual([
-      ["packages/core/src/test-utils/harness.ts", 1],
-    ])
-  })
-
-  test("a declared dependency, a self import, and a fixture tree pass", () => {
-    const findings = findUndeclaredWorkspaceImports(
-      manifests,
-      new Map([
-        ["packages/sdk/src/client.ts", `import { GentRpcs } from "${coreImport}"`],
-        ["packages/core/tests/entry.test.ts", `import { waitFor } from "@gent/core/test-utils"`],
-        ["packages/core/fixtures/app.ts", `import { Gent } from "${sdkImport}"`],
-      ]),
-    )
-    expect(findings).toEqual([])
-  })
-
-  const linesOf = (file: string, text: string) =>
-    findUndeclaredWorkspaceImports(manifests, new Map([[file, text]])).map(
-      (finding) => finding.line,
-    )
-
-  test("an import whose specifier sits on a later line is a finding", () => {
-    const text = ["import {", "  Gent,", "} from", `  "${sdkImport}"`].join("\n")
-    expect(linesOf("packages/core/src/a.ts", text)).toEqual([4])
-    expect(
-      linesOf(
-        "packages/core/src/b.ts",
-        ["const sdk = require(", `  "${sdkImport}",`, ")"].join("\n"),
-      ),
-    ).toEqual([2])
-  })
-
-  test("require, dynamic import, type import, and export-from are findings", () => {
-    const text = [
-      `const sdk = require("${sdkImport}")`,
-      `const lazy = import("${sdkImport}")`,
-      `import type { GentServer } from "${sdkImport}"`,
-      `export { Gent } from "${sdkImport}"`,
-      `type Client = typeof import("${sdkImport}")`,
-    ].join("\n")
-    expect(linesOf("packages/core/src/a.ts", text)).toEqual([1, 2, 3, 4, 5])
-  })
-
-  test("an import inside a comment, a string, or a template is not a finding", () => {
-    const text = [
-      `// import { Gent } from "${sdkImport}"`,
-      `/* import { Gent } from "${sdkImport}" */`,
-      `const example = 'import { Gent } from "${sdkImport}"'`,
-      'const shown = `import { Gent } from "' + sdkImport + '" ${1}`',
-      "const pattern = /[\"']/",
-    ].join("\n")
-    expect(linesOf("packages/core/src/a.ts", text)).toEqual([])
-  })
-
-  test("a relative import that leaves its workspace root is a finding", () => {
-    expect(
-      linesOf(
-        "packages/sdk/tests/client.test.ts",
-        'import { narrowR } from "../../core/tests/helpers/effect"',
-      ),
-    ).toEqual([1])
-    expect(
-      linesOf(
-        "packages/core/tests/extensions/api.test.ts",
-        'import notes from "../../../../examples/extensions/session-notes"',
-      ),
-    ).toEqual([1])
-    expect(
-      linesOf("packages/core/tests/runtime/a.test.ts", 'import { x } from "../../src/runtime/x"'),
-    ).toEqual([])
   })
 })

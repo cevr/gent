@@ -222,7 +222,6 @@ describe("Sessions", () => {
         expect(busyTimeout[0]?.timeout).toBe(5000)
         expect(walAutocheckpoint[0]?.wal_autocheckpoint).toBe(1000)
         expect(foreignKeys[0]?.foreign_keys).toBe(1)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.provide(BunServices.layer)),
   )
@@ -270,7 +269,6 @@ describe("Sessions", () => {
           "turn_record_admission",
           "session_admission",
         ])
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       // Reboot — migrator must not re-run the init migration.
@@ -304,7 +302,6 @@ describe("Sessions", () => {
           "turn_record_admission",
           "session_admission",
         ])
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.provide(BunServices.layer)),
   )
@@ -354,7 +351,6 @@ describe("Sessions", () => {
           "CREATE INDEX idx_messages_branch_created ON messages(branch_id, created_at, id)",
         )
         yield* sql.unsafe("DELETE FROM gent_storage_migrations WHERE migration_id >= 11")
-        // oxlint-disable-next-line effect/noInlineProvide -- Each operation opens a fresh database owner.
       }).pipe(Effect.provide(layer))
       yield* Effect.gen(function* () {
         const messages = yield* MessageStorage
@@ -382,7 +378,6 @@ describe("Sessions", () => {
           MessageId.make("step10"),
           MessageId.make("step11"),
         ])
-        // oxlint-disable-next-line effect/noInlineProvide -- Each operation opens a fresh database owner.
       }).pipe(Effect.provide(layer))
     }).pipe(Effect.provide(BunServices.layer)),
   )
@@ -402,7 +397,6 @@ describe("Sessions", () => {
             updated_at INTEGER NOT NULL
           )
         `)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(BunSqliteClient.layer({ filename: dbPath })))
 
       const layer = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(

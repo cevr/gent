@@ -513,10 +513,7 @@ describe("session profile resolution", () => {
         expect(again).toBe(profileA)
         expect(profileA.generationId).toBe(profileB.generationId)
         expect(yield* Ref.get(setups)).toBe(2)
-      }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [counted] })),
-      )
+      }).pipe(Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [counted] })))
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
@@ -548,7 +545,6 @@ describe("session profile resolution", () => {
             { sourcePath: projectConfig, scope: "project", phase: "load", status: "failed" },
           ])
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(
             makeCacheLayer({
               cwd: launch,
@@ -592,7 +588,6 @@ describe("session profile resolution", () => {
         ])
         expect(Context.get(profile.layerContext, SessionProfileResourceMarker).value).toBe("live")
       }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           makeCacheLayer({
             cwd: launch,
@@ -631,7 +626,6 @@ describe("session profile resolution", () => {
           ExtensionId.make("@gent/test-session-profile/kept"),
         ])
       }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept, dropped] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("d".repeat(64))),
       )
@@ -674,7 +668,6 @@ describe("session profile resolution", () => {
         yield* fs.writeFileString(projectConfig, "{}")
         expect(yield* cache.resolve(launch)).toBe(before)
       }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept, toggled] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("f".repeat(64))),
       )
@@ -759,7 +752,6 @@ describe("session profile resolution", () => {
         expect(yield* Ref.get(open)).toBe(1)
       }).pipe(
         Effect.timeout("20 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [tracked, ...toggles] })),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("2".repeat(64))),
       )
@@ -826,7 +818,6 @@ describe("session profile resolution", () => {
         expect(yield* Ref.get(open)).toEqual(["a"])
       }).pipe(
         Effect.timeout("10 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           Layer.mergeAll(
             makeCacheLayer({ cwd: launch, home, extensions: toggles }),
@@ -895,7 +886,6 @@ describe("session profile resolution", () => {
         expect(yield* Effect.scoped(cache.resolve(launch))).toBe(newerProfile)
       }).pipe(
         Effect.timeout("10 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           makeCacheLayer({ cwd: launch, home, extensions: toggles, wrapConfig: holdFirstRead }),
         ),
@@ -957,7 +947,6 @@ describe("session profile resolution", () => {
         expect(yield* resolve).toBe(fixed)
       }).pipe(
         Effect.timeout("15 seconds"),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
           makeCacheLayer({ cwd: launch, home, extensions: [kept], allowFailedExtensions: true }),
         ),
@@ -1060,7 +1049,6 @@ describe("session profile resolution", () => {
           expect(yield* Ref.get(open)).toEqual(["shared-c"])
         }).pipe(
           Effect.timeout("10 seconds"),
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions })),
           Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("6".repeat(64))),
         )
@@ -1122,7 +1110,6 @@ describe("session profile resolution", () => {
           expect(profile.resolved.failedExtensions).toEqual([])
           expect(Context.get(profile.layerContext, SessionProfileResourceMarker).value).toBe("live")
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This focused interruption test owns one isolated live cache layer.
           Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [healthy, blocking] })),
         ),
         Deferred.succeed(releaseStart, void 0).pipe(Effect.asVoid),
@@ -1203,7 +1190,6 @@ describe("resolveTurnProfile", () => {
           defaults: { baseSections: [] },
         })
         expect(resolved.turnHostCtx.cwd).toBe(secondary)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer), Effect.scoped)
     }).pipe(Effect.provide(BunPlatformLive)),
   )
@@ -1236,7 +1222,6 @@ describe("resolveTurnProfile", () => {
         expect(resolved.turnBaseSections).toEqual([
           { id: "default", content: "Default", priority: 1 },
         ])
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
   )
@@ -1273,7 +1258,6 @@ describe("resolveTurnProfile", () => {
         if (exit._tag === "Success") {
           expect(exit.value.turnHostCtx.cwd).toBe("/tmp/runtime-context-fail")
         }
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
   )
@@ -1342,7 +1326,6 @@ describe("resolveTurnProfile", () => {
         expect(resolved.turnHostCtx.cwd).toBe("/tmp/profile-driver-scope")
         expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
         expect(extensionRegistry.getResolved().modelDrivers.has("profile-driver")).toBe(false)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
   )
@@ -3774,7 +3757,6 @@ describe("ExtensionRegistry", () => {
       const resolved = yield* Effect.gen(function* () {
         const ext = yield* ExtensionRegistry
         return ext.getResolved()
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(ExtensionRegistry.Test()))
       expect(resolved.modelCapabilities.size).toBe(0)
       expect(resolved.agents.size).toBe(0)
@@ -4390,7 +4372,6 @@ describe("session agent", () => {
         ])
         expect(eventTags(calls)).not.toContain("AgentSwitched")
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
     }).pipe(Effect.provide(BunCrypto.layer)),
   )
@@ -4408,7 +4389,6 @@ describe("session agent", () => {
         expect(yield* messageStorage.listMessages(noPrompt.branchId)).toEqual([])
         expect(yield* messageStorage.listMessages(emptyPrompt.branchId)).toEqual([])
         yield* controls.assertDone
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
     }).pipe(Effect.provide(BunCrypto.layer)),
   )

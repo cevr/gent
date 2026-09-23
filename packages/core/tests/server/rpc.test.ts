@@ -1323,7 +1323,6 @@ describe("interaction.respondInteraction", () => {
           })
           yield* storage.decide(first, first.requestId, decisionJson)
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(storageLayer),
           Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()),
         )
@@ -2524,7 +2523,6 @@ describe("interaction.respondInteraction", () => {
         const pending = yield* Effect.gen(function* () {
           return yield* (yield* InteractionStorage).listOpen(session)
         }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test reads the closed server's database.
           Effect.provide(
             SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
               Layer.provide(BunPlatformLive),

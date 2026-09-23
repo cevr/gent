@@ -24,8 +24,9 @@ check the claim instead of trusting it. A change that breaks an invariant
 updates this list in the same commit.
 
 1. **Effect-native end to end.** No `Promise<` in an extension surface; no
-   `async`/`await` in tests. Receipts: `packages/tooling/src/check-guardrails.ts`,
-   `packages/core/src/extensions/api.ts`.
+   `async`/`await` in tests. Receipts: `packages/core/tests/extensions/api.test.ts`
+   (the extension surface rejects a Promise at compile time) and `.oxlintrc.json`
+   (`effect/noAsyncFunction`, `gent/no-promise-control-flow-in-tests`).
 2. **One actor per (workspace, session, branch).** The agent loop is an
    effect-encore entity; every session mutation crosses its mailbox.
    Receipts: `packages/core/src/runtime/agent-loop.ts`,

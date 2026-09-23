@@ -9,13 +9,15 @@
     "perf": "error"
   },
   "plugins": ["typescript", "import", "node"],
-  "jsPlugins": ["./lint/gent-rules.ts", "oxlint-plugin-effect/plugin"],
+  "jsPlugins": ["./packages/tooling/src/gent-rules.ts", "oxlint-plugin-effect/plugin"],
   "rules": {
     // Custom — no positional error args in Effect.log*
     "gent/no-positional-log-error": "error",
     // Custom — extensions read only the authoring entries; product code never reads test-utils
     "gent/core-entry-boundary": "error",
-    // Custom — Effect.runPromise only in *-boundary.ts files or via runSdkBoundary
+    // Custom — a workspace imports only the workspace packages its manifest declares
+    "gent/declared-workspace-imports": "error",
+    // Custom — Effect.runPromise only in *-boundary.ts files
     "gent/no-runpromise-outside-boundary": "error",
     // Custom — definePackage/defineExtension factories must not throw
     "gent/no-define-extension-throw": "error",
@@ -23,7 +25,7 @@
     "gent/no-dynamic-imports": "error",
     // Custom — no Bun.* outside adapter, entrypoint, tooling, and test harness boundaries
     "gent/no-bun-outside-adapter": "error",
-    // Custom — test control flow must stay in Effect, not try/finally/async/await
+    // Custom — no Promise chains or runPromise in tests (effect/* bans async, await, try/finally)
     "gent/no-promise-control-flow-in-tests": "error",
     // Custom — hand-rolled `_tag` discriminated unions banned; use Schema.TaggedUnion
     "gent/no-hand-rolled-tagged-union": "error",
@@ -44,7 +46,6 @@
     "effect/noAsyncFunction": "error",
     "effect/noChainedTypeAssertions": "error",
     "effect/noConditionalEmptyObjectSpread": "error",
-    "effect/noDynamicImports": "error",
     "effect/noEffectBind": "error",
     "effect/noEffectDo": "error",
     "effect/noGlobals": "error",
@@ -138,9 +139,12 @@
       }
     },
     {
-      "files": ["lint/**/*.ts"],
+      // The lint plugin runs inside oxlint's Node host, not in an Effect runtime.
+      "files": ["packages/tooling/src/gent-rules.ts"],
       "rules": {
         "effect/maxCognitiveComplexity": "off",
+        "effect/noNodeBuiltinImport": "off",
+        "effect/noGlobals": "off",
         "effect/noAs": "off",
         "effect/noChainedTypeAssertions": "off",
         "effect/noKnownValueWidening": "off",
@@ -183,12 +187,10 @@
       }
     },
     {
-      "files": ["**/*.tsx"],
-      "rules": {}
-    },
-    {
+      // A test composes the layers its operation needs; that is the test norm.
       "files": ["**/tests/**", "**/*.test.ts", "**/*.test.tsx"],
       "rules": {
+        "effect/noInlineProvide": "off",
         "typescript/no-non-null-assertion": "off",
         "typescript/no-explicit-any": "off",
         "typescript/no-unsafe-type-assertion": "off"
