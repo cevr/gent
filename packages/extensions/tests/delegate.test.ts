@@ -517,6 +517,61 @@ describe("a start nobody waits for", () => {
   )
 
   it.live(
+    "a re-sent start keeps the run spec it was admitted with",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("ack"),
+            textStep("ack"),
+            textStep("ack"),
+          ])
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          // The row is written before the start is sent, with the call's run spec.
+          yield* harness.writeRegistry(branchId, [
+            {
+              requestId: RequestId.make("written-ahead"),
+              sessionId: child.sessionId,
+              branchId: child.branchId,
+              agentName: DELEGATE_AGENT_NAME,
+              prompt: childTask,
+              toolCallId: ToolCallId.make("written-ahead"),
+              runSpec: { overrides: { modelId: ModelId.make("test/override-model") } },
+              private: false,
+              submitted: false,
+              delivered: false,
+            },
+          ])
+          yield* sendPrompt(harness, "hello again")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              completionMessages(current.messages).length === 1 && current.runtime._tag === "Idle",
+            8_000,
+            "the re-sent child delivered its completion",
+          )
+          const models = yield* client.session.events(child).pipe(
+            Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+            Stream.flatMap((envelope) => {
+              if (envelope.event._tag !== "StreamEnded") return Stream.empty
+              return Stream.make(envelope.event.model)
+            }),
+            Stream.runCollect,
+            Effect.map((found) => Array.from(found)),
+          )
+          expect(models).toEqual([ModelId.make("test/override-model")])
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
     "a private row whose child answers after an upgrade wakes no one",
     () =>
       Effect.scoped(
@@ -701,6 +756,121 @@ describe("starts over the pending cap", () => {
         }).pipe(Effect.timeout("25 seconds")),
       ),
     30_000,
+  )
+
+  it.live(
+    "a child deleted from the agents pane frees its slot",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let parentCalls = 0
+          // The children never answer: each one holds its slot until it is deleted.
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.startsWith("Task from your parent session") === true) return Effect.never
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(
+                Stream.fromIterable([
+                  ...["one", "two", "three", "four"].map((word) =>
+                    toolCallPart(
+                      "delegate.start",
+                      { todo: `Reply with ${word}` },
+                      { toolCallId: ToolCallId.make(`start-${word}`) },
+                    ),
+                  ),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            if (parentCalls === 3) {
+              return Effect.succeed(
+                toolStep("delegate.start", { todo: "Reply with five" }, "start-five"),
+              )
+            }
+            return Effect.succeed(reply("ok"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate four tasks")
+          const idle = (count: number) =>
+            waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (current) =>
+                current.runtime._tag === "Idle" &&
+                resultsOf("delegate.start", current.messages).length === count,
+              8_000,
+              `the parent ended its turn with ${count} start results`,
+            )
+          yield* idle(4)
+          const admitted = yield* harness.registryOf(branchId)
+          expect(admitted).toHaveLength(4)
+          // The user deletes every child from the agents pane.
+          yield* Effect.forEach(
+            admitted,
+            (row) => client.session.delete({ sessionId: row.sessionId }),
+            { discard: true },
+          )
+          yield* sendPrompt(harness, "start one more")
+          const snapshot = yield* idle(5)
+          const results = resultsOf("delegate.start", snapshot.messages)
+          expect(results.filter((part) => part.type === "tool-result" && part.isFailure)).toEqual(
+            [],
+          )
+          const rows = yield* harness.registryOf(branchId)
+          expect(rows.filter((row) => row.requestId !== "start-five")).toEqual(
+            admitted.map((row) =>
+              expect.objectContaining({
+                requestId: row.requestId,
+                completed: { interrupted: true },
+                delivered: true,
+              }),
+            ),
+          )
+          // A deleted child settles quietly: the user removed it, so nothing wakes the parent.
+          expect(completionMessages(snapshot.messages)).toEqual([])
+        }).pipe(Effect.timeout("15 seconds")),
+      ),
+    20_000,
+  )
+
+  it.live(
+    "the parent's next turn settles a child deleted while no process ran",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          yield* harness.writeRegistry(branchId, [
+            {
+              requestId: RequestId.make("deleted-child"),
+              sessionId: child.sessionId,
+              branchId: child.branchId,
+              agentName: DELEGATE_AGENT_NAME,
+              prompt: childTask,
+              private: false,
+              submitted: true,
+              delivered: false,
+            },
+          ])
+          yield* client.session.delete({ sessionId: child.sessionId })
+          yield* sendPrompt(harness, "anything new?")
+          const rows = yield* waitFor(
+            harness.registryOf(branchId),
+            (entries) => entries[0]?.delivered === true,
+            5_000,
+            "reconcile settled the deleted child",
+          )
+          expect(rows[0]?.completed).toEqual({ interrupted: true })
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
 })
 

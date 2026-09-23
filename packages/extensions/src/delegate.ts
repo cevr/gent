@@ -112,8 +112,13 @@ export const DelegateEntry = Schema.Struct({
    * still require the key, so it stays in the schema for files on both sides of that change.
    */
   private: Schema.Boolean,
-  /** The child's prompt reached its loop; a start that crashed before this is re-sent. */
+  /**
+   * The child's prompt reached its loop. The row is written false before the
+   * start is sent, so a start that crashed in between is re-sent.
+   */
   submitted: Schema.Boolean,
+  /** The run spec the start was admitted with; a re-sent start uses it again. */
+  runSpec: Schema.optionalKey(RunSpecSchema),
   completed: Schema.optionalKey(ChildOutcome),
   /** The parent has the completion: the message is on the parent branch, or the parent stopped the child. */
   delivered: Schema.Boolean,
@@ -368,7 +373,7 @@ export const childTaskBody = (text: string): string =>
   )
 
 /** The child's prompt as its one durable turn. A repeat with the same id is a no-op at the loop. */
-const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
+const submitStart = (entry: DelegateEntry) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     yield* ctx.Session.send({
@@ -379,17 +384,32 @@ const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
       commandId: ActorCommandId.make(startMessageId(entry.requestId)),
       agentOverride: entry.agentName,
       interactive: false,
-      runSpec: childRunSpec(runSpec),
+      runSpec: childRunSpec(Option.fromUndefinedOr(entry.runSpec)),
       completion: "admission",
     })
+  })
+
+/**
+ * A child deleted outside the delegate (the agents pane) never reports, so
+ * its row settles as interrupted. The user removed it, so no message wakes
+ * the parent. Rows already settled are returned as they are.
+ */
+const settleIfGone = (entry: DelegateEntry) =>
+  Effect.gen(function* () {
+    if (entry.delivered || Predicate.isNotUndefined(entry.completed)) return entry
+    const ctx = yield* ExtensionContext
+    const child = yield* ctx.Session.getSession(entry.sessionId)
+    if (Predicate.isNotUndefined(child)) return entry
+    return settled(entry, { interrupted: true }, Option.none(), "")
   })
 
 /**
  * Bring the current branch's registry up to date without a hook: a start
  * whose prompt never reached the child is re-sent, a finished child whose
  * completion never landed (the process died between the receipt and the
- * hook) is delivered now, and a private row is removed with its session,
- * never delivered. Called from the parent's turn and its listing tools.
+ * hook) is delivered now, a deleted child settles as interrupted, and a
+ * private row is removed with its session, never delivered. Called from the
+ * parent's turn and its listing tools.
  */
 const reconcile = Effect.fn("Delegate.reconcile")(function* () {
   const ctx = yield* ExtensionContext
@@ -405,8 +425,13 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
           continue
         }
         if (entry.delivered) continue
+        const current = yield* settleIfGone(entry)
+        if (current.delivered) {
+          next = replaceEntry(next, current)
+          continue
+        }
         if (!entry.submitted) {
-          yield* submitStart(entry, Option.none())
+          yield* submitStart(entry)
           next = replaceEntry(next, { ...entry, submitted: true })
           continue
         }
@@ -502,9 +527,15 @@ interface AdmitParams {
   readonly runSpec?: RunSpec
 }
 
+const unfinished = (entries: ReadonlyArray<DelegateEntry>) =>
+  entries.filter((entry) => Predicate.isUndefined(entry.completed))
+
 /**
  * Admit one child under the current branch and send its prompt. The child
- * counts against the branch's cap and is listed for the parent's view.
+ * counts against the branch's cap and is listed for the parent's view. The
+ * row is written before the prompt is sent and marked submitted after, so a
+ * crash in between leaves a row that reconcile re-sends, never a running
+ * child nobody owns.
  */
 const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
   const ctx = yield* ExtensionContext
@@ -525,8 +556,12 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           }
           return { next: entries, result: existing.value }
         }
-        const pending = entries.filter((entry) => Predicate.isUndefined(entry.completed))
-        if (pending.length >= MAX_PENDING_CHILDREN) {
+        // At the cap, a child deleted since the last reconcile frees its slot.
+        let current = entries
+        if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
+          current = yield* Effect.forEach(current, settleIfGone)
+        }
+        if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
           return yield* new DelegateError({
             message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished children`,
           })
@@ -549,26 +584,32 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           agentName: DELEGATE_AGENT_NAME,
           prompt: params.prompt,
           ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
+          runSpec: makeRunSpec({
+            ...params.runSpec,
+            ...Record.filter({ parentToolCallId: params.toolCallId }, Predicate.isNotUndefined),
+          }),
           private: false,
           submitted: false,
           delivered: false,
         }
-        yield* submitStart(
-          entry,
-          Option.some(
-            makeRunSpec({
-              ...params.runSpec,
-              ...Record.filter({ parentToolCallId: params.toolCallId }, Predicate.isNotUndefined),
-            }),
-          ),
-        )
-        const started = { ...entry, submitted: true }
-        return { next: [...entries, started], result: started }
+        return { next: [...current, entry], result: entry }
       }),
     )
     .pipe(asDelegateError("Child start failed"))
+  if (!admitted.submitted) {
+    yield* submitStart(admitted).pipe(asDelegateError("Child start failed"))
+    // Only the flag changes: a hook may have settled the row since it was written.
+    yield* registry
+      .update((entries) =>
+        entries.map((row) => {
+          if (row.requestId !== admitted.requestId) return row
+          return { ...row, submitted: true }
+        }),
+      )
+      .pipe(asDelegateError("Child start failed"))
+  }
   yield* ctx.State.changed().pipe(Effect.ignore)
-  return admitted
+  return { ...admitted, submitted: true }
 })
 
 // ── stopping ────────────────────────────────────────────────────────────────
@@ -657,8 +698,9 @@ const onParentTurnAfter = Effect.fn("Delegate.parentTurnAfter")(function* (input
 }) {
   if (!input.interrupted) return
   const ctx = yield* ExtensionContext
+  // An unsubmitted row settles too, so reconcile never sends a start the user interrupted.
   const running = (yield* registry.at(input.branchId).read()).filter(
-    (row) => !row.delivered && row.submitted && Predicate.isUndefined(row.completed),
+    (row) => !row.delivered && Predicate.isUndefined(row.completed),
   )
   if (running.length === 0) return
   yield* Effect.forEach(running, stopChild, { discard: true })
