@@ -6,6 +6,7 @@ import * as AiError from "effect/unstable/ai/AiError"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopError,
+  type FollowUpQueueFull,
   entityIdOf,
   type SessionRuntimeState,
 } from "../../src/domain/agent-loop"
@@ -113,7 +114,11 @@ export interface AgentLoopService {
     readonly sessionId: SessionId
     readonly branchId: BranchId
     readonly prompt: string
-  }) => Effect.Effect<void, AgentLoopError | StorageError, BranchStorage | SessionStorage>
+  }) => Effect.Effect<
+    void,
+    AgentLoopError | FollowUpQueueFull | StorageError,
+    BranchStorage | SessionStorage
+  >
   readonly getQueue: (input: {
     readonly sessionId: SessionId
     readonly branchId: BranchId

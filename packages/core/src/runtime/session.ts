@@ -53,6 +53,7 @@ import type { PromptSection } from "../domain/capability.js"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "./agent-loop.js"
 import {
   AgentLoopError,
+  FollowUpQueueFull,
   entityIdOf,
   listWorkspaceLoops,
   type SendUserMessagePayload,
@@ -361,8 +362,9 @@ const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
   const inner = cause.reasons.find(Cause.isFailReason)?.error
   if (Schema.is(SessionRuntimeError)(inner)) return inner
   // The loop already names the concrete failure (an extension refusal, a
-  // missing capability); the user needs that text, not the operation name.
-  if (Schema.is(AgentLoopError)(inner)) {
+  // missing capability, a full queue); the user needs that text, not the
+  // operation name.
+  if (Schema.is(AgentLoopError)(inner) || Schema.is(FollowUpQueueFull)(inner)) {
     return new SessionRuntimeError({ message: `${message}: ${inner.message}`, cause })
   }
   return new SessionRuntimeError({ message, cause })
