@@ -1305,6 +1305,18 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
   ["packages/core/tests/x.test.ts", "Layer.provide(BunCronRuntimeLive)", "BunCronRuntimeLive"],
   ["packages/core/src/server/rpc.ts", "export class SessionInfo {}", "SessionInfo"],
   ["packages/core/src/domain/x.ts", "type B = BranchInfo", "BranchInfo"],
+  ["packages/core/tests/x.test.ts", "yield* ExtensionStatePublisher", "ExtensionStatePublisher"],
+  ["packages/core/src/runtime/x.ts", "const events = yield* EventPublisher", "EventPublisher"],
+  ["packages/core/tests/x.test.ts", "Layer.provide(ConnectionTracker.Live)", "ConnectionTracker"],
+  ["packages/sdk/src/x.ts", 'Rpc.make("runtime.status", {})', '"runtime.status"'],
+  ["apps/tui/src/x.ts", "yield* transport.driverList", "driverList"],
+  ["packages/core/tests/x.test.ts", "yield* scope.inbox.claimStart(item)", "inbox.claimStart"],
+  ["packages/core/src/runtime/x.ts", "scope.inbox.releaseStart(item)", "inbox.releaseStart"],
+  ["packages/sdk/src/x.ts", 'import { x } from "./server/server-root.js"', "server-root"],
+  ["packages/core/tests/x.test.ts", "yield* buildServerRoot(deps)", "buildServerRoot"],
+  ["AGENTS.md", "the `ExtensionStatePublisher` publishes state", "ExtensionStatePublisher"],
+  ["docs/extensions.md", "yield* ProcessRunner", "ProcessRunner"],
+  ["packages/core/AGENTS.md", "Runtime code yields `EventPublisher`", "EventPublisher"],
 ]
 
 const RETIRED_PATHS: ReadonlyArray<string> = [
@@ -1316,6 +1328,7 @@ const RETIRED_PATHS: ReadonlyArray<string> = [
   "packages/core/src/runtime/scope-brands.ts",
   "packages/sdk/src/server-registry.ts",
   "packages/sdk/src/worker-http.ts",
+  "packages/core/src/server/server-root.ts",
 ]
 
 describe("retired surface guard", () => {
@@ -1364,10 +1377,33 @@ describe("retired surface guard", () => {
     ).toEqual([])
   })
 
-  test("docs, plans, the tooling tests and the guard source are not scanned", () => {
+  test("a steering file or a doc is read for every name row", () => {
     const text = ["ProcessRunner", "ResourceGraphHost", "ExtensionRuntime"].join("\n")
-    expect(findRetiredSurfaces("ARCHITECTURE.md", text)).toEqual([])
+    for (const file of [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "ARCHITECTURE.md",
+      "apps/tui/AGENTS.md",
+      "packages/core/AGENTS.md",
+      "docs/extensions.md",
+      "docs/guides/authoring.md",
+    ]) {
+      expect(findRetiredSurfaces(file, text).map((finding) => finding.line)).toEqual([1, 2, 3])
+    }
+  })
+
+  test("a doc is not read for imports, and a doc's own path is no finding", () => {
+    expect(
+      findRetiredSurfaces("docs/extensions.md", 'import { x } from "./resource-graph.js"'),
+    ).toEqual([])
+    expect(findRetiredSurfaces("docs/server-root.md", "")).toEqual([])
+  })
+
+  test("dated research, plans, the tooling tests and the guard source are not scanned", () => {
+    const text = ["ProcessRunner", "ResourceGraphHost", "ExtensionRuntime"].join("\n")
+    expect(findRetiredSurfaces("docs/research/2026-09-08-pi-v2-extensions.md", text)).toEqual([])
     expect(findRetiredSurfaces("plans/arch-core.md", text)).toEqual([])
+    expect(findRetiredSurfaces("README.md", text)).toEqual([])
     expect(findRetiredSurfaces("packages/tooling/src/guards.ts", text)).toEqual([])
     expect(findRetiredSurfaces("packages/tooling/tests/guards.test.ts", text)).toEqual([])
   })
@@ -1389,6 +1425,17 @@ describe("retired surface guard", () => {
     expect(findRetiredSurfaces("packages/core/src/runtime/child-agents.ts", "")).toEqual([])
     expect(findRetiredSurfaces("packages/core/src/runtime/provider.ts", "")).toEqual([])
     expect(findRetiredSurfaces("packages/sdk/src/server.ts", "")).toEqual([])
+    expect(
+      findRetiredSurfaces(
+        "packages/extensions/src/exec-tools.ts",
+        [
+          "const claim = yield* storage.claimStart({ id })",
+          "listModels: driverListModels(catalog, id)",
+          "const releaseStart = yield* Deferred.make<void>()",
+          "const status = yield* runtime.status",
+        ].join("\n"),
+      ),
+    ).toEqual([])
   })
 })
 

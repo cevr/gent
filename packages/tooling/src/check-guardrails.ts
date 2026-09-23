@@ -27,6 +27,7 @@ import {
   findUnmatchedOverrideGlobs,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
+  isRetiredSurfaceProse,
   isSteeringFile,
   OxlintConfigSchema,
   type PackageJson,
@@ -95,13 +96,13 @@ const ANY_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findBannedEslintDisableBlocks,
   findSuppressionInventoryFindings,
   findHookWithoutGuards,
+  findRetiredSurfaces,
 ]
 
 /** Findings a source file answers on its own, without the rest of the tree. */
 const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findPlatformDuplicationViolations,
   findCoreFeatureIndependenceFindings,
-  findRetiredSurfaces,
   findCoreVendorModelPins,
   findAliasTestLayers,
   findE2eFixtureImportFindings,
@@ -231,11 +232,14 @@ const program = Effect.gen(function* () {
   const symlinks = yield* trackedSymlinks
   const textFiles = yield* Effect.forEach(
     trackedFiles
-      // The steering files are Markdown and the hook is YAML; both join the
-      // pass so their own scans get the text.
+      // The steering files and docs are Markdown and the hook is YAML; they
+      // join the pass so their own scans get the text.
       .filter(
         (file) =>
-          /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file) || file === HOOK_FILE,
+          /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) ||
+          isSteeringFile(file) ||
+          isRetiredSurfaceProse(file) ||
+          file === HOOK_FILE,
       )
       .filter((file) => !file.includes("/dist/") && !symlinks.has(file)),
     readTrackedFile,

@@ -1324,6 +1324,11 @@ export const findPlatformDuplicationViolations = (
  * line, an import specifier's module basename, or the file path itself. The
  * guard source is exempt: the table names every retired surface on purpose.
  *
+ * The steering files and the authoring docs are read too, for every `line`
+ * row whatever its scope: an agent reads them before the code, and a deleted
+ * name there is an instruction to bring it back. `docs/research/` is out; like
+ * `plans/`, it holds dated receipts that name what existed at the time.
+ *
  * Retired `Bun.*` members (`Bun.Glob`, `Bun.randomUUIDv7` outside the platform
  * adapter) are banned by the `gent/no-bun-outside-adapter` rule in
  * `gent-rules.ts` instead, because only the AST sees a member access.
@@ -1583,12 +1588,79 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     message:
       "the transport session DTOs are removed; the contract carries the domain Session and Branch schemas",
   },
+  {
+    on: "line",
+    match: identifiers("ExtensionStatePublisher", "ExtensionStatePublisherLive"),
+    scope: "shipped-and-tests",
+    message:
+      "ExtensionStatePublisher is removed; the State facet of ExtensionContext publishes through EventStore",
+  },
+  {
+    on: "line",
+    match: identifiers("EventPublisher", "EventPublisherLive", "EventPublisherService"),
+    // Shipped only: a test asserts the public API does not export the name.
+    scope: "shipped",
+    message: "the EventPublisher pass-through is removed; runtime code yields EventStore",
+  },
+  {
+    on: "line",
+    match: identifiers("ConnectionTracker", "ConnectionTrackerService"),
+    scope: "shipped-and-tests",
+    message:
+      "the connection tracker is removed with shared server mode and idle shutdown; a server lives as long as its owner",
+  },
+  {
+    on: "line",
+    match: /["'`]runtime\.status["'`]/,
+    scope: "shipped-and-tests",
+    message:
+      "the runtime.status RPC is removed with shared server mode; the server identity endpoint names the build",
+  },
+  {
+    on: "line",
+    match: identifiers("driverList", "driverListReply"),
+    scope: "shipped-and-tests",
+    message:
+      "transport.driverList is removed; /driver sends driver.set and the server rejects an unknown id",
+  },
+  {
+    on: "line",
+    match: /\b(?:inbox|LoopInbox)\.(?:claimStart|releaseStart)\b/,
+    scope: "shipped-and-tests",
+    message:
+      "the inbox start reservation is removed; a reserved start runs in the loop scope, so no caller releases it",
+  },
+  {
+    on: "line",
+    match: new RegExp(`\\bserver-root\\b|${identifiers("buildServerRoot").source}`),
+    scope: "shipped-and-tests",
+    message:
+      "server-root.ts is folded away; the SDK root and the test harness build the routes and RPC handlers from createDependencies",
+  },
+  {
+    on: "path",
+    match: /^packages\/core\/src\/server\/server-root\.ts$/,
+    scope: "shipped",
+    message:
+      "server-root.ts is folded away; the SDK root and the test harness build the routes and RPC handlers from createDependencies",
+  },
 ]
 
 const SHIPPED_AND_TESTS = /^(?:packages|apps)\/(?!tooling\/)[^/]+\/(?:src|tests)\//
 
-const inRetiredScope = (file: string, scope: RetiredSurface["scope"]): boolean => {
-  if (scope === "shipped") return shippedSourceFile(file)
+/**
+ * The prose the retired rows read: the steering files, a package's own
+ * `AGENTS.md` or `CLAUDE.md`, and `docs/` but its dated research.
+ */
+const RETIRED_PROSE =
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md)$/
+
+/** A prose file the retired-surface rows read. */
+export const isRetiredSurfaceProse = (file: string): boolean => RETIRED_PROSE.test(file)
+
+const inRetiredScope = (file: string, row: RetiredSurface): boolean => {
+  if (isRetiredSurfaceProse(file)) return row.on === "line"
+  if (row.scope === "shipped") return shippedSourceFile(file)
   return SHIPPED_AND_TESTS.test(file) && file !== GUARDS_FILE
 }
 
@@ -1612,7 +1684,7 @@ const subjectOf = (row: RetiredSurface, line: string): Option.Option<string> => 
 
 /** Every line, import, or path in `file` that brings back a retired surface. */
 export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<Finding> => {
-  const rows = RETIRED_SURFACES.filter((row) => inRetiredScope(file, row.scope))
+  const rows = RETIRED_SURFACES.filter((row) => inRetiredScope(file, row))
   if (rows.length === 0) return []
   const findings: Array<Finding> = []
   for (const row of rows) {
