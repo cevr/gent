@@ -2,11 +2,9 @@
 import { Command, Flag, Argument } from "effect/unstable/cli"
 import { BunPlatformLive } from "@gent/core/host"
 import {
-  Cause,
   Config,
   Context,
   Effect,
-  Exit,
   Fiber,
   Layer,
   Logger,
@@ -41,7 +39,7 @@ import { ComposerDraftsProvider, SessionShellProvider } from "./session"
 import { detectColorScheme } from "./theme"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
 import { ExtensionUIProvider } from "./extensions/host"
-import { type HeadlessOptions, runHeadless } from "./headless"
+import { type ExitSignal, type HeadlessOptions, makeCliTeardown, runHeadless } from "./headless"
 import { GentConnectionError, type GentClientBundle } from "@gent/sdk"
 import {
   CliStartupError,
@@ -275,6 +273,9 @@ const runGent = ({
       authDirectory: authDirectoryOpt,
     })
     if (headless) {
+      yield* Effect.sync(() => {
+        cliRun.headless = true
+      })
       // The agent is a session property: the flag shapes a new session only.
       if (Option.isSome(requestedAgent) && Option.isSome(session)) {
         return yield* new CliStartupError({
@@ -480,16 +481,13 @@ const mainEffect = Effect.scoped(
   }),
 )
 
-const gracefulCliTeardown: Runtime.Teardown = (exit, onExit) => {
-  if (Exit.isSuccess(exit)) {
-    onExit(0)
-    return
-  }
-  if (Cause.hasInterruptsOnly(exit.cause)) {
-    onExit(0)
-    return
-  }
-  Runtime.defaultTeardown(exit, onExit)
+/**
+ * What the teardown reads about the run: the signal that stopped it, and
+ * whether it was a headless run. The process entry owns both.
+ */
+const cliRun = {
+  signal: Option.none<ExitSignal>(),
+  headless: false,
 }
 
 const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
@@ -506,8 +504,9 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
     })
   })
 
-  function onSignal() {
+  function onSignal(signal: ExitSignal) {
     receivedSignal = true
+    cliRun.signal = Option.some(signal)
     process.removeListener("SIGINT", onSignal)
     process.removeListener("SIGTERM", onSignal)
     fiber.interruptUnsafe(fiber.id)
@@ -518,6 +517,6 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
 })
 
 runCliMain(mainEffect, {
-  teardown: gracefulCliTeardown,
+  teardown: makeCliTeardown({ signal: () => cliRun.signal, headless: () => cliRun.headless }),
   disableErrorReporting: true,
 })

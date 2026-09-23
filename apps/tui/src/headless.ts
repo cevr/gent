@@ -6,6 +6,7 @@ import {
   Fiber,
   Option,
   Predicate,
+  Runtime,
   Schedule,
   Schema,
   Stdio,
@@ -472,3 +473,40 @@ export const runHeadless = (
       for (const error of errors) yield* writeStderr(`Warning: ${error}\n`)
     }),
   )
+
+// ── process exit ────────────────────────────────────────────────────────────
+
+export type ExitSignal = "SIGINT" | "SIGTERM"
+
+/** 128 plus the signal number, as a shell reports a process a signal ended. */
+const SIGNAL_EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } satisfies Record<ExitSignal, number>
+
+/**
+ * How the CLI's exit becomes the process exit code.
+ *
+ * A signal interrupts the root fiber. For the TUI that is a quit and exits 0.
+ * A headless run a signal ended did not answer, and a caller that chains
+ * `gent -H … && next` must not read it as success, so it exits 130 or 143.
+ * Any other failure takes the default teardown's code.
+ */
+export const makeCliTeardown =
+  (run: {
+    readonly signal: () => Option.Option<ExitSignal>
+    readonly headless: () => boolean
+  }): Runtime.Teardown =>
+  (exit, onExit) => {
+    if (Exit.isSuccess(exit)) {
+      onExit(0)
+      return
+    }
+    if (Cause.hasInterruptsOnly(exit.cause)) {
+      const signal = run.signal()
+      if (run.headless() && Option.isSome(signal)) {
+        onExit(SIGNAL_EXIT_CODE[signal.value])
+        return
+      }
+      onExit(0)
+      return
+    }
+    Runtime.defaultTeardown(exit, onExit)
+  }

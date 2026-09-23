@@ -140,7 +140,8 @@ even after partial text, which has printed already. A receipt without those
 flags (a historical one) exits 1 on an error with no answer text. An error
 marked `notice: true` (a compaction fallback) is only a warning. The client
 status also ignores a notice. A failed turn phase appends a `TurnCompleted`
-with `streamFailed`; a failed send is the fallback end. The run's end owns stderr: a failed run prints one line, an
+with `streamFailed`; a failed send is the fallback end. SIGINT exits 130 and
+SIGTERM 143. The run's end owns stderr: a failed run prints one line, an
 answered run prints one `Warning:` line for each notice.
 
 ## Input Prefixes

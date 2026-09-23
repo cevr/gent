@@ -7,7 +7,7 @@ import {
   ToolCallSucceeded,
   TurnCompleted,
 } from "@gent/core/test-utils"
-import { describe, it, expect } from "effect-bun-test"
+import { describe, it, expect, test } from "effect-bun-test"
 import { Cause, Deferred, Effect, Exit, Option, Schema, Sink, Stdio, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
@@ -22,7 +22,7 @@ import {
 } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { GentConnectionError } from "@gent/sdk"
-import { renderHeadlessToolCall, runHeadless } from "../src/headless"
+import { makeCliTeardown, renderHeadlessToolCall, runHeadless } from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"
 class HeadlessRunnerTestError extends Schema.TaggedError<HeadlessRunnerTestError>()(
   "HeadlessRunnerTestError",
@@ -629,4 +629,40 @@ describe("runHeadless", () => {
       expect(printed).toContain("[tool done: cell]")
     }),
   )
+})
+
+// ── process exit ────────────────────────────────────────────────────────────
+
+/** The code a teardown hands the process for `exit`. */
+const exitCodeOf = (
+  teardown: ReturnType<typeof makeCliTeardown>,
+  exit: Exit.Exit<unknown, unknown>,
+): number => {
+  let code = -1
+  teardown(exit, (value) => {
+    code = value
+  })
+  return code
+}
+
+const interruptedBy = (signal: Option.Option<"SIGINT" | "SIGTERM">, headless: boolean) =>
+  makeCliTeardown({ signal: () => signal, headless: () => headless })
+
+describe("CLI teardown", () => {
+  test("a signal ends a headless run non-zero: 130 for SIGINT, 143 for SIGTERM", () => {
+    const interrupted = Exit.failCause(Cause.interrupt())
+    expect(exitCodeOf(interruptedBy(Option.some("SIGINT"), true), interrupted)).toBe(130)
+    expect(exitCodeOf(interruptedBy(Option.some("SIGTERM"), true), interrupted)).toBe(143)
+  })
+
+  test("a signal ends the TUI cleanly", () => {
+    const interrupted = Exit.failCause(Cause.interrupt())
+    expect(exitCodeOf(interruptedBy(Option.some("SIGINT"), false), interrupted)).toBe(0)
+  })
+
+  test("a headless run that answered exits 0, and one that failed exits 1", () => {
+    const teardown = interruptedBy(Option.none(), true)
+    expect(exitCodeOf(teardown, Exit.void)).toBe(0)
+    expect(exitCodeOf(teardown, Exit.fail("unanswered"))).toBe(1)
+  })
 })
