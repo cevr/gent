@@ -44,7 +44,7 @@ import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import { EditToolRenderer, ReadToolRenderer, useToolRenderers } from "../src/tool-renderers"
-import { renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { destroyRenderSetup, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
@@ -1204,7 +1204,7 @@ describe("FX transcript treatment", () => {
     }),
   )
 
-  it.live("a reloaded cell draws a failed bash op and a whole edit diff", () =>
+  it.live("a reloaded cell draws its ops as the live feed drew them", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("session-reloaded-ops")
       const branchId = BranchId.make("branch-reloaded-ops")
@@ -1291,20 +1291,56 @@ describe("FX transcript treatment", () => {
         status: "completed",
         operations: (operations ?? []).map((operation) => ({ ...operation })),
       }
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <RegisteredToolMessageLists
-              items={[assistantToolMessage("assistant-reloaded-cell", reloaded)]}
-              fullDetail
-            />
-          ),
-          { width: 110, height: 60 },
-        ),
-      )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (next) => next.includes("module.ts"), "reloaded cell ops"),
-      )
+      // The same cell as the live feed carried it: each op with its whole
+      // input and output, before any reload projected it.
+      const live: ToolCall = {
+        ...reloaded,
+        operations: [
+          {
+            id: "op-bash",
+            toolName: "bash",
+            status: "completed",
+            input: { command: "bun test" },
+            summary: "done",
+            output: encodeJson({ stdout: "1 fail", stderr: "", exitCode: 1 }),
+          },
+          {
+            id: "op-edit",
+            toolName: "edit",
+            status: "completed",
+            input: editInput,
+            summary: "done",
+            output: encodeJson({ path: editInput.path, replacements: 1 }),
+          },
+        ],
+      }
+      const drawn = (call: ToolCall, label: string) =>
+        Effect.gen(function* () {
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(
+              () => (
+                <RegisteredToolMessageLists
+                  items={[assistantToolMessage("assistant-reloaded-cell", call)]}
+                  fullDetail
+                />
+              ),
+              { width: 110, height: 60 },
+            ),
+          )
+          const frame = yield* Effect.promise(() =>
+            waitForRenderedFrame(
+              setup,
+              (next) => next.includes("module.ts") && next.includes("other = 1"),
+              label,
+            ),
+          )
+          destroyRenderSetup(setup)
+          return frame
+        })
+      const liveFrame = yield* drawn(live, "live cell ops")
+      const frame = yield* drawn(reloaded, "reloaded cell ops")
+      // A reload opens each op body exactly as far as the live feed did.
+      expect(frame).toBe(liveFrame)
       // A failed command reads as failed after a reload, not as a bare success header.
       expect(frame).toContain("exit 1")
       // The diff is built from the whole strings: the new text adds a line.
