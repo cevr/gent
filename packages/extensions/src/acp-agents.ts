@@ -469,7 +469,16 @@ export interface AcpConnection {
     params: PromptRequest,
   ) => Effect.Effect<PromptResponse, AcpError | AcpClosedError>
   readonly cancel: (sessionId: string) => Effect.Effect<void>
-  readonly updates: Stream.Stream<SessionNotification, AcpError>
+  /**
+   * Subscribe to `session/update` notifications. The subscription exists
+   * once this Effect returns, so a caller subscribes before it sends the
+   * prompt and no early update is lost (the PubSub has no replay).
+   */
+  readonly subscribeUpdates: Effect.Effect<
+    Stream.Stream<SessionNotification, AcpError>,
+    never,
+    Scope.Scope
+  >
   readonly close: (reason?: string) => Effect.Effect<void>
 }
 
@@ -839,7 +848,7 @@ export const makeAcpConnection = (
       prompt: (params) =>
         rpcRaw("session/prompt", params).pipe(Effect.flatMap(decodePromptResponse)),
       cancel: (sessionId) => write(encodeNotification("session/cancel", { sessionId })),
-      updates: Stream.fromPubSub(updatesPubSub),
+      subscribeUpdates: PubSub.subscribe(updatesPubSub).pipe(Effect.map(Stream.fromSubscription)),
       // Atomically seal the state and claim the pending map in one
       // Ref.modify so a concurrent rpcRaw cannot leak a Deferred into
       // the post-drain map. Then fail each claimed Deferred with the
@@ -1137,6 +1146,10 @@ const makeAcpTurnExecutor = (
       let promptText = renderLiveUserPrompt(lastUser)
       if (session.created) promptText = composePromptWithTranscript(ctx.messages, lastUser)
 
+      // Subscribe before the prompt goes out: the agent can answer with an
+      // update at once, and the PubSub keeps nothing for a late subscriber.
+      const updates = yield* session.conn.subscribeUpdates
+
       // Fork the prompt call — runs concurrently with the update stream.
       // On failure, fail the deferred so the stream doesn't hang. An
       // `AcpClosedError` here means the driver was invalidated mid-turn
@@ -1168,7 +1181,7 @@ const makeAcpTurnExecutor = (
       const mapper = makeAcpResponsePartMapper()
 
       // Stream updates until the prompt completes
-      const updateStream: Stream.Stream<TurnStreamPart, TurnError> = session.conn.updates.pipe(
+      const updateStream: Stream.Stream<TurnStreamPart, TurnError> = updates.pipe(
         Stream.map((notification) => mapAcpUpdateToResponsePart(notification, mapper)),
         Stream.filter(Option.isSome),
         Stream.map((part) => part.value),
@@ -1218,6 +1231,29 @@ const makeAcpTurnExecutor = (
 
 const ACP_KILL_GRACE_MS = 5_000
 
+/**
+ * How long an agent may take to answer `initialize` and `session/new`. An
+ * agent that waits for an interactive login never answers; without a
+ * deadline the turn hangs. The first start of an `npx` agent downloads it,
+ * so the bound is generous.
+ */
+const ACP_SETUP_TIMEOUT = Duration.seconds(60)
+
+const setupDeadline =
+  (config: AcpProtocolAgentConfig, method: string) =>
+  <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | AcpError> =>
+    effect.pipe(
+      Effect.timeoutOrElse({
+        duration: ACP_SETUP_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new AcpError({
+              message: `${config.command} did not answer ${method} within ${Duration.format(ACP_SETUP_TIMEOUT)}; it may be waiting for a login`,
+            }),
+          ),
+      }),
+    )
+
 interface AcpProcess {
   readonly conn: AcpConnection
   readonly acpSessionId: string
@@ -1263,7 +1299,8 @@ const fingerprintSession = (
  * context channel, so pinning the spawner here keeps that contract
  * honest without re-providing `BunServices.layer` per turn.
  */
-const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, ChildProcessSpawner> =
+/** @internal Exported for testing. */
+export const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, ChildProcessSpawner> =
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner
     const spawnerContext = Context.make(ChildProcessSpawner, spawner)
@@ -1330,69 +1367,74 @@ const createAcpSessionManager: Effect.Effect<AcpSessionManager, never, ChildProc
 
         // The process lives in `procScope` so the parent scope is not bound to
         // a long-lived child; the process survives across turns and is
-        // explicitly killed on tearDown.
+        // explicitly killed on tearDown. `scope` owns the connection fibers.
         const procScope = yield* Scope.make()
-        const handle = yield* ChildProcess.make(config.command, [...config.args], {
-          stdin: "pipe",
-          stdout: "pipe",
-          stderr: "inherit",
-        }).pipe(
-          Scope.provide(procScope),
-          Effect.catchTag("PlatformError", (e) =>
-            Effect.fail(
-              new AcpError({
-                message: `failed to spawn ACP agent: ${e.message}`,
-              }),
-            ),
-          ),
-          Effect.tapError(() => Scope.close(procScope, Exit.void)),
-        )
-
-        const killProc = handle
-          .kill({
-            killSignal: "SIGTERM",
-            forceKillAfter: Duration.millis(ACP_KILL_GRACE_MS),
-          })
-          .pipe(Effect.ignore)
-
         const scope = yield* Scope.make()
 
-        const cleanup = Effect.gen(function* () {
-          yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
-          yield* killProc
-          yield* Scope.close(procScope, Exit.void).pipe(Effect.ignore)
-        })
-
-        const conn = yield* makeAcpConnection({
-          stdin: handle.stdin,
-          stdout: handle.stdout,
-        }).pipe(
-          Effect.provideService(Scope.Scope, scope),
-          Effect.tapError(() => cleanup),
-        )
-
-        yield* conn
-          .initialize({
-            protocolVersion: 1,
-            clientCapabilities: {
-              fs: { readTextFile: false, writeTextFile: false },
-              terminal: false,
-            },
-            clientInfo: { name: "gent", version: "0.0.0" },
-          })
-          .pipe(Effect.tapError(() => cleanup))
-
-        // Create session with cwd and system prompt via ACP's `_meta` channel.
-        // The wire format is open per agent — the claude-agent-acp reference
-        // impl recognises `_meta.systemPrompt` (string = replace, `{append}`
-        // = append). Agents that don't recognise it ignore the field.
-        const sessionResponse = yield* conn
-          .newSession({
+        // Spawn → initialize → newSession. Any failure or interruption
+        // (the turn stopped during setup) closes both scopes; closing
+        // `procScope` kills the process.
+        const setup = Effect.gen(function* () {
+          const handle = yield* ChildProcess.make(config.command, [...config.args], {
             cwd,
-            mcpServers: [],
-            _meta: { systemPrompt },
-          })
-          .pipe(Effect.tapError(() => cleanup))
+            stdin: "pipe",
+            stdout: "pipe",
+            stderr: "inherit",
+          }).pipe(
+            Scope.provide(procScope),
+            Effect.catchTag("PlatformError", (e) =>
+              Effect.fail(
+                new AcpError({
+                  message: `failed to spawn ACP agent: ${e.message}`,
+                }),
+              ),
+            ),
+          )
+
+          const conn = yield* makeAcpConnection({
+            stdin: handle.stdin,
+            stdout: handle.stdout,
+          }).pipe(Effect.provideService(Scope.Scope, scope))
+
+          yield* conn
+            .initialize({
+              protocolVersion: 1,
+              clientCapabilities: {
+                fs: { readTextFile: false, writeTextFile: false },
+                terminal: false,
+              },
+              clientInfo: { name: "gent", version: "0.0.0" },
+            })
+            .pipe(setupDeadline(config, "initialize"))
+
+          // Create session with cwd and system prompt via ACP's `_meta` channel.
+          // The wire format is open per agent — the claude-agent-acp reference
+          // impl recognises `_meta.systemPrompt` (string = replace, `{append}`
+          // = append). Agents that don't recognise it ignore the field.
+          const sessionResponse = yield* conn
+            .newSession({
+              cwd,
+              mcpServers: [],
+              _meta: { systemPrompt },
+            })
+            .pipe(setupDeadline(config, "session/new"))
+
+          const killProc = handle
+            .kill({
+              killSignal: "SIGTERM",
+              forceKillAfter: Duration.millis(ACP_KILL_GRACE_MS),
+            })
+            .pipe(Effect.ignore)
+          return { conn, sessionResponse, killProc }
+        }).pipe(
+          Effect.onError(() =>
+            Effect.gen(function* () {
+              yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
+              yield* Scope.close(procScope, Exit.void).pipe(Effect.ignore)
+            }),
+          ),
+        )
+        const { conn, sessionResponse, killProc } = yield* setup
 
         const entry: AcpProcess = {
           conn,

@@ -1,24 +1,34 @@
 import {
   type Cause,
   Effect,
+  Exit,
   Fiber,
+  FileSystem,
   Layer,
   Option,
   Path,
   Predicate,
   Queue,
+  Ref,
   Schema,
   Sink,
   Stream,
 } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
-import { describe, expect, it, yieldFibers } from "effect-bun-test"
-import { collectTestContributions, BunGentPlatformLive } from "@gent/core/test-utils"
+import { describe, expect, it } from "effect-bun-test"
+import {
+  BunGentPlatformLive,
+  collectTestContributions,
+  makeTempDirectoryScoped,
+  waitFor,
+} from "@gent/core/test-utils"
+import { TestClock } from "effect/testing"
 import {
   ACP_PROTOCOL_AGENTS,
   AcpAgentsExtension,
   AcpClosedError,
   acpDisposerRelease,
+  createAcpSessionManager,
   type AcpSessionManager,
   composePromptWithTranscript,
   findLastUserMessage,
@@ -235,6 +245,98 @@ describe("acp agents extension", () => {
   )
 })
 
+// ── acp-agents/session-manager.test ─────────────────────────────────────────
+
+/**
+ * The session manager spawns a real subprocess. The fake agent is `sh`: it
+ * writes its pid and working directory into the test directory, then sleeps
+ * without ever answering `initialize`, like an agent that waits for a login.
+ */
+const silentAgent = (dir: string) => ({
+  command: "sh",
+  args: [
+    "-c",
+    `pwd -P > "${dir}/cwd"; echo $$ > "${dir}/pid.tmp"; mv "${dir}/pid.tmp" "${dir}/pid"; exec sleep 30`,
+  ],
+})
+
+const readAgentFile = (dir: string, name: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    return (yield* fs.readFileString(`${dir}/${name}`)).trim()
+  })
+
+const processAlive = (pid: number) =>
+  Effect.try(() => process.kill(pid, 0)).pipe(
+    Effect.as(true),
+    Effect.orElseSucceed(() => false),
+  )
+
+const sessionKey = { sessionId: "s1", branchId: "b1", driverId: "acp-test" }
+
+describe("acp session manager", () => {
+  it.scopedLive("kills the agent process when the turn stops during setup", () =>
+    Effect.gen(function* () {
+      const dir = yield* makeTempDirectoryScoped("gent-acp-setup-")
+      const manager = yield* createAcpSessionManager
+      const setup = yield* Effect.forkChild(
+        manager.getOrCreate(sessionKey, silentAgent(dir), dir, "system"),
+      )
+      const pid = Number(yield* waitFor(readAgentFile(dir, "pid"), (text) => text.length > 0))
+      expect(yield* processAlive(pid)).toBe(true)
+
+      yield* Fiber.interrupt(setup)
+      yield* waitFor(processAlive(pid), (alive) => !alive, 3_000, "agent process exit")
+    }).pipe(Effect.provide(fsLayer), Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive("fails setup when the agent never answers initialize", () =>
+    Effect.gen(function* () {
+      const dir = yield* makeTempDirectoryScoped("gent-acp-silent-")
+      const manager = yield* createAcpSessionManager
+      // Setup runs on a virtual clock; the process and this test's polling run on the real one.
+      const virtualClock = yield* Layer.build(TestClock.layer())
+      const settled = yield* Ref.make(Option.none<Exit.Exit<unknown, unknown>>())
+      yield* Effect.exit(manager.getOrCreate(sessionKey, silentAgent(dir), dir, "system")).pipe(
+        Effect.flatMap((exit) => Ref.set(settled, Option.some(exit))),
+        Effect.provideContext(virtualClock),
+        Effect.forkChild,
+      )
+      const pid = Number(yield* waitFor(readAgentFile(dir, "pid"), (text) => text.length > 0))
+      // The deadline starts only once `initialize` is sent, so advance past
+      // it on every poll until setup settles.
+      const result = yield* waitFor(
+        TestClock.adjust("61 seconds").pipe(
+          Effect.provideContext(virtualClock),
+          Effect.andThen(Ref.get(settled)),
+        ),
+        Option.isSome,
+        3_000,
+        "setup to settle",
+      )
+      expect(Option.isSome(result) && Exit.isFailure(result.value)).toBe(true)
+      if (Option.isSome(result) && Exit.isFailure(result.value)) {
+        expect(String(result.value.cause)).toContain("did not answer initialize")
+      }
+      yield* waitFor(processAlive(pid), (alive) => !alive, 3_000, "agent process exit")
+    }).pipe(Effect.provide(fsLayer), Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive("starts the agent in the turn's working directory", () =>
+    Effect.gen(function* () {
+      const dir = yield* makeTempDirectoryScoped("gent-acp-cwd-")
+      const manager = yield* createAcpSessionManager
+      const setup = yield* Effect.forkChild(
+        manager.getOrCreate(sessionKey, silentAgent(dir), dir, "system"),
+      )
+      yield* waitFor(readAgentFile(dir, "pid"), (text) => text.length > 0)
+      const fs = yield* FileSystem.FileSystem
+      expect(yield* readAgentFile(dir, "cwd")).toBe(yield* fs.realPath(dir))
+      yield* Fiber.interrupt(setup)
+    }).pipe(Effect.provide(fsLayer), Effect.timeout("5 seconds")),
+  )
+})
+
 // ── acp-agents/protocol.test ────────────────────────────────────────────────
 
 /**
@@ -386,13 +488,8 @@ describe("acp protocol transport", () => {
       const peer = yield* makeFakeAcpPeer
       const conn = yield* makeAcpConnection(peer.proc)
 
-      const collector = yield* Effect.forkChild(
-        conn.updates.pipe(Stream.take(2), Stream.runCollect),
-      )
-      // `updates` is a PubSub subscription that only exists once the
-      // forked stream runs. Hand the fiber its turn before publishing,
-      // rather than sleeping past the race.
-      yield* yieldFibers
+      const updates = yield* conn.subscribeUpdates
+      const collector = yield* Effect.forkChild(updates.pipe(Stream.take(2), Stream.runCollect))
       yield* peer.notify("s1", {
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: "a" },
@@ -404,6 +501,30 @@ describe("acp protocol transport", () => {
 
       const collected = yield* Fiber.join(collector)
       expect(collected).toHaveLength(2)
+      expect(collected[0]!.sessionId).toBe("s1")
+    }).pipe(Effect.timeout("5 seconds")),
+  )
+
+  it.scopedLive("keeps an update the agent sends before the consumer reads", () =>
+    Effect.gen(function* () {
+      const peer = yield* makeFakeAcpPeer
+      const conn = yield* makeAcpConnection(peer.proc)
+
+      // The turn subscribes, then sends the prompt. The agent answers with
+      // an update before anything reads the stream.
+      const updates = yield* conn.subscribeUpdates
+      const promptFiber = yield* Effect.forkChild(conn.prompt({ sessionId: "s1", prompt: [] }))
+      const promptReq = yield* peer.waitForRequest("session/prompt")
+      yield* peer.notify("s1", {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "early" },
+      })
+      yield* peer.reply(promptReq.id, { stopReason: "end_turn" })
+      // The reader handles lines in order: the prompt reply lands after the update.
+      yield* Fiber.join(promptFiber)
+
+      const collected = yield* updates.pipe(Stream.take(1), Stream.runCollect)
+      expect(collected).toHaveLength(1)
       expect(collected[0]!.sessionId).toBe("s1")
     }).pipe(Effect.timeout("5 seconds")),
   )
@@ -437,8 +558,8 @@ describe("acp protocol transport", () => {
       // A consumer parked on `updates` must be released too — a live
       // PubSub would hold the executor's part stream open after the
       // driver went away.
-      const collector = yield* Effect.forkChild(conn.updates.pipe(Stream.runCollect))
-      yield* yieldFibers
+      const updates = yield* conn.subscribeUpdates
+      const collector = yield* Effect.forkChild(updates.pipe(Stream.runCollect))
       const promptFiber = yield* Effect.forkChild(conn.prompt({ sessionId: "s", prompt: [] }))
       yield* peer.waitForRequest("session/prompt")
 
