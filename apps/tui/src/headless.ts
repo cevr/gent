@@ -25,7 +25,7 @@ import {
   type ToolInput,
 } from "./utils.js"
 import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
-import { isErrorNotice, randomId } from "./utils"
+import { randomId } from "./utils"
 
 // ── headless tool renderers ─────────────────────────────────────────────────
 
@@ -370,7 +370,7 @@ export const runHeadless = (
                 // An error does not end the turn; its `TurnCompleted` or the
                 // send does. A notice (a compaction fallback) does not fail it.
                 errors.push(oneLine(event.error))
-                if (!isErrorNotice(event)) failed = true
+                if (event.notice !== true) failed = true
                 break
               case "TurnCompleted":
                 yield* turnCompleted(event)
