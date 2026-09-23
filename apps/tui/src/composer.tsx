@@ -1,4 +1,4 @@
-import { runProcess } from "@gent/core/extensions/api"
+import { type ProcessError, runProcess } from "@gent/core/extensions/api"
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { homedir } from "os"
@@ -145,17 +145,20 @@ const saveFullOutput = (
     ),
   )
 
+/**
+ * A spawn that fails (the session's directory is gone, bash is missing) is a
+ * typed failure: the submit restores the command and says why.
+ */
 const runCommand = (
   command: string,
   cwd: string,
 ): Effect.Effect<
   { stdout: string; stderr: string },
-  never,
+  ProcessError,
   ChildProcessSpawner.ChildProcessSpawner
 > =>
   runProcess("bash", ["-c", command], { cwd, stdout: "pipe", stderr: "pipe" }).pipe(
     Effect.map((r) => ({ stdout: r.stdout, stderr: r.stderr })),
-    Effect.orDie,
   )
 
 // ── composer frame ──────────────────────────────────────────────────────────
@@ -770,17 +773,10 @@ function useComposerController(): ComposerController {
             sc.onSubmit(userMessage, "queue", target)
           }),
         ),
-        // eslint-disable-next-line effect/noUnknownParameters -- shell failures cross the process boundary.
-        Effect.catchEager((error: unknown) =>
+        Effect.catchEager((error) =>
           Effect.sync(() => {
-            const decoded = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }))(
-              error,
-            )
-            const message = Option.match(decoded, {
-              onNone: () => String(error),
-              onSome: (value) => value.message,
-            })
-            client.setError(message)
+            if (error._tag === "ProcessError") client.setError(`Shell: ${error.message}`)
+            else client.setError(formatError(error))
             if (!stillIn(target)) return
             if (Option.isSome(inputRef) && inputRef.value.plainText.length === 0) {
               sc.onComposerInteraction(ComposerInteractionEvent.cases.EnterShell.make({}))

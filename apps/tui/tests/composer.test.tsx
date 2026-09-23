@@ -797,6 +797,55 @@ describe("Composer submit", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  // A resumed session can be rooted in a directory that is gone. The spawn
+  // fails, and the reader gets the command back with the reason.
+  submitTest("!cmd in a session whose directory is gone restores the draft and shows why", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const launchDir = yield* fs.makeTempDirectoryScoped()
+      const submitted: Array<string> = []
+      let client = Option.none<ClientContextValue>()
+      const CaptureClient = () => {
+        client = Option.some(useClient())
+        return <box />
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <TestComposer onSubmit={(content) => submitted.push(content)}>
+              <CaptureClient />
+            </TestComposer>
+          ),
+          {
+            cwd: launchDir,
+            initialSession: {
+              sessionId: SessionId.make("session-gone"),
+              branchId: BranchId.make("branch-gone"),
+              name: "Gone",
+              modelId: Option.getOrUndefined(Option.none()),
+              reasoningLevel: Option.getOrUndefined(Option.none()),
+              cwd: "/nonexistent/gent-probe-x",
+            },
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* Effect.promise(() => setup.mockInput.typeText("echo hi"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        () =>
+          Option.exists(client, (c) =>
+            Option.exists(Option.fromNullishOr(c.error()), (m) => m.startsWith("Shell:")),
+          ),
+        "error shown",
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("echo hi"), "draft restored")
+      expect(submitted).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   submitTest("a second Enter while !cmd runs neither runs it again nor sends twice", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

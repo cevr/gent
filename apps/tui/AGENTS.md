@@ -161,6 +161,7 @@ Special prefixes at input start trigger different modes:
 - Type `!` at cursor position 0 → enters shell mode (prompt: `$`)
 - Submit executes command, output shown in chat
 - ESC or backspace at empty input exits shell mode
+- Runs in the session's cwd; a spawn failure (the cwd is gone) restores the command and shows the error
 - Large output (>2000 lines or 50KB) truncated, full saved to `~/tool-output/`
 
 ### File References
