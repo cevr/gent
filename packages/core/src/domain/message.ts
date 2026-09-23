@@ -897,13 +897,14 @@ export const QueuedTurnItem = Schema.Struct({
    * denied. Both were measured, not assumed.
    */
   interactive: Schema.optional(Schema.Boolean),
-  /** The admitter asked for a turn even when the branch has no prior history. */
-  wake: Schema.optional(Schema.Boolean),
   /**
-   * The message id is a durable source key (`followUpMessageIdForSource`).
-   * Follow-ups no longer merge, so no reader needs it; stored rows carry it.
+   * The admitter asked for a turn even when the branch has no prior history.
+   *
+   * A row written before this field set shrank may still carry `keyed`. The
+   * struct ignores keys it does not declare, so such a row decodes and the
+   * next write drops the key.
    */
-  keyed: Schema.optional(Schema.Boolean),
+  wake: Schema.optional(Schema.Boolean),
 })
 export type QueuedTurnItem = typeof QueuedTurnItem.Type
 

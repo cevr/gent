@@ -1016,7 +1016,8 @@ describe("persisted loop queue format", () => {
       // `false` is the only value this field is read for; a dropped key would
       // hand a child the interactive tools it was denied.
       expect(loaded.followUp[0]?.interactive).toBe(false)
-      expect(loaded.followUp[0]?.keyed).toBe(true)
+      // A retired key (`keyed`) on an old row is ignored, not rejected.
+      expect(Object.keys(loaded.followUp[0] ?? {})).not.toContain("keyed")
       expect(String(loaded.inFlight?.message.id)).toBe("in-flight-1")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )

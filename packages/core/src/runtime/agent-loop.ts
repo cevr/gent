@@ -1937,8 +1937,6 @@ const buildAgentLoopActorHandlers = (config: {
       readonly runSpec?: RunSpec
       readonly interactive?: boolean
       readonly wake?: boolean
-      /** The message already carries a source-keyed id; see `QueuedTurnItem.keyed`. */
-      readonly keyed?: boolean
     }
 
     const buildFollowUpItem = Effect.fn("AgentLoopActor.buildFollowUpItem")(function* (
@@ -1972,7 +1970,6 @@ const buildAgentLoopActorHandlers = (config: {
         runSpec: input.runSpec,
         interactive: input.interactive,
         wake: input.wake,
-        keyed: Predicate.isNotUndefined(input.sourceId) || input.keyed === true,
       }
       return item
     })
@@ -2311,7 +2308,6 @@ const buildAgentLoopActorHandlers = (config: {
             yield* enqueueMessage(handle, {
               message: operation.message,
               wake: operation.wake,
-              keyed: true,
             })
           }).pipe(provideActorWorkspace),
       ),
