@@ -158,6 +158,46 @@ describe("sessionQuery", () => {
       dispose()
     }),
   )
+
+  // A switch that lands while a read runs queues one more read instead of
+  // reading. The follow effect must keep its dependency on the session
+  // through that, or it never fires again.
+  it.scopedLive("a follow query keeps following after a switch lands during a read", () =>
+    Effect.gen(function* () {
+      const { active, setActive, dispose } = createRoot((disposeRoot) => {
+        const [current, setCurrent] = createSignal("a")
+        return { active: current, setActive: setCurrent, dispose: disposeRoot }
+      })
+      const reads: Array<string> = []
+      const releaseA = yield* Deferred.make<void>()
+      const query = yield* provideClientServices(
+        sessionQuery({
+          initial: "none",
+          follow: true,
+          fetch: (session) => {
+            const id = String(session.sessionId)
+            reads.push(id)
+            if (id === "a") return Deferred.await(releaseA).pipe(Effect.as(id))
+            return Effect.succeed(id)
+          },
+        }),
+        {
+          currentSession: () =>
+            Option.some({ sessionId: SessionId.make(active()), branchId: BranchId.make("b") }),
+        },
+      )
+      yield* waitUntil(() => reads.length === 1, "a's read started")
+      setActive("b")
+      yield* Deferred.done(releaseA, Exit.void)
+      yield* waitUntil(() => query.value() === "b", "b read")
+      setActive("c")
+      yield* waitUntil(() => query.value() === "c", "c read").pipe(
+        Effect.onError(() => Effect.sync(dispose)),
+      )
+      expect(reads).toEqual(["a", "b", "c"])
+      dispose()
+    }),
+  )
 })
 
 // ── client runtime ──────────────────────────────────────────────────────────

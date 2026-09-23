@@ -24,7 +24,7 @@ import {
 } from "@gent/core/protocol"
 import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import { omitUndefined, type CapabilityRef, type DriverRef } from "@gent/core/extensions/api"
-import { createEffect, createRoot, createSignal } from "solid-js"
+import { createEffect, createRoot, createSignal, on } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
 import type { JSX } from "@opentui/solid"
@@ -621,11 +621,16 @@ export const sessionQuery = <A>(opts: {
 
       // `currentSession` is the client's identity accessor, so this fires only
       // when the session or the branch moves, never for a rename or a model change.
+      // The dependency is explicit: a switch that lands during a read queues a
+      // read without reading the session, and an effect that tracked only what
+      // `refresh` read would lose it there and never fire again.
       if (opts.follow) {
-        createEffect(() => {
-          setError(Option.none())
-          refresh()
-        })
+        createEffect(
+          on(transport.currentSession, () => {
+            setError(Option.none())
+            refresh()
+          }),
+        )
       }
 
       const value = (): A =>
