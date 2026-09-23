@@ -2015,8 +2015,11 @@ export class SessionProfileCache extends Context.Service<
                 continue
               }
               yield* Scope.close(extensionScope, built)
-              // An interrupt stops the whole build; it is not a failed extension.
-              if (Cause.hasInterruptsOnly(built.cause)) return yield* Effect.failCause(built.cause)
+              // An interrupt of this resolve stops the whole build; it is not a
+              // failed extension. An extension that interrupts itself is. The
+              // cause cannot tell them apart, the fiber can: an interruptible
+              // no-op fails at once only when this fiber was interrupted.
+              if (Cause.hasInterruptsOnly(built.cause)) yield* restore(Effect.void)
               const error = Cause.pretty(built.cause)
               yield* Effect.logError("session-profile.resource.failed").pipe(
                 Effect.annotateLogs({ extensionId: extension.manifest.id, error }),

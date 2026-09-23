@@ -2016,6 +2016,43 @@ describe("extension activation isolation", () => {
       expect(released).toBe(0)
     }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
   )
+
+  // Only an interrupt of the resolve stops the build. An extension whose
+  // resource interrupts itself is a failed extension, like any other failure.
+  it.scopedLive("a resource layer that interrupts itself fails only its extension", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const selfInterrupting = defineExtension({
+        id: "self-interrupting",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            // oxlint-disable-next-line effect/noAs -- The fixture erases a resource with no service output at the contribution boundary.
+            defineResource({
+              id: "test/self-interrupting",
+              scope: "process",
+              layer: Layer.effectDiscard(Effect.interrupt),
+            }) as never,
+          )
+        }),
+      })
+      const context = yield* Layer.build(
+        SessionProfileCache.Live({
+          failOnExtensionFailure: false,
+          home,
+          platform: "test",
+          extensions: [selfInterrupting],
+        }),
+      )
+      const cache = Context.get(context, SessionProfileCache)
+      const profile = yield* cache.resolve(home).pipe(Effect.timeout("5 seconds"))
+      expect(profile.resolved.failedExtensions).toMatchObject([
+        { manifest: { id: ExtensionId.make("self-interrupting") }, phase: "startup" },
+      ])
+    }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
+  )
 })
 
 // ── capability registries ────────────────────────────────────────────────────
