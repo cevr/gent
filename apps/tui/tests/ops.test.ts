@@ -28,6 +28,7 @@ import {
   inspectServer,
   inspectStorage,
   makeDoctorReport,
+  readDoctorExtensionHealth,
   resetStorage,
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
@@ -253,6 +254,16 @@ describe("local health", () => {
     expect(server.status).toBe("dead")
     expect(server.summary).toBe("Shared server lock is stale: pid 4242, server-1")
   })
+
+  it.live("the doctor reports a lock holder that does not answer instead of waiting for it", () =>
+    Effect.gen(function* () {
+      const health = yield* readDoctorExtensionHealth(
+        ServerLockStatus.cases.Alive.make({ entry: lockEntry }),
+      ).pipe(Effect.timeout("4 seconds"))
+      expect(health.status).toBe("unavailable")
+      expect(health.summary).toContain("4242")
+    }),
+  )
 
   test("no lock reports no shared server", () => {
     expect(inspectServer(absentServer)).toEqual({ status: "none", summary: "No shared server." })

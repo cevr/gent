@@ -522,7 +522,15 @@ export const server = Command.make("server", {}, () =>
   Console.log("Usage: gent server <status|stop>"),
 ).pipe(Command.withSubcommands([serverStatus, serverStop]))
 
-const readDoctorExtensionHealth = (
+/** How long the doctor waits for a confirmed server to report extension health. */
+const DOCTOR_QUERY_TIMEOUT = "5 seconds"
+
+/**
+ * Ask the shared server for extension health. The doctor runs when something
+ * is wrong, so it confirms the server's identity first and bounds the query:
+ * a holder that does not answer is reported, not waited on.
+ */
+export const readDoctorExtensionHealth = (
   status: ServerLockStatus,
 ): Effect.Effect<ExtensionDoctorHealth> => {
   if (status._tag === "None") return Effect.succeed(extensionHealthUnavailable("No shared server."))
@@ -532,14 +540,31 @@ const readDoctorExtensionHealth = (
   if (status._tag === "Stale") {
     return Effect.succeed(extensionHealthUnavailable("Shared server lock is stale."))
   }
-  return Effect.scoped(
-    Effect.gen(function* () {
-      const bundle = yield* Gent.client(status.entry.rpcUrl, { cwd: process.cwd() })
-      yield* bundle.runtime.lifecycle.waitForReady
-      const snapshot = yield* bundle.client.extension.listStatus({})
-      return extensionHealthFromSnapshot(snapshot)
-    }),
-  ).pipe(Effect.catch((error) => Effect.succeed(extensionHealthError(String(error)))))
+  const { entry } = status
+  return Effect.gen(function* () {
+    if (!(yield* serverLock.probe(entry))) {
+      return extensionHealthUnavailable(
+        `PID ${entry.pid} holds the server lock but does not answer as a gent server at ${entry.rpcUrl}.`,
+      )
+    }
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const bundle = yield* Gent.client(entry.rpcUrl, { cwd: process.cwd() })
+        yield* bundle.runtime.lifecycle.waitForReady
+        const snapshot = yield* bundle.client.extension.listStatus({})
+        return extensionHealthFromSnapshot(snapshot)
+      }),
+    ).pipe(
+      Effect.timeoutOrElse({
+        duration: DOCTOR_QUERY_TIMEOUT,
+        orElse: () =>
+          Effect.succeed(
+            extensionHealthError(`no answer within ${DOCTOR_QUERY_TIMEOUT} from ${entry.rpcUrl}`),
+          ),
+      }),
+      Effect.catch((error) => Effect.succeed(extensionHealthError(String(error)))),
+    )
+  })
 }
 
 export const doctor = Command.make("doctor", {}, () =>
