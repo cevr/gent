@@ -816,6 +816,24 @@ describe("GrepTool", () => {
     }).pipe(Effect.provide(IndexLayer)),
   )
 
+  it.scopedLive("a cut never splits a surrogate pair", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      // The match sits past the cut, and an emoji straddles each cut end.
+      const long = `${"a".repeat(499)}😀${"b".repeat(99)}needle${"c".repeat(393)}😀${"d".repeat(900)}`
+      yield* fs.writeFileString(`${tmpDir}/emoji.txt`, long)
+
+      const result = yield* runToolWithCtx(GrepTool, { pattern: "needle", path: tmpDir }, ctxGrep)
+      const content = result.matches[0]?.content ?? ""
+      expect(content).toContain("needle")
+      expect(content.isWellFormed()).toBe(true)
+      expect(
+        content.replace(/^\[\d+ chars cut\] | \[\d+ chars cut\]$/g, "").length,
+      ).toBeLessThanOrEqual(500)
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
   for (const { name, params } of [
     { name: "limit 0", params: { limit: 0 } },
     { name: "limit -2", params: { limit: -2 } },

@@ -1171,6 +1171,13 @@ const BINARY_PROBE_BYTES = 8192
 /** A match or context line longer than this is cut to this many characters. */
 const MAX_LINE_LENGTH = 500
 
+/** True when a cut at `index` falls between the two halves of a surrogate pair. */
+const splitsSurrogatePair = (text: string, index: number): boolean => {
+  const before = text.charCodeAt(index - 1)
+  const after = text.charCodeAt(index)
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff
+}
+
 /**
  * Cut a long line to `MAX_LINE_LENGTH` characters from shortly before `at`,
  * with a marker that counts what each side lost. One minified line would
@@ -1178,8 +1185,11 @@ const MAX_LINE_LENGTH = 500
  */
 const clipLine = (line: string, at: number): string => {
   if (line.length <= MAX_LINE_LENGTH) return line
-  const start = Math.max(0, Math.min(at - MAX_LINE_LENGTH / 5, line.length - MAX_LINE_LENGTH))
-  const end = start + MAX_LINE_LENGTH
+  const from = Math.max(0, Math.min(at - MAX_LINE_LENGTH / 5, line.length - MAX_LINE_LENGTH))
+  // Both ends move inward off a surrogate pair: a lone half is not valid text,
+  // and the API refuses a request that holds one.
+  const start = from + Number(splitsSurrogatePair(line, from))
+  const end = from + MAX_LINE_LENGTH - Number(splitsSurrogatePair(line, from + MAX_LINE_LENGTH))
   let clipped = line.slice(start, end)
   if (start > 0) clipped = `[${start} chars cut] ${clipped}`
   if (end < line.length) clipped = `${clipped} [${line.length - end} chars cut]`
