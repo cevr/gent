@@ -2117,10 +2117,14 @@ describe("OpenAI reasoning hints", () => {
         ["gpt-5.1", "xhigh", "high"],
         ["gpt-5.1-codex", "max", "high"],
         ["gpt-5.2-pro", "max", "xhigh"],
+        // o-series pro models take the o-series levels, not the GPT-5 Pro ones.
+        ["o3-pro", "max", "high"],
+        ["o1-pro", "max", "high"],
         // A level the model skips: the next one up.
         ["gpt-5-pro", "low", "high"],
         ["gpt-5.4", "minimal", "low"],
         ["gpt-5.4-pro", "low", "medium"],
+        ["o3-pro", "low", "low"],
         // Accepted as sent.
         ["gpt-5.6-sol", "max", "max"],
         ["gpt-6-astra", "max", "max"],
