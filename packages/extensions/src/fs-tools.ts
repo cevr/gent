@@ -9,11 +9,9 @@ import {
   Path,
   Result,
   Schema,
-  type Scope,
   Stream,
 } from "effect"
 import picomatch from "picomatch"
-import { FileFinder as NativeFileFinder } from "@ff-labs/fff-bun"
 import {
   defineExtension,
   defineResource,
@@ -31,16 +29,19 @@ import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
  * Indexed file discovery for the grep tool.
  *
  * Git decides which files are listed inside a work tree, and a
- * `.gitignore`-aware FileSystem walk decides outside one. The native index
- * (`@ff-labs/fff-bun`, one cached finder per search root) only orders them.
- * The layer always succeeds: a missing native module or a failed native
- * listing leaves the files unordered.
+ * `.gitignore`-aware FileSystem walk decides outside one.
  */
 
 interface IndexedFile {
   readonly path: string
   /** Path relative to the listed `cwd`. */
   readonly relativePath: string
+}
+
+interface Listing {
+  readonly files: ReadonlyArray<IndexedFile>
+  /** Names grep cannot open: git listed them, but they are not valid UTF-8. */
+  readonly unreadable: number
 }
 
 class FileIndexError extends Schema.TaggedError<FileIndexError>()("FileIndexError", {
@@ -51,14 +52,13 @@ class FileIndexError extends Schema.TaggedError<FileIndexError>()("FileIndexErro
 
 interface FileIndexService {
   /**
-   * List the files under `cwd`. `root` is the search root that owns the
-   * cached index (the session cwd, or `cwd` itself); it is `cwd` or an
-   * ancestor of it, so every listing under one root shares one index.
+   * List the files under `cwd`. `root` is the session cwd or `cwd` itself;
+   * outside a work tree the walk reads the `.gitignore` files from `root` down.
    */
   readonly listFiles: (params: {
     readonly root: string
     readonly cwd: string
-  }) => Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError>
+  }) => Effect.Effect<Listing, FileIndexError>
 }
 
 class FileIndex extends Context.Service<FileIndex, FileIndexService>()(
@@ -276,7 +276,7 @@ const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSys
     const scanAllFiles = (params: {
       readonly root: string
       readonly cwd: string
-    }): Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError> =>
+    }): Effect.Effect<Listing, FileIndexError> =>
       Effect.gen(function* () {
         const { cwd } = params
         let root = params.root
@@ -348,7 +348,8 @@ const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSys
 
         yield* scanDir(cwd, "", rules)
 
-        return files
+        // A directory entry is a decoded string: the walk never holds an unreadable name.
+        return { files, unreadable: 0 }
       })
 
     return {
@@ -365,163 +366,6 @@ const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSys
           ),
         ),
     }
-  })
-
-// ── Native: fff-bun finders, one per search root ──
-
-interface FinderEntry {
-  finder: NativeFileFinder
-  scanned: boolean
-  /** Listings that hold the finder; an evicted finder is destroyed at zero. */
-  users: number
-  evicted: boolean
-}
-
-const SCAN_TIMEOUT_MS = 5000
-
-/**
- * Each finder holds a watcher; past this many roots the least recently used
- * finder is destroyed.
- */
-const MAX_FINDERS = 4
-
-// fff-bun's `waitForScan(timeoutMs)` resolves once the indexer signals
-// completion, or with false when the timeout elapses.
-const waitForScan = (finder: NativeFileFinder): Effect.Effect<boolean> =>
-  Effect.promise(() => finder.waitForScan(SCAN_TIMEOUT_MS)).pipe(
-    Effect.map((result) => result.ok && result.value),
-  )
-
-const makeNativeService = (
-  dbDir: string,
-): Effect.Effect<FileIndexService, never, Path.Path | Scope.Scope> =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path
-    // Insertion order is recency order: a hit is re-inserted at the end.
-    const finders = new Map<string, FinderEntry>()
-    const frecencyDbPath = path.join(dbDir, "frecency.mdb")
-    const historyDbPath = path.join(dbDir, "history.mdb")
-
-    // Cleanup is best effort. The native module can throw during teardown.
-    const destroy = (entry: FinderEntry) => Result.try(() => entry.finder.destroy())
-
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        for (const [, entry] of finders) evict(entry)
-        finders.clear()
-      }),
-    )
-
-    const evict = (entry: FinderEntry) => {
-      entry.evicted = true
-      if (entry.users === 0) destroy(entry)
-    }
-
-    const getOrCreate = (root: string): Option.Option<FinderEntry> => {
-      const existing = Option.fromUndefinedOr(finders.get(root))
-      if (Option.isSome(existing)) {
-        finders.delete(root)
-        finders.set(root, existing.value)
-        return existing
-      }
-
-      const result = NativeFileFinder.create({
-        basePath: root,
-        frecencyDbPath,
-        historyDbPath,
-        aiMode: true,
-        // The index only lists paths; grep reads the contents itself.
-        disableContentIndexing: true,
-        disableMmapCache: true,
-      })
-
-      if (!result.ok) return Option.none()
-
-      const entry: FinderEntry = { finder: result.value, scanned: false, users: 0, evicted: false }
-      finders.set(root, entry)
-      for (const [key, oldest] of finders) {
-        if (finders.size <= MAX_FINDERS) break
-        finders.delete(key)
-        evict(oldest)
-      }
-      return Option.some(entry)
-    }
-
-    /** Hold a root's finder for one listing; eviction waits for the release. */
-    const acquireFinder = (params: { readonly root: string; readonly cwd: string }) =>
-      Effect.acquireRelease(
-        Effect.suspend(() =>
-          Option.match(getOrCreate(params.root), {
-            onNone: () =>
-              Effect.fail(
-                new FileIndexError({ message: "failed to create finder", cwd: params.cwd }),
-              ),
-            onSome: (entry) =>
-              Effect.sync(() => {
-                entry.users++
-                return entry
-              }),
-          }),
-        ),
-        (entry) =>
-          Effect.sync(() => {
-            entry.users--
-            if (entry.evicted && entry.users === 0) destroy(entry)
-          }),
-      )
-
-    const listUnder = (params: {
-      readonly root: string
-      readonly cwd: string
-    }): Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError> =>
-      Effect.gen(function* () {
-        const finderEntry = yield* acquireFinder(params)
-
-        if (!finderEntry.scanned) {
-          const completed = yield* waitForScan(finderEntry.finder)
-          if (!completed) {
-            return yield* new FileIndexError({
-              message: "scan timed out",
-              cwd: params.cwd,
-            })
-          }
-          finderEntry.scanned = true
-        }
-
-        // Items are relative to the root; keep those under `cwd` and
-        // rebase them onto it.
-        const subtree = path.relative(params.root, params.cwd)
-        let prefix = ""
-        if (subtree.length > 0) prefix = `${subtree}/`
-        const pageSize = 200
-        const allFiles: IndexedFile[] = []
-        let pageIndex = 0
-        let seen = 0
-
-        while (true) {
-          const result = finderEntry.finder.fileSearch("", { pageSize, pageIndex })
-          if (!result.ok) {
-            return yield* new FileIndexError({
-              message: `fileSearch failed: ${result.error}`,
-              cwd: params.cwd,
-            })
-          }
-
-          for (const item of result.value.items) {
-            if (!item.relativePath.startsWith(prefix)) continue
-            const relativePath = item.relativePath.slice(prefix.length)
-            allFiles.push({ path: path.join(params.cwd, relativePath), relativePath })
-          }
-          seen += result.value.items.length
-
-          if (seen >= result.value.totalFiles || result.value.items.length < pageSize) break
-          pageIndex++
-        }
-
-        return allFiles
-      }).pipe(Effect.scoped)
-
-    return { listFiles: listUnder }
   })
 
 // ── Inside a git work tree: git decides the listing ──
@@ -549,44 +393,73 @@ const GIT_ENV = {
 /** A git that does not answer within this long is treated as absent: the walk lists. */
 const GIT_TIMEOUT = Duration.seconds(10)
 
+interface GitNames {
+  readonly names: ReadonlyArray<string>
+  readonly unreadable: number
+}
+
+/** The tag `ls-files -t` gives a sparse checkout's skip-worktree entry: in the index, not on disk. */
+const SKIP_WORKTREE_TAG = "S".charCodeAt(0)
+
 /**
- * `git ls-files -z` under `cwd`, read until `FALLBACK_MAX_FILES` entries at
- * most: past the bound the process is stopped and the listing fails, so a
- * huge tree never lands in memory whole. `None` when git fails or times out.
+ * `git ls-files -z -t` under `cwd`, the names git lists below it. A
+ * skip-worktree entry of a sparse checkout is not on disk and is dropped
+ * before the bound: the output is read as a stream, and past
+ * `FALLBACK_MAX_FILES` names on disk the process is stopped and the listing
+ * fails, so a huge tree never lands in memory whole. A name that is not
+ * valid UTF-8 cannot be opened through a string path; it is counted. `None`
+ * when git fails or times out.
  */
 const gitLsFiles = (
   cwd: string,
 ): Effect.Effect<
-  Option.Option<ReadonlyArray<string>>,
+  Option.Option<GitNames>,
   FileIndexError,
   ChildProcessSpawner.ChildProcessSpawner
 > =>
   Effect.gen(function* () {
     const handle = yield* ChildProcess.make(
       "git",
-      ["-C", cwd, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      ["-C", cwd, "ls-files", "-z", "-t", "--cached", "--others", "--exclude-standard"],
       { env: GIT_ENV, extendEnv: true, stdin: "ignore", stdout: "pipe", stderr: "ignore" },
     )
     const chunks: Array<Uint8Array> = []
-    let entries = 0
+    let onDisk = 0
+    let entryStart = true
+    let skipWorktree = false
     yield* Stream.runForEachWhile(handle.stdout, (chunk) =>
       Effect.sync(() => {
         chunks.push(chunk)
-        for (const byte of chunk) if (byte === 0) entries++
-        return entries <= FALLBACK_MAX_FILES
+        for (const byte of chunk) {
+          if (entryStart) skipWorktree = byte === SKIP_WORKTREE_TAG
+          entryStart = byte === 0
+          if (entryStart && !skipWorktree) onDisk++
+        }
+        return onDisk <= FALLBACK_MAX_FILES
       }),
     )
-    if (entries > FALLBACK_MAX_FILES) {
+    if (onDisk > FALLBACK_MAX_FILES) {
       return yield* new FileIndexError({
         message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
         cwd,
       })
     }
-    if ((yield* handle.exitCode) !== 0) return Option.none<ReadonlyArray<string>>()
-    const decoder = new TextDecoder()
-    const stdout = chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("")
-    const names = [...new Set(stdout.split("\0"))].filter((entry) => entry.length > 0)
-    return Option.some<ReadonlyArray<string>>(names)
+    if ((yield* handle.exitCode) !== 0) return Option.none<GitNames>()
+    const decoder = new TextDecoder("utf-8", { fatal: true })
+    const names = new Set<string>()
+    let unreadable = 0
+    const output = Buffer.concat(chunks)
+    let start = 0
+    for (let end = output.indexOf(0); end !== -1; end = output.indexOf(0, start)) {
+      const entry = output.subarray(start, end)
+      start = end + 1
+      // `-t` prefixes each name with its tag and a space.
+      if (entry.length < 3 || entry[0] === SKIP_WORKTREE_TAG) continue
+      const name = Result.try(() => decoder.decode(entry.subarray(2)))
+      if (Result.isSuccess(name)) names.add(name.success)
+      else unreadable++
+    }
+    return Option.some<GitNames>({ names: [...names], unreadable })
   }).pipe(
     Effect.scoped,
     Effect.catchTag("PlatformError", () => Effect.succeedNone),
@@ -597,7 +470,7 @@ const gitLsFiles = (
 const listGitFiles: (
   cwd: string,
 ) => Effect.Effect<
-  Option.Option<ReadonlyArray<IndexedFile>>,
+  Option.Option<Listing>,
   FileIndexError,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > = Effect.fn("FileIndex.listGitFiles")(function* (cwd: string) {
@@ -605,11 +478,11 @@ const listGitFiles: (
   const path = yield* Path.Path
   const listed = yield* gitLsFiles(cwd)
   if (Option.isNone(listed)) return Option.none()
-  const relativePaths = listed.value
+  let unreadable = listed.value.unreadable
   // A deleted tracked file and a symbolic link are listed too; a directory
   // is a nested repository (`vendor/lib/`) or a submodule's gitlink.
   const nested = yield* Effect.forEach(
-    relativePaths,
+    listed.value.names,
     Effect.fnUntraced(function* (entry) {
       const relativePath = entry.replace(/\/$/, "")
       const absolutePath = path.join(cwd, relativePath)
@@ -622,7 +495,9 @@ const listGitFiles: (
         .pipe(Effect.orElseSucceed(() => false))
       if (!isRepository) return []
       const inner = yield* listGitFiles(absolutePath)
-      return Option.getOrElse(inner, (): ReadonlyArray<IndexedFile> => []).map((file) => ({
+      if (Option.isNone(inner)) return []
+      unreadable += inner.value.unreadable
+      return inner.value.files.map((file) => ({
         path: file.path,
         relativePath: `${relativePath}/${file.relativePath}`,
       }))
@@ -636,7 +511,7 @@ const listGitFiles: (
       cwd,
     })
   }
-  return Option.some(files)
+  return Option.some({ files, unreadable })
 })
 
 /**
@@ -660,56 +535,24 @@ const gitIgnoresDirectory = (
     Effect.orElseSucceed(() => Option.none<boolean>()),
   )
 
-/** Git's files, in the native index's order; files the index has not seen yet go last. */
-const inIndexOrder = (
-  files: ReadonlyArray<IndexedFile>,
-  ordered: ReadonlyArray<IndexedFile>,
-): ReadonlyArray<IndexedFile> => {
-  const unordered = new Map(files.map((file) => [file.path, file]))
-  const result: Array<IndexedFile> = []
-  for (const file of ordered) {
-    const listed = Option.fromUndefinedOr(unordered.get(file.path))
-    if (Option.isNone(listed)) continue
-    result.push(listed.value)
-    unordered.delete(file.path)
-  }
-  return [...result, ...unordered.values()]
-}
-
 /**
- * One listing rule for both paths: an ignore authority decides which files
- * grep may read, and the native index, when present, only orders them, most
- * recently used first. Inside a git work tree the authority is git's own
- * listing; outside one it is the `.gitignore` matcher walk. An ignored `cwd`
- * (an explicit `dist/`, or a session started in one) is walked from its own
- * root, as ripgrep searches a named path: git would list none of its
- * untracked files. The walk has a bound and holds no watcher, so listing
- * ignored targets never evicts a finder.
+ * One listing rule: an ignore authority decides which files grep may read.
+ * Inside a git work tree the authority is git's own listing; outside one it
+ * is the `.gitignore` matcher walk. An ignored `cwd` (an explicit `dist/`, or
+ * a session started in one) is walked from its own root, as ripgrep searches
+ * a named path: git would list none of its untracked files.
  */
-const makeFileIndex = (
-  native: Option.Option<FileIndexService>,
-): Effect.Effect<
-  FileIndexService,
+export const FileIndexLive: Layer.Layer<
+  FileIndex,
   never,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> =>
+> = Layer.effect(
+  FileIndex,
   Effect.gen(function* () {
     const walk = yield* makeMatcherWalk
     const platform = yield* Effect.context<
       FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
     >()
-    const inNativeOrder = (
-      files: ReadonlyArray<IndexedFile>,
-      params: { readonly root: string; readonly cwd: string },
-    ) =>
-      Option.match(native, {
-        onNone: () => Effect.succeed(files),
-        onSome: (index) =>
-          index.listFiles(params).pipe(
-            Effect.map((ordered) => inIndexOrder(files, ordered)),
-            Effect.orElseSucceed(() => files),
-          ),
-      })
 
     const listFiles = Effect.fn("FileIndex.listFiles")(function* (params: {
       readonly root: string
@@ -720,34 +563,15 @@ const makeFileIndex = (
         return yield* walk.listFiles({ root: params.cwd, cwd: params.cwd })
       }
       const gitFiles = yield* listGitFiles(params.cwd)
-      if (Option.isSome(gitFiles)) return yield* inNativeOrder(gitFiles.value, params)
-      return yield* inNativeOrder(yield* walk.listFiles(params), params)
+      if (Option.isSome(gitFiles)) return gitFiles.value
+      return yield* walk.listFiles(params)
     })
 
-    return {
+    return FileIndex.of({
       listFiles: (params) => listFiles(params).pipe(Effect.provideContext(platform)),
-    }
-  })
-
-/** The file index, with the native index when the module loads. Finder databases live under `${home}/.gent/fff`. */
-export const FileIndexLive = (options: {
-  readonly home: string
-}): Layer.Layer<
-  FileIndex,
-  never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> =>
-  Layer.effect(
-    FileIndex,
-    Effect.gen(function* () {
-      if (!NativeFileFinder.isAvailable()) return yield* makeFileIndex(Option.none())
-      const path = yield* Path.Path
-      const fs = yield* FileSystem.FileSystem
-      const dbDir = path.join(options.home, ".gent", "fff")
-      yield* fs.makeDirectory(dbDir, { recursive: true }).pipe(Effect.ignore)
-      return yield* makeFileIndex(Option.some(yield* makeNativeService(dbDir)))
-    }),
-  )
+    })
+  }),
+)
 
 // ── read ────────────────────────────────────────────────────────────────────
 
@@ -1345,6 +1169,8 @@ const GrepMatch = Schema.Struct({
 const GrepResult = Schema.Struct({
   matches: Schema.Array(GrepMatch),
   truncated: Schema.Boolean,
+  /** Files grep could not open: git listed them, but their names are not valid UTF-8. */
+  unreadable: Schema.optional(Schema.Finite),
 })
 
 /** ripgrep's rule: a NUL byte in a file's first 8 KB marks it binary, and grep skips it. */
@@ -1409,6 +1235,7 @@ export const GrepTool = tool({
     })
 
     let truncated = false
+    let unreadable = 0
     const matches: Array<{
       file: string
       line: number
@@ -1467,7 +1294,7 @@ export const GrepTool = tool({
       const fromCwd = path.relative(ctx.cwd, basePath)
       let root = basePath
       if (!fromCwd.startsWith("..") && !path.isAbsolute(fromCwd)) root = ctx.cwd
-      const allFiles = yield* index.listFiles({ root, cwd: basePath }).pipe(
+      const listing = yield* index.listFiles({ root, cwd: basePath }).pipe(
         Effect.mapError(
           (cause) =>
             new GrepError({
@@ -1490,17 +1317,16 @@ export const GrepTool = tool({
           }),
       })
 
-      for (const file of allFiles) {
+      unreadable = listing.unreadable
+      for (const file of listing.files) {
         if (truncated) break
         if (!matchesGlob(file.relativePath)) continue
         yield* searchFile(file.path)
       }
     }
 
-    return {
-      matches,
-      truncated,
-    }
+    if (unreadable === 0) return { matches, truncated }
+    return { matches, truncated, unreadable }
   }),
 })
 
@@ -1516,7 +1342,7 @@ export const FsToolsExtension = defineExtension({
       defineResource({
         id: "@gent/fs-tools/file-index",
         scope: "process",
-        layer: FileIndexLive({ home: host.home }),
+        layer: FileIndexLive,
       }),
     )
   }),
