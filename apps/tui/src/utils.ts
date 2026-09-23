@@ -698,15 +698,19 @@ const lineCount = (text: string) => {
   return text.split("\n").length
 }
 
-/** Line counts for a row: cells show code in and display out, bash shows output only. The unit keeps them apart from token counts. */
+/** Line counts for a row: cells show code in and display out, bash shows output only; a zero count is left out. The unit keeps them apart from token counts. */
 export function formatRowCounts(
   toolName: string,
   counts: { readonly input: string; readonly output: string },
 ): string {
-  const out = lineCount(counts.output)
-  if (toolName === "cell") return `↑ ${lineCount(counts.input)} ↓ ${out} lines`
-  if (toolName === "bash") return `↓ ${out} lines`
-  return ""
+  const out = { arrow: "↓", count: lineCount(counts.output) }
+  let all: ReadonlyArray<{ readonly arrow: string; readonly count: number }> = []
+  if (toolName === "cell") all = [{ arrow: "↑", count: lineCount(counts.input) }, out]
+  if (toolName === "bash") all = [out]
+  // A zero count says nothing: a cell with no output shows only its code.
+  const shown = all.filter((entry) => entry.count > 0)
+  if (shown.length === 0) return ""
+  return `${shown.map((entry) => `${entry.arrow} ${entry.count}`).join(" ")} lines`
 }
 
 // ── Working icon ──

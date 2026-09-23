@@ -1466,6 +1466,46 @@ describe("compact file tool bodies", () => {
   )
 })
 
+describe("read_session row", () => {
+  it.live("draws the counts the result carries", () =>
+    Effect.gen(function* () {
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        sessionId: "session-read-1234",
+        content: "READ-SESSION-TREE",
+        messageCount: 4,
+        branchCount: 2,
+      })
+      const items: SessionItem[] = [
+        assistantToolMessage("assistant-read-session", {
+          id: "call-read-session",
+          toolName: "read_session",
+          status: "completed",
+          input: { sessionId: "session-read-1234" },
+          summary: absent,
+          output,
+        }),
+      ]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={items}
+              disclosure="full"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 100, height: 40 },
+        ),
+      )
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (text) => text.includes("4 messages"), "read_session row"),
+      )
+      expect(frame).toContain("✓ 4 messages, 2 branches")
+    }),
+  )
+})
+
 // ── native-transcript-markdown.test ─────────────────────────────────────────
 
 const assistant = (id: string, content: string): ListMessage => ({

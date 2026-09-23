@@ -1006,11 +1006,8 @@ function GrepToolRenderer(props: ToolRendererProps) {
 const ReadSessionOutputSchema = Schema.Struct({
   sessionId: Schema.optional(Schema.String),
   content: Schema.optional(Schema.String),
-  extracted: Schema.optional(Schema.Boolean),
-  goal: Schema.optional(Schema.String),
   messageCount: Schema.optional(Schema.Finite),
   branchCount: Schema.optional(Schema.Finite),
-  error: Schema.optional(Schema.String),
 })
 
 function getInputField(input: ToolInput, key: string): Option.Option<string> {
@@ -1027,30 +1024,22 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
   const subtitle = () => {
     const sid = getInputField(props.toolCall.input, "sessionId")
     if (Option.isNone(sid)) return Option.getOrUndefined(Option.none<string>())
-    const goal = getInputField(props.toolCall.input, "goal")
-    if (Option.isSome(goal)) return `${sid.value.slice(0, 8)}… — ${goal.value.slice(0, 40)}`
     return sid.value.slice(0, 8) + "…"
   }
 
   const summary = (): Option.Option<string> => {
     const o = output()
     if (Option.isNone(o)) return Option.none()
-    if (o.value.extracted) {
-      const goal = Option.getOrElse(
-        Option.map(Option.fromNullishOr(o.value.goal), (value) => value.slice(0, 50)),
-        () => "?",
-      )
-      return Option.some(`Extracted for: ${goal}`)
-    }
-    const messageCount = Option.fromNullishOr(o.value.messageCount)
-    if (Option.isSome(messageCount)) {
-      return Option.some(`${messageCount.value} messages, ${o.value.branchCount} branches`)
-    }
-    return Option.none()
+    const branches = Option.fromNullishOr(o.value.branchCount).pipe(
+      Option.map((count) => `, ${count} branches`),
+      Option.getOrElse(() => ""),
+    )
+    return Option.fromNullishOr(o.value.messageCount).pipe(
+      Option.map((count) => `${count} messages${branches}`),
+    )
   }
 
   const content = () => Option.flatMap(output(), (value) => Option.fromNullishOr(value.content))
-  const error = () => Option.flatMap(output(), (value) => Option.fromNullishOr(value.error))
   const renderContent = (value: string): string => {
     if (value.length > 500) return value.slice(0, 500) + "…"
     return value
@@ -1081,12 +1070,6 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
             {Option.match(content(), { onNone: () => "", onSome: renderContent })}
           </text>
         </box>
-      </Show>
-
-      <Show when={Option.getOrUndefined(error())}>
-        <text style={{ fg: theme.error }}>
-          <span>✕</span> {Option.getOrElse(error(), () => "")}
-        </text>
       </Show>
     </ToolFrame>
   )
