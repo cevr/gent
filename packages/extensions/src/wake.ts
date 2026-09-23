@@ -251,15 +251,30 @@ const fireKey = (entry: PendingWakeEntry): string => {
   return `wake:${entry.wakeId}:${entry.deadline}`
 }
 
+/** How a fire moves the entry's own row: a repeat moves to its next tick, anything else leaves. */
+type SettleRow = (current: ReadonlyArray<WakeEntry>) => ReadonlyArray<WakeEntry>
+
+/** Drops the entry's pending row; a notice under the same id stays. */
+const dropPendingRow =
+  (wakeId: string): SettleRow =>
+  (current) =>
+    current.filter((candidate) => candidate._tag === "notice" || candidate.wakeId !== wakeId)
+
 /**
- * What a fire leaves behind. In `wake` mode a user-role line is queued with
- * `wake: true`, which starts a turn on an idle loop. In `notify` mode a notice
- * is stored beside the pending entries and the tray is pulsed; no turn starts.
+ * What a fire leaves behind, and the move of its row. In `wake` mode a
+ * user-role line is queued with `wake: true`, which starts a turn on an idle
+ * loop; the queue drops a repeat of the same fire key, so the row can move in
+ * a later write. In `notify` mode the notice and the row move are one write,
+ * so a stop cannot leave a notice with its row still due. A file an older
+ * binary left in that state has the notice already: an alarm's notice text
+ * names its due time, so the same text under the same id is the same fire,
+ * and it is not added twice.
  */
 const queueWake = (
   entry: PendingWakeEntry,
   content: string,
   details: WakeDetails & { readonly firedAt: number },
+  settle: SettleRow,
 ) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
@@ -271,7 +286,17 @@ const queueWake = (
         content,
         note: entry.note,
       })
-      yield* modifyWakeEntries((current) => [...current, notice])
+      yield* modifyWakeEntries((current) => {
+        const settled = settle(current)
+        const seen = current.some(
+          (candidate) =>
+            candidate._tag === "notice" &&
+            candidate.wakeId === notice.wakeId &&
+            candidate.content === notice.content,
+        )
+        if (seen) return settled
+        return [...settled, notice]
+      })
       return yield* ctx.State.changed()
     }
     yield* ctx.Session.send({
@@ -281,6 +306,7 @@ const queueWake = (
       metadata: { customType: WAKE_MESSAGE_TYPE, extensionId: WAKE_EXTENSION_ID, details },
       wake: true,
     })
+    yield* modifyWakeEntries(settle)
   })
 
 /**
@@ -342,12 +368,18 @@ const alarmWork = (
       yield* Effect.sleep(Duration.millis(Math.max(0, entry.dueAt - now)))
       yield* Effect.logInfo("wake.fired").pipe(Effect.annotateLogs({ wakeId: entry.wakeId }))
       const firedAt = yield* Clock.currentTimeMillis
-      yield* queueWake(entry, wakeMessage(entry), { outcome: "fired", note: entry.note, firedAt })
-      if (Predicate.isUndefined(entry.everySeconds)) return
-      // The next tick is stored before the timer sleeps again, so a restart in between re-arms it.
+      const details: WakeDetails & { readonly firedAt: number } = {
+        outcome: "fired",
+        note: entry.note,
+        firedAt,
+      }
+      if (Predicate.isUndefined(entry.everySeconds)) {
+        return yield* queueWake(entry, wakeMessage(entry), details, dropPendingRow(entry.wakeId))
+      }
+      // The next tick is stored with the fire, before the timer sleeps again, so a restart in between re-arms it.
       const next = { ...entry, dueAt: nextDueAt(entry.dueAt, entry.everySeconds, firedAt) }
       // Only the pending alarm row moves; a notify fire's notice shares its wakeId and stays.
-      yield* modifyWakeEntries((current) =>
+      yield* queueWake(entry, wakeMessage(entry), details, (current) =>
         current.map((candidate) => {
           if (candidate._tag === "alarm" && candidate.wakeId === next.wakeId) return next
           return candidate
@@ -407,19 +439,25 @@ const monitorWork = (
         yield* Effect.logInfo("wake.monitor.matched").pipe(
           Effect.annotateLogs({ wakeId: entry.wakeId, checks }),
         )
-        return yield* queueWake(entry, monitorMessage(entry, "matched", checks, lastOutput), {
-          outcome: "matched",
-          note: entry.note,
-          firedAt: yield* Clock.currentTimeMillis,
-        })
+        return yield* queueWake(
+          entry,
+          monitorMessage(entry, "matched", checks, lastOutput),
+          {
+            outcome: "matched",
+            note: entry.note,
+            firedAt: yield* Clock.currentTimeMillis,
+          },
+          dropPendingRow(entry.wakeId),
+        )
       }
       const now = yield* Clock.currentTimeMillis
       if (result.cut || now >= entry.deadline) {
-        return yield* queueWake(entry, monitorMessage(entry, "timed-out", checks, lastOutput), {
-          outcome: "timed-out",
-          note: entry.note,
-          firedAt: now,
-        })
+        return yield* queueWake(
+          entry,
+          monitorMessage(entry, "timed-out", checks, lastOutput),
+          { outcome: "timed-out", note: entry.note, firedAt: now },
+          dropPendingRow(entry.wakeId),
+        )
       }
       yield* Effect.sleep(
         Duration.millis(Math.min(entry.everySeconds * 1000, entry.deadline - now)),
@@ -476,14 +514,11 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: PendingWakeEntry) {
   >()
   const alarms = yield* WakeAlarms
   const work = workFor(entry)
-  // A notice the fire left under the same id stays; only the pending entry goes.
-  const forget = modifyWakeEntries((current) =>
-    current.filter((candidate) => candidate._tag === "notice" || candidate.wakeId !== entry.wakeId),
-  ).pipe(Effect.ignore)
+  // A settled fire moved its own row; a failed one drops the pending entry here.
+  const forget = modifyWakeEntries(dropPendingRow(entry.wakeId)).pipe(Effect.ignore)
   return yield* alarms.schedule(
     entry.wakeId,
     work.pipe(
-      Effect.andThen(forget),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.void
         return Effect.logWarning("wake.fire.failed").pipe(

@@ -1092,6 +1092,55 @@ describe("wake store", () => {
   )
 
   it.scopedLive(
+    "a notify tick whose notice was stored before a stop, with its row not yet moved, is not noticed twice on re-arm",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("wake-notify-stop-")
+        const queued = yield* Ref.make<ReadonlyArray<string>>([])
+        const ctx = testLeafContext(contextWith(home, queued))
+        const alarm = WakeEntry.cases.alarm.make({
+          wakeId: "tick",
+          dueAt: 1_000,
+          everySeconds: 60,
+          mode: "notify",
+          note: "stretch",
+        })
+        // The file a stop leaves between the two writes of an older binary:
+        // the notice for due time 1_000 is in, and the row still waits at 1_000.
+        const fs = yield* FileSystem.FileSystem
+        yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
+        yield* fs.writeFileString(
+          `${home}/.gent/wakes/${branchId}.json`,
+          encodeAlarms([
+            alarm,
+            {
+              _tag: "notice",
+              wakeId: "tick",
+              outcome: "fired",
+              firedAt: 1_000,
+              content: wakeMessage(alarm),
+              note: "stretch",
+            },
+          ]),
+        )
+        yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
+        yield* TestClock.adjust("1 second")
+        yield* eventually(
+          readFile(home).pipe(Effect.orDie),
+          (file) => file.includes(`"dueAt":61000`),
+          "the row moved to the next tick",
+        )
+        const decode = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))
+        const entries = yield* readFile(home).pipe(Effect.flatMap(decode), Effect.orDie)
+        expect(entries.filter((entry) => entry._tag === "notice")).toHaveLength(1)
+        expect(entries.filter((entry) => entry._tag === "alarm")).toHaveLength(1)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+        Effect.timeout("8 seconds"),
+      ),
+  )
+
+  it.scopedLive(
     "an interrupted timer leaves its row for the next re-arm; a settled fire removes it",
     () =>
       Effect.gen(function* () {
