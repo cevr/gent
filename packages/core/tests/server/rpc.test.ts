@@ -2710,6 +2710,87 @@ describe("extension command RPCs", () => {
       )
     }).pipe(Effect.provide(BunPlatformLive)),
   )
+  it.scoped("a branch resource is built from the session's profile, not the launch registry", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const profileCwd = yield* fs.makeTempDirectoryScoped()
+      const ext: GentExtension = {
+        manifest: { id: ExtensionId.make("@test/branch-profile-token") },
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: "test/extension-commands-rpc/branch-profile-token",
+              scope: "branch",
+              layer: Layer.succeed(
+                ProfileToken,
+                ProfileToken.of({ read: Effect.succeed(`branch:${host.cwd}`) }),
+              ),
+            }),
+          )
+          yield* host.register(
+            "request",
+            request({
+              id: "read-branch-profile-token",
+              input: Schema.String,
+              output: Schema.String,
+              execute: () =>
+                Effect.gen(function* () {
+                  const token = yield* ProfileToken
+                  return yield* token.read
+                }),
+            }),
+          )
+        }),
+      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const sessionProfileCacheLayer = Layer.unwrap(
+            Effect.map(Effect.scope, (scope) =>
+              SessionProfileCache.Live({
+                home,
+                failOnExtensionFailure: true,
+                platform: "test",
+                extensions: [ext],
+              }).pipe(
+                Layer.provide(
+                  Layer.mergeAll(
+                    BunPlatformLive,
+                    ConfigService.Test(),
+                    SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+                      Layer.provide(BunPlatformLive),
+                    ),
+                  ),
+                ),
+                Layer.orDie,
+                Layer.provide(Layer.succeed(Scope.Scope, scope)),
+              ),
+            ),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+          // The launch registry does not load the extension: only the
+          // profile for the session's cwd knows its branch resource.
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [],
+            sessionProfileCacheLayer,
+            cwd: profileCwd,
+          })
+          const result = yield* client.extension.request({
+            sessionId,
+            extensionId: ExtensionId.make("@test/branch-profile-token"),
+            capabilityId: "read-branch-profile-token",
+            input: "token",
+            branchId,
+          })
+          expect(result).toBe(`branch:${profileCwd}`)
+        }).pipe(Effect.timeout("4 seconds")),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
   it.live("a test root stops at a failed extension and names it", () =>
     Effect.gen(function* () {
       const failingExtension: GentExtension = {

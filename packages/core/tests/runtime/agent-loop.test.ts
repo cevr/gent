@@ -4,6 +4,7 @@ import {
   Clock,
   Context,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -86,6 +87,7 @@ import {
   emptyLoopQueueState,
   emptyQueueSnapshot,
   encodeToolOutput,
+  isRuntimeUserMessage,
   LoopQueueState,
   type LoopQueueState as LoopQueueStateType,
   Message,
@@ -635,6 +637,45 @@ describe("continuation", () => {
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
   )
+  it.live("a joined interjection keeps its sender's custom type and never recovers as a turn", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+        textStep("Done after the sender's message."),
+      ])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        const turn = makeContMessage("a sender steers this turn")
+        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, turn))
+        yield* controls.waitForCall(0)
+        yield* steerAgentLoop({
+          _tag: "Interject",
+          sessionId: contSessionId,
+          branchId: contBranchId,
+          requestId: "req-interject-keeps-custom-type",
+          message: "from another session",
+          metadata: { customType: "session-message", details: { from: "sender" } },
+        })
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        const messages = yield* messageStorage.listMessages(contBranchId)
+        const joined = messages.find(
+          (message) =>
+            message._tag === "interjection" &&
+            message.parts.some(
+              (part) => part.type === "text" && part.text === "from another session",
+            ),
+        )
+        // The TUI draws the sender row from the custom type; the join must not erase it.
+        expect(joined?.metadata?.customType).toBe("session-message")
+        expect(joined?.metadata?.details).toEqual({ from: "sender" })
+        // The turn it joined answered it, so a restart must not answer it again.
+        expect(Predicate.isNotUndefined(joined) && isRuntimeUserMessage(joined)).toBe(true)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
   it.live("an interjection that asks to wake starts a turn on an idle branch", () =>
     Effect.gen(function* () {
       const idleSessionId = SessionId.make("cont-idle-session")
@@ -1052,6 +1093,69 @@ describe("max turn steps", () => {
   )
 
   /**
+   * The last budgeted step asks the model for no tools. A call it makes anyway
+   * must not run: the step has no successor to read the result, and a tool
+   * with side effects would act after the budget said stop.
+   */
+  it.live("a tool call on the last budgeted step is refused, not run", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("echo", { text: "first" }),
+        toolCallStep("echo", { text: "past the limit" }),
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(agentLoop, userMessage("two steps at most"), {
+          runSpec: makeRunSpec({ overrides: { maxSteps: 2 } }),
+        })
+        const events = yield* Ref.get(eventsRef)
+        expect(events.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(1)
+        const messageStorage = yield* MessageStorage
+        const stored = yield* messageStorage.listMessages(branchId)
+        const refused = stored
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result" && part.isFailure)
+        expect(refused).toHaveLength(1)
+        const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
+        expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  /**
+   * The last budgeted step tells the model its tools are gone. The line is
+   * written at that step's boundary, after the step resolved its messages, so
+   * the step itself must read it: no later step exists to show it.
+   */
+  it.live("the last budgeted step reads the step-limit instruction", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        toolCallStep("echo", { text: "first" }),
+        {
+          ...textStep("stopped at the limit"),
+          assertOptions: (options) => {
+            expect(promptText(options.prompt)).toContain("maximum number of steps")
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(agentLoop, userMessage("two steps at most"), {
+          runSpec: makeRunSpec({ overrides: { maxSteps: 2 } }),
+        })
+        yield* controls.assertDone
+        // A failed `assertOptions` fails the stream, not the test: read the outcome.
+        const events = yield* Ref.get(eventsRef)
+        expect(events.some((event) => event._tag === "ErrorOccurred")).toBe(false)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  /**
    * A continuation asks the model for one more step. On the last step of the
    * budget no step follows, so the instruction would stay in the transcript
    * with no answer after it.
@@ -1381,6 +1485,105 @@ describe("tool projection reconciliation", () => {
       )
     }),
   )
+  for (const scenario of [
+    { name: "beside a call left with nothing", lost: true },
+    { name: "and the turn goes on", lost: false },
+  ]) {
+    it.live(`a cold resume keeps a stored tool result without its binding, ${scenario.name}`, () =>
+      Effect.gen(function* () {
+        const sessionId = SessionId.make(`cold-binding-session-${scenario.lost}`)
+        const branchId = BranchId.make(`cold-binding-branch-${scenario.lost}`)
+        const doneCall = ToolCallId.make("cold-binding-done")
+        const lostCall = ToolCallId.make("cold-binding-lost")
+        const providerLayer = scriptedProvider([
+          [textDeltaPart("after resume"), finishPart({ finishReason: "stop" })],
+        ])
+        const eventsRef = yield* Ref.make<AgentEvent[]>([])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const messageStorage = yield* MessageStorage
+            const eventStorage = yield* EventStorage
+            yield* ensureStorageParents({ sessionId, branchId })
+            const turn = makeMessage(sessionId, branchId, "resume without bindings")
+            // A previous host issued the step's calls and died before its tool
+            // message. The finished call's terminal event is stored; a lost
+            // call left nothing. No call has a stored binding.
+            const calls = [
+              Prompt.toolCallPart({
+                id: doneCall,
+                name: "echo",
+                params: { text: "done" },
+                providerExecuted: false,
+              }),
+            ]
+            if (scenario.lost) {
+              calls.push(
+                Prompt.toolCallPart({
+                  id: lostCall,
+                  name: "echo",
+                  params: { text: "lost" },
+                  providerExecuted: false,
+                }),
+              )
+            }
+            const assistant = Message.cases.regular.make({
+              id: assistantMessageIdForTurn(turn.id, 1),
+              sessionId,
+              branchId,
+              role: "assistant",
+              parts: calls,
+              createdAt: dateFromMillis(1_767_225_600_010),
+            })
+            yield* messageStorage.createMessage(assistant)
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: assistant }))
+            yield* eventStorage.appendEvent(
+              ToolCallSucceeded.make({
+                sessionId,
+                branchId,
+                toolCallId: doneCall,
+                toolName: "echo",
+                output: "done",
+                resultJson: encodeToolOutput({ text: "done" }),
+                assistantMessageId: assistant.id,
+              }),
+            )
+
+            const agentLoop = yield* makeAgentLoopService
+            const exit = yield* Effect.exit(runAgentLoop(agentLoop, turn))
+
+            const toolMessage = yield* messageStorage.getMessage(
+              toolResultMessageIdForTurn(turn.id, 1),
+            )
+            const results = (toolMessage?.parts ?? []).filter(
+              (part): part is Prompt.ToolResultPart => part.type === "tool-result",
+            )
+            // The finished call keeps its stored success.
+            expect(results.find((part) => part.id === doneCall)).toEqual(
+              Prompt.toolResultPart({
+                id: doneCall,
+                name: "echo",
+                isFailure: false,
+                providerExecuted: false,
+                result: { text: "done" },
+              }),
+            )
+            if (scenario.lost) {
+              // Only the call with no result and no binding is failed.
+              expect(results.find((part) => part.id === lostCall)?.isFailure).toBe(true)
+              return
+            }
+            // Every call has a result, so no binding is needed and the turn
+            // answers instead of failing on the missing one.
+            expect(exit._tag).toBe("Success")
+          }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])),
+            Effect.timeout("4 seconds"),
+          ),
+        )
+      }),
+    )
+  }
   it.live("fails a stale running tool projection before any new model work", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("orphan-session")
@@ -1907,7 +2110,10 @@ const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
       branchId,
       loopRef,
       queuePersistenceSemaphore: yield* Semaphore.make(1),
-      persistenceFailure: yield* Deferred.make<void, AgentLoopError>(),
+      persistenceFailures: yield* TxSubscriptionRef.make({
+        epoch: 0,
+        error: Option.none<AgentLoopError>(),
+      }),
       startedRef: yield* Ref.make(true),
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
@@ -2662,11 +2868,610 @@ const ResumeProbeExtension: LoadedExtension = {
   },
 }
 
+/** The probe as a dispatching tool: recovery rebuilds host bindings for it from the agent. */
+const DispatchProbeExtension: LoadedExtension = {
+  manifest: { id: ExtensionId.make("@test/turn-dispatch-probe") },
+  scope: "builtin",
+  sourcePath: "test",
+  artifactIdentity: LoadedArtifactIdentity.make("@test/turn-dispatch-probe@artifact-1"),
+  contributions: {
+    tools: [
+      tool({
+        id: "dispatch_probe",
+        description: "Record one execution; declared as running other tools",
+        params: Schema.Struct({ label: Schema.String }),
+        output: Schema.Struct({ label: Schema.String }),
+        dispatches: true,
+        execute: Effect.fn("dispatch_probe")(function* (params) {
+          yield* ExtensionContext
+          probe.runs += 1
+          const gate = probe.gate
+          if (Option.isSome(gate) && gate.value.label === params.label) {
+            yield* Deferred.succeed(gate.value.entered, void 0)
+            yield* Deferred.await(gate.value.release)
+          }
+          return { label: params.label }
+        }),
+      }),
+    ],
+  },
+}
+
 /** The user message id that opened the branch's only turn. */
 const openingTurnMessageId = (messages: ReadonlyArray<{ readonly id: string }>) =>
   Option.fromUndefinedOr(messages.map((message) => message.id).find((id) => !id.includes(":")))
 
+// ── model-change notice ─────────────────────────────────────────────────────
+
+interface HoldGate {
+  readonly entered: Deferred.Deferred<void>
+  readonly release: Deferred.Deferred<void>
+}
+
+const holdToolExtension = (gate: HoldGate): LoadedExtension => ({
+  manifest: { id: ExtensionId.make("@test/hold-tool") },
+  scope: "builtin",
+  sourcePath: "test",
+  artifactIdentity: LoadedArtifactIdentity.make("@test/hold-tool@artifact-1"),
+  contributions: {
+    tools: [
+      tool({
+        id: "hold",
+        description: "Hold until the test releases it",
+        params: Schema.Struct({}),
+        output: Schema.Struct({ held: Schema.Boolean }),
+        execute: Effect.fn("hold")(function* () {
+          yield* ExtensionContext
+          yield* Deferred.succeed(gate.entered, void 0)
+          yield* Deferred.await(gate.release)
+          return { held: true }
+        }),
+      }),
+    ],
+  },
+})
+
+describe("model-change notice", () => {
+  it.scopedLive(
+    "a model switch while a tool runs is noticed at the next step, after the tool result",
+    () =>
+      Effect.gen(function* () {
+        const gate: HoldGate = {
+          entered: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        }
+        const nextModel = ModelId.make("custom/next-model")
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("hold", {}),
+          {
+            ...textStep("after the switch"),
+            assertOptions: (options) => {
+              expect(promptText(options.prompt)).toContain(`continues with ${nextModel}]`)
+            },
+          },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensions: [holdToolExtension(gate)],
+        })
+        yield* client.message
+          .send({ sessionId, branchId, content: "hold, then answer" })
+          .pipe(Effect.forkScoped)
+        yield* Deferred.await(gate.entered)
+        // `/model` lands while the tool call has no result yet.
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: nextModel,
+          reasoningLevel: Option.getOrUndefined(Option.none()),
+        })
+        yield* Deferred.succeed(gate.release, void 0)
+        const messages = yield* waitFor(
+          client.message.list({ branchId }),
+          (current) =>
+            current.some((message) =>
+              message.parts.some(
+                (part) => part.type === "text" && part.text === "after the switch",
+              ),
+            ),
+          10_000,
+          "the step after the switch answered",
+        )
+        const resultIndex = messages.findIndex((message) =>
+          message.parts.some((part) => part.type === "tool-result"),
+        )
+        const noticeIndex = messages.findIndex(
+          (message) => message.metadata?.customType === "model-change",
+        )
+        expect(resultIndex).toBeGreaterThanOrEqual(0)
+        // The notice never splits a tool call from its result.
+        expect(noticeIndex).toBeGreaterThan(resultIndex)
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a model switch while the model streams is noticed at the next step",
+    () =>
+      Effect.gen(function* () {
+        const gate: HoldGate = {
+          entered: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        }
+        yield* Deferred.succeed(gate.release, void 0)
+        const nextModel = ModelId.make("custom/next-model")
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          { ...toolCallStep("hold", {}), gated: true },
+          {
+            ...textStep("after the stream switch"),
+            assertOptions: (options) => {
+              expect(promptText(options.prompt)).toContain(`continues with ${nextModel}]`)
+            },
+          },
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensions: [holdToolExtension(gate)],
+        })
+        yield* client.message
+          .send({ sessionId, branchId, content: "switch while you stream" })
+          .pipe(Effect.forkScoped)
+        yield* controls.waitForCall(0)
+        // The settings event lands before this step's `StreamEnded`.
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: nextModel,
+          reasoningLevel: Option.getOrUndefined(Option.none()),
+        })
+        yield* controls.emitAll(0)
+        yield* waitFor(
+          client.message.list({ branchId }),
+          (current) =>
+            current.some((message) =>
+              message.parts.some(
+                (part) => part.type === "text" && part.text === "after the stream switch",
+              ),
+            ),
+          10_000,
+          "the step after the stream switch answered",
+        )
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a replayed step after a second switch reads a notice naming the final model",
+    () =>
+      Effect.gen(function* () {
+        resetProbe()
+        const tempDir = yield* makeTempDirectoryScoped("gent-notice-replay-")
+        const dbPath = `${tempDir}/gent.db`
+        const secondModel = ModelId.make("custom/next-model")
+        const finalModel = ModelId.make("custom/final-model")
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        probe.gate = Option.some({ label: "switch", entered, release })
+
+        // First process: during the tool the model switches; step 2 writes
+        // its notice, calls the model, and the process dies there.
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          toolCallStep("resume_probe", { label: "switch" }),
+          { ...textStep("never emitted"), gated: true },
+        ])
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: firstProvider.layer,
+                extensions: [ResumeProbeExtension],
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message
+              .send({ sessionId, branchId, content: "switch twice" })
+              .pipe(Effect.forkScoped)
+            yield* Deferred.await(entered)
+            yield* client.session.updateSettings({
+              sessionId,
+              modelId: secondModel,
+              reasoningLevel: Option.getOrUndefined(Option.none()),
+            })
+            yield* Deferred.succeed(release, void 0)
+            yield* firstProvider.controls.waitForCall(1)
+            return { sessionId, branchId }
+          }).pipe(Effect.timeout("10 seconds")),
+        )
+        probe.gate = Option.none()
+
+        // Second process: switch again, then the turn replays step 2.
+        const finalReply = "READ-THE-FINAL-NOTICE"
+        const secondProvider = yield* LanguageModelLayers.sequence([
+          {
+            ...textStep(finalReply),
+            assertOptions: (options) => {
+              expect(promptText(options.prompt)).toContain(`continues with ${finalModel}]`)
+            },
+          },
+        ])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: secondProvider.layer,
+                extensions: [ResumeProbeExtension],
+                storagePath: dbPath,
+              }),
+            )
+            yield* client.session.updateSettings({
+              sessionId: started.sessionId,
+              modelId: finalModel,
+              reasoningLevel: Option.getOrUndefined(Option.none()),
+            })
+            yield* client.session.getSnapshot({
+              sessionId: started.sessionId,
+              branchId: started.branchId,
+            })
+            yield* client.message.send({
+              sessionId: started.sessionId,
+              branchId: started.branchId,
+              content: "continue",
+            })
+            yield* waitFor(
+              client.message.list({ branchId: started.branchId }),
+              (messages) =>
+                messages.some((message) =>
+                  message.parts.some(
+                    (part) => part.type === "text" && part.text.includes(finalReply),
+                  ),
+                ),
+              15_000,
+              "the replayed step answered",
+            )
+          }).pipe(Effect.timeout("20 seconds")),
+        )
+      }).pipe(Effect.timeout("40 seconds")),
+    60_000,
+  )
+
+  it.scopedLive(
+    "a turn under another agent writes no notice; the turn after it notices the change back",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          textStep("default one"),
+          textStep("helper one"),
+          textStep("default again"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          agents: [...testAgents, helperAgent],
+          providerLayer,
+        })
+        const turn = (content: string, reply: string, agentOverride?: AgentName) =>
+          Effect.gen(function* () {
+            yield* client.message.send({ sessionId, branchId, content, agentOverride })
+            return yield* waitFor(
+              client.message.list({ branchId }),
+              (current) =>
+                current.some((message) =>
+                  message.parts.some((part) => part.type === "text" && part.text === reply),
+                ),
+              10_000,
+              `reply: ${reply}`,
+            )
+          })
+        const notices = <M extends { readonly metadata?: { readonly customType?: string } }>(
+          messages: ReadonlyArray<M>,
+        ) => messages.filter((message) => message.metadata?.customType === "model-change")
+        yield* turn("first", "default one")
+        // The override picks its own model on purpose: no notice.
+        expect(notices(yield* turn("second", "helper one", helperAgent.name))).toHaveLength(0)
+        // Back on the default model, the helper's reply above is attributed.
+        const back = notices(yield* turn("third", "default again"))
+        expect(back).toHaveLength(1)
+        expect(
+          back[0]?.parts.some(
+            (part) =>
+              part.type === "text" && part.text.includes(`generated by ${helperAgent.model}`),
+          ),
+        ).toBe(true)
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("15 seconds")),
+  )
+})
+
 describe("turn record", () => {
+  it.scopedLive(
+    "a child-shaped turn recovered after a restart keeps its agent, denied tools and run spec",
+    () =>
+      Effect.gen(function* () {
+        resetProbe()
+        const tempDir = yield* makeTempDirectoryScoped("gent-turn-admission-")
+        const dbPath = `${tempDir}/gent.db`
+        const sessionId = SessionId.make("admission-recovery-session")
+        const branchId = BranchId.make("admission-recovery-branch")
+        const addendum = "CHILD-ADDENDUM-SURVIVES-RESTART"
+        const runSpec = makeRunSpec({
+          overrides: { deniedTools: ["resume_probe"], systemPromptAddendum: addendum },
+        })
+        type SeenRequest = { readonly tools: ReadonlyArray<string>; readonly prompt: string }
+        const seenRequest = (options: LanguageModel.ProviderOptions): SeenRequest => ({
+          tools: options.tools.map((entry) => entry.name),
+          prompt: promptText(options.prompt),
+        })
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            agents: [...testAgents, helperAgent],
+            providerLayer,
+            extensions: [ResumeProbeExtension],
+            storagePath: dbPath,
+          })
+
+        // First process: the child turn is admitted and its first model call
+        // hangs. The process dies there, before the turn completes.
+        const firstRequests = yield* Ref.make<ReadonlyArray<SeenRequest>>([])
+        const firstCalled = yield* Deferred.make<void>()
+        const firstProvider = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            yield* Ref.update(firstRequests, (seen) => [...seen, seenRequest(options)])
+            yield* Deferred.succeed(firstCalled, void 0)
+            return Stream.never
+          }),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* submitAgentLoop(
+              agentLoop,
+              makeMessage(sessionId, branchId, "child task before restart"),
+              { agentOverride: helperAgent.name, runSpec, interactive: false },
+            )
+            yield* Deferred.await(firstCalled)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(layerFor(firstProvider)), Effect.timeout("10 seconds")),
+        )
+
+        // Second process: opening the branch resumes the cut turn. It must run
+        // under the same admission, not as the default agent.
+        const secondRequests = yield* Ref.make<ReadonlyArray<SeenRequest>>([])
+        const secondProvider = LanguageModelLayers.testStream((options) =>
+          Ref.update(secondRequests, (seen) => [...seen, seenRequest(options)]).pipe(
+            Effect.as(
+              Stream.fromIterable([
+                textDeltaPart("resumed child answer"),
+                finishPart({ finishReason: "stop" }),
+              ] satisfies LanguageModelStreamPart[]),
+            ),
+          ),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* agentLoop.getState({ sessionId, branchId })
+            yield* waitForOption(
+              () =>
+                Ref.get(secondRequests).pipe(
+                  Effect.map((seen) => Option.liftPredicate(seen, (all) => all.length > 0)),
+                ),
+              "the recovered turn called the model",
+            )
+            // The agent picks the model: the child's agent, not the default one.
+            const eventStorage = yield* EventStorage
+            const streamModel = yield* waitForOption(
+              () =>
+                eventStorage
+                  .listEvents({ sessionId, branchId })
+                  .pipe(
+                    Effect.map((envelopes) =>
+                      Option.fromUndefinedOr(
+                        envelopes
+                          .map(({ event }) => event)
+                          .find(
+                            (event) =>
+                              event._tag === "StreamEnded" && Predicate.isNotUndefined(event.model),
+                          ),
+                      ),
+                    ),
+                  ),
+              "the recovered step ended",
+            )
+            expect(streamModel._tag === "StreamEnded" && streamModel.model).toBe(helperAgent.model)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(layerFor(secondProvider)), Effect.timeout("10 seconds")),
+        )
+
+        const [before] = yield* Ref.get(firstRequests)
+        const [after] = yield* Ref.get(secondRequests)
+        // The first process ran the child as admitted: the control case.
+        expect(before?.tools).not.toContain("resume_probe")
+        expect(before?.prompt).toContain(addendum)
+        // The recovered turn keeps the child's run spec: the denied tool stays
+        // denied, and the child's prompt addendum is still there.
+        expect(after?.tools).not.toContain("resume_probe")
+        expect(after?.prompt).toContain(addendum)
+      }),
+    40_000,
+  )
+
+  it.scopedLive(
+    "a recovered turn whose agent was removed settles with an error that names the agent",
+    () =>
+      Effect.gen(function* () {
+        resetProbe()
+        const tempDir = yield* makeTempDirectoryScoped("gent-turn-removed-agent-")
+        const dbPath = `${tempDir}/gent.db`
+        const sessionId = SessionId.make("removed-agent-session")
+        const branchId = BranchId.make("removed-agent-branch")
+        const layerFor = (
+          providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+          agents: ReadonlyArray<AgentDefinition>,
+        ) =>
+          createE2ELayer({
+            ...e2ePreset,
+            agents,
+            providerLayer,
+            extensions: [ResumeProbeExtension],
+            storagePath: dbPath,
+          })
+
+        // First process: a turn under the helper agent is cut mid-call.
+        const firstCalled = yield* Deferred.make<void>()
+        const firstProvider = LanguageModelLayers.testStream(() =>
+          Deferred.succeed(firstCalled, void 0).pipe(Effect.as(Stream.never)),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* submitAgentLoop(
+              agentLoop,
+              makeMessage(sessionId, branchId, "work under the helper"),
+              { agentOverride: helperAgent.name },
+            )
+            yield* Deferred.await(firstCalled)
+          }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            Effect.provide(layerFor(firstProvider, [...testAgents, helperAgent])),
+            Effect.timeout("10 seconds"),
+          ),
+        )
+
+        // Second process: the helper definition is gone. The turn must end,
+        // and say why, instead of staying unanswered.
+        const secondProvider = LanguageModelLayers.testStream(() =>
+          Effect.succeed(
+            Stream.fromIterable([
+              textDeltaPart("should not run"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[]),
+          ),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* agentLoop.getState({ sessionId, branchId })
+            const eventStorage = yield* EventStorage
+            const events = yield* waitForOption(
+              () =>
+                eventStorage.listEvents({ sessionId, branchId }).pipe(
+                  Effect.map((envelopes) =>
+                    Option.liftPredicate(
+                      envelopes.map(({ event }) => event),
+                      (all) => all.some((event) => event._tag === "TurnCompleted"),
+                    ),
+                  ),
+                ),
+              "the recovered turn settled",
+            )
+            const errors = events.flatMap((event) => {
+              if (event._tag !== "ErrorOccurred") return []
+              return [event.error]
+            })
+            expect(errors.some((error) => error.includes(helperAgent.name))).toBe(true)
+            const completed = events.filter((event) => event._tag === "TurnCompleted")
+            expect(completed.every((event) => event.unanswered === true)).toBe(true)
+          }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            Effect.provide(layerFor(secondProvider, testAgents)),
+            Effect.timeout("10 seconds"),
+          ),
+        )
+      }),
+    40_000,
+  )
+
+  it.scopedLive(
+    "a recovered dispatching call whose agent was removed settles the turn with that error",
+    () =>
+      Effect.gen(function* () {
+        resetProbe()
+        const tempDir = yield* makeTempDirectoryScoped("gent-turn-removed-agent-tool-")
+        const dbPath = `${tempDir}/gent.db`
+        const sessionId = SessionId.make("removed-agent-tool-session")
+        const branchId = BranchId.make("removed-agent-tool-branch")
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        probe.gate = Option.some({ label: "held", entered, release })
+        const layerFor = (
+          providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+          agents: ReadonlyArray<AgentDefinition>,
+        ) =>
+          createE2ELayer({
+            ...e2ePreset,
+            agents,
+            providerLayer,
+            extensions: [DispatchProbeExtension],
+            storagePath: dbPath,
+          })
+
+        // First process: the helper's step calls the dispatching tool, which
+        // holds. The process dies with the call pending.
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          toolCallStep("dispatch_probe", { label: "held" }),
+        ])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* submitAgentLoop(
+              agentLoop,
+              makeMessage(sessionId, branchId, "dispatch under the helper"),
+              { agentOverride: helperAgent.name },
+            )
+            yield* Deferred.await(entered)
+          }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            Effect.provide(layerFor(firstProvider.layer, [...testAgents, helperAgent])),
+            Effect.timeout("10 seconds"),
+          ),
+        )
+        probe.gate = Option.none()
+
+        // Second process: the helper is gone. Recovery must still end the
+        // turn, name the agent, and leave no call without a result.
+        const secondProvider = yield* LanguageModelLayers.sequence([])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* agentLoop.getState({ sessionId, branchId })
+            const eventStorage = yield* EventStorage
+            const events = yield* waitForOption(
+              () =>
+                eventStorage.listEvents({ sessionId, branchId }).pipe(
+                  Effect.map((envelopes) =>
+                    Option.liftPredicate(
+                      envelopes.map(({ event }) => event),
+                      (all) => all.some((event) => event._tag === "TurnCompleted"),
+                    ),
+                  ),
+                ),
+              "the recovered turn settled",
+            )
+            const errors = events.flatMap((event) => {
+              if (event._tag !== "ErrorOccurred") return []
+              return [event.error]
+            })
+            expect(errors.some((error) => error.includes(helperAgent.name))).toBe(true)
+            const messageStorage = yield* MessageStorage
+            const results = (yield* messageStorage.listMessages(branchId))
+              .flatMap((message) => message.parts)
+              .filter((part) => part.type === "tool-result")
+            expect(results).toHaveLength(1)
+          }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            Effect.provide(layerFor(secondProvider.layer, testAgents)),
+            Effect.timeout("10 seconds"),
+          ),
+        )
+      }),
+    40_000,
+  )
+
   it.scopedLive(
     "records the completed step for a turn that answered after a tool call",
     () =>
@@ -2714,6 +3519,99 @@ describe("turn record", () => {
         expect(probe.runs).toBe(1)
       }).pipe(Effect.timeout("20 seconds")),
     40_000,
+  )
+
+  it.scopedLive(
+    "a row behind its messages never moves the turn below a step with no assistant message",
+    () =>
+      Effect.gen(function* () {
+        resetProbe()
+        const tempDir = yield* makeTempDirectoryScoped("gent-turn-position-")
+        const dbPath = `${tempDir}/gent.db`
+        const finalReply = "RESUMED-AFTER-GAP"
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        probe.gate = Option.some({ label: "late", entered, release })
+
+        // First process: step 1 writes nothing (no assistant message) and is
+        // re-prompted; step 2 calls the probe, which holds. The process dies.
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          {
+            parts: [
+              finishPart({ finishReason: "stop", usage: { inputTokens: 10, outputTokens: 0 } }),
+            ],
+          },
+          toolCallStep("resume_probe", { label: "late" }),
+        ])
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: firstProvider.layer,
+                extensions: [ResumeProbeExtension],
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message
+              .send({ sessionId, branchId, content: "gap then probe" })
+              .pipe(Effect.forkScoped)
+            yield* Deferred.await(entered)
+            return { sessionId, branchId }
+          }).pipe(Effect.timeout("10 seconds")),
+        )
+        probe.gate = Option.none()
+
+        // The crash window: step 2's messages are durable, the row still
+        // names step 1 with nothing pending.
+        yield* Effect.sync(() => {
+          const db = new Database(dbPath)
+          db.run(
+            "UPDATE turn_records SET step = 1, pending_tool_calls_json = '[]' WHERE session_id = ? AND branch_id = ?",
+            [started.sessionId, started.branchId],
+          )
+          db.close()
+        })
+
+        // Second process: the turn resumes at step 2's pending call, not at a
+        // position below the row.
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep(finalReply)])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: secondProvider.layer,
+                extensions: [ResumeProbeExtension],
+                storagePath: dbPath,
+              }),
+            )
+            yield* client.session.getSnapshot({
+              sessionId: started.sessionId,
+              branchId: started.branchId,
+            })
+            yield* client.message.send({
+              sessionId: started.sessionId,
+              branchId: started.branchId,
+              content: "continue",
+            })
+            yield* waitFor(
+              client.message.list({ branchId: started.branchId }),
+              (messages) =>
+                messages.some((message) =>
+                  message.parts.some(
+                    (part) => part.type === "text" && part.text.includes(finalReply),
+                  ),
+                ),
+              15_000,
+              "resumed turn produced its reply",
+            )
+            yield* secondProvider.controls.assertDone
+          }).pipe(Effect.timeout("20 seconds")),
+        )
+      }).pipe(Effect.timeout("40 seconds")),
+    60_000,
   )
 
   it.scopedLive(
@@ -3414,7 +4312,10 @@ describe("wake admission", () => {
         branchId: wakeBranchId,
         loopRef,
         queuePersistenceSemaphore: yield* Semaphore.make(1),
-        persistenceFailure: yield* Deferred.make<void, AgentLoopError>(),
+        persistenceFailures: yield* TxSubscriptionRef.make({
+          epoch: 0,
+          error: Option.none<AgentLoopError>(),
+        }),
         startedRef: yield* Ref.make(true),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
@@ -4040,9 +4941,9 @@ describe("queue drain regression", () => {
           parts: [Prompt.textPart({ text: "answer me" })],
           createdAt: dateFromMillis(1_767_225_600_000),
         })
-        // The shape `deliverSteeringAtStepBoundary` writes: a user-role
-        // interjection carrying the runtime marker, with no completion of
-        // its own.
+        // The shape older builds of `deliverSteeringAtStepBoundary` wrote,
+        // still on disk: a user-role interjection carrying the `steering`
+        // marker, with no completion of its own.
         const delivered = Message.cases.regular.make({
           id: MessageId.make("msg-steering-replay-interject"),
           sessionId,
@@ -4073,6 +4974,55 @@ describe("queue drain regression", () => {
             expect(Option.isNone(called)).toBe(true)
             // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           }).pipe(Effect.provide(layer)),
+        )
+      }),
+    15000,
+  )
+
+  it.live(
+    "startup does not replay a failed turn that newer completed turns followed",
+    () =>
+      Effect.gen(function* () {
+        // A turn that failed writes no `TurnCompleted`. Once a later turn has
+        // completed, the failed one is history: reopening must not answer it.
+        const sessionId = SessionId.make("session-loop-stale-failure")
+        const branchId = BranchId.make("branch-loop-stale-failure")
+        const providerCalled = yield* Deferred.make<void>()
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            return Stream.fromIterable([
+              textDeltaPart("replayed"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const failed = makeMessage(sessionId, branchId, "the turn that failed")
+        const answered = Message.cases.regular.make({
+          ...makeMessage(sessionId, branchId, "the turn that answered"),
+          createdAt: dateFromMillis(1_767_225_600_010),
+        })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({ sessionId, branchId })
+            const eventStorage = yield* EventStorage
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: failed }))
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: answered }))
+            yield* eventStorage.appendEvent(
+              TurnCompleted.make({ sessionId, branchId, messageId: answered.id, durationMs: 1 }),
+            )
+
+            const agentLoop = yield* makeAgentLoopService
+            const state = yield* agentLoop.getState({ sessionId, branchId })
+            expect(state._tag).toBe("Idle")
+            const called = yield* Deferred.await(providerCalled).pipe(
+              Effect.timeout("500 millis"),
+              Effect.option,
+            )
+            expect(Option.isNone(called)).toBe(true)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(makeLayer(providerLayer))),
         )
       }),
     15000,
@@ -5829,6 +6779,80 @@ describe("streaming", () => {
       )
     }),
   )
+  it.live("a queue write that failed earlier does not fail a later waiting caller", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("stale-persistence-session")
+      const branchId = BranchId.make("stale-persistence-branch")
+      const failWrites = yield* Ref.make(false)
+      const rows = yield* Ref.make<LoopQueueStateType>(emptyPersistedQueue())
+      const queueStorageLayer = Layer.succeed(
+        AgentLoopQueueStorage,
+        AgentLoopQueueStorage.of({
+          getQueueState: () => Ref.get(rows),
+          putQueueState: (_s, _b, queue) =>
+            Effect.gen(function* () {
+              if (yield* Ref.get(failWrites)) {
+                return yield* new StorageError({ message: "queue write failed once" })
+              }
+              yield* Ref.set(rows, queue)
+            }),
+        }),
+      )
+      const providerLayer = scriptedProvider([
+        [textDeltaPart("answered"), finishPart({ finishReason: "stop" })],
+      ])
+      const deps = Layer.mergeAll(
+        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+        queueStorageLayer,
+        providerLayer,
+        ModelResolver.fromLanguageModel(providerLayer),
+        makeExtRegistry(),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+        ConfigService.Test(),
+        EventStore.Memory,
+        ToolRunner.Test(),
+        ApprovalService.Test(),
+        BunServices.layer,
+        ModelRegistry.Test(),
+        GentPlatform.Test(),
+      )
+      const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            deps,
+            Layer.provide(EventPublisherLive, deps),
+            AgentLoopSessionGovernance.Live,
+          ),
+        ),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        expect((yield* agentLoop.getState({ sessionId, branchId }))._tag).toBe("Idle")
+        // One steering write fails while storage is down; the caller hears it.
+        yield* Ref.set(failWrites, true)
+        const steered = yield* Effect.exit(
+          steerAgentLoop({
+            _tag: "Interject",
+            sessionId,
+            branchId,
+            requestId: "req-stale-persistence",
+            message: "parked while storage is down",
+          }),
+        )
+        expect(steered._tag).toBe("Failure")
+        // Storage recovers. A turn submitted now owes nothing to that failure.
+        yield* Ref.set(failWrites, false)
+        const submitted = yield* Effect.exit(
+          runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "after recovery")),
+        )
+        expect(submitted._tag).toBe("Success")
+      }).pipe(
+        Effect.timeout("4 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(layer),
+      )
+    }),
+  )
   it.live("a queued turn that fails before it starts does not hold the queue", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("unsaved-turn-session")
@@ -6639,6 +7663,64 @@ describe("streaming", () => {
           ])
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef))),
+      )
+    }),
+  )
+  it.live("a cancel during a retry wait ends the turn without waiting out the delay", () =>
+    Effect.gen(function* () {
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      const sessionId = SessionId.make("retry-cancel-session")
+      const branchId = BranchId.make("retry-cancel-branch")
+      let streamCalls = 0
+      // The provider asks for a long wait before the next attempt.
+      const rateLimited = AiError.make({
+        module: "Test",
+        method: "streamText",
+        reason: new AiError.RateLimitError({ retryAfter: Duration.seconds(20) }),
+      })
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Effect.sync(() => {
+          streamCalls += 1
+          if (streamCalls === 1) return Stream.fail(rateLimited)
+          return Stream.fromIterable([
+            textDeltaPart("never after cancel"),
+            finishPart({ finishReason: "stop" }),
+          ])
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const message = makeMessage(sessionId, branchId, "wait for the rate limit")
+        const turn = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+        yield* waitForOption(
+          () =>
+            Ref.get(eventsRef).pipe(
+              Effect.map((events) =>
+                Option.liftPredicate(events, (all) =>
+                  all.some((event) => event._tag === "ProviderRetrying"),
+                ),
+              ),
+            ),
+          "the retry wait began",
+        )
+        yield* steerAgentLoop({
+          _tag: "Cancel",
+          sessionId,
+          branchId,
+          requestId: "req-cancel-retry-wait",
+        })
+        // The cancel reaches the wait: the turn ends well before 20 seconds.
+        const ended = yield* Fiber.join(turn).pipe(Effect.timeoutOption("2 seconds"))
+        expect(Option.isSome(ended)).toBe(true)
+        expect(streamCalls).toBe(1)
+        const completed = (yield* Ref.get(eventsRef)).find(
+          (event) => event._tag === "TurnCompleted" && event.messageId === message.id,
+        )
+        expect(completed?._tag === "TurnCompleted" && completed.interrupted).toBe(true)
+      }).pipe(
+        Effect.timeout("6 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(makeLayerWithEvents(providerLayer, eventsRef)),
       )
     }),
   )

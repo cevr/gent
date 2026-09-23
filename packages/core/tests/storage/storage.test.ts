@@ -50,6 +50,7 @@ import {
   ToolCallId,
   ToolId,
 } from "../../src/domain/ids"
+import { AgentName } from "../../src/domain/agent"
 import {
   ToolBindingIdentity,
   ToolBindingSource,
@@ -267,6 +268,7 @@ describe("Sessions", () => {
           "session_thread",
           "drop_message_search_index",
           "interaction_owner",
+          "turn_record_admission",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -299,6 +301,7 @@ describe("Sessions", () => {
           "session_thread",
           "drop_message_search_index",
           "interaction_owner",
+          "turn_record_admission",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -1018,7 +1021,8 @@ describe("persisted loop queue format", () => {
       // `false` is the only value this field is read for; a dropped key would
       // hand a child the interactive tools it was denied.
       expect(loaded.followUp[0]?.interactive).toBe(false)
-      expect(loaded.followUp[0]?.keyed).toBe(true)
+      // A retired key (`keyed`) on an old row is ignored, not rejected.
+      expect(Object.keys(loaded.followUp[0] ?? {})).not.toContain("keyed")
       expect(String(loaded.inFlight?.message.id)).toBe("in-flight-1")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
   )
@@ -2549,6 +2553,50 @@ describe("TurnRecordStorage", () => {
     ),
   )
 
+  it.live("keeps what admitted a turn across later step writes", () =>
+    Effect.gen(function* () {
+      const key = yield* makeFixtureTurnRecord("admission")
+      const storage = yield* TurnRecordStorage
+      const admission = {
+        agentOverride: AgentName.make("helper"),
+        runSpec: { overrides: { deniedTools: ["delegate"], maxSteps: 4 } },
+        interactive: false,
+      }
+      yield* storage.put(
+        key,
+        turnRecordAtStep({ step: 0, continuations: 0, pendingToolCalls: [], ...admission }),
+      )
+      const opened = yield* storage.get(key)
+      yield* storage.put(key, turnRecordAtStep({ ...opened, step: 2 }))
+      const loaded = yield* storage.get(key)
+      expect(loaded.step).toBe(2)
+      expect(loaded.agentOverride).toBe(admission.agentOverride)
+      expect(loaded.runSpec).toEqual(admission.runSpec)
+      expect(loaded.interactive).toBe(false)
+    }).pipe(
+      Effect.provideService(CurrentWorkspaceId, DefaultWorkspaceId),
+      Effect.provide(storageLayer),
+    ),
+  )
+
+  it.live("a row written before admissions existed reads as a plain turn", () =>
+    Effect.gen(function* () {
+      const key = yield* makeFixtureTurnRecord("pre-admission")
+      const storage = yield* TurnRecordStorage
+      const sql = yield* SqlClient.SqlClient
+      yield* sql`
+        INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, updated_at)
+        VALUES (${key.sessionId}, ${key.branchId}, ${key.messageId}, ${3}, ${0}, ${"[]"}, ${FIXED_NOW.getTime()})
+      `
+      expect(yield* storage.get(key)).toEqual(
+        turnRecordAtStep({ step: 3, continuations: 0, pendingToolCalls: [] }),
+      )
+    }).pipe(
+      Effect.provideService(CurrentWorkspaceId, DefaultWorkspaceId),
+      Effect.provide(storageLayer),
+    ),
+  )
+
   it.live("advances one turn's position without leaving the earlier step readable", () =>
     Effect.gen(function* () {
       const key = yield* makeFixtureTurnRecord("advance")
@@ -2612,6 +2660,7 @@ describe("turn_records migration", () => {
         SELECT name, pk FROM pragma_table_info('turn_records')
       `
       expect(columns.map((column) => column.name).sort()).toEqual([
+        "admission_json",
         "branch_id",
         "continuations",
         "message_id",

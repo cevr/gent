@@ -119,12 +119,7 @@ import {
   type TurnInterruption,
 } from "./tools.js"
 import { ConfigService } from "./config.js"
-import {
-  AgentLoopError,
-  asAgentLoopError,
-  type ResolvedTurn,
-  type RunningState,
-} from "../domain/agent-loop.js"
+import { asAgentLoopError, type ResolvedTurn, type RunningState } from "../domain/agent-loop.js"
 import {
   driverRetryPolicy,
   ModelRegistry,
@@ -144,6 +139,7 @@ import {
   ModelContextCapabilityFailure,
   ModelContextLedger,
   ModelContextProjectionError,
+  modelChangeNotice,
   projectContextWindow,
   projectModelContext,
   toPrompt,
@@ -1453,6 +1449,9 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       // transient `ProviderError` only.
       effect.pipe(
         retryProviderCall(retryPolicy, {
+          // A cancel during a backoff ends the wait; the failure it leaves
+          // reads as an interrupted step below.
+          stop: Deferred.await(params.activeStream.interrupted),
           onRetry: ({ attempt, maxAttempts, delayMs, error }) =>
             publishEventOrDie(
               ProviderRetrying.make({
@@ -1646,6 +1645,40 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const toolBindingStorage = yield* ToolCallBindingStorage
     const turnRecordStorage = yield* TurnRecordStorage
     const processLocalReplay = yield* ProcessLocalToolReplay
+    const eventStorage = yield* EventStorage
+
+    /**
+     * The model the branch's last settled step actually ran on, derived from
+     * its `StreamEnded`. The step boundary compares it with the model the
+     * next step resolves; where the settings event sits in the log does not
+     * matter. The cursor only bounds the read to the events since the last
+     * settled step it saw; the value is always re-derived from the log.
+     */
+    const settledStepModel = ({ event }: EventEnvelope): Option.Option<ModelIdType> => {
+      if (event._tag !== "StreamEnded") return Option.none()
+      return Option.fromUndefinedOr(event.model)
+    }
+    const lastSettledStep = yield* Ref.make<{
+      readonly cursor: number
+      readonly model: Option.Option<ModelIdType>
+    }>({ cursor: 0, model: Option.none() })
+    const lastSettledModel = Effect.gen(function* () {
+      const known = yield* Ref.get(lastSettledStep)
+      const events = yield* eventStorage.listEvents({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        afterId: known.cursor,
+      })
+      const settledIndex = events.findLastIndex((envelope) =>
+        Option.isSome(settledStepModel(envelope)),
+      )
+      const current = Option.match(Option.fromUndefinedOr(events[settledIndex]), {
+        onNone: () => known,
+        onSome: (envelope) => ({ cursor: envelope.id, model: settledStepModel(envelope) }),
+      })
+      yield* Ref.set(lastSettledStep, current)
+      return current.model
+    })
     const clearProcessLocalReplayBindings = (assistantMessageId: string) =>
       processLocalReplay.clearBindingsWithPrefix(
         `${scope.sessionId}:${scope.branchId}:${assistantMessageId}:`,
@@ -1741,6 +1774,22 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             ),
           )
       })
+
+    /**
+     * Keep what admitted the turn beside its position. A plain turn has
+     * nothing to keep and writes no row here.
+     */
+    const recordTurnAdmission = Effect.fn("AgentLoop.recordTurnAdmission")(function* (
+      state: RunningState,
+    ) {
+      const admission = omitUndefined({
+        agentOverride: state.agentOverride,
+        runSpec: state.runSpec,
+        interactive: state.interactive,
+      })
+      if (Object.keys(admission).length === 0) return
+      yield* updateTurnRecord(state.message.id, () => admission)
+    })
 
     /** The step opened: its assistant message committed, its calls are pending. */
     const openTurnStep = Effect.fn("AgentLoop.openTurnStep")(function* (params: {
@@ -2004,8 +2053,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // parts persisted with their bindings.
       const settleStep = Effect.gen(function* () {
         const usage = Option.fromUndefinedOr(collected.messageProjection.usage)
+        // Priced by the catalog id, the same one the context window reads: a
+        // driver override routes `provider/model` to `driver/model`.
         const streamEndedCost = yield* computeStreamEndedCost({
-          modelId: params.resolved.modelId,
+          modelId: params.resolved.modelDriver.contextModelId,
           usage,
         })
         yield* publishEventOrDie(
@@ -2272,8 +2323,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
         if (dispatching.length === 0) return params.toolBindings
         const resolved = yield* resolveForState(params.state, params.turnProfile)
+        // The turn's agent no longer exists: the resolve already published an
+        // error that names it. A removed agent grants nothing, so its
+        // dispatching calls lose their bindings and settle as failed; the next
+        // step meets the same missing agent and ends the turn unanswered.
         if (Predicate.isUndefined(resolved)) {
-          return yield* new AgentLoopError({ message: "Recovery requires a selected agent" })
+          for (const call of dispatching) params.toolBindings.delete(call.name)
+          return params.toolBindings
         }
         // A stored binding cannot restore authority the current agent policy
         // removed: a tool the agent no longer grants must not come back.
@@ -2337,11 +2393,15 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
 
       // No usable row. Derive the position from the messages once, then adopt
-      // it. A turn that is only starting exits on the first missing id.
-      let lastCompletedStep = 0
+      // it. A turn that is only starting exits on the first missing id. The
+      // row is written after its step's messages, so the steps it names are
+      // settled: the probe starts past them. A step that wrote nothing (an
+      // empty answer re-prompted) has no assistant message, and a probe from
+      // step 1 would stop there and move the turn backwards.
+      let lastCompletedStep = record.step
       let pendingAssistant = Option.none<Message>()
       let pendingToolCalls: ReadonlyArray<Prompt.ToolCallPart> = []
-      for (let step = 1; step <= MAX_TURN_STEPS; step++) {
+      for (let step = record.step + 1; step <= MAX_TURN_STEPS; step++) {
         const at = stepAddress(messageId, step)
         const existingAssistant = yield* messageStorage.getMessage(at.assistant)
         if (Predicate.isUndefined(existingAssistant)) break
@@ -2472,23 +2532,36 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         }
         nativeToolCalls.push(toolCall)
       }
+      // A call whose result is already known needs no binding: it will not
+      // run again. Only the calls still owed a result are captured, so one
+      // missing binding cannot turn a stored success into a failure.
+      const known = yield* readKnownStepResults({
+        messageId: params.messageId,
+        step: pendingStep,
+        toolCalls: pendingToolCalls,
+        recoveredResults,
+      })
+      if (Option.isNone(known)) return { step: pendingStep, interaction: Option.none() }
+      const knownResults = known.value.knownResults
+      const unsettledCalls = nativeToolCalls.filter((toolCall) => !knownResults.has(toolCall.id))
       const toolBindings = yield* captureReplayToolBindings({
         assistantMessageId: pendingAssistant.value.id,
-        toolCalls: nativeToolCalls,
+        toolCalls: unsettledCalls,
         turnProfile: params.turnProfile,
       }).pipe(
         Effect.catchIf(Schema.is(ToolBindingReplayError), (error) =>
           Effect.gen(function* () {
-            const failureParts = nativeToolCalls.map((toolCall) =>
-              Prompt.toolResultPart({
-                id: toolCall.id,
-                name: toolCall.name,
-                isFailure: true,
-                providerExecuted: false,
-                result: { error: error.message, reason: error.reason },
-              }),
+            const parts = pendingToolCalls.map(
+              (toolCall) =>
+                knownResults.get(toolCall.id) ??
+                Prompt.toolResultPart({
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  isFailure: true,
+                  providerExecuted: false,
+                  result: { error: error.message, reason: error.reason },
+                }),
             )
-            const parts = [...recoveredResults, ...failureParts]
             yield* recordToolOutcome({
               sessionId: scope.sessionId,
               branchId: scope.branchId,
@@ -2540,18 +2613,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // The message joins the transcript now. Its admission time could sort it
         // between a tool call and its result, which the projection rejects.
         //
-        // `steering` marks it as answered by the turn it joined. Without the
+        // `joinedTurn` marks it as answered by the turn it joined. Without the
         // mark it is a user-role message with no `TurnCompleted` of its own,
         // and a restart reads that as an unanswered turn and answers it twice.
-        // Only delivery stamps it: an interjection that woke an idle branch
-        // never reaches this boundary and must still recover.
+        // Only delivery sets it: an interjection that woke an idle branch
+        // never reaches this boundary and must still recover. The sender's own
+        // custom type stays; the TUI draws the sender row from it.
         join: (item) =>
           Effect.gen(function* () {
             yield* persistMessageReceived({
               message: {
                 ...item.message,
                 createdAt: yield* DateTime.nowAsDate,
-                metadata: { ...item.message.metadata, customType: "steering" },
+                metadata: { ...item.message.metadata, joinedTurn: true },
               },
             })
           }),
@@ -2603,12 +2677,55 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly currentTurnAgent: AgentNameType
       readonly turnProfile: AgentLoopTurnProfile
     }) {
-      const resolved = yield* resolveForState(params.state, params.turnProfile)
+      const resolvedAtBoundary = yield* resolveForState(params.state, params.turnProfile)
       // `resolveTurnContext` published `ErrorOccurred` and gave up — an unknown
       // agent, most often. The turn produced no answer, so say so rather than
       // publish a `TurnCompleted` no caller can tell from a reply.
-      if (Predicate.isUndefined(resolved)) {
+      if (Predicate.isUndefined(resolvedAtBoundary)) {
         return endStep(params.currentTurnAgent, { unanswered: true })
+      }
+      // A line the loop writes at this boundary, after the messages this step
+      // resolved: the step reads it too. Replay finds it by id, so it is
+      // appended once.
+      let resolved = resolvedAtBoundary
+      const appendBoundaryLine = Effect.fn("AgentLoop.appendBoundaryLine")(function* (
+        message: Message,
+      ) {
+        const persisted = yield* persistMessageReceived({ message })
+        if (resolved.messages.some((existing) => existing.id === persisted.id)) return
+        resolved = { ...resolved, messages: [...resolved.messages, persisted] }
+      })
+      // A `/model` switch lands here, never between a tool call and its
+      // result: the settings writer only records the choice. A turn under an
+      // agent or run-spec model override picks its own model on purpose and
+      // writes no notice; the turn after it notices the change back.
+      const overridesModel =
+        Predicate.isNotUndefined(params.state.agentOverride) ||
+        Predicate.isNotUndefined(params.state.runSpec?.overrides?.modelId)
+      const previousModel = yield* lastSettledModel.pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("turn.model-change-read-failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
+            Effect.as(Option.none<ModelIdType>()),
+          ),
+        ),
+      )
+      if (
+        !overridesModel &&
+        Option.isSome(previousModel) &&
+        previousModel.value !== resolved.modelId
+      ) {
+        yield* appendBoundaryLine(
+          modelChangeNotice({
+            sessionId: scope.sessionId,
+            branchId: scope.branchId,
+            turnMessageId: params.state.message.id,
+            step: params.step,
+            previousModelId: previousModel.value,
+            nextModelId: resolved.modelId,
+            createdAt: yield* DateTime.nowAsDate,
+          }),
+        )
       }
 
       const currentTurnAgent = resolved.currentTurnAgent
@@ -2621,9 +2738,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       const maxSteps = Math.min(resolved.agent.maxSteps ?? MAX_TURN_STEPS, MAX_TURN_STEPS)
       if (params.step > maxSteps) {
-        // Only reachable when the final step still returned a tool call: it ran
-        // with tools disabled, and the calls it made ran anyway. Leaving the
-        // flags false publishes a `TurnCompleted` no caller can tell from a
+        // The final step refuses its tool calls and stops, so only a resume
+        // past the budget lands here. Leaving the flags false publishes a `TurnCompleted` no caller can tell from a
         // reply, and `headless-runner.ts` reads exactly that flag to pick its
         // exit code, so `gent -H` would exit 0 having printed nothing.
         yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
@@ -2637,8 +2753,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // (`runner/llm.ts:221`).
       const finalStep = params.step === maxSteps
       if (finalStep) {
-        yield* persistMessageReceived({
-          message: Message.cases.regular.make({
+        yield* appendBoundaryLine(
+          Message.cases.regular.make({
             id: finalStepMessageIdForTurn(params.state.message.id),
             sessionId: scope.sessionId,
             branchId: scope.branchId,
@@ -2647,7 +2763,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             createdAt: yield* DateTime.nowAsDate,
             metadata: { customType: "max-steps", details: { step: params.step } },
           }),
-        })
+        )
         yield* Effect.logWarning("turn.max-steps-final").pipe(
           Effect.annotateLogs({ step: params.step, max: maxSteps }),
         )
@@ -2688,6 +2804,29 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }),
         )
       }
+      const refuseToolsAtStepLimit = Effect.gen(function* () {
+        const address = stepAddress(params.state.message.id, params.step)
+        yield* recordToolOutcome({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          toolResultMessageId: address.toolResult,
+          assistantMessageId: address.assistant,
+          parts: toolCallsFromResponseParts(collected.responseParts).map((call) =>
+            Prompt.toolResultPart({
+              id: call.id,
+              name: call.name,
+              isFailure: true,
+              providerExecuted: false,
+              result: {
+                error: "The tool did not run: the turn reached its step limit.",
+                reason: "StepLimit",
+              },
+            }),
+          ),
+        })
+        yield* clearProcessLocalReplayBindings(address.assistant)
+        yield* closeTurnStep({ messageId: params.state.message.id, step: params.step })
+      })
       const runTools = Effect.gen(function* () {
         const interactionSignal = yield* executeTools({
           hostToolBindings: resolved.hostToolBindings,
@@ -2737,7 +2876,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             if (truncated) instruction = TRUNCATED_RESPONSE_INSTRUCTION
             return continueOr(instruction, stop({ unanswered: empty }))
           },
-          ToolCalls: () => runTools,
+          // The last budgeted step ran with `toolChoice: "none"`; a call made
+          // anyway is refused, not run. No step follows to read its result, and
+          // a tool with side effects would act after the budget said stop.
+          ToolCalls: () => {
+            if (!finalStep) return runTools
+            return refuseToolsAtStepLimit.pipe(Effect.as(stop({ unanswered: true })))
+          },
         }),
       )(outcome)
     })
@@ -2788,6 +2933,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       return yield* Effect.gen(function* () {
         yield* persistMessageReceived({ message: state.message })
+        // The queue forgets the admission once it settles; the record keeps
+        // it, so a restart resumes this turn under the same agent and run.
+        yield* recordTurnAdmission(state)
         yield* scope.inbox.settle(state.message.id)
 
         const resumed = yield* resumeTurn({

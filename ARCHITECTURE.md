@@ -64,10 +64,17 @@ updates this list in the same commit.
     characters inline (head and tail); the rest is paged through
     `context.read`. Receipt: `maximumModelToolResultChars` in
     `packages/core/src/runtime/model-context.ts`.
-11. **A model change is a durable user-role notice.** Switching models writes
-    one `model-change` message the next turn reads; an effort change writes
-    nothing. Receipt: `modelChangeNotice` in
-    `packages/core/src/server/server.ts`.
+11. **A model change is a durable user-role notice the loop writes.** The
+    settings update only records the choice. At each step boundary the loop
+    compares the model the branch's last settled step ran on (its
+    `StreamEnded`) with the model this step resolves; when they differ it
+    writes one `model-change` message, and that step reads it. The id names
+    both models, so a replay after a further switch writes the right one. A
+    turn under an agent or run-spec model override writes none; the turn after
+    it notices the change back. An effort change, or a branch with no settled
+    step, writes nothing. Receipts: `modelChangeNotice` in
+    `packages/core/src/runtime/model-context.ts`, `lastSettledModel` in
+    `packages/core/src/runtime/turn.ts`.
 12. **Tool guidance lives on the tool and follows the active tool list.**
     `promptGuidelines` are deduped per turn from the post-policy tools only.
     Receipts: `buildTurnPromptSections` in
@@ -1026,9 +1033,11 @@ Other notes:
 
 - A process Resource layer that fails to build rejects its extension: the
   profile reports it failed at the `startup` phase, closes what that layer
-  acquired, and keeps its siblings live. Branch resources build together when
-  a branch loop starts, so a branch resource that fails to build fails that
-  loop, not one extension. Release runs in reverse build order when the owning
+  acquired, and keeps its siblings live. Branch resources come from the
+  session's profile (the extensions set up for the session's cwd) and build
+  together on the loop's first turn or extension request, so a control-plane
+  write never resolves a profile, and a branch resource that fails to build
+  fails that loop, not one extension. Release runs in reverse build order when the owning
   scope closes.
 - Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
 - Agent choice is turn-scoped: `QueuedTurnItem.agentOverride` names the agent

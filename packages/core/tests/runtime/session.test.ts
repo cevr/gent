@@ -2,6 +2,7 @@ import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
+  DriverRef,
   Model,
   ModelId,
   ProviderId,
@@ -577,7 +578,7 @@ describe("SessionRuntime", () => {
       )
     }),
   )
-  it.live("steer interject interrupts the active turn ahead of queued follow-ups", () =>
+  it.live("an interjection joins the running turn ahead of queued follow-ups", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
@@ -809,6 +810,12 @@ const cowork = AgentDefinition.make({
   name: AgentName.make("cowork"),
   model: ModelId.make("test/priced"),
 })
+/** Names its model under another provider; its driver routes it to `test/priced`. */
+const routed = AgentDefinition.make({
+  name: AgentName.make("routed"),
+  model: ModelId.make("proxy/priced"),
+  driver: DriverRef.make({ id: "test" }),
+})
 const modelWithPricing = new Model({
   id: ModelId.make("test/priced"),
   name: "Priced Test",
@@ -821,7 +828,7 @@ const makeLayer = (
   models: readonly Model[] = [modelWithPricing],
 ) =>
   baseLocalLayerWithProvider(providerLayer, {
-    agents: [cowork],
+    agents: [cowork, routed],
     // `extraLayers` in `baseLocalLayerWithProvider` are merged AFTER the
     // default `ModelRegistry.Test()`, so later merges win the tag.
     extraLayers: [ModelRegistry.Test(models)],
@@ -913,6 +920,31 @@ describe("session metrics", () => {
       const expected = result.streamEndeds.reduce((sum, ev) => sum + (ev.costUsd ?? 0), 0)
       expect(result.metrics.costUsd).toBeCloseTo(expected, 10)
       expect(result.metrics.lastInputTokens).toBeGreaterThan(0)
+    }),
+  )
+  it.live("a routed model is priced by the model the catalog knows it as", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
+      const streamEndeds = yield* narrowR(
+        Effect.gen(function* () {
+          const runtime = yield* SessionRuntime
+          const events = yield* EventStorage
+          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+          yield* runtime.sendUserMessage({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("turn:routed"),
+            content: "routed",
+            agentOverride: AgentName.make("routed"),
+          })
+          const envelopes = yield* events.listEvents({ sessionId, branchId })
+          return envelopes.map((e) => e.event).filter((e) => e._tag === "StreamEnded")
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
+      )
+      expect(streamEndeds).toHaveLength(1)
+      // The context window already reads `test/priced`; the price must too.
+      expect(streamEndeds[0]?.costUsd).toBeGreaterThan(0)
     }),
   )
   it.live("a turn with one step that reports no usage leaves the receipt's usage absent", () =>

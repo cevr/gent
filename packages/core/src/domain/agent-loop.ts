@@ -654,8 +654,8 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
  * in-flight turn holds the actor; the persisted reply can't drain.
  * Empirically validated twice: W35-C7.3 (commit `a8b084bc`),
  * re-derived W37-S4-C10 (2026-05-11) — both produced 4s timeout on
- * `tests/runtime/session.test.ts` ("steer interject interrupts
- * the active turn ahead of queued follow-ups"). Note: `ref.send` does
+ * `tests/runtime/session.test.ts` ("an interjection joins the
+ * running turn ahead of queued follow-ups"). Note: `ref.send` does
  * NOT silently drop runtime delivery errors — the discardCall Effect
  * propagates; only statically typed `never`. `Steer.persisted: true`
  * is the durability guarantee (Steer survives crash + redeliver) and

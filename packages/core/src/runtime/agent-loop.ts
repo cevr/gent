@@ -57,6 +57,7 @@ import {
   SessionOperationStorage,
   type SessionStorage,
   ToolCallBindingStorage,
+  type TurnRecord,
   TurnRecordStorage,
 } from "../storage/storage.js"
 import {
@@ -90,7 +91,7 @@ import {
   type WaitingForInteractionState,
 } from "../domain/agent-loop.js"
 import { type AgentEvent, ErrorOccurred, EventPublisher } from "../domain/event.js"
-import { causeChainMessage } from "../domain/guards.js"
+import { causeChainMessage, omitUndefined } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
   type AgentLoopTurnProfile,
@@ -533,12 +534,22 @@ const turnFailureEpoch = (state: AgentLoopState): number =>
 
 // ── The module ──
 
+/**
+ * The queue writes that failed so far, as a monotonic counter with the latest
+ * error. A waiter records the epoch before it starts and fails only on a mark
+ * past it, so a write that failed once never fails a later caller.
+ */
+interface PersistenceFailureMark {
+  readonly epoch: number
+  readonly error: Option.Option<AgentLoopError>
+}
+
 type LoopInboxContext = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly loopRef: TxSubscriptionRef.TxSubscriptionRef<AgentLoopState>
   readonly queuePersistenceSemaphore: Semaphore.Semaphore
-  readonly persistenceFailure: Deferred.Deferred<void, AgentLoopError>
+  readonly persistenceFailures: TxSubscriptionRef.TxSubscriptionRef<PersistenceFailureMark>
   readonly startedRef: Ref.Ref<boolean>
 }
 
@@ -638,7 +649,10 @@ export const makeLoopInbox = (
       })
 
     const recordPersistenceFailure = (error: AgentLoopError) =>
-      Deferred.fail(scope.persistenceFailure, error).pipe(Effect.catchEager(() => Effect.void))
+      TxSubscriptionRef.update(scope.persistenceFailures, (mark) => ({
+        epoch: mark.epoch + 1,
+        error: Option.some(error),
+      }))
 
     const commitQueueTransaction = <A>(
       operation: string,
@@ -1170,15 +1184,21 @@ const provideAgentLoopRuntimeContext =
     Effect.provideContext(effect, ctx)
 
 type AgentLoopBehavior = {
-  persistenceFailure: Effect.Effect<void, AgentLoopError>
+  /** The persistence-failure epoch now; a waiter records it before it starts. */
+  persistenceFailureEpoch: Effect.Effect<number>
+  /** Fails with the first queue-write failure recorded after `epoch`. */
+  persistenceFailureAfter: (epoch: number) => Effect.Effect<void, AgentLoopError>
   /**
    * Everything this branch has accepted and not yet answered. The behavior
    * does not restate the inbox's verbs: a caller that wants to admit, steer,
    * withdraw or read the queue asks the inbox itself.
    */
   inbox: LoopInbox
-  /** The newest user message whose turn never completed; what a reopened loop resumes. */
-  incompleteUserTurn: Effect.Effect<Option.Option<Message>>
+  /**
+   * The newest user message whose turn never completed, with what admitted
+   * it; what a reopened loop resumes.
+   */
+  incompleteUserTurn: Effect.Effect<Option.Option<QueuedTurnItem>>
   /** Whether this session has ever written to the branch; a cold loop with history wakes. */
   hasPriorHistory: Effect.Effect<boolean>
   /**
@@ -1192,9 +1212,10 @@ type AgentLoopBehavior = {
    * Branch-lifetime services: the cell kernel, the model context ledger, and
    * every extension Resource declared with `scope: "branch"`. Extension leaves
    * invoked outside a turn (an `extension.request` RPC, say) must be given this
-   * context, or a branch Resource resolves as "Service not found".
+   * context, or a branch Resource resolves as "Service not found". Built on
+   * first use from the session's profile.
    */
-  branchContext: Context.Context<never>
+  branchContext: Effect.Effect<Context.Context<never>>
   startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   interrupt: (messageId?: MessageId) => Effect.Effect<void, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
@@ -1294,7 +1315,7 @@ const makeAgentLoopBehavior = (
     const extensionRegistry = yield* ExtensionRegistry
     const eventPublisher = yield* EventPublisher
     yield* ToolCallBindingStorage
-    yield* TurnRecordStorage
+    const turnRecords = yield* TurnRecordStorage
     yield* ToolRunner
     const followUp = yield* AgentLoopFollowUp
     const messageStorage = yield* MessageStorage
@@ -1371,30 +1392,53 @@ const makeAgentLoopBehavior = (
     // `loopScope`, so they are rebuilt per loop and interrupted when the branch
     // closes. Process-scope Resources are not collected here — they belong to
     // the process graph host and outlive this scope.
-    const branchResourceLayer = buildResourceLayer(
-      extensionRegistry.getResolved().extensions,
-      "branch",
-    )
     const branchTools = yield* CurrentBranchToolFeature
     const branchCwd = yield* sessionWorkingDirectory(sessionId)
-    const branchContext = yield* Layer.build(
-      Layer.merge(
-        branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
-        branchResourceLayer,
-      ),
+    const branchToolContext = yield* Layer.build(
+      branchTools.branchLayer({ sessionId, branchId, cwd: branchCwd, turnInterruption }),
     ).pipe(Scope.provide(loopScope))
+    // The branch's Resources come from the session's profile, the same one its
+    // turns and requests resolve: the extensions set up for the session's cwd,
+    // over that profile's process services. The launch registry would build
+    // another project's Resources. They are built on the first turn or
+    // request, not at open, so a control-plane write (a cancel, an answer to
+    // no question) never resolves a profile.
+    const branchResourceLock = yield* Semaphore.make(1)
+    const branchResources = yield* Ref.make(Option.none<typeof branchToolContext>())
+    const branchContext = Effect.gen(function* () {
+      const built = yield* Ref.get(branchResources)
+      if (Option.isSome(built)) return built.value
+      const profile = yield* resolveTurnProfile
+      return yield* Effect.uninterruptible(
+        Layer.build(
+          buildResourceLayer(profile.turnExtensionRegistry.getResolved().extensions, "branch"),
+        ).pipe(
+          Effect.provideContext(
+            Option.getOrElse(Option.fromUndefinedOr(profile.turnCapabilityContext), Context.empty),
+          ),
+          Scope.provide(loopScope),
+          Effect.map((resources): typeof branchToolContext =>
+            Context.merge(branchToolContext, resources),
+          ),
+          Effect.tap((context) => Ref.set(branchResources, Option.some(context))),
+        ),
+      )
+    }).pipe(branchResourceLock.withPermits(1))
     const turnWorkerQueue = yield* TxQueue.unbounded<RunningState>()
     const activeStreamRef = yield* Ref.make<Option.Option<ActiveStreamHandle>>(Option.none())
     const turnLedger = yield* makeTurnLedger
     // A tool holding branch-scoped work exposes how to cancel it. A branch
     // whose tools are all stateless has nothing to cancel.
-    const branchWork = Context.getOption(branchContext, BranchToolWork)
+    const branchWork = Context.getOption(branchToolContext, BranchToolWork)
     const initialLoopState = buildIdleState()
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
       buildInitialAgentLoopState({ state: initialLoopState, queue: initialQueue }),
     )
     const queuePersistenceSemaphore = yield* Semaphore.make(1)
-    const persistenceFailure = yield* Deferred.make<void, AgentLoopError>()
+    const persistenceFailures = yield* TxSubscriptionRef.make<PersistenceFailureMark>({
+      epoch: 0,
+      error: Option.none(),
+    })
     const closed = yield* Deferred.make<void>()
     const startedRef = yield* Ref.make(false)
 
@@ -1403,7 +1447,7 @@ const makeAgentLoopBehavior = (
       branchId,
       loopRef,
       queuePersistenceSemaphore,
-      persistenceFailure,
+      persistenceFailures,
       startedRef,
     })
 
@@ -1446,7 +1490,10 @@ const makeAgentLoopBehavior = (
       runTurn: (state) =>
         Effect.acquireUseRelease(
           keepAlive(true),
-          () => runTurn(state).pipe(Effect.provideContext(branchContext)),
+          () =>
+            branchContext.pipe(
+              Effect.flatMap((context) => runTurn(state).pipe(Effect.provideContext(context))),
+            ),
           () => keepAlive(false),
         ),
     })
@@ -1500,10 +1547,14 @@ const makeAgentLoopBehavior = (
           return []
         }),
       )
+      // A failed turn writes no receipt. Once a later turn has completed, the
+      // failed one is history the branch moved past, so only messages received
+      // after the last completion can be the turn a restart cut short.
+      const lastCompletion = envelopes.findLastIndex(({ event }) => event._tag === "TurnCompleted")
       // Continuation prompts, handoff markers, and model-change notices are
       // the runtime's own user-role lines; none completes on its own and none
       // must start a turn of its own.
-      const incomplete = envelopes.flatMap(({ event }) => {
+      const incomplete = envelopes.slice(lastCompletion + 1).flatMap(({ event }) => {
         if (
           event._tag === "MessageReceived" &&
           event.message.role === "user" &&
@@ -1514,11 +1565,59 @@ const makeAgentLoopBehavior = (
         }
         return []
       })
-      return Option.fromUndefinedOr(incomplete.at(-1))
+      const message = incomplete.at(-1)
+      if (Predicate.isUndefined(message)) return Option.none<QueuedTurnItem>()
+      // The turn resumes under the admission that started it. A turn cut
+      // before it settled still has it in the queue's in-flight slot; one
+      // that settled has it in its record.
+      const inFlight = (yield* inbox.read).queue.inFlight
+      if (Predicate.isNotUndefined(inFlight) && inFlight.message.id === message.id) {
+        return Option.some(inFlight)
+      }
+      const record = yield* turnRecords.get({ sessionId, branchId, messageId: message.id }).pipe(
+        Effect.asSome,
+        Effect.catchEager((error) =>
+          Effect.logWarning("agent-loop.recovery-read-failed").pipe(
+            Effect.annotateLogs({ read: "turn record", sessionId, branchId, error: String(error) }),
+            Effect.as(Option.none<TurnRecord>()),
+          ),
+        ),
+      )
+      return Option.some<QueuedTurnItem>({
+        message,
+        ...Option.match(record, {
+          onNone: () => ({}),
+          onSome: (value) =>
+            omitUndefined({
+              agentOverride: value.agentOverride,
+              runSpec: value.runSpec,
+              interactive: value.interactive,
+            }),
+        }),
+      })
     })
 
     return {
-      persistenceFailure: Deferred.await(persistenceFailure),
+      persistenceFailureEpoch: Effect.map(
+        TxSubscriptionRef.get(persistenceFailures),
+        (mark) => mark.epoch,
+      ),
+      persistenceFailureAfter: (epoch) =>
+        Effect.gen(function* () {
+          const after = (mark: PersistenceFailureMark) => mark.epoch > epoch
+          const current = yield* TxSubscriptionRef.get(persistenceFailures)
+          let mark = Option.liftPredicate(current, after)
+          if (Option.isNone(mark)) {
+            mark = yield* TxSubscriptionRef.changesStream(persistenceFailures).pipe(
+              Stream.filter(after),
+              Stream.runHead,
+            )
+          }
+          return yield* Option.getOrElse(
+            Option.flatMap(mark, (value) => value.error),
+            () => new AgentLoopError({ message: "Queue persistence failure stream ended" }),
+          )
+        }),
       inbox,
       incompleteUserTurn,
       hasPriorHistory,
@@ -1588,7 +1687,7 @@ const isActiveLoopState = Predicate.or(
  * not running it, not waiting on it, and not keeping it queued. That is read
  * off the loop's own state, so no event subscription can miss it. Failure is
  * a monotonic counter (`turnFailure.epoch`); a caller records where it stood
- * before starting the turn (`turnFailureBaseline`). A later mark that names
+ * before starting the turn (`waitBaseline`). A later mark that names
  * the caller's message is this turn's failure; a mark for another message is
  * not.
  */
@@ -1687,9 +1786,18 @@ const failIfTurnFailedAfterEpoch = (
     }
   })
 
-/** Record the failure mark to wait from. Take this *before* starting the turn. */
-const turnFailureBaseline = (behavior: AgentLoopBehavior): Effect.Effect<number> =>
-  Effect.map(behavior.inbox.read, turnFailureEpoch)
+/** Where a waiter starts: the turn- and persistence-failure marks before its turn. */
+interface WaitBaseline {
+  readonly turn: number
+  readonly persistence: number
+}
+
+/** Record the failure marks to wait from. Take this *before* starting the turn. */
+const waitBaseline = (behavior: AgentLoopBehavior): Effect.Effect<WaitBaseline> =>
+  Effect.all({
+    turn: Effect.map(behavior.inbox.read, turnFailureEpoch),
+    persistence: behavior.persistenceFailureEpoch,
+  })
 
 /**
  * Wait until the loop has released `messageId`, started after `baseline`.
@@ -1703,7 +1811,7 @@ const turnFailureBaseline = (behavior: AgentLoopBehavior): Effect.Effect<number>
  */
 const awaitTurnCompletion = (
   behavior: AgentLoopBehavior,
-  baseline: number,
+  baseline: WaitBaseline,
   messageId: MessageId,
   onPersistenceFailure: (
     failure: Effect.Effect<void, AgentLoopError>,
@@ -1712,13 +1820,13 @@ const awaitTurnCompletion = (
   Effect.raceFirst(
     Effect.raceFirst(
       waitForMessageReleased(behavior, messageId),
-      waitForTurnFailureAfterEpoch(behavior, baseline, messageId),
+      waitForTurnFailureAfterEpoch(behavior, baseline.turn, messageId),
     ),
-    onPersistenceFailure(behavior.persistenceFailure),
+    onPersistenceFailure(behavior.persistenceFailureAfter(baseline.persistence)),
   ).pipe(
     // Release wins the race even when the turn failed on its way there,
     // so the failure is checked once more after the race settles.
-    Effect.andThen(failIfTurnFailedAfterEpoch(behavior, baseline, messageId)),
+    Effect.andThen(failIfTurnFailedAfterEpoch(behavior, baseline.turn, messageId)),
   )
 /**
  * `Actor.toLayer` handler layer for `AgentLoop`.
@@ -1851,8 +1959,10 @@ const buildAgentLoopActorHandlers = (config: {
     const shouldWake = (handle: AgentLoopBehavior, input: { readonly wake?: boolean }) =>
       Effect.gen(function* () {
         if (input.wake === true) return true
-        if (Option.isSome(yield* handle.incompleteUserTurn)) return true
-        return yield* handle.hasPriorHistory
+        // An incomplete turn is a stored user message, so history answers first
+        // and the event-log scan runs only for a branch with no messages.
+        if (yield* handle.hasPriorHistory) return true
+        return Option.isSome(yield* handle.incompleteUserTurn)
       })
 
     const startNextQueuedTurnIfIdle = (
@@ -1937,8 +2047,6 @@ const buildAgentLoopActorHandlers = (config: {
       readonly runSpec?: RunSpec
       readonly interactive?: boolean
       readonly wake?: boolean
-      /** The message already carries a source-keyed id; see `QueuedTurnItem.keyed`. */
-      readonly keyed?: boolean
     }
 
     const buildFollowUpItem = Effect.fn("AgentLoopActor.buildFollowUpItem")(function* (
@@ -1972,7 +2080,6 @@ const buildAgentLoopActorHandlers = (config: {
         runSpec: input.runSpec,
         interactive: input.interactive,
         wake: input.wake,
-        keyed: Predicate.isNotUndefined(input.sourceId) || input.keyed === true,
       }
       return item
     })
@@ -2091,10 +2198,10 @@ const buildAgentLoopActorHandlers = (config: {
           Effect.andThen(handle.inbox.writeInitialQueue),
           Effect.andThen(
             Effect.gen(function* () {
-              const incompleteMessage = yield* handle.incompleteUserTurn
-              if (Option.isSome(incompleteMessage)) {
+              const incompleteTurn = yield* handle.incompleteUserTurn
+              if (Option.isSome(incompleteTurn)) {
                 yield* handle
-                  .startTurn({ message: incompleteMessage.value })
+                  .startTurn(incompleteTurn.value)
                   .pipe(
                     Effect.catchEager((error) =>
                       closeBehaviorWithHeldStartupPermit(handle).pipe(
@@ -2219,7 +2326,7 @@ const buildAgentLoopActorHandlers = (config: {
       operation: TurnSubmissionInput,
     ) {
       const handle = yield* ensureStarted
-      const baseline = yield* turnFailureBaseline(handle)
+      const baseline = yield* waitBaseline(handle)
       yield* admitTurn(handle, operation)
       // This turn is done when the loop lets *its* message go, which can
       // happen while the loop stays busy with a follow-up.
@@ -2311,7 +2418,6 @@ const buildAgentLoopActorHandlers = (config: {
             yield* enqueueMessage(handle, {
               message: operation.message,
               wake: operation.wake,
-              keyed: true,
             })
           }).pipe(provideActorWorkspace),
       ),
@@ -2324,21 +2430,12 @@ const buildAgentLoopActorHandlers = (config: {
             yield* ensureTarget(operation)
             yield* markWrite
             const handle = yield* ensureStarted
-            // One read decides all three cases. The mailbox is unbounded, so a
-            // second read could observe a turn that started in between and take
-            // a branch the first read did not test.
-            const phase = yield* handle.inbox.phase
-            if (phase._tag === "WaitingForInteraction") {
-              return yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
-            }
             // A reply to a loop that lost its turn (a restart mid-interaction)
-            // resumes that turn instead; the interaction is answered inside it.
-            if (phase._tag !== "Idle") return
-            const message = yield* handle.incompleteUserTurn
-            if (Option.isNone(message)) return
-            const baseline = yield* turnFailureBaseline(handle)
-            yield* handle.startTurn({ message: message.value }).pipe(orCleanup(handle))
-            yield* awaitTurnCompletion(handle, baseline, message.value.id, orCleanup(handle))
+            // needs nothing here: opening the loop resumed that turn, and it
+            // reads the stored answer when it reaches the interaction.
+            const phase = yield* handle.inbox.phase
+            if (phase._tag !== "WaitingForInteraction") return
+            yield* handle.respondInteraction(operation.requestId).pipe(orCleanup(handle))
           }).pipe(provideActorWorkspace),
       ),
       DrainQueue: Effect.fn("AgentLoop.DrainQueue")(
@@ -2376,12 +2473,14 @@ const buildAgentLoopActorHandlers = (config: {
               // Branch Resources live on the loop scope, not on the turn
               // profile. Without this an extension leaf reached over RPC
               // cannot see a `scope: "branch"` service.
-              Effect.provideContext(handle.branchContext),
+              Effect.provideContext(yield* handle.branchContext),
             )
             // A read-only request answers while a turn runs; anything else is
             // a side mutation and waits for the permit the turn holds.
             if (rpcRegistry.isReadonly(operation.extensionId, capabilityId)) return yield* run
-            return yield* run.pipe(handle.withSideMutation, Effect.ensuring(drainWake(handle)))
+            // A follow-up the request admitted wakes the loop from
+            // `admitFollowUp`, which forks the drain in the actor scope.
+            return yield* run.pipe(handle.withSideMutation)
           }).pipe(
             Effect.catchCause((cause) => Effect.fail(causeToAgentLoopError(cause))),
             provideActorWorkspace,
