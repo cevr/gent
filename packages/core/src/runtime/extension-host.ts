@@ -1155,7 +1155,8 @@ const importFailure = (
 
 /**
  * A config file that did not load, as a `load` failure the extension health
- * view shows. Its settings are ignored until the file loads again.
+ * view shows. Its settings are ignored until the file loads again. The reason
+ * names the file: the id of both the user and the project file is `config`.
  */
 const configLoadFailure = (
   path: Path.Path,
@@ -1168,9 +1169,26 @@ const configLoadFailure = (
     path,
     error.path,
     scope,
-    `Config did not load; its settings are ignored until it is fixed: ${error.message}`,
+    `${error.path} did not load; its settings are ignored until it is fixed: ${error.message}`,
   )
 }
+
+/**
+ * The config files for `cwd` that do not load now, as health statuses. Health
+ * reads the files on each call, not from the cached session profile, so a
+ * fixed file clears its status without a restart.
+ */
+export const configHealthStatuses = Effect.fn("ExtensionHealth.configHealthStatuses")(function* (
+  cwd: string,
+) {
+  const configService = yield* ConfigService
+  const path = yield* Path.Path
+  const environment = yield* RuntimeEnvironment
+  const fresh = yield* configService.getFresh(cwd)
+  return fresh.failures.map((failure) =>
+    failedExtensionStatus(configLoadFailure(path, environment.home, failure)),
+  )
+})
 
 /** Discover and load extensions from all configured directories. Per-file isolation — one broken file does not suppress siblings. */
 export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (opts: {
@@ -1843,15 +1861,21 @@ export class SessionProfileCache extends Context.Service<
                 platformServicesContext,
                 profileScope,
               )
+              // A config failure is not part of the profile: health reads it
+              // live (`configHealthStatuses`), so it clears when the file is
+              // fixed. A root that fails on any failure still sees it here.
               const resolved = resolveExtensions(started.active, [
-                ...fresh.failures.map((failure) =>
-                  configLoadFailure(pathSvc, config.home, failure),
-                ),
                 ...declarations.extensionDeclarations.failed,
                 ...started.failed,
               ])
-              if (config.failOnExtensionFailure && resolved.failedExtensions.length > 0) {
-                return yield* Effect.die(describeFailedExtensions(resolved.failedExtensions))
+              const buildFailures = [
+                ...fresh.failures.map((failure) =>
+                  configLoadFailure(pathSvc, config.home, failure),
+                ),
+                ...resolved.failedExtensions,
+              ]
+              if (config.failOnExtensionFailure && buildFailures.length > 0) {
+                return yield* Effect.die(describeFailedExtensions(buildFailures))
               }
               return yield* buildSessionProfile({
                 cwd,
