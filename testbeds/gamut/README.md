@@ -13,7 +13,7 @@ bun run gamut list                  # the presets and the models each one pins
 bun run gamut up sol-luna           # fresh scratch run in a new herdr pane
 bun run gamut up mixed --prompt ./my-prompt.md --no-build
 bun run gamut read 80               # the pane tail
-bun run gamut wait                  # block until idle with no working child; use this, the transcript echoes the prompt
+bun run gamut wait                  # block until the pane is idle and no session in the run's data.db has an open turn
 bun run gamut send "also run typecheck"   # types into the TUI composer, then Enter
 bun run gamut interrupt             # one Ctrl-C
 bun run gamut status                # what the run actually did (below)
@@ -65,4 +65,5 @@ so `bun run test` and `bun run typecheck` do not reach it — its four failing
 tests are the exercise, not a regression.
 
 The pure parts of `gamut.ts` (preset → config, roster rewrite, state file,
-pane id) are covered by `packages/tooling/tests/gamut-testbed.test.ts`.
+pane id) are covered by `testbeds/gamut/tests/gamut.test.ts`, which the
+`@gent/tooling` test task runs.
