@@ -113,10 +113,49 @@ describe("injectGitTrailers", () => {
     expect(inject('git -C "my dir" commit -m a')).toBe(`git -C "my dir" commit ${trailer} -m a`)
   })
 
-  test("a commit that passes its own trailer keeps it; the other commits get one", () => {
-    expect(inject('git commit --trailer "X: 1" -m a && git commit -m b')).toBe(
-      `git commit --trailer "X: 1" -m a && git commit ${trailer} -m b`,
+  test("a commit that names its own Session-Id trailer keeps it; the other commits get one", () => {
+    expect(inject('git commit --trailer "Session-Id: x" -m a && git commit -m b')).toBe(
+      `git commit --trailer "Session-Id: x" -m a && git commit ${trailer} -m b`,
     )
+    expect(inject("git commit --trailer=session-id:x -m a")).toBe(
+      "git commit --trailer=session-id:x -m a",
+    )
+  })
+
+  test("another trailer, or a message that reads --trailer, keeps the session trailer", () => {
+    for (const command of [
+      'git commit --trailer "Co-authored-by: X <x@x>" -m a',
+      'git commit -m a -m "--trailer"',
+      'git commit -m "--trailer=Session-Id: x"',
+    ]) {
+      expect(inject(command), command).toBe(command.replace("git commit", `git commit ${trailer}`))
+    }
+  })
+
+  test("a commit found only by name in another command's words gets no trailer", () => {
+    for (const command of [
+      "gh issue create --title x git commit -m y",
+      "nix develop -c git commit -m y",
+    ]) {
+      expect(inject(command), command).toBe(command)
+    }
+  })
+
+  test("a commit after a wrapper's `--` gets the trailer", () => {
+    expect(inject("timeout 60 -- git commit -m y")).toBe(`timeout 60 -- git commit ${trailer} -m y`)
+  })
+
+  test("a commit in a coproc or a function body gets the trailer", () => {
+    expect(inject("coproc git commit -m y")).toBe(`coproc git commit ${trailer} -m y`)
+    expect(inject("coproc c { git commit -m y; }")).toBe(`coproc c { git commit ${trailer} -m y; }`)
+    expect(inject("function f { git commit -m y; }")).toBe(
+      `function f { git commit ${trailer} -m y; }`,
+    )
+  })
+
+  test("a heredoc with an escaped delimiter gets no trailer in its body", () => {
+    const command = "cat <<\\EOF > notes.md\n$(git commit -m x)\nEOF"
+    expect(inject(command)).toBe(command)
   })
 
   test("every commit in a chained command gets the trailer", () => {
@@ -198,11 +237,6 @@ describe("injectGitTrailers", () => {
     )
   })
 
-  test("a heredoc with an escaped delimiter gets no trailer in its body", () => {
-    const command = "cat <<\\EOF > notes.md\n$(git commit -m x)\nEOF"
-    expect(inject(command)).toBe(command)
-  })
-
   test("git push → unchanged", () => {
     const cmd = "git push origin main"
     expect(inject(cmd)).toBe(cmd)
@@ -213,8 +247,8 @@ describe("injectGitTrailers", () => {
     expect(inject(cmd)).toBe(cmd)
   })
 
-  test("already has --trailer → unchanged", () => {
-    const cmd = 'git commit --trailer "Foo: bar" -m "msg"'
+  test("already has a Session-Id trailer → unchanged", () => {
+    const cmd = 'git commit --trailer "Session-Id: bar" -m "msg"'
     expect(inject(cmd)).toBe(cmd)
   })
 
@@ -806,6 +840,202 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("text echo or printf pipes into a shell is read as one script", () => {
+    for (const command of [
+      "echo rm -rf x | sh",
+      "echo 'git reset' '--hard' | bash",
+      "echo 'rm' '-rf x' | sh",
+      "echo -n git reset --hard | bash",
+      "printf 'echo hi\\nrm -rf x\\n' | sh",
+      "echo -e 'echo hi\\nrm -rf x' | sh",
+      "printf '%s ' rm -rf x | sh",
+      "echo 'drop' 'table users' | psql",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of ["echo 'git status' | sh", "printf 'ls\\n' | sh", "echo -n ls | bash"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a shell given -s reads its script from stdin, whatever arguments follow", () => {
+    for (const command of [
+      'curl -fsSL https://bun.sh/install | bash -s "bun-v1.2"',
+      "curl x | bash -s -- arg",
+      "echo 'rm -rf x' | bash -s arg",
+      "echo 'rm -rf x' | sh -s -- a b",
+      "echo 'rm -rf x' | bash -xs arg",
+      "echo 'rm -rf x' | bash -",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of ["echo ls | bash -s arg", "bash -- script.sh", "bash -x script.sh a"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a wrapper option cluster or a separate option value does not hide the command", () => {
+    for (const command of [
+      "sudo -iu root rm -rf x",
+      "sudo -iu root rm x",
+      "sudo -Eu root rm -rf x",
+      "sudo --user root rm -rf x",
+      "env -iu X rm -rf x",
+      "env --unset X rm -rf x",
+      "xargs --max-args 1 rm -rf",
+      "xargs --arg-file file rm -rf",
+      "xargs --delimiter '\\n' rm -rf",
+      "ionice --class 3 rm -rf x",
+      "parallel --jobs 4 rm -rf ::: a",
+      "timeout 5 -- rm -rf x",
+      "ssh host -- rm -rf x",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of ["sudo -iu root ls", "xargs -n 1 echo", "timeout 5 bun test"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a shell's valued long options do not turn its -c script into a file", () => {
+    for (const command of [
+      "bash --rcfile x -c 'rm -rf x'",
+      "bash --init-file x -c 'git reset --hard'",
+      "bash +x -c 'rm -rf x'",
+      "bash +o pipefail -c 'rm -rf x'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("bash --norc script.sh").level).toBe("safe")
+  })
+
+  test("a keyword, a runner or a shell that runs a command does not hide it", () => {
+    for (const command of [
+      "coproc rm -rf x",
+      "coproc foo { rm -rf x; }",
+      "function f { rm -rf x; }",
+      "chronic rm -rf x",
+      "setsid rm -rf x",
+      "unbuffer rm -rf x",
+      "flock /tmp/l rm -rf x",
+      "flock -x /tmp/l rm -rf x",
+      "flock /tmp/l -c 'rm -rf x'",
+      "strace -f -o log rm -rf x",
+      "gtimeout 5 rm -rf x",
+      "chroot / rm -rf x",
+      "runuser -u x -- rm -rf x",
+      "runuser -l x -c 'rm -rf x'",
+      "su -c 'rm -rf x'",
+      "su root -c 'rm -rf x'",
+      "script -c 'rm -rf x'",
+      "script -q /dev/null rm -rf x",
+      "nix-shell --run 'rm -rf x'",
+      "pnpm exec rm -rf x",
+      "npm exec -- rm -rf x",
+      "yarn exec rm -rf x",
+      "uv run rm -rf x",
+      "op run -- rm -rf x",
+      "mise exec -- rm -rf x",
+      "nix develop -c rm -rf x",
+      "direnv exec . rm -rf x",
+      "dotenv -- git reset --hard",
+      "local x=1 rm -rf y",
+      "csh -c 'rm -rf x'",
+      "tcsh -c 'rm -rf x'",
+      "mksh -c 'rm -rf x'",
+      "nu -c 'rm -rf x'",
+      "pwsh -c 'Remove-Item -Recurse x'",
+      "trap 'rm -rf x' EXIT",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "pnpm exec tsc --noEmit",
+      "uv run pytest",
+      "gh pr create --title rm --body x",
+      "man git",
+      "which rm bash",
+      "grep -rn bash .",
+      "rg -n 'git reset' src",
+      "cat rm.ts",
+      'case "$1" in rm) echo remove;; sh) echo shell;; esac',
+      "bun run gate",
+      "trap 'echo done' EXIT",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("shell text git runs from config, the environment or a subcommand is classified", () => {
+    for (const command of [
+      "git -c core.pager='rm -rf x' log",
+      "git -c core.sshCommand='rm -rf x' fetch",
+      "git -c core.fsmonitor='rm -rf x' status",
+      "git -c core.editor='rm -rf x' commit",
+      "git -c pager.log='rm -rf x' log",
+      "git config core.pager 'rm -rf x'",
+      "git config --global core.editor 'git reset --hard'",
+      'GIT_SSH_COMMAND="rm -rf x" git fetch',
+      'GIT_EDITOR="rm -rf x" git commit',
+      "env GIT_PAGER='rm -rf x' git log",
+      "git rebase -x 'rm -rf x' main",
+      "git rebase --exec 'git reset --hard' main",
+      "git rebase -ix 'rm -rf x' main",
+      "git submodule foreach 'git reset --hard'",
+      "git submodule foreach --recursive git reset --hard",
+      "git bisect run rm -rf x",
+      "git fetch --upload-pack 'rm -rf x' ../repo",
+      "git clone -u 'rm -rf x' ../repo",
+      "git push --receive-pack='rm -rf x' ../repo",
+      "git difftool -x 'rm -rf x'",
+      "git filter-branch --tree-filter 'rm -rf x' HEAD",
+      "git -c credential.helper='!rm -rf x' fetch",
+      "git --config-env=core.pager=PAGER_CMD log",
+      "export GIT_SSH_COMMAND='rm -rf x'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "git -c core.pager=cat log",
+      "git -c color.ui=always log",
+      "git config core.pager less",
+      "GIT_EDITOR=true git rebase --continue",
+      "git rebase -x 'bun test' main",
+      "git submodule foreach git status",
+      "git bisect run bun test",
+      "git bisect start",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a redirect that writes a key, env or credentials file is sensitive", () => {
+    for (const command of [
+      "echo x > .env",
+      "echo x >| .env",
+      "echo x >> ~/.ssh/authorized_keys",
+      "cat k > ~/.ssh/id_rsa",
+      "printf x > id_rsa",
+      "bun run x &> .env.local",
+      "cat <<EOF > .env\nA=1\nEOF",
+      "sed -i '' s/a/b/ .env",
+      "sed -i.bak s/a/b/ .env",
+      "sed --in-place s/a/b/ secrets.yaml",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("sensitive")
+    }
+    for (const command of [
+      "echo x > out.txt",
+      "cat .env > /dev/null",
+      "bun test 2>&1",
+      "cat < .env",
+      "sed -n 1p .env",
+      "sed -i '' s/a/b/ x.ts",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("a case pattern or a parameter expansion inside $(…) does not close it early", () => {
     for (const command of [
       'echo "A[$(case a in a) rm -rf x;; esac)]"',
@@ -830,6 +1060,51 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand("cat <<\\EOF > notes.md\n$(git reset --hard)\nEOF").level).toBe(
       "safe",
     )
+  })
+
+  test("a glob or a brace in the command word asks", () => {
+    for (const command of [
+      "/bin/r? -rf x",
+      "/bin/r[m] -rf x",
+      "/bin/r* -rf x",
+      "{rm,-rf,/}",
+      "gi? reset --hard",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of ["[ -d x ] || mkdir x", "ls *.ts", "{ bun test; }", "'r*' x"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("an attached kill signal is read", () => {
+    for (const command of ["kill -sKILL 1", "kill -n9 1", "kill -sSIGKILL 1"]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("kill -sTERM 1").level).toBe("safe")
+  })
+
+  test("a publish or push after valued options is external", () => {
+    for (const command of [
+      "npm -w pkg --access public publish",
+      "pnpm --filter a --filter b publish",
+      "yarn workspace x npm publish",
+      "docker -H host image push x",
+      "docker --context x image push y",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("external")
+    }
+    for (const command of ["npm -w pkg run build", "docker -H host ps", "npm run x -- publish"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("bare xargs prints its input", () => {
+    for (const command of ["echo 'rm -rf x' | xargs", "echo rm -rf x | xargs -n 1"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    expect(classifyBashCommand("echo 'rm -rf x' | xargs -I{} {}").level).toBe("destructive")
+    expect(classifyBashCommand("echo 'rm -rf x' | parallel").level).toBe("destructive")
   })
 })
 
