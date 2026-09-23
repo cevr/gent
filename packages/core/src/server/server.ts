@@ -726,7 +726,9 @@ const makeSessionMutationsService: Effect.Effect<
           createdAt: yield* DateTime.nowAsDate,
         })
         yield* branchStorage.createBranch(branch)
-        for (const message of messages.slice(0, targetIndex + 1)) {
+        // A fork point inside a tool step would copy a call without its
+        // result, and the new branch could never project a turn.
+        for (const message of settledMessages(messages.slice(0, targetIndex + 1))) {
           yield* messageStorage.createMessage(
             copyMessageToBranch(message, {
               id: MessageId.make(yield* platform.randomId),

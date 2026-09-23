@@ -331,6 +331,82 @@ describe("model context RPC boundary", () => {
   )
 })
 
+// ── branch-fork ─────────────────────────────────────────────────────────────
+
+const EchoProbeExtension: LoadedExtension = {
+  manifest: { id: ExtensionId.make("@test/echo-probe") },
+  scope: "builtin",
+  sourcePath: "test",
+  artifactIdentity: LoadedArtifactIdentity.make("@test/echo-probe@artifact-1"),
+  contributions: {
+    tools: [
+      tool({
+        id: "echo_probe",
+        description: "Return the text",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ text: Schema.String }),
+        execute: (params) => Effect.succeed({ text: params.text }),
+      }),
+    ],
+  },
+}
+
+const hasText = (messages: ReadonlyArray<Message>, text: string) =>
+  messages.some((message) =>
+    message.parts.some((part) => part.type === "text" && part.text === text),
+  )
+
+describe("branch.fork", () => {
+  it.scopedLive(
+    "a fork at an assistant tool-call message can run a turn",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("echo_probe", { text: "ping" }),
+          textStep("first done"),
+          textStep("fork done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensions: [EchoProbeExtension],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "call echo" })
+        const settled = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) => current.runtime._tag === "Idle" && hasText(current.messages, "first done"),
+          5_000,
+          "first turn settles",
+        )
+        const callMessage = settled.messages.find((message) =>
+          message.parts.some((part) => part.type === "tool-call"),
+        )
+        if (Predicate.isUndefined(callMessage)) return yield* Effect.die("tool call missing")
+
+        const fork = yield* client.branch.fork({
+          sessionId,
+          fromBranchId: branchId,
+          atMessageId: callMessage.id,
+          name: "at tool call",
+        })
+        yield* client.message.send({ sessionId, branchId: fork.branchId, content: "go on" })
+        const forked = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId: fork.branchId }),
+          (current) => current.runtime._tag === "Idle" && hasText(current.messages, "fork done"),
+          5_000,
+          "fork turn settles",
+        )
+        // The copied prefix keeps no call without its result.
+        expect(
+          forked.messages.some((message) =>
+            message.parts.some((part) => part.type === "tool-call"),
+          ),
+        ).toBe(false)
+      }).pipe(Effect.timeout("10 seconds")),
+    12_000,
+  )
+})
+
 // ── auth-rpc.test ───────────────────────────────────────────────────────────
 
 /**
