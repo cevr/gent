@@ -498,7 +498,7 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
   process.on("SIGTERM", onSignal)
 })
 
-runCliMain(Effect.scoped(mainEffect), {
+runCliMain(mainEffect, {
   teardown: gracefulCliTeardown,
   disableErrorReporting: true,
 })
