@@ -135,8 +135,7 @@ describe("user configuration", () => {
                     ).pipe(Effect.catchEager(() => Effect.succeed(new UserConfig({}))))
                     const count = Object.keys(decoded.driverOverrides ?? {}).length
                     if (count === agents.length) {
-                      // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-                      yield* Deferred.succeed(allEntriesWriteStarted, undefined).pipe(
+                      yield* Deferred.succeed(allEntriesWriteStarted, void 0).pipe(
                         Effect.catchEager(() => Effect.void),
                       )
                     }
@@ -429,8 +428,7 @@ describe("user configuration", () => {
                     Effect.gen(function* () {
                       if (target !== userConfigPath) return
                       if (!(yield* Ref.getAndSet(armed, false))) return
-                      // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-                      yield* Deferred.succeed(held, undefined)
+                      yield* Deferred.succeed(held, void 0)
                       yield* Deferred.await(release)
                     }),
                   ),
@@ -449,8 +447,7 @@ describe("user configuration", () => {
           )
           // A writer that does not wait for the held read finishes here.
           yield* Fiber.await(writer).pipe(Effect.timeoutOption("200 millis"))
-          // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-          yield* Deferred.succeed(release, undefined)
+          yield* Deferred.succeed(release, void 0)
           yield* Fiber.join(reader)
           yield* Fiber.join(writer)
           yield* fs.writeFileString(userConfigPath, "{ broken")

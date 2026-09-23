@@ -72,7 +72,8 @@ const readTypeScriptConfig = (relativePath: string) =>
 interface RuleCase {
   readonly rule: string
   readonly invalid: string
-  readonly valid: string
+  /** One or more files the rule must leave alone. */
+  readonly valid: ReadonlyArray<string>
   /**
    * Exact diagnostic count expected on the invalid fixture. When omitted,
    * the test asserts `> 0`. Set this when the invalid fixture covers a
@@ -86,14 +87,14 @@ const CASES: ReadonlyArray<RuleCase> = [
   {
     rule: "gent/no-positional-log-error",
     invalid: "no-positional-log-error.invalid.ts",
-    valid: "no-positional-log-error.valid.ts",
+    valid: ["no-positional-log-error.valid.ts"],
     // logWarning and logError, each with an error as a positional argument
     expectedCount: 2,
   },
   {
     rule: "gent/no-runpromise-outside-boundary",
     invalid: "no-runpromise-outside-boundary.invalid.ts",
-    valid: "no-runpromise-outside-boundary-boundary.ts",
+    valid: ["no-runpromise-outside-boundary-boundary.ts"],
     // 3 Effect statics + 3 runtime instance + 3 nested member access
     expectedCount: 9,
   },
@@ -101,25 +102,37 @@ const CASES: ReadonlyArray<RuleCase> = [
     // A shipped extension reads only the two authoring entries.
     rule: "gent/core-entry-boundary",
     invalid: "packages/extensions/src/core-entry-boundary.invalid.ts",
-    valid: "packages/extensions/src/core-entry-boundary.valid.ts",
+    valid: ["packages/extensions/src/core-entry-boundary.valid.ts"],
     // protocol, host, test-utils, a core path, two relative paths that resolve
-    // into core source, a re-export, an export-all of host, and a dynamic import
-    expectedCount: 9,
+    // into core source, a re-export, an export-all of host, a dynamic import,
+    // and a `typeof import` of host
+    expectedCount: 10,
   },
   {
     // A client extension also reads protocol; the loader is host code.
     rule: "gent/core-entry-boundary",
     invalid: "apps/tui/src/extensions/core-entry-boundary.invalid.ts",
-    valid: "apps/tui/src/extensions/loader-boundary.ts",
+    valid: ["apps/tui/src/extensions/loader-boundary.ts"],
     // a protocol subpath, host, test-utils, a relative path to core's host,
-    // a core re-export, a dynamic import, and the two host Solid contexts
-    expectedCount: 8,
+    // a core re-export, and a dynamic import
+    expectedCount: 6,
+  },
+  {
+    // A client extension reaches the TUI only through @gent/tui/extensions;
+    // only the builtin roster may name its sibling client extensions.
+    rule: "gent/core-entry-boundary",
+    invalid: "apps/tui/src/extensions/owner-rule.invalid.client.tsx",
+    valid: ["apps/tui/src/extensions/builtins.tsx"],
+    // the client provider, the extension host, a host utility, the facet
+    // module by path, a type import, a re-export, a dynamic import,
+    // `typeof import`, and a sibling client extension
+    expectedCount: 9,
   },
   {
     // The TUI host reads no extension module; a client extension owns that view.
     rule: "gent/core-entry-boundary",
     invalid: "apps/tui/src/tui-host-boundary.invalid.ts",
-    valid: "apps/tui/src/tui-host-boundary.valid.ts",
+    valid: ["apps/tui/src/tui-host-boundary.valid.ts"],
     // a subpath import, a type import, a re-export of the root, a dynamic import
     expectedCount: 4,
   },
@@ -127,7 +140,7 @@ const CASES: ReadonlyArray<RuleCase> = [
     // A reference extension is held to the same two entries.
     rule: "gent/core-entry-boundary",
     invalid: "examples/extensions/core-entry-boundary.invalid.ts",
-    valid: "examples/extensions/core-entry-boundary.valid.ts",
+    valid: ["examples/extensions/core-entry-boundary.valid.ts"],
     // core source, host, test-utils
     expectedCount: 3,
   },
@@ -135,7 +148,7 @@ const CASES: ReadonlyArray<RuleCase> = [
     // Product code never reads the test entry; tests may.
     rule: "gent/core-entry-boundary",
     invalid: "packages/sdk/src/core-entry-boundary.invalid.ts",
-    valid: "packages/sdk/tests/core-entry-boundary.valid.ts",
+    valid: ["packages/sdk/tests/core-entry-boundary.valid.ts"],
     // an import and a re-export of test-utils, and a relative path that
     // resolves into core's test-utils; the host import is allowed
     expectedCount: 3,
@@ -144,30 +157,27 @@ const CASES: ReadonlyArray<RuleCase> = [
     // A test outside core reads core through its entries, never its source.
     rule: "gent/core-entry-boundary",
     invalid: "packages/extensions/tests/core-entry-boundary.invalid.ts",
-    valid: "packages/extensions/tests/core-entry-boundary.valid.ts",
+    valid: ["packages/extensions/tests/core-entry-boundary.valid.ts"],
     // an import and a re-export that resolve into core source
     expectedCount: 2,
   },
   {
     // Core product code reaches the harness by relative path; still rejected.
-    rule: "gent/core-entry-boundary",
-    invalid: "packages/core/src/runtime/core-entry-boundary.invalid.ts",
-    valid: "packages/core/src/runtime/core-entry-boundary.valid.ts",
-    // an import and a re-export that resolve into core's test-utils
-    expectedCount: 2,
-  },
-  {
     // The harness itself reads its sibling files and core internals.
     rule: "gent/core-entry-boundary",
     invalid: "packages/core/src/runtime/core-entry-boundary.invalid.ts",
-    valid: "packages/core/src/test-utils/core-entry-boundary.valid.ts",
+    valid: [
+      "packages/core/src/runtime/core-entry-boundary.valid.ts",
+      "packages/core/src/test-utils/core-entry-boundary.valid.ts",
+    ],
+    // an import and a re-export that resolve into core's test-utils
     expectedCount: 2,
   },
   {
     // A workspace imports only what its manifest declares, and stays in its root.
     rule: "gent/declared-workspace-imports",
     invalid: "workspaces/core/src/declared-workspace-imports.invalid.ts",
-    valid: "workspaces/sdk/src/declared-workspace-imports.valid.ts",
+    valid: ["workspaces/sdk/src/declared-workspace-imports.valid.ts"],
     // import, type import, a specifier on a later line, a relative path into
     // the SDK, a re-export, an export-all, import(), require(), typeof import()
     expectedCount: 9,
@@ -175,26 +185,27 @@ const CASES: ReadonlyArray<RuleCase> = [
   {
     rule: "gent/no-define-extension-throw",
     invalid: "no-define-extension-throw.invalid.ts",
-    valid: "no-define-extension-throw.valid.ts",
+    valid: ["no-define-extension-throw.valid.ts"],
     expectedCount: 1,
   },
   {
     rule: "gent/no-dynamic-imports",
     invalid: "no-dynamic-imports.invalid.ts",
-    valid: "no-dynamic-imports.valid.ts",
+    valid: ["no-dynamic-imports.valid.ts"],
     expectedCount: 7,
   },
   {
     rule: "gent/no-promise-control-flow-in-tests",
     invalid: "no-promise-control-flow-in-tests.invalid.test.ts",
-    valid: "no-promise-control-flow-in-tests.valid.test.ts",
-    // three chain methods and three runPromise edges
-    expectedCount: 6,
+    valid: ["no-promise-control-flow-in-tests.valid.test.ts"],
+    // four chain methods, one on a capitalised promise variable, and three
+    // runPromise edges
+    expectedCount: 7,
   },
   {
     rule: "gent/no-promise-control-flow-in-tests",
     invalid: "test-module-control-flow/tests/no-promise-control-flow-in-tests.invalid.module.ts",
-    valid: "test-module-control-flow/tests/no-promise-control-flow-in-tests.valid.module.ts",
+    valid: ["test-module-control-flow/tests/no-promise-control-flow-in-tests.valid.module.ts"],
     // `.then`, `.catch` and `.finally` on one chain
     expectedCount: 3,
   },
@@ -203,28 +214,28 @@ const CASES: ReadonlyArray<RuleCase> = [
     invalid: "no-bun-outside-adapter.invalid.ts",
     // valid file lives at `runtime/gent-platform-bun.ts` — the canonical
     // GentPlatform live impl. That path is the only allowlist entry.
-    valid: "runtime/gent-platform-bun.ts",
+    valid: ["runtime/gent-platform-bun.ts"],
     // 5 Bun.* member expressions + 4 process host probes + 3 os host facts
     expectedCount: 12,
   },
   {
     rule: "gent/no-bun-outside-adapter",
     invalid: "runtime/retired-adapter.ts",
-    valid: "runtime/fallback-adapter.ts",
+    valid: ["runtime/fallback-adapter.ts"],
     // Bun.Glob and Bun.randomUUIDv7, banned even in an adapter
     expectedCount: 2,
   },
   {
     rule: "gent/no-bun-outside-adapter",
     invalid: "packages/sdk/src/host-facts.invalid.ts",
-    valid: "packages/sdk/src/host-facts.valid.ts",
+    valid: ["packages/sdk/src/host-facts.valid.ts"],
     // process.platform, process.pid, Bun.spawn: the SDK is not exempt
     expectedCount: 3,
   },
   {
     rule: "gent/no-bun-outside-adapter",
     invalid: "packages/core/src/runtime/host-facts.invalid.ts",
-    valid: "packages/core/src/runtime/host-facts.valid.ts",
+    valid: ["packages/core/src/runtime/host-facts.valid.ts"],
     // Eight host module imports (os, bun, crypto and url, with and without
     // node:, and a side-effect import), process.cwd and globalThis.process.cwd,
     // a hand-rolled file path, a dynamic import, three require forms, and
@@ -235,42 +246,42 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-bun-outside-adapter",
     invalid: "packages/extensions/src/host-facts.invalid.ts",
     // The test harness backs the platform, so it is exempt
-    valid: "packages/core/src/test-utils/host-facts.valid.ts",
+    valid: ["packages/core/src/test-utils/host-facts.valid.ts"],
     // os import, process.cwd, and bare createHash, randomBytes and fileURLToPath
     expectedCount: 5,
   },
   {
     rule: "gent/no-bun-outside-adapter",
     invalid: "apps/server/src/main.ts",
-    valid: "apps/server/src/launch.valid.ts",
+    valid: ["apps/server/src/launch.valid.ts"],
     // process.execPath: the server launcher is not exempt
     expectedCount: 1,
   },
   {
     rule: "gent/no-hand-rolled-tagged-union",
     invalid: "no-hand-rolled-tagged-union.invalid.ts",
-    valid: "no-hand-rolled-tagged-union.valid.ts",
+    valid: ["no-hand-rolled-tagged-union.valid.ts"],
     // 4 hand-rolled `_tag` unions in the invalid fixture
     expectedCount: 4,
   },
   {
     rule: "gent/no-sleep",
     invalid: "no-sleep.invalid.test.ts",
-    valid: "no-sleep.valid.test.ts",
+    valid: ["no-sleep.valid.test.ts"],
     // 4 unguarded sleeps + 1 malformed-carveout sleep
     expectedCount: 5,
   },
   {
     rule: "gent/no-die-in-test-helpers",
     invalid: "no-die-in-test-helpers.invalid.test.ts",
-    valid: "no-die-in-test-helpers.valid.test.ts",
+    valid: ["no-die-in-test-helpers.valid.test.ts"],
     // 3 unguarded Effect.die/dieMessage + 1 malformed-carveout die
     expectedCount: 4,
   },
   {
     rule: "gent/no-with-wrapper-call",
     invalid: "no-with-wrapper-call.invalid.ts",
-    valid: "no-with-wrapper-call.valid.ts",
+    valid: ["no-with-wrapper-call.valid.ts"],
     // Calls: withX(innerCall()), withX(...)(innerCall()), withX(innerCall(), arg),
     // withX(arrow), withX(arg, function). Definitions: an Effect parameter,
     // a curried Effect parameter, a callback parameter, and an Effect parameter
@@ -280,23 +291,15 @@ const CASES: ReadonlyArray<RuleCase> = [
   {
     rule: "gent/no-inert-it",
     invalid: "no-inert-it.invalid.test.ts",
-    valid: "no-inert-it.valid.test.ts",
-    // Arrow body + function reference + the renamed import
-    expectedCount: 3,
+    valid: ["no-inert-it.valid.test.ts"],
+    // Arrow body + function reference + the renamed import + a namespace import
+    expectedCount: 4,
   },
 ]
 
-const assertProcessed = (run: OxlintRun, fixtureFile: string): void => {
-  // Sanity: oxlint must have actually loaded the file. A diagnostic-less
-  // result on a known-invalid fixture or a `number_of_files` mismatch
-  // indicates a config error or ignore-pattern oversight, not a passing
-  // test.
-  const seen = run.report.diagnostics.some((d) => d.filename === fixtureFile)
-  expect(
-    seen || run.report.number_of_files >= CASES.length,
-    `oxlint did not process fixture "${fixtureFile}". stderr:\n${run.stderr}`,
-  ).toBeTrue()
-}
+/** Each fixture file once: a run lints a path it is given once, however many cases name it. */
+const INVALID_FIXTURES = [...new Set(CASES.map((c) => c.invalid))]
+const VALID_FIXTURES = [...new Set(CASES.flatMap((c) => c.valid))]
 
 effectDescribe("custom lint rules", () => {
   // Memoize the two oxlint invocations so each `it.live` test reuses the
@@ -313,7 +316,7 @@ effectDescribe("custom lint rules", () => {
     const cached = loadRunsRef.current
     if (Option.isSome(cached)) return yield* cached.value
     const created = yield* Effect.cached(
-      Effect.all([runOxlint(CASES.map((c) => c.invalid)), runOxlint(CASES.map((c) => c.valid))], {
+      Effect.all([runOxlint(INVALID_FIXTURES), runOxlint(VALID_FIXTURES)], {
         concurrency: "unbounded",
       }),
     )
@@ -325,7 +328,6 @@ effectDescribe("custom lint rules", () => {
     it.live(`${c.rule} fires on invalid fixture`, () =>
       Effect.gen(function* () {
         const [invalidRun] = yield* loadRuns
-        assertProcessed(invalidRun, c.invalid)
         // oxlint exits non-zero when ANY fixture has violations — and our
         // invalid set always does, so we just need to assert the per-file
         // diagnostics.
@@ -345,12 +347,25 @@ effectDescribe("custom lint rules", () => {
         // The valid fixture set should produce zero diagnostics overall;
         // exit-code 0 is the global signal. Per-file: zero violations of
         // this specific rule.
-        const fileDiagnostics = filterByFile(validRun.report, c.valid)
-        const violations = countViolations(fileDiagnostics, c.rule)
-        expect(violations).toBe(0)
+        const violations = c.valid.map((file) =>
+          countViolations(filterByFile(validRun.report, file), c.rule),
+        )
+        expect(violations).toEqual(c.valid.map(() => 0))
       }),
     )
   }
+
+  it.live("every fixture file is linted, so a silent one is a pass on evidence", () =>
+    Effect.gen(function* () {
+      // A valid fixture reports nothing either way; only the file count shows
+      // that oxlint read it instead of ignoring or missing the path.
+      const [invalidRun, validRun] = yield* loadRuns
+      expect(
+        [invalidRun.report.number_of_files, validRun.report.number_of_files],
+        `stderr:\n${invalidRun.stderr}\n${validRun.stderr}`,
+      ).toEqual([INVALID_FIXTURES.length, VALID_FIXTURES.length])
+    }),
+  )
 
   it.live("valid fixture set passes oxlint cleanly", () =>
     Effect.gen(function* () {

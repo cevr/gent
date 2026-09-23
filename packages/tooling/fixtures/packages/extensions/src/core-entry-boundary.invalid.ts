@@ -6,6 +6,7 @@ import { EventStore } from "../../core/src/domain/event"
 import { SqliteStorage } from "../../../packages/core/src/host.js"
 export { MessageStorage } from "@gent/core/storage/message-storage"
 export * from "@gent/core/host"
+export type HostModule = typeof import("@gent/core/host")
 
 export const loadRuntime = () => import("@gent/core/runtime/session-runtime")
 

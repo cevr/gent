@@ -4,11 +4,10 @@
 **/dist/
 **/node_modules/
 **/*.d.ts
-**/scripts/
 packages/tooling/fixtures/
 apps/tui/tests/.tmp-*/
 # Testbeds are driver scripts and the apps they drive, not shipped runtime.
-# `testbeds/gamut/gamut.ts` is a plain Bun script on the same footing as the
-# `**/scripts/` entry above; `testbeds/gamut/fixture/` is the deliberately
-# broken ledgerline app the agent under test is asked to repair.
+# `testbeds/gamut/gamut.ts` is a plain Bun script; `testbeds/gamut/fixture/`
+# is the deliberately broken ledgerline app the agent under test is asked to
+# repair.
 testbeds/

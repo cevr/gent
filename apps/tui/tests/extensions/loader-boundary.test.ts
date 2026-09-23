@@ -1487,32 +1487,3 @@ describe("tool renderer reach", () => {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 })
-
-// ── public client entry ─────────────────────────────────────────────────────
-
-describe("public client entry", () => {
-  it.live("a shipped client extension reaches the TUI only through @gent/tui/extensions", () =>
-    Effect.gen(function* () {
-      // A user extension can import `@gent/tui/extensions` and nothing else of
-      // the TUI. A shipped one that reaches past the entry is more privileged
-      // than a user one. Only the builtin roster may name its sibling modules.
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const dir = path.join(import.meta.dir, "../../src/extensions")
-      const shipped = (yield* fs.readDirectory(dir)).filter(
-        (name) => name.endsWith(".client.tsx") || name === "builtins.tsx",
-      )
-      expect(shipped.length).toBeGreaterThan(5)
-      const reaches: string[] = []
-      for (const name of shipped) {
-        const text = yield* fs.readFileString(path.join(dir, name))
-        for (const match of text.matchAll(/from\s+"(\.[^"]+)"/g)) {
-          const specifier = match[1] ?? ""
-          if (/^\.\/[a-z-]+\.client$/.test(specifier)) continue
-          reaches.push(`${name}: ${specifier}`)
-        }
-      }
-      expect(reaches).toEqual([])
-    }).pipe(Effect.provide(BunServices.layer)),
-  )
-})

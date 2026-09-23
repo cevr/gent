@@ -134,19 +134,15 @@
       // GentPlatform implements Bun/OS capabilities at the runtime boundary.
       "files": ["packages/core/src/runtime/gent-platform-bun.ts"],
       "rules": {
-        "effect/noGlobals": "off",
-        "effect/noNodeBuiltinImport": "off"
+        "effect/noGlobals": "off"
       }
     },
     {
       // The lint plugin runs inside oxlint's Node host, not in an Effect runtime.
       "files": ["packages/tooling/src/gent-rules.ts"],
       "rules": {
-        "effect/maxCognitiveComplexity": "off",
         "effect/noNodeBuiltinImport": "off",
         "effect/noGlobals": "off",
-        "effect/noAs": "off",
-        "effect/noChainedTypeAssertions": "off",
         "effect/noKnownValueWidening": "off",
         "effect/noNullish": "off",
         "effect/noRuntimeTypeof": "off",
@@ -170,20 +166,27 @@
     {
       "files": ["packages/tooling/src/fixture-runner.ts"],
       "rules": {
+        "effect/noGlobals": "off"
+      }
+    },
+    {
+      // The TUI build is a plain Bun script run by `bun scripts/build.ts`, not
+      // an Effect program; every other rule, the workspace imports included,
+      // still reads it.
+      "files": ["apps/tui/scripts/build.ts"],
+      "rules": {
+        "effect/noAsyncFunction": "off",
         "effect/noGlobals": "off",
-        "effect/noNodeBuiltinImport": "off"
+        "effect/noNodeBuiltinImport": "off",
+        "effect/noTryCatch": "off",
+        "gent/no-bun-outside-adapter": "off",
+        "node/no-process-env": "off"
       }
     },
     {
       "files": ["packages/tooling/src/check-guardrails.ts"],
       "rules": {
         "effect/noGlobals": "off"
-      }
-    },
-    {
-      "files": ["packages/tooling/tests/fixture-runner.test.ts"],
-      "rules": {
-        "effect/noNodeBuiltinImport": "off"
       }
     },
     {

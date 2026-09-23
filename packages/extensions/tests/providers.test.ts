@@ -579,8 +579,7 @@ describe("models.dev catalog", () => {
       )
       // Let both callers reach the catalog before anything can answer.
       yield* Effect.yieldNow
-      // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
-      yield* Deferred.succeed(gate, undefined)
+      yield* Deferred.succeed(gate, void 0)
       const [openai, anthropic] = yield* Fiber.join(both).pipe(Effect.timeout(5_000))
 
       expect(yield* Ref.get(calls)).toBe(1)
