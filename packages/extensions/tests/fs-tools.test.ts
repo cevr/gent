@@ -1,13 +1,28 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path } from "effect"
+import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { EditTool, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
-import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
-import { runProcess } from "@gent/core/extensions/api"
+import {
+  EditTool,
+  FilesRpc,
+  FsToolsExtension,
+  GrepTool,
+  ReadTool,
+  WriteTool,
+} from "../src/fs-tools.js"
+import {
+  createRpcHarness,
+  LanguageModelLayers,
+  RuntimeEnvironment,
+  runToolWithCtx,
+  testToolContext,
+  textStep,
+} from "@gent/core/test-utils"
+import { ref, runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
+import { e2ePreset } from "./helpers/test-preset"
 
 // ── read tool ───────────────────────────────────────────────────────────────
 
@@ -1570,5 +1585,40 @@ describe("an ignored directory with tracked files", () => {
 
       expect(yield* listed(repo, `${repo}/dist`)).toEqual(["new.js", "pinned.js"])
     }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("the file listing request", () => {
+  it.scopedLive(
+    "lists the session's files as git lists them, relative and sorted",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* fs.makeTempDirectoryScoped()
+        yield* runProcess("git", ["init", "-q", repo])
+        yield* writeTree(repo, ["src/b.ts", "a.md", "dist/out.js", ".turbo/log.txt"], {
+          ".gitignore": "dist/\n.turbo/\n",
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          cwd: repo,
+          providerLayer,
+          extensionInputs: [FsToolsExtension],
+        })
+        const raw = yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ref(FilesRpc.List).extensionId,
+          capabilityId: ref(FilesRpc.List).capabilityId,
+          input: {},
+        })
+        expect(yield* Schema.decodeUnknownEffect(Schema.Array(Schema.String))(raw)).toEqual([
+          ".gitignore",
+          "a.md",
+          "src/b.ts",
+        ])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
   )
 })

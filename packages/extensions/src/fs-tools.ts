@@ -12,8 +12,11 @@ import {
 import picomatch from "picomatch"
 import {
   defineExtension,
+  defineRequests,
   ExtensionContext,
+  ExtensionId,
   ExtensionHost,
+  request,
   runProcess,
   splitLines,
   tool,
@@ -1395,12 +1398,37 @@ export const GrepTool = tool({
   }),
 })
 
+// ── protocol ────────────────────────────────────────────────────────────────
+
+const FS_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/fs-tools")
+
+/**
+ * The client's file picker reads the same listing grep reads, so the files a
+ * user can name with `@` are the files the model can search: git's listing
+ * inside a work tree, the `.gitignore` walk outside one.
+ */
+export const FilesRpc = defineRequests(FS_TOOLS_EXTENSION_ID, {
+  List: request({
+    id: "files-list",
+    description: "List the session's files, relative to its cwd, sorted",
+    readonly: true,
+    input: Schema.Struct({}),
+    output: Schema.Array(Schema.String),
+    execute: Effect.fn("FilesRpc.List")(function* () {
+      const ctx = yield* ExtensionContext
+      const listing = yield* listFiles({ root: ctx.cwd, cwd: ctx.cwd })
+      return listing.files.map((file) => file.relativePath).toSorted()
+    }),
+  }),
+})
+
 // ── extension ───────────────────────────────────────────────────────────────
 
 export const FsToolsExtension = defineExtension({
-  id: "@gent/fs-tools",
+  id: FS_TOOLS_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", ReadTool, WriteTool, EditTool, GrepTool)
+    yield* host.register("request", FilesRpc.List)
   }),
 })

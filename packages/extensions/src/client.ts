@@ -8,6 +8,7 @@ export {
   readChildCompletionHeadline,
 } from "./delegate.js"
 export { SkillsRpc } from "./skills.js"
+export { FilesRpc } from "./fs-tools.js"
 export {
   GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,
