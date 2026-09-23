@@ -80,6 +80,17 @@ export class InteractionOwnerMissingError extends Schema.TaggedError<Interaction
   message: Schema.String,
 }) {}
 
+/**
+ * A reply to a request that already has a different answer. The first answer
+ * wins; a later reply cannot change what the call was told.
+ */
+export class InteractionDecisionConflictError extends Schema.TaggedError<InteractionDecisionConflictError>(
+  "@gent/core/src/domain/interaction/InteractionDecisionConflictError",
+)("InteractionDecisionConflictError", {
+  message: Schema.String,
+  requestId: InteractionRequestId,
+}) {}
+
 export class InteractionRequestMismatchError extends Schema.TaggedError<InteractionRequestMismatchError>(
   "@gent/core/src/domain/interaction/InteractionRequestMismatchError",
 )("InteractionRequestMismatchError", {
@@ -188,11 +199,15 @@ export interface InteractionService {
     branchId: BranchId
     // oxlint-disable-next-line effect/noNullish -- The public interaction lookup preserves undefined for no pending request.
   }) => Effect.Effect<InteractionRequestId | undefined>
-  /** Store a resolution for cold-mode resumption (keyed by requestId) */
+  /**
+   * Store the answer to a request. The first answer wins, in storage and in
+   * memory. The same answer again succeeds with `false`; a different one
+   * fails with a conflict. True when this reply stored the answer.
+   */
   readonly storeResolution: (
     requestId: InteractionRequestId,
     decision: ApprovalDecision,
-  ) => Effect.Effect<void, EventStoreError>
+  ) => Effect.Effect<boolean, EventStoreError | InteractionDecisionConflictError>
   /** True when this request has an answer that its owner has not taken yet. */
   readonly answered: (requestId: InteractionRequestId) => Effect.Effect<boolean>
   /**
@@ -223,6 +238,12 @@ export interface InteractionService {
   ) => <A, E, R>(self: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
+/** The answer a request keeps. `first`: this reply is the one that stored it. */
+export interface StoredInteractionDecision {
+  readonly first: boolean
+  readonly decisionJson: string
+}
+
 /**
  * Storage callbacks for durable interaction requests.
  * Persist failures fail closed. A presented interaction without a durable row
@@ -230,10 +251,11 @@ export interface InteractionService {
  */
 export interface InteractionStorageConfig {
   readonly persist: (record: InteractionRequestRecord) => Effect.Effect<void, EventStoreError>
+  /** First answer wins; returns the answer the row keeps. See `InteractionStorage.decide`. */
   readonly decide: (
     requestId: InteractionRequestId,
     decisionJson: string,
-  ) => Effect.Effect<void, EventStoreError>
+  ) => Effect.Effect<Option.Option<StoredInteractionDecision>, EventStoreError>
   readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, never>
   /** Its call took the answer; the row stays open until the call or its turn ends. */
   readonly take: (requestId: InteractionRequestId) => Effect.Effect<void, never>
@@ -774,18 +796,41 @@ export const makeInteractionService = (
       storeResolution: (requestId, decision) =>
         Effect.gen(function* () {
           const decisionJson = yield* encodeInteractionDecision(decision)
-          yield* config.storage.decide(requestId, decisionJson)
-          // A request that closed after the caller looked keeps no answer:
-          // storage ignores it too, and nothing would ever take it.
-          yield* Ref.update(state, (current) => {
-            const open = Array.from(current.branches.values()).some((branch) =>
-              Option.exists(branch.open, (value) => value.requestId === requestId),
-            )
-            if (!open) return current
-            return { ...current, decisions: new Map(current.decisions).set(requestId, decision) }
+          const durable = yield* config.storage.decide(requestId, decisionJson)
+          // The first answer wins. Storage decides for a request with a row;
+          // memory keeps the same rule for one without. A request that closed
+          // after the caller looked keeps no answer: nothing would take it.
+          const earlier = yield* Ref.modify(
+            state,
+            (current): readonly [Option.Option<ApprovalDecision>, InteractionState] => {
+              const kept = Option.fromUndefinedOr(current.decisions.get(requestId))
+              if (Option.isSome(kept)) return [kept, current]
+              const open = Array.from(current.branches.values()).some((branch) =>
+                Option.exists(branch.open, (value) => value.requestId === requestId),
+              )
+              if (!open || Option.exists(durable, (stored) => !stored.first))
+                return [Option.none(), current]
+              const decisions = new Map(current.decisions).set(requestId, decision)
+              return [Option.none(), { ...current, decisions }]
+            },
+          )
+          let keptJson = Option.map(durable, (stored) => stored.decisionJson)
+          if (Option.isNone(durable) && Option.isSome(earlier))
+            keptJson = Option.some(yield* encodeInteractionDecision(earlier.value))
+          const first = Option.match(durable, {
+            onNone: () => Option.isNone(earlier),
+            onSome: (stored) => stored.first,
           })
-          // A call that waits for this answer in place takes it now.
-          yield* signal
+          if (first) {
+            // A call that waits for this answer in place takes it now.
+            yield* signal
+            return true
+          }
+          if (Option.getOrElse(keptJson, () => decisionJson) === decisionJson) return false
+          return yield* new InteractionDecisionConflictError({
+            message: "This request already has a different answer",
+            requestId,
+          })
         }),
 
       present: Effect.fn("InteractionService.present")(function* (

@@ -2053,7 +2053,7 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
         },
         pendingRequestId: () =>
           Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
-        storeResolution: () => Effect.void,
+        storeResolution: () => Effect.succeed(false),
         rehydrate: () => Effect.succeed(false),
         answered: () => Effect.succeed(false),
         endTurn: () => Effect.void,

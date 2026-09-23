@@ -20,7 +20,10 @@ import {
   RequestId,
   SessionId,
 } from "../domain/ids.js"
-import { InteractionRequestMismatchError } from "../domain/interaction.js"
+import {
+  InteractionDecisionConflictError,
+  InteractionRequestMismatchError,
+} from "../domain/interaction.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
 import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
 import { SessionRuntimeError } from "../runtime/session.js"
@@ -74,6 +77,7 @@ export const GentRpcError = Schema.Union([
   ExtensionProtocolError,
   EventStoreError,
   InteractionRequestMismatchError,
+  InteractionDecisionConflictError,
   NotFoundError,
   InvalidStateError,
   SessionDepthLimitError,

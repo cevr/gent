@@ -417,6 +417,112 @@ describe("Interaction Request", () => {
     return Effect.succeed(error.requestId)
   }
 
+  it.live("the first answer to a request wins; a different later answer is refused", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const interaction = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(is),
+      })
+      const sessionId = SessionId.make("s-first-wins")
+      const branchId = BranchId.make("b-first-wins")
+      yield* ensureStorageParents({ sessionId, branchId })
+      const requestId = yield* pendingId(
+        yield* Effect.exit(
+          asCall(interaction, { sessionId, branchId })(
+            interaction.present({ text: "Run it?" }, { sessionId, branchId }),
+          ),
+        ),
+      )
+      yield* interaction.storeResolution(requestId, { approved: false, notes: "no" })
+      const conflict = yield* Effect.flip(
+        interaction.storeResolution(requestId, { approved: true, notes: "yes" }),
+      )
+      expect(conflict._tag).toBe("InteractionDecisionConflictError")
+      // The same answer again is accepted: a retried reply is not an error.
+      yield* interaction.storeResolution(requestId, { approved: false, notes: "no" })
+      const stored = yield* is.listOpen({ sessionId, branchId })
+      expect(stored.map((record) => record.decisionJson)).toEqual([
+        `{"approved":false,"notes":"no"}`,
+      ])
+      const result = yield* asCall(interaction, { sessionId, branchId })(
+        interaction.present({ text: "Run it?" }, { sessionId, branchId }),
+      )
+      expect(result).toEqual({ approved: false, notes: "no" })
+    }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live("two answers at once: one is kept, the other is refused", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const interaction = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(is),
+      })
+      const sessionId = SessionId.make("s-race")
+      const branchId = BranchId.make("b-race")
+      yield* ensureStorageParents({ sessionId, branchId })
+      const requestId = yield* pendingId(
+        yield* Effect.exit(
+          asCall(interaction, { sessionId, branchId })(
+            interaction.present({ text: "Run it?" }, { sessionId, branchId }),
+          ),
+        ),
+      )
+      const exits = yield* Effect.all(
+        [
+          Effect.exit(interaction.storeResolution(requestId, { approved: false })),
+          Effect.exit(interaction.storeResolution(requestId, { approved: true })),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(exits.filter(Exit.isSuccess)).toHaveLength(1)
+      // The decline was sent first; the approval wins only when the decline lost.
+      const winner = Exit.isFailure(exits[0])
+      const result = yield* asCall(interaction, { sessionId, branchId })(
+        interaction.present({ text: "Run it?" }, { sessionId, branchId }),
+      )
+      expect(result.approved).toBe(winner)
+    }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live("storage keeps the first answer when another service instance answers later", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const sessionId = SessionId.make("s-two-services")
+      const branchId = BranchId.make("b-two-services")
+      yield* ensureStorageParents({ sessionId, branchId })
+      const first = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(is),
+      })
+      const requestId = yield* pendingId(
+        yield* Effect.exit(
+          asCall(first, { sessionId, branchId })(
+            first.present({ text: "Run it?" }, { sessionId, branchId }),
+          ),
+        ),
+      )
+      // The second instance loads the request before any answer, so only
+      // storage knows that an answer came.
+      const second = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(is),
+      })
+      for (const record of yield* is.listOpen({ sessionId, branchId }))
+        yield* second.rehydrate(record)
+      yield* first.storeResolution(requestId, { approved: false })
+      const conflict = yield* Effect.flip(second.storeResolution(requestId, { approved: true }))
+      expect(conflict._tag).toBe("InteractionDecisionConflictError")
+      const stored = yield* is.listOpen({ sessionId, branchId })
+      expect(stored.map((record) => record.decisionJson)).toEqual([`{"approved":false}`])
+    }).pipe(Effect.provide(storageLive)),
+  )
+
   it.live("a call that asks two questions takes both answers on its third run", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
@@ -659,6 +765,42 @@ describe("Interaction Request", () => {
       expect(taken).toEqual([first, second])
       expect(yield* is.listOpen(branch)).toEqual([])
     }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live(
+    "an inner call waiting in place gets the first answer; a different later one is refused",
+    () =>
+      Effect.gen(function* () {
+        const presented = yield* Queue.unbounded<InteractionRequestId>()
+        const interaction = yield* makeInteractionService({
+          onPresent: (requestId) => Queue.offer(presented, requestId),
+          onDismiss: () => Effect.void,
+          storage: callbacksFor(yield* InteractionStorage),
+        })
+        const branch = {
+          sessionId: SessionId.make("s-in-place"),
+          branchId: BranchId.make("b-in-place"),
+        }
+        yield* ensureStorageParents(branch)
+        const taken: Array<InteractionRequestId> = []
+        const waiting = yield* asCall(
+          interaction,
+          branch,
+        )(interaction.present({ text: "Delete it?" }, { ...branch, owned: ownedAsk(taken) })).pipe(
+          Effect.forkChild,
+        )
+        const requestId = yield* Queue.take(presented)
+        yield* interaction.storeResolution(requestId, { approved: false })
+        // Whether or not the waiting call took the first answer yet, the second
+        // reply cannot change it.
+        const conflict = yield* Effect.flip(
+          interaction.storeResolution(requestId, { approved: true }),
+        )
+        expect(conflict._tag).toBe("InteractionDecisionConflictError")
+        const answer = yield* Fiber.join(waiting).pipe(Effect.timeout("2 seconds"))
+        expect(answer.approved).toBe(false)
+        expect(taken).toEqual([requestId])
+      }).pipe(Effect.provide(storageLive)),
   )
 
   it.live("a dispatching owner does not take an answer to a changed question", () =>

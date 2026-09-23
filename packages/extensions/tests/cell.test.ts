@@ -4182,7 +4182,6 @@ it.live("binds a decision to one waiting operation and grants one resume attempt
     yield* fixture
     yield* (yield* CellStorage).executions.claim(cellOperationStorage)
     const storage = (yield* CellStorage).operations
-    const interactions = yield* InteractionStorage
     const first = yield* storage.admit(params)
     const peer = { ...params, operationId: "2" }
     yield* storage.admit(peer)
@@ -4201,11 +4200,6 @@ it.live("binds a decision to one waiting operation and grants one resume attempt
     expect(Schema.is(StorageError)(yield* storage.resume(key, requestId).pipe(Effect.flip))).toBe(
       true,
     )
-    yield* interactions.decide(requestId, "not-json")
-    expect(Schema.is(StorageError)(yield* storage.resume(key, requestId).pipe(Effect.flip))).toBe(
-      true,
-    )
-    expect((yield* storage.get(key)).state._tag).toBe("Waiting")
     const decision = { approved: false, notes: "Do not write" }
     yield* recordInteractionDecision(requestId, decision)
     const resumed = yield* storage.resume(key, requestId)
@@ -4216,6 +4210,24 @@ it.live("binds a decision to one waiting operation and grants one resume attempt
     )
     expect((yield* storage.admit(params)).admitted).toBe(false)
     expect((yield* storage.get(key)).state._tag).toBe("Resuming")
+  }).pipe(
+    Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
+  ),
+)
+
+it.live("a stored decision that does not decode grants no resume", () =>
+  Effect.gen(function* () {
+    yield* fixture
+    yield* (yield* CellStorage).executions.claim(cellOperationStorage)
+    const storage = (yield* CellStorage).operations
+    yield* storage.admit(params)
+    yield* storage.suspend(key, requestOperationStorage)
+    // The first answer is the one the request keeps, so a corrupt one stays.
+    yield* (yield* InteractionStorage).decide(requestId, "not-json")
+    expect(Schema.is(StorageError)(yield* storage.resume(key, requestId).pipe(Effect.flip))).toBe(
+      true,
+    )
+    expect((yield* storage.get(key)).state._tag).toBe("Waiting")
   }).pipe(
     Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),
   ),

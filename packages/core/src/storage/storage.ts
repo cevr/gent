@@ -70,7 +70,11 @@ import {
   getEventBranchId,
   getEventSessionId,
 } from "../domain/event.js"
-import { InteractionRequestRecord, InteractionRequestStatus } from "../domain/interaction.js"
+import {
+  InteractionRequestRecord,
+  InteractionRequestStatus,
+  type StoredInteractionDecision,
+} from "../domain/interaction.js"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { BunCrypto } from "@effect/platform-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
@@ -1110,10 +1114,15 @@ export interface InteractionStorageService {
    * ends. The row leaves the pending slot but stays open for recovery.
    */
   readonly take: (requestId: InteractionRequestId) => Effect.Effect<void, StorageError>
+  /**
+   * Store the answer of a pending request. The first answer wins: a later one
+   * leaves the row unchanged and gets back the answer already stored. None
+   * when the request has no row in this workspace or closed without one.
+   */
   readonly decide: (
     requestId: InteractionRequestId,
     decisionJson: string,
-  ) => Effect.Effect<void, StorageError>
+  ) => Effect.Effect<Option.Option<StoredInteractionDecision>, StorageError>
   /** List open interactions: pending ones, and taken answers a call still keeps.
    *  Pass `scope` to narrow to a specific session+branch. Omit `scope` to scan the
    *  current workspace (startup recovery supplies each persisted workspace id). */
@@ -1170,11 +1179,23 @@ export class InteractionStorage extends Context.Service<
         decide: Effect.fn("InteractionStorage.decide")(
           function* (requestId, decisionJson) {
             const workspaceId = yield* CurrentWorkspaceId
-            yield* sql`UPDATE interaction_requests
+            // One statement, so two replies that race cannot both store.
+            const stored = yield* sql`UPDATE interaction_requests
               SET decision_json = ${decisionJson}
               WHERE request_id = ${requestId}
                 AND status = 'pending'
+                AND decision_json IS NULL
+                AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})
+              RETURNING request_id`
+            if (stored.length === 1) return Option.some({ first: true, decisionJson })
+            const rows = yield* sql<Pick<InteractionRequestRow, "decision_json">>`
+              SELECT decision_json FROM interaction_requests
+              WHERE request_id = ${requestId}
                 AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
+            return Option.fromUndefinedOr(rows[0]).pipe(
+              Option.flatMap((row) => Option.fromNullishOr(row.decision_json)),
+              Option.map((kept) => ({ first: false, decisionJson: kept })),
+            )
           },
           Effect.mapError(storageError("Failed to store interaction decision")),
         ),
