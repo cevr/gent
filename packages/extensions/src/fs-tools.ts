@@ -1199,12 +1199,34 @@ const GrepResult = Schema.Struct({
   truncated: Schema.Boolean,
 })
 
+/** ripgrep's rule: a NUL byte in a file's first 8 KB marks it binary, and grep skips it. */
+const BINARY_PROBE_BYTES = 8192
+
+/** A match or context line longer than this is cut to this many characters. */
+const MAX_LINE_LENGTH = 500
+
+/**
+ * Cut a long line to `MAX_LINE_LENGTH` characters from shortly before `at`,
+ * with a marker that counts what each side lost. One minified line would
+ * otherwise use the model's whole tool-result budget.
+ */
+const clipLine = (line: string, at: number): string => {
+  if (line.length <= MAX_LINE_LENGTH) return line
+  const start = Math.max(0, Math.min(at - MAX_LINE_LENGTH / 5, line.length - MAX_LINE_LENGTH))
+  const end = start + MAX_LINE_LENGTH
+  let clipped = line.slice(start, end)
+  if (start > 0) clipped = `[${start} chars cut] ${clipped}`
+  if (end < line.length) clipped = `${clipped} [${line.length - end} chars cut]`
+  return clipped
+}
+
 // Grep Tool
 
 export const GrepTool = tool({
   id: "grep",
   readonly: true,
-  description: "Search file contents with regex. Returns matching lines.",
+  description:
+    "Search file contents with regex. Returns matching lines. Skips binary files; a line over 500 characters is cut around the match.",
   promptSnippet: "Search file contents with regex",
   params: GrepParams,
   output: GrepResult,
@@ -1225,10 +1247,8 @@ export const GrepTool = tool({
     }
     const limit = params.limit ?? 100
     const contextLines = params.context ?? 0
-    let flags = "g"
-    if (params.caseSensitive === false) {
-      flags = "gi"
-    }
+    let flags = ""
+    if (params.caseSensitive === false) flags = "i"
 
     const regex = yield* Effect.try({
       try: () => new RegExp(params.pattern, flags),
@@ -1250,36 +1270,36 @@ export const GrepTool = tool({
 
     const searchFile = (filePath: string): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const contentResult = yield* fs.readFileString(filePath).pipe(Effect.option)
-        if (Option.isNone(contentResult)) return
+        const bytes = yield* fs.readFile(filePath).pipe(Effect.option)
+        if (Option.isNone(bytes)) return
+        if (bytes.value.subarray(0, BINARY_PROBE_BYTES).includes(0)) return
 
-        const content = contentResult.value
-        const lines = content.split("\n")
+        const lines = new TextDecoder().decode(bytes.value).split("\n")
+        const contextOf = (from: number, to: number) =>
+          lines.slice(from, to).map((line) => clipLine(line, 0))
 
-        for (let i = 0; i < lines.length && !truncated; i++) {
-          const line = Option.fromNullishOr(lines[i])
-          if (Option.isSome(line) && regex.test(line.value)) {
-            if (matches.length >= limit) {
-              truncated = true
-              break
-            }
-            const match: (typeof matches)[0] = {
-              file: filePath,
-              line: i + 1,
-              content: line.value,
-            }
-
-            if (contextLines > 0) {
-              match.context = {
-                before: lines.slice(Math.max(0, i - contextLines), i),
-                after: lines.slice(i + 1, i + 1 + contextLines),
-              }
-            }
-
-            matches.push(match)
+        for (const [i, line] of lines.entries()) {
+          if (truncated) break
+          const found = Option.fromNullishOr(regex.exec(line))
+          if (Option.isNone(found)) continue
+          if (matches.length >= limit) {
+            truncated = true
+            break
           }
-          // Reset regex lastIndex for next test
-          regex.lastIndex = 0
+          const match: (typeof matches)[0] = {
+            file: filePath,
+            line: i + 1,
+            content: clipLine(line, found.value.index),
+          }
+
+          if (contextLines > 0) {
+            match.context = {
+              before: contextOf(Math.max(0, i - contextLines), i),
+              after: contextOf(i + 1, i + 1 + contextLines),
+            }
+          }
+
+          matches.push(match)
         }
       })
 

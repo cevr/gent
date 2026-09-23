@@ -776,6 +776,49 @@ describe("GrepTool", () => {
     }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
   )
 
+  it.scopedLive("a file with a NUL byte in its first 8 KB is binary and skipped", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/text.ts`, "const needle = 1")
+      yield* fs.writeFileString(`${tmpDir}/binary.bin`, `${"x".repeat(8000)}\0needle`)
+      yield* fs.writeFileString(`${tmpDir}/late-nul.txt`, `needle${"x".repeat(9000)}\0`)
+
+      const result = yield* runToolWithCtx(GrepTool, { pattern: "needle", path: tmpDir }, ctxGrep)
+      expect(result.matches.map((match) => match.file.slice(tmpDir.length + 1)).toSorted()).toEqual(
+        ["late-nul.txt", "text.ts"],
+      )
+      const direct = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "needle", path: `${tmpDir}/binary.bin` },
+        ctxGrep,
+      )
+      expect(direct.matches).toEqual([])
+    }).pipe(Effect.provide(FallbackLayer)),
+  )
+
+  it.scopedLive("a long line is cut around the match, and so is its context", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const long = `${"a".repeat(5000)}needle${"b".repeat(5000)}`
+      yield* fs.writeFileString(`${tmpDir}/min.js`, `${"c".repeat(3000)}\n${long}\nshort`)
+
+      const result = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "needle", path: tmpDir, context: 1 },
+        ctxGrep,
+      )
+      const [match] = result.matches
+      expect(match?.line).toBe(2)
+      expect(match?.content).toBe(
+        `[4900 chars cut] ${"a".repeat(100)}needle${"b".repeat(394)} [4606 chars cut]`,
+      )
+      expect(match?.context?.before).toEqual([`${"c".repeat(500)} [2500 chars cut]`])
+      expect(match?.context?.after).toEqual(["short"])
+    }).pipe(Effect.provide(FallbackLayer)),
+  )
+
   it.scopedLive("searches single file directly", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
