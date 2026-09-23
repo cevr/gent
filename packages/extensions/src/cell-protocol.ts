@@ -254,15 +254,40 @@ const maximumCatalogEntries = 512
 const identifierSegment = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 const encodeSegment = Schema.encodeSync(Schema.fromJsonString(Schema.String))
 
-/** The source a model writes to reach `id`: `tools.delegate.start`, `tools["must-not-run"]`. */
-export const toolPath = (id: string): string =>
-  ["tools", ...id.split(".")]
-    .map((segment, index) => {
-      if (index === 0) return segment
+/**
+ * Keys JavaScript reads on its own or already defines on a function: `await`
+ * reads `then`, `JSON.stringify` reads `toJSON`, coercion reads `toString`.
+ * On a `tools` node these keep their JavaScript meaning and never name a tool,
+ * so an id with such a segment is reached through `tools(id)` instead.
+ */
+export const reservedToolSegments: ReadonlySet<string> = new Set([
+  ...Object.getOwnPropertyNames(Object.prototype),
+  ...Object.getOwnPropertyNames(Function.prototype),
+  "prototype",
+  "then",
+  "toJSON",
+  "inspect",
+  "asymmetricMatch",
+  "$$typeof",
+  "nodeType",
+])
+
+/**
+ * The source a model writes to reach `id`: `tools.delegate.start`,
+ * `tools["must-not-run"]`, or `tools("read.then")` when a segment is reserved.
+ */
+export const toolPath = (id: string): string => {
+  const segments = id.split(".")
+  if (segments.some((segment) => reservedToolSegments.has(segment))) {
+    return `tools(${encodeSegment(id)})`
+  }
+  return segments
+    .map((segment) => {
       if (identifierSegment.test(segment)) return `.${segment}`
       return `[${encodeSegment(segment)}]`
     })
-    .join("")
+    .reduce((path, segment) => `${path}${segment}`, "tools")
+}
 
 /** One selected host tool as the kernel describes it. Descriptions never grant execution. */
 export const CellCatalogEntry = Schema.Struct({

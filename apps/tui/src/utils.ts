@@ -544,6 +544,8 @@ const CELL_VERB_PATTERNS: ReadonlyArray<readonly [RegExp, (match: RegExpExecArra
     /\btools((?:\.[A-Za-z_$][\w$]*|\[\s*["'`][^"'`]+["'`]\s*\])+)\s*\(/g,
     (m) => hostToolId(m[1] ?? ""),
   ],
+  // `tools("read.then")(input)` calls by id; a bare `tools(id)` only reads the catalog.
+  [/\btools\(\s*["'`]([^"'`]+)["'`]\s*\)\s*\(/g, (m) => m[1] ?? ""],
   [/Bun\.\$`([^`]*)`/g, (m) => `$ ${shellHead(m[1] ?? "")}`],
   [
     /Bun\.spawn\(\s*(?:\{\s*cmd:\s*)?\[\s*((?:["'`][^"'`]*["'`]\s*,?\s*)+)\]/g,
@@ -561,10 +563,7 @@ const hostToolId = (path: string) => {
     path.matchAll(/\.([A-Za-z_$][\w$]*)|\[\s*["'`]([^"'`]+)["'`]\s*\]/g),
     (m) => m[1] ?? m[2] ?? "",
   )
-  const id = segments.join(".")
-  // `tools.describe(id)` reads the catalog; it is not a host tool call.
-  if (id === "describe") return ""
-  return id
+  return segments.join(".")
 }
 
 const argv = (list: string) =>

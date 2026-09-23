@@ -105,7 +105,7 @@ describe("cell worker", () => {
         CellRequest.cases.Evaluate.make({
           cellId: "one",
           outputToken: "one-token",
-          source: "tools.describe('read').description",
+          source: "tools('read').description",
           catalog: {
             hash: "a",
             tools: [{ name: "read", description: "Read a file", guidelines: [], parameters: {} }],
@@ -316,10 +316,10 @@ describe("Bun cell evaluation", () => {
         { name: "write", description: "Write a file", guidelines: [], parameters: {} },
       ])
       const described = yield* kernel.evaluate(
-        "const spec = tools.describe('read'); `${spec.parameters.properties.path.type}:${spec.guidelines[0]}`",
+        "const spec = tools('read'); `${spec.parameters.properties.path.type}:${spec.guidelines[0]}`",
       )
       expect(described.display).toBe("string:Prefer read over bash")
-      const missing = yield* kernel.evaluate("tools.describe('bash')").pipe(Effect.flip)
+      const missing = yield* kernel.evaluate("tools('bash')").pipe(Effect.flip)
       expect(missing.message).toContain("tools.bash is not a host tool selected for this turn")
       // Catalog reads are worker-local and never become host operations.
       expect(yield* Ref.get(calls)).toBe(0)
@@ -397,6 +397,64 @@ describe("Bun cell evaluation", () => {
       expect((yield* kernel.evaluate("typeof tools.read.then")).display).toBe("undefined")
       expect(yield* Ref.get(calls)).toBe(0)
     }),
+  )
+
+  it.scopedLive("JavaScript probes never call a tool, and tools(id) reaches a colliding id", () =>
+    Effect.gen(function* () {
+      const sent = yield* Ref.make<ReadonlyArray<string>>([])
+      const kernel = yield* makeKernel(
+        {
+          call: (name) => Ref.update(sent, (seen) => [...seen, name]).pipe(Effect.as(name)),
+        },
+        "read",
+        "read.then",
+        "toJSON",
+        "constructor",
+        "name",
+      )
+      const probed = yield* kernel.evaluate(
+        "const same = (await Promise.resolve(tools.read)) === tools.read; [same, JSON.stringify(tools), typeof tools.read.constructor, typeof tools.name]",
+      )
+      expect(probed.display).toBe("[ true, undefined, 'function', 'string' ]")
+      expect(yield* Ref.get(sent)).toEqual([])
+      const called = yield* kernel.evaluate(
+        "[await tools('read.then')({}), await tools('toJSON')({}), await tools('constructor')({}), await tools('name')({}), await tools.read({})].join(',')",
+      )
+      expect(called.display).toBe("read.then,toJSON,constructor,name,read")
+      expect((yield* kernel.evaluate("Object.keys(tools).join(',')")).display).toBe("read")
+    }),
+  )
+
+  it.scopedLive("a null input reaches the host as null", () =>
+    Effect.gen(function* () {
+      const sent = yield* Ref.make<ReadonlyArray<Schema.Json>>([])
+      const kernel = yield* makeKernel(
+        { call: (_name, input) => Ref.update(sent, (seen) => [...seen, input]).pipe(Effect.as(0)) },
+        "read",
+      )
+      yield* kernel.evaluate("await tools.read(null); await tools.read()")
+      // oxlint-disable-next-line effect/noNullish -- The contract under test is that a JavaScript null input stays null.
+      expect(yield* Ref.get(sent)).toEqual([null, {}])
+    }),
+  )
+
+  it.scopedLive(
+    "tools named describe are ordinary paths; tools(id) returns the catalog entry",
+    () =>
+      Effect.gen(function* () {
+        const sent = yield* Ref.make<ReadonlyArray<string>>([])
+        const kernel = yield* makeKernel(
+          { call: (name) => Ref.update(sent, (seen) => [...seen, name]).pipe(Effect.as(0)) },
+          "describe",
+          "describe.run",
+        )
+        yield* kernel.evaluate("await tools.describe({}); await tools.describe.run({})")
+        expect(yield* Ref.get(sent)).toEqual(["describe", "describe.run"])
+        const entry = yield* kernel.evaluate(
+          "const spec = tools('describe.run'); [spec.id, spec.description, typeof spec.parameters]",
+        )
+        expect(entry.display).toBe("[ 'describe.run', 'describe.run', 'object' ]")
+      }),
   )
 
   it.scopedLive("rejects non-data host arguments before dispatch", () =>

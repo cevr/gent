@@ -2260,7 +2260,7 @@ export const CellTool = tool({
     "The value of the last expression is the cell result; an undefined value shows nothing. Top-level await works; a top-level return does not.",
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
     "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
-    "The Host Tools section lists every host tool selected for this turn with its signature. tools.describe(id) returns its full input schema and guidelines; it is local and synchronous and does not grant permission to execute. Object.keys(tools) lists the top-level names.",
+    "The Host Tools section lists every host tool selected for this turn with its signature. tools(id) returns the tool as a function carrying its full input schema (parameters) and guidelines; it is local and synchronous and does not grant permission to execute. Object.keys(tools) lists the top-level names.",
     "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff before the next turn, focused on the instructions. context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
@@ -2552,7 +2552,7 @@ export const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
  * The default model execution surface. When this builtin is registered, a native
  * model turn advertises only `cell`; host tools stay callable inside the cell
  * as `tools.<id path>(input)` through the turn's bound identities. The kernel
- * builds that namespace, and the local `tools.describe`, from the catalog the
+ * builds that namespace, and the local `tools(id)` lookup, from the catalog the
  * host ships with each changed turn.
  * The extension owns the model selection and catalog through ordinary hooks.
  */
@@ -2589,7 +2589,7 @@ export const CellExtension = defineExtension({
           renderToolSignature,
         )
         if (entries.length === 0) return `${input.basePrompt}\n\n${CELL_WORK}`
-        const catalog = `## Host Tools\n\nInside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. \`tools.describe(id)\` returns the full input schema and the tool's guidelines.\n\n${entries.join("\n")}`
+        const catalog = `## Host Tools\n\nInside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. \`tools(id)\` returns the tool with its full input schema (\`parameters\`) and \`guidelines\`, and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`.\n\n${entries.join("\n")}`
         return `${input.basePrompt}\n\n${CELL_WORK}\n\n${catalog}`
       }),
     )
@@ -2613,10 +2613,14 @@ const CELL_WORK = `# Working in the cell
 
 // ── tool signatures ─────────────────────────────────────────────────────────
 
-/** Nested objects longer than this render as `object`; `tools.describe(id)` has the rest. */
+/** Nested objects longer than this render as `object`; `tools(id).parameters` has the rest. */
 const INLINE_OBJECT_LIMIT = 80
-/** A result type longer than this renders as `object`. */
+/** An input type longer than this renders as its outer shape, so no schema can flood the prompt. */
+const INPUT_TYPE_LIMIT = 300
+/** A result type longer than this renders as its outer shape. */
 const RESULT_TYPE_LIMIT = 100
+/** An enum with more literals than this renders as the literals' types. */
+const LITERAL_LIMIT = 8
 /** The description after a signature is cut here, as opencode codemode cuts it. */
 const DESCRIPTION_LIMIT = 120
 
@@ -2651,6 +2655,41 @@ const propertyKey = (name: string) => {
   return encodeJson(name)
 }
 
+const literalType = (value: SchemaValue) => {
+  if (Predicate.isString(value)) return "string"
+  if (Predicate.isNumber(value)) return "number"
+  if (Predicate.isBoolean(value)) return "boolean"
+  if (Predicate.isNull(value)) return "null"
+  return "unknown"
+}
+
+/** A short enum lists its literals; a long one names their types. */
+const renderLiterals = (values: ReadonlyArray<SchemaValue>) => {
+  if (values.length <= LITERAL_LIMIT) return union(values.map((value) => encodeJson(value)))
+  return union(values.map(literalType))
+}
+
+/** A type past its limit keeps only its outer shape. */
+const boundedType = (rendered: string, limit: number) => {
+  if (rendered.length <= limit) return rendered
+  if (rendered.endsWith("[]")) return "object[]"
+  return "object"
+}
+
+/**
+ * Whether a call with no argument is valid: the host sends `{}` for it, so the
+ * schema must accept an empty object. A schema with no constraint accepts it;
+ * a number, a literal, a reference, or an object with required keys does not.
+ */
+const acceptsEmptyInput = (schema: JsonSchema.JsonSchema): boolean => {
+  const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
+  if (alternatives.length > 0) return alternatives.some(acceptsEmptyInput)
+  if ("const" in schema || "enum" in schema || "$ref" in schema) return false
+  const types = strings([schema["type"]].flat())
+  if (types.length === 0) return true
+  return types.includes("object") && strings(schema["required"]).length === 0
+}
+
 /**
  * One TypeScript-like type for a JSON Schema node. Objects past the first level
  * inline only while short; references and anything unrecognized fall back to
@@ -2658,7 +2697,7 @@ const propertyKey = (name: string) => {
  */
 const renderSchemaType = (schema: JsonSchema.JsonSchema, depth: number): string => {
   if ("const" in schema) return encodeJson(schema["const"])
-  if (Array.isArray(schema["enum"])) return union(schema["enum"].map((value) => encodeJson(value)))
+  if (Array.isArray(schema["enum"])) return renderLiterals(schema["enum"])
   const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
   if (alternatives.length > 0) {
     return union(alternatives.map((member) => renderSchemaType(member, depth)))
@@ -2718,14 +2757,6 @@ const renderObjectType = (schema: JsonSchema.JsonSchema, depth: number): string 
   return rendered
 }
 
-/** A long result type keeps only its outer shape. */
-const renderResultType = (schema: JsonSchema.JsonSchema) => {
-  const rendered = renderSchemaType(schema, 0)
-  if (rendered.length <= RESULT_TYPE_LIMIT) return rendered
-  if (rendered.endsWith("[]")) return "object[]"
-  return "object"
-}
-
 const firstLine = (text: string) => {
   const line = (text.split("\n")[0] ?? "").trim()
   if (line.length <= DESCRIPTION_LIMIT) return line
@@ -2752,10 +2783,11 @@ export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(
   if (Schema.isSchema(output)) {
     result = yield* jsonSchemaOf(() => AiTool.getJsonSchemaFromSchema(output))
   }
-  let input = `input: ${renderSchemaType(parameters, 0)}`
-  if (strings(parameters["required"]).length === 0)
-    input = `input?: ${renderSchemaType(parameters, 0)}`
-  const signature = `${toolPath(getToolId(tool))}(${input}): Promise<${renderResultType(result)}>`
+  const inputType = boundedType(renderSchemaType(parameters, 0), INPUT_TYPE_LIMIT)
+  let input = `input: ${inputType}`
+  if (acceptsEmptyInput(parameters)) input = `input?: ${inputType}`
+  const resultType = boundedType(renderSchemaType(result, 0), RESULT_TYPE_LIMIT)
+  const signature = `${toolPath(getToolId(tool))}(${input}): Promise<${resultType}>`
   const summary = firstLine(getToolPrompt(tool).promptSnippet ?? tool.description)
   if (summary.length === 0) return `- ${signature}`
   return `- ${signature} // ${summary}`

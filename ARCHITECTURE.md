@@ -737,9 +737,18 @@ a callable path, split on `.` (`delegate.start` is `tools.delegate.start(input)`
 reads the current catalog, so one node can be a tool and a namespace at once
 (`tools.wake(...)` and `tools.wake.cancel(...)`). A call sends the id itself as
 the host call name, so operation receipts and replay key on the tool id. An
-unknown path throws and names the three closest ids. `tools.describe(id)` is a
-local synchronous read of the full entry, schema and guidelines; it records no
-operation receipt and grants no execution permission. The RPC lifetime test
+unknown path throws and names the three closest ids. A key JavaScript reads on
+its own or defines on a function (`then`, `toJSON`, `constructor`, `call`,
+`name`, ...; `reservedToolSegments` in `cell-protocol.ts`) keeps its JavaScript
+meaning and never names a tool, so `await`, `JSON.stringify`, and inspection
+never call one. `tools(id)` is the one lookup by string: a local synchronous
+read that returns the tool as a function carrying its catalog entry (`id`,
+`description`, `guidelines`, `parameters`). It reaches an id with a reserved
+segment, which the prompt renders as `tools("read.then")(input)`; it records
+no operation receipt and grants no execution permission. A call with no
+argument sends `{}`; the signature marks `input?` only when the schema accepts
+`{}`. Enums past eight literals and input types past 300 characters render as
+their outer shape. The RPC lifetime test
 checks the namespace keys and a host schema through the compiled worker, and
 that a later cell without a catalog still describes the tool. An agent-denied
 tool and the outer `cell` are absent from the namespace.

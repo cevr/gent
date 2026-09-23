@@ -827,12 +827,18 @@ describe("describeCellCode", () => {
 
   test("names host tools by their id path and skips catalog reads", () => {
     const code = `
-      const spec = tools.describe("delegate.start")
+      const spec = tools("delegate.start").parameters
       const child = await tools.delegate.start({ todo: "x" })
       await tools["must-not-run"]({})
+      await tools("read.then")({})
       await tools.wake.cancel()
     `
-    expect(describeCellCode(code)).toEqual(["delegate.start", "must-not-run", "wake.cancel"])
+    expect(describeCellCode(code)).toEqual([
+      "delegate.start",
+      "must-not-run",
+      "read.then",
+      "wake.cancel",
+    ])
   })
 
   test("source with no recognised verb yields nothing", () => {

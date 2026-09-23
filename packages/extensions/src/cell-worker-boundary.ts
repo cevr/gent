@@ -13,6 +13,7 @@ import { createRequire } from "node:module"
 import { inspect } from "node:util"
 import {
   type CellCatalogEntry,
+  reservedToolSegments,
   toolPath,
   CellEvaluation,
   CellEvaluationError,
@@ -41,9 +42,6 @@ import { BunRuntime } from "@effect/platform-bun"
 // ── tool namespace ──────────────────────────────────────────────────────────
 
 /* oxlint-disable effect/noThrowStatement, effect/noNewError, effect/noUnknownParameters -- The namespace runs inside model code; a thrown Error is the cell's failure contract, and a Proxy trap receives any JavaScript value. */
-
-/** Keys a caller probes without meaning a tool: `await` reads `then`, JSON reads `toJSON`. */
-const probeKeys = new Set(["then", "toJSON"])
 
 const editDistance = (left: string, right: string): number => {
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index)
@@ -79,13 +77,11 @@ const closeIds = (wanted: string, ids: ReadonlyArray<string>): string =>
 /** The id a child key names under `path`; the root has no prefix. */
 const childPath = (path: string, key: string) => [path, key].filter((part) => part !== "").join(".")
 
-/** The root is a plain namespace; every other node is callable and shows its id. */
-const nodeTarget = (path: string) => {
-  if (path === "") return {}
-  return Object.defineProperty(() => {}, "name", { value: path })
-}
+/** Every node is callable and shows its id; the root shows `tools`. */
+const nodeTarget = (path: string) =>
+  Object.defineProperty(() => {}, "name", { value: path || "tools" })
 
-/** A namespace node: the plain root object, or a callable path named by its id. */
+/** A namespace node: a callable path named by its id. */
 type ToolNode = ReturnType<typeof nodeTarget>
 
 interface ToolCatalogView {
@@ -94,13 +90,28 @@ interface ToolCatalogView {
   readonly call: (id: string, input: unknown) => Promise<Schema.Json>
 }
 
+/** A call with no argument sends an empty input, as `tools.delegate.list()` reads; `null` stays `null`. */
+const inputOrEmpty = (input: unknown) => {
+  if (Predicate.isUndefined(input)) return {}
+  return input
+}
+
+/** A reserved key keeps its JavaScript meaning; only the other string keys name tools. */
+const isToolKey = (key: string | symbol): key is string =>
+  Predicate.isString(key) && !reservedToolSegments.has(key)
+
 /**
  * `tools` inside the cell: every selected host tool id is a callable path, so
  * `delegate.start` is `tools.delegate.start(input)`. Each node is a Proxy that
  * reads the current id set on access; a node can be a tool and a namespace at
  * once (`tools.wake(input)` and `tools.wake.cancel(input)`). A call sends the
  * id itself to the host, so operation records key on the tool id.
- * `tools.describe(id)` returns the full catalog entry: schema and guidelines.
+ *
+ * A reserved key (`then`, `toJSON`, `constructor`, `call`, `name`, ...) is
+ * never a tool, so `await`, `JSON.stringify`, and inspection never call one.
+ * `tools(id)` is the one lookup by string: it returns the tool as a function
+ * that carries its catalog entry (`id`, `description`, `guidelines`,
+ * `parameters`), and reaches an id whose segment is reserved.
  */
 const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
   const nodes = new Map<string, ToolNode>()
@@ -111,37 +122,45 @@ const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
       .ids()
       .filter((id) => path === "" || id.startsWith(`${path}.`))
       .map((id) => id.slice(path.length).replace(/^\./, "").split(".")[0] ?? "")
+      .filter(isToolKey)
     return [...new Set(names)].toSorted()
   }
   const unknown = (path: string) =>
     new Error(
       `${toolPath(path)} is not a host tool selected for this turn. Close ids: ${closeIds(path, catalog.ids()) || "none"}`,
     )
-  const describe = (id: string) =>
-    Option.getOrThrowWith(catalog.describe(String(id)), () => unknown(String(id)))
+  const lookup = (id: string) => {
+    const entry = Option.getOrThrowWith(catalog.describe(id), () => unknown(id))
+    return Object.assign((input?: unknown) => catalog.call(entry.name, input), {
+      id: entry.name,
+      description: entry.description,
+      guidelines: [...entry.guidelines],
+      parameters: entry.parameters,
+    })
+  }
   const node = (path: string): ToolNode => {
     const existing = nodes.get(path)
     if (Predicate.isNotUndefined(existing)) return existing
     const handler: ProxyHandler<ToolNode> = {
       get: (target, key, receiver) => {
-        if (Predicate.isSymbol(key)) return Reflect.get(target, key, receiver)
-        if (path === "" && key === "describe") return describe
+        if (!isToolKey(key)) return Reflect.get(target, key, receiver)
         if (isPrefix(childPath(path, key))) return node(childPath(path, key))
-        if (Reflect.has(target, key) || probeKeys.has(key))
-          return Reflect.get(target, key, receiver)
         throw unknown(childPath(path, key))
       },
-      has: (target, key) =>
-        (Predicate.isString(key) && isPrefix(childPath(path, key))) || Reflect.has(target, key),
+      has: (target, key) => {
+        if (!isToolKey(key)) return Reflect.has(target, key)
+        return isPrefix(childPath(path, key))
+      },
       ownKeys: () => children(path),
       getOwnPropertyDescriptor: (target, key) => {
-        if (Predicate.isString(key) && isPrefix(childPath(path, key))) {
+        if (isToolKey(key) && isPrefix(childPath(path, key))) {
           const value = node(childPath(path, key))
           return { value, enumerable: true, configurable: true, writable: false }
         }
         return Reflect.getOwnPropertyDescriptor(target, key)
       },
       apply: (_target, _this, args: ReadonlyArray<unknown>) => {
+        if (path === "") return lookup(String(args[0]))
         if (catalog.ids().includes(path)) return catalog.call(path, args[0])
         if (!isPrefix(path)) throw unknown(path)
         const inside = catalog.ids().filter((id) => id.startsWith(`${path}.`))
@@ -249,10 +268,9 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
         Option.fromUndefinedOr(catalog.find((candidate) => candidate.name === id)),
         (entry) => ({ ...entry, guidelines: [...entry.guidelines] }),
       ),
-    // A call with no argument sends an empty input, as `tools.delegate.list()` reads.
     call: (id, input) =>
       runPromise(
-        Schema.decodeUnknownEffect(Schema.Json)(input ?? {}).pipe(
+        Schema.decodeUnknownEffect(Schema.Json)(inputOrEmpty(input)).pipe(
           Effect.mapError((cause) => failure("execute", cause)),
           Effect.flatMap((decoded) => host.call(id, decoded)),
         ),

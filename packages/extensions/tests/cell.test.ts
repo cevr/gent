@@ -984,7 +984,7 @@ describe("cell worker process", () => {
           tools: [{ name: "read", description: "Read a file", guidelines: [], parameters: {} }],
         }
         const host = CellOperationHost.of({ catalog, call: () => Effect.succeed(true) })
-        const describe = "tools.describe('read').description"
+        const describe = "tools('read').description"
         const first = yield* kernel
           .evaluate(describe)
           .pipe(Effect.provideService(CellOperationHost, host))
@@ -2160,7 +2160,7 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
       .join("\n")
     expect(system).toContain("## Host Tools")
     expect(system).toContain("- tools.read(input: { path: string")
-    expect(system).toContain("`tools.describe(id)` returns the full input schema")
+    expect(system).toContain("`tools(id)` returns the tool with its full input schema")
     expect(system).not.toContain("tools.cell(")
   },
 })
@@ -2845,8 +2845,8 @@ describe("branch cell lifetime", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const sources = [
-              "const names = Object.keys(tools); if (names.includes('hidden') || names.includes('cell') || !names.includes('worker')) throw new Error('Wrong catalog'); const spec = tools.describe('worker'); if (spec.parameters.type !== 'number' || !spec.guidelines.includes('Supply the current worker PID')) throw new Error('Wrong tool description'); let kept = 21; await tools.worker(process.pid); kept",
-              "if (tools.describe('worker').parameters.type !== 'number') throw new Error('Catalog was not retained'); kept += 1",
+              "const names = Object.keys(tools); if (names.includes('hidden') || names.includes('cell') || !names.includes('worker')) throw new Error('Wrong catalog'); const spec = tools('worker'); if (spec.parameters.type !== 'number' || !spec.guidelines.includes('Supply the current worker PID')) throw new Error('Wrong tool description'); let kept = 21; await tools.worker(process.pid); kept",
+              "if (tools('worker').parameters.type !== 'number') throw new Error('Catalog was not retained'); kept += 1",
               "await tools.worker(process.pid); typeof kept",
               "let rejected = false; try { await tools.cell({code: 'kept = 0'}) } catch (error) { rejected = error.message.includes('tools.cell is not a host tool selected for this turn') }; let hiddenRejected = false; try { await tools.hidden({}) } catch { hiddenRejected = true }; rejected && hiddenRejected && kept === 23",
               "typeof kept",
@@ -4469,6 +4469,89 @@ const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
     '- tools["must-not-run"](input: { items: (string | number)[]; node?: { id: string } }): Promise<boolean> // First line.',
   ],
 ]
+
+const numberInput = tool({
+  id: "worker",
+  description: "Supply the current worker PID.",
+  params: Schema.Finite,
+  output: Schema.Boolean,
+  execute: () => Effect.succeed(true),
+})
+
+const eitherInput = tool({
+  id: "either",
+  description: "Takes one of two shapes.",
+  params: Schema.Union([
+    Schema.Struct({ left: Schema.String }),
+    Schema.Struct({ right: Schema.String }),
+  ]),
+  output: Schema.Boolean,
+  execute: () => Effect.succeed(true),
+})
+
+const emptyInput = tool({
+  id: "ping",
+  description: "Takes nothing.",
+  params: Schema.Struct({}),
+  output: Schema.Boolean,
+  execute: () => Effect.succeed(true),
+})
+
+const hugeEnum = tool({
+  id: "huge",
+  description: "Picks one of many kinds.",
+  params: Schema.Struct({
+    kind: Schema.Literals(Array.from({ length: 10_000 }, (_, index) => `kind-${index}`)),
+  }),
+  output: Schema.Boolean,
+  execute: () => Effect.succeed(true),
+})
+
+const wideInput = tool({
+  id: "wide",
+  description: "Takes many fields.",
+  params: Schema.Struct(
+    Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`field${index}`, Schema.String])),
+  ),
+  output: Schema.Boolean,
+  execute: () => Effect.succeed(true),
+})
+
+const collidingId = tool({
+  id: "read.then",
+  description: "A segment JavaScript probes.",
+  params: Schema.Struct({ path: Schema.String }),
+  output: Schema.Boolean,
+  execute: () => Effect.succeed(true),
+})
+
+const edgeSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
+  [
+    numberInput,
+    "- tools.worker(input: number): Promise<boolean> // Supply the current worker PID.",
+  ],
+  [
+    eitherInput,
+    "- tools.either(input: { left: string } | { right: string }): Promise<boolean> // Takes one of two shapes.",
+  ],
+  [emptyInput, "- tools.ping(input?: {} | unknown[]): Promise<boolean> // Takes nothing."],
+  [hugeEnum, "- tools.huge(input: { kind: string }): Promise<boolean> // Picks one of many kinds."],
+  [wideInput, "- tools.wide(input: object): Promise<boolean> // Takes many fields."],
+  [
+    collidingId,
+    '- tools("read.then")(input: { path: string }): Promise<boolean> // A segment JavaScript probes.',
+  ],
+]
+
+describe("tool signature edges", () => {
+  for (const [capability, expected] of edgeSignatures) {
+    it.effect(`${String(capability.id)} keeps its argument contract and a bounded line`, () =>
+      Effect.gen(function* () {
+        expect(yield* renderToolSignature(capability)).toBe(expected)
+      }),
+    )
+  }
+})
 
 describe("tool signatures", () => {
   for (const [capability, expected] of shippedSignatures) {
