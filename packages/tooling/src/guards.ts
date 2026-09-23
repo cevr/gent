@@ -1101,7 +1101,6 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_AUTH_DIRECTORY", "the operator names the auth directory"],
   ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
   ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
-  ["GENT_LINK", "a developer sets this by hand to link the built binary onto PATH"],
 ])
 
 /**

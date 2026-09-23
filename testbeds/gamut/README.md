@@ -53,7 +53,7 @@ It reads the run's own `data.db` read-only and prints:
    `${home}/.gent/auth`, not the data dir, so the real credentials still work.
 2. **The wrong binary.** `~/.bun/bin/gent` points at whichever checkout last
    ran the gate. `up` builds and launches `apps/tui/bin/gent` by absolute path
-   from this checkout, and never sets `GENT_LINK`. It builds through the root
+   from this checkout, and never runs `bun run link`. It builds through the root
    build, so the `gent-cell` worker beside the binary is this checkout's too.
 3. **The stale TUI.** `pkill` returns before the process releases the PTY, so
    the next command types into the dying session. `restart` and `down` send two

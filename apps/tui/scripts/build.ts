@@ -1,9 +1,8 @@
-import { copyFileSync, existsSync, mkdirSync, lstatSync, unlinkSync, symlinkSync } from "fs"
+import { copyFileSync, existsSync, mkdirSync } from "fs"
 import { dirname, join } from "path"
 import { fileURLToPath } from "url"
 import { randomUUID } from "node:crypto"
 import solidTransformPlugin from "@opentui/solid/bun-plugin"
-import * as os from "node:os"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -58,29 +57,3 @@ if (!buildResult.success) {
 }
 
 console.log(`✅ Binary built: ${join(binDir, "gent")}`)
-
-// Symlink to global bun bin.
-//
-// This is opt-in. `~/.bun/bin/gent` is a single global name, and every
-// checkout builds the same binary path, so an unconditional symlink hands the
-// user's `gent` to whichever checkout built last. A build in an isolated
-// worktree — or the one the pre-commit hook runs — would silently repoint the
-// binary another session is using. Set GENT_LINK=1 to claim the name.
-if (process.env["GENT_LINK"] === "1") {
-  const home = process.env["HOME"] ?? os.homedir()
-  const bunBin = join(home, ".bun", "bin", "gent")
-  try {
-    try {
-      lstatSync(bunBin)
-      unlinkSync(bunBin)
-    } catch {
-      // doesn't exist
-    }
-    symlinkSync(join(binDir, "gent"), bunBin)
-    console.log(`✅ Symlinked to: ${bunBin}`)
-  } catch (e) {
-    console.log(`⚠️  Could not symlink to ${bunBin}: ${e}`)
-  }
-} else {
-  console.log("↷ Skipped global symlink. Set GENT_LINK=1 to point ~/.bun/bin/gent here.")
-}
