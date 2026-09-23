@@ -1534,4 +1534,43 @@ describe("wake store", () => {
       Effect.timeout("8 seconds"),
     ),
   )
+
+  it.scopedLive("cancelling a repeating alarm with unread notices names it once", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("wake-cancel-notices-")
+      const queued = yield* Ref.make<ReadonlyArray<string>>([])
+      const ctx = contextWith(home, queued)
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
+      const notice = (firedAt: number): WakeEntry =>
+        WakeEntry.cases.notice.make({
+          wakeId: "repeating",
+          outcome: "fired",
+          firedAt,
+          content: `stand up (${firedAt})`,
+          note: "stand up",
+        })
+      yield* fs.writeFileString(
+        `${home}/.gent/wakes/${branchId}.json`,
+        encodeAlarms([
+          {
+            _tag: "alarm",
+            wakeId: "repeating",
+            dueAt: 10_000_000,
+            everySeconds: 60,
+            mode: "notify",
+            note: "stand up",
+          },
+          notice(1_000),
+          notice(2_000),
+        ]),
+      )
+      const result = yield* runToolWithCtx(CancelTool, { wakeId: "repeating" }, ctx)
+      expect(result.cancelled).toEqual(["repeating"])
+      expect(yield* readFile(home)).toBe("[]")
+    }).pipe(
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+      Effect.timeout("8 seconds"),
+    ),
+  )
 })

@@ -598,13 +598,14 @@ const storeAndArm = Effect.fn("WakeTool.storeAndArm")(function* (entry: PendingW
   yield* armEntry(entry)
 })
 
-/** Drops entries from the file and interrupts their timers; returns the ids removed. */
+/** Drops entries from the file and interrupts their timers; returns each removed id once. */
 const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEntry) => boolean) {
   const alarms = yield* WakeAlarms
   const removed = yield* store.modify((current: ReadonlyArray<WakeEntry>) =>
     Effect.succeed({
       next: current.filter(keep),
-      result: current.filter((entry) => !keep(entry)).map((entry) => entry.wakeId),
+      // A repeating notify alarm and its unread notices share one id.
+      result: [...new Set(current.filter((entry) => !keep(entry)).map((entry) => entry.wakeId))],
     }),
   )
   // A stored entry may have no timer yet (before the first turn re-arms it); an
