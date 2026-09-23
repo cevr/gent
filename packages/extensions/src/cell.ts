@@ -2217,6 +2217,9 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           call: Parameters<CellExecutionService["run"]>[0],
           runEpoch: number,
         ) {
+          // The loop closed before this run took the permit: it takes no claim
+          // and runs nothing, so a restart issues the call again.
+          if (stopping) return yield* Effect.interrupt
           const address = { ...call, sessionId: input.sessionId, branchId: input.branchId }
           const admission = yield* storage.claim(address)
           if (admission._tag === "Completed") return admission.result

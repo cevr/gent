@@ -346,6 +346,40 @@ describe("recorded cell execution", () => {
   )
 
   it.scopedLive(
+    "a cell that reaches the executor after its loop stopped does not start",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [late] = yield* setupCalls(["await tools.mark({})"])
+        if (!late) return yield* Effect.die("Missing test cell")
+        const calls = yield* Ref.make(0)
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("mark"),
+          call: () => Ref.update(calls, (n) => n + 1).pipe(Effect.as(true)),
+        })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        yield* cells.stop
+        const exit = yield* cells
+          .run(late)
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.exit)
+        expect(Exit.hasInterrupts(exit)).toBe(true)
+        expect(yield* Ref.get(calls)).toBe(0)
+        // Never admitted: a restart re-issues the call instead of settling it.
+        expect(
+          Option.isNone(
+            yield* (yield* CellStorage).executions.get({ ...late, sessionId, branchId }),
+          ),
+        ).toBe(true)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "restores the saved namespace into a replaced worker and into a new branch owner",
     () =>
       Effect.gen(function* () {
