@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { Effect, Option, Schema } from "effect"
 import { For, Show } from "solid-js"
-import { formatHeadTail } from "@gent/core/protocol"
+import { formatHeadTail, splitLines } from "@gent/core/protocol"
 import {
   CHILD_COMPLETION_TYPE,
   ChildCompletionDetails,
@@ -206,7 +206,7 @@ function ChildCompletionRow(props: MessageRowProps & { details: CompletionDetail
     return { mark: "✓", color: theme.success }
   }
   const answer = () =>
-    formatHeadTail(completionAnswer(props.content).split("\n"), COMPLETION_ANSWER_LINES)
+    formatHeadTail(splitLines(completionAnswer(props.content)), COMPLETION_ANSWER_LINES)
   return (
     <box
       marginTop={1}

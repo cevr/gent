@@ -31,6 +31,10 @@ bun run --cwd apps/tui dev -s <session-id>
 # Headless mode - streams to stdout, exits after response
 bun run --cwd apps/tui dev -H "your prompt here"
 
+# Headless mode that approves every ask (destructive commands included).
+# Without the flag, headless declines each ask: no user is present.
+bun run --cwd apps/tui dev -H --approve-all "your prompt here"
+
 # List sessions
 bun run --cwd apps/tui dev sessions
 ```

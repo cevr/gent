@@ -122,6 +122,19 @@ describe("reduceAgentLifecycle", () => {
     })
     expect(Schema.is(AgentStatus.cases.Error)(reduceAgentLifecycle(errored).status)).toBe(true)
   })
+
+  test("a notice leaves the status as it is", () => {
+    const notice = Object.assign(
+      ErrorOccurred.make({
+        sessionId: SessionId.make("s1"),
+        branchId: BranchId.make("b1"),
+        error: "compaction fell back to truncation",
+      }),
+      { notice: true },
+    )
+
+    expect(reduceAgentLifecycle(notice)).toEqual({})
+  })
 })
 
 // ── session settings state ──────────────────────────────────────────────────
