@@ -981,7 +981,7 @@ describe("OpenAI device-code login", () => {
 // ── openai/openai-codex-transform.test ──────────────────────────────────────
 
 /**
- * codexTransformClient — auth-headers middleware (O2).
+ * codexTransformClient — auth-headers middleware.
  *
  * Builds a fake `HttpClient` (via `HttpClient.make`) that captures
  * incoming requests and returns canned responses. The transform under
@@ -1087,7 +1087,7 @@ const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
   runEffectBoundary(Effect.scoped(eff.pipe(Effect.orDie)))
 // ── Tests ──
-describe("codexTransformClient — auth headers (O2)", () => {
+describe("codexTransformClient — auth headers", () => {
   it.live("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(noopRefreshIO(), validAuthInfo({ access: "k1-access" }))
@@ -1359,7 +1359,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
     }),
   )
 })
-describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
+describe("codexTransformClient — URL/body/beta rewrite", () => {
   // Helpers local to O3 — keep the auth-header tests above untouched.
   const okResponse = (): FakeClientState => ({
     captured: [],
@@ -1653,7 +1653,7 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
     }),
   )
 })
-describe("codexTransformClient — 401 recovery (O4)", () => {
+describe("codexTransformClient — 401 recovery", () => {
   // The credential cache TTL (30s) can outlive a token's last minute,
   // and OAuth tokens can be revoked server-side between cache fill and
   // wire send. On 401: invalidate the cache + retry once. A second 401

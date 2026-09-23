@@ -46,6 +46,7 @@ import {
   explainCredentialFailure,
   freshCredentials,
   freshEnoughAt,
+  HttpResponseField,
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
@@ -141,16 +142,16 @@ export const getModelOverride = (modelId: string): Option.Option<ModelOverride> 
   return Option.none()
 }
 
-/** Currently-advertised Claude Code CLI version, used by the billing
- *  signature. Override via `ANTHROPIC_CLI_VERSION` env var at the call
- *  site (kept here as the default for the helper). */
-export const getCcVersion = (): string => MODEL_CONFIG.ccVersion
-
 /**
  * Heuristic — does this model id look like opus/sonnet 4.6+ (the
  * versions where 1M-context is default)? Lifted from the opencode
  * reference; broader than a pure version bump because date-suffix
  * model ids (`-20250514`) get treated as `x.0`.
+ *
+ * It needs `family-major-minor`. Ids without a minor version
+ * (`claude-sonnet-5`, `claude-opus-5`) and families other than opus and
+ * sonnet (`claude-fable-5`) get no `context-1m` beta. That is intended:
+ * those models have a 1M context window by default and need no beta.
  */
 export const supports1mContext = (modelId: string): boolean => {
   const lower = modelId.toLowerCase()
@@ -471,9 +472,6 @@ const decodeOAuthTokenResponse = Schema.decodeUnknownOption(
 
 export type ClaudeCredentials = typeof ClaudeCredentials.Type
 
-export const freshEnoughForUse = (creds: ClaudeCredentials, now: number): boolean =>
-  freshEnoughAt(creds.expiresAt, now)
-
 const decodeCredentials = (raw: string): Effect.Effect<ClaudeCredentials, ProviderAuthError> =>
   Schema.decodeEffect(Schema.fromJsonString(ClaudeCredentialsWrapper))(raw).pipe(
     Effect.map((w) => w.claudeAiOauth),
@@ -570,7 +568,8 @@ export const SYSTEM_IDENTITY_PREFIX = "You are Claude Code, Anthropic's official
  * CLI version: the live env wins, otherwise the `MODEL_CONFIG.ccVersion`
  * baseline. Pure function — env comes from the caller's `AnthropicPlatform`.
  */
-const getCliVersion = (env: AnthropicKeychainEnv): string => env.cliVersion ?? getCcVersion()
+const getCliVersion = (env: AnthropicKeychainEnv): string =>
+  env.cliVersion ?? MODEL_CONFIG.ccVersion
 
 const getUserAgent = (env: AnthropicKeychainEnv): string =>
   env.userAgent ?? `claude-cli/${getCliVersion(env)} (external, cli)`
@@ -1129,7 +1128,7 @@ export const makeAnthropicCredentialCache = (
             }),
           )
           const now = yield* Clock.currentTimeMillis
-          if (freshEnoughForUse(refreshed, now)) return refreshed
+          if (freshEnoughAt(refreshed.expiresAt, now)) return refreshed
           return yield* new ProviderAuthError({
             message: `Claude Code credentials are expired. ${CLAUDE_SIGN_IN_HINT}`,
           })
@@ -1588,17 +1587,13 @@ export const transformPayload = (
 
 // ── Response Transforms (incoming) ──
 
-/** Strip `mcp_` and lowercase the first char so gent sees its
- *  registered tool name (`Bash` from the wire → `bash` internally). */
-const stripPrefix = (name: string): string => unprefixName(name)
-
 /** Strip mcp_ prefix from tool_use content blocks in a non-streaming response */
 export const transformResponseContent = (
   content: ReadonlyArray<JsonRecord>,
 ): ReadonlyArray<JsonRecord> =>
   content.map((block) => {
     if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
-      return { ...block, name: stripPrefix(block["name"]) }
+      return { ...block, name: unprefixName(block["name"]) }
     }
     return block
   })
@@ -1617,7 +1612,7 @@ export const transformStreamEvent = (
   if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
     return decodeMessageStreamEvent({
       ...event,
-      content_block: { ...block, name: stripPrefix(block["name"]) },
+      content_block: { ...block, name: unprefixName(block["name"]) },
     })
   }
   return event
@@ -1762,19 +1757,13 @@ const makeKeychainClientLayer = (
 
 /**
  * Internal error driving the long-context beta retry. Carries the response
- * so the catch-tag can hand the final 400 back to the caller. `response` is
- * `Schema.Any` because `HttpClientResponse` is a vendor class; the typed
- * accessor `getResponse` re-narrows it.
+ * so the catch-tag can hand the final 400 back to the caller.
  */
 class LongContextBetaError extends Schema.TaggedError<LongContextBetaError>(
   "@gent/extensions/src/anthropic/LongContextBetaError",
 )("LongContextBetaError", {
-  response: Schema.Any,
-}) {
-  getResponse(): HttpClientResponse.HttpClientResponse {
-    return this.response
-  }
-}
+  response: HttpResponseField,
+}) {}
 
 /**
  * Pick the next long-context beta to drop given the candidates the
@@ -1812,16 +1801,16 @@ const requestBodyText = (req: HttpClientRequest.HttpClientRequest): Option.Optio
 }
 
 /**
- * Build the OAuth header set for a request. `excluded` is an optional
- * set of betas to drop (used by the beta-retry middleware in commit
- * 2d; for 2a it's always empty / undefined).
+ * Build the OAuth header set for a request. `excluded` holds the betas
+ * the server rejected for this model; the beta-retry middleware learns
+ * them.
  */
 const buildOauthHeaders = (
   req: HttpClientRequest.HttpClientRequest,
   accessToken: string,
   modelId: string,
   env: AnthropicKeychainEnv,
-  excluded?: Set<string>,
+  excluded: ReadonlySet<string>,
 ): Headers.Headers => {
   // Start from the SDK's existing headers (preserve `anthropic-version`
   // etc.) but drop `x-api-key` since OAuth uses Bearer.
@@ -1830,7 +1819,7 @@ const buildOauthHeaders = (
   const modelBetas = getModelBetas(
     modelId,
     Option.fromNullishOr(env.betaFlags),
-    Option.fromNullishOr(excluded),
+    Option.some(excluded),
   )
   const incomingBeta = headers["anthropic-beta"] ?? ""
   const mergedBetas = Array.from(
@@ -1882,7 +1871,7 @@ export const buildKeychainTransformClient =
           // beta-retry transformResponse below records the rejected beta
           // before failing to retry.
           const excluded = yield* excludedBetas(betaExclusions, modelId)
-          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env, new Set(excluded))
+          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env, excluded)
           return withHeaders(req, headers)
         }),
       ),
@@ -1942,7 +1931,7 @@ export const buildKeychainTransformClient =
             while: (e) => e._tag === "LongContextBetaError",
             times: 8,
           }),
-          Effect.catchTag("LongContextBetaError", (e) => Effect.succeed(e.getResponse())),
+          Effect.catchTag("LongContextBetaError", (e) => Effect.succeed(e.response)),
         ),
       ),
       recoverUnauthorized(creds),
@@ -2117,7 +2106,7 @@ export const buildAnthropicModelDriver = (
         // The Claude Code authorize flow reads the primary account.
         let creds = yield* readClaudeCodeCredentials
         const now = yield* Clock.currentTimeMillis
-        if (!freshEnoughForUse(creds, now)) {
+        if (!freshEnoughAt(creds.expiresAt, now)) {
           // Use the returned creds — re-reading keychain after refresh
           // would silently lose direct-OAuth tokens whenever write-back
           // failed.

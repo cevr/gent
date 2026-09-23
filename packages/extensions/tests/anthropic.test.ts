@@ -12,8 +12,6 @@ import {
   computeCch as computeCchEffect,
   computeVersionSuffix as computeVersionSuffixEffect,
   extractFirstUserMessageText,
-  freshEnoughForUse,
-  getCcVersion,
   getModelBetas,
   getModelOverride,
   isLongContextError,
@@ -661,7 +659,7 @@ describe("transformPayload — haiku effort-strip", () => {
 // ── anthropic/anthropic-keychain-transform.test ─────────────────────────────
 
 /**
- * keychainTransformClient — auth-headers middleware (Commit 2a).
+ * keychainTransformClient — auth-headers middleware.
  *
  * Builds a fake `HttpClient` (via `HttpClient.make`) that captures
  * incoming requests and returns canned responses. The transform under
@@ -777,7 +775,7 @@ const jsonBody = (payload: JsonRecord) => HttpBody.jsonUnsafe(payload)
 const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
   runEffectBoundary(Effect.scoped(eff.pipe(Effect.orDie)))
 // ── Tests ──
-describe("keychainTransformClient — auth headers (Commit 2a)", () => {
+describe("keychainTransformClient — auth headers", () => {
   it.live("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
       const creds = yield* credentialCache(validCredsIO("k1"))
@@ -946,7 +944,7 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
     }),
   )
 })
-describe("keychainTransformClient — long-context beta retry (Commit 2d)", () => {
+describe("keychainTransformClient — long-context beta retry", () => {
   // Long-context error markers Anthropic returns in the 400 body.
   // `keychain-transform` matches via `isLongContextError(body)`.
   const LONG_CONTEXT_BODY =
@@ -1132,7 +1130,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
     }),
   )
 })
-describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
+describe("keychainTransformClient — 401 recovery", () => {
   // IO that flips its `read` result on each call — simulates the
   // production sequence: stale cached token sent on attempt 1, 401 fires
   // creds.invalidate, attempt 2's mapRequestEffect re-reads keychain and
@@ -1677,37 +1675,6 @@ describe("updateCredentialBlob", () => {
   })
 })
 
-describe("freshEnoughForUse", () => {
-  // The gate that decides "use these creds vs. refresh first" must
-  // allow at least a 60s safety margin so a token that's about to
-  // expire isn't sent on the wire mid-refresh. Note: this only tests
-  // the *threshold*, not the integration. The full
-  // regression ("refresh returns fresh creds → caller uses them in
-  // memory even when write-back failed") is verified at the call
-  // sites (the credential service and the anthropic driver)
-  // through code review — none of them re-read keychain after
-  // refresh anymore.
-  const now = 1_700_000_000_000
-
-  test("returns true when expiry is more than 60s away", () => {
-    expect(
-      freshEnoughForUse({ accessToken: "a", refreshToken: "r", expiresAt: now + 61_000 }, now),
-    ).toBe(true)
-  })
-
-  test("returns false at exactly the 60s threshold (strict >)", () => {
-    expect(
-      freshEnoughForUse({ accessToken: "a", refreshToken: "r", expiresAt: now + 60_000 }, now),
-    ).toBe(false)
-  })
-
-  test("returns false when expiry is in the past", () => {
-    expect(
-      freshEnoughForUse({ accessToken: "a", refreshToken: "r", expiresAt: now - 1 }, now),
-    ).toBe(false)
-  })
-})
-
 // ── anthropic/anthropic-signing.test ────────────────────────────────────────
 
 /**
@@ -1864,7 +1831,6 @@ describe("MODEL_CONFIG", () => {
   test("ccVersion is the currently-advertised Claude Code CLI version", () => {
     // Reference: opencode-claude-auth/src/model-config.ts:15
     expect(MODEL_CONFIG.ccVersion).toBe("2.1.90")
-    expect(getCcVersion()).toBe(MODEL_CONFIG.ccVersion)
   })
 
   test("baseBetas carry the five flags Claude Code currently sends", () => {
@@ -1942,6 +1908,13 @@ describe("supports1mContext", () => {
     // Counsel  — date suffix like 20250514 reads minor>99 → effective 0,
     // so opus-4-20250514 is treated as 4.0 (not 1m-eligible).
     expect(supports1mContext("claude-opus-4-20250514")).toBe(false)
+  })
+
+  test("ids without a minor version and other families get no beta", () => {
+    // These models have a 1M context window by default and need no beta.
+    expect(supports1mContext("claude-sonnet-5")).toBe(false)
+    expect(supports1mContext("claude-opus-5")).toBe(false)
+    expect(supports1mContext("claude-fable-5-1")).toBe(false)
   })
 })
 

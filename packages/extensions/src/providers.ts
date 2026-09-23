@@ -397,6 +397,12 @@ export const checkCredentials = <C>(
     Effect.catchTag("CredentialRefreshUnavailable", () => Effect.void),
   )
 
+/** An HTTP response carried by a retry-signal error. */
+export const HttpResponseField = Schema.declare<HttpClientResponse.HttpClientResponse>(
+  (input): input is HttpClientResponse.HttpClientResponse =>
+    Predicate.hasProperty(input, HttpClientResponse.TypeId),
+)
+
 /**
  * Internal error driving 401 recovery. The credential cache TTL can outlive
  * a token's last minute, and tokens can be revoked server-side between cache
@@ -406,10 +412,7 @@ export const checkCredentials = <C>(
 class Unauthorized401Error extends Schema.TaggedError<Unauthorized401Error>(
   "@gent/extensions/src/providers/Unauthorized401Error",
 )("Unauthorized401Error", {
-  response: Schema.declare<HttpClientResponse.HttpClientResponse>(
-    (input): input is HttpClientResponse.HttpClientResponse =>
-      Predicate.hasProperty(input, HttpClientResponse.TypeId),
-  ),
+  response: HttpResponseField,
 }) {}
 
 /**
@@ -790,18 +793,14 @@ export const makeOpenAiCompatResolution = (params: {
   readonly config: OpenAiCompatConfig
   readonly apiUrl: Option.Option<string>
 }): ProviderResolution => {
-  let clientLayer = OpenAiClient.layer({ apiKey: Redacted.make(params.apiKey) })
-  if (Option.isSome(params.apiUrl)) {
-    clientLayer = OpenAiClient.layer({
-      apiKey: Redacted.make(params.apiKey),
-      apiUrl: params.apiUrl.value,
-    })
-  }
-  const providedClientLayer = clientLayer.pipe(Layer.provide(FetchHttpClient.layer))
+  const clientLayer = OpenAiClient.layer({
+    apiKey: Redacted.make(params.apiKey),
+    ...Option.match(params.apiUrl, { onNone: () => ({}), onSome: (apiUrl) => ({ apiUrl }) }),
+  }).pipe(Layer.provide(FetchHttpClient.layer))
   const modelLayer = OpenAiLanguageModel.layer({
     model: params.modelName,
     config: params.config,
-  }).pipe(Layer.provide(providedClientLayer))
+  }).pipe(Layer.provide(clientLayer))
   return AiModel.make(params.provider, params.modelName, modelLayer)
 }
 

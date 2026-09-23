@@ -120,7 +120,8 @@ const decodeDeviceError = Schema.decodeUnknownOption(Schema.fromJsonString(Devic
 /**
  * Typed error for the OpenAI OAuth flow. `reason` discriminates the
  * failure mode so the surrounding `ProviderAuthError` boundary in
- * `index.ts` preserves structure in `cause`, not just a string.
+ * `buildOpenAIModelDriver`'s `authorize`/`callback` preserves structure
+ * in `cause`, not just a string.
  */
 export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
   reason: Schema.Literals([
@@ -506,7 +507,7 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
  *
  * Either way, `callback` returns the structured `OpenAIOAuthTokens` the
  * extension persists. `cancel` interrupts the deferred (used by the
- * 5-minute abandoned-flow timer in `index.ts`).
+ * 5-minute abandoned-flow timer in `buildOpenAIModelDriver`'s `authorize`).
  */
 const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.Scope> = Effect.gen(
   function* () {
@@ -779,8 +780,9 @@ export const authorizeOpenAIDevice: Effect.Effect<
 
 /**
  * Device-code counterpart of `allocateOpenAIAuthorization`. Nothing to
- * tear down, so `close` is a no-op; the shape matches so `index.ts`
- * keeps one pending-callback table for both OAuth methods.
+ * tear down, so `close` is a no-op; the shape matches so
+ * `buildOpenAIModelDriver` keeps one pending-callback table for both
+ * OAuth methods.
  */
 const allocateOpenAIDeviceAuthorization: Effect.Effect<
   {
@@ -797,8 +799,8 @@ const allocateOpenAIDeviceAuthorization: Effect.Effect<
 /**
  * Allocate a detached scope and run `authorizeOpenAI` inside it,
  * returning the flow handle plus a `close` Effect that tears the scope
- * down. Used by `index.ts` to bridge between the `authorize` /
- * `callback` calls — the scope must outlive the first call so the
+ * down. Used by `buildOpenAIModelDriver` to bridge between the
+ * `authorize` / `callback` calls — the scope must outlive the first call so the
  * redirect server stays up until the user completes (or the timeout
  * fires).
  *
