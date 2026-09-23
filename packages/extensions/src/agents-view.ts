@@ -333,9 +333,9 @@ interface AgentActivityService {
 }
 
 /**
- * Process-scoped followers of running loops. A follower reads the loop's
- * events through `ExtensionContext.Session.events`, the same verb any
- * extension has, and folds them into one line per loop. The resource scope
+ * Process-scoped followers of running child loops. A follower reads the
+ * loop's events from now through `ExtensionContext.Session.events`, the same
+ * verb any extension has, and folds them into one line per loop. The resource scope
  * owns the fibers, so shutdown stops them.
  */
 class AgentActivity extends Context.Service<AgentActivity, AgentActivityService>()(
@@ -357,7 +357,9 @@ const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
         const key = rowKey(loop)
-        yield* ctx.Session.events(loop).pipe(
+        // From now: the fold needs only what the loop does next, so a
+        // follower never replays the child's whole history.
+        yield* ctx.Session.events({ ...loop, from: "now" }).pipe(
           Stream.runForEach((event) => setFold(key, (fold) => foldActivity(fold, event))),
           Effect.catchCause((cause) =>
             Effect.logWarning("agents-view.activity.follow-failed").pipe(
@@ -515,9 +517,12 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
     execute: Effect.fn("AgentsViewRpc.ListAgents")(function* (input) {
       const rows = yield* collectRows(input.query ?? "")
       const activity = yield* AgentActivity
-      // Only a loop that is itself running is followed; a parent forced into
-      // `running` by a busy child has nothing of its own to report.
-      yield* activity.follow(rows.filter((row) => row.live && isWorking(row.status)))
+      // Only the rows the tray draws are followed: running children. A root
+      // is never in the tray, and a parent forced into `running` by a busy
+      // child has nothing of its own to report.
+      yield* activity.follow(
+        rows.filter((row) => row.live && isWorking(row.status) && Option.isSome(row.parent)),
+      )
       const lines = new Map<string, string>()
       for (const row of rows) {
         const line = yield* activity.read(row)

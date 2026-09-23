@@ -540,7 +540,7 @@ describe("AgentsViewExtension via RPC", () => {
   )
 
   it.live(
-    "a running loop reports its streamed line, and the line clears when the turn ends",
+    "a running child reports its streamed line, and the line clears when its turn ends",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -553,30 +553,44 @@ describe("AgentsViewExtension via RPC", () => {
             providerLayer,
             cwd: "/tmp/agents-view-rpc-activity",
           })
+          const child = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-activity",
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+          })
           yield* harness.client.message.send({
-            sessionId: harness.sessionId,
-            branchId: harness.branchId,
+            sessionId: child.sessionId,
+            branchId: child.branchId,
             content: "look at the loader",
           })
           yield* controls.waitForStreamStart
+          const rowOf = (reply: typeof ReplySchema.Type, sessionId: string) =>
+            reply.rows.find((row) => row.sessionId === sessionId)
+          // The tray has listed the child once, so its follower is open before
+          // the line streams: it starts from now, not from the history.
+          yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => rowOf(reply, child.sessionId)?.section === "running",
+            5_000,
+            "child running",
+          )
           yield* controls.emitNext
-          const ownRow = (reply: typeof ReplySchema.Type) =>
-            reply.rows.find((row) => row.sessionId === harness.sessionId)
           const busy = yield* waitFor(
             requestRows(harness, {}),
-            ({ reply }) => ownRow(reply)?.activity === "Reading the loader.",
+            ({ reply }) => rowOf(reply, child.sessionId)?.activity === "Reading the loader.",
             5_000,
-            "streamed line in the row",
+            "streamed line in the child row",
           )
-          expect(ownRow(busy.reply)?.section).toBe("running")
+          // The root is not in the tray, so it is not followed.
+          expect(rowOf(busy.reply, harness.sessionId)?.activity).toBeUndefined()
           yield* controls.emitAll
           const idle = yield* waitFor(
             requestRows(harness, {}),
-            ({ reply }) => ownRow(reply)?.section === "idle",
+            ({ reply }) => rowOf(reply, child.sessionId)?.section === "idle",
             5_000,
-            "loop idle",
+            "child idle",
           )
-          expect(ownRow(idle.reply)?.activity).toBeUndefined()
+          expect(rowOf(idle.reply, child.sessionId)?.activity).toBeUndefined()
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

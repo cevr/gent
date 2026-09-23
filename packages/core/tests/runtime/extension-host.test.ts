@@ -322,6 +322,53 @@ describe("ambient extension host context", () => {
         ),
       ),
   )
+
+  it.scopedLive("a subscription from now replays no history, then delivers new events", () =>
+    Effect.gen(function* () {
+      const workspace = workspaceIdForCwd("/tmp/run-workspace")
+      yield* ensureStorageParents({ sessionId, branchId }).pipe(
+        Effect.provideService(CurrentWorkspaceId, workspace),
+      )
+      const publisher = yield* EventPublisher
+      const publish = (event: AgentEvent) =>
+        publisher.publish(event).pipe(Effect.provideService(CurrentWorkspaceId, workspace))
+      yield* publish(AgentEvent.cases.SessionStarted.make({ sessionId, branchId }))
+      yield* publish(AgentEvent.cases.StreamStarted.make({ sessionId, branchId }))
+      const ctx = yield* ambientContext.pipe(Effect.provideService(CurrentWorkspaceId, workspace))
+      const events = ctx.Session.events({ sessionId, branchId, from: "now" })
+      // Nothing before the marker: the history stays unread.
+      const replayed = yield* events.pipe(
+        Stream.takeUntil((event) => event._tag === "StreamSynchronized"),
+        Stream.runCollect,
+      )
+      expect(replayed.map((event) => event._tag)).toStrictEqual(["StreamSynchronized"])
+      // An event after the cursor still arrives. The marker says the
+      // subscription is open, so the publish cannot land before it.
+      const open = yield* Deferred.make<boolean>()
+      const next = yield* events.pipe(
+        // The first event is the marker; completing twice is a no-op.
+        Stream.tap(() => Deferred.succeed(open, true)),
+        Stream.filter((event) => event._tag !== "StreamSynchronized"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      yield* Deferred.await(open)
+      yield* publish(AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }))
+      const [delivered] = yield* Fiber.join(next).pipe(Effect.timeout("4 seconds"))
+      expect(delivered?._tag).toBe("TurnCompleted")
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(
+          EventPublisherLive,
+          Layer.provideMerge(
+            EventStoreLive,
+            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          ),
+        ),
+      ),
+    ),
+  )
 })
 
 // ── session-profile.test ────────────────────────────────────────────────────

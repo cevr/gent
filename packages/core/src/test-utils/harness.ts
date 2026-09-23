@@ -415,10 +415,12 @@ export const RecordingEventStore: Layer.Layer<EventStore, never, SequenceRecorde
         Stream.scoped(
           Stream.unwrap(
             Effect.gen(function* () {
-              const afterId = after ?? 0
               const ps = yield* getOrCreateSessionPubSub(sessionId)
               const subscription = yield* PubSub.subscribe(ps)
               const latestId = nextId
+              let afterId = 0
+              if (after === "latest") afterId = latestId
+              else if (Predicate.isNotUndefined(after)) afterId = after
               const buffered = events.filter(
                 (env) => matchesEventFilter(env, sessionId, branchId) && env.id > afterId,
               )

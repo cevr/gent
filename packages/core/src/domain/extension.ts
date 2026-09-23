@@ -766,10 +766,13 @@ export interface ExtensionSessionService {
   /**
    * A branch's events: the durable history first, one `StreamSynchronized`
    * marker, then live delivery. Take until the marker for a bounded read.
+   * `from: "now"` skips the history: the marker comes first, then only
+   * events stored after the call, for a follower of what a loop does next.
    */
   readonly events: (target: {
     readonly sessionId: SessionId
     readonly branchId?: BranchId
+    readonly from?: "start" | "now"
   }) => Stream.Stream<AgentEvent, ExtensionServiceError>
   /** Removes a queued follow-up by source; the current branch when no target is named. False when absent or already running. */
   readonly dequeueFollowUp: (params: {
