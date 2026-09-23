@@ -2737,9 +2737,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       const maxSteps = Math.min(resolved.agent.maxSteps ?? MAX_TURN_STEPS, MAX_TURN_STEPS)
       if (params.step > maxSteps) {
-        // Only reachable when the final step still returned a tool call: it ran
-        // with tools disabled, and the calls it made ran anyway. Leaving the
-        // flags false publishes a `TurnCompleted` no caller can tell from a
+        // The final step refuses its tool calls and stops, so only a resume
+        // past the budget lands here. Leaving the flags false publishes a `TurnCompleted` no caller can tell from a
         // reply, and `headless-runner.ts` reads exactly that flag to pick its
         // exit code, so `gent -H` would exit 0 having printed nothing.
         yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
@@ -2804,6 +2803,29 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           }),
         )
       }
+      const refuseToolsAtStepLimit = Effect.gen(function* () {
+        const address = stepAddress(params.state.message.id, params.step)
+        yield* recordToolOutcome({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          toolResultMessageId: address.toolResult,
+          assistantMessageId: address.assistant,
+          parts: toolCallsFromResponseParts(collected.responseParts).map((call) =>
+            Prompt.toolResultPart({
+              id: call.id,
+              name: call.name,
+              isFailure: true,
+              providerExecuted: false,
+              result: {
+                error: "The tool did not run: the turn reached its step limit.",
+                reason: "StepLimit",
+              },
+            }),
+          ),
+        })
+        yield* clearProcessLocalReplayBindings(address.assistant)
+        yield* closeTurnStep({ messageId: params.state.message.id, step: params.step })
+      })
       const runTools = Effect.gen(function* () {
         const interactionSignal = yield* executeTools({
           hostToolBindings: resolved.hostToolBindings,
@@ -2853,7 +2875,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             if (truncated) instruction = TRUNCATED_RESPONSE_INSTRUCTION
             return continueOr(instruction, stop({ unanswered: empty }))
           },
-          ToolCalls: () => runTools,
+          // The last budgeted step ran with `toolChoice: "none"`; a call made
+          // anyway is refused, not run. No step follows to read its result, and
+          // a tool with side effects would act after the budget said stop.
+          ToolCalls: () => {
+            if (!finalStep) return runTools
+            return refuseToolsAtStepLimit.pipe(Effect.as(stop({ unanswered: true })))
+          },
         }),
       )(outcome)
     })

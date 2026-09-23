@@ -1093,6 +1093,38 @@ describe("max turn steps", () => {
   )
 
   /**
+   * The last budgeted step asks the model for no tools. A call it makes anyway
+   * must not run: the step has no successor to read the result, and a tool
+   * with side effects would act after the budget said stop.
+   */
+  it.live("a tool call on the last budgeted step is refused, not run", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        toolCallStep("echo", { text: "first" }),
+        toolCallStep("echo", { text: "past the limit" }),
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(agentLoop, userMessage("two steps at most"), {
+          runSpec: makeRunSpec({ overrides: { maxSteps: 2 } }),
+        })
+        const events = yield* Ref.get(eventsRef)
+        expect(events.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(1)
+        const messageStorage = yield* MessageStorage
+        const stored = yield* messageStorage.listMessages(branchId)
+        const refused = stored
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result" && part.isFailure)
+        expect(refused).toHaveLength(1)
+        const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
+        expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  /**
    * The last budgeted step tells the model its tools are gone. The line is
    * written at that step's boundary, after the step resolved its messages, so
    * the step itself must read it: no later step exists to show it.
