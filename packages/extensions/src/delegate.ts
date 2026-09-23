@@ -879,6 +879,7 @@ export const StartChild = tool({
     'Each todo must be self-contained — a fresh child has no conversation history. Use context: "fork" when the child needs what you already read or decided; the copy is what you see now, so a long context is a costly seed.',
     "Start every independent child from one cell, then end your turn. Do not poll, set an alarm, or set a monitor for a child: each result wakes you as a message, and several may arrive over several turns. Chain dependent work by starting the next child from the turn that read the earlier result.",
     "Interrupting your turn stops every child you started and had not heard from.",
+    "A finished child's armed wakes and monitors keep reporting to you. To stop them, ask the child with session.send to cancel its wakes.",
     "A new call starts new work. Do not repeat a start to recover an unknown outcome; delegate.list shows the children this branch owns, and read_session reads a finished child's transcript.",
     "For parallel exploration: don't share preliminary findings between children — let each form independent conclusions.",
     "Use overrides.modelId for a second opinion from a different model; overrides.systemPromptAddendum focuses a child on one role.",
