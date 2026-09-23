@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { Cause, Clock, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -880,6 +880,46 @@ describe("GrepTool", () => {
         ctxGrep,
       )
       expect(direct.matches).toEqual([])
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  // `(x+x+)+y` backtracks exponentially on a run of x with no y after it.
+  // JavaScriptCore gives up on such a line after about a second and reports
+  // no match, even for a line that holds one.
+  it.scopedLive("a backtracking pattern does not stall the server, and a timeout ends it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const slowLine = `${"x".repeat(28)}!`
+      yield* fs.writeFileString(`${tmpDir}/slow.txt`, Array(8).fill(slowLine).join("\n"))
+
+      const started = yield* Clock.currentTimeMillis
+      const result = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "(x+x+)+y", path: tmpDir },
+        ctxGrep,
+      ).pipe(Effect.timeoutOption("300 millis"))
+      const elapsed = (yield* Clock.currentTimeMillis) - started
+      expect(Option.isNone(result)).toBe(true)
+      // On the server thread, the search runs every line to the end before a timeout can act.
+      expect(elapsed).toBeLessThan(1500)
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  it.scopedLive("a line the regex engine gives up on is reported, not dropped", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      // This line matches (`xxy` at the end), but the engine stops before it finds it.
+      yield* fs.writeFileString(`${tmpDir}/slow.txt`, `plain y\n${"x".repeat(30)}!xxy\n`)
+
+      const result = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "(x+x+)+y", path: tmpDir },
+        ctxGrep,
+      ).pipe(Effect.timeout("20 seconds"))
+      expect(result.matches).toEqual([])
+      expect(result.undecided).toBe(1)
     }).pipe(Effect.provide(IndexLayer)),
   )
 

@@ -7,6 +7,7 @@ import {
   Path,
   Result,
   Schema,
+  type Scope,
   Stream,
 } from "effect"
 import picomatch from "picomatch"
@@ -1230,6 +1231,11 @@ const GrepResult = Schema.Struct({
   unreadable: Schema.optional(Schema.Finite),
   /** Files grep skipped because they are larger than the size cap. */
   oversized: Schema.optional(Schema.Finite),
+  /**
+   * Lines the regex engine gave up on: the pattern backtracks too much to
+   * decide them, so one of them may match. Simplify the pattern.
+   */
+  undecided: Schema.optional(Schema.Finite),
 })
 
 /** A file larger than this is skipped and counted: it is a log or a bundle, not source. */
@@ -1271,11 +1277,116 @@ const clipLine = (line: string, at: number): string => {
   return clipped
 }
 
+// ── Line matcher: the regex runs on its own thread ──
+
+/**
+ * A line whose search runs longer than this and finds nothing is undecided.
+ * JavaScriptCore stops a search that backtracks too far and reports no match,
+ * with no other signal, so a slow miss may hide a match.
+ */
+const UNDECIDED_LINE_MS = 100
+
+/** A grep that runs longer than this fails: its pattern backtracks too much. */
+const GREP_TIME_LIMIT = Duration.seconds(30)
+
+/** One file's answer from the matcher thread. */
+const MatcherReply = Schema.Struct({
+  id: Schema.Int,
+  /** Each matching line's index and the offset of its match, at most `limit + 1`. */
+  hits: Schema.Array(Schema.Tuple([Schema.Int, Schema.Int])),
+  undecided: Schema.Int,
+})
+type MatcherReply = typeof MatcherReply.Type
+
+/**
+ * The matcher thread's source. It is plain JavaScript with no imports, so it
+ * runs from a Blob URL in the compiled binary as well as from source. Each
+ * request carries the pattern; the thread builds its regex once.
+ */
+const MATCHER_SOURCE = [
+  "let regex",
+  "onmessage = (event) => {",
+  "  const { id, source, flags, text, limit } = event.data",
+  "  regex ??= new RegExp(source, flags)",
+  "  const lines = text.split('\\n')",
+  "  const hits = []",
+  "  let undecided = 0",
+  "  for (let index = 0; index < lines.length && hits.length <= limit; index++) {",
+  "    const started = performance.now()",
+  "    const hit = regex.exec(lines[index])",
+  "    if (hit !== null) hits.push([index, hit.index])",
+  `    else if (performance.now() - started > ${UNDECIDED_LINE_MS}) undecided++`,
+  "  }",
+  "  postMessage({ id, hits, undecided })",
+  "}",
+].join("\n")
+
+/** Searches one file's text on the matcher thread. */
+interface LineMatcher {
+  readonly search: (text: string, limit: number) => Effect.Effect<MatcherReply, GrepError>
+}
+
+/**
+ * A matcher thread for one grep. The regex runs off the server thread, so a
+ * pattern that backtracks for minutes stalls nothing else, and closing the
+ * scope ends the thread: a timeout or an interrupt stops the search at once.
+ */
+const makeLineMatcher = (regex: RegExp): Effect.Effect<LineMatcher, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const pending = new Map<number, (reply: Effect.Effect<MatcherReply, GrepError>) => void>()
+    const failAll = (message: string) => {
+      for (const resume of pending.values()) {
+        resume(Effect.fail(new GrepError({ message, pattern: regex.source })))
+      }
+      pending.clear()
+    }
+    const worker = yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const url = URL.createObjectURL(new Blob([MATCHER_SOURCE]))
+        // oxlint-disable-next-line effect/noGlobals -- the regex must run on an OS thread the server can end, and an Effect Worker needs a bundled entry module; this one is a Blob of plain JavaScript.
+        return { url, thread: new Worker(url) }
+      }),
+      ({ url, thread }) =>
+        Effect.sync(() => {
+          thread.terminate()
+          URL.revokeObjectURL(url)
+          failAll("grep ended")
+        }),
+    )
+    worker.thread.onmessage = (event: MessageEvent) => {
+      const reply = Schema.decodeUnknownOption(MatcherReply)(event.data)
+      if (Option.isNone(reply)) return failAll("grep's matcher sent a reply it cannot read")
+      const resume = pending.get(reply.value.id)
+      pending.delete(reply.value.id)
+      resume?.(Effect.succeed(reply.value))
+    }
+    worker.thread.onerror = (event: ErrorEvent) =>
+      failAll(`grep's matcher failed: ${event.message}`)
+    let nextId = 0
+    return {
+      search: (text, limit) =>
+        Effect.callback<MatcherReply, GrepError>((resume) => {
+          const id = nextId++
+          pending.set(id, resume)
+          worker.thread.postMessage({ id, source: regex.source, flags: regex.flags, text, limit })
+          return Effect.sync(() => {
+            pending.delete(id)
+          })
+        }),
+    }
+  })
+
 /** What one grep looks for. */
 interface Search {
-  readonly regex: RegExp
+  readonly matcher: LineMatcher
   readonly limit: number
   readonly contextLines: number
+}
+
+interface FileSearch {
+  readonly matches: ReadonlyArray<GrepMatch>
+  readonly oversized: boolean
+  readonly undecided: number
 }
 
 /**
@@ -1285,46 +1396,38 @@ interface Search {
 const searchFile = (
   filePath: string,
   search: Search,
-): Effect.Effect<
-  { readonly matches: ReadonlyArray<GrepMatch>; readonly oversized: boolean },
-  never,
-  FileSystem.FileSystem
-> =>
+): Effect.Effect<FileSearch, GrepError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const none = { matches: [], oversized: false }
+    const none: FileSearch = { matches: [], oversized: false, undecided: 0 }
     const info = yield* fs.stat(filePath).pipe(Effect.option)
     if (Option.isNone(info)) return none
-    if (info.value.size > BigInt(MAX_SEARCH_FILE_BYTES)) return { matches: [], oversized: true }
+    if (info.value.size > BigInt(MAX_SEARCH_FILE_BYTES)) return { ...none, oversized: true }
     const bytes = yield* fs.readFile(filePath).pipe(Effect.option)
     const decoded = Option.flatMap(bytes, decodeFileText)
     if (Option.isNone(decoded)) return none
 
-    const lines = decoded.value.text.split("\n")
+    const text = decoded.value.text
+    const reply = yield* search.matcher.search(text, search.limit)
+    const lines = text.split("\n")
     const contextOf = (from: number, to: number) =>
       lines.slice(from, to).map((line) => clipLine(line, 0))
-    const found: Array<GrepMatch> = []
-    for (const [i, line] of lines.entries()) {
-      if (found.length > search.limit) break
-      const hit = Option.fromNullishOr(search.regex.exec(line))
-      if (Option.isNone(hit)) continue
-      let match: GrepMatch = {
+    const matches = reply.hits.map(([index, at]): GrepMatch => {
+      const match: GrepMatch = {
         file: filePath,
-        line: i + 1,
-        content: clipLine(line, hit.value.index),
+        line: index + 1,
+        content: clipLine(lines[index] ?? "", at),
       }
-      if (search.contextLines > 0) {
-        match = {
-          ...match,
-          context: {
-            before: contextOf(Math.max(0, i - search.contextLines), i),
-            after: contextOf(i + 1, i + 1 + search.contextLines),
-          },
-        }
+      if (search.contextLines === 0) return match
+      return {
+        ...match,
+        context: {
+          before: contextOf(Math.max(0, index - search.contextLines), index),
+          after: contextOf(index + 1, index + 1 + search.contextLines),
+        },
       }
-      found.push(match)
-    }
-    return { matches: found, oversized: false }
+    })
+    return { matches, oversized: false, undecided: reply.undecided }
   })
 
 /**
@@ -1339,13 +1442,15 @@ const searchFiles = (
     readonly matches: ReadonlyArray<GrepMatch>
     readonly truncated: boolean
     readonly oversized: number
+    readonly undecided: number
   },
-  never,
+  GrepError,
   FileSystem.FileSystem
 > =>
   Effect.gen(function* () {
     const matches: Array<GrepMatch> = []
     let oversized = 0
+    let undecided = 0
     for (let from = 0; from < files.length; from += SEARCH_ROUND) {
       const results = yield* Effect.forEach(
         files.slice(from, from + SEARCH_ROUND),
@@ -1354,13 +1459,19 @@ const searchFiles = (
       )
       for (const result of results) {
         if (result.oversized) oversized++
+        undecided += result.undecided
         matches.push(...result.matches)
         if (matches.length > search.limit) {
-          return { matches: matches.slice(0, search.limit), truncated: true, oversized }
+          return {
+            matches: matches.slice(0, search.limit),
+            truncated: true,
+            oversized,
+            undecided,
+          }
         }
       }
     }
-    return { matches, truncated: false, oversized }
+    return { matches, truncated: false, oversized, undecided }
   })
 
 // Grep Tool
@@ -1369,7 +1480,7 @@ export const GrepTool = tool({
   id: "grep",
   readonly: true,
   description:
-    "Search file contents with regex. Returns matching lines in path order. Skips binary files and files over 10 MB; a line over 500 characters is cut around the match.",
+    "Search file contents with regex. Returns matching lines in path order. Skips binary files and files over 10 MB; a line over 500 characters is cut around the match. A pattern that backtracks too much leaves lines undecided (counted in undecided) and fails past 30 seconds.",
   promptSnippet: "Search file contents with regex",
   params: GrepParams,
   output: GrepResult,
@@ -1448,14 +1559,27 @@ export const GrepTool = tool({
         .toSorted()
     }
 
-    const { matches, truncated, oversized } = yield* searchFiles(files, {
-      regex,
-      limit,
-      contextLines,
-    })
+    const { matches, truncated, oversized, undecided } = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const matcher = yield* makeLineMatcher(regex)
+        return yield* searchFiles(files, { matcher, limit, contextLines })
+      }),
+    ).pipe(
+      Effect.timeoutOrElse({
+        duration: GREP_TIME_LIMIT,
+        orElse: () =>
+          Effect.fail(
+            new GrepError({
+              message: `grep ran past ${Duration.format(GREP_TIME_LIMIT)}: the pattern backtracks too much. Simplify it or search a narrower path.`,
+              pattern: params.pattern,
+            }),
+          ),
+      }),
+    )
     let result: typeof GrepResult.Type = { matches, truncated }
     if (unreadable > 0) result = { ...result, unreadable }
     if (oversized > 0) result = { ...result, oversized }
+    if (undecided > 0) result = { ...result, undecided }
     return result
   }),
 })
