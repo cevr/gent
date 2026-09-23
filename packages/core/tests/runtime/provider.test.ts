@@ -839,6 +839,42 @@ describe("Auth", () => {
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
     )
 
+    // A cancel of a turn waiting on another process's refresh must end the
+    // wait, not sit out the holder's refresh or the whole 30 s poll.
+    it.scopedLive("a wait for a lock another store holds ends when it is interrupted", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const holder = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const waiter = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const inside = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const holding = yield* holder
+          .update("openai", () =>
+            Effect.gen(function* () {
+              yield* Deferred.completeWith(inside, Effect.void)
+              yield* Deferred.await(release)
+              return ["held", Option.none()] satisfies readonly [string, Option.Option<AuthInfo>]
+            }),
+          )
+          .pipe(Effect.forkScoped)
+        yield* Deferred.await(inside)
+        const waiting = yield* waiter
+          .update("openai", () =>
+            Effect.succeed(["waited", Option.none()] satisfies readonly [
+              string,
+              Option.Option<AuthInfo>,
+            ]),
+          )
+          .pipe(Effect.timeout("300 millis"), Effect.exit, Effect.forkScoped)
+        // The holder is still inside: only an interruptible wait ends here.
+        const ended = yield* Fiber.await(waiting).pipe(Effect.timeoutOption("3 seconds"))
+        yield* Deferred.completeWith(release, Effect.void)
+        yield* Fiber.join(holding)
+        expect(Option.isSome(ended)).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    )
+
     it.scopedLive("stores a credential readable only by its owner", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem

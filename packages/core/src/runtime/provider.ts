@@ -302,15 +302,23 @@ const fileProviderLock =
       Effect.sync(() => {
         db.close()
       })
-    const acquire = fs.makeDirectory(lockDirectory, { recursive: true }).pipe(
-      Effect.mapError(lockError),
-      Effect.andThen(open),
-      Effect.flatMap((db) =>
-        take(db).pipe(
-          Effect.onError(() => close(db)),
-          Effect.as(db),
+    // One open-and-take attempt is the uninterruptible acquire; the poll
+    // between attempts is not, so a cancel ends the wait at once. Only a
+    // held lock outlives an interrupt, and its release always runs.
+    const attempt = Effect.acquireRelease(
+      fs.makeDirectory(lockDirectory, { recursive: true }).pipe(
+        Effect.mapError(lockError),
+        Effect.andThen(open),
+        Effect.flatMap((db) =>
+          take(db).pipe(
+            Effect.onError(() => close(db)),
+            Effect.as(db),
+          ),
         ),
       ),
+      close,
+    )
+    const held = attempt.pipe(
       Effect.retry({
         while: (error) => error._tag === "AuthLockBusy",
         schedule: Schedule.spaced(AUTH_LOCK_POLL),
@@ -322,7 +330,7 @@ const fileProviderLock =
         ),
       ),
     )
-    return Effect.acquireUseRelease(acquire, () => effect, close)
+    return Effect.scoped(Effect.andThen(held, effect))
   }
 
 export class Auth extends Context.Service<Auth, AuthService>()(
