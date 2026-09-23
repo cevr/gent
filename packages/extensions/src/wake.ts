@@ -11,7 +11,7 @@ import {
   Layer,
   Match,
   Option,
-  type Path,
+  Path,
   type PlatformError,
   Predicate,
   Schema,
@@ -356,9 +356,17 @@ const monitorWork = (
     let lastOutput = ""
     for (;;) {
       checks += 1
+      // A check that blocks (`tail -f`, a dead host) must not hold the monitor
+      // past its deadline: the scope close kills the process.
+      const budget = Math.max(0, entry.deadline - (yield* Clock.currentTimeMillis))
       const result = yield* Effect.scoped(
         runBashCommand(entry.command, Option.fromUndefinedOr(entry.cwd)),
       ).pipe(
+        Effect.timeoutOrElse({
+          duration: Duration.millis(budget),
+          orElse: () =>
+            Effect.succeed({ exitCode: 1, stdout: "", stderr: "check still running at deadline" }),
+        }),
         Effect.catch((error) => Effect.succeed({ exitCode: 1, stdout: "", stderr: error.message })),
       )
       lastOutput = [result.stdout, result.stderr].filter((text) => text.length > 0).join("\n")
@@ -677,6 +685,7 @@ export const MonitorTool = tool({
   output: MonitorResult,
   execute: Effect.fn("MonitorTool.execute")(function* (params: typeof MonitorParams.Type) {
     const ctx = yield* ExtensionContext
+    const path = yield* Path.Path
     const now = yield* Clock.currentTimeMillis
     yield* validRegex(Option.fromUndefinedOr(params.until))
     const everySeconds = Math.max(
@@ -712,7 +721,8 @@ export const MonitorTool = tool({
     const entry = WakeEntry.cases.monitor.make({
       wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7,
       command: params.command,
-      cwd: Option.getOrElse(Option.fromUndefinedOr(params.cwd), () => ctx.cwd),
+      // One server serves every workspace: resolve against the session's cwd.
+      cwd: path.resolve(ctx.cwd, params.cwd ?? "."),
       everySeconds,
       deadline,
       note: params.note,

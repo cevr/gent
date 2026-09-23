@@ -818,7 +818,8 @@ const GrepParams = Schema.Struct({
   ),
   glob: Schema.optionalKey(
     Schema.String.annotate({
-      description: "Glob pattern to filter files (e.g., *.ts)",
+      description:
+        "Glob pattern to filter files (e.g., *.ts). A pattern without a slash matches file names at any depth",
     }),
   ),
   caseSensitive: Schema.optionalKey(
@@ -957,7 +958,8 @@ export const GrepTool = tool({
       )
       const globPattern = params.glob ?? "**/*"
       const matchesGlob = yield* Effect.try({
-        try: () => picomatch(globPattern, { dot: true }),
+        // A slash-free glob (`*.ts`) matches the basename at any depth, as ripgrep's `-g` does.
+        try: () => picomatch(globPattern, { dot: true, basename: true }),
         catch: (e) =>
           new GrepError({
             message: `Invalid glob pattern: ${e}`,

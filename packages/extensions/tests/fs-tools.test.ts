@@ -473,6 +473,35 @@ describe("GrepTool", () => {
     }).pipe(Effect.provide(ToolLayerGrep)),
   )
 
+  it.scopedLive("a glob without a slash matches files in nested directories", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.makeDirectory(`${tmpDir}/src/deep`, { recursive: true })
+      yield* fs.writeFileString(`${tmpDir}/top.ts`, "const foo = 1")
+      yield* fs.writeFileString(`${tmpDir}/src/deep/nested.ts`, "const foo = 2")
+      yield* fs.writeFileString(`${tmpDir}/src/deep/nested.js`, "const foo = 3")
+
+      const anywhere = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "foo", path: tmpDir, glob: "*.ts" },
+        ctxGrep,
+      )
+      expect(
+        anywhere.matches
+          .map((match) => match.file.split("/").at(-1))
+          .sort((a, b) => (a ?? "").localeCompare(b ?? "")),
+      ).toEqual(["nested.ts", "top.ts"])
+      // A glob with a slash still matches the path relative to the search root.
+      const scoped = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "foo", path: tmpDir, glob: "src/*.ts" },
+        ctxGrep,
+      )
+      expect(scoped.matches).toEqual([])
+    }).pipe(Effect.provide(ToolLayerGrep)),
+  )
+
   it.scopedLive("searches single file directly", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

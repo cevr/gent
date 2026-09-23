@@ -709,6 +709,59 @@ describe("monitor guardrail", () => {
   )
 })
 
+describe("monitor command", () => {
+  it.scopedLive(
+    "a relative cwd runs in the session directory, not the server directory",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* fs.realPath(yield* makeTempDirectoryScoped("wake-monitor-cwd-"))
+        yield* fs.makeDirectory(`${home}/sub`)
+        const queued = yield* Ref.make<ReadonlyArray<string>>([])
+        const fired = yield* Deferred.make<boolean>()
+        const ctx = { ...contextWith(home, queued, Option.some(fired)), cwd: home }
+        yield* runToolWithCtx(
+          MonitorTool,
+          { command: "pwd", cwd: "sub", everySeconds: 1, timeoutSeconds: 5, note: "where" },
+          ctx,
+        )
+        yield* Deferred.await(fired)
+        const [message] = yield* Ref.get(queued)
+        expect(message).toContain("matched after")
+        expect(message).toContain(`${home}/sub`)
+      }).pipe(
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+        Effect.timeout("8 seconds"),
+      ),
+    10_000,
+  )
+
+  it.scopedLive(
+    "a hanging command stops at the deadline and the monitor wakes timed out",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("wake-monitor-hang-")
+        const queued = yield* Ref.make<ReadonlyArray<string>>([])
+        const fired = yield* Deferred.make<boolean>()
+        const ctx = contextWith(home, queued, Option.some(fired))
+        yield* runToolWithCtx(
+          MonitorTool,
+          { command: "sleep 30", everySeconds: 1, timeoutSeconds: 1, note: "never returns" },
+          ctx,
+        )
+        yield* TestClock.adjust("1 second")
+        yield* Deferred.await(fired)
+        const [message] = yield* Ref.get(queued)
+        expect(message).toContain("timed out after")
+        expect(message).toContain("never returns")
+      }).pipe(
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+        Effect.timeout("8 seconds"),
+      ),
+    10_000,
+  )
+})
+
 describe("wake store", () => {
   it.scopedLive("an alarm is written to the branch file and removed once it fires", () =>
     Effect.gen(function* () {
