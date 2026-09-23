@@ -1,7 +1,6 @@
 import {
   Array as Arr,
   Clock,
-  Context,
   Crypto,
   Deferred,
   Duration,
@@ -825,8 +824,7 @@ const allocateOpenAIAuthorization: Effect.Effect<
 // ── credential service ──────────────────────────────────────────────────────
 
 /**
- * OpenAICredentialService — ChatGPT OAuth (Codex) credentials behind the
- * shared credential cache (`makeCredentialCache` in `providers.ts`).
+ * ChatGPT OAuth (Codex) credentials behind the shared credential cache (`makeCredentialCache` in `providers.ts`).
  *
  * There is no keychain: the initial credentials come from `authInfo` and
  * the cache cell is the sole copy of the rotated refresh token until
@@ -881,40 +879,6 @@ const realIO: OpenAICredentialIO = {
     ),
 }
 
-// ── Service tag ──
-
-export class OpenAICredentialService extends Context.Service<
-  OpenAICredentialService,
-  CredentialCache<OpenAICredentials>
->()("@gent/extensions/src/openai/OpenAICredentialService") {
-  /**
-   * Production layer. The cache cell is provided externally so its
-   * lifetime is hoisted above the per-`resolveModel` layer build; a Ref
-   * allocated per build would disable the cache and the rotated
-   * refresh-token contract. `authInfo.persist` (when present) durably
-   * writes refreshed credentials back to Auth.
-   */
-  static layerFromRef = (
-    cellRef: CredentialCacheCellRef<OpenAICredentials>,
-    authInfo: ProviderAuthInfo,
-  ) => OpenAICredentialService.layerFromRefAndIO(cellRef, realIO, authInfo)
-
-  /** Test-friendly variant — accepts the IO seam so tests can drive `refresh` deterministically. */
-  static layerFromIO = (io: OpenAICredentialIO, authInfo: ProviderAuthInfo) =>
-    Layer.effect(
-      OpenAICredentialService,
-      SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
-        Effect.flatMap((cellRef) => build(cellRef, io, authInfo)),
-      ),
-    )
-
-  static layerFromRefAndIO = (
-    cellRef: CredentialCacheCellRef<OpenAICredentials>,
-    io: OpenAICredentialIO,
-    authInfo: ProviderAuthInfo,
-  ) => Layer.effect(OpenAICredentialService, build(cellRef, io, authInfo))
-}
-
 const seedFromAuthInfo = (authInfo: ProviderAuthInfo): Option.Option<OpenAICredentials> => {
   const access = Option.getOrElse(Option.fromNullishOr(authInfo.access), () => "")
   const refresh = Option.getOrElse(Option.fromNullishOr(authInfo.refresh), () => "")
@@ -927,7 +891,12 @@ const seedFromAuthInfo = (authInfo: ProviderAuthInfo): Option.Option<OpenAICrede
   })
 }
 
-const build = (
+/**
+ * The OpenAI credential cache over a cell that outlives one `resolveModel`
+ * call. A cell allocated per call would disable the cache and lose the
+ * rotated refresh token.
+ */
+export const makeOpenAICredentialCache = (
   cellRef: CredentialCacheCellRef<OpenAICredentials>,
   io: OpenAICredentialIO,
   authInfo: ProviderAuthInfo,
@@ -968,7 +937,7 @@ const build = (
       expires: creds.expires,
       accountId: Option.getOrUndefined(creds.accountId),
     })),
-  }).pipe(Effect.map(OpenAICredentialService.of))
+  })
 
 // ── codex transform ─────────────────────────────────────────────────────────
 
@@ -992,16 +961,13 @@ const build = (
  *   - 401 recovery: invalidate creds + retry once
  *
 
- * Why a factory `(creds) => (client) => client` instead of grabbing
- * the service from context inside `mapRequestEffect`: the SDK's
+ * Why a factory `(creds) => (client) => client`: the SDK's
  * `transformClient` signature is `(HttpClient) => HttpClient`, which
- * requires the returned client's requirement channel to stay empty.
- * Yielding the service from context inside `mapRequestEffect` would
- * surface `OpenAICredentialService` as a requirement and break the
- * type. The factory captures the service instance in a closure;
- * per-request semantics survive because each call to `creds.getFresh`
- * still consults the live `Ref` cache. The Anthropic
- * `buildKeychainTransformClient` factory has the same shape.
+ * requires the returned client's requirement channel to stay empty, so
+ * the credential cache is a closure argument. Per-request semantics
+ * survive because each call to `creds.getFresh` still consults the live
+ * `Ref` cache. The Anthropic `buildKeychainTransformClient` factory has
+ * the same shape.
  */
 
 // ── Codex routing ──
@@ -1184,8 +1150,7 @@ const buildOauthHeaders = (
 /**
  * Build the `transformClient` value the OpenAI-compat SDK accepts.
  *
- * Takes the `OpenAICredentialService` instance as a closure argument
- * (not via `yield*` inside `mapRequestEffect`) for the type reasons
+ * Takes the credential cache as a closure argument for the type reasons
  * documented above.
  *
  * Per-request semantics are preserved: each request invokes
@@ -1391,7 +1356,7 @@ export const buildOpenAIModelDriver = (
             message: `Model "${modelName}" not available with ChatGPT OAuth`,
           })
         }
-        const creds = yield* build(credentialCellRef, realIO, auth.value)
+        const creds = yield* makeOpenAICredentialCache(credentialCellRef, realIO, auth.value)
         yield* checkCredentials(creds)
         return AiModel.make("openai", modelName, makeOauthOpenAILayer(modelName, config, creds))
       }

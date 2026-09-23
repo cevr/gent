@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  makeAnthropicCredentialCache,
   type AnthropicCredentialIO,
-  AnthropicCredentialService,
   type AnthropicKeychainEnv,
   AnthropicPlatform,
   type BetaExclusions,
@@ -30,7 +30,6 @@ import {
 import {
   Cause,
   Clock,
-  Context,
   FileSystem,
   Deferred,
   Effect,
@@ -59,7 +58,6 @@ import {
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import {
-  type CredentialCache,
   type CredentialCacheCell,
   type CredentialFailure,
   CredentialRefreshUnavailable,
@@ -747,10 +745,8 @@ const makeFakeClient = (state: FakeClientState): HttpClient.HttpClient =>
     }
     return Effect.succeed(HttpClientResponse.fromWeb(request, result))
   })
-// Capture the credential-service "instance" by running its layer once
-// and grabbing the service from context. The transform takes this
-// instance directly (closure-based, not yielded from R).
-const buildCreds = (io: AnthropicCredentialIO): Promise<CredentialCache<ClaudeCredentials>> => {
+// A credential cache over a fresh cell, on the test host's platform.
+const credentialCache = (io: AnthropicCredentialIO) => {
   const host = testHostFacts().host
   const platformLayer = Layer.succeed(
     AnthropicPlatform,
@@ -760,20 +756,9 @@ const buildCreds = (io: AnthropicCredentialIO): Promise<CredentialCache<ClaudeCr
       env: {},
     }),
   )
-  const layer = AnthropicCredentialService.layerFromIO(io).pipe(
-    Layer.provide(Layer.merge(BunServices.layer, platformLayer)),
-  )
-  return runEffectBoundary(
-    Layer.build(layer).pipe(
-      Effect.scoped,
-      Effect.map((ctx) => {
-        const creds = Context.get(ctx, AnthropicCredentialService)
-        return {
-          getFresh: creds.getFresh,
-          invalidate: creds.invalidate,
-        }
-      }),
-    ),
+  return SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
+    Effect.flatMap((cellRef) => makeAnthropicCredentialCache(cellRef, io)),
+    Effect.provide(Layer.merge(BunServices.layer, platformLayer)),
   )
 }
 // A fresh exclusion Ref per test keeps the tests isolated.
@@ -795,7 +780,7 @@ const runOk = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> =>
 describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   it.live("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -816,7 +801,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   )
   it.live("removes x-api-key (would otherwise conflict with OAuth Bearer)", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -841,7 +826,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   )
   it.live("sets x-app, user-agent, anthropic-dangerous-direct-browser-access", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -864,7 +849,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   )
   it.live("merges anthropic-beta with model defaults", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -896,12 +881,10 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   )
   it.live("credential-service failure surfaces as a request-build HttpClientError", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() =>
-        buildCreds({
-          read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
-          refresh: () => Effect.fail(new ProviderAuthError({ message: "no refresh token either" })),
-        }),
-      )
+      const creds = yield* credentialCache({
+        read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
+        refresh: () => Effect.fail(new ProviderAuthError({ message: "no refresh token either" })),
+      })
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -931,7 +914,7 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
   // each request once and hands the result back.
   const sendOnce = (responder: (call: number) => Response | TransportFailure) =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = { captured: [], responder }
       const wrapped = buildKeychainTransformClient(
@@ -971,7 +954,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   const NON_LONG_CONTEXT_400 = '{"type":"error","error":{"message":"some other 400"}}'
   it.live("400 long-context once → drops one beta → retry succeeds", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -1000,7 +983,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   )
   it.live("learning persists into the cache — next request starts pre-narrowed", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -1041,7 +1024,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   )
   it.live("learning for one model survives requests to another model", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -1077,7 +1060,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
       // Long-context layer is 400-only. A 429 whose body happens to match
       // the long-context marker goes back to the caller untouched: the rate
       // limit is not beta-related, and the loop owns the 429 retry.
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -1099,7 +1082,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   )
   it.live("non-long-context 400 passes through without retry", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -1122,7 +1105,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   )
   it.live("exhausted candidates surface terminal 400 (every long-context beta tried)", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const creds = yield* credentialCache(validCredsIO("k1"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -1171,7 +1154,7 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
   }
   it.live("401 once → invalidate creds → retry succeeds with fresh token", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(togglingCredsIO("stale", "fresh")))
+      const creds = yield* credentialCache(togglingCredsIO("stale", "fresh"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -1199,7 +1182,7 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
   )
   it.live("two consecutive 401s — second surfaces (real auth failure, no infinite loop)", () =>
     Effect.gen(function* () {
-      const creds = yield* Effect.promise(() => buildCreds(togglingCredsIO("stale", "still-bad")))
+      const creds = yield* credentialCache(togglingCredsIO("stale", "still-bad"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -1227,7 +1210,7 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
       // service. If a non-401 mistakenly invalidated the cache, request
       // #2 would re-read and pick up the second token. Asserting both
       // requests use the first token proves the cache survived the 500.
-      const creds = yield* Effect.promise(() => buildCreds(togglingCredsIO("first", "second")))
+      const creds = yield* credentialCache(togglingCredsIO("first", "second"))
       const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
@@ -1268,16 +1251,14 @@ describe("keychainTransformClient — credential failure through the SDK", () =>
     () =>
       Effect.gen(function* () {
         let refreshes = 0
-        const creds = yield* Effect.promise(() =>
-          buildCreds({
-            read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
-            refresh: () =>
-              Effect.suspend(() => {
-                refreshes++
-                return Effect.fail(new ProviderAuthError({ message: "refresh token revoked" }))
-              }),
-          }),
-        )
+        const creds = yield* credentialCache({
+          read: Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
+          refresh: () =>
+            Effect.suspend(() => {
+              refreshes++
+              return Effect.fail(new ProviderAuthError({ message: "refresh token revoked" }))
+            }),
+        })
         const cache = yield* buildBetaCache()
         const state = makeFakeFetchState()
         const clientLayer = AnthropicSdkClient.layer({
@@ -1320,7 +1301,7 @@ void Ref
 // ── anthropic/anthropic-credential-service.test ─────────────────────────────
 
 /**
- * AnthropicCredentialService — Effect-native credential cache.
+ * Anthropic credential cache — Effect-native, over `makeCredentialCache`.
  *
  * The service caches credentials in a `Ref` with TTL 30s + a 60s
  * freshness margin (refresh before the wire-side auth gate rejects).
@@ -1328,21 +1309,6 @@ void Ref
  * via `TestClock` so we can assert cache semantics without spawning
  * `security` or hitting the keychain.
  */
-const testPlatformLayerCredentialService = (): Layer.Layer<AnthropicPlatform> => {
-  const host = testHostFacts().host
-  return Layer.succeed(
-    AnthropicPlatform,
-    AnthropicPlatform.of({
-      platform: host.osInfo.platform,
-      home: host.homeDirectory,
-      env: {},
-    }),
-  )
-}
-const credLayer = (...args: Parameters<typeof AnthropicCredentialService.layerFromIO>) =>
-  AnthropicCredentialService.layerFromIO(...args).pipe(
-    Layer.provide(Layer.merge(BunServices.layer, testPlatformLayerCredentialService())),
-  )
 // ── Helpers ──
 const makeCreds = (label: string, expiresAt: number): ClaudeCredentials => ({
   accessToken: `${label}-access`,
@@ -1366,7 +1332,7 @@ const COMPLETE = Option.getOrUndefined(Option.none<void>())
 const runWithTestClock = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
   Effect.scoped(eff).pipe(Effect.provide(TestClock.layer()))
 // ── Tests ──
-describe("AnthropicCredentialService — cache hit/miss", () => {
+describe("Anthropic credential cache — cache hit/miss", () => {
   it.live("returns cached creds within TTL even when source changes", () =>
     Effect.gen(function* () {
       // Outcome assertion: if the source switches underneath, a cached
@@ -1380,17 +1346,16 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
         refreshResult: () =>
           Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
-      const layer = credLayer(makeIO(state))
+      const cache = credentialCache(makeIO(state))
       yield* runWithTestClock(
         Effect.gen(function* () {
-          const svc = yield* AnthropicCredentialService
+          const svc = yield* cache
           const first = yield* svc.getFresh
           callsRef.current = creds2 // source switches; cache should ignore
           const second = yield* svc.getFresh
           expect(first.accessToken).toBe("k1-access")
           expect(second.accessToken).toBe("k1-access")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer)),
+        }),
       )
     }),
   )
@@ -1404,23 +1369,22 @@ describe("AnthropicCredentialService — cache hit/miss", () => {
         refreshResult: () =>
           Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
-      const layer = credLayer(makeIO(state))
+      const cache = credentialCache(makeIO(state))
       yield* runWithTestClock(
         Effect.gen(function* () {
-          const svc = yield* AnthropicCredentialService
+          const svc = yield* cache
           const first = yield* svc.getFresh
           callsRef.current = creds2
           yield* TestClock.adjust("31 seconds")
           const second = yield* svc.getFresh
           expect(first.accessToken).toBe("k1-access")
           expect(second.accessToken).toBe("k2-access")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer)),
+        }),
       )
     }),
   )
 })
-describe("AnthropicCredentialService — refresh on stale", () => {
+describe("Anthropic credential cache — refresh on stale", () => {
   it.live("concurrent stale calls share one refresh", () =>
     Effect.gen(function* () {
       const stale = makeCreds("stale", 30000)
@@ -1438,10 +1402,10 @@ describe("AnthropicCredentialService — refresh on stale", () => {
             return fresh
           }),
       }
-      const layer = credLayer(makeIO(state))
+      const cache = credentialCache(makeIO(state))
       yield* runWithTestClock(
         Effect.gen(function* () {
-          const svc = yield* AnthropicCredentialService
+          const svc = yield* cache
           const fiber = yield* Effect.all([svc.getFresh, svc.getFresh], {
             concurrency: 2,
           }).pipe(Effect.forkChild)
@@ -1454,8 +1418,7 @@ describe("AnthropicCredentialService — refresh on stale", () => {
           expect(results[0].accessToken).toBe("fresh-access")
           expect(results[1].accessToken).toBe("fresh-access")
           expect(refreshCount).toBe(1)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer)),
+        }),
       )
     }),
   )
@@ -1469,14 +1432,13 @@ describe("AnthropicCredentialService — refresh on stale", () => {
         readResult: () => Effect.succeed(stale),
         refreshResult: () => Effect.succeed(fresh),
       }
-      const layer = credLayer(makeIO(state))
+      const cache = credentialCache(makeIO(state))
       yield* runWithTestClock(
         Effect.gen(function* () {
-          const svc = yield* AnthropicCredentialService
+          const svc = yield* cache
           const result = yield* svc.getFresh
           expect(result.accessToken).toBe("fresh-access")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer)),
+        }),
       )
     }),
   )
@@ -1488,13 +1450,12 @@ describe("AnthropicCredentialService — refresh on stale", () => {
         refreshResult: () =>
           Effect.fail(new ProviderAuthError({ message: "OAuth 401 from refresh" })),
       }
-      const layer = credLayer(makeIO(state))
+      const cache = credentialCache(makeIO(state))
       const result = yield* runWithTestClock(
         Effect.gen(function* () {
-          const svc = yield* AnthropicCredentialService
+          const svc = yield* cache
           return yield* Effect.exit(svc.getFresh)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer)),
+        }),
       )
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
@@ -1516,19 +1477,18 @@ describe("AnthropicCredentialService — refresh on stale", () => {
         refreshResult: () =>
           Effect.fail(new CredentialRefreshUnavailable({ message: "token endpoint 503" })),
       }
-      const layer = credLayer(makeIO(state))
+      const cache = credentialCache(makeIO(state))
       const result = yield* runWithTestClock(
         Effect.gen(function* () {
-          const svc = yield* AnthropicCredentialService
+          const svc = yield* cache
           return yield* Effect.flip(svc.getFresh)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer)),
+        }),
       )
       expect(result._tag).toBe("CredentialRefreshUnavailable")
     }),
   )
 })
-describe("AnthropicCredentialService — invalidate", () => {
+describe("Anthropic credential cache — invalidate", () => {
   it.live("invalidate forces next getFresh to re-read", () =>
     Effect.gen(function* () {
       const creds1 = makeCreds("k1", FAR_FUTURE)
@@ -1539,23 +1499,22 @@ describe("AnthropicCredentialService — invalidate", () => {
         refreshResult: () =>
           Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
-      const layer = credLayer(makeIO(state))
+      const cache = credentialCache(makeIO(state))
       yield* runWithTestClock(
         Effect.gen(function* () {
-          const svc = yield* AnthropicCredentialService
+          const svc = yield* cache
           const before = yield* svc.getFresh
           callsRef.current = creds2
           yield* svc.invalidate
           const after = yield* svc.getFresh
           expect(before.accessToken).toBe("k1-access")
           expect(after.accessToken).toBe("k2-access")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer)),
+        }),
       )
     }),
   )
 })
-describe("AnthropicCredentialService — keychain miss falls through to refresh", () => {
+describe("Anthropic credential cache — keychain miss falls through to refresh", () => {
   it.live("read fails → refresh succeeds → returns refreshed creds", () =>
     Effect.gen(function* () {
       const fresh = makeCreds("fresh", FAR_FUTURE)
@@ -1563,16 +1522,15 @@ describe("AnthropicCredentialService — keychain miss falls through to refresh"
         readResult: () => Effect.fail(new ProviderAuthError({ message: "no keychain entry" })),
         refreshResult: () => Effect.succeed(fresh),
       }
-      const layer = credLayer(makeIO(state))
+      const cache = credentialCache(makeIO(state))
       yield* runWithTestClock(
         Effect.gen(function* () {
-          const svc = yield* AnthropicCredentialService
+          const svc = yield* cache
           const result = yield* svc.getFresh
           // Outcome: when read fails, the refresh path's creds reach the
           // caller. No internal call counters needed.
           expect(result.accessToken).toBe("fresh-access")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer)),
+        }),
       )
     }),
   )
@@ -2408,7 +2366,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
       // Pre-seed the cred Ref directly (test owns it). If
       // `makeOauthAnthropicLayer` regressed to allocating its own internal
-      // Ref via `AnthropicCredentialService.layer(authInfo)`, the
+      // Ref per call, the
       // production credential service would NOT see this seeded creds —
       // the IO path would try to read keychain, fail/refresh, etc. We
       // assert the captured Authorization header reflects the seed, so

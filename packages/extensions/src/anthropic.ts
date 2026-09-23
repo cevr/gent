@@ -1045,8 +1045,7 @@ const refreshClaudeCodeCredentials = (
 // ── credential service ──────────────────────────────────────────────────────
 
 /**
- * AnthropicCredentialService — Claude Code credentials behind the shared
- * credential cache (`makeCredentialCache` in `providers.ts`).
+ * Claude Code credentials behind the shared credential cache (`makeCredentialCache` in `providers.ts`).
  *
  * The keychain is the source of truth: once the cache TTL lapses the
  * service re-reads it, and only refreshes (OAuth or CLI fallback) when
@@ -1084,28 +1083,12 @@ const realIO: AnthropicCredentialIO = {
   refresh: refreshClaudeCodeCredentials,
 }
 
-// ── Service tag ──
-
-export class AnthropicCredentialService extends Context.Service<
-  AnthropicCredentialService,
-  CredentialCache<ClaudeCredentials>
->()("@gent/extensions/src/anthropic/AnthropicCredentialService") {
-  /** Test-friendly variant — accepts the IO seam so tests can drive read/refresh deterministically. */
-  static layerFromIO = (io: AnthropicCredentialIO) =>
-    Layer.effect(
-      AnthropicCredentialService,
-      SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
-        Effect.flatMap((cellRef) => build(cellRef, io)),
-      ),
-    )
-}
-
 /** The production credential cache over the Claude Code keychain and the real platform. */
 const buildLiveCredentialCache = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
   platform: AnthropicPlatformApi,
 ): Effect.Effect<CredentialCache<ClaudeCredentials>> =>
-  Effect.suspend(() => build(cellRef, realIO)).pipe(
+  Effect.suspend(() => makeAnthropicCredentialCache(cellRef, realIO)).pipe(
     // @effect-diagnostics-next-line strictEffectProvide:off
     Effect.provide(Layer.merge(BunServices.layer, Layer.succeed(AnthropicPlatform, platform))),
   )
@@ -1113,7 +1096,8 @@ const buildLiveCredentialCache = (
 /** What the user does when the Claude Code sign-in no longer works. */
 const CLAUDE_SIGN_IN_HINT = "Run `claude` to sign in again, then choose Claude Code in /auth."
 
-const build = (
+/** The Anthropic credential cache over a cell that outlives one `resolveModel` call. */
+export const makeAnthropicCredentialCache = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
   io: AnthropicCredentialIO,
 ): Effect.Effect<CredentialCache<ClaudeCredentials>, never, AnthropicCredentialIORequirements> =>
@@ -1155,7 +1139,7 @@ const build = (
       // tokens, so a refresh is not written there.
       writeBack: Option.none(),
     })
-    return AnthropicCredentialService.of(cache)
+    return cache
   })
 
 // ── keychain client ─────────────────────────────────────────────────────────
@@ -1732,7 +1716,7 @@ const makeKeychainClientLayer = (
  * (`x-api-key`, `anthropic-version`, `accept: application/json`). This
  * middleware augments + overrides what OAuth needs:
  *
- * - Sets `authorization: Bearer <accessToken>` from `AnthropicCredentialService`
+ * - Sets `authorization: Bearer <accessToken>` from the credential cache
  * - Sets `anthropic-beta: <merged>` from per-model defaults
  * - Sets `x-app: cli`, `user-agent: claude-cli/<version> (external, cli)`,
  *   `anthropic-dangerous-direct-browser-access: true`
@@ -1745,17 +1729,12 @@ const makeKeychainClientLayer = (
  * what we want — replacing it would mean re-implementing it. See
  * `~/.cache/repo/effect-ts/effect-smol/packages/ai/anthropic/src/AnthropicClient.ts:215-232`.
  *
- * Why a factory `(creds) => (client) => client` instead of grabbing the
- * service from context inside `mapRequestEffect`: the SDK's
+ * Why a factory `(creds) => (client) => client`: the SDK's
  * `transformClient` signature is `(HttpClient) => HttpClient`, which
- * requires the returned client's requirement channel to be empty.
- * `mapRequestEffect` widens that channel to whatever services its body
- * yields — so reading the service from context per-request would
- * surface `AnthropicCredentialService` as a requirement and not
- * type-check against the SDK signature. The factory captures the
- * service instance in a closure; per-request semantics are preserved
- * because each call to `creds.getFresh` still consults the live
- * `Ref` cache.
+ * requires the returned client's requirement channel to be empty, so the
+ * credential cache is a closure argument. Per-request semantics are
+ * preserved because each call to `creds.getFresh` still consults the
+ * live `Ref` cache.
  *
  * The middleware stack, layered outside-in via `pipe`:
  *   - mapRequestEffect (preprocess) — auth + cache-aware headers
@@ -1881,17 +1860,10 @@ const buildOauthHeaders = (
 /**
  * Build the `transformClient` value the Anthropic SDK accepts.
  *
- * Takes the `AnthropicCredentialService` instance as a closure
- * argument (not via `yield*` inside `mapRequestEffect`) because the
- * SDK's `transformClient` signature `(HttpClient) => HttpClient`
- * requires the returned client to have an empty requirement channel —
- * yielding the service from context inside the middleware would
- * surface it as a requirement and break the type.
- *
- * Per-request semantics are preserved: each request invokes
- * `creds.getFresh` which consults the live `Ref` cache. The closure
- * captures the dispatcher (the service instance), not a snapshot of
- * its state.
+ * Takes the credential cache as a closure argument: the SDK's
+ * `transformClient` signature `(HttpClient) => HttpClient` requires the
+ * returned client to have an empty requirement channel. Each request
+ * invokes `creds.getFresh`, which consults the live `Ref` cache.
  */
 export const buildKeychainTransformClient =
   (
@@ -1978,10 +1950,9 @@ export const buildKeychainTransformClient =
 
 // ── extension ───────────────────────────────────────────────────────────────
 
-// Credential cache + refresh logic live in `AnthropicCredentialService`
-// (Effect-native). The OAuth path provides this service into the layer
-// that hosts `AnthropicClient`; the keychain transform middleware reads
-// from it per-request via `mapRequestEffect`.
+// Credential cache + refresh logic live in `makeAnthropicCredentialCache`.
+// The OAuth path hands the cache to the keychain transform middleware,
+// which reads it per request via `mapRequestEffect`.
 
 // Maps gent reasoning level to Anthropic effort.
 //
