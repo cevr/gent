@@ -761,18 +761,18 @@ function useComposerController(): ComposerController {
     }
     sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text: next.draft }))
   }
-  // The composer on screen takes refusals for the branch in view.
+  // The composer on screen takes refusals for the branch in view. The draft
+  // is merged as it stands, paste placeholders included: a paste expands at
+  // submit, never when a refusal lands.
   createEffect(() => {
     const identity = client.sessionIdentity()
     if (Option.isNone(identity)) return
     onCleanup(
       refusals.link(identity.value.branchId, {
         current: () => ({
-          draft: paste.expandPlaceholders(
-            Option.getOrElse(
-              Option.map(inputRef, (renderable) => renderable.plainText),
-              () => "",
-            ),
+          draft: Option.getOrElse(
+            Option.map(inputRef, (renderable) => renderable.plainText),
+            () => "",
           ),
           mode: sc.interactionState().mode,
         }),

@@ -981,6 +981,43 @@ describe("Composer submit", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  // The reader pasted while a send was out. The refusal joins the draft and
+  // leaves the paste as its placeholder; the paste expands only at submit.
+  submitTest("a refusal keeps the reader's paste placeholder in the draft", () =>
+    Effect.gen(function* () {
+      const reply = yield* Deferred.make<void>()
+      const submitted: Array<string> = []
+      let sends = 0
+      const sendResult = Effect.suspend(() => {
+        sends++
+        if (sends === 1) return Deferred.await(reply).pipe(Effect.andThen(Effect.fail(refusedSend)))
+        return Effect.void
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => (
+          <TestComposer onSubmit={(content) => submitted.push(content)} sendResult={sendResult} />
+        )),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("first send"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => sends === 1, "first send out")
+      const pasted = "one\ntwo\nthree\nfour\nfive"
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(pasted))
+      yield* waitForFrame(setup, (frame) => frame.includes("[Pasted ~5 lines"), "placeholder")
+      yield* Deferred.complete(reply, Effect.void)
+      const frame = yield* waitForFrame(
+        setup,
+        (text) => text.includes("first send"),
+        "refused back",
+      )
+      expect(frame).toContain("[Pasted ~5 lines #paste-1]")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => sends === 2, "sent again")
+      expect(submitted[1]).toBe(`first send\n\n${pasted}`)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   // Two sends in flight, both refused, the later one first: neither text is
   // lost, and the composer holds them in the order they were sent.
   submitTest("two refused sends both come back, in the order they were sent", () =>
