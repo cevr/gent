@@ -2416,6 +2416,31 @@ export function classifyBashCommand(command: string): BashRisk {
   return strongest
 }
 
+/**
+ * One durable approval per flagged command: `subject` names it in the
+ * question, `question` asks. Returns the block message when the approval is
+ * declined; a decline in a session no user sees says who can answer instead.
+ */
+export const approveBashCommand = Effect.fn("approveBashCommand")(function* (
+  command: string,
+  subject: string,
+  question: string,
+) {
+  const risk = classifyBashCommand(command)
+  if (risk.level === "safe") return Option.none<string>()
+  const ctx = yield* ExtensionContext
+  const decision = yield* ctx.Interaction.approve({
+    text: `${subject} is classified as ${risk.level}: ${risk.reason}\n\n\`${command}\`\n\n${question}`,
+    metadata: { type: "bash-guardrail", level: risk.level },
+  })
+  if (decision.approved) return Option.none<string>()
+  const notes = Option.match(Option.fromUndefinedOr(decision.notes), {
+    onNone: () => "",
+    onSome: (note) => `. ${note}`,
+  })
+  return Option.some(`Command blocked: ${risk.reason}${notes}`)
+})
+
 // Bash Tool Error
 
 class BashError extends Schema.TaggedError<BashError>()("BashError", {
@@ -2837,26 +2862,9 @@ export const BashTool = tool({
     }
     const cwd = Option.some(directory)
 
-    // Guardrail check — one durable approval per flagged call
-    const risk = classifyBashCommand(command)
-    if (risk.level !== "safe") {
-      const decision = yield* ctx.Interaction.approve({
-        text: `This command is classified as ${risk.level}: ${risk.reason}\n\n\`${command}\`\n\nAllow execution?`,
-        metadata: { type: "bash-guardrail", level: risk.level },
-      })
-      if (!decision.approved) {
-        // A decline in a session no user sees says who can answer instead.
-        const notes = Option.match(Option.fromUndefinedOr(decision.notes), {
-          onNone: () => "",
-          onSome: (text) => `. ${text}`,
-        })
-        return {
-          stdout: `Command blocked: ${risk.reason}${notes}`,
-          stderr: "",
-          exitCode: 1,
-          status: "blocked",
-        }
-      }
+    const blocked = yield* approveBashCommand(command, "This command", "Allow execution?")
+    if (Option.isSome(blocked)) {
+      return { stdout: blocked.value, stderr: "", exitCode: 1, status: "blocked" }
     }
 
     // Background mode — hand the process to the process-scoped supervisor.

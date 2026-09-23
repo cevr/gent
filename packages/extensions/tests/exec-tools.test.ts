@@ -1575,6 +1575,41 @@ describe("BashTool execution", () => {
     processTestTimeout,
   )
 
+  // The command is flagged and declined, so it never runs; were it to run, it
+  // would fail at once on a directory that does not exist.
+  it.live(
+    "a declined command is blocked with the question it was asked and the decline's notes",
+    () =>
+      Effect.gen(function* () {
+        const asked = yield* Ref.make<ReadonlyArray<string>>([])
+        const notes = "Ask your parent with session.send"
+        const ctx: TestToolContext = {
+          ...stubCtx,
+          Interaction: {
+            ...stubCtx.Interaction,
+            approve: ({ text }) =>
+              Ref.update(asked, (all) => [...all, text]).pipe(
+                Effect.as({ approved: false, notes }),
+              ),
+          },
+        }
+        const result = yield* provideBun(
+          runToolWithCtx(
+            BashTool,
+            { command: "git -C /nonexistent/gent-probe-x push --force" },
+            ctx,
+          ),
+        )
+        expect(result.status).toBe("blocked")
+        expect(result.stdout).toBe(`Command blocked: git push --force. ${notes}`)
+        const prompts = yield* Ref.get(asked)
+        expect(prompts.length).toBe(1)
+        expect(prompts[0]).toContain("This command is classified as destructive: git push --force")
+        expect(prompts[0]).toContain("Allow execution?")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+
   it.live(
     "keeps a huge command result whole",
     () =>
