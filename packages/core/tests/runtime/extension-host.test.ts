@@ -139,6 +139,7 @@ import {
   LoadedArtifactIdentity,
   registerContributions,
   type SystemPromptInput,
+  sortExtensionsByScope,
   type TurnAfterInput,
   type ExtensionHookHandler,
 } from "../../src/domain/extension"
@@ -1556,6 +1557,12 @@ const makeLoaded = (id: string, contributions: ExtensionContributions): LoadedEx
   scope: "builtin",
   sourcePath: "builtin",
   contributions,
+})
+
+test("extensions of one scope resolve in code-unit order of their ids", () => {
+  // The later extension wins a service conflict; the locale must not pick it.
+  const order = sortExtensionsByScope([makeLoaded("alpha", {}), makeLoaded("Zeta", {})])
+  expect(order.map((extension) => String(extension.manifest.id))).toEqual(["Zeta", "alpha"])
 })
 
 describe("extension activation isolation", () => {
@@ -3114,6 +3121,36 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
         expect(entry).toBeDefined()
         expect(entry?.error).toContain("No GentExtension found")
       }
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
+  // Load order decides which of two same-named services wins, so it must not
+  // follow the locale: `Zeta.ts` sorts before `alpha.ts` by code unit.
+  it.scopedLive("extension files load in code-unit order of their paths", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
+      const dir = yield* fs.makeTempDirectoryScoped({
+        directory: repositoryRoot,
+        prefix: ".tmp-loader-order-",
+      })
+      for (const id of ["alpha", "Zeta"]) {
+        yield* fs.writeFileString(
+          path.join(dir, `${id}.ts`),
+          `import { Effect } from "effect"\nexport default { manifest: { id: "${id}" }, setup: Effect.void }\n`,
+        )
+      }
+
+      const result = yield* discoverExtensions({
+        userDir: dir,
+        projectDir: "/nonexistent-project-dir-loader-test",
+      })
+
+      expect(result.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+        ExtensionId.make("Zeta"),
+        ExtensionId.make("alpha"),
+      ])
     }).pipe(Effect.provide(fsLayer)),
   )
 

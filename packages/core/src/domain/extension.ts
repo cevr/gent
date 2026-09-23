@@ -5,6 +5,7 @@ import {
   HashMap,
   Layer,
   Option,
+  Order,
   Path,
   Predicate,
   Schema,
@@ -313,7 +314,8 @@ export const sortExtensionsByScope = (
   [...extensions].sort((a, b) => {
     const scopeDiff = SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope]
     if (scopeDiff !== 0) return scopeDiff
-    return a.manifest.id.localeCompare(b.manifest.id)
+    // Code-unit order, not the locale's: this order picks conflict winners.
+    return Order.String(a.manifest.id, b.manifest.id)
   })
 
 // Extension Load Error

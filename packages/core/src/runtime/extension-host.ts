@@ -8,6 +8,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Path,
   type PlatformError,
   Predicate,
@@ -1045,7 +1046,8 @@ const scanDir = Effect.fn("ExtensionLoader.scanDir")(function* (dir: string) {
     if (Option.isSome(found.success)) paths.push(found.success.value)
   }
 
-  return { paths: paths.toSorted((a, b) => a.path.localeCompare(b.path)), unreadable }
+  // Code-unit order, not the locale's: load order decides service conflicts.
+  return { paths: paths.toSorted((a, b) => Order.String(a.path, b.path)), unreadable }
 })
 
 /**
