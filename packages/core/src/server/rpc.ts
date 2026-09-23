@@ -23,7 +23,7 @@ import {
 } from "../domain/ids.js"
 import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
-import { ConfigLoadError } from "../runtime/config.js"
+import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
 import { SessionRuntimeError } from "../runtime/session.js"
 import {
   AuthAuthorization,
@@ -65,6 +65,7 @@ export class ExtensionProtocolError extends Schema.TaggedError<ExtensionProtocol
 
 export const GentRpcError = Schema.Union([
   ConfigLoadError,
+  ConfigWriteError,
   StorageError,
   SessionRuntimeError,
   ProviderError,
