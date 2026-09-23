@@ -578,6 +578,47 @@ describe("recorded cell execution", () => {
   )
 
   it.scopedLive(
+    "a thrown error reaches the model as its name and message, without a stack",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [unknownTool, typeError, withCause] = yield* setupCalls([
+          "await tools.nope({})",
+          "const o = null; o.x",
+          "throw new Error('outer', { cause: new RangeError('inner') })",
+        ])
+        if (!unknownTool || !typeError || !withCause) return yield* Effect.die("Missing test cells")
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("start"),
+          call: () => Effect.succeed({}),
+        })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        const message = (call: typeof unknownTool) =>
+          cells.run(call).pipe(
+            Effect.provideService(CellOperationHost, host),
+            Effect.map(
+              (reply) =>
+                Schema.decodeUnknownSync(Schema.Struct({ message: Schema.String }))(reply.result)
+                  .message,
+            ),
+          )
+        expect(yield* message(unknownTool)).toBe(
+          "Error: tools.nope is not a host tool selected for this turn. Close ids: start",
+        )
+        const typeErrorMessage = yield* message(typeError)
+        expect(typeErrorMessage.startsWith("TypeError: ")).toBe(true)
+        expect(typeErrorMessage).not.toContain("\n")
+        expect(yield* message(withCause)).toBe("Error: outer\ncaused by RangeError: inner")
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "restores the saved namespace into a replaced worker and into a new branch owner",
     () =>
       Effect.gen(function* () {
