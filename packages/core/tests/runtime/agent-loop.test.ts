@@ -35,7 +35,6 @@ import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import {
   AgentLoopSessionGovernance,
   type AgentLoopState,
-  AgentLoopTestActor,
   buildInitialAgentLoopState,
   canStartTurnNow,
   emptyAdmissionGate,
@@ -124,6 +123,7 @@ import {
   ToolCallBindingStorage,
 } from "../../src/storage/storage"
 import {
+  actorTestRoot,
   helperAgent,
   makeAgentLoopService,
   makeExtRegistry,
@@ -150,7 +150,6 @@ import {
   EventId,
   EventPublisher,
   EventPublisherLive,
-  EventStore,
   EventStoreError,
   MessageReceived,
   ToolCallStarted,
@@ -1929,32 +1928,18 @@ describe("native model context projection", () => {
     ])
     const extensionRegistry = ExtensionRegistry.fromResolved(resolved)
     const modelResolver = ModelResolver.Live.pipe(Layer.provide(Auth.Test()))
-    const deps = Layer.mergeAll(
-      SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-      extensionRegistry,
-      RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-      ConfigService.Test(),
-      EventStore.Memory,
-      ToolRunner.Test(),
-      ApprovalService.Test(),
-      BunServices.layer,
-      ModelRegistry.Test([
+    const layer = actorTestRoot({
+      registry: extensionRegistry,
+      models: [
         Model.make({
           id: modelId,
           name: "Context model",
           provider: ProviderId.make("context-driver"),
           contextLength: 128_000,
         }),
-      ]),
-      GentPlatform.Test(),
-      modelResolver,
-    )
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-      Layer.provideMerge(
-        Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-      ),
-    )
+      ],
+      resolver: modelResolver,
+    })
 
     return Effect.scoped(
       Effect.gen(function* () {
@@ -2007,35 +1992,19 @@ describe("model resolution failure", () => {
     ])
     return Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-        ExtensionRegistry.fromResolved(resolved),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-        ConfigService.Test(),
-        makeCountingEventStore(eventsRef),
-        ToolRunner.Test(),
-        ApprovalService.Test(),
-        BunServices.layer,
-        ModelRegistry.Test([
+      const layer = actorTestRoot({
+        registry: ExtensionRegistry.fromResolved(resolved),
+        eventStore: makeCountingEventStore(eventsRef),
+        models: [
           Model.make({
             id: modelId,
             name: "Signed-out model",
             provider: ProviderId.make("signed-out-driver"),
             contextLength: 128_000,
           }),
-        ]),
-        GentPlatform.Test(),
-        ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
-      )
-      const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(
-            deps,
-            Layer.provide(EventPublisherLive, deps),
-            AgentLoopSessionGovernance.Live,
-          ),
-        ),
-      )
+        ],
+        resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      })
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(
@@ -2512,27 +2481,7 @@ describe("agent-loop recovery race", () => {
           }),
         )
 
-        const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          queueStorageLayer,
-          providerLayer,
-          ModelResolver.fromLanguageModel(providerLayer),
-          makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-          ConfigService.Test(),
-          EventStore.Memory,
-          ToolRunner.Test(),
-          ApprovalService.Test(),
-          BunServices.layer,
-          ModelRegistry.Test(),
-          GentPlatform.Test(),
-        )
-        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-          ),
-        )
+        const layer = actorTestRoot({ provider: providerLayer, overrides: queueStorageLayer })
 
         yield* Effect.scoped(
           Effect.gen(function* () {
@@ -2621,27 +2570,11 @@ describe("agent-loop recovery race", () => {
           Layer.provide(AgentLoopQueueStorage.Live, baseStorage),
         )
 
-        const deps = Layer.mergeAll(
-          baseStorage,
-          wrappedQueueStorage,
-          providerLayer,
-          ModelResolver.fromLanguageModel(providerLayer),
-          makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-          ConfigService.Test(),
-          EventStore.Memory,
-          ToolRunner.Test(),
-          ApprovalService.Test(),
-          BunServices.layer,
-          ModelRegistry.Test(),
-          GentPlatform.Test(),
-        )
-        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-          ),
-        )
+        const layer = actorTestRoot({
+          provider: providerLayer,
+          storage: baseStorage,
+          overrides: wrappedQueueStorage,
+        })
 
         yield* Effect.scoped(
           Effect.gen(function* () {
@@ -4571,26 +4504,7 @@ describe("queue drain regression", () => {
             ] satisfies LanguageModelStreamPart[])
           }),
         )
-        const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          gatedProvider,
-          ModelResolver.fromLanguageModel(gatedProvider),
-          makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-          ConfigService.Test(),
-          EventStore.Memory,
-          ToolRunner.Test(),
-          ApprovalService.Test(),
-          BunServices.layer,
-          ModelRegistry.Test(),
-          GentPlatform.Test(),
-        )
-        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-          ),
-        )
+        const layer = actorTestRoot({ provider: gatedProvider })
         yield* Effect.scoped(
           Effect.gen(function* () {
             const agentLoop = yield* makeAgentLoopService
@@ -4700,29 +4614,8 @@ describe("queue drain regression", () => {
               }),
           }),
         )
-        const makeLayer = () => {
-          const deps = Layer.mergeAll(
-            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-            queueStorageLayer,
-            queuedProvider,
-            ModelResolver.fromLanguageModel(queuedProvider),
-            makeExtRegistry(),
-            RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-            ConfigService.Test(),
-            EventStore.Memory,
-            ToolRunner.Test(),
-            ApprovalService.Test(),
-            BunServices.layer,
-            ModelRegistry.Test(),
-            GentPlatform.Test(),
-          )
-          const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-          return AgentLoopTestActor({ baseSections: [] }).pipe(
-            Layer.provideMerge(
-              Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-            ),
-          )
-        }
+        const makeLayer = () =>
+          actorTestRoot({ provider: queuedProvider, overrides: queueStorageLayer })
         const makeMessage = (id: string, text: string) =>
           Message.cases.regular.make({
             id: MessageId.make(id),
@@ -4783,26 +4676,7 @@ describe("queue drain regression", () => {
             ] satisfies LanguageModelStreamPart[])
           }),
         )
-        const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          providerLayer,
-          ModelResolver.fromLanguageModel(providerLayer),
-          makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-          ConfigService.Test(),
-          EventStore.Memory,
-          ToolRunner.Test(),
-          ApprovalService.Test(),
-          BunServices.layer,
-          ModelRegistry.Test(),
-          GentPlatform.Test(),
-        )
-        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-          ),
-        )
+        const layer = actorTestRoot({ provider: providerLayer })
         const message = Message.cases.regular.make({
           id: MessageId.make("msg-incomplete-recovery"),
           sessionId,
@@ -4850,26 +4724,7 @@ describe("queue drain regression", () => {
             ] satisfies LanguageModelStreamPart[])
           }),
         )
-        const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          providerLayer,
-          ModelResolver.fromLanguageModel(providerLayer),
-          makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-          ConfigService.Test(),
-          EventStore.Memory,
-          ToolRunner.Test(),
-          ApprovalService.Test(),
-          BunServices.layer,
-          ModelRegistry.Test(),
-          GentPlatform.Test(),
-        )
-        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-          ),
-        )
+        const layer = actorTestRoot({ provider: providerLayer })
         const messageId = MessageId.make("msg-continuation-replay")
         const message = Message.cases.regular.make({
           id: messageId,
@@ -4935,26 +4790,7 @@ describe("queue drain regression", () => {
             ] satisfies LanguageModelStreamPart[])
           }),
         )
-        const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          providerLayer,
-          ModelResolver.fromLanguageModel(providerLayer),
-          makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-          ConfigService.Test(),
-          EventStore.Memory,
-          ToolRunner.Test(),
-          ApprovalService.Test(),
-          BunServices.layer,
-          ModelRegistry.Test(),
-          GentPlatform.Test(),
-        )
-        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-          ),
-        )
+        const layer = actorTestRoot({ provider: providerLayer })
         const messageId = MessageId.make("msg-marker-replay")
         const message = Message.cases.regular.make({
           id: messageId,
@@ -5027,26 +4863,7 @@ describe("queue drain regression", () => {
             ] satisfies LanguageModelStreamPart[])
           }),
         )
-        const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          providerLayer,
-          ModelResolver.fromLanguageModel(providerLayer),
-          makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-          ConfigService.Test(),
-          EventStore.Memory,
-          ToolRunner.Test(),
-          ApprovalService.Test(),
-          BunServices.layer,
-          ModelRegistry.Test(),
-          GentPlatform.Test(),
-        )
-        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-          ),
-        )
+        const layer = actorTestRoot({ provider: providerLayer })
         const messageId = MessageId.make("msg-steering-replay")
         const message = Message.cases.regular.make({
           id: messageId,
@@ -5198,27 +5015,12 @@ describe("queue drain regression", () => {
           ),
           storageLayer,
         )
-        const deps = Layer.mergeAll(
-          storageLayer,
-          queueStorageLayer,
-          providerLayer,
-          ModelResolver.fromLanguageModel(providerLayer),
-          makeExtRegistry([echoTool]),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-          ConfigService.Test(),
-          EventStore.Memory,
-          ToolRunner.Test(),
-          ApprovalService.Test(),
-          BunServices.layer,
-          ModelRegistry.Test(),
-          GentPlatform.Test(),
-        )
-        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-          ),
-        )
+        const layer = actorTestRoot({
+          provider: providerLayer,
+          storage: storageLayer,
+          overrides: queueStorageLayer,
+          registry: makeExtRegistry([echoTool]),
+        })
         yield* Effect.scoped(
           Effect.gen(function* () {
             const agentLoop = yield* makeAgentLoopService
@@ -5295,27 +5097,7 @@ describe("queue drain regression", () => {
             },
           }),
         )
-        const deps = Layer.mergeAll(
-          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          queueStorageLayer,
-          heldProvider,
-          ModelResolver.fromLanguageModel(heldProvider),
-          makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-          ConfigService.Test(),
-          EventStore.Memory,
-          ToolRunner.Test(),
-          ApprovalService.Test(),
-          BunServices.layer,
-          ModelRegistry.Test(),
-          GentPlatform.Test(),
-        )
-        const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-        const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-          ),
-        )
+        const layer = actorTestRoot({ provider: heldProvider, overrides: queueStorageLayer })
         const makeMessage = (id: string, text: string) =>
           Message.cases.regular.make({
             id: MessageId.make(id),
@@ -5427,28 +5209,13 @@ describe("interaction", () => {
   ) => {
     const resolvedProviderLayer = providerLayer ?? makeInteractionProviderLayer()
     const recorderLayer = SequenceRecorder.Live
-    const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-    const baseDeps = Layer.mergeAll(
-      SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-      resolvedProviderLayer,
-      ModelResolver.fromLanguageModel(resolvedProviderLayer),
-      makeExtRegistry(tools),
-      RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-      ConfigService.Test(),
-      ApprovalService.Test(),
-      BunServices.layer,
-      ModelRegistry.Test(),
-      GentPlatform.Test(),
-      recorderLayer,
-      eventStoreLayer,
-    )
-    const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
-    const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-    return AgentLoopTestActor({ baseSections: [] }).pipe(
-      Layer.provideMerge(
-        Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-      ),
-    )
+    return actorTestRoot({
+      provider: resolvedProviderLayer,
+      registry: makeExtRegistry(tools),
+      eventStore: RecordingEventStore.pipe(Layer.provide(recorderLayer)),
+      overrides: recorderLayer,
+      toolRunner: ToolRunner.Live,
+    })
   }
   it.live("tool triggers InteractionPendingError and machine parks", () =>
     Effect.gen(function* () {
@@ -5855,26 +5622,7 @@ describe("interaction", () => {
           Stream.fromIterable([textDeltaPart("hello"), finishPart({ finishReason: "stop" })]),
         ),
       )
-      const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-        providerLayer,
-        ModelResolver.fromLanguageModel(providerLayer),
-        makeExtRegistry(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-        ConfigService.Test(),
-        EventStore.Memory,
-        ToolRunner.Test(),
-        ApprovalService.Test(),
-        BunServices.layer,
-        ModelRegistry.Test(),
-        GentPlatform.Test(),
-      )
-      const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const loopLayer = AgentLoopTestActor({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-        ),
-      )
+      const loopLayer = actorTestRoot({ provider: providerLayer })
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
@@ -6641,26 +6389,7 @@ describe("streaming", () => {
         noBranchTools.storage,
         noBranchTools.migrations,
       )
-      const deps = Layer.mergeAll(
-        baseStorageLayer,
-        providerLayer,
-        ModelResolver.fromLanguageModel(providerLayer),
-        makeExtRegistry(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-        ConfigService.Test(),
-        EventStore.Memory,
-        ToolRunner.Test(),
-        ApprovalService.Test(),
-        BunServices.layer,
-        ModelRegistry.Test(),
-        GentPlatform.Test(),
-      )
-      const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-      const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live),
-        ),
-      )
+      const layer = actorTestRoot({ provider: providerLayer, storage: baseStorageLayer })
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLoop = yield* makeAgentLoopService
@@ -6916,30 +6645,7 @@ describe("streaming", () => {
       const providerLayer = scriptedProvider([
         [textDeltaPart("answered"), finishPart({ finishReason: "stop" })],
       ])
-      const deps = Layer.mergeAll(
-        SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-        queueStorageLayer,
-        providerLayer,
-        ModelResolver.fromLanguageModel(providerLayer),
-        makeExtRegistry(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-        ConfigService.Test(),
-        EventStore.Memory,
-        ToolRunner.Test(),
-        ApprovalService.Test(),
-        BunServices.layer,
-        ModelRegistry.Test(),
-        GentPlatform.Test(),
-      )
-      const layer = AgentLoopTestActor({ baseSections: [] }).pipe(
-        Layer.provideMerge(
-          Layer.mergeAll(
-            deps,
-            Layer.provide(EventPublisherLive, deps),
-            AgentLoopSessionGovernance.Live,
-          ),
-        ),
-      )
+      const layer = actorTestRoot({ provider: providerLayer, overrides: queueStorageLayer })
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         expect((yield* agentLoop.getState({ sessionId, branchId }))._tag).toBe("Idle")
@@ -7300,31 +7006,8 @@ describe("streaming", () => {
             const storage = yield* Layer.build(
               SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
             )
-            const processLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
-              const deps = Layer.mergeAll(
-                Layer.succeedContext(storage),
-                providerLayer,
-                ModelResolver.fromLanguageModel(providerLayer),
-                makeExtRegistry(),
-                RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-                ConfigService.Test(),
-                EventStore.Memory,
-                ToolRunner.Test(),
-                ApprovalService.Test(),
-                BunServices.layer,
-                ModelRegistry.Test(),
-                GentPlatform.Test(),
-              )
-              return AgentLoopTestActor({ baseSections: [] }).pipe(
-                Layer.provideMerge(
-                  Layer.mergeAll(
-                    deps,
-                    Layer.provide(EventPublisherLive, deps),
-                    AgentLoopSessionGovernance.Live,
-                  ),
-                ),
-              )
-            }
+            const processLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+              actorTestRoot({ provider: providerLayer, storage: Layer.succeedContext(storage) })
             yield* Effect.scoped(
               Effect.gen(function* () {
                 const agentLoop = yield* makeAgentLoopService

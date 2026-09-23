@@ -9,7 +9,13 @@ import {
   entityIdOf,
   type SessionRuntimeState,
 } from "../../src/domain/agent-loop"
-import { AgentDefinition, AgentName, ModelId, type RunSpec } from "../../src/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  type Model,
+  ModelId,
+  type RunSpec,
+} from "../../src/domain/agent"
 import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
 import {
   ModelRegistry,
@@ -289,52 +295,66 @@ export const respondAgentLoopInteraction = (input: {
       AgentLoopActor.RespondInteraction.make({ ...input, workspaceId: DefaultWorkspaceId }),
     )
   })
-export const makeLayer = (
-  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-  tools: ReadonlyArray<ToolCapability> = [],
-  resources: AnyResourceContribution[] = [],
+/** Where a test root's turns get their model: a scripted stream, or a resolver over drivers. */
+type ActorTestModel =
+  | { readonly provider: Layer.Layer<LanguageModel.LanguageModel> }
+  | { readonly resolver: Layer.Layer<ModelResolver> }
+
+const actorTestModelLayer = (model: ActorTestModel) => {
+  if ("resolver" in model) return model.resolver
+  return Layer.merge(model.provider, ModelResolver.fromLanguageModel(model.provider))
+}
+
+/**
+ * The actor test root: the loop actor over real storage, an in-memory event
+ * store and the test registry. Each option replaces one piece; `overrides`
+ * merges last, so it wins over any service the root already provides.
+ */
+export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
+  params: ActorTestModel & {
+    readonly storage?: Layer.Layer<S, ES>
+    readonly overrides?: Layer.Layer<X, EX>
+    readonly registry?: Layer.Layer<ExtensionRegistry>
+    readonly eventStore?: Layer.Layer<EventStore>
+    readonly eventPublisher?: Layer.Layer<EventPublisher, never, EventStore>
+    readonly models?: ReadonlyArray<Model>
+    readonly toolRunner?: typeof ToolRunner.Live
+  },
 ) => {
-  const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-    providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
-    makeExtRegistry(tools, resources),
+  const baseDeps = Layer.mergeAll(
+    params.storage ?? SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+    actorTestModelLayer(params),
+    params.registry ?? makeExtRegistry(),
     RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
     ConfigService.Test(),
-    EventStore.Memory,
-    ToolRunner.Test(),
+    params.eventStore ?? EventStore.Memory,
     ApprovalService.Test(),
     BunServices.layer,
-    ModelRegistry.Test(),
+    ModelRegistry.Test(params.models),
     GentPlatform.Test(),
+    params.overrides ?? Layer.empty,
   )
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+  const deps = Layer.mergeAll(
+    baseDeps,
+    Layer.provide(params.toolRunner ?? ToolRunner.Test(), baseDeps),
+  )
+  const eventPublisherLayer = Layer.provide(params.eventPublisher ?? EventPublisherLive, deps)
   return AgentLoopTestActor({ baseSections: [] }).pipe(
     Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
+export const makeLayer = (
+  providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
+  tools: ReadonlyArray<ToolCapability> = [],
+  resources: AnyResourceContribution[] = [],
+) => actorTestRoot({ provider: providerLayer, registry: makeExtRegistry(tools, resources) })
 export const makeRecordingLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) => {
   const recorderLayer = SequenceRecorder.Live
-  const eventStoreLayer = RecordingEventStore.pipe(Layer.provide(recorderLayer))
-  const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-    providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
-    makeExtRegistry(),
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-    ConfigService.Test(),
-    ToolRunner.Test(),
-    ApprovalService.Test(),
-    BunServices.layer,
-    ModelRegistry.Test(),
-    GentPlatform.Test(),
-    recorderLayer,
-    eventStoreLayer,
-  )
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoopTestActor({ baseSections: [] }).pipe(
-    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
-  )
+  return actorTestRoot({
+    provider: providerLayer,
+    eventStore: RecordingEventStore.pipe(Layer.provide(recorderLayer)),
+    overrides: recorderLayer,
+  })
 }
 /** Scripted provider: returns stream parts from an array, one response per model stream call. */
 export const scriptedProvider = (
@@ -360,28 +380,13 @@ export const makeLiveToolLayer = (
   tools: ReadonlyArray<ToolCapability> = [],
   resources: AnyResourceContribution[] = [],
   eventStoreLayer: Layer.Layer<EventStore> = EventStore.Memory,
-) => {
-  const extRegistry = makeExtRegistry(tools, resources)
-  const baseDeps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-    providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
-    extRegistry,
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-    ConfigService.Test(),
-    eventStoreLayer,
-    ApprovalService.Test(),
-    BunServices.layer,
-    ModelRegistry.Test(),
-    GentPlatform.Test(),
-  )
-  const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  const actorLayer = AgentLoopTestActor({ baseSections: [] }).pipe(
-    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
-  )
-  return actorLayer
-}
+) =>
+  actorTestRoot({
+    provider: providerLayer,
+    registry: makeExtRegistry(tools, resources),
+    eventStore: eventStoreLayer,
+    toolRunner: ToolRunner.Live,
+  })
 export const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
   Layer.effect(
     EventStore,
@@ -409,51 +414,16 @@ export const makeLayerWithEvents = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   eventsRef: Ref.Ref<AgentEvent[]>,
   tools: ReadonlyArray<ToolCapability> = [],
-) => {
-  const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-    providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
-    makeExtRegistry(tools),
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-    ConfigService.Test(),
-    makeCountingEventStore(eventsRef),
-    ToolRunner.Test(),
-    ApprovalService.Test(),
-    BunServices.layer,
-    ModelRegistry.Test(),
-    GentPlatform.Test(),
-  )
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoopTestActor({ baseSections: [] }).pipe(
-    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
-  )
-}
+) =>
+  actorTestRoot({
+    provider: providerLayer,
+    registry: makeExtRegistry(tools),
+    eventStore: makeCountingEventStore(eventsRef),
+  })
 export const makeLayerWithEventPublisher = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   eventPublisherLayer: Layer.Layer<EventPublisher>,
-) => {
-  const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-    providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
-    makeExtRegistry(),
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-    ConfigService.Test(),
-    EventStore.Memory,
-    ToolRunner.Test(),
-    ApprovalService.Test(),
-    BunServices.layer,
-    ModelRegistry.Test(),
-    GentPlatform.Test(),
-  )
-  const providedEventPublisherLayer = Layer.provide(eventPublisherLayer, deps)
-  return AgentLoopTestActor({ baseSections: [] }).pipe(
-    Layer.provideMerge(
-      Layer.mergeAll(deps, providedEventPublisherLayer, AgentLoopSessionGovernance.Live),
-    ),
-  )
-}
+) => actorTestRoot({ provider: providerLayer, eventPublisher: eventPublisherLayer })
 /** A `waitFor` deadline expiring. Typed so a timeout fails its own test. */
 export class AgentLoopTestTimeout extends Schema.TaggedError<AgentLoopTestTimeout>()(
   "@gent/core/tests/runtime/agent-loop/AgentLoopTestTimeout",
