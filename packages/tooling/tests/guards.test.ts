@@ -866,6 +866,76 @@ describe("a read variable must have a writer", () => {
     ])
   })
 
+  test("a direct property read is a read: process.env.X and Bun.env.X", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        [
+          "packages/sdk/src/reader.ts",
+          [`const a = process.env.GENT_PROBE_G`, `const b = Bun.env.GENT_PROBE_H ?? "x"`].join(
+            "\n",
+          ),
+        ],
+      ]),
+      none,
+    )
+    expect(findings.map((finding) => [finding.line, finding.message.split("`")[1]])).toEqual([
+      [1, "GENT_PROBE_G"],
+      [2, "GENT_PROBE_H"],
+    ])
+  })
+
+  test("a string that shows the assignment in another production file sets nothing", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        ["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`],
+        [
+          "packages/sdk/src/help.ts",
+          `console.log("run with GENT_ORPHAN=1")\nconst hint = "GENT_ORPHAN: on"\n`,
+        ],
+      ]),
+      none,
+    )
+    expect(messages(findings)).toEqual([
+      expect.stringContaining("`GENT_ORPHAN` is read but nothing in the tree sets it"),
+    ])
+  })
+
+  test("each real writer shape sets the variable", () => {
+    const reader = [
+      `Config.string("GENT_W_SPAWN")`,
+      `Config.string("GENT_W_ASSIGN")`,
+      `Config.string("GENT_W_INDEX")`,
+      `Config.string("GENT_W_SCRIPT")`,
+    ].join("\n")
+    const findings = findReadersWithoutWriters(
+      new Map([
+        ["packages/sdk/src/reader.ts", reader],
+        [
+          "packages/sdk/src/spawn.ts",
+          `Bun.spawn(["gent"], {\n  env: { ...process.env, GENT_W_SPAWN: "1" },\n})\n`,
+        ],
+        [
+          "packages/sdk/src/boot.ts",
+          `process.env.GENT_W_ASSIGN = "1"\nBun.env["GENT_W_INDEX"] = "1"\n`,
+        ],
+        ["apps/tui/package.json", `{ "scripts": { "dev": "GENT_W_SCRIPT=1 bun run x" } }\n`],
+      ]),
+      none,
+    )
+    expect(findings).toEqual([])
+  })
+
+  test("a shell prefix outside a package script sets nothing", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        ["packages/sdk/src/reader.ts", `Config.string("GENT_W_TEXT")\n`],
+        ["packages/sdk/src/help.ts", `const usage = "GENT_W_TEXT=1 gent"\n`],
+      ]),
+      none,
+    )
+    expect(messages(findings)).toEqual([expect.stringContaining("`GENT_W_TEXT`")])
+  })
+
   test("a comment that shows how to set a variable, or a message naming it, is not a writer", () => {
     const findings = findReadersWithoutWriters(
       new Map([
@@ -1380,6 +1450,7 @@ describe("TUI session identity guard", () => {
 const nextLine = ["// @effect", "diagnostics-next-line"].join("-")
 const membraneFile = "packages/core/src/runtime/extension-host.ts"
 const membraneComment = `${nextLine} anyUnknownInErrorContext:off`
+type Entries = NonNullable<Parameters<typeof findUnusedSuppressionApprovals>[1]>
 
 describe("suppression inventory guard", () => {
   test("flags effect diagnostics outside reviewed files", () => {
@@ -1429,13 +1500,42 @@ describe("suppression inventory guard", () => {
 
   test("approved entry with a matching comment is not reported", () => {
     const findings = findUnusedSuppressionApprovals(
-      new Map([[membraneFile, `const x = 1\n  ${membraneComment}\nconst y = 2\n`]]),
+      new Map([[membraneFile, `const x = 1\n  ${nextLine} probeRule:off\nconst y = 2\n`]]),
+      [{ file: membraneFile, scope: "next-line", text: "probeRule:off" }],
     )
-    expect(
-      messages(findings).filter(
-        (message) => message.includes(`for ${membraneFile} `) && message.endsWith(membraneComment),
-      ),
-    ).toEqual([])
+    expect(findings).toEqual([])
+  })
+
+  describe("an entry counts its identical comments", () => {
+    const comment = `${nextLine} probeRule:off`
+    const counted: Entries = [
+      { file: membraneFile, scope: "next-line", text: "probeRule:off", count: 2 },
+    ]
+    const holding = (sites: number) => Array.from({ length: sites }, () => comment).join("\n")
+
+    test("the approved count of sites passes both directions", () => {
+      expect(findSuppressionInventoryFindings(membraneFile, holding(2), counted)).toEqual([])
+      expect(
+        findUnusedSuppressionApprovals(new Map([[membraneFile, holding(2)]]), counted),
+      ).toEqual([])
+    })
+
+    test("count + 1: the new site is reported at its line", () => {
+      expect(findSuppressionInventoryFindings(membraneFile, holding(3), counted)).toMatchObject([
+        { file: membraneFile, line: 3, message: expect.stringContaining("new site") },
+      ])
+    })
+
+    test("count - 1: the entry is reported, with the count to set", () => {
+      expect(
+        messages(findUnusedSuppressionApprovals(new Map([[membraneFile, holding(1)]]), counted)),
+      ).toEqual([expect.stringContaining("set the count to 1")])
+    })
+
+    test("absent count means one site", () => {
+      const single: Entries = [{ file: membraneFile, scope: "next-line", text: "probeRule:off" }]
+      expect(findSuppressionInventoryFindings(membraneFile, holding(2), single)).toHaveLength(1)
+    })
   })
 })
 
@@ -1784,6 +1884,31 @@ export const plantedDeadSdkExport = "nothing imports this"
     expect(findings.map((finding) => finding.message)).toContainEqual(
       expect.stringContaining("`commentedOnly`"),
     )
+  })
+
+  test("a comment inside a template interpolation does not keep a name alive", () => {
+    const findings = findingsFor([
+      { file: SDK_FILE, text: `export const vanished = 1\n` },
+      {
+        file: SDK_CONSUMER,
+        text: "export const shown = `a ${/* vanished */ 1} b ${`c ${2 /* vanished */}`}`\n",
+      },
+    ])
+    expect(findings.map((finding) => finding.message)).toContainEqual(
+      expect.stringContaining("`vanished`"),
+    )
+  })
+
+  test("a name read inside a template interpolation is live", () => {
+    expect(
+      findingsFor([
+        { file: SDK_FILE, text: `export const interpolated = 1\n` },
+        {
+          file: "apps/tui/src/app.tsx",
+          text: "const label = `n = ${ { value: interpolated }.value } // not a comment`\nuse(label)\n",
+        },
+      ]),
+    ).toEqual([])
   })
 
   test("a name another file reads beside a URL in a string is live", () => {

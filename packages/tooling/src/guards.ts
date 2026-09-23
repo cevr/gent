@@ -10,21 +10,96 @@ export interface Finding {
 /** This file: the guards name what they look for, so several scans skip it. */
 const GUARDS_FILE = "packages/tooling/src/guards.ts"
 
-/** A comment or a string literal, read left to right so a `//` inside a string stays a string. */
-const COMMENT_OR_STRING =
-  /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g
-
 const blankKeepingLines = (text: string): string => text.replace(/[^\n]/g, " ")
 
-const isComment = (token: string): boolean => token.startsWith("/")
+/**
+ * A scanner frame: `IN_TEMPLATE` inside a template's text, otherwise the count
+ * of braces open in that stretch of code (an interpolation closes at 0).
+ */
+const IN_TEMPLATE = -1
 
-const blankComment = (token: string): string => {
-  if (isComment(token)) return blankKeepingLines(token)
-  return token
+/** The end of a quoted string that starts at `start`: its closing quote, or the line end. */
+const quotedEnd = (text: string, start: number): number => {
+  const quote = text[start]
+  let at = start + 1
+  while (at < text.length && text[at] !== quote && text[at] !== "\n") {
+    at += 1 + Number(text[at] === "\\")
+  }
+  return Math.min(at + 1, text.length)
+}
+
+/** The end of the comment that opens at `start` with `opener` (`//` or `/*`). */
+const commentEnd = (text: string, start: number, opener: string): number => {
+  if (opener === "//") {
+    const newline = text.indexOf("\n", start)
+    if (newline === -1) return text.length
+    return newline
+  }
+  const close = text.indexOf("*/", start + 2)
+  if (close === -1) return text.length
+  return close + 2
+}
+
+/** One step inside a template's text: the characters it copies, and the frame change. */
+const templateStep = (text: string, at: number, frames: Array<number>): string => {
+  const pair = text.slice(at, at + 2)
+  if (pair === "${") {
+    frames.push(0)
+    return pair
+  }
+  if (text[at] === "\\") return pair
+  if (text[at] === "`") frames.pop()
+  return text[at] ?? ""
+}
+
+/** A brace or backtick in code: open or close a frame. */
+const trackCodeFrame = (char: string, frames: Array<number>): void => {
+  const top = frames.length - 1
+  const depth = frames[top] ?? 0
+  if (char === "`") frames.push(IN_TEMPLATE)
+  if (char === "{") frames[top] = depth + 1
+  if (char !== "}") return
+  if (depth === 0 && top > 0) frames.pop()
+  else frames[top] = Math.max(depth - 1, 0)
+}
+
+/**
+ * Blank the comments in `text`, line count preserved, read left to right so a
+ * `//` inside a string stays a string. Template literals are followed into
+ * their `${}` interpolations, so a comment there is blanked too. With
+ * `blankStrings`, each quoted string becomes `""`; a template's own text is
+ * kept, because an interpolation inside it reads code.
+ */
+const blankComments = (text: string, blankStrings: boolean): string => {
+  const out: Array<string> = []
+  const frames: Array<number> = [0]
+  let at = 0
+  while (at < text.length) {
+    const char = text[at] ?? ""
+    const pair = text.slice(at, at + 2)
+    let chunk = char
+    let end = at + 1
+    if (frames[frames.length - 1] === IN_TEMPLATE) {
+      chunk = templateStep(text, at, frames)
+      end = at + chunk.length
+    } else if (pair === "//" || pair === "/*") {
+      end = commentEnd(text, at, pair)
+      chunk = blankKeepingLines(text.slice(at, end))
+    } else if (char === '"' || char === "'") {
+      end = quotedEnd(text, at)
+      chunk = text.slice(at, end)
+      if (blankStrings) chunk = '""'
+    } else {
+      trackCodeFrame(char, frames)
+    }
+    out.push(chunk)
+    at = end
+  }
+  return out.join("")
 }
 
 /** The text with comments blanked, line count preserved. */
-const withoutComments = (text: string): string => text.replace(COMMENT_OR_STRING, blankComment)
+const withoutComments = (text: string): string => blankComments(text, false)
 
 // ── a lint directive names its rules ────────────────────────────────────────
 
@@ -1029,23 +1104,58 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
   ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
   ["GENT_IDLE_TIMEOUT_MS", "the launcher of a shared server sets its idle window"],
+  ["GENT_LINK", "a developer sets this by hand to link the built binary onto PATH"],
 ])
 
 /**
  * A quoted name is a read wherever it sits -- `Config.string("GENT_X")`, the
- * last argument of `Config.literals([...], "GENT_X")` on its own line, or
- * `optionalEnv("GENT_X")` -- unless it is in a writer position.
+ * last argument of `Config.literals([...], "GENT_X")` on its own line,
+ * `optionalEnv("GENT_X")` or `process.env["GENT_X"]` -- unless it is a record
+ * key or the target of an assignment.
  */
 const QUOTED_NAME = /["'](GENT_[A-Z0-9_]+)["'](?!\s*:|\]\s*=(?!=))/g
 
+/** A direct property read, `process.env.GENT_X` or `Bun.env.GENT_X`, that is not an assignment. */
+const DIRECT_READ = /\b(?:process|Bun)\.env\.(GENT_[A-Z0-9_]+)\b(?!\s*=(?!=))/g
+
 /**
- * Setting a variable: a quoted record key or index (`{ "GENT_X": v }`,
- * `env["GENT_X"] = v`), a bare record key at the start of an entry
- * (`{ GENT_X: v }`), or an assignment (`GENT_X=1` in a command). A name
- * followed by a colon mid-sentence, as in an error message, sets nothing.
+ * Setting a variable is one of three shapes; any other text that names it,
+ * such as a message saying `GENT_X=1`, sets nothing:
+ *
+ * - a key of an env record: `env: { GENT_X: v }`, `const env = { "GENT_X": v }`,
+ *   the shape a spawned process receives;
+ * - an assignment: `process.env.GENT_X = v`, `Bun.env["GENT_X"] = v`;
+ * - a shell prefix in a package script: `"dev": "GENT_X=1 bun run ..."`.
  */
-const WRITER =
-  /["'](GENT_[A-Z0-9_]+)["']\]?\s*[:=](?!=)|(?:^|[{,])\s*(GENT_[A-Z0-9_]+)\s*:|\b(GENT_[A-Z0-9_]+)\s*=(?!=)/g
+const ENV_RECORD_OPEN = /\benv\s*[:=]\s*\{/g
+const ENV_RECORD_KEY = /(?:^|[{,\s])["']?(GENT_[A-Z0-9_]+)["']?\s*:/g
+const ENV_ASSIGNMENT =
+  /\b(?:process|Bun)\.env(?:\.(GENT_[A-Z0-9_]+)|\[["'](GENT_[A-Z0-9_]+)["']\])\s*=(?!=)/g
+const SCRIPT_PREFIX = /(?:^|[\s"'&;|(])(GENT_[A-Z0-9_]+)=\S/g
+
+/** The text of the record whose `{` sits at `open`, through its matching `}`. */
+const recordAt = (text: string, open: number): string => {
+  let depth = 0
+  for (let at = open; at < text.length; at += 1) {
+    if (text[at] === "{") depth += 1
+    if (text[at] === "}") depth -= 1
+    if (depth === 0) return text.slice(open, at + 1)
+  }
+  return text.slice(open)
+}
+
+/** The names `text` (comments blanked) sets, by the three writer shapes. */
+const namesWritten = (file: string, text: string): ReadonlyArray<string> => {
+  const records = [...text.matchAll(ENV_RECORD_OPEN)].map((match) =>
+    recordAt(text, match.index + match[0].length - 1),
+  )
+  const written = [
+    ...records.flatMap((record) => namesMatching(record, ENV_RECORD_KEY)),
+    ...namesMatching(text, ENV_ASSIGNMENT),
+  ]
+  if (!file.endsWith("package.json")) return written
+  return [...written, ...namesMatching(text, SCRIPT_PREFIX)]
+}
 
 interface VariableUse {
   readonly file: string
@@ -1082,14 +1192,18 @@ const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>) => {
     // This finder names variables to describe itself; it is not a call site.
     if (file === GUARDS_FILE || isTestSupport(file)) continue
     // A comment that shows `GENT_X=1` documents a variable; it sets nothing.
-    for (const [index, line] of withoutComments(text).split("\n").entries()) {
-      for (const name of namesMatching(line, QUOTED_NAME)) {
+    const code = withoutComments(text)
+    for (const [index, line] of code.split("\n").entries()) {
+      for (const name of [
+        ...namesMatching(line, QUOTED_NAME),
+        ...namesMatching(line, DIRECT_READ),
+      ]) {
         const found = readers.get(name) ?? []
         found.push({ file, line: index + 1 })
         readers.set(name, found)
       }
-      for (const name of namesMatching(line, WRITER)) writers.add(name)
     }
+    for (const name of namesWritten(file, code)) writers.add(name)
   }
   return { readers, writers }
 }
@@ -1715,9 +1829,11 @@ export const findTuiSessionIdentityReads = (file: string, text: string): Readonl
  *
  * The inventory is checked in both directions: a suppression comment with no
  * approved entry fails the guard, and an approved entry with no matching
- * comment anywhere in the tree fails it too, so the table cannot drift. One
- * entry approves every identical comment in its file, so an entry listed twice
- * fails as well.
+ * comment anywhere in the tree fails it too, so the table cannot drift. An
+ * entry states how many identical comments its file holds (`count`, one when
+ * absent), and the guard fails when the file holds more or fewer: a new site
+ * of a reviewed comment is a new suppression and needs its own review. An
+ * entry listed twice fails as well.
  */
 
 /** `next-line` suppresses the following line; `file` suppresses the whole module. */
@@ -1728,6 +1844,11 @@ interface ApprovedSuppressionEntry {
   readonly scope: SuppressionScope
   /** Everything after the directive: rule flags and the reason. */
   readonly text: string
+  /**
+   * How many identical comments the file holds; absent means one. The guard
+   * fails when the file holds more or fewer, so a new site asks for review.
+   */
+  readonly count?: number
 }
 
 const directiveMarker = ["@effect", "diagnostics"].join("-")
@@ -1761,6 +1882,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "apps/tui/tests/extensions/loader-boundary.test.ts",
     scope: "next-line",
     text: "nodeBuiltinImport:off",
+    count: 2,
   },
   {
     file: "packages/core/src/server/workspace-rpc.ts",
@@ -1821,6 +1943,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/core/src/runtime/extension-host.ts",
     scope: "next-line",
     text: "anyUnknownInErrorContext:off",
+    count: 8,
   },
   {
     file: "packages/core/src/runtime/extension-host.ts",
@@ -1831,6 +1954,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/extensions/src/openai.ts",
     scope: "next-line",
     text: "strictEffectProvide:off OAuth token endpoint at extension boundary",
+    count: 2,
   },
   {
     file: "packages/extensions/src/openai.ts",
@@ -1846,6 +1970,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/extensions/src/anthropic.ts",
     scope: "next-line",
     text: "strictEffectProvide:off",
+    count: 3,
   },
   {
     file: "packages/extensions/src/providers.ts",
@@ -1861,32 +1986,52 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
  */
 const DESCRIBES_THE_MARKER = new Set([GUARDS_FILE, "packages/tooling/tests/guards.test.ts"])
 
-const approvedSuppression = (file: string, text: string): boolean =>
-  approvedSuppressionEntries.some(
-    (entry) => entry.file === file && approvedComment(entry) === text.trim(),
+const approvedCount = (entry: ApprovedSuppressionEntry): number => entry.count ?? 1
+
+/** How many comments of this exact text the inventory approves in `file`. */
+const approvalsFor = (
+  entries: ReadonlyArray<ApprovedSuppressionEntry>,
+  file: string,
+  comment: string,
+): number =>
+  Option.match(
+    Option.fromNullishOr(
+      entries.find((entry) => entry.file === file && approvedComment(entry) === comment),
+    ),
+    { onNone: () => 0, onSome: approvedCount },
   )
+
+/** A comment past its approved count: never approved, or one site more than approved. */
+const unreviewedMessage = (approved: number, seen: number): string => {
+  if (approved === 0) {
+    return `unreviewed ${directiveMarker} suppression; remove it, or approve its exact text in ${GUARDS_FILE}`
+  }
+  return `${directiveMarker} suppression at a new site: ${GUARDS_FILE} approves ${approved} identical comment(s) here, this is number ${seen}; remove it, or review it and raise the entry's count`
+}
 
 export const findSuppressionInventoryFindings = (
   file: string,
   text: string,
+  entries: ReadonlyArray<ApprovedSuppressionEntry> = approvedSuppressionEntries,
 ): ReadonlyArray<Finding> => {
   const findings: Finding[] = []
   if (DESCRIBES_THE_MARKER.has(file)) return findings
 
+  const seenByComment = new Map<string, number>()
   for (const [index, line] of text.split("\n").entries()) {
-    if (line.includes(directiveMarker) && !approvedSuppression(file, line)) {
-      findings.push({
-        file,
-        line: index + 1,
-        message: `unreviewed ${directiveMarker} suppression; remove it, or approve its exact text in ${GUARDS_FILE}`,
-      })
-    }
+    if (!line.includes(directiveMarker)) continue
+    const comment = line.trim()
+    const seen = (seenByComment.get(comment) ?? 0) + 1
+    seenByComment.set(comment, seen)
+    const approved = approvalsFor(entries, file, comment)
+    if (seen <= approved) continue
+    findings.push({ file, line: index + 1, message: unreviewedMessage(approved, seen) })
   }
   return findings
 }
 
-const containsComment = (text: string, comment: string): boolean =>
-  text.split("\n").some((line) => line.trim() === comment)
+const countComment = (text: string, comment: string): number =>
+  text.split("\n").filter((line) => line.trim() === comment).length
 
 /**
  * Whole-tree check: every approved entry must match a comment in its file.
@@ -1924,17 +2069,30 @@ export const findUnusedSuppressionApprovals = (
         {
           file: GUARDS_FILE,
           line: at(),
-          message: `approved suppression for ${entry.file} is listed twice; one entry approves every identical comment, so drop the duplicate: ${comment}`,
+          message: `approved suppression for ${entry.file} is listed twice; one entry counts every identical comment in its file, so drop the duplicate and set its count: ${comment}`,
         },
       ]
     }
-    const source = Option.fromNullishOr(sources.get(entry.file))
-    if (Option.exists(source, (text) => containsComment(text, comment))) return []
+    const present = Option.match(Option.fromNullishOr(sources.get(entry.file)), {
+      onNone: () => 0,
+      onSome: (text) => countComment(text, comment),
+    })
+    const approved = approvedCount(entry)
+    if (present >= approved) return []
+    if (present === 0) {
+      return [
+        {
+          file: GUARDS_FILE,
+          line: at(),
+          message: `approved suppression for ${entry.file} has no matching comment there; drop the entry: ${comment}`,
+        },
+      ]
+    }
     return [
       {
         file: GUARDS_FILE,
         line: at(),
-        message: `approved suppression for ${entry.file} has no matching comment there; drop the entry: ${comment}`,
+        message: `approved suppression for ${entry.file} approves ${approved} identical comments but the file holds ${present}; set the count to ${present}: ${comment}`,
       },
     ]
   })
@@ -2342,12 +2500,7 @@ const identifiersIn = (text: string): ReadonlySet<string> =>
  * carries are not consumption; blanking them is what lets an own-file
  * reference be read as one.
  */
-const withoutCommentsAndStrings = (text: string): string =>
-  text.replace(COMMENT_OR_STRING, (token) => {
-    if (isComment(token)) return blankKeepingLines(token)
-    if (token.startsWith("`")) return token
-    return '""'
-  })
+const withoutCommentsAndStrings = (text: string): string => blankComments(text, true)
 
 /** Lines carrying a `@ts-expect-error`, which assert absence rather than use. */
 const expectErrorLines = (lines: ReadonlyArray<string>): ReadonlySet<number> => {
