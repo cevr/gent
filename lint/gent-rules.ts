@@ -9,10 +9,9 @@
  *   @gent/core (plus protocol for TUI client extensions), product code
  *   never reads @gent/core/test-utils, and the TUI host never reads
  *   @gent/extensions.
- * - no-promise-control-flow-in-tests: bans new `try/finally`, `async`,
- *   `await`, and Promise chains in test files.
- *   Test resources should live in Effect scopes (`Effect.scoped`,
- *   `FileSystem.makeTempDirectoryScoped`, `Effect.acquireRelease`, etc.).
+ * - no-promise-control-flow-in-tests: bans `.then`/`.catch`/`.finally`
+ *   chains and `runPromise` in test files; `effect/*` rules already ban
+ *   `async`, `await`, `try/finally` and the Promise constructor and statics.
  *
  * Six-primitive substrate rules:
  * - no-runpromise-outside-boundary: Effect.runPromise/runPromiseWith only allowed
@@ -44,7 +43,7 @@
 
 import { existsSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import type { Plugin, Range } from "@oxlint/plugins"
+import type { Context, Plugin, Range } from "@oxlint/plugins"
 
 const LOG_METHODS = new Set([
   "logInfo",
@@ -111,6 +110,31 @@ const getLocLine = (node: AstNode, edge: "start" | "end"): number | undefined =>
   if (!isRecord(point)) return undefined
   const line = point["line"]
   return typeof line === "number" ? line : undefined
+}
+
+/**
+ * Whether a `// gent/<rule>: allow <reason>` comment sits on the line above
+ * `node`, or, when `sameLine` holds, trails it on its own line. The reason
+ * must be non-empty, so the carve-out says why this one site is intentional.
+ */
+const hasAllowComment = (
+  context: Context,
+  node: AstNode,
+  rule: string,
+  sameLine: boolean,
+): boolean => {
+  const startLine = getLocLine(node, "start")
+  if (startLine === undefined) return false
+  const allow = new RegExp(`\\bgent/${rule}:\\s*allow\\s+\\S`)
+  return context.sourceCode
+    .getAllComments()
+    .filter(isAstNode)
+    .some((comment) => {
+      const endLine = getLocLine(comment, "end")
+      const placed = endLine === startLine - 1 || (sameLine && endLine === startLine)
+      const value = getStringField(comment, "value")
+      return placed && value !== undefined && allow.test(value)
+    })
 }
 
 const isTestFilename = (filename: string): boolean =>
@@ -208,7 +232,6 @@ const importTypeSourceOf = (node: AstNode): string | undefined => {
 }
 
 const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
-const PROMISE_STATIC_METHODS = new Set(["all", "allSettled", "any", "race", "resolve", "reject"])
 
 const promiseChainMethodName = (node: AstNode): string | undefined => {
   if (node.type !== "CallExpression") return undefined
@@ -222,20 +245,6 @@ const promiseChainMethodName = (node: AstNode): string | undefined => {
   if (prop?.type !== "Identifier") return undefined
   const name = getStringField(prop, "name")
   return name !== undefined && PROMISE_CHAIN_METHODS.has(name) ? name : undefined
-}
-
-const promiseStaticMethodName = (node: AstNode): string | undefined => {
-  if (node.type !== "CallExpression") return undefined
-  const callee = getNodeField(node, "callee")
-  if (callee?.type !== "MemberExpression") return undefined
-  const object = getNodeField(callee, "object")
-  if (object?.type !== "Identifier" || getStringField(object, "name") !== "Promise") {
-    return undefined
-  }
-  const prop = getNodeField(callee, "property")
-  if (prop?.type !== "Identifier") return undefined
-  const name = getStringField(prop, "name")
-  return name !== undefined && PROMISE_STATIC_METHODS.has(name) ? name : undefined
 }
 
 const RUN_PROMISE_METHODS = new Set(["runPromise", "runPromiseWith", "runPromiseExit"])
@@ -364,7 +373,7 @@ const retiredBunMessage = (
 ): string | undefined => {
   if (member.object !== "Bun") return undefined
   if (member.property === "Glob") {
-    return "`Bun.Glob` fallback is deleted; use the FileIndex service."
+    return "`Bun.Glob` is retired; list files through Effect `FileSystem`."
   }
   if (member.property === "randomUUIDv7" && !platformImpl) {
     return "`Bun.randomUUIDv7` is adapter-only; use `GentPlatform.randomId`."
@@ -523,12 +532,6 @@ const withWrapperDefinitionKind = (fn: AstNode | undefined): "effect" | "callbac
   if (levels.some((params) => annotations(params).some(isEffectTypeAnnotation))) return "effect"
   if (annotations(levels[0] ?? []).some(isCallbackTypeAnnotation)) return "callback"
   return undefined
-}
-
-const isPromiseConstructor = (node: AstNode): boolean => {
-  if (node.type !== "NewExpression") return false
-  const callee = getNodeField(node, "callee")
-  return callee?.type === "Identifier" && getStringField(callee, "name") === "Promise"
 }
 
 /** Locate a named property's arrow-function value inside an object literal. */
@@ -1058,29 +1061,8 @@ const plugin: Plugin = {
       create(context) {
         const createRequireAliases = new Set<string>()
 
-        const getComments = (): ReadonlyArray<AstNode> => {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- oxlint plugin context exposes sourceCode outside public types
-          const ctx = context as unknown as {
-            sourceCode?: { getAllComments?: () => ReadonlyArray<unknown> }
-          }
-          const getAll = ctx.sourceCode?.getAllComments
-          if (typeof getAll !== "function") return []
-          return getAll.call(ctx.sourceCode).filter(isAstNode)
-        }
-
-        const hasAllowComment = (node: AstNode): boolean => {
-          const startLine = getLocLine(node, "start")
-          if (startLine === undefined) return false
-          return getComments().some((comment) => {
-            const endLine = getLocLine(comment, "end")
-            if (endLine === undefined || endLine !== startLine - 1) return false
-            const value = getStringField(comment, "value")
-            return value !== undefined && /\bgent\/no-dynamic-imports:\s*allow\s+\S/.test(value)
-          })
-        }
-
         const reportUnlessAllowed = (node: AstNode, message: string): void => {
-          if (hasAllowComment(node)) return
+          if (hasAllowComment(context, node, "no-dynamic-imports", false)) return
           context.report({ message, node })
         }
 
@@ -1115,17 +1097,13 @@ const plugin: Plugin = {
     },
 
     /**
-     * Bans new `try/finally`, `async`, `await`, and Promise-chain control
-     * flow in test files.
+     * Bans Promise-chain control flow and `runPromise` in test files.
      *
-     * Tests should model resource lifetime with Effect scopes so cleanup runs
-     * through finalizers, composes with `it.live` / `Effect.scoped`, and stays
-     * visible in the Effect graph. For temporary directories, prefer
-     * `FileSystem.FileSystem.makeTempDirectoryScoped()` with the platform
-     * filesystem layer. For custom resources, use `Effect.acquireRelease`.
-     *
-     * This rule is zero-tolerance: test files must not use Promise control
-     * flow for setup, teardown, or assertions.
+     * A test returns an Effect from `it.live` / `it.scopedLive`, so cleanup
+     * runs through finalizers and composes with `Effect.scoped`. A `.then`,
+     * `.catch` or `.finally` chain, or a `runPromise` edge, steps outside that
+     * graph. `async`, `await`, `try/finally`, `new Promise` and the Promise
+     * statics are the `effect/*` rules' to report, everywhere, tests included.
      */
     "no-promise-control-flow-in-tests": {
       create(context) {
@@ -1134,45 +1112,6 @@ const plugin: Plugin = {
         if (isTestBoundaryFilename(filename)) return {}
 
         return {
-          TryStatement(node) {
-            if (node.finalizer == null) return
-            context.report({
-              message:
-                "Do not use `try/finally` cleanup in tests. Import `it` from `effect-bun-test` and put lifetime in the Effect scope: `it.scopedLive(...)`, `FileSystem.makeTempDirectoryScoped()`, or `Effect.acquireRelease(...)`.",
-              node,
-            })
-          },
-          FunctionDeclaration(node) {
-            if (node.async !== true) return
-            context.report({
-              message:
-                'Do not use `async` test functions. Import `it` from `effect-bun-test` and return an Effect: `it.live("name", () => Effect.gen(function* () { ... }))` or `it.scopedLive` for scoped resources.',
-              node,
-            })
-          },
-          FunctionExpression(node) {
-            if (node.async !== true) return
-            context.report({
-              message:
-                'Do not use `async` test functions. Import `it` from `effect-bun-test` and return an Effect: `it.live("name", () => Effect.gen(function* () { ... }))` or `it.scopedLive` for scoped resources.',
-              node,
-            })
-          },
-          ArrowFunctionExpression(node) {
-            if (node.async !== true) return
-            context.report({
-              message:
-                'Do not use `async` test functions. Import `it` from `effect-bun-test` and return an Effect: `it.live("name", () => Effect.gen(function* () { ... }))` or `it.scopedLive` for scoped resources.',
-              node,
-            })
-          },
-          AwaitExpression(node) {
-            context.report({
-              message:
-                "Do not use `await` in tests. Import `it` from `effect-bun-test`; use `yield*` inside `Effect.gen`, `Effect.promise` only at real async boundaries, and scoped resources for cleanup.",
-              node,
-            })
-          },
           CallExpression(node) {
             if (!isAstNode(node)) return
             const callee = getNodeField(node, "callee")
@@ -1195,25 +1134,9 @@ const plugin: Plugin = {
               return
             }
             const method = promiseChainMethodName(node)
-            if (method !== undefined) {
-              context.report({
-                message: `Do not use Promise-chain \`.${method}(...)\` control flow in tests. Import \`it\` from \`effect-bun-test\`; use \`yield*\` in \`Effect.gen\`, \`Effect.all([...])\` for concurrency, and \`Effect.scoped\` / \`it.scopedLive\` for cleanup.`,
-                node,
-              })
-              return
-            }
-            const staticMethod = promiseStaticMethodName(node)
-            if (staticMethod === undefined) return
+            if (method === undefined) return
             context.report({
-              message: `Do not use \`Promise.${staticMethod}(...)\` in tests. Use \`Effect.all([...], { concurrency: ... })\` for aggregation, \`Effect.succeed\` / \`Effect.fail\` for values, and \`Deferred\` for test coordination.`,
-              node,
-            })
-          },
-          NewExpression(node) {
-            if (!isAstNode(node) || !isPromiseConstructor(node)) return
-            context.report({
-              message:
-                "Do not construct raw Promises in tests. Import `it` from `effect-bun-test`; use `Deferred` for coordination, `Effect.sleep` for delays, `Effect.async` for callback APIs, or `Effect.promise` only at a real external async boundary.",
+              message: `Do not use Promise-chain \`.${method}(...)\` control flow in tests. Import \`it\` from \`effect-bun-test\`; use \`yield*\` in \`Effect.gen\`, \`Effect.all([...])\` for concurrency, and \`Effect.scoped\` / \`it.scopedLive\` for cleanup.`,
               node,
             })
           },
@@ -1239,7 +1162,7 @@ const plugin: Plugin = {
      *   - `*.test.ts` and files under `tests/`
      *
      * Two retired APIs are banned even inside those exemptions, outside
-     * `tests/`: `Bun.Glob` (the FileIndex service replaced it) and
+     * `tests/`: `Bun.Glob` (files are listed through Effect `FileSystem`) and
      * `Bun.randomUUIDv7` (only `runtime/gent-platform-bun.ts` may call it;
      * everyone else uses `GentPlatform.randomId`).
      *
@@ -1384,33 +1307,16 @@ const plugin: Plugin = {
     },
 
     /**
-     * Bans `.sleep(...)` calls in test files.
+     * Bans `Effect.die` / `Effect.dieMessage` in test code when the message
+     * describes a timeout.
      *
-     * Why: `Effect.sleep("0 millis")` / `Effect.sleep("10 millis")` is the
-     * canonical "wait for the next tick" anti-pattern in this codebase —
-     * tests that need to wait for a state transition should use `Deferred`,
-     * `controls.waitForCall`, or `waitFor` polling helpers, not a fixed
-     * delay. Non-zero sleeps in tests usually indicate a missing
-     * synchronisation primitive and produce flaky timing-coupled assertions.
+     * A timeout is an expected outcome. Dying on it escapes the failing
+     * assertion as "Unhandled error between tests", attributed to no test.
+     * Dying on a genuine impossible state (a missing fixture, an out-of-range
+     * index) stays allowed: that really is a defect.
      *
-     * Legitimate uses do exist:
-     *   - real-clock timing assertions (idle-timeout eviction in
-     *     server-lifecycle, headless CLI exit timeout fallback)
-     *   - deliberate fiber-pacing in PTY / subprocess fixtures, where the
-     *     OS-level scheduler needs to be exercised
-     *   - retry / backoff sleeps when the retry helper is itself the
-     *     subject under test
-     *
-     * Opt out per-site by placing
-     * `// gent/no-sleep: allow <reason>` on the line directly above the
-     * call. The reason must be non-empty so the carveout encodes why this
-     * specific sleep is intentional.
-     *
-     * Matches both `Effect.sleep(...)` and `Bun.sleep(...)`. Scoped to test
-     * files (`*.test.ts`, `*.test.tsx`, `tests/**`) and test-adjacent
-     * fixtures (`pty-fixture.ts`, `server-process-fixture.ts`, `helpers.ts`
-     * inside `tests/`, `helpers-boundary.ts`). The rule does NOT apply to
-     * product code — production retries/timeouts/debounces are unaffected.
+     * Opt out per site with `// gent/no-die-in-test-helpers: allow <reason>`
+     * on the line above the call or trailing it.
      */
     "no-die-in-test-helpers": {
       create(context) {
@@ -1449,28 +1355,6 @@ const plugin: Plugin = {
           if (!inTestsTree && !inIntegrationTree && !inTestUtils) return {}
         }
 
-        const getComments = (): ReadonlyArray<AstNode> => {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- oxlint plugin context exposes sourceCode outside public types
-          const ctx = context as unknown as {
-            sourceCode?: { getAllComments?: () => ReadonlyArray<unknown> }
-          }
-          const getAll = ctx.sourceCode?.getAllComments
-          if (typeof getAll !== "function") return []
-          return getAll.call(ctx.sourceCode).filter(isAstNode)
-        }
-
-        const hasAllowComment = (node: AstNode): boolean => {
-          const startLine = getLocLine(node, "start")
-          if (startLine === undefined) return false
-          return getComments().some((comment) => {
-            const endLine = getLocLine(comment, "end")
-            if (endLine === undefined) return false
-            if (endLine !== startLine - 1 && endLine !== startLine) return false
-            const value = getStringField(comment, "value")
-            return value !== undefined && /\bgent\/no-die-in-test-helpers:\s*allow\s+\S/.test(value)
-          })
-        }
-
         return {
           CallExpression(node) {
             if (!isAstNode(node)) return
@@ -1489,7 +1373,7 @@ const plugin: Plugin = {
             // an expected outcome, so dying on it drops the diagnostic and
             // detaches the failure from the test that caused it.
             if (!mentionsTimeout(node)) return
-            if (hasAllowComment(node)) return
+            if (hasAllowComment(context, node, "no-die-in-test-helpers", true)) return
             context.report({
               message: `\`Effect.${method}(...)\` in test code — a defect escapes the failing assertion and surfaces as "Unhandled error between tests", attributed to no test in particular. Fail with a typed error instead (\`Schema.TaggedError\`, then \`yield* new MyError({...})\`) so the timeout or precondition failure lands on the test that caused it. If this site genuinely models an unrecoverable defect, add \`// gent/no-die-in-test-helpers: allow <reason>\` on the line directly above the call.`,
               node,
@@ -1498,6 +1382,35 @@ const plugin: Plugin = {
         }
       },
     },
+    /**
+     * Bans `.sleep(...)` calls in test files.
+     *
+     * Why: `Effect.sleep("0 millis")` / `Effect.sleep("10 millis")` is the
+     * canonical "wait for the next tick" anti-pattern in this codebase —
+     * tests that need to wait for a state transition should use `Deferred`,
+     * `controls.waitForCall`, or `waitFor` polling helpers, not a fixed
+     * delay. Non-zero sleeps in tests usually indicate a missing
+     * synchronisation primitive and produce flaky timing-coupled assertions.
+     *
+     * Legitimate uses do exist:
+     *   - real-clock timing assertions (idle-timeout eviction in
+     *     server-lifecycle, headless CLI exit timeout fallback)
+     *   - deliberate fiber-pacing in PTY / subprocess fixtures, where the
+     *     OS-level scheduler needs to be exercised
+     *   - retry / backoff sleeps when the retry helper is itself the
+     *     subject under test
+     *
+     * Opt out per-site by placing
+     * `// gent/no-sleep: allow <reason>` on the line directly above the
+     * call. The reason must be non-empty so the carveout encodes why this
+     * specific sleep is intentional.
+     *
+     * Matches both `Effect.sleep(...)` and `Bun.sleep(...)`. Scoped to test
+     * files (`*.test.ts`, `*.test.tsx`, `tests/**`) and test-adjacent
+     * fixtures (`pty-fixture.ts`, `server-process-fixture.ts`, `helpers.ts`
+     * inside `tests/`, `helpers-boundary.ts`). The rule does NOT apply to
+     * product code — production retries/timeouts/debounces are unaffected.
+     */
     "no-sleep": {
       create(context) {
         const filename = context.filename
@@ -1516,30 +1429,6 @@ const plugin: Plugin = {
         // so the fixtures test can count diagnostics on the invalid fixture
         // and zero diagnostics on the valid fixture.
 
-        const getComments = (): ReadonlyArray<AstNode> => {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- oxlint plugin context exposes sourceCode outside public types
-          const ctx = context as unknown as {
-            sourceCode?: { getAllComments?: () => ReadonlyArray<unknown> }
-          }
-          const getAll = ctx.sourceCode?.getAllComments
-          if (typeof getAll !== "function") return []
-          return getAll.call(ctx.sourceCode).filter(isAstNode)
-        }
-
-        const hasAllowComment = (node: AstNode): boolean => {
-          const startLine = getLocLine(node, "start")
-          if (startLine === undefined) return false
-          return getComments().some((comment) => {
-            const endLine = getLocLine(comment, "end")
-            if (endLine === undefined) return false
-            // Allow either an immediately-preceding line OR a same-line
-            // trailing comment.
-            if (endLine !== startLine - 1 && endLine !== startLine) return false
-            const value = getStringField(comment, "value")
-            return value !== undefined && /\bgent\/no-sleep:\s*allow\s+\S/.test(value)
-          })
-        }
-
         return {
           CallExpression(node) {
             if (!isAstNode(node)) return
@@ -1556,7 +1445,7 @@ const plugin: Plugin = {
             if (obj?.type !== "Identifier") return
             const objectName = getStringField(obj, "name")
             if (objectName !== "Effect" && objectName !== "Bun") return
-            if (hasAllowComment(node)) return
+            if (hasAllowComment(context, node, "no-sleep", true)) return
             context.report({
               message: `\`${objectName}.sleep(...)\` in test code — replace fixed delays with deterministic synchronisation: \`Deferred\` for coordination, \`controls.waitForCall(...)\` / \`controls.waitForStreamStart()\` for sequence-provider gating, or \`waitFor\` polling helpers for projection convergence. If this site is a real-clock timing assertion, OS-level fiber pacing, or a retry/backoff test, add \`// gent/no-sleep: allow <reason>\` on the line directly above the call.`,
               node,

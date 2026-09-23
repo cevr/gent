@@ -185,13 +185,15 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-promise-control-flow-in-tests",
     invalid: "no-promise-control-flow-in-tests.invalid.test.ts",
     valid: "no-promise-control-flow-in-tests.valid.test.ts",
-    expectedCount: 11,
+    // three chain methods and three runPromise edges
+    expectedCount: 6,
   },
   {
     rule: "gent/no-promise-control-flow-in-tests",
     invalid: "test-module-control-flow/tests/no-promise-control-flow-in-tests.invalid.module.ts",
     valid: "test-module-control-flow/tests/no-promise-control-flow-in-tests.valid.module.ts",
-    expectedCount: 10,
+    // `.then`, `.catch` and `.finally` on one chain
+    expectedCount: 3,
   },
   {
     rule: "gent/no-bun-outside-adapter",

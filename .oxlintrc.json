@@ -17,7 +17,7 @@
     "gent/core-entry-boundary": "error",
     // Custom — a workspace imports only the workspace packages its manifest declares
     "gent/declared-workspace-imports": "error",
-    // Custom — Effect.runPromise only in *-boundary.ts files or via runSdkBoundary
+    // Custom — Effect.runPromise only in *-boundary.ts files
     "gent/no-runpromise-outside-boundary": "error",
     // Custom — definePackage/defineExtension factories must not throw
     "gent/no-define-extension-throw": "error",
@@ -25,7 +25,7 @@
     "gent/no-dynamic-imports": "error",
     // Custom — no Bun.* outside adapter, entrypoint, tooling, and test harness boundaries
     "gent/no-bun-outside-adapter": "error",
-    // Custom — test control flow must stay in Effect, not try/finally/async/await
+    // Custom — no Promise chains or runPromise in tests (effect/* bans async, await, try/finally)
     "gent/no-promise-control-flow-in-tests": "error",
     // Custom — hand-rolled `_tag` discriminated unions banned; use Schema.TaggedUnion
     "gent/no-hand-rolled-tagged-union": "error",
@@ -46,7 +46,6 @@
     "effect/noAsyncFunction": "error",
     "effect/noChainedTypeAssertions": "error",
     "effect/noConditionalEmptyObjectSpread": "error",
-    "effect/noDynamicImports": "error",
     "effect/noEffectBind": "error",
     "effect/noEffectDo": "error",
     "effect/noGlobals": "error",
@@ -186,10 +185,6 @@
       "rules": {
         "effect/noNodeBuiltinImport": "off"
       }
-    },
-    {
-      "files": ["**/*.tsx"],
-      "rules": {}
     },
     {
       // A test composes the layers its operation needs; that is the test norm.

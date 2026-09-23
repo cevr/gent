@@ -216,7 +216,7 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
         () => {
           fetchCalls += 1
           // The endpoint accepted the socket and went silent: a fetch that never settles.
-          // oxlint-disable-next-line effect/noNewPromise, gent/no-promise-control-flow-in-tests -- The fake implements the Promise-based Fetch contract.
+          // oxlint-disable-next-line effect/noNewPromise -- The fake implements the Promise-based Fetch contract.
           return Promise.race<Response>([])
         },
         { preconnect: () => {} },
