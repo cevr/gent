@@ -445,6 +445,21 @@ const listGitFiles: (
   const listed = yield* gitLsFiles(cwd)
   if (Option.isNone(listed)) return Option.none()
   let unreadable = listed.value.unreadable
+  // Git lists index paths: a tracked `sub/a.ts` stays listed after `sub`
+  // becomes a symbolic link, and a read would follow it out of the tree.
+  // Each directory is checked once.
+  const linkedDirectories = new Map<string, boolean>()
+  const underLink: (relativeDirectory: string) => Effect.Effect<boolean> = (relativeDirectory) =>
+    Effect.gen(function* () {
+      if (relativeDirectory === "." || relativeDirectory.length === 0) return false
+      const known = Option.fromUndefinedOr(linkedDirectories.get(relativeDirectory))
+      if (Option.isSome(known)) return known.value
+      const linked =
+        (yield* underLink(path.dirname(relativeDirectory))) ||
+        Option.isSome(yield* fs.readLink(path.join(cwd, relativeDirectory)).pipe(Effect.option))
+      linkedDirectories.set(relativeDirectory, linked)
+      return linked
+    })
   // A deleted tracked file and a symbolic link are listed too; a directory
   // is a nested repository (`vendor/lib/`) or a submodule's gitlink.
   const nested = yield* Effect.forEach(
@@ -452,6 +467,7 @@ const listGitFiles: (
     Effect.fnUntraced(function* (entry) {
       const relativePath = entry.replace(/\/$/, "")
       const absolutePath = path.join(cwd, relativePath)
+      if (yield* underLink(path.dirname(relativePath))) return []
       const kind = yield* entryKind(absolutePath)
       if (kind === "skip") return []
       if (kind === "file") return [{ path: absolutePath, relativePath }]

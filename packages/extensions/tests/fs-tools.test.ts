@@ -1321,6 +1321,24 @@ describe("symbolic links", () => {
   }
 })
 
+describe("a tracked path under a directory that is now a link", () => {
+  it.scopedLive("is not read through the link", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* fs.makeTempDirectoryScoped()
+      const outside = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* writeTree(repo, ["sub/a.ts", "keep.ts"], {})
+      yield* runProcess("git", ["-C", repo, "add", "."])
+      yield* writeTree(outside, ["a.ts"], {})
+      yield* fs.remove(`${repo}/sub`, { recursive: true })
+      yield* fs.symlink(outside, `${repo}/sub`)
+
+      expect(yield* listed(repo)).toEqual(["keep.ts"])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+  )
+})
+
 /**
  * The index over a platform whose spawner rewrites each command first. It
  * stands in for what the index cannot choose: the environment gent inherits,
