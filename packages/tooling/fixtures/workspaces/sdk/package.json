@@ -1,0 +1,7 @@
+{
+  "name": "@gent/sdk",
+  "private": true,
+  "dependencies": {
+    "@gent/core": "workspace:*"
+  }
+}

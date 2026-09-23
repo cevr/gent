@@ -15,6 +15,8 @@
     "gent/no-positional-log-error": "error",
     // Custom — extensions read only the authoring entries; product code never reads test-utils
     "gent/core-entry-boundary": "error",
+    // Custom — a workspace imports only the workspace packages its manifest declares
+    "gent/declared-workspace-imports": "error",
     // Custom — Effect.runPromise only in *-boundary.ts files or via runSdkBoundary
     "gent/no-runpromise-outside-boundary": "error",
     // Custom — definePackage/defineExtension factories must not throw
@@ -138,9 +140,12 @@
       }
     },
     {
+      // The lint plugin runs inside oxlint's Node host, not in an Effect runtime.
       "files": ["lint/**/*.ts"],
       "rules": {
         "effect/maxCognitiveComplexity": "off",
+        "effect/noNodeBuiltinImport": "off",
+        "effect/noGlobals": "off",
         "effect/noAs": "off",
         "effect/noChainedTypeAssertions": "off",
         "effect/noKnownValueWidening": "off",

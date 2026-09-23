@@ -161,6 +161,15 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 2,
   },
   {
+    // A workspace imports only what its manifest declares, and stays in its root.
+    rule: "gent/declared-workspace-imports",
+    invalid: "workspaces/core/src/declared-workspace-imports.invalid.ts",
+    valid: "workspaces/sdk/src/declared-workspace-imports.valid.ts",
+    // import, type import, a specifier on a later line, a relative path into
+    // the SDK, a re-export, an export-all, import(), require(), typeof import()
+    expectedCount: 9,
+  },
+  {
     rule: "gent/no-define-extension-throw",
     invalid: "no-define-extension-throw.invalid.ts",
     valid: "no-define-extension-throw.valid.ts",

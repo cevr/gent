@@ -124,6 +124,14 @@
             }
           },
           {
+            "include": ["lint/**/*.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "nodeBuiltinImport": "off"
+              }
+            }
+          },
+          {
             "include": ["testbeds/gamut/gamut.ts"],
             "options": {
               "diagnosticSeverity": {

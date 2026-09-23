@@ -3,6 +3,8 @@
  *
  * Rules:
  * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
+ * - declared-workspace-imports: a workspace package imports only the
+ *   workspace packages its manifest declares, and no relative path leaves it.
  * - core-entry-boundary: extensions read only the authoring entries of
  *   @gent/core (plus protocol for TUI client extensions), product code
  *   never reads @gent/core/test-utils, and the TUI host never reads
@@ -40,6 +42,8 @@
  *   throws during module load and the file registers no tests at all.
  */
 
+import { existsSync, readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
 import type { Plugin, Range } from "@oxlint/plugins"
 
 const LOG_METHODS = new Set([
@@ -148,6 +152,59 @@ const resolvedRelativeSource = (filename: string, source: string): string | unde
     if (part !== ".." && part !== "." && part !== "") segments.push(part)
   }
   return segments.join("/")
+}
+
+/** The package an `@gent/...` specifier names: `@gent/core/protocol` → `@gent/core`. */
+const WORKSPACE_PACKAGE = /^(@gent\/[a-z0-9-]+)(?:\/.*)?$/
+
+/** A workspace package: its directory and every package name its manifest declares. */
+interface Workspace {
+  readonly dir: string
+  readonly declared: ReadonlySet<string>
+}
+
+const MANIFEST_FIELDS = ["dependencies", "devDependencies", "peerDependencies"]
+
+/**
+ * The workspace a manifest describes, or undefined for the repository root: a
+ * manifest with `workspaces` owns no source of its own.
+ */
+const workspaceOf = (dir: string, manifest: unknown): Workspace | undefined => {
+  if (!isRecord(manifest) || "workspaces" in manifest) return undefined
+  const declared = new Set<string>()
+  if (typeof manifest["name"] === "string") declared.add(manifest["name"])
+  for (const field of MANIFEST_FIELDS) {
+    const entries = manifest[field]
+    if (isRecord(entries)) for (const name of Object.keys(entries)) declared.add(name)
+  }
+  return { dir, declared }
+}
+
+/** Nearest manifest per directory, shared by every file one lint run reads. */
+const workspaceByDir = new Map<string, Workspace | undefined>()
+
+/** The workspace package that owns `dir`: the nearest `package.json` above it. */
+const owningWorkspace = (dir: string): Workspace | undefined => {
+  if (workspaceByDir.has(dir)) return workspaceByDir.get(dir)
+  const manifestPath = join(dir, "package.json")
+  const parent = dirname(dir)
+  let owner: Workspace | undefined
+  if (existsSync(manifestPath)) {
+    owner = workspaceOf(dir, JSON.parse(readFileSync(manifestPath, "utf8")))
+  } else if (parent !== dir) {
+    owner = owningWorkspace(parent)
+  }
+  workspaceByDir.set(dir, owner)
+  return owner
+}
+
+/** The module a `typeof import("x")` type names. */
+const importTypeSourceOf = (node: AstNode): string | undefined => {
+  const direct = importSourceOf(node)
+  if (direct !== undefined) return direct
+  const argument = getNodeField(node, "argument")
+  const literal = argument === undefined ? undefined : getNodeField(argument, "literal")
+  return literal === undefined ? undefined : getStringField(literal, "value")
 }
 
 const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
@@ -666,6 +723,56 @@ const plugin: Plugin = {
           ExportNamedDeclaration: report,
           ExportAllDeclaration: report,
           ImportExpression: report,
+        }
+      },
+    },
+
+    /**
+     * A workspace package imports only the workspace packages its manifest
+     * declares, and never reaches across its own root with a relative path.
+     *
+     * Turbo orders and caches tasks by the declared graph, so an undeclared
+     * edge lets a cached typecheck replay green after the imported package
+     * broke it. Core's test harness once called `@gent/sdk`, which depends on
+     * core: a cycle no manifest showed. A relative path into another
+     * workspace is the same edge without a name.
+     *
+     * The owner is the nearest `package.json` above the file. A file whose
+     * nearest manifest is the repository root (it carries `workspaces`) is in
+     * no workspace and is not read. Every module form counts: `import`,
+     * `export ... from`, `import(...)`, `typeof import(...)` and `require(...)`.
+     */
+    "declared-workspace-imports": {
+      create(context) {
+        const filename = context.filename.replaceAll("\\", "/")
+        const workspace = owningWorkspace(dirname(filename))
+        if (workspace === undefined) return {}
+        const report = (node: AstNode, source: string | undefined) => {
+          if (source === undefined) return
+          const resolved = resolvedRelativeSource(filename, source)
+          if (resolved !== undefined) {
+            if (resolved.startsWith(`${workspace.dir}/`)) return
+            context.report({
+              message: `reaches \`${source}\` across its workspace root; import a declared package entry instead`,
+              node,
+            })
+            return
+          }
+          const imported = WORKSPACE_PACKAGE.exec(source)?.[1]
+          if (imported === undefined || workspace.declared.has(imported)) return
+          context.report({
+            message: `imports \`${imported}\`, which its package.json does not declare; declare it without a cycle, or move the code to a package that does`,
+            node,
+          })
+        }
+        const reportSource = (node: AstNode) => report(node, importSourceOf(node))
+        return {
+          ImportDeclaration: reportSource,
+          ExportNamedDeclaration: reportSource,
+          ExportAllDeclaration: reportSource,
+          ImportExpression: reportSource,
+          TSImportType: (node) => report(node, importTypeSourceOf(node)),
+          CallExpression: (node) => report(node, requireSourceOf(node)),
         }
       },
     },

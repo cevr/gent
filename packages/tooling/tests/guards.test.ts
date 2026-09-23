@@ -22,7 +22,6 @@ import {
   findUnadaptedSeams,
   findUnadmittedChildSessionWriters,
   findUnconsumedExports,
-  findUndeclaredWorkspaceImports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
   findUnusedSuppressionApprovals,
@@ -2489,94 +2488,5 @@ describe("a namesake does not vouch for an export", () => {
       usedElsewhere,
     ])
     expect(findings).toEqual([])
-  })
-})
-
-// ── undeclared workspace imports ────────────────────────────────────────────
-
-describe("undeclared workspace imports", () => {
-  const manifests = new Map([
-    ["packages/core", { name: "@gent/core" }],
-    ["packages/sdk", { name: "@gent/sdk", dependencies: { "@gent/core": "workspace:*" } }],
-  ])
-  const sdkImport = ["@gent", "sdk"].join("/")
-  const coreImport = ["@gent", "core", "protocol"].join("/")
-
-  test("a core file that imports the SDK is a finding", () => {
-    const findings = findUndeclaredWorkspaceImports(
-      manifests,
-      new Map([["packages/core/src/test-utils/harness.ts", `import { Gent } from "${sdkImport}"`]]),
-    )
-    expect(findings.map((finding) => [finding.file, finding.line])).toEqual([
-      ["packages/core/src/test-utils/harness.ts", 1],
-    ])
-  })
-
-  test("a declared dependency, a self import, and a fixture tree pass", () => {
-    const findings = findUndeclaredWorkspaceImports(
-      manifests,
-      new Map([
-        ["packages/sdk/src/client.ts", `import { GentRpcs } from "${coreImport}"`],
-        ["packages/core/tests/entry.test.ts", `import { waitFor } from "@gent/core/test-utils"`],
-        ["packages/core/fixtures/app.ts", `import { Gent } from "${sdkImport}"`],
-      ]),
-    )
-    expect(findings).toEqual([])
-  })
-
-  const linesOf = (file: string, text: string) =>
-    findUndeclaredWorkspaceImports(manifests, new Map([[file, text]])).map(
-      (finding) => finding.line,
-    )
-
-  test("an import whose specifier sits on a later line is a finding", () => {
-    const text = ["import {", "  Gent,", "} from", `  "${sdkImport}"`].join("\n")
-    expect(linesOf("packages/core/src/a.ts", text)).toEqual([4])
-    expect(
-      linesOf(
-        "packages/core/src/b.ts",
-        ["const sdk = require(", `  "${sdkImport}",`, ")"].join("\n"),
-      ),
-    ).toEqual([2])
-  })
-
-  test("require, dynamic import, type import, and export-from are findings", () => {
-    const text = [
-      `const sdk = require("${sdkImport}")`,
-      `const lazy = import("${sdkImport}")`,
-      `import type { GentServer } from "${sdkImport}"`,
-      `export { Gent } from "${sdkImport}"`,
-      `type Client = typeof import("${sdkImport}")`,
-    ].join("\n")
-    expect(linesOf("packages/core/src/a.ts", text)).toEqual([1, 2, 3, 4, 5])
-  })
-
-  test("an import inside a comment, a string, or a template is not a finding", () => {
-    const text = [
-      `// import { Gent } from "${sdkImport}"`,
-      `/* import { Gent } from "${sdkImport}" */`,
-      `const example = 'import { Gent } from "${sdkImport}"'`,
-      'const shown = `import { Gent } from "' + sdkImport + '" ${1}`',
-      "const pattern = /[\"']/",
-    ].join("\n")
-    expect(linesOf("packages/core/src/a.ts", text)).toEqual([])
-  })
-
-  test("a relative import that leaves its workspace root is a finding", () => {
-    expect(
-      linesOf(
-        "packages/sdk/tests/client.test.ts",
-        'import { narrowR } from "../../core/tests/helpers/effect"',
-      ),
-    ).toEqual([1])
-    expect(
-      linesOf(
-        "packages/core/tests/extensions/api.test.ts",
-        'import notes from "../../../../examples/extensions/session-notes"',
-      ),
-    ).toEqual([1])
-    expect(
-      linesOf("packages/core/tests/runtime/a.test.ts", 'import { x } from "../../src/runtime/x"'),
-    ).toEqual([])
   })
 })
