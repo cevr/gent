@@ -17,6 +17,7 @@ import type { Session } from "../../src/client"
 import { useExtensionUI } from "../../src/extensions/host"
 import { createMockClient, renderWithProviders } from "../render-harness-boundary"
 import { waitForFrame } from "../helpers-boundary"
+import { delegateSubtitle } from "../../src/extensions/delegate.client"
 
 /**
  * A child never blocks its parent: `delegate.start` settles at admission, and
@@ -34,6 +35,7 @@ const parentSession: Session = {
   name: "parent",
   modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
+  cwd: Option.getOrUndefined(Option.none()),
 }
 
 const startOp: ToolCall = {
@@ -370,6 +372,16 @@ describe("delegate.start row", () => {
       // never its full body, even inside the full cell body.
       expect(frame).toContain("#cell-read-op")
       expect(frame).not.toContain("OP-READ-LINE-20")
+    }),
+  )
+})
+
+describe("delegate subtitle", () => {
+  it.live("a long task is cut on a grapheme boundary, never inside an emoji", () =>
+    Effect.sync(() => {
+      const todo = `${"a".repeat(59)}😀 and the rest of the task`
+      expect(delegateSubtitle({ todo })).toEqual(Option.some(`${"a".repeat(59)}…`))
+      expect(delegateSubtitle({ todo: "short task" })).toEqual(Option.some("short task"))
     }),
   )
 })

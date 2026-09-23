@@ -11,7 +11,7 @@ import {
   shellOutputDirectory,
 } from "../src/composer"
 import { Deferred, Effect, FileSystem, Layer, Option } from "effect"
-import { type ActiveInteraction, BranchId, SessionId } from "@gent/core/protocol"
+import { type ActiveInteraction, BranchId, dateFromMillis, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { RGBA } from "@opentui/core"
@@ -25,9 +25,14 @@ import {
   SessionUiState,
   transitionComposerInteraction,
 } from "../src/session"
-import { renderFrame, renderWithProviders } from "./render-harness-boundary"
+import {
+  createMockClient,
+  renderFrame,
+  renderWithProviders as renderHarness,
+} from "./render-harness-boundary"
 import { createSignal, type JSX, onMount } from "solid-js"
 import { PromptSearchState } from "../src/pickers"
+import { type ClientContextValue, type SessionIdentity, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
 import { type RenderWaitTimeoutError, waitForFrame } from "./helpers-boundary"
 import { useScopedKeyboard } from "../src/terminal"
@@ -40,6 +45,18 @@ import { builtinClientModules } from "../src/extensions/builtins"
 import { rankAutocompleteItems } from "../src/autocomplete"
 
 // ── shell ───────────────────────────────────────────────────────────────────
+
+/** The composer lives in a session view, so every mount has a session to draft in. */
+const draftSession = {
+  sessionId: SessionId.make("draft-session"),
+  branchId: BranchId.make("draft-branch"),
+  name: "Draft",
+  modelId: Option.getOrUndefined(Option.none()),
+  reasoningLevel: Option.getOrUndefined(Option.none()),
+  cwd: Option.getOrUndefined(Option.none()),
+}
+const renderWithProviders: typeof renderHarness = (ui, options) =>
+  renderHarness(ui, { initialSession: draftSession, ...options })
 
 const testLayer = Layer.merge(BunFileSystem.layer, BunServices.layer)
 const shellTest = it.scopedLive.layer(testLayer)
@@ -433,7 +450,7 @@ function Contribute() {
 }
 function TestComposer(props: {
   readonly suspended?: boolean
-  readonly onSubmit: (content: string, mode?: "queue" | "interject") => void
+  readonly onSubmit: (content: string, mode: "queue" | "interject", target: SessionIdentity) => void
   readonly children?: JSX.Element
   readonly composerState?: () => ComposerState
   readonly dispatchComposer?: (event: ComposerEvent) => void
@@ -550,6 +567,42 @@ describe("Composer renderer", () => {
       expect(renderFrame(setup)).not.toContain("┃ hi")
     }),
   )
+  // A large paste becomes a placeholder where the caret is. The draft around
+  // it stays whole, so submit sends the text before the caret, the paste, and
+  // the text after the caret, in that order.
+  it.live("a large paste in the middle of the draft sends the exact text", () =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <TestComposer onSubmit={(content) => submitted.push(content)} />),
+      )
+      const pasted = "one\ntwo\nthree\nfour\nfive"
+      yield* Effect.promise(() => setup.mockInput.typeText("hello world"))
+      for (let i = 0; i < 5; i++) setup.mockInput.pressArrow("left")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(pasted))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("hello [Pasted ~5 lines #paste-1]world")
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(submitted).toEqual([`hello ${pasted}world`])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("a large paste over a selection replaces it and sends the exact text", () =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <TestComposer onSubmit={(content) => submitted.push(content)} />),
+      )
+      const pasted = "one\ntwo\nthree\nfour\nfive"
+      yield* Effect.promise(() => setup.mockInput.typeText("hello world"))
+      for (let i = 0; i < 5; i++) setup.mockInput.pressArrow("left", { shift: true })
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(pasted))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(submitted).toEqual([`hello ${pasted}`])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("suspended composer blocks enter submission", () =>
     Effect.gen(function* () {
       const submitted: string[] = []
@@ -600,6 +653,213 @@ describe("Composer renderer", () => {
       expect(frame).toContain("Tab Complete")
       setup.renderer.destroy()
     }),
+  )
+})
+
+// ── composer submit ─────────────────────────────────────────────────────────
+
+/**
+ * Submit takes the draft before any async work: a second Enter while a
+ * `!cmd` runs or `@file` refs expand finds an empty composer. `@file` and
+ * `!cmd` resolve against the session's directory, which a resumed or switched
+ * session does not share with the TUI's launch directory.
+ */
+
+const submitTest = it.scopedLive.layer(testLayer)
+
+/** A session rooted in `cwd`, as `session.get` returns it. */
+const storedSessionIn = (cwd: string) => ({
+  id: SessionId.make("session-elsewhere"),
+  name: "Elsewhere",
+  cwd,
+  activeBranchId: BranchId.make("branch-elsewhere"),
+  createdAt: dateFromMillis(0),
+  updatedAt: dateFromMillis(0),
+})
+
+describe("Composer submit", () => {
+  submitTest("@file resolves against the session's directory, not the launch directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const launchDir = yield* fs.makeTempDirectoryScoped()
+      const sessionDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${launchDir}/notes.md`, "LAUNCH COPY")
+      yield* fs.writeFileString(`${sessionDir}/notes.md`, "SESSION COPY")
+      const submitted: Array<string> = []
+      // The session is reached by id alone, so its record names no cwd and the
+      // composer reads it from the server.
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+          {
+            cwd: launchDir,
+            client: createMockClient({
+              session: { get: () => Effect.succeed(storedSessionIn(sessionDir)) },
+            }),
+            initialSession: {
+              sessionId: SessionId.make("session-elsewhere"),
+              branchId: BranchId.make("branch-elsewhere"),
+              name: "Elsewhere",
+              modelId: Option.getOrUndefined(Option.none()),
+              reasoningLevel: Option.getOrUndefined(Option.none()),
+              cwd: Option.getOrUndefined(Option.none()),
+            },
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("see @notes.md"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => submitted.length === 1, "submitted")
+      expect(submitted[0]).toContain("SESSION COPY")
+      expect(submitted[0]).not.toContain("LAUNCH COPY")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  submitTest(
+    "a switch while @file expands leaves the message in the session it was drafted in",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${dir}/notes.md`, "notes body")
+        // The drafted-in session names no cwd, so the submit reads it from the
+        // server; the read waits on a gate the test opens after the switch.
+        const gate = yield* Deferred.make<void>()
+        const sent: Array<{ content: string; target: SessionIdentity }> = []
+        let client = Option.none<ClientContextValue>()
+        const CaptureClient = () => {
+          client = Option.some(useClient())
+          return <box />
+        }
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => (
+              <TestComposer onSubmit={(content, _mode, target) => sent.push({ content, target })}>
+                <CaptureClient />
+              </TestComposer>
+            ),
+            {
+              cwd: dir,
+              client: createMockClient({
+                session: {
+                  get: () => Deferred.await(gate).pipe(Effect.as(storedSessionIn(dir))),
+                },
+              }),
+            },
+          ),
+        )
+        yield* Effect.promise(() => setup.mockInput.typeText("see @notes.md"))
+        yield* Effect.promise(() => setup.renderOnce())
+        setup.mockInput.pressEnter()
+        yield* Effect.promise(() => setup.renderOnce())
+        if (Option.isNone(client)) return yield* Effect.die("the client never mounted")
+        client.value.switchSession(SessionId.make("other"), BranchId.make("other-branch"), "Other")
+        yield* Deferred.succeed(gate, void 0)
+        yield* waitForFrame(setup, () => sent.length === 1, "submitted")
+        expect(sent[0]?.content).toContain("notes body")
+        expect(sent[0]?.target).toEqual({
+          sessionId: draftSession.sessionId,
+          branchId: draftSession.branchId,
+        })
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  submitTest("!cmd runs in the session's directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const launchDir = yield* fs.makeTempDirectoryScoped()
+      const sessionDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${sessionDir}/marker-session.txt`, "")
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+          {
+            cwd: launchDir,
+            initialSession: {
+              sessionId: SessionId.make("session-elsewhere"),
+              branchId: BranchId.make("branch-elsewhere"),
+              name: "Elsewhere",
+              modelId: Option.getOrUndefined(Option.none()),
+              reasoningLevel: Option.getOrUndefined(Option.none()),
+              cwd: sessionDir,
+            },
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* Effect.promise(() => setup.mockInput.typeText("ls"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => submitted.length === 1, "submitted")
+      expect(submitted[0]).toContain("marker-session.txt")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  submitTest("a second Enter while !cmd runs neither runs it again nor sends twice", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      // The command waits for a gate file, so it is still running when the
+      // second Enter arrives. The finalizer opens the gate on every exit.
+      yield* Effect.addFinalizer(() => Effect.ignore(fs.writeFileString(`${dir}/go`, "")))
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+          {
+            cwd: dir,
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* Effect.promise(() =>
+        setup.mockInput.typeText("until [ -e go ]; do sleep 0.02; done; echo ran >> count"),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      // The draft left the composer when the command started.
+      expect(renderFrame(setup)).not.toContain("until")
+      setup.mockInput.pressEnter()
+      yield* fs.writeFileString(`${dir}/go`, "")
+      yield* waitForFrame(setup, () => submitted.length === 1, "submitted")
+      expect(submitted).toHaveLength(1)
+      expect(yield* fs.readFileString(`${dir}/count`)).toBe("ran\n")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  submitTest("a second Enter while @file refs expand does not send twice", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${dir}/notes.md`, "notes body")
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+          {
+            cwd: dir,
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("see @notes.md"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => submitted.length >= 1, "submitted")
+      // Both expansions would start together; a second send lands within this bound.
+      const second = yield* waitForFrame(
+        setup,
+        () => submitted.length >= 2,
+        "second send",
+        300,
+      ).pipe(Effect.option)
+      expect(Option.isNone(second)).toBe(true)
+      expect(submitted).toHaveLength(1)
+      expect(submitted[0]).toContain("notes body")
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -1026,7 +1286,18 @@ function ContributeSlashEnter() {
     {
       prefix: "@",
       title: "Files",
-      items: () => [{ id: "notes.ts", label: "notes.ts" }],
+      items: (filter: string) => {
+        if (filter.startsWith("src/")) return [{ id: "src/main.ts", label: "main.ts" }]
+        return [
+          { id: "notes.ts", label: "notes.ts" },
+          { id: "src/", label: "src/" },
+        ].filter((item) => item.id.includes(filter))
+      },
+      // As the files extension does: a directory keeps completing.
+      formatInsertion: (id: string) => {
+        if (id.endsWith("/")) return `@${id}`
+        return `@${id} `
+      },
     },
   ])
   return <box />
@@ -1222,6 +1493,16 @@ describe("Composer slash Enter", () => {
       // The `@` path inserts and waits — it never dispatches a command.
       expect(dispatched).toEqual([])
       expect(renderFrame(setup)).toContain("@notes.ts")
+    }),
+  )
+
+  it.live("a directory row completes into the directory and keeps the popup open", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      const setup = yield* typeThenEnter(dispatched, "@src", "src/")
+      yield* waitForFrame(setup, (frame) => frame.includes("main.ts"), "directory rows")
+      expect(renderFrame(setup)).toContain("@src/")
+      expect(dispatched).toEqual([])
     }),
   )
 

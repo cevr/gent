@@ -2,6 +2,7 @@ import { Deferred, Effect, Option, type Scope } from "effect"
 import { createSignal } from "solid-js"
 import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
 import type {
+  ClientContextDeps,
   AnyExtensionClientModule,
   ClientContributions,
   ClientRuntime,
@@ -32,7 +33,7 @@ export interface ClientExtensionHarnessOptions {
    * fine for a setup that only reads `cwd`; a test whose extension writes
    * under `home` must supply its own temp directory, or runs share one file.
    */
-  readonly workspace?: { readonly cwd: string; readonly home: string }
+  readonly workspace?: ClientContextDeps["workspace"]
 }
 
 export const makeActiveSessionRef = (value?: ActiveClientSession): ActiveClientSessionRef => ({

@@ -29,6 +29,7 @@ import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { textWidth } from "./text-width-adapter"
 import {
   expandFileRefs,
+  formatError,
   INLINE_MAX_BYTES,
   INLINE_MAX_LINES,
   truncate,
@@ -43,7 +44,7 @@ import {
   type SelectListRow,
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
-import { useClient, useRuntime } from "./client"
+import { type SessionIdentity, useClient, useRuntime } from "./client"
 import type {
   AutocompleteContribution,
   AutocompleteItem,
@@ -52,10 +53,16 @@ import type {
 import { PromptRenderer } from "./interaction-renderers"
 import { runAutocompleteContributions } from "./extensions/loader-boundary"
 import { ghostCompletion } from "./autocomplete"
-import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
+import {
+  decodePasteBytes,
+  type PasteEvent,
+  stripAnsiSequences,
+  SyntaxStyle,
+  type TextareaRenderable,
+} from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { isSlashCommandName, parseSlashCommand, useCommand } from "./commands"
-import { useEnv, useWorkspace } from "./workspace"
+import { useEnv } from "./workspace"
 import { openExternalEditor, resolveEditor } from "./os"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/protocol"
 
@@ -524,7 +531,6 @@ interface ComposerController {
 
 function useComposerController(): ComposerController {
   const sc = useSessionController()
-  const workspace = useWorkspace()
   const { theme } = useTheme()
   const command = useCommand()
   const client = useClient()
@@ -654,7 +660,17 @@ function useComposerController(): ComposerController {
     const nextValue = beforeTrigger + insertion
     inputRef.value.replaceText(nextValue)
     inputRef.value.cursorOffset = nextValue.length
-    sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text: nextValue }))
+    // An insertion that ends without a space is not finished (`@src/`): the
+    // popup reopens on it instead of closing.
+    if (insertion.endsWith(" ")) {
+      sc.onComposerInteraction(
+        ComposerInteractionEvent.cases.RestoreDraft.make({ text: nextValue }),
+      )
+    } else {
+      sc.onComposerInteraction(
+        ComposerInteractionEvent.cases.DraftChanged.make({ text: nextValue }),
+      )
+    }
     applyTokenHighlights()
     focusTextarea()
   }
@@ -672,6 +688,20 @@ function useComposerController(): ComposerController {
     focusTextarea()
   }
 
+  /**
+   * A large paste becomes a placeholder at the caret. The paste event carries
+   * the pasted text, and the textarea's own insert puts the placeholder where
+   * the paste would have gone: at the caret, over any selection. Reading the
+   * paste back from the changed draft cannot tell where it landed.
+   */
+  const handlePaste = (event: PasteEvent) => {
+    if (Option.isNone(inputRef)) return
+    const pasted = stripAnsiSequences(decodePasteBytes(event.bytes))
+    if (!isLargePaste(pasted)) return
+    event.preventDefault()
+    inputRef.value.insertText(paste.createPlaceholder(pasted))
+  }
+
   const handleContentChange = () => {
     const value = Option.getOrElse(
       Option.map(inputRef, (renderable) => renderable.plainText),
@@ -682,19 +712,6 @@ function useComposerController(): ComposerController {
     // after RestoreDraft (e.g. autocomplete selection triggers replaceText
     // which fires onContentChange, but we already closed autocomplete)
     if (value === previousValue) return
-    if (value.length > previousValue.length && Option.isSome(inputRef)) {
-      const inserted = value.slice(previousValue.length)
-      if (isLargePaste(inserted)) {
-        const placeholder = paste.createPlaceholder(inserted)
-        const nextValue = previousValue + placeholder
-        inputRef.value.replaceText(nextValue)
-        inputRef.value.cursorOffset = nextValue.length
-        sc.onComposerInteraction(
-          ComposerInteractionEvent.cases.RestoreDraft.make({ text: nextValue }),
-        )
-        return
-      }
-    }
     sc.onComposerInteraction(ComposerInteractionEvent.cases.DraftChanged.make({ text: value }))
 
     // Prune tokens that are no longer in the text, then re-apply highlights
@@ -705,9 +722,39 @@ function useComposerController(): ComposerController {
     applyTokenHighlights()
   }
 
+  /**
+   * Put a submit that failed back in the composer, unless the reader has
+   * started a new draft since. The submit took the draft when it began.
+   */
+  const restoreDraft = (text: string) => {
+    if (Option.isNone(inputRef) || inputRef.value.plainText.length > 0) return
+    inputRef.value.replaceText(text)
+    inputRef.value.cursorOffset = text.length
+    sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text }))
+  }
+
+  /**
+   * The session a draft was written in. A submission carries it to the end:
+   * a switch while `@file` expands or `!cmd` runs does not move the message.
+   */
+  const draftedIn = (): Option.Option<SessionIdentity> => client.sessionIdentity()
+  const stillIn = (target: SessionIdentity) =>
+    Option.exists(
+      client.sessionIdentity(),
+      (current) => current.sessionId === target.sessionId && current.branchId === target.branchId,
+    )
+
   const submitShellCommand = (text: string) => {
+    const drafted = draftedIn()
+    if (Option.isNone(drafted)) return
+    const target = drafted.value
+    // The command leaves the composer before it runs, so a second Enter
+    // finds an empty draft instead of running it again.
+    sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
+    clearInput()
     cast(
-      executeShell(text, workspace.cwd).pipe(
+      client.cwdOf(target.sessionId).pipe(
+        Effect.flatMap((cwd) => executeShell(text, cwd)),
         Effect.map(({ output, truncated, savedPath }) => {
           let userMessage = `$ ${text}\n\n${output}`
           if (!truncated) return userMessage
@@ -720,9 +767,7 @@ function useComposerController(): ComposerController {
         }),
         Effect.tap((userMessage) =>
           Effect.sync(() => {
-            sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
-            clearInput()
-            sc.onSubmit(userMessage)
+            sc.onSubmit(userMessage, "queue", target)
           }),
         ),
         // eslint-disable-next-line effect/noUnknownParameters -- shell failures cross the process boundary.
@@ -736,6 +781,11 @@ function useComposerController(): ComposerController {
               onSome: (value) => value.message,
             })
             client.setError(message)
+            if (!stillIn(target)) return
+            if (Option.isSome(inputRef) && inputRef.value.plainText.length === 0) {
+              sc.onComposerInteraction(ComposerInteractionEvent.cases.EnterShell.make({}))
+              restoreDraft(text)
+            }
           }),
         ),
       ),
@@ -755,14 +805,26 @@ function useComposerController(): ComposerController {
   }
 
   const submitMessage = (text: string, mode: "queue" | "interject") => {
+    const drafted = draftedIn()
+    if (Option.isNone(drafted)) return
+    const target = drafted.value
     client.log.info("composer.submit.requested", { contentLength: text.length, mode })
     history.add(text)
+    // The message leaves the composer before its `@file` refs expand, so a
+    // second Enter finds an empty draft instead of sending it again.
+    clearInput()
     cast(
-      expandFileRefs(text, workspace.cwd).pipe(
+      client.cwdOf(target.sessionId).pipe(
+        Effect.flatMap((cwd) => expandFileRefs(text, cwd)),
         Effect.tap((expanded) =>
           Effect.sync(() => {
-            clearInput()
-            sc.onSubmit(expanded, mode)
+            sc.onSubmit(expanded, mode, target)
+          }),
+        ),
+        Effect.catchEager((error) =>
+          Effect.sync(() => {
+            client.setError(formatError(error))
+            if (stillIn(target)) restoreDraft(text)
           }),
         ),
       ),
@@ -1032,6 +1094,7 @@ function useComposerController(): ComposerController {
       inputRef = Option.fromNullishOr(renderable)
       if (Option.isSome(inputRef)) {
         inputRef.value.onContentChange = handleContentChange
+        inputRef.value.onPaste = handlePaste
         inputRef.value.syntaxStyle = tokenStyle
       }
     },

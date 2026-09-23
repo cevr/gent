@@ -223,6 +223,7 @@ describe("session feed boundary", () => {
               name: "Test Session",
               modelId: absentModelId,
               reasoningLevel: absentReasoningLevel,
+              cwd: repoRoot,
             },
             cwd: repoRoot,
             width: 100,

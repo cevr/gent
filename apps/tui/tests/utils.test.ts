@@ -349,6 +349,56 @@ describe("expandFileRefs", () => {
     }),
   )
 
+  fileRefsTest("a file of exactly the cap's lines is whole, with no cut note", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* makeFixture
+      const lines = Array.from({ length: 2000 }, (_, i) => `row ${i + 1}`)
+      yield* fs.writeFileString(`${testDir}/exact.txt`, `${lines.join("\n")}\n`)
+      const result = yield* expandFileRefs("see @exact.txt", testDir)
+      expect(result).toContain("row 2000\n")
+      expect(result).not.toContain("cut at")
+    }),
+  )
+
+  fileRefsTest("the byte cap counts UTF-8 bytes, not UTF-16 units", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* makeFixture
+      // 20 lines of 1,000 three-byte characters: 60 KB of UTF-8, 20,000 units.
+      const lines = Array.from({ length: 20 }, () => "\u20ac".repeat(1000))
+      yield* fs.writeFileString(`${testDir}/euro.txt`, lines.join("\n"))
+      const result = yield* expandFileRefs("see @euro.txt", testDir)
+      expect(result).toContain("[euro.txt cut at 17 lines of 20;")
+    }),
+  )
+
+  fileRefsTest("a quoted reference expands a path with a space or a hash", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* makeFixture
+      yield* fs.writeFileString(`${testDir}/my notes.md`, "spaced body\nsecond\n")
+      yield* fs.writeFileString(`${testDir}/issue#12.md`, "hashed body\n")
+      const result = yield* expandFileRefs(
+        'see @"my notes.md" and @"issue#12.md" and @"my notes.md"#2',
+        testDir,
+      )
+      expect(result).toContain("```my notes.md\nspaced body")
+      expect(result).toContain("```issue#12.md\nhashed body")
+      expect(result).toContain("```my notes.md:2\nsecond\n```")
+      expect(result).not.toContain("@")
+    }),
+  )
+
+  fileRefsTest("trailing punctuation after a reference stays in the sentence", () =>
+    Effect.gen(function* () {
+      const testDir = yield* makeFixture
+      const result = yield* expandFileRefs("look at @src/bar.ts, then (@src/bar.ts).", testDir)
+      const block = "```src/bar.ts\nexport const bar = 1\n\n```"
+      expect(result).toBe(`look at ${block}, then (${block}).`)
+    }),
+  )
+
   fileRefsTest("keeps every dollar pattern in the file text as written", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

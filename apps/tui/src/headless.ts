@@ -6,6 +6,7 @@ import {
   Fiber,
   Option,
   Predicate,
+  Runtime,
   Schedule,
   Schema,
   Stdio,
@@ -218,6 +219,30 @@ const isClientPrompt = (message: Message, text: string): boolean =>
   ) &&
   messageText(message) === text
 
+/** How the run's own turn ended, read from its `TurnCompleted` receipt. */
+type TurnEnd = "answered" | "unanswered" | "interrupted"
+
+const TURN_END_MESSAGE = {
+  unanswered: "the turn ended without an answer",
+  interrupted: "the turn was interrupted",
+} satisfies Record<Exclude<TurnEnd, "answered">, string>
+
+/**
+ * The receipt decides. An interrupted turn and a failed stream did not
+ * answer, whatever text came before the end: that text is a truncated answer,
+ * and it has printed already. A receipt without either flag (a historical one)
+ * falls back to the transcript: an error with no answer text is no answer.
+ */
+const turnEnd = (
+  event: Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>,
+  transcript: { readonly wroteText: boolean; readonly failed: boolean },
+): TurnEnd => {
+  if (event.interrupted === true) return "interrupted"
+  if (event.streamFailed === true || event.unanswered === true) return "unanswered"
+  if (transcript.failed && !transcript.wroteText) return "unanswered"
+  return "answered"
+}
+
 /** An error the run reports on one stderr line. */
 const oneLine = (text: string): string => text.replace(/\s*\n\s*/g, " ").trim()
 
@@ -237,8 +262,8 @@ export const runHeadless = (
       // history), then marks the start of the live events. The run sends after
       // the mark, so the turn it opens arrives live.
       const synchronized = yield* Deferred.make<void>()
-      // Settles with whether the run's own turn answered.
-      const done = yield* Deferred.make<boolean>()
+      // Settles with how the run's own turn ended.
+      const done = yield* Deferred.make<TurnEnd>()
       let live = false
       let sent = false
       /**
@@ -290,9 +315,7 @@ export const runHeadless = (
       const turnCompleted = (event: Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>) => {
         if (!Option.contains(ownTurn, event.messageId)) return Effect.void
         ownTurnEnded = true
-        // A failed stream ends its turn without `unanswered`; the error and
-        // the empty transcript say it did not answer.
-        return Deferred.succeed(done, event.unanswered !== true && (wroteText || !failed))
+        return Deferred.succeed(done, turnEnd(event, { wroteText, failed }))
       }
       const toolEnded = (
         event: Extract<AgentEvent, { readonly _tag: "ToolCallSucceeded" | "ToolCallFailed" }>,
@@ -408,11 +431,11 @@ export const runHeadless = (
 
       yield* Effect.raceFirst(Deferred.await(synchronized), streamEnded)
 
-      // The send returns when the loop lets the run's message go, and fails
-      // when the turn's phase failed. A failed phase publishes no
-      // `TurnCompleted`, so the send's failure is the run's end then; a
-      // success leaves the end to the run's `TurnCompleted`, which the loop
-      // stores before it lets the message go.
+      // The send returns when the loop lets the run's message go. The run
+      // settles on its turn's `TurnCompleted`, which the loop stores before it
+      // lets the message go; a failed phase appends one with `streamFailed`.
+      // A send that fails is the fallback end, for a turn that never got a
+      // receipt.
       const sendRequestId = yield* randomId
       sent = true
       const sendFiber = yield* Effect.suspend(() =>
@@ -436,13 +459,13 @@ export const runHeadless = (
       )
       const sendFailed = Fiber.join(sendFiber).pipe(Effect.andThen(Effect.never))
 
-      const answered = yield* Effect.raceFirst(
+      const end = yield* Effect.raceFirst(
         Deferred.await(done),
         Effect.raceFirst(streamEnded, sendFailed),
       )
       yield* Fiber.interrupt(streamFiber).pipe(Effect.asVoid)
-      if (!answered) {
-        let message = "the turn ended without an answer"
+      if (end !== "answered") {
+        let message = TURN_END_MESSAGE[end]
         if (errors.length > 0) message = `${message}: ${errors.join("; ")}`
         return yield* new HeadlessUnansweredError({ message })
       }
@@ -450,3 +473,40 @@ export const runHeadless = (
       for (const error of errors) yield* writeStderr(`Warning: ${error}\n`)
     }),
   )
+
+// ── process exit ────────────────────────────────────────────────────────────
+
+export type ExitSignal = "SIGINT" | "SIGTERM"
+
+/** 128 plus the signal number, as a shell reports a process a signal ended. */
+const SIGNAL_EXIT_CODE = { SIGINT: 130, SIGTERM: 143 } satisfies Record<ExitSignal, number>
+
+/**
+ * How the CLI's exit becomes the process exit code.
+ *
+ * A signal interrupts the root fiber. For the TUI that is a quit and exits 0.
+ * A headless run a signal ended did not answer, and a caller that chains
+ * `gent -H … && next` must not read it as success, so it exits 130 or 143.
+ * Any other failure takes the default teardown's code.
+ */
+export const makeCliTeardown =
+  (run: {
+    readonly signal: () => Option.Option<ExitSignal>
+    readonly headless: () => boolean
+  }): Runtime.Teardown =>
+  (exit, onExit) => {
+    if (Exit.isSuccess(exit)) {
+      onExit(0)
+      return
+    }
+    if (Cause.hasInterruptsOnly(exit.cause)) {
+      const signal = run.signal()
+      if (run.headless() && Option.isSome(signal)) {
+        onExit(SIGNAL_EXIT_CODE[signal.value])
+        return
+      }
+      onExit(0)
+      return
+    }
+    Runtime.defaultTeardown(exit, onExit)
+  }

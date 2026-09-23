@@ -224,6 +224,42 @@ describe("Agents pane refresh while open", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.scopedLive("the closed tray polls only while a descendant has a live loop", () =>
+    Effect.gen(function* () {
+      let childLive = false
+      let listings = 0
+      const listed = (): ReadonlyArray<AgentRowEntry> => [
+        { ...row("child", childLive), parentSessionId: parentKey.sessionId },
+      ]
+      const clock = yield* TestClock.make()
+      const controller = yield* provideClientServices(
+        makeAgentsController(
+          () =>
+            Effect.sync(() => {
+              listings += 1
+              return listed()
+            }),
+          () => Effect.succeed(detail(1)),
+        ).pipe(Effect.provideService(Clock.Clock, clock)),
+        { currentSession: () => Option.some(parentKey) },
+      )
+      controller.refresh("")
+      yield* waitUntil(() => controller.rows().length === 1, "first listing")
+
+      // Only a stored child: several poll periods pass and nothing is listed.
+      for (let period = 0; period < 3; period++) {
+        yield* clock.adjust(POLL)
+        yield* Effect.yieldNow
+      }
+      expect(listings).toBe(1)
+
+      // The child's loop starts (a delegate pulse would re-read); the poll resumes.
+      childLive = true
+      controller.refresh("")
+      yield* waitUntilAdvancing(clock.adjust(POLL), () => listings >= 4, "polls for a live child")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("the selected detail is read again only when its listing row moved", () =>
     Effect.gen(function* () {
       let updatedAt = 1

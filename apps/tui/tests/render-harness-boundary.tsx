@@ -25,7 +25,7 @@ import {
 } from "@gent/sdk"
 import { ExtensionUIProvider } from "../src/extensions/host"
 import type { AnyExtensionClientModule } from "../src/extensions/client-facets"
-import { ComposerDraftsProvider, SessionShellProvider } from "../src/session"
+import { ComposerMemoryProvider, SessionShellProvider } from "../src/session"
 import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/protocol"
 import { testAgent, type SessionRuntimeState } from "@gent/core/test-utils"
 
@@ -197,6 +197,7 @@ const toInitialSession = (
       name: Option.getOrElse(Option.fromNullishOr(value.name), () => "Unnamed"),
       modelId: value.modelId,
       reasoningLevel: value.reasoningLevel,
+      cwd: value.cwd,
     }))
   })
 
@@ -263,7 +264,7 @@ export const renderWithProviders = (
         render(
           () => (
             <TerminalDimensionsProvider>
-              <ComposerDraftsProvider>
+              <ComposerMemoryProvider>
                 <KeyboardScopeProvider>
                   <ThemeProvider mode="dark">
                     <EnvProvider
@@ -308,7 +309,7 @@ export const renderWithProviders = (
                     </EnvProvider>
                   </ThemeProvider>
                 </KeyboardScopeProvider>
-              </ComposerDraftsProvider>
+              </ComposerMemoryProvider>
             </TerminalDimensionsProvider>
           ),
           setup.renderer,

@@ -25,6 +25,7 @@ import {
   Random,
   Schedule,
   Schema,
+  Semaphore,
   Stream,
 } from "effect"
 import {
@@ -60,6 +61,7 @@ import type { RGBA } from "@opentui/core"
 import {
   type ClientContextValue,
   type ClientLog,
+  type SessionIdentity,
   type SessionMetrics,
   shutdownLog,
   SteerCommandInput,
@@ -82,16 +84,14 @@ import {
   type ToolInteraction,
 } from "@gent/sdk"
 import { useEnv, useWorkspace } from "./workspace"
+import { writeFileAtomic } from "@gent/core/host"
 import {
   clearFrecencyStore,
-  frecencyLookup,
   type FrecencyLookup,
-  frecencySnapshot,
   noFrecency,
   rankAutocompleteItems,
-  readFrecencyStore,
+  readFrecencyLookup,
   recordFrecencyPick,
-  setFrecencySnapshot,
 } from "./autocomplete"
 import { type Command, executeSlashCommand, useCommand } from "./commands"
 import { createStore, produce, type SetStoreFunction } from "solid-js/store"
@@ -491,7 +491,7 @@ interface TransitionResult {
   readonly effect?: ComposerEffect
 }
 
-export function transition(state: ComposerState, event: ComposerEvent): TransitionResult {
+function transition(state: ComposerState, event: ComposerEvent): TransitionResult {
   if (event._tag === "EnterInteraction") {
     return { state: { _tag: "interaction", interaction: event.interaction } }
   }
@@ -515,7 +515,11 @@ export function transition(state: ComposerState, event: ComposerEvent): Transiti
   return { state: ComposerState.idle() }
 }
 
-// ── composer drafts ─────────────────────────────────────────────────────────
+// ── composer memory ─────────────────────────────────────────────────────────
+//
+// What the composer keeps across its own remounts: the draft per branch and
+// the prompt history it navigates. Both live for one mounted shell, owned by
+// this provider rather than by a module global.
 
 type ComposerDraft = Pick<ComposerInteractionState, "draft" | "mode">
 
@@ -524,27 +528,35 @@ interface ComposerDrafts {
   readonly set: (branchId: BranchId, draft: ComposerDraft) => void
 }
 
-const ComposerDraftsContext = createContext<ComposerDrafts>()
+interface ComposerMemory {
+  readonly drafts: ComposerDrafts
+  readonly history: PromptHistoryStore
+}
 
-export function ComposerDraftsProvider(props: ParentProps) {
-  const drafts = new Map<BranchId, ComposerDraft>()
-  const value: ComposerDrafts = {
-    get: (branchId) => Option.fromNullishOr(drafts.get(branchId)),
+const ComposerMemoryContext = createContext<ComposerMemory>()
+
+export function ComposerMemoryProvider(props: ParentProps) {
+  const byBranch = new Map<BranchId, ComposerDraft>()
+  const drafts: ComposerDrafts = {
+    get: (branchId) => Option.fromNullishOr(byBranch.get(branchId)),
     set: (branchId, draft) => {
       if (draft.draft.length === 0 && draft.mode === "editing") {
-        drafts.delete(branchId)
+        byBranch.delete(branchId)
         return
       }
-      drafts.set(branchId, draft)
+      byBranch.set(branchId, draft)
     },
   }
+  const value: ComposerMemory = { drafts, history: makePromptHistoryStore() }
   return (
-    <ComposerDraftsContext.Provider value={value}>{props.children}</ComposerDraftsContext.Provider>
+    <ComposerMemoryContext.Provider value={value}>{props.children}</ComposerMemoryContext.Provider>
   )
 }
 
-const useComposerDrafts = () =>
-  useRequiredContext(ComposerDraftsContext, "Composer drafts require ComposerDraftsProvider")
+const useComposerMemory = () =>
+  useRequiredContext(ComposerMemoryContext, "The composer requires ComposerMemoryProvider")
+
+const useComposerDrafts = () => useComposerMemory().drafts
 
 // ── session UI state ────────────────────────────────────────────────────────
 
@@ -898,6 +910,11 @@ const pickThinkingWord = (random: number): string => {
  * Plain text entries, persisted to ~/.cache/gent/prompt-history.json.
  * Max 100 entries. Deduplicates against the last entry on add.
  *
+ * Every `gent` sharing a home writes the same file. An add re-reads it and
+ * folds the prompt into what is on disk, so a second TUI's prompts survive
+ * this one's next submit, and the write is atomic, so a crash leaves the old
+ * list or the new one, never truncated JSON that reads as empty.
+ *
  * File access runs on the client runtime, which already carries
  * `FileSystem` and `Path`. The cache paths come from the workspace home the
  * shell mounted with, computed inside the hook rather than at module load.
@@ -933,8 +950,33 @@ export const writeEntries = (home: string, items: ReadonlyArray<string>) =>
     const fs = yield* FileSystem.FileSystem
     const paths = yield* historyPaths(home)
     yield* fs.makeDirectory(paths.directory, { recursive: true })
-    yield* fs.writeFileString(paths.file, encodeHistoryStore(HistoryStore.make({ entries: items })))
+    yield* writeFileAtomic(paths.file, encodeHistoryStore(HistoryStore.make({ entries: items })))
   }).pipe(Effect.ignoreCause)
+
+/** The list after `prompt` is added: newest first, capped, no repeat of the newest. */
+const foldPrompt = (entries: ReadonlyArray<string>, prompt: string): string[] => {
+  if (entries[0] === prompt) return [...entries]
+  return [prompt, ...entries].slice(0, MAX_ENTRIES)
+}
+
+/**
+ * Serializes the read-fold-write in `recordPrompt`. It guards a path on disk,
+ * not a value one caller owns, so it is a module singleton — the same shape
+ * as the frecency store's gate.
+ */
+const historyGate = Semaphore.makeUnsafe(1)
+
+/**
+ * Adds a prompt to the file on disk and answers the merged list. Entries
+ * another `gent` wrote since this one loaded are kept.
+ */
+export const recordPrompt = (home: string, prompt: string) =>
+  Effect.gen(function* () {
+    const onDisk = Option.getOrElse(yield* readEntries(home), (): ReadonlyArray<string> => [])
+    const next = foldPrompt(onDisk, prompt)
+    yield* writeEntries(home, next)
+    return next
+  }).pipe(historyGate.withPermits(1))
 
 export function canNavigateAtCursor(
   direction: "up" | "down",
@@ -973,32 +1015,20 @@ interface PromptHistory {
 }
 
 type PromptHistoryStore = {
-  entries: ReturnType<typeof createSignal<string[]>>[0]
-  setEntries: ReturnType<typeof createSignal<string[]>>[1]
+  entries: Accessor<string[]>
+  setEntries: Setter<string[]>
   historyIndex: number
   savedEntry: Option.Option<string>
   loaded: boolean
 }
 
-let promptHistorySingleton: Option.Option<PromptHistoryStore> = Option.none()
-
-const getStore = (): PromptHistoryStore => {
-  if (Option.isSome(promptHistorySingleton)) return promptHistorySingleton.value
-
+function makePromptHistoryStore(): PromptHistoryStore {
   const [entries, setEntries] = createSignal<string[]>([])
-  const store: PromptHistoryStore = {
-    entries,
-    setEntries,
-    historyIndex: -1,
-    savedEntry: Option.none(),
-    loaded: false,
-  }
-  promptHistorySingleton = Option.some(store)
-  return store
+  return { entries, setEntries, historyIndex: -1, savedEntry: Option.none(), loaded: false }
 }
 
 export function usePromptHistory(): PromptHistory {
-  const store = getStore()
+  const store = useComposerMemory().history
   const workspace = useWorkspace()
   const { cast } = useRuntime()
 
@@ -1017,10 +1047,6 @@ export function usePromptHistory(): PromptHistory {
     )
   }
 
-  const persist = (items: string[]) => {
-    cast(writeEntries(workspace.home, items))
-  }
-
   ensureLoaded()
 
   return {
@@ -1030,12 +1056,14 @@ export function usePromptHistory(): PromptHistory {
       const trimmed = text.trim()
       if (trimmed.length === 0) return
 
-      store.setEntries((prev) => {
-        if (prev[0] === trimmed) return prev
-        const next = [trimmed, ...prev].slice(0, MAX_ENTRIES)
-        persist(next)
-        return next
-      })
+      // The local fold answers the next up-arrow at once; the merged list
+      // from disk replaces it when the write lands.
+      store.setEntries((prev) => foldPrompt(prev, trimmed))
+      cast(
+        recordPrompt(workspace.home, trimmed).pipe(
+          Effect.tap((merged) => Effect.sync(() => store.setEntries(merged))),
+        ),
+      )
       store.historyIndex = -1
       store.savedEntry = Option.none()
     },
@@ -1117,35 +1145,19 @@ export function usePromptHistory(): PromptHistory {
  */
 
 interface AutocompleteFrecency {
-  /** The reader's decayed pick weights, fixed at the moment of the call. */
-  readonly lookup: () => FrecencyLookup
+  /** The reader's decayed pick weights, read from the store when ranking runs. */
+  readonly lookup: Effect.Effect<FrecencyLookup, never, FileSystem.FileSystem | Path.Path>
   /** Records that the reader chose `id` from the `prefix` popup. */
   readonly record: (prefix: string, id: string) => void
-  /** Forgets every pick, so ranking falls back to match quality alone. */
+  /** Forgets every recorded pick, so ranking falls back to match quality alone. */
   readonly reset: () => void
 }
-
-/** Whether the store has been read from disk yet, once per process. */
-let frecencyLoaded = false
 
 function useAutocompleteFrecency(): AutocompleteFrecency {
   const workspace = useWorkspace()
   const { cast } = useRuntime()
-
-  if (!frecencyLoaded) {
-    frecencyLoaded = true
-    cast(
-      Effect.tap(readFrecencyStore(workspace.home), (snapshot) =>
-        Effect.sync(() => {
-          if (Option.isNone(snapshot)) return
-          setFrecencySnapshot(snapshot.value)
-        }),
-      ),
-    )
-  }
-
   return {
-    lookup: () => frecencyLookup(frecencySnapshot(), currentMillis()),
+    lookup: readFrecencyLookup(workspace.home),
     record: (prefix: string, id: string) => {
       cast(recordFrecencyPick(workspace.home, prefix, id, currentMillis()))
     },
@@ -1194,7 +1206,7 @@ interface SessionCommandRegistryProps {
   }
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
   /** The reader's pick history, so a command they choose often ranks first. */
-  readonly frecency: () => FrecencyLookup
+  readonly frecency: Effect.Effect<FrecencyLookup, never, FileSystem.FileSystem | Path.Path>
   /** Records that the reader chose a command from the `/` popup. */
   readonly recordPick: (id: string) => void
   /** Forgets every recorded pick, so ranking starts over. */
@@ -1375,7 +1387,10 @@ const createSessionCommandRegistry = (props: SessionCommandRegistryProps): void 
       {
         prefix: "/",
         title: "Commands",
-        items: (filter) => slashAutocompleteItems(allCommands, filter, props.frecency()),
+        items: (filter) =>
+          Effect.map(props.frecency, (lookup) =>
+            slashAutocompleteItems(allCommands, filter, lookup),
+          ),
         // Without this a slash pick is never recorded, and `/t` answers
         // `think` forever however often the reader opens `/thread`.
         onSelect: (id: string) => props.recordPick(id),
@@ -1954,6 +1969,17 @@ export function useSessionFeed(
         return
 
       case "ErrorOccurred":
+        // A notice leaves the turn running: a muted row, no retry settled.
+        if (event.notice === true) {
+          if (live) client.log.warn("sessionFeed.notice", { error: event.error, seq: eventSeq })
+          appendSessionEvent(setStore, {
+            _tag: "notice",
+            text: event.error,
+            createdAt: stampedAt,
+            seq: eventSeq++,
+          })
+          return
+        }
         resolveRetryingEvents(setStore)
         if (live) client.log.error("sessionFeed.error", { error: event.error, seq: eventSeq })
         appendSessionEvent(setStore, {
@@ -2387,7 +2413,8 @@ export interface SessionController {
   phaseLabel: () => string
   elapsed: () => number
   onComposerInteraction: (event: ComposerInteractionEvent) => void
-  onSubmit: (content: string, mode?: "queue" | "interject") => void
+  /** Send a submission to the session it was drafted in (`target`), never "the current one". */
+  onSubmit: (content: string, mode: "queue" | "interject", target: SessionIdentity) => void
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
   onRestoreQueue: () => void
   dispatchComposer: (event: ComposerEvent) => void
@@ -2793,7 +2820,7 @@ export function createSessionController(props: {
     client,
     ext,
     cast,
-    frecency: () => frecency.lookup(),
+    frecency: frecency.lookup,
     recordPick: (id: string) => frecency.record("/", id),
     resetFrecency: () => frecency.reset(),
     openForkPicker,
@@ -2875,12 +2902,24 @@ export function createSessionController(props: {
     )
   }
 
-  const onSubmit = (content: string, mode?: "queue" | "interject") => {
-    if (mode === "interject" && client.isStreaming()) {
-      client.steer(SteerCommandInput.cases.Interject.make({ message: content }))
+  const onSubmit = (content: string, mode: "queue" | "interject", target: SessionIdentity) => {
+    // Interjecting steers the stream in view, so it holds only while the
+    // drafted-in session is still the one streaming; otherwise the message queues there.
+    const stillHere = Option.exists(
+      client.sessionIdentity(),
+      (current) => current.sessionId === target.sessionId && current.branchId === target.branchId,
+    )
+    if (mode === "interject" && stillHere && client.isStreaming()) {
+      client.steer(target, SteerCommandInput.cases.Interject.make({ message: content }))
       return
     }
-    client.sendMessage(content)
+    client.sendMessage(target, content)
+  }
+  /** Cancel the turn streaming in the session in view. */
+  const cancelTurn = () => {
+    Option.map(client.sessionIdentity(), (target) =>
+      client.steer(target, SteerCommandInput.cases.Cancel.make({})),
+    )
   }
 
   const clearMessages = () => {
@@ -2918,7 +2957,7 @@ export function createSessionController(props: {
       return
     }
     if (client.isStreaming()) {
-      client.steer(SteerCommandInput.cases.Cancel.make({}))
+      cancelTurn()
       return
     }
     exit()
@@ -2954,7 +2993,7 @@ export function createSessionController(props: {
       }
 
       if (client.isStreaming()) {
-        client.steer(SteerCommandInput.cases.Cancel.make({}))
+        cancelTurn()
         disarmQuit()
         return true
       }

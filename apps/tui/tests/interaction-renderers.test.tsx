@@ -159,6 +159,7 @@ describe("HandoffRenderer", () => {
               name: "Parent",
               modelId: Option.getOrUndefined(Option.none()),
               reasoningLevel: Option.getOrUndefined(Option.none()),
+              cwd: Option.getOrUndefined(Option.none()),
             },
           },
         ),

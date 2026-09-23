@@ -134,13 +134,15 @@ the live events from the `MessageReceived` of the prompt it sent (the first
 client-sent user message with the prompt's text after the send) to the
 `TurnCompleted` that names that message. A resumed session's history and an
 older turn still running on the branch are not printed and do not settle it. An
-`ErrorOccurred` alone does not end the run. It exits 1 when the turn ended
-unanswered, or with an error and no answer text; an error marked
-`notice: true` (a compaction fallback) is only a warning. The client status
-also ignores a notice. A failed turn phase
-appends one `TurnCompleted` with `streamFailed: true`, and that settles the
-run; the send fails too, and whichever comes first ends it. The
-run's end owns stderr: a failed run prints one line, an answered run prints one
+`ErrorOccurred` alone does not end the run; the `TurnCompleted` receipt does.
+It exits 1 when the receipt says `interrupted`, `streamFailed` or `unanswered`,
+even after partial text, which has printed already. A receipt without those
+flags (a historical one) exits 1 on an error with no answer text. An error
+marked `notice: true` (a compaction fallback) is only a warning. The client
+status also ignores a notice. A failed turn phase appends one `TurnCompleted`
+with `streamFailed: true`, which settles the run; the send fails too, and
+whichever comes first ends it. SIGINT exits 130 and SIGTERM 143. The run's end
+owns stderr: a failed run prints one line, an answered run prints one
 `Warning:` line for each notice.
 
 ## Input Prefixes
@@ -163,7 +165,11 @@ Special prefixes at input start trigger different modes:
 
 ### File References
 
-`@path/to/file.ts#10-20` expands to code block with lines 10-20 on submit.
+`@path/to/file.ts#10-20` expands to code block with lines 10-20 on submit,
+resolved against the session's cwd. A path with whitespace or `#` is written
+quoted, `@"my notes.md"#10-20`, and the popup inserts it that way. Punctuation
+after a bare reference (`see @a.ts, then`) stays in the sentence. A file is cut
+at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 
 ### Slash Commands
 
@@ -196,6 +202,14 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child-completion row |
 | `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                             |
 | `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row            |
+
+Client extensions author against one public entry, `@gent/tui/extensions`
+(`src/extensions.ts`): `defineClientExtension`, `ClientContext`, the
+contribution constructors, `sessionQuery` and the rendering kit. A shipped
+client extension imports the TUI through that entry and nothing else, so a user
+`*.client.ts(x)` file reaches everything a shipped one does; a loader test
+fails on a shipped file that imports past it. Only the builtin roster in
+`builtins.tsx` names its sibling `*.client` modules.
 
 Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions
 

@@ -132,6 +132,13 @@ export type SessionEvent =
       seq: number
     }
   | {
+      /** An error the turn goes on past, such as a compaction fallback. */
+      _tag: "notice"
+      text: string
+      createdAt: number
+      seq: number
+    }
+  | {
       _tag: "retrying"
       attempt: number
       maxAttempts: number
@@ -161,6 +168,7 @@ export const getSessionEventLabel = (event: SessionEvent, now = currentMillis())
   }
   if (event._tag === "interruption") return "Interrupted - what do you want to do instead?"
   if (event._tag === "error") return event.error
+  if (event._tag === "notice") return event.text
   if (event.resolved) return `Retry ${event.attempt}/${event.maxAttempts} finished`
 
   const retryAt = event.createdAt + event.delayMs
@@ -784,6 +792,8 @@ export const transcriptFingerprint = (item: SessionItem): string => {
     ])
   if (item._tag === "error")
     return encodeFingerprint([item._tag, item.createdAt, item.seq, item.error])
+  if (item._tag === "notice")
+    return encodeFingerprint([item._tag, item.createdAt, item.seq, item.text])
   if (item._tag === "retrying")
     return encodeFingerprint([
       item._tag,

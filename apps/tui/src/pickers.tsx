@@ -265,7 +265,7 @@ interface BranchPickerProps {
   readonly onClose: () => void
 }
 
-export const formatBranchLabel = (
+const formatBranchLabel = (
   branch: Branch,
   messageCount: Option.Option<number> = Option.none(),
 ): string => {

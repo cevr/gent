@@ -24,7 +24,7 @@ import {
 } from "@gent/core/protocol"
 import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
 import { omitUndefined, type CapabilityRef, type DriverRef } from "@gent/core/extensions/api"
-import { createEffect, createRoot, createSignal } from "solid-js"
+import { createEffect, createRoot, createSignal, on } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
 import type { JSX } from "@opentui/solid"
@@ -393,8 +393,15 @@ const agentDetailAt = (
 // ── workspace, shell and lifecycle facets ───────────────────────────────────
 
 interface ClientWorkspace {
+  /** Where the TUI launched. */
   readonly cwd: string
   readonly home: string
+  /**
+   * The active session's directory, which `@` paths and the model's tools
+   * resolve against. A resumed or switched session can be rooted outside the
+   * launch `cwd`; with no session it is the launch `cwd`.
+   */
+  readonly sessionCwd: Effect.Effect<string>
 }
 
 export interface ClientShell {
@@ -477,7 +484,9 @@ export class ClientContext extends Context.Service<
  */
 export interface ClientContextDeps {
   readonly transport: ClientShellTransport
-  readonly workspace: ClientWorkspace
+  /** `sessionCwd` defaults to the launch `cwd`, for a surface with no session to read. */
+  readonly workspace: Omit<ClientWorkspace, "sessionCwd"> &
+    Partial<Pick<ClientWorkspace, "sessionCwd">>
   readonly shell: Pick<ClientShell, "cast" | "pane"> & Partial<Omit<ClientShell, "cast" | "pane">>
   /** Current UI activity; absent when the surface has no activity to report. */
   readonly activity?: () => ClientActivitySnapshot
@@ -502,7 +511,10 @@ export const makeClientContextLayer = (deps: ClientContextDeps): Layer.Layer<Cli
       return ClientContext.of({
         transport: transportFacet(deps.transport),
         shell: { ...noopShell, ...deps.shell },
-        workspace: deps.workspace,
+        workspace: {
+          sessionCwd: Effect.succeed(deps.workspace.cwd),
+          ...deps.workspace,
+        },
         lifecycle: { ...lifecycle, scoped: (effect) => Scope.provide(scope)(effect) },
         activity: {
           snapshot: Option.getOrElse(Option.fromUndefinedOr(deps.activity), () => unknownActivity),
@@ -621,11 +633,16 @@ export const sessionQuery = <A>(opts: {
 
       // `currentSession` is the client's identity accessor, so this fires only
       // when the session or the branch moves, never for a rename or a model change.
+      // The dependency is explicit: a switch that lands during a read queues a
+      // read without reading the session, and an effect that tracked only what
+      // `refresh` read would lose it there and never fire again.
       if (opts.follow) {
-        createEffect(() => {
-          setError(Option.none())
-          refresh()
-        })
+        createEffect(
+          on(transport.currentSession, () => {
+            setError(Option.none())
+            refresh()
+          }),
+        )
       }
 
       const value = (): A =>

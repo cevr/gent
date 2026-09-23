@@ -421,6 +421,7 @@ describe("CommandPalette renderer", () => {
         name: "Delegate",
         modelId: absent,
         reasoningLevel: absent,
+        cwd: absent,
       })
     }),
   )

@@ -2,34 +2,36 @@
 import { DateTime, Effect, Option, Predicate, Schedule } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
 import { type AgentRowEntry, AgentsViewRpc, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
-import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
-import { useTheme } from "../theme"
-import { formatAge, formatDuration, truncate, workingIconFrame } from "../utils"
-import { textWidth } from "../text-width-adapter"
 import {
+  type ActiveExtensionSession,
   ChromePanel,
+  clientCommandContribution,
+  ClientContext,
+  clientContributions,
+  coalescedRead,
   decoration,
+  defineClientExtension,
+  type ExtensionAgentDetail,
+  formatAge,
+  formatDuration,
   PickerFrame,
   pickerHeight,
   pickerLines,
   selectable,
   SelectList,
   type SelectListRow,
-  usePickerGeometry,
-  useSpinnerClock,
-} from "../ui"
-import { ref } from "@gent/core/extensions/api"
-import {
-  clientCommandContribution,
-  clientContributions,
-  ClientContext,
-  defineClientExtension,
-  type ActiveExtensionSession,
-  type ExtensionAgentDetail,
-  coalescedRead,
   sessionQuery,
+  textWidth,
+  truncate,
+  usePickerGeometry,
+  useScopedKeyboard,
+  useSpinnerClock,
+  useTerminalDimensions,
+  useTheme,
   widgetContribution,
-} from "./client-facets"
+  workingIconFrame,
+} from "@gent/tui/extensions"
+import { ref } from "@gent/core/extensions/api"
 
 // ── builtins/agents-tray.client ─────────────────────────────────────────────
 
@@ -335,12 +337,16 @@ export const makeAgentsController = (
       }),
     )
     // A child's own turns raise no event in this session, so while the pane is
-    // open or the tray has children the listing is re-read on a slow clock.
-    // The read is a registry lookup per loop, cheap enough to poll.
+    // open or a descendant has a live loop the listing is re-read on a slow
+    // clock. Stored children alone never change on their own: a delegate pulse
+    // announces a new or woken one, so the tray stops polling for them.
     yield* lifecycle.scoped(
       Effect.forkScoped(
         Effect.sync(() => {
-          if (open() || subtreeRows(listing.value(), transport.currentSession()).length > 0) tick()
+          const watching = subtreeRows(listing.value(), transport.currentSession()).some(
+            (row) => row.live,
+          )
+          if (open() || watching) tick()
         }).pipe(Effect.repeat(Schedule.spaced(POLL_EVERY))),
       ),
     )

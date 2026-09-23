@@ -16,6 +16,7 @@ import {
   nextDisclosure,
   queuedDraftText,
   readEntries,
+  recordPrompt,
   resolveModelQuery,
   overlayHoldsComposer,
   SessionUiState,
@@ -222,7 +223,7 @@ describe("canNavigateAtCursor", () => {
 })
 
 /**
- * The store itself is a Solid singleton (`use-prompt-history.ts:94-109`), so the
+ * The store itself lives in `ComposerMemoryProvider` (session.tsx), so the
  * index/saved-entry bookkeeping is modeled here while the cursor gate under test
  * is the real `canNavigateAtCursor`.
  */
@@ -389,6 +390,51 @@ describe("prompt history store", () => {
       expect(Option.getOrElse(yield* readEntries(first), (): ReadonlyArray<string> => [])).toEqual([
         "only in first",
       ])
+    }),
+  )
+})
+
+describe("prompt history across writers", () => {
+  storeTest("an add keeps the prompts another gent wrote since this one loaded", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      yield* recordPrompt(home, "mine, first")
+
+      // A second TUI on the same home submits behind this one's back.
+      yield* writeEntries(home, ["theirs", "mine, first"])
+
+      const merged = yield* recordPrompt(home, "mine, second")
+
+      expect(merged).toEqual(["mine, second", "theirs", "mine, first"])
+      expect(Option.getOrElse(yield* readEntries(home), (): ReadonlyArray<string> => [])).toEqual(
+        merged,
+      )
+    }),
+  )
+
+  storeTest("concurrent adds in one process all land", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const prompts = Array.from({ length: 20 }, (_, index) => `prompt ${index}`)
+
+      yield* Effect.forEach(prompts, (prompt) => recordPrompt(home, prompt), {
+        concurrency: prompts.length,
+        discard: true,
+      })
+
+      const stored = Option.getOrElse(yield* readEntries(home), (): ReadonlyArray<string> => [])
+      expect([...stored].sort()).toEqual([...prompts].sort())
+    }),
+  )
+
+  storeTest("a repeat of the newest prompt is not stored twice", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      yield* recordPrompt(home, "same")
+      expect(yield* recordPrompt(home, "same")).toEqual(["same"])
     }),
   )
 })

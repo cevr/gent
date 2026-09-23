@@ -212,6 +212,13 @@ export interface Session {
   readonly modelId: ModelId | undefined
   // eslint-disable-next-line effect/noNullish -- RPC session snapshots omit an unset reasoning level.
   readonly reasoningLevel: ReasoningEffort | undefined
+  /**
+   * The directory the session is rooted in, which is not always the TUI's
+   * launch directory: `gent resume <id>` and a session switch reach sessions
+   * rooted elsewhere. Absent until read when a switch named only the ids.
+   */
+  // eslint-disable-next-line effect/noNullish -- a switch by id carries no cwd until the session is read.
+  readonly cwd: string | undefined
 }
 
 /** The session's mutable settings, always carried whole. */
@@ -233,6 +240,7 @@ const SessionSchema: Schema.Schema<Session> = Schema.Struct({
   name: Schema.String,
   modelId: Schema.UndefinedOr(ModelId),
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
+  cwd: Schema.UndefinedOr(Schema.String),
 })
 
 export type SessionState =
@@ -248,6 +256,8 @@ export const SessionStateEvent = Schema.TaggedUnion({
   Clear: {},
   UpdateName: { name: Schema.String },
   UpdateBranch: { branchId: BranchId },
+  /** The session's cwd, read after a switch; ignored once the shell left that session. */
+  UpdateCwd: { sessionId: SessionId, cwd: Schema.String },
   UpdateSettings: {
     modelId: Schema.UndefinedOr(ModelId),
     reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
@@ -283,6 +293,11 @@ export function transitionSessionState(
       return mapActive(state, (session) => ({ ...session, name: event.name }))
     case "UpdateBranch":
       return mapActive(state, (session) => ({ ...session, branchId: event.branchId }))
+    case "UpdateCwd":
+      return mapActive(state, (session) => {
+        if (session.sessionId !== event.sessionId) return session
+        return { ...session, cwd: event.cwd }
+      })
     case "UpdateSettings":
       return mapActive(state, (session) => ({
         ...session,
@@ -472,7 +487,7 @@ interface ClientTransportValue {
  * moves to another session or branch, and every consumer that needs the
  * identity rather than the record reads it.
  */
-interface SessionIdentity {
+export interface SessionIdentity {
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
@@ -488,6 +503,15 @@ interface ClientSessionValue {
   activeSessionId: () => Option.Option<SessionId>
   isActive: () => boolean
   isLoading: () => boolean
+  /**
+   * The directory `@file` and `!cmd` resolve against: the active session's
+   * cwd, read from the server when the record does not carry it yet. The
+   * launch directory stands in only with no session, or for a stored session
+   * that names no cwd.
+   */
+  sessionCwd: Effect.Effect<string, GentClientRpcError>
+  /** The directory a given session resolves against, whether or not it is active. */
+  cwdOf: (sessionId: SessionId) => Effect.Effect<string, GentClientRpcError>
 
   // Session actions (fire-and-forget, update state internally)
   /** Create a session and make it the active one. */
@@ -569,9 +593,10 @@ interface ClientAgentValue {
 
 interface ClientActionValue {
   // Session actions (fire-and-forget, update state internally)
-  sendMessage: (content: string) => void
+  /** Send to the session the content was drafted in, not whichever is active when it lands. */
+  sendMessage: (target: SessionIdentity, content: string) => void
   // Steering (fire-and-forget)
-  steer: (command: SteerCommandInput) => void
+  steer: (target: SessionIdentity, command: SteerCommandInput) => void
 }
 
 export type ClientContextValue = ClientTransportValue &
@@ -691,6 +716,47 @@ export function ClientProvider(props: ClientProviderProps) {
   )
   const isActive = () => sessionState().status === "active"
   const isLoading = () => sessionState().status === "creating"
+
+  const cwdOf = (sessionId: SessionId): Effect.Effect<string, GentClientRpcError> =>
+    Effect.suspend(() => {
+      const known = sessionOption().pipe(
+        Option.filter((current) => current.sessionId === sessionId),
+        Option.flatMap((current) => Option.fromUndefinedOr(current.cwd)),
+      )
+      if (Option.isSome(known)) return Effect.succeed(known.value)
+      return readCwd(sessionId)
+    })
+  const readCwd = (sessionId: SessionId): Effect.Effect<string, GentClientRpcError> =>
+    client.session.get({ sessionId }).pipe(
+      Effect.map((stored) =>
+        Option.fromNullishOr(stored).pipe(
+          Option.flatMap((value) => Option.fromUndefinedOr(value.cwd)),
+        ),
+      ),
+      Effect.tap((cwd) =>
+        Effect.sync(() => {
+          if (Option.isNone(cwd)) return
+          dispatchSession(SessionStateEvent.cases.UpdateCwd.make({ sessionId, cwd: cwd.value }))
+        }),
+      ),
+      Effect.map(Option.getOrElse(() => workspace.cwd)),
+    )
+  const sessionCwd: Effect.Effect<string, GentClientRpcError> = Effect.suspend(() =>
+    Option.match(sessionOption(), {
+      onNone: () => Effect.succeed(workspace.cwd),
+      onSome: (current) => cwdOf(current.sessionId),
+    }),
+  )
+
+  // A session reached by id alone reads its cwd once, so the status row names
+  // where it is rooted before anything is submitted.
+  createEffect(
+    on(activeSessionId, () => {
+      const current = sessionOption()
+      if (Option.isNone(current) || Predicate.isNotUndefined(current.value.cwd)) return
+      cast(sessionCwd.pipe(Effect.catchEager(() => Effect.void)))
+    }),
+  )
 
   // The catalog is the active session's profile: a project model driver
   // appears once that session is active, a disabled one disappears.
@@ -902,6 +968,10 @@ export function ClientProvider(props: ClientProviderProps) {
       ),
       modelId: snapshot.modelId,
       reasoningLevel: snapshot.reasoningLevel,
+      // The snapshot names no cwd; the record keeps the one it has.
+      cwd: Option.getOrUndefined(
+        Option.flatMap(currentSession, (value) => Option.fromUndefinedOr(value.cwd)),
+      ),
     }
     const sessionChanged = Option.match(currentSession, {
       onNone: () => true,
@@ -1073,6 +1143,7 @@ export function ClientProvider(props: ClientProviderProps) {
                   name: result.name,
                   modelId: Option.getOrUndefined(Option.none()),
                   reasoningLevel: Option.getOrUndefined(Option.none()),
+                  cwd: workspace.cwd,
                 },
               }),
             )
@@ -1099,6 +1170,8 @@ export function ClientProvider(props: ClientProviderProps) {
     activeSessionId,
     isActive,
     isLoading,
+    sessionCwd,
+    cwdOf,
 
     createSession: () => createSessionWith({}),
 
@@ -1114,7 +1187,16 @@ export function ClientProvider(props: ClientProviderProps) {
     },
 
     switchSession: (sessionId, branchId, name) => {
-      const currentSessionId = Option.map(sessionOption(), (value) => value.sessionId)
+      const current = sessionOption()
+      const currentSessionId = Option.map(current, (value) => value.sessionId)
+      // A branch switch stays in the session's directory; another session's
+      // directory is read when something asks for it.
+      const cwd = Option.getOrUndefined(
+        Option.flatMap(
+          Option.filter(current, (value) => value.sessionId === sessionId),
+          (value) => Option.fromUndefinedOr(value.cwd),
+        ),
+      )
       resetForSession({
         // The session's snapshot names its agent.
         agent: Option.none(),
@@ -1130,6 +1212,7 @@ export function ClientProvider(props: ClientProviderProps) {
             name,
             modelId: Option.getOrUndefined(Option.none()),
             reasoningLevel: Option.getOrUndefined(Option.none()),
+            cwd,
           },
         }),
       )
@@ -1317,11 +1400,7 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const actionValue: ClientActionValue = {
-    sendMessage: (content) => {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return
-      const s = currentSession.value
-
+    sendMessage: (s, content) => {
       const sendMessageEffect = Effect.fn("TUI.sendMessage")(function* () {
         const requestId = yield* randomId
         yield* Effect.sync(() => {
@@ -1344,10 +1423,7 @@ export function ClientProvider(props: ClientProviderProps) {
         ),
       )
     },
-    steer: (command) => {
-      const currentSession = sessionOption()
-      if (Option.isNone(currentSession)) return
-      const s = currentSession.value
+    steer: (s, command) => {
       cast(
         Effect.gen(function* () {
           const requestId = yield* randomId

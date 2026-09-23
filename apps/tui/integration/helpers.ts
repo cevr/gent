@@ -14,4 +14,5 @@ export const makeSessionState = (created: {
   name: created.name,
   modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
+  cwd: Option.getOrUndefined(Option.none()),
 })

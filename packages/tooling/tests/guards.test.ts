@@ -1906,6 +1906,26 @@ export const plantedDeadSdkExport = "nothing imports this"
     expect(findings[0]?.message).toContain("clientOnly")
   })
 
+  test("a shipped client extension that imports the TUI entry by its specifier consumes the name", () => {
+    const entry = "apps/tui/src/extensions.ts"
+    const findings = findingsFor([
+      {
+        file: entry,
+        text: `export { viaSpecifier } from "./extensions/client-facets"\nexport { viaRelative } from "./ui"\n`,
+      },
+      {
+        file: "apps/tui/src/extensions/wake.client.tsx",
+        text: `import { viaSpecifier } from "@gent/tui/extensions"\nuse(viaSpecifier)\n`,
+      },
+      {
+        file: "apps/tui/src/extensions/agents.client.tsx",
+        text: `import { viaRelative } from "../extensions"\nuse(viaRelative)\n`,
+      },
+    ])
+    expect(findings).toMatchObject([{ file: entry, line: 2 }])
+    expect(findings[0]?.message).toContain("viaRelative")
+  })
+
   test("a comment inside a template interpolation does not keep a name alive", () => {
     const findings = findingsFor([
       { file: SDK_FILE, text: `export const vanished = 1\n` },

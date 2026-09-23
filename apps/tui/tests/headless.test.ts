@@ -7,7 +7,7 @@ import {
   ToolCallSucceeded,
   TurnCompleted,
 } from "@gent/core/test-utils"
-import { describe, it, expect } from "effect-bun-test"
+import { describe, it, expect, test } from "effect-bun-test"
 import { Cause, Deferred, Effect, Exit, Option, Schema, Sink, Stdio, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
@@ -22,7 +22,7 @@ import {
 } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { GentConnectionError } from "@gent/sdk"
-import { renderHeadlessToolCall, runHeadless } from "../src/headless"
+import { makeCliTeardown, renderHeadlessToolCall, runHeadless } from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"
 class HeadlessRunnerTestError extends Schema.TaggedError<HeadlessRunnerTestError>()(
   "HeadlessRunnerTestError",
@@ -75,7 +75,12 @@ const opening = (id: MessageId, text: string) =>
 const chunk = (text: string) =>
   AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: text })
 const completed = (
-  fields: { readonly unanswered?: boolean; readonly messageId?: MessageId } = {},
+  fields: {
+    readonly unanswered?: boolean
+    readonly interrupted?: boolean
+    readonly streamFailed?: boolean
+    readonly messageId?: MessageId
+  } = {},
 ) => TurnCompleted.make({ sessionId, branchId, durationMs: 1, messageId: OWN_TURN, ...fields })
 const errorOccurred = (error: string) => ErrorOccurred.make({ sessionId, branchId, error })
 /** An error the turn continues past, such as a compaction fallback. */
@@ -238,13 +243,45 @@ describe("runHeadless", () => {
     }),
   )
 
-  headlessTest("a failed stream after an answer still exits cleanly", () =>
+  // The receipt says the stream failed, so the text before the failure is a
+  // truncated answer: it prints, and the run still exits non-zero.
+  headlessTest("a failed stream after partial text prints it and fails the run", () =>
     Effect.gen(function* () {
       const client = branchClient({
-        ownTurn: [chunk("partial answer"), errorOccurred("provider unavailable"), completed()],
+        ownTurn: [
+          chunk("partial answer"),
+          errorOccurred("provider unavailable"),
+          completed({ streamFailed: true }),
+        ],
       })
+      const { result: exit, stdout } = yield* captureStdout(Effect.exit(run(client)))
+      expect(stdout).toContain("partial answer")
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag !== "Failure") return
+      expect(String(Cause.squash(exit.cause))).toContain(
+        "the turn ended without an answer: provider unavailable",
+      )
+    }),
+  )
+
+  headlessTest("an interrupted turn fails the run", () =>
+    Effect.gen(function* () {
+      const client = branchClient({ ownTurn: [completed({ interrupted: true })] })
       const exit = yield* Effect.exit(run(client))
-      expect(exit._tag).toBe("Success")
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag !== "Failure") return
+      expect(String(Cause.squash(exit.cause))).toContain("the turn was interrupted")
+    }),
+  )
+
+  headlessTest("an interrupted turn fails the run even after partial text", () =>
+    Effect.gen(function* () {
+      const client = branchClient({
+        ownTurn: [chunk("half an answer"), completed({ interrupted: true })],
+      })
+      const { result: exit, stdout } = yield* captureStdout(Effect.exit(run(client)))
+      expect(stdout).toContain("half an answer")
+      expect(exit._tag).toBe("Failure")
     }),
   )
 
@@ -592,4 +629,40 @@ describe("runHeadless", () => {
       expect(printed).toContain("[tool done: cell]")
     }),
   )
+})
+
+// ── process exit ────────────────────────────────────────────────────────────
+
+/** The code a teardown hands the process for `exit`. */
+const exitCodeOf = (
+  teardown: ReturnType<typeof makeCliTeardown>,
+  exit: Exit.Exit<unknown, unknown>,
+): number => {
+  let code = -1
+  teardown(exit, (value) => {
+    code = value
+  })
+  return code
+}
+
+const interruptedBy = (signal: Option.Option<"SIGINT" | "SIGTERM">, headless: boolean) =>
+  makeCliTeardown({ signal: () => signal, headless: () => headless })
+
+describe("CLI teardown", () => {
+  test("a signal ends a headless run non-zero: 130 for SIGINT, 143 for SIGTERM", () => {
+    const interrupted = Exit.failCause(Cause.interrupt())
+    expect(exitCodeOf(interruptedBy(Option.some("SIGINT"), true), interrupted)).toBe(130)
+    expect(exitCodeOf(interruptedBy(Option.some("SIGTERM"), true), interrupted)).toBe(143)
+  })
+
+  test("a signal ends the TUI cleanly", () => {
+    const interrupted = Exit.failCause(Cause.interrupt())
+    expect(exitCodeOf(interruptedBy(Option.some("SIGINT"), false), interrupted)).toBe(0)
+  })
+
+  test("a headless run that answered exits 0, and one that failed exits 1", () => {
+    const teardown = interruptedBy(Option.none(), true)
+    expect(exitCodeOf(teardown, Exit.void)).toBe(0)
+    expect(exitCodeOf(teardown, Exit.fail("unanswered"))).toBe(1)
+  })
 })

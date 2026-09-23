@@ -1,6 +1,7 @@
+import { FileFinder } from "@ff-labs/fff-bun"
 import {
-  type FileSystem,
   Clock,
+  FileSystem,
   Config,
   Deferred,
   Effect,
@@ -13,21 +14,33 @@ import {
 } from "effect"
 import {
   type AnyExtensionClientModule,
+  AskUserRenderer,
   autocompleteContribution,
+  BUILTIN_TOOL_RENDERERS,
   type ClientActivitySnapshot,
   clientCommandContribution,
-  clientContributions,
   ClientContext,
+  clientContributions,
+  CollapsedRow,
   defineClientExtension,
+  formatFileRef,
+  HandoffRenderer,
   interactionRendererContribution,
+  isReferenceablePath,
   messageRendererContribution,
+  PromptRenderer,
+  rankAutocompleteItems,
+  readFrecencyLookup,
+  recordFrecencyPick,
   rendererContribution,
   sessionQuery,
+  shortId,
   statusLabelContribution,
-} from "./client-facets.js"
-import { shortId, truncate, truncatePath } from "../utils"
-import { CollapsedRow, UserRow } from "../ui"
-import { textWidth } from "../text-width-adapter"
+  textWidth,
+  truncate,
+  truncatePath,
+  UserRow,
+} from "@gent/tui/extensions"
 import { BunSocket } from "@effect/platform-bun"
 import { createEffect, createRoot, Show } from "solid-js"
 import { AgentName, DriverRef } from "@gent/core/protocol"
@@ -45,20 +58,11 @@ import {
   FilesRpc,
   SkillsRpc,
 } from "@gent/extensions/client"
-import { BUILTIN_TOOL_RENDERERS } from "../tool-renderers"
-import { AskUserRenderer, HandoffRenderer, PromptRenderer } from "../interaction-renderers"
 import builtinAgentsView from "./agents.client"
 import builtinBtw from "./btw.client"
 import builtinDelegate from "./delegate.client"
 import builtinWake from "./wake.client"
 import builtinThreadView from "./thread-view.client"
-import {
-  emptyFrecencyStore,
-  frecencyLookup,
-  rankAutocompleteItems,
-  readFrecencyStore,
-  recordFrecencyPick,
-} from "../autocomplete"
 
 // ── file tags ───────────────────────────────────────────────────────────────
 
@@ -96,26 +100,142 @@ export function getFileTag(path: string): string {
   return Option.getOrElse(extension, () => "")
 }
 
+// ── file finder ─────────────────────────────────────────────────────────────
+
+/**
+ * fff ranks the `@` popup: fuzzy distance, filename hits, and its own
+ * frecency of which files this reader picks for which query. It scans the
+ * session's directory once per directory and keeps its databases under
+ * `~/.gent/fff`.
+ *
+ * fff honors `.gitignore` but not every exclude rule the model's own listing
+ * does (an exclude above its root, `.git/info/exclude`), so it only ranks:
+ * the popup keeps the paths `FilesRpc.List` names, the files the model can
+ * search, and pages through fff's ranking until it holds a full page of them.
+ */
+
+class FileFinderUnavailableError extends Schema.TaggedError<FileFinderUnavailableError>()(
+  "FileFinderUnavailableError",
+  {},
+) {}
+
+class FileFinderError extends Schema.TaggedError<FileFinderError>()("FileFinderError", {
+  reason: Schema.String,
+}) {}
+
+/** The fff page the popup reads at a time while it filters to listed paths. */
+const FINDER_PAGE_SIZE = 200
+
+/** One finder per scanned directory, and the scan it started. */
+interface FinderEntry {
+  readonly finder: FileFinder
+  readonly scanned: Effect.Effect<void, FileFinderError>
+}
+
+const createFinder = (cwd: string, dbDir: string) =>
+  Effect.gen(function* () {
+    if (!FileFinder.isAvailable()) return yield* new FileFinderUnavailableError()
+    const created = FileFinder.create({
+      basePath: cwd,
+      frecencyDbPath: `${dbDir}/frecency.mdb`,
+      historyDbPath: `${dbDir}/history.mdb`,
+      aiMode: true,
+      // The popup matches names only: no content cache, no content index.
+      disableMmapCache: true,
+      disableContentIndexing: true,
+    })
+    if (!created.ok) return yield* new FileFinderError({ reason: String(created.error) })
+    const finder = created.value
+    const scanned = yield* Effect.cached(
+      Effect.tryPromise({
+        try: () => finder.waitForScan(15_000),
+        catch: (cause) => new FileFinderError({ reason: String(cause) }),
+      }).pipe(
+        Effect.flatMap((scan) => {
+          if (scan.ok) return Effect.void
+          return Effect.fail(new FileFinderError({ reason: String(scan.error) }))
+        }),
+      ),
+    )
+    return { finder, scanned } satisfies FinderEntry
+  })
+
+/**
+ * The most fff pages one keystroke reads. When few of fff's matches are in
+ * the listing, paging to the end of them costs 60-80 ms per key on a 19k-file
+ * tree; five pages cost about 4 ms, and the listing fills what they miss.
+ */
+export const FINDER_PAGE_BUDGET = 5
+
+/** One page of fff's matches: its paths, and how many matched in all. */
+interface FinderPage {
+  readonly paths: ReadonlyArray<string>
+  readonly totalMatched: number
+}
+
+const finderPage = (entry: FinderEntry, query: string) => (pageIndex: number) =>
+  Effect.gen(function* () {
+    const page = entry.finder.fileSearch(query, { pageIndex, pageSize: FINDER_PAGE_SIZE })
+    if (!page.ok) return yield* new FileFinderError({ reason: String(page.error) })
+    return {
+      paths: page.value.items.map((item) => item.relativePath),
+      totalMatched: page.value.totalMatched,
+    } satisfies FinderPage
+  })
+
+/**
+ * fff's ranking kept to the `listed` paths, up to `limit`, reading at most
+ * `FINDER_PAGE_BUDGET` pages. `complete` is false when the budget ran out
+ * before fff's matches did, so the caller fills the rest another way.
+ */
+export const rankListed = <E,>(
+  page: (pageIndex: number) => Effect.Effect<FinderPage, E>,
+  listed: ReadonlySet<string>,
+  limit: number,
+) =>
+  Effect.gen(function* () {
+    const kept: Array<string> = []
+    for (let pageIndex = 0; pageIndex < FINDER_PAGE_BUDGET; pageIndex++) {
+      const read = yield* page(pageIndex)
+      for (const path of read.paths) {
+        if (!listed.has(path)) continue
+        kept.push(path)
+        if (kept.length >= limit) return { kept, complete: true }
+      }
+      const seen = (pageIndex + 1) * FINDER_PAGE_SIZE
+      if (read.paths.length < FINDER_PAGE_SIZE || seen >= read.totalMatched) {
+        return { kept, complete: true }
+      }
+    }
+    return { kept, complete: false }
+  })
+
 // ── files extension ─────────────────────────────────────────────────────────
 
 /**
- * Files autocomplete (`@`). The list comes from fs-tools' own listing through
+ * Files autocomplete (`@`). The paths are fs-tools' own listing through
  * `FilesRpc.List`, so the files a user can name are the files the model can
  * search: git's listing inside a work tree, the `.gitignore` walk outside one.
- * The shared ranker scores the paths, and a pick is recorded in the shared
- * frecency store under the `@` prefix, as `/` and `$` are.
+ * fff ranks them and keeps the pick history. Where fff cannot run, the shared
+ * matcher ranks the listing instead.
  *
  * The list is read when the popup opens (an empty filter) and reused for each
- * keystroke after, so typing does not relist the tree.
+ * keystroke after, so typing does not relist the tree. A path is written as
+ * the composer reads it back (`formatFileRef`), and a directory row completes
+ * to `@dir/` so the popup keeps going inside it.
  */
 
 const MAX_RESULTS = 50
 
 const formatMatch = (path: string) => {
-  const name = path.split("/").pop() ?? path
+  const isDirectory = path.endsWith("/")
+  const segments = path.split("/").filter((segment) => segment.length > 0)
+  const segment = Option.getOrElse(Option.fromUndefinedOr(segments.at(-1)), () => path)
+  let name = segment
+  if (isDirectory) name = `${segment}/`
   const tag = getFileTag(path)
   let label = name
-  if (tag.length > 0) label = `${tag} ${name}`
+  if (tag.length > 0 && !isDirectory) label = `${tag} ${name}`
   return {
     id: path,
     label,
@@ -137,64 +257,125 @@ const topLevel = (paths: ReadonlyArray<string>): ReadonlyArray<string> => {
 
 export const builtinFiles = defineClientExtension("@gent/files-ui", {
   setup: Effect.gen(function* () {
-    const { workspace, transport } = yield* ClientContext
-    const storeServices = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
-    const forkStoreWrite = Effect.runForkWith(storeServices)
-    let listing = Option.none<ReadonlyArray<string>>()
-    // One read at a time: keys typed while a listing is on its way wait for it.
-    let pending = Option.none<Fiber.Fiber<ReadonlyArray<string>>>()
-    const fetchListing = transport.request(ref(FilesRpc.List), {}).pipe(
-      Effect.tap((paths) =>
-        Effect.sync(() => {
-          listing = Option.some(paths)
-        }),
-      ),
-      Effect.orElseSucceed((): ReadonlyArray<string> => []),
-    )
-    const readListing = Effect.gen(function* () {
-      if (Option.isSome(pending)) return yield* Fiber.join(pending.value)
-      const fiber = yield* Effect.forkDetach(fetchListing)
-      pending = Option.some(fiber)
-      return yield* Fiber.join(fiber).pipe(
-        Effect.ensuring(
+    const { workspace, transport, lifecycle } = yield* ClientContext
+    const dbDir = `${workspace.home}/.gent/fff`
+    const finders = new Map<string, FinderEntry>()
+    lifecycle.addCleanup(() => {
+      for (const entry of finders.values()) entry.finder.destroy()
+      finders.clear()
+    })
+    const finderFor = Effect.fn("FilesPopup.finderFor")(function* (cwd: string) {
+      const existing = Option.fromUndefinedOr(finders.get(cwd))
+      if (Option.isSome(existing)) return existing.value
+      const fs = yield* FileSystem.FileSystem
+      yield* Effect.ignore(fs.makeDirectory(dbDir, { recursive: true }))
+      const entry = yield* createFinder(cwd, dbDir)
+      finders.set(cwd, entry)
+      return entry
+    })
+    // The directory the last ranking used, for recording the pick against it.
+    let rankedIn = Option.none<string>()
+    // The listing and the read in flight each belong to one session. A key
+    // typed after a switch never ranks the session it left, and a reply that
+    // lands after the switch is kept only under the session that asked.
+    let listing = Option.none<{ readonly session: string; readonly paths: ReadonlyArray<string> }>()
+    // One read at a time per session: keys typed while it is on its way wait for it.
+    let pending = Option.none<{
+      readonly session: string
+      readonly fiber: Fiber.Fiber<ReadonlyArray<string>>
+    }>()
+    const sessionKey = () =>
+      Option.match(transport.currentSession(), {
+        onNone: () => "",
+        onSome: (current) => String(current.sessionId),
+      })
+    const fetchListing = (session: string) =>
+      transport.request(ref(FilesRpc.List), {}).pipe(
+        Effect.map((paths) => paths.filter(isReferenceablePath)),
+        // A failed listing offers nothing until the popup opens again.
+        Effect.orElseSucceed((): ReadonlyArray<string> => []),
+        Effect.tap((paths) =>
           Effect.sync(() => {
-            if (Option.contains(pending, fiber)) pending = Option.none()
+            listing = Option.some({ session, paths })
           }),
         ),
       )
-    })
+    const readListing = (session: string) =>
+      Effect.gen(function* () {
+        const inFlight = Option.filter(pending, (read) => read.session === session)
+        if (Option.isSome(inFlight)) return yield* Fiber.join(inFlight.value.fiber)
+        const fiber = yield* lifecycle.scoped(Effect.forkScoped(fetchListing(session)))
+        pending = Option.some({ session, fiber })
+        return yield* Fiber.join(fiber).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (Option.exists(pending, (read) => read.fiber === fiber)) pending = Option.none()
+            }),
+          ),
+        )
+      })
+    const listingFor = (session: string) =>
+      Option.match(
+        Option.filter(listing, (known) => known.session === session),
+        {
+          onNone: () => readListing(session),
+          onSome: (known) => Effect.succeed(known.paths),
+        },
+      )
+    /** The shared matcher over the listing, for keys fff cannot rank. */
+    const matchListed = (paths: ReadonlyArray<string>, filter: string) =>
+      rankAutocompleteItems(
+        paths.map((path) => ({ id: path, label: path })),
+        filter,
+        { prefix: "@" },
+      ).map((item) => item.id)
     return autocompleteContribution({
       prefix: "@",
       title: "Files",
       items: (filter: string) =>
         Effect.gen(function* () {
+          const session = sessionKey()
+          const cwd = yield* workspace.sessionCwd
           if (filter.length === 0) {
-            const paths = yield* readListing
+            const paths = yield* readListing(session)
+            // Opening the popup starts the scan, so the first typed key finds it ready.
+            yield* lifecycle.scoped(Effect.forkScoped(Effect.ignore(finderFor(cwd))))
             return topLevel(paths).slice(0, MAX_RESULTS).map(formatMatch)
           }
-          const paths = yield* Option.match(listing, {
-            onNone: () => readListing,
-            onSome: Effect.succeed,
-          })
-          const store = yield* readFrecencyStore(workspace.home)
-          const lookup = frecencyLookup(
-            Option.getOrElse(store, () => emptyFrecencyStore()),
-            yield* Clock.currentTimeMillis,
+          const paths = yield* listingFor(session)
+          const ranked = yield* finderFor(cwd).pipe(
+            Effect.tap((entry) => entry.scanned),
+            Effect.flatMap((entry) =>
+              rankListed(finderPage(entry, filter), new Set(paths), MAX_RESULTS),
+            ),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                rankedIn = Option.some(cwd)
+              }),
+            ),
+            Effect.map(({ kept, complete }) => {
+              if (complete) return kept
+              // The page budget ran out first: the listing fills the rest.
+              const taken = new Set(kept)
+              const rest = matchListed(
+                paths.filter((path) => !taken.has(path)),
+                filter,
+              )
+              return [...kept, ...rest].slice(0, MAX_RESULTS)
+            }),
+            Effect.orElseSucceed(() => matchListed(paths, filter).slice(0, MAX_RESULTS)),
           )
-          return rankAutocompleteItems(
-            paths.map((path) => ({ id: path, label: path })),
-            filter,
-            { prefix: "@", frecency: lookup },
-          )
-            .slice(0, MAX_RESULTS)
-            .map((item) => formatMatch(item.id))
+          return ranked.map(formatMatch)
         }),
-      onSelect: (id: string) => {
-        forkStoreWrite(
-          Effect.flatMap(Clock.currentTimeMillis, (now) =>
-            recordFrecencyPick(workspace.home, "@", id, now),
-          ),
-        )
+      formatInsertion: (id: string) => {
+        // A directory keeps completing inside itself; a file ends the reference.
+        if (id.endsWith("/")) return formatFileRef(id)
+        return `${formatFileRef(id)} `
+      },
+      onSelect: (id: string, filter: string) => {
+        if (id.endsWith("/")) return
+        const entry = Option.flatMap(rankedIn, (cwd) => Option.fromUndefinedOr(finders.get(cwd)))
+        if (Option.isSome(entry)) entry.value.finder.trackQuery(filter, id)
       },
     })
   }),
@@ -599,11 +780,7 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
         Effect.gen(function* () {
           const { transport } = yield* ClientContext
           const skills = yield* transport.request(ref(SkillsRpc.ListSkills), {})
-          const store = yield* readFrecencyStore(workspace.home)
-          const lookup = frecencyLookup(
-            Option.getOrElse(store, () => emptyFrecencyStore()),
-            yield* Clock.currentTimeMillis,
-          )
+          const lookup = yield* readFrecencyLookup(workspace.home)
           return rankAutocompleteItems(
             skills.map((s) => ({
               id: s.name,

@@ -145,6 +145,7 @@ const active = SessionState.active({
   name: "S",
   modelId: absent,
   reasoningLevel: "high",
+  cwd: absent,
 })
 
 describe("session settings", () => {
@@ -603,6 +604,7 @@ describe("ClientProvider session lifecycle", () => {
         name: "Created",
         modelId: absent,
         reasoningLevel: absent,
+        cwd: workspaceCwd,
       })
     }),
   )
@@ -851,6 +853,7 @@ describe("ClientProvider session lifecycle", () => {
             name: "B",
             modelId: absent,
             reasoningLevel: absent,
+            cwd: absent,
           },
         })
         expect(client.agent()).toBeUndefined()
@@ -961,6 +964,7 @@ describe("ClientProvider session lifecycle", () => {
           name: "Fresh",
           modelId: absent,
           reasoningLevel: "high",
+          cwd: absent,
         },
       })
     }),
@@ -1022,6 +1026,7 @@ describe("ClientProvider session lifecycle", () => {
           name: "Target",
           modelId: absent,
           reasoningLevel: absent,
+          cwd: absent,
         },
       })
       expect(client.agent()).toBeUndefined()
@@ -1089,6 +1094,7 @@ describe("ClientProvider session lifecycle", () => {
           name: "New",
           modelId: absent,
           reasoningLevel: absent,
+          cwd: absent,
         },
       })
       expect(client.agent()).toBeUndefined()
@@ -1220,6 +1226,7 @@ const makeSession = (sessionId: SessionId, branchId: BranchId): Session => ({
   name: "Test Session",
   modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
+  cwd: Option.getOrUndefined(Option.none()),
 })
 
 /** The feed reads only which session is active, so the probe supplies only that. */
@@ -1484,6 +1491,87 @@ describe("useSessionFeed", () => {
         })
         const retry = events.find((event) => event._tag === "retrying")
         expect(retry?._tag === "retrying" && retry.resolved).toBe(true)
+        dispose()
+      })
+    }),
+  )
+
+  it.live("a notice draws a notice row, not an error row", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("notice-session")
+      const branchId = BranchId.make("notice-branch")
+      const envelopes = [
+        makeEnvelope(
+          1,
+          AgentEvent.cases.ProviderRetrying.make({
+            sessionId,
+            branchId,
+            attempt: 1,
+            maxAttempts: 3,
+            delayMs: 100,
+            error: "temporary provider failure",
+          }),
+        ),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ErrorOccurred.make({
+            sessionId,
+            branchId,
+            error: "compaction fell back to a trimmed window",
+            notice: true,
+          }),
+        ),
+      ]
+      let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
+      const dispose = createRoot((disposeRoot) => {
+        const [active] = createSignal(makeSession(sessionId, branchId))
+        const client = {
+          sessionIdentity: identityOf(active),
+          client: createMockClient({
+            session: {
+              getSnapshot: () => Effect.succeed(snapshotFor(sessionId, branchId)),
+              events: () => Stream.concat(Stream.make(...envelopes), Stream.never),
+              watchRuntime: () => Stream.concat(Stream.make(runtimeSnapshot()), Stream.never),
+            },
+          }),
+          runtime: createMockRuntime(),
+          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+          setConnectionIssue: () => {},
+          waitForTransportReady: Effect.void,
+          applySessionRuntime: () => {},
+          applySessionSnapshot: () => {},
+          applySessionEvent: () => {},
+          applyBufferedSessionEvent: () => {},
+        } satisfies FeedClient
+        feed = Option.some(
+          useSessionFeed(
+            () => sessionId,
+            () => branchId,
+            client,
+            client.runtime.cast,
+            {
+              onInteraction: () => {},
+              onInteractionDismissed: () => {},
+              onBranchSwitch: () => {},
+              onQueueSnapshot: () => {},
+            },
+          ),
+        )
+        return disposeRoot
+      })
+      yield* waitUntil(
+        () => Option.isSome(feed) && feed.value.items().some((item) => item._tag === "notice"),
+      )
+      yield* Effect.sync(() => {
+        if (Option.isNone(feed)) return
+        const events = feed.value
+          .items()
+          .filter(Predicate.or(isSessionEvent, Predicate.isTagged("notice")))
+        expect(events.map((event) => event._tag)).toEqual(["retrying", "notice"])
+        const notice = events[1]
+        expect(notice?._tag === "notice" && notice.text).toBe(
+          "compaction fell back to a trimmed window",
+        )
         dispose()
       })
     }),

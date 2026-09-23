@@ -2256,10 +2256,12 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     specifier: Option.none(),
   },
   {
-    // The TUI's one public entry: client extensions author against it, so a
-    // name there needs a reader outside the TUI's own source.
+    // The TUI's one public entry: client extensions author against it. The
+    // shipped ones live in `apps/tui/src/extensions/` and import it by its
+    // specifier like a user extension does, so the import is the consumer,
+    // wherever it sits. A relative import of the same module never counts.
     prefix: "apps/tui/src/extensions.ts",
-    outsideOf: ["apps/tui/src/"],
+    outsideOf: [],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/tui/extensions"),
@@ -2800,8 +2802,12 @@ const messageFor = (file: string, declaration: Declaration): string =>
       }
       return `\`${declaration.name}\` is exported but no file outside ${file} names it; drop the \`export\` keyword, or delete it if nothing uses it at all`
     },
-    onSome: (specifier) =>
-      `entry-point name "${declaration.name}" has no consumer outside ${declaration.surface.outsideOf.join(", ")} through ${specifier}; it is vocabulary every caller reads past. Drop it from the entry point, or ship something that uses it.`,
+    onSome: (specifier) => {
+      const where = declaration.surface.outsideOf
+      let reach = "no importer"
+      if (where.length > 0) reach = `no consumer outside ${where.join(", ")}`
+      return `entry-point name "${declaration.name}" has ${reach} through ${specifier}; it is vocabulary every caller reads past. Drop it from the entry point, or ship something that uses it.`
+    },
   })
 
 /**

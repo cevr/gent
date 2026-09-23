@@ -10,18 +10,19 @@ import {
   type WakePendingType,
   WakeRpc,
 } from "@gent/extensions/client"
-import { useTheme } from "../theme"
-import { useTerminalDimensions } from "../terminal"
-import { CollapsedRow, useSpinnerClock } from "../ui"
 import {
-  clientContributions,
   ClientContext,
+  clientContributions,
+  CollapsedRow,
   defineClientExtension,
   messageRendererContribution,
   sessionQuery,
+  truncate,
+  useSpinnerClock,
+  useTerminalDimensions,
+  useTheme,
   widgetContribution,
-} from "./client-facets.js"
-import { truncate } from "../utils"
+} from "@gent/tui/extensions"
 
 // ── builtins/wake.client ────────────────────────────────────────────────────
 

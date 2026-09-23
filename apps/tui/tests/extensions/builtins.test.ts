@@ -3,8 +3,10 @@ import {
   builtinDriver,
   builtinHerdr,
   builtinFiles,
+  FINDER_PAGE_BUDGET,
   getFileTag,
   makeHerdrReporter,
+  rankListed,
 } from "../../src/extensions/builtins"
 import { BunServices } from "@effect/platform-bun"
 import {
@@ -122,80 +124,237 @@ describe("getFileTag", () => {
 // ── files popup ─────────────────────────────────────────────────────────────
 
 /**
- * The `@` popup lists what fs-tools lists (`FilesRpc.List`), ranks it with the
- * shared matcher, and reads the listing once per open popup.
+ * The `@` popup lists what fs-tools lists (`FilesRpc.List`), lets fff rank
+ * those paths in the session's directory, and reads the listing once per open
+ * popup. Each listed path is a real file under the session's directory, and
+ * `unlisted` names files on disk the listing leaves out.
  */
 const withFilesPopup = <A>(
   paths: ReadonlyArray<string>,
-  home: string,
   body: (popup: {
     readonly items: (
       filter: string,
     ) => Effect.Effect<ReadonlyArray<AutocompleteItem>, never, ClientRuntimeServices>
+    readonly insertion: (id: string) => string
     readonly reads: () => number
   }) => Effect.Effect<A, never, ClientRuntimeServices>,
-  /** Holds every listing read until it opens. */
-  gate: Effect.Effect<void> = Effect.void,
-) => {
-  let reads = 0
-  return provideClientServices(
-    Effect.gen(function* () {
-      const contributions = yield* builtinFiles.setup
-      const source = Option.getOrThrow(Option.fromUndefinedOr(contributions.autocomplete?.[0]))
-      const items = (filter: string) => {
-        const result = source.items(filter)
-        if (Effect.isEffect(result)) return Effect.orDie(result)
-        return Effect.succeed(result)
-      }
-      return yield* body({ items, reads: () => reads })
-    }).pipe(Effect.orDie),
-    {
-      workspace: { cwd: "/tmp/test-cwd", home },
-      currentSession: () => Option.some(session),
-      requestEffect: () =>
-        Effect.sync(() => {
-          reads++
-        }).pipe(Effect.andThen(gate), Effect.as(paths)),
-    },
-  )
-}
+  options: {
+    /** Holds every listing read until it opens. */
+    readonly gate?: Effect.Effect<void>
+    readonly unlisted?: ReadonlyArray<string>
+  } = {},
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const home = yield* fs.makeTempDirectoryScoped()
+    const launchCwd = yield* fs.makeTempDirectoryScoped()
+    const sessionCwd = yield* fs.makeTempDirectoryScoped()
+    for (const file of [...paths, ...(options.unlisted ?? [])]) {
+      if (file.endsWith("/")) continue
+      yield* fs.makeDirectory(path.dirname(path.join(sessionCwd, file)), { recursive: true })
+      yield* fs.writeFileString(path.join(sessionCwd, file), file)
+    }
+    let reads = 0
+    return yield* provideClientServices(
+      Effect.gen(function* () {
+        const contributions = yield* builtinFiles.setup
+        const source = Option.getOrThrow(Option.fromUndefinedOr(contributions.autocomplete?.[0]))
+        const items = (filter: string) => {
+          const result = source.items(filter)
+          if (Effect.isEffect(result)) return Effect.orDie(result)
+          return Effect.succeed(result)
+        }
+        const insertion = (id: string) =>
+          Option.getOrThrow(Option.fromUndefinedOr(source.formatInsertion))(id)
+        return yield* body({ items, insertion, reads: () => reads })
+      }).pipe(Effect.orDie),
+      {
+        // The session is rooted outside the launch directory: fff scans the session's.
+        workspace: { cwd: launchCwd, home, sessionCwd: Effect.succeed(sessionCwd) },
+        currentSession: () => Option.some(session),
+        requestEffect: () =>
+          Effect.sync(() => {
+            reads++
+          }).pipe(Effect.andThen(options.gate ?? Effect.void), Effect.as(paths)),
+      },
+    )
+  })
 
 const filesTest = it.scopedLive.layer(BunServices.layer)
 
+describe("files popup across sessions", () => {
+  filesTest(
+    "a switch shows the new session's paths, and a read in flight stays with its session",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const sessions = {
+          a: {
+            key: { sessionId: SessionId.make("sess-a"), branchId: BranchId.make("branch-a") },
+            dir: yield* fs.makeTempDirectoryScoped(),
+            paths: ["alpha/only-a.ts"],
+          },
+          b: {
+            key: { sessionId: SessionId.make("sess-b"), branchId: BranchId.make("branch-b") },
+            dir: yield* fs.makeTempDirectoryScoped(),
+            paths: ["beta/only-b.ts"],
+          },
+        }
+        for (const entry of Object.values(sessions)) {
+          for (const file of entry.paths) {
+            yield* fs.makeDirectory(path.dirname(path.join(entry.dir, file)), { recursive: true })
+            yield* fs.writeFileString(path.join(entry.dir, file), file)
+          }
+        }
+        let current = sessions.a
+        // A's second read waits on this gate, so it is still in flight at the switch.
+        const holdA = yield* Deferred.make<void>()
+        let readsOfA = 0
+        yield* provideClientServices(
+          Effect.gen(function* () {
+            const contributions = yield* builtinFiles.setup
+            const source = Option.getOrThrow(
+              Option.fromUndefinedOr(contributions.autocomplete?.[0]),
+            )
+            const items = (filter: string) => {
+              const result = source.items(filter)
+              if (Effect.isEffect(result)) return Effect.orDie(result)
+              return Effect.succeed(result)
+            }
+            const ids = (filter: string) =>
+              items(filter).pipe(Effect.map((shown) => shown.map((item) => item.id)))
+
+            yield* items("")
+            expect(yield* ids("ts")).toEqual(["alpha/only-a.ts"])
+
+            // The popup stays open across the switch: no empty filter re-lists.
+            current = sessions.b
+            expect(yield* ids("ts")).toEqual(["beta/only-b.ts"])
+
+            // Back on A, a listing read is held; a switch to B meanwhile asks for B's own.
+            current = sessions.a
+            const heldRead = yield* Effect.forkChild(items(""))
+            yield* Effect.yieldNow
+            current = sessions.b
+            expect(yield* ids("ts")).toEqual(["beta/only-b.ts"])
+            yield* Deferred.succeed(holdA, void 0)
+            yield* Fiber.join(heldRead)
+            expect(yield* ids("ts")).toEqual(["beta/only-b.ts"])
+          }).pipe(Effect.orDie),
+          {
+            workspace: {
+              cwd: home,
+              home,
+              sessionCwd: Effect.sync(() => current.dir),
+            },
+            currentSession: () => Option.some(current.key),
+            requestEffect: () => {
+              const asked = current
+              if (asked !== sessions.a) return Effect.succeed(asked.paths)
+              readsOfA++
+              if (readsOfA < 2) return Effect.succeed(asked.paths)
+              return Deferred.await(holdA).pipe(Effect.as(asked.paths))
+            },
+          },
+        )
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+describe("files popup page budget", () => {
+  const page = (paths: ReadonlyArray<string>, totalMatched: number) => ({ paths, totalMatched })
+  const unlistedPage = Array.from({ length: 200 }, (_, index) => `ignored/${index}.ts`)
+
+  test("sparse matches stop at the page budget and report the ranking incomplete", () => {
+    let pagesRead = 0
+    const result = Effect.runSync(
+      rankListed(
+        () =>
+          Effect.sync(() => {
+            pagesRead++
+            return page(unlistedPage, 100_000)
+          }),
+        new Set(["src/kept.ts"]),
+        50,
+      ),
+    )
+    expect(pagesRead).toBe(FINDER_PAGE_BUDGET)
+    expect(result).toEqual({ kept: [], complete: false })
+  })
+
+  test("matches that end inside the budget are complete", () => {
+    let pagesRead = 0
+    const result = Effect.runSync(
+      rankListed(
+        () =>
+          Effect.sync(() => {
+            pagesRead++
+            return page(["src/kept.ts", "ignored/x.ts"], 2)
+          }),
+        new Set(["src/kept.ts"]),
+        50,
+      ),
+    )
+    expect(pagesRead).toBe(1)
+    expect(result).toEqual({ kept: ["src/kept.ts"], complete: true })
+  })
+})
+
 describe("files popup", () => {
-  filesTest("an empty filter shows the listing's top level, directories with a slash", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
-      const shown = yield* withFilesPopup(
-        ["src/a.ts", "README.md", "src/b/c.ts", ".github/x.yml"],
-        home,
-        (popup) => popup.items(""),
-      )
-      expect(shown.map((item) => item.id)).toEqual([".github/", "README.md", "src/"])
-    }),
+  filesTest(
+    "an empty filter shows the listing's top level, directories labelled with a slash",
+    () =>
+      Effect.gen(function* () {
+        const shown = yield* withFilesPopup(
+          ["src/a.ts", "README.md", "src/b/c.ts", ".github/x.yml"],
+          (popup) => popup.items(""),
+        )
+        expect(shown.map((item) => item.id)).toEqual([".github/", "README.md", "src/"])
+        expect(shown.map((item) => item.label)).toEqual([".github/", "[md] README.md", "src/"])
+      }).pipe(Effect.timeout("10 seconds")),
   )
 
-  filesTest("a filter ranks the listed paths with the shared matcher", () =>
+  filesTest("fff ranks the listed paths", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
       const shown = yield* withFilesPopup(
         ["docs/composer-notes.md", "apps/tui/src/composer.tsx", "packages/core/src/x.ts"],
-        home,
         (popup) => popup.items("composer.tsx"),
       )
       expect(shown[0]?.id).toBe("apps/tui/src/composer.tsx")
       expect(shown[0]?.label).toBe("[ts] composer.tsx")
       expect(shown.map((item) => item.id)).not.toContain("packages/core/src/x.ts")
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  filesTest("a file the listing leaves out is not offered", () =>
+    Effect.gen(function* () {
+      const shown = yield* withFilesPopup(["src/kept.ts"], (popup) => popup.items("ts"), {
+        unlisted: ["src/ignored.ts", "build/out.ts"],
+      })
+      expect(shown.map((item) => item.id)).toEqual(["src/kept.ts"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  filesTest("a path with a space or a hash inserts quoted, a directory keeps completing", () =>
+    Effect.gen(function* () {
+      const inserted = yield* withFilesPopup(["my notes.md"], (popup) =>
+        Effect.succeed([
+          popup.insertion("my notes.md"),
+          popup.insertion("issue#12.md"),
+          popup.insertion("src/a.ts"),
+          popup.insertion("src/"),
+        ]),
+      )
+      expect(inserted).toEqual(['@"my notes.md" ', '@"issue#12.md" ', "@src/a.ts ", "@src/"])
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   filesTest("typing after the popup opens reuses its listing", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
-      const reads = yield* withFilesPopup(["src/a.ts", "src/b.ts"], home, (popup) =>
+      const reads = yield* withFilesPopup(["src/a.ts", "src/b.ts"], (popup) =>
         Effect.gen(function* () {
           yield* popup.items("")
           yield* popup.items("s")
@@ -205,21 +364,18 @@ describe("files popup", () => {
         }),
       )
       expect(reads).toBe(2)
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 
   filesTest("typing before the first listing arrives waits for that listing", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const home = yield* fs.makeTempDirectoryScoped()
       const open = yield* Deferred.make<void>()
       const reads = yield* withFilesPopup(
         ["src/a.ts", "src/b.ts"],
-        home,
         (popup) =>
           Effect.gen(function* () {
             const typed = yield* Effect.forkChild(
-              Effect.all([popup.items(""), popup.items("s"), popup.items("sa")], {
+              Effect.all([popup.items(""), popup.items("s"), popup.items("a.ts")], {
                 concurrency: "unbounded",
               }),
             )
@@ -228,13 +384,13 @@ describe("files popup", () => {
             const [top, one, two] = yield* Fiber.join(typed)
             expect(top.map((item) => item.id)).toEqual(["src/"])
             expect(one.length).toBe(2)
-            expect(two.map((item) => item.id)).toEqual(["src/a.ts"])
+            expect(two[0]?.id).toBe("src/a.ts")
             return popup.reads()
           }),
-        Deferred.await(open),
+        { gate: Deferred.await(open) },
       )
       expect(reads).toBe(1)
-    }).pipe(Effect.timeout("4 seconds")),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 

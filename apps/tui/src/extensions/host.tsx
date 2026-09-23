@@ -159,7 +159,13 @@ export function ExtensionUIProvider(props: {
       onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
       onSessionEvent: (cb) => client.onSessionEvent(cb),
     },
-    workspace: { cwd: workspace.cwd, home: workspace.home },
+    workspace: {
+      cwd: workspace.cwd,
+      home: workspace.home,
+      // A failed read leaves the launch directory, where a session without a
+      // stored cwd resolves too.
+      sessionCwd: client.sessionCwd.pipe(Effect.orElseSucceed(() => workspace.cwd)),
+    },
     shell: {
       notify: (message) => client.setNotice(message),
       switchSession: (input) => client.switchSession(input.sessionId, input.branchId, input.name),

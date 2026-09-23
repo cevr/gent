@@ -10,27 +10,27 @@ import {
 } from "@gent/core/protocol"
 import {
   ChromePanel,
+  clientCommandContribution,
+  ClientContext,
+  clientContributions,
   decoration,
+  defineClientExtension,
+  formatAge,
   PickerFrame,
   pickerHeight,
   pickerLines,
+  plural,
   selectable,
   SelectList,
   type SelectListRow,
-  usePickerGeometry,
-} from "../ui"
-import { childTaskBody } from "@gent/extensions/client"
-import { formatAge, plural, truncate } from "../utils"
-import { useTerminalDimensions } from "../terminal"
-import { useTheme } from "../theme"
-import {
-  clientCommandContribution,
-  clientContributions,
-  ClientContext,
-  defineClientExtension,
   sessionQuery,
+  truncate,
+  usePickerGeometry,
+  useTerminalDimensions,
+  useTheme,
   widgetContribution,
-} from "./client-facets"
+} from "@gent/tui/extensions"
+import { childTaskBody } from "@gent/extensions/client"
 
 // ── builtins/thread-view.client ─────────────────────────────────────────────
 

@@ -5,6 +5,9 @@
     "gent": "bin/gent"
   },
   "type": "module",
+  "exports": {
+    "./extensions": "./src/extensions.ts"
+  },
   "scripts": {
     "dev": "bun --preload @opentui/solid/preload src/main.tsx",
     "build": "env -u FORCE_COLOR NO_COLOR=1 bun scripts/build.ts",
@@ -14,6 +17,7 @@
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
+    "@ff-labs/fff-bun": "catalog:",
     "@gent/core": "workspace:*",
     "@gent/extensions": "workspace:*",
     "@gent/sdk": "workspace:*",
