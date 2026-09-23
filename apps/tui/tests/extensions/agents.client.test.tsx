@@ -6,6 +6,8 @@ import { BranchId, dateFromMillis, Session, SessionId } from "@gent/core/protoco
 import type { AgentRowEntry } from "@gent/extensions/client"
 import {
   AgentsPane,
+  countsLabel,
+  detailLabel,
   makeAgentsController,
   SubagentTray,
   subtreeCounts,
@@ -269,7 +271,7 @@ describe("Agents pane navigation", () => {
                     asked.push(value.sessionId)
                     setDetail(
                       Option.some({
-                        status: "Running",
+                        status: "Idle",
                         model: "anthropic/claude-sonnet-5",
                         turns: 7,
                         costUsd: 0.125,
@@ -832,6 +834,37 @@ describe("subtreeCounts", () => {
       })
       expect(subtreeCounts(rows, Option.some({ sessionId: "grandchild" })).total).toBe(0)
       expect(subtreeCounts(rows, Option.none()).total).toBe(0)
+    }),
+  )
+})
+
+describe("agents pane counts and detail", () => {
+  it.live("a parent grouped with its running children counts as idle", () =>
+    Effect.sync(() => {
+      const pane = [
+        { ...root("parent", "running"), status: "Idle" },
+        { ...child("a", "running", "parent"), status: "Running" },
+        { ...child("b", "running", "parent"), status: "Running" },
+        root("old", "inactive"),
+      ]
+      expect(countsLabel(pane)).toBe("2 running, 1 idle, 1 inactive")
+    }),
+  )
+
+  it.live("a working loop names the turn it is on, not finished turns and time", () =>
+    Effect.sync(() => {
+      const detail = (status: string, turns: number): ExtensionAgentDetail => ({
+        status,
+        model: "anthropic/claude-sonnet-5",
+        turns,
+        costUsd: 0.028,
+        durationMs: 0,
+        omittedMessages: 0,
+      })
+      expect(detailLabel(Option.some(detail("Running", 0)))).toBe(
+        "claude-sonnet-5  ·  turn 1 running  ·  $0.028",
+      )
+      expect(detailLabel(Option.some(detail("Idle", 2)))).toContain("2 turns  ·  $0.028")
     }),
   )
 })

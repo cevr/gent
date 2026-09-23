@@ -200,26 +200,66 @@ const ancestorsOf = (
 }
 
 /**
- * Assign tree depth from parent links, then order rows for display.
+ * Assign tree depth from parent links, then order rows for display: by
+ * section, and in each section as a tree. A root, or a row whose parent is
+ * in another section, is placed by its last update, most recent first; its
+ * children follow it in the order they started, as the tray lists them, so
+ * a child's steps never reshuffle its siblings.
  *
  * A child whose parent is absent from the row set is promoted to top level
  * rather than hidden — an orphan is still a real agent, and dropping it would
- * make work disappear from the view.
+ * make work disappear from the view. Rows on a parent cycle are placed as
+ * roots.
  */
 export const buildRowTree = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> => {
   const byKey = new Map<string, AgentRow>()
   for (const row of rows) byKey.set(rowKey(row), row)
+  const placed = rows.map((row) => ({ ...row, depth: ancestorsOf(row, byKey).length }))
 
-  return rows
-    .map((row) => ({ ...row, depth: ancestorsOf(row, byKey).length }))
-    .toSorted((left, right) => {
-      const bySection = SECTION_ORDER[left.section] - SECTION_ORDER[right.section]
-      if (bySection !== 0) return bySection
-      const byRecency =
-        Option.getOrElse(right.updatedAt, () => 0) - Option.getOrElse(left.updatedAt, () => 0)
-      if (byRecency !== 0) return byRecency
-      return rowKey(left).localeCompare(rowKey(right))
-    })
+  const byRecency = (left: AgentRow, right: AgentRow) => {
+    const recency =
+      Option.getOrElse(right.updatedAt, () => 0) - Option.getOrElse(left.updatedAt, () => 0)
+    if (recency !== 0) return recency
+    return rowKey(left).localeCompare(rowKey(right))
+  }
+  const byStart = (left: AgentRow, right: AgentRow) => {
+    const start =
+      Option.getOrElse(left.createdAt, () => 0) - Option.getOrElse(right.createdAt, () => 0)
+    if (start !== 0) return start
+    return rowKey(left).localeCompare(rowKey(right))
+  }
+  // The parent a row nests under here: one in the same section.
+  const parentKeyOf = (row: AgentRow): Option.Option<string> =>
+    Option.map(row.parent, rowKey).pipe(
+      Option.filter((key) => byKey.get(key)?.section === row.section),
+    )
+  const children = new Map<string, Array<AgentRow>>()
+  for (const row of placed) {
+    const parentKey = parentKeyOf(row)
+    if (Option.isNone(parentKey)) continue
+    children.set(parentKey.value, [...(children.get(parentKey.value) ?? []), row])
+  }
+
+  const ordered: Array<AgentRow> = []
+  const seen = new Set<string>()
+  const visit = (row: AgentRow): void => {
+    const key = rowKey(row)
+    if (seen.has(key)) return
+    seen.add(key)
+    ordered.push(row)
+    for (const child of (children.get(key) ?? []).toSorted(byStart)) visit(child)
+  }
+  const sectionRank = (row: AgentRow) => SECTION_ORDER[row.section]
+  const bySectionThenRecency = (left: AgentRow, right: AgentRow) =>
+    sectionRank(left) - sectionRank(right) || byRecency(left, right)
+  for (const root of placed
+    .filter((row) => Option.isNone(parentKeyOf(row)))
+    .toSorted(bySectionThenRecency)) {
+    visit(root)
+  }
+  // A cycle has no root to reach it from.
+  for (const row of placed.toSorted(bySectionThenRecency)) visit(row)
+  return ordered.toSorted((left, right) => sectionRank(left) - sectionRank(right))
 }
 
 /**
@@ -275,9 +315,31 @@ export const projectAgentRows = (params: {
  * still running, in start order, and the reply text streamed since its step began.
  */
 interface ActivityFold {
-  readonly tools: ReadonlyArray<{ readonly id: string; readonly name: string }>
+  readonly tools: ReadonlyArray<{ readonly id: string; readonly label: string }>
   readonly partial: string
 }
+
+/** The input fields that say what a call works on, in the order they are read. */
+const ActivityInput = Schema.Struct({
+  command: Schema.optional(Schema.String),
+  path: Schema.optional(Schema.String),
+  pattern: Schema.optional(Schema.String),
+})
+const decodeActivityInput = Schema.decodeUnknownOption(ActivityInput)
+
+/** `bash git status`: the tool and the first line of the command, path or pattern it works on. */
+const toolLabel = (toolName: string, input: Option.Option<typeof ActivityInput.Type>): string =>
+  input.pipe(
+    Option.flatMap((fields) =>
+      Option.fromUndefinedOr(
+        [fields.command, fields.path, fields.pattern]
+          .map((text) => (text ?? "").trim().split("\n")[0]?.trim() ?? "")
+          .find((text) => text.length > 0),
+      ),
+    ),
+    Option.map((detail) => `${toolName} ${detail}`),
+    Option.getOrElse(() => toolName),
+  )
 
 export const emptyActivity: ActivityFold = { tools: [], partial: "" }
 
@@ -293,7 +355,13 @@ export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFo
     case "ToolCallStarted":
       return {
         ...state,
-        tools: [...state.tools, { id: event.toolCallId, name: event.toolName }],
+        tools: [
+          ...state.tools,
+          {
+            id: event.toolCallId,
+            label: toolLabel(event.toolName, decodeActivityInput(event.input)),
+          },
+        ],
       }
     case "ToolCallSucceeded":
     case "ToolCallFailed":
@@ -305,10 +373,10 @@ export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFo
   }
 }
 
-/** One line for the tray: the newest running tool, else the last streamed line. */
+/** One line for the tray: the newest running tool and what it works on, else the last streamed line. */
 export const activityText = (state: ActivityFold): Option.Option<string> =>
   Option.fromUndefinedOr(state.tools.at(-1)).pipe(
-    Option.map((tool) => `running ${tool.name}`),
+    Option.map((tool) => [...`running ${tool.label}`].slice(0, ACTIVITY_CHARS).join("")),
     Option.orElse(() =>
       Option.fromUndefinedOr(
         state.partial

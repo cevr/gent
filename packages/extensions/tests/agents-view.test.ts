@@ -49,6 +49,7 @@ const durable = (overrides: {
   cwd?: string
   parentSession?: string
   parentBranch?: string
+  createdAt?: number
   updatedAt?: number
   sideThread?: boolean
 }): DurableAgentRow => ({
@@ -65,7 +66,7 @@ const durable = (overrides: {
       branchId: bid(parentBranch),
     })),
   ),
-  createdAt: 0,
+  createdAt: overrides.createdAt ?? 0,
   updatedAt: overrides.updatedAt ?? 0,
   sideThread: overrides.sideThread ?? false,
 })
@@ -250,6 +251,34 @@ describe("agents view projection", () => {
       expect(rows.map((row) => row.section)).toEqual(["running", "idle", "inactive"])
     })
 
+    test("draws children under their parent in the order they started, as the tray does", () => {
+      const child = (session: string, createdAt: number, updatedAt: number) =>
+        durable({
+          session,
+          branch: "b",
+          parentSession: "parent",
+          parentBranch: "b",
+          createdAt,
+          updatedAt,
+        })
+      const rows = buildRowTree(
+        reconcileAgentRows({
+          live: [],
+          durable: [
+            // The newest update first, as a listing returns them.
+            child("gamma", 300, 900),
+            child("beta", 200, 800),
+            child("alpha", 100, 700),
+            durable({ session: "parent", branch: "b", createdAt: 50, updatedAt: 600 }),
+            durable({ session: "other", branch: "b", createdAt: 10, updatedAt: 650 }),
+          ],
+        }),
+      )
+      expect(rows.map((row) => row.sessionId)).toEqual(
+        ["other", "parent", "alpha", "beta", "gamma"].map(sid),
+      )
+    })
+
     test("orders more recent rows first within a section", () => {
       const rows = buildRowTree(
         reconcileAgentRows({
@@ -408,12 +437,13 @@ describe("agents view live activity", () => {
   const sessionId = sid("activity-session")
   const branchId = bid("activity-branch")
   const fold = (events: ReadonlyArray<AgentEvent>) => events.reduce(foldActivity, emptyActivity)
-  const started = (id: string, toolName: string) =>
+  const started = (id: string, toolName: string, input: Readonly<Record<string, string>> = {}) =>
     AgentEvent.cases.ToolCallStarted.make({
       sessionId,
       branchId,
       toolCallId: ToolCallId.make(id),
       toolName,
+      input,
     })
   const chunk = (text: string) =>
     AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: text })
@@ -436,6 +466,19 @@ describe("agents view live activity", () => {
       }),
     )
     expect(Option.getOrUndefined(activityText(afterBash))).toBe("running cell")
+  })
+
+  test("a running tool names the first line of the command, path or pattern it works on", () => {
+    const bash = fold([
+      started("tc-bash", "bash", { command: "  bun test tests/money.test.ts\necho done" }),
+    ])
+    expect(Option.getOrUndefined(activityText(bash))).toBe(
+      "running bash bun test tests/money.test.ts",
+    )
+    const read = fold([started("tc-read", "read", { path: "src/loader.ts" })])
+    expect(Option.getOrUndefined(activityText(read))).toBe("running read src/loader.ts")
+    const long = fold([started("tc-long", "bash", { command: "x".repeat(200) })])
+    expect([...(Option.getOrUndefined(activityText(long)) ?? "")].length).toBe(80)
   })
 
   test("a completed turn reports nothing", () => {
