@@ -1971,6 +1971,74 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     })
 
     /**
+     * What one step already knows about its calls, before any tool runs.
+     *
+     * None when the step's tool message exists: the step is settled, and it
+     * is closed here. Otherwise the known results, by precedence: a stored
+     * terminal event wins over a recovered result, which wins over a result
+     * this process kept. Every path that writes the step's results reads this
+     * first, so none of them overwrites a result the step already has.
+     */
+    const readKnownStepResults = Effect.fn("AgentLoop.readKnownStepResults")(function* (params: {
+      readonly messageId: RunningState["message"]["id"]
+      readonly step: number
+      readonly toolCalls: ReadonlyArray<Prompt.ToolCallPart>
+      readonly recoveredResults: ReadonlyArray<Prompt.ToolResultPart>
+    }) {
+      const address = stepAddress(params.messageId, params.step)
+      const resultKey = processLocalReplayResultKey({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        toolResultMessageId: address.toolResult,
+      })
+      const existing = yield* messageStorage.getMessage(address.toolResult)
+      if (!Predicate.isUndefined(existing)) {
+        yield* processLocalReplay.removeResults(resultKey)
+        yield* closeTurnStep({ messageId: params.messageId, step: params.step })
+        return Option.none()
+      }
+
+      const persistedResults = yield* findPersistedToolResults({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        assistantMessageId: address.assistant,
+        toolCalls: params.toolCalls,
+      }).pipe(
+        Effect.catchIf(Schema.is(ToolResultReplayError), (error) =>
+          Effect.gen(function* () {
+            const failureParts = params.toolCalls.map((toolCall) =>
+              Prompt.toolResultPart({
+                id: toolCall.id,
+                name: toolCall.name,
+                isFailure: true,
+                providerExecuted: false,
+                result: {
+                  error: error.message,
+                  reason: "CorruptResult",
+                },
+              }),
+            )
+            yield* recordToolOutcome({
+              sessionId: scope.sessionId,
+              branchId: scope.branchId,
+              toolResultMessageId: address.toolResult,
+              assistantMessageId: address.assistant,
+              parts: failureParts,
+            }).pipe(Effect.orDie)
+            return yield* error
+          }),
+        ),
+      )
+      const localResults = yield* processLocalReplay.getResults(resultKey)
+      const knownResults = new Map(localResults)
+      for (const result of params.recoveredResults) knownResults.set(result.id, result)
+      for (const [toolCallId, result] of persistedResults) {
+        knownResults.set(toolCallId, result)
+      }
+      return Option.some({ resultKey, localResults, knownResults })
+    })
+
+    /**
      * Run the step's tool calls and commit their results.
      *
      * Answers with the interaction a tool parked on, if one did: a tool that
@@ -1990,55 +2058,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         if (params.toolCalls.length === 0) return Option.none<ToolInteractionPending>()
 
         const address = stepAddress(params.messageId, params.step)
-        const resultKey = processLocalReplayResultKey({
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          toolResultMessageId: address.toolResult,
-        })
-        const existing = yield* messageStorage.getMessage(address.toolResult)
-        if (!Predicate.isUndefined(existing)) {
-          yield* processLocalReplay.removeResults(resultKey)
-          yield* closeTurnStep({ messageId: params.messageId, step: params.step })
-          return Option.none<ToolInteractionPending>()
-        }
-
-        const persistedResults = yield* findPersistedToolResults({
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          assistantMessageId: address.assistant,
+        const known = yield* readKnownStepResults({
+          messageId: params.messageId,
+          step: params.step,
           toolCalls: params.toolCalls,
-        }).pipe(
-          Effect.catchIf(Schema.is(ToolResultReplayError), (error) =>
-            Effect.gen(function* () {
-              const failureParts = params.toolCalls.map((toolCall) =>
-                Prompt.toolResultPart({
-                  id: toolCall.id,
-                  name: toolCall.name,
-                  isFailure: true,
-                  providerExecuted: false,
-                  result: {
-                    error: error.message,
-                    reason: "CorruptResult",
-                  },
-                }),
-              )
-              yield* recordToolOutcome({
-                sessionId: scope.sessionId,
-                branchId: scope.branchId,
-                toolResultMessageId: address.toolResult,
-                assistantMessageId: address.assistant,
-                parts: failureParts,
-              }).pipe(Effect.orDie)
-              return yield* error
-            }),
-          ),
-        )
-        const localResults = yield* processLocalReplay.getResults(resultKey)
-        const knownResults = new Map(localResults)
-        for (const result of params.recoveredResults ?? []) knownResults.set(result.id, result)
-        for (const [toolCallId, result] of persistedResults) {
-          knownResults.set(toolCallId, result)
-        }
+          recoveredResults: params.recoveredResults ?? [],
+        })
+        if (Option.isNone(known)) return Option.none<ToolInteractionPending>()
+        const { resultKey, localResults, knownResults } = known.value
         const pendingToolCalls = params.toolCalls.filter(
           (toolCall) => !knownResults.has(toolCall.id),
         )
@@ -2596,19 +2623,17 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         if (Option.isNone(position.pendingAssistant)) {
           return { step: lastCompletedStep, interaction: Option.none() }
         }
+        const known = yield* readKnownStepResults({
+          messageId: params.messageId,
+          step: pendingStep,
+          toolCalls: position.pendingToolCalls,
+          recoveredResults: [],
+        })
+        if (Option.isNone(known)) return { step: pendingStep, interaction: Option.none() }
         const address = stepAddress(params.messageId, pendingStep)
-        const known = new Map(
-          yield* processLocalReplay.getResults(
-            processLocalReplayResultKey({
-              sessionId: scope.sessionId,
-              branchId: scope.branchId,
-              toolResultMessageId: address.toolResult,
-            }),
-          ),
-        )
         const parts = position.pendingToolCalls.map(
           (call) =>
-            known.get(call.id) ??
+            known.value.knownResults.get(call.id) ??
             Prompt.toolResultPart({
               id: call.id,
               name: call.name,
@@ -2627,6 +2652,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           assistantMessageId: position.pendingAssistant.value.id,
           parts,
         })
+        yield* processLocalReplay.removeResults(known.value.resultKey)
         yield* closeTurnStep({ messageId: params.messageId, step: pendingStep })
         return { step: pendingStep, interaction: Option.none() }
       }

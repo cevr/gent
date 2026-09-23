@@ -117,6 +117,7 @@ import {
   makeStorageTransaction,
   MessageStorage,
   type RelationshipStorage,
+  SessionOperationStorage,
   SessionStorage,
   SqliteStorage,
   ToolCallBindingStorage,
@@ -1344,6 +1345,79 @@ describe("tool projection reconciliation", () => {
           )
           expect(completed?._tag).toBe("TurnCompleted")
           expect(completed?._tag === "TurnCompleted" && completed.usage).toBeUndefined()
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])),
+          Effect.timeout("4 seconds"),
+        ),
+      )
+    }),
+  )
+  it.live("an interrupted cold recovery keeps a stored tool result", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("interrupted-recovery-session")
+      const branchId = BranchId.make("interrupted-recovery-branch")
+      const toolCallId = ToolCallId.make("interrupted-recovery-call")
+      const providerLayer = scriptedProvider([])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const messageStorage = yield* MessageStorage
+          const eventStorage = yield* EventStorage
+          const operations = yield* SessionOperationStorage
+          yield* ensureStorageParents({ sessionId, branchId })
+          const turn = makeMessage(sessionId, branchId, "recover after a stop")
+          // A previous host ran the call to success, then died before it wrote
+          // the step's tool message. The turn was stopped while it was down.
+          const assistant = Message.cases.regular.make({
+            id: assistantMessageIdForTurn(turn.id, 1),
+            sessionId,
+            branchId,
+            role: "assistant",
+            parts: [
+              Prompt.toolCallPart({
+                id: toolCallId,
+                name: "echo",
+                params: { text: "done" },
+                providerExecuted: false,
+              }),
+            ],
+            createdAt: dateFromMillis(1_767_225_600_010),
+          })
+          yield* messageStorage.createMessage(assistant)
+          yield* eventStorage.appendEvent(MessageReceived.make({ message: assistant }))
+          yield* eventStorage.appendEvent(
+            ToolCallSucceeded.make({
+              sessionId,
+              branchId,
+              toolCallId,
+              toolName: "echo",
+              output: "done",
+              resultJson: encodeToolOutput({ text: "done" }),
+              assistantMessageId: assistant.id,
+            }),
+          )
+          yield* operations.cancelTurn({ sessionId, branchId, messageId: turn.id })
+
+          const agentLoop = yield* makeAgentLoopService
+          yield* runAgentLoop(agentLoop, turn)
+
+          const toolMessage = yield* messageStorage.getMessage(
+            toolResultMessageIdForTurn(turn.id, 1),
+          )
+          expect(toolMessage?.parts).toEqual([
+            Prompt.toolResultPart({
+              id: toolCallId,
+              name: "echo",
+              isFailure: false,
+              providerExecuted: false,
+              result: { text: "done" },
+            }),
+          ])
+          const failed = (yield* Ref.get(eventsRef)).filter(
+            (event) => event._tag === "ToolCallFailed",
+          )
+          expect(failed).toEqual([])
         }).pipe(
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
           Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])),
@@ -5749,6 +5823,94 @@ describe("streaming", () => {
         Effect.timeout("4 seconds"),
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeLayerWithEventPublisher(providerLayer, failFirstAssistant)),
+      )
+    }),
+  )
+  it.live("a queued turn that fails before it starts does not hold the queue", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("unsaved-turn-session")
+      const branchId = BranchId.make("unsaved-turn-branch")
+      const first = makeMessage(sessionId, branchId, "first completes")
+      const second = makeMessage(sessionId, branchId, "second is never saved")
+      const third = makeMessage(sessionId, branchId, "third runs")
+      const firstStarted = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      let streamCalls = 0
+      let secondAttempts = 0
+      const providerLayer = LanguageModelLayers.testStream(() => {
+        streamCalls += 1
+        const parts = Stream.fromIterable([
+          textDeltaPart("ok"),
+          finishPart({ finishReason: "stop" }),
+        ])
+        if (streamCalls > 1) return Effect.succeed(parts)
+        return Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(gate)
+            }),
+          ).pipe(Stream.flatMap(() => parts)),
+        )
+      })
+      const failSecondUserMessage = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: (event: AgentEvent) => {
+            if (event._tag === "MessageReceived" && event.message.id === second.id) {
+              secondAttempts += 1
+              return Effect.fail(new EventStoreError({ message: "append failed" }))
+            }
+            return Effect.gen(function* () {
+              return EventEnvelope.make({
+                id: EventId.make(0),
+                event,
+                createdAt: yield* Clock.currentTimeMillis,
+              })
+            })
+          },
+          deliver: () => Effect.void,
+          publish: () => Effect.void,
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, first)))
+        yield* Deferred.await(firstStarted)
+        // A run option keeps each queued turn its own; plain follow-ups batch.
+        const secondFiber = yield* Effect.forkChild(
+          Effect.exit(runAgentLoop(agentLoop, second, { interactive: false })),
+        )
+        yield* waitForOption(
+          () =>
+            agentLoop
+              .getQueue({ sessionId, branchId })
+              .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 1))),
+          "second message queued",
+        )
+        const thirdFiber = yield* Effect.forkChild(
+          Effect.exit(runAgentLoop(agentLoop, third, { interactive: false })),
+        )
+        yield* waitForOption(
+          () =>
+            agentLoop
+              .getQueue({ sessionId, branchId })
+              .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 2))),
+          "third message queued",
+        )
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+        yield* Deferred.succeed(gate, undefined)
+        expect((yield* Fiber.join(firstFiber))._tag).toBe("Success")
+        expect((yield* Fiber.join(secondFiber))._tag).toBe("Failure")
+        expect((yield* Fiber.join(thirdFiber))._tag).toBe("Success")
+        // The failed admission runs once; it is not taken again.
+        expect(secondAttempts).toBe(1)
+        expect(streamCalls).toBe(2)
+      }).pipe(
+        Effect.timeout("4 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(makeLayerWithEventPublisher(providerLayer, failSecondUserMessage)),
       )
     }),
   )

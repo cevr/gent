@@ -1040,6 +1040,10 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     Effect.gen(function* () {
       yield* scope.recordTurnFailure(cause, startState.message.id)
       yield* publishPhaseFailure(cause)
+      // A turn that failed before it settled still holds the in-flight slot,
+      // and `take` hands that slot back first. Clear it, so the failed turn
+      // ends here and the next queued item runs.
+      yield* scope.inbox.settle(startState.message.id)
       const nextItem = yield* scope.inbox.take
       yield* scope.turnInterruption.beginTurn
       yield* advanceOrIdle(nextItem)
