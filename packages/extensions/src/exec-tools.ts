@@ -826,7 +826,10 @@ const joinWords = (words: ReadonlyArray<ShellWord>): Option.Option<ShellWord> =>
       safe.push(false)
     }
     map.push(...word.map)
-    safe.push(...word.safe)
+    // The end of a joined word is a word boundary in the joined script too.
+    safe.push(
+      ...word.safe.map((charSafe, at) => charSafe || (at === word.safe.length - 1 && word.endSafe)),
+    )
   }
   return Option.some({
     text: words.map((word) => word.text).join(" "),
@@ -876,7 +879,10 @@ const WRAPPERS: ReadonlyMap<string, Prefix> = new Map([
   ),
   ["sudo", prefix(["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-T", "-U", "--user"])],
   ["doas", prefix(["-u", "-C"])],
-  ["env", prefix(["-u", "-C", "-S", "--unset", "--chdir", "--split-string"])],
+  ["env", prefix(["-u", "-C", "--unset", "--chdir"])],
+  // Multicall binaries: the next word is the applet (`busybox rm -rf x`).
+  ["busybox", prefix()],
+  ["toybox", prefix()],
   ["nohup", prefix()],
   ["command", prefix()],
   ["builtin", prefix()],
@@ -920,6 +926,45 @@ const prefixEnd = (words: ReadonlyArray<ShellWord>, spec: Prefix): number => {
     cursor++
   }
   return cursor + spec.positionals
+}
+
+/** `env` options whose value is the next word. */
+const ENV_OPTIONS_WITH_VALUE = new Set(["-u", "-C", "--unset", "--chdir"])
+/** An `env` flag cluster that ends in `-S`: `-S`, `-iS`, `-S'cmd'`. */
+const ENV_SPLIT_OPTION = /^-[iv0]*S/
+const ENV_SPLIT_LONG = "--split-string="
+
+/**
+ * `env -S <string>` splits the string into words and runs them, followed by
+ * the words after it. The command it runs is those words joined, from the
+ * string on.
+ */
+const envSplitWords = (
+  words: ReadonlyArray<ShellWord>,
+): Option.Option<ReadonlyArray<ShellWord>> => {
+  if (commandName(words[0]?.text ?? "") !== "env") return Option.none()
+  let valueNext = false
+  for (const [index, word] of words.entries()) {
+    const text = word.text
+    const rest = words.slice(index + 1)
+    if (index === 0 || valueNext) {
+      valueNext = false
+      continue
+    }
+    if (text === "--" || !text.startsWith("-")) return Option.none()
+    if (text === "--split-string") return Option.some(rest)
+    if (text.startsWith(ENV_SPLIT_LONG)) {
+      return Option.some([wordFrom(word, ENV_SPLIT_LONG.length), ...rest])
+    }
+    const split = Option.fromNullishOr(ENV_SPLIT_OPTION.exec(text))
+    if (Option.isSome(split)) {
+      const after = split.value[0].length
+      if (after === text.length) return Option.some(rest)
+      return Option.some([wordFrom(word, after), ...rest])
+    }
+    valueNext = ENV_OPTIONS_WITH_VALUE.has(text)
+  }
+  return Option.none()
 }
 
 /**
@@ -1042,12 +1087,12 @@ const shellRuns = ({ segment, words }: Invocation): SegmentRuns => {
   return { scripts: [...Option.toArray(script), ...inputs.scripts], unreadable }
 }
 
-/** `eval`, `ssh host` and `watch` run their words joined; an expanded word is known only at run time. */
-const joinedRuns = ({ words }: Invocation, spec: Prefix): SegmentRuns => {
-  const joined = joinWords(words.slice(prefixEnd(words, spec)))
+/** `eval`, `ssh host`, `watch` and `env -S` run `script` joined; an expanded word is known only at run time. */
+const joinedRuns = (name: string, script: ReadonlyArray<ShellWord>): SegmentRuns => {
+  const joined = joinWords(script)
   const unreadable = Option.toArray(joined)
     .filter((word) => word.dynamic)
-    .map((word) => `${words[0]?.text ?? ""} of text expanded at run time: ${word.text}`)
+    .map((word) => `${name} of text expanded at run time: ${word.text}`)
   return { scripts: Option.toArray(joined), unreadable }
 }
 
@@ -1172,13 +1217,22 @@ const gitRuns = ({ words }: Invocation): SegmentRuns => {
  */
 const invocationRuns = (invocation: Invocation): SegmentRuns => {
   const name = invocationName(invocation)
+  const { words } = invocation
+  // `$(printf git) reset --hard`, `$G reset --hard`: the command itself is computed.
+  if (words[0]?.dynamic === true) {
+    return { scripts: [], unreadable: [`a command known only at run time: ${words[0].text}`] }
+  }
+  const split = envSplitWords(words)
+  if (Option.isSome(split)) return joinedRuns(name, split.value)
   if (SHELL_NAMES.has(name)) return shellRuns(invocation)
   if (name === "source" || name === ".") {
     return scriptFileRuns(Option.fromUndefinedOr(invocation.words[1]))
   }
   if (name === "git") return gitRuns(invocation)
   const joiner = Option.fromUndefinedOr(SCRIPT_JOINERS.get(name))
-  if (Option.isSome(joiner)) return joinedRuns(invocation, joiner.value)
+  if (Option.isSome(joiner)) {
+    return joinedRuns(name, words.slice(prefixEnd(words, joiner.value)))
+  }
   const wrapper = Option.fromUndefinedOr(WRAPPERS.get(name))
   if ((name === "xargs" || name === "parallel") && Option.isSome(wrapper)) {
     return inputWrapperRuns(invocation, wrapper.value)

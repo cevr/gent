@@ -187,6 +187,11 @@ describe("injectGitTrailers", () => {
     }
   })
 
+  test("a commit that env -S runs gets the trailer", () => {
+    expect(inject("env -S git commit -m x")).toBe(`env -S git commit ${trailer} -m x`)
+    expect(inject("env -S 'git commit -m x'")).toBe(`env -S 'git commit ${trailer} -m x'`)
+  })
+
   test("an escaped quote in ANSI-C quoting does not hide a later commit", () => {
     expect(inject("git commit -m $'x8\\'s' && git commit -m x9")).toBe(
       `git commit ${trailer} -m $'x8\\'s' && git commit ${trailer} -m x9`,
@@ -219,6 +224,8 @@ describe("injectGitTrailers", () => {
         `${git} commit -q --allow-empty -m 'fix git commit hook'`,
         `${git} commit -q --allow-empty -F - <<EOF\nsee git commit docs\nEOF`,
         `${git} commit -q --allow-empty -m $'it\\'s done' && ${git} commit -q --allow-empty -m after`,
+        `env -S '${git} commit -q --allow-empty -m split'`,
+        `env -S ${git} commit -q --allow-empty -m joined`,
         `git log --format=%B%x00`,
       ].join("\n")
       const result = yield* runBashCommand(inject(script), Option.none()).pipe(Effect.scoped)
@@ -228,6 +235,8 @@ describe("injectGitTrailers", () => {
         .map((message) => message.trim())
         .filter((message) => message.length > 0)
       expect(messages).toEqual([
+        "joined\n\nSession-Id: s1",
+        "split\n\nSession-Id: s1",
         "after\n\nSession-Id: s1",
         "it's done\n\nSession-Id: s1",
         "see git commit docs\n\nSession-Id: s1",
@@ -727,6 +736,36 @@ describe("classifyBashCommand", () => {
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
+  })
+
+  test("env -S and a multicall binary do not hide the command they run", () => {
+    for (const command of [
+      "env -S git reset --hard",
+      "env -S 'git reset --hard'",
+      "env --split-string='git push --force'",
+      "env -S'git reset --hard'",
+      "env -i -S 'git clean -fd'",
+      "busybox rm -rf /tmp/a",
+      "toybox rm -rf /tmp/a",
+      "busybox sh -c 'git reset --hard'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("env -S 'git status'").level).toBe("safe")
+    expect(classifyBashCommand("busybox ls").level).toBe("safe")
+  })
+
+  test("a command word known only at run time asks", () => {
+    for (const command of [
+      "$(printf git) reset --hard",
+      "`echo git` reset --hard",
+      "G=git; $G reset --hard",
+      'sudo "$CMD"',
+      '"$EDITOR" notes.md',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("X=$(git rev-parse HEAD) bun test").level).toBe("safe")
   })
 
   test("a script or git subcommand known only at run time asks", () => {
