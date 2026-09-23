@@ -918,10 +918,8 @@ export const makeExtensionHostPlatform: Effect.Effect<ExtensionHostPlatform, nev
     const platform = yield* GentPlatform
     return {
       osInfo: yield* platform.osInfo,
-      execPath: yield* platform.execPath,
       homeDirectory: yield* platform.homeDirectory,
       randomId: platform.randomId,
-      pathListSeparator: yield* platform.pathListSeparator,
     }
   })
 
