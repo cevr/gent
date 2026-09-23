@@ -825,6 +825,65 @@ describe("file encodings", () => {
     }),
   )
 
+  // [name, file, oldString, newString, replaceAll, count, file after]
+  const lineEndEdits: ReadonlyArray<[string, string, string, string, boolean, number, string]> = [
+    ["a bare-CR file: a middle line edits in place", "a\rb\rc", "b", "B", false, 1, "a\rB\rc"],
+    [
+      "a bare-CR file: a replacement's line breaks take CR",
+      "a\rb\rc",
+      "b",
+      "b1\nb2",
+      false,
+      1,
+      "a\rb1\rb2\rc",
+    ],
+    ["a bare-CR file: replaceAll edits every site", "a\rb\ra", "a", "z", true, 2, "z\rb\rz"],
+    [
+      "a CRLF search that ends at the last CRLF keeps it whole",
+      "x\r\nfoo\r\n",
+      "foo\r\n",
+      "bar\n",
+      false,
+      1,
+      "x\r\nbar\r\n",
+    ],
+    [
+      "an LF search that ends at the last CRLF takes the CR too",
+      "x\r\nfoo\r\n",
+      "foo\n",
+      "bar\n",
+      false,
+      1,
+      "x\r\nbar\r\n",
+    ],
+    [
+      "a line deleted up to the last CRLF leaves no stray CR",
+      "x\r\nfoo\r\n",
+      "foo\n",
+      "",
+      false,
+      1,
+      "x\r\n",
+    ],
+  ]
+  for (const [name, before, oldString, newString, replaceAll, count, after] of lineEndEdits) {
+    encodingTest(name, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/endings.txt`
+        yield* fs.writeFileString(filePath, before)
+        const result = yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString, newString, replaceAll },
+          stubCtx,
+        )
+        expect(result.replacements).toBe(count)
+        expect(yield* fs.readFileString(filePath)).toBe(after)
+      }),
+    )
+  }
+
   encodingTest("an LF search in a mixed file finds the CRLF sites too", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

@@ -1110,12 +1110,27 @@ const lineFeedView = (content: string): LineFeedView => {
   }
 }
 
-/** The line break the line at `index` ends with; the last line takes the one before it. */
+/** The break at `at`: CRLF, a bare CR or LF. */
+const breakAt = (content: string, at: number): string => {
+  if (content.charAt(at) === "\n") return "\n"
+  if (content.charAt(at + 1) === "\n") return "\r\n"
+  return "\r"
+}
+
+/**
+ * The line break the line at `index` ends with (CRLF, a bare CR or LF); the
+ * last line takes the one before it, and a file with none takes LF.
+ */
 const lineEndingAt = (content: string, index: number): string => {
-  let lineEnd = content.indexOf("\n", index)
-  if (lineEnd === -1) lineEnd = content.lastIndexOf("\n", index - 1)
-  if (lineEnd > 0 && content.charAt(lineEnd - 1) === "\r") return "\r\n"
-  return "\n"
+  const next = content.slice(index).search(/[\r\n]/)
+  if (next !== -1) return breakAt(content, index + next)
+  const before = Math.max(
+    content.lastIndexOf("\n", index - 1),
+    content.lastIndexOf("\r", index - 1),
+  )
+  if (before === -1) return "\n"
+  if (content.charAt(before) === "\n" && content.charAt(before - 1) === "\r") return "\r\n"
+  return breakAt(content, before)
 }
 
 /**
