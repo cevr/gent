@@ -6,7 +6,6 @@ import {
   Duration,
   Effect,
   Encoding,
-  Equal,
   Exit,
   FileSystem,
   Layer,
@@ -414,139 +413,37 @@ export const buildBillingHeaderValue = (
 // ── beta cache ──────────────────────────────────────────────────────────────
 
 /**
- * AnthropicBetaCache — cross-request learning cache for "betas the
- * server rejected for this model".
- *
- * This isn't just per-request retry state — it's session-level memory
- * so that turn N+1 doesn't include a beta turn N already learned the
- * server hates. It is a service, so it composes through Layer and
- * holds no import-time mutable state.
- *
- * Two implicit clear conditions:
- *   1. `betaFlags` env changes — user toggled flags, prior learning
- *      may no longer apply.
- *   2. `modelId` changes — different model, different beta surface.
- *
- * `getExcluded` takes `currentBetaFlags` as a parameter (not yielded
- * from a hidden module). Production wiring passes the env beta flags;
- * tests can pass anything they want. No global mutation.
+ * Betas the server rejected, by model id. The Ref lives as long as the
+ * extension, so turn N+1 does not resend a beta that turn N learned the
+ * server rejects, and each model keeps its own learning when requests
+ * switch between models (a child or a summarizer on another model).
+ * `ANTHROPIC_BETA_FLAGS` is read once at setup, so the learning cannot
+ * go stale inside one extension instance.
  */
+export type BetaExclusions = ReadonlyMap<string, ReadonlySet<string>>
 
-// ── Internal cache cell ──
-
-export interface BetaCacheCell {
-  readonly map: ReadonlyMap<string, ReadonlySet<string>>
-  readonly lastBetaFlags: Option.Option<string>
-  readonly lastModelId: Option.Option<string>
-}
-
-export const EMPTY_BETA_CELL: BetaCacheCell = {
-  map: new Map(),
-  lastBetaFlags: Option.none(),
-  lastModelId: Option.none(),
-}
-
-const cellAfterMaybeClear = (
-  cell: BetaCacheCell,
-  currentBetaFlags: Option.Option<string>,
+const excludedBetas = (
+  exclusions: Ref.Ref<BetaExclusions>,
   modelId: string,
-): BetaCacheCell => {
-  // Env betaFlags changed → clear everything.
-  if (!Equal.equals(cell.lastBetaFlags, currentBetaFlags)) {
-    return { map: new Map(), lastBetaFlags: currentBetaFlags, lastModelId: Option.some(modelId) }
-  }
-  // Model changed → clear. The first request has nothing to clear.
-  if (Option.isSome(cell.lastModelId) && cell.lastModelId.value !== modelId) {
-    return { map: new Map(), lastBetaFlags: currentBetaFlags, lastModelId: Option.some(modelId) }
-  }
-  return { ...cell, lastModelId: Option.some(modelId) }
-}
-
-// ── Service interface ──
-
-export interface AnthropicBetaCacheApi {
-  /**
-   * Get the set of betas previously learned to be rejected for `modelId`
-   * under the current `betaFlags` env. Auto-clears the entire cache if
-   * either the env flags or the model differs from the last call.
-   */
-  readonly getExcluded: (
-    modelId: string,
-    currentBetaFlags: Option.Option<string>,
-  ) => Effect.Effect<ReadonlySet<string>>
-  /**
-   * Record that `beta` was rejected for `modelId` under the current
-   * `betaFlags` env. Runs the same env/model-change clear logic as
-   * `getExcluded` so the call is standalone-safe (no hidden ordering
-   * contract).
-   */
-  readonly recordExcluded: (
-    modelId: string,
-    beta: string,
-    currentBetaFlags: Option.Option<string>,
-  ) => Effect.Effect<void>
-}
-
-// ── Service tag ──
-
-export class AnthropicBetaCache extends Context.Service<
-  AnthropicBetaCache,
-  AnthropicBetaCacheApi
->()("@gent/extensions/src/anthropic/AnthropicBetaCache") {
-  static layer: Layer.Layer<AnthropicBetaCache> = Layer.effect(
-    AnthropicBetaCache,
-    Effect.gen(function* () {
-      const cellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
-      return AnthropicBetaCache.buildService(cellRef)
-    }),
+): Effect.Effect<ReadonlySet<string>> =>
+  Ref.get(exclusions).pipe(
+    Effect.map((byModel) =>
+      Option.getOrElse(Option.fromNullishOr(byModel.get(modelId)), () => new Set<string>()),
+    ),
   )
 
-  /**
-   * The cell Ref is provided externally so the cache lives for the
-   * extension lifetime, not one `resolveModel` call. A beta the server
-   * rejected on turn N stays excluded on turn N+1.
-   */
-  static layerFromRef = (cellRef: Ref.Ref<BetaCacheCell>): Layer.Layer<AnthropicBetaCache> =>
-    Layer.succeed(AnthropicBetaCache, AnthropicBetaCache.buildService(cellRef))
-
-  private static buildService = (cellRef: Ref.Ref<BetaCacheCell>): AnthropicBetaCacheApi => {
-    const getExcluded = (
-      modelId: string,
-      currentBetaFlags: Option.Option<string>,
-    ): Effect.Effect<ReadonlySet<string>> =>
-      Ref.modify(cellRef, (cell) => {
-        const next = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
-        const excluded = Option.getOrElse(
-          Option.fromNullishOr(next.map.get(modelId)),
-          () => new Set<string>(),
-        )
-        return [excluded, next]
-      })
-
-    const recordExcluded = (
-      modelId: string,
-      beta: string,
-      currentBetaFlags: Option.Option<string>,
-    ): Effect.Effect<void> =>
-      Ref.update(cellRef, (cell) => {
-        // Apply the same clear/seed transition as getExcluded so the
-        // call is standalone-safe — no hidden contract that
-        // recordExcluded must follow a getExcluded.
-        const seeded = cellAfterMaybeClear(cell, currentBetaFlags, modelId)
-        const existing = Option.getOrElse(
-          Option.fromNullishOr(seeded.map.get(modelId)),
-          () => new Set<string>(),
-        )
-        const updated = new Set(existing)
-        updated.add(beta)
-        const nextMap = new Map(seeded.map)
-        nextMap.set(modelId, updated)
-        return { ...seeded, map: nextMap }
-      })
-
-    return AnthropicBetaCache.of({ getExcluded, recordExcluded })
-  }
-}
+const recordExcludedBeta = (
+  exclusions: Ref.Ref<BetaExclusions>,
+  modelId: string,
+  beta: string,
+): Effect.Effect<void> =>
+  Ref.update(exclusions, (byModel) => {
+    const held = Option.getOrElse(
+      Option.fromNullishOr(byModel.get(modelId)),
+      () => new Set<string>(),
+    )
+    return new Map(byModel).set(modelId, new Set([...held, beta]))
+  })
 
 // ── oauth credentials ───────────────────────────────────────────────────────
 
@@ -1875,8 +1772,8 @@ const makeKeychainClientLayer = (
  * containing "Extra usage is required for long context requests" or
  * "long context beta is not yet available". The fix is to retry with
  * one of those betas removed, learning across requests so the next
- * turn doesn't re-include it. The cross-request learning state lives
- * in `AnthropicBetaCache` (Commit 2c); this middleware reads from it
+ * turn doesn't re-include it. The cross-request learning lives in the
+ * `BetaExclusions` Ref, keyed by model; this middleware reads from it
  * in `mapRequestEffect` (so the outgoing header reflects what we've
  * learned) and writes to it in the beta-retry `transformResponse` (so
  * the next attempt's preprocess sees the updated set).
@@ -1999,7 +1896,7 @@ const buildOauthHeaders = (
 export const buildKeychainTransformClient =
   (
     creds: CredentialCache<ClaudeCredentials>,
-    betaCache: AnthropicBetaCacheApi,
+    betaExclusions: Ref.Ref<BetaExclusions>,
     env: AnthropicKeychainEnv,
   ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
   (client) =>
@@ -2008,12 +1905,11 @@ export const buildKeychainTransformClient =
         Effect.gen(function* () {
           const fresh = yield* freshCredentials(creds, req)
           const modelId = parseModelIdFromBody(requestBodyText(req))
-          const betaFlags = env.betaFlags
-          // Read the cross-request-learned exclusion set from the
-          // betaCache. On retry, mapRequestEffect re-runs and reads the
-          // updated set — the beta-retry transformResponse below records
-          // the rejected beta into the cache before failing to retry.
-          const excluded = yield* betaCache.getExcluded(modelId, Option.fromNullishOr(betaFlags))
+          // Read the betas learned to be rejected for this model. On retry,
+          // mapRequestEffect re-runs and reads the updated set — the
+          // beta-retry transformResponse below records the rejected beta
+          // before failing to retry.
+          const excluded = yield* excludedBetas(betaExclusions, modelId)
           const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env, new Set(excluded))
           return withHeaders(req, headers)
         }),
@@ -2042,7 +1938,7 @@ export const buildKeychainTransformClient =
                       // Body matches: try to record the next beta + retry.
                       const modelId = parseModelIdFromBody(requestBodyText(response.request))
                       const betaFlags = env.betaFlags
-                      return betaCache.getExcluded(modelId, Option.fromNullishOr(betaFlags)).pipe(
+                      return excludedBetas(betaExclusions, modelId).pipe(
                         Effect.flatMap((excluded) => {
                           const beta = pickNextBetaToExclude(
                             modelId,
@@ -2050,13 +1946,11 @@ export const buildKeychainTransformClient =
                             excluded,
                           )
                           if (Option.isNone(beta)) return Effect.succeed(response)
-                          return betaCache
-                            .recordExcluded(modelId, beta.value, Option.fromNullishOr(betaFlags))
-                            .pipe(
-                              Effect.flatMap(() =>
-                                Effect.fail(new LongContextBetaError({ response })),
-                              ),
-                            )
+                          return recordExcludedBeta(betaExclusions, modelId, beta.value).pipe(
+                            Effect.flatMap(() =>
+                              Effect.fail(new LongContextBetaError({ response })),
+                            ),
+                          )
                         }),
                       )
                     }),
@@ -2143,13 +2037,11 @@ const makeApiKeyAnthropicLayer = (modelName: string, config: AnthropicConfig, ap
 /**
  * OAuth path: builds `AnthropicClient.layer` with `transformClient` set
  * to the keychain transform middleware (auth headers, long-context beta
- * retry, 401 recovery). Uses `Layer.unwrap` because the transform
- * factory needs the beta cache instance at construction time.
+ * retry, 401 recovery).
  *
- * `resolveModel` builds the credential cache, and this layer builds the
- * beta cache, over cells the Effectful `modelDrivers()` setup allocates
- * once. Cells allocated per layer build would reset both caches, killing
- * cross-request beta learning and credential reuse.
+ * The credential cell and the beta exclusions are allocated once in the
+ * extension setup. Cells allocated per layer build would reset both,
+ * killing cross-request beta learning and credential reuse.
  *
  * No `apiKey` is passed — the SDK's apiKey is optional and skips
  * `x-api-key` injection when absent (verified at
@@ -2161,19 +2053,12 @@ const makeOauthAnthropicLayer = (
   modelName: string,
   config: AnthropicConfig,
   creds: CredentialCache<ClaudeCredentials>,
-  betaCellRef: Ref.Ref<BetaCacheCell>,
+  betaExclusions: Ref.Ref<BetaExclusions>,
   platform: AnthropicPlatformApi,
 ) => {
-  const cacheLayer = AnthropicBetaCache.layerFromRef(betaCellRef)
-
-  const clientLayer = Layer.unwrap(
-    Effect.gen(function* () {
-      const cache = yield* AnthropicBetaCache
-      return AnthropicClient.layer({
-        transformClient: buildKeychainTransformClient(creds, cache, platform.env),
-      }).pipe(Layer.provide(FetchHttpClient.layer))
-    }),
-  ).pipe(Layer.provide(cacheLayer))
+  const clientLayer = AnthropicClient.layer({
+    transformClient: buildKeychainTransformClient(creds, betaExclusions, platform.env),
+  }).pipe(Layer.provide(FetchHttpClient.layer))
 
   const wrappedClient = makeKeychainClientLayer(creds).pipe(
     Layer.provide(clientLayer),
@@ -2195,7 +2080,7 @@ const makeOauthAnthropicLayer = (
  */
 export const buildAnthropicModelDriver = (
   credentialCellRef: CredentialCacheCellRef<ClaudeCredentials>,
-  betaCellRef: Ref.Ref<BetaCacheCell>,
+  betaExclusions: Ref.Ref<BetaExclusions>,
   envApiKey: Option.Option<string>,
   platform: AnthropicPlatformApi,
   catalog: CatalogSource,
@@ -2228,7 +2113,7 @@ export const buildAnthropicModelDriver = (
         return AiModel.make(
           "anthropic",
           modelName,
-          makeOauthAnthropicLayer(modelName, config, creds, betaCellRef, platform),
+          makeOauthAnthropicLayer(modelName, config, creds, betaExclusions, platform),
         )
       }
 
@@ -2322,13 +2207,13 @@ export const AnthropicExtension = defineExtension({
     // through SynchronizedRef.make instead of an unsafe closure escape hatch.
     const credentialCellRef =
       yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-    const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+    const betaExclusions = yield* Ref.make<BetaExclusions>(new Map())
 
     const catalog = yield* catalogSource(ctx.home)
 
     yield* ctx.register(
       "modelDriver",
-      buildAnthropicModelDriver(credentialCellRef, betaCellRef, envApiKey, platform, catalog),
+      buildAnthropicModelDriver(credentialCellRef, betaExclusions, envApiKey, platform, catalog),
     )
   }),
 })

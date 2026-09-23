@@ -1,19 +1,16 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
-  AnthropicBetaCache,
-  type AnthropicBetaCacheApi,
   type AnthropicCredentialIO,
   AnthropicCredentialService,
   type AnthropicKeychainEnv,
   AnthropicPlatform,
-  type BetaCacheCell,
+  type BetaExclusions,
   buildAnthropicModelDriver as buildAnthropicModelDriverLive,
   buildBillingHeaderValue as buildBillingHeaderValueEffect,
   buildKeychainTransformClient,
   type ClaudeCredentials,
   computeCch as computeCchEffect,
   computeVersionSuffix as computeVersionSuffixEffect,
-  EMPTY_BETA_CELL,
   extractFirstUserMessageText,
   freshEnoughForUse,
   getCcVersion,
@@ -779,16 +776,8 @@ const buildCreds = (io: AnthropicCredentialIO): Promise<CredentialCache<ClaudeCr
     ),
   )
 }
-// Same instance-extraction trick for AnthropicBetaCache. Each call
-// returns a FRESH cache (the layer builds a new Ref) so tests are
-// isolated.
-const buildBetaCache = (): Promise<AnthropicBetaCacheApi> =>
-  runEffectBoundary(
-    Layer.build(AnthropicBetaCache.layer).pipe(
-      Effect.scoped,
-      Effect.map((ctx) => Context.get(ctx, AnthropicBetaCache)),
-    ),
-  )
+// A fresh exclusion Ref per test keeps the tests isolated.
+const buildBetaCache = () => Ref.make<BetaExclusions>(new Map())
 const validCredsIO = (label: string): AnthropicCredentialIO => ({
   read: Effect.succeed(makeCredsKeychain(label)),
   refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
@@ -807,7 +796,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   it.live("injects Authorization Bearer from credential service", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
@@ -828,7 +817,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   it.live("removes x-api-key (would otherwise conflict with OAuth Bearer)", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
@@ -853,7 +842,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   it.live("sets x-app, user-agent, anthropic-dangerous-direct-browser-access", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
@@ -876,7 +865,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
   it.live("merges anthropic-beta with model defaults", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
@@ -913,7 +902,7 @@ describe("keychainTransformClient — auth headers (Commit 2a)", () => {
           refresh: () => Effect.fail(new ProviderAuthError({ message: "no refresh token either" })),
         }),
       )
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response("ok", { status: 200 }),
@@ -943,7 +932,7 @@ describe("keychainTransformClient — transient failures reach the loop", () => 
   const sendOnce = (responder: (call: number) => Response | TransportFailure) =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = { captured: [], responder }
       const wrapped = buildKeychainTransformClient(
         creds,
@@ -983,7 +972,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   it.live("400 long-context once → drops one beta → retry succeeds", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: respondFirstWith(
@@ -1012,7 +1001,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   it.live("learning persists into the cache — next request starts pre-narrowed", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: respondFirstWith(
@@ -1050,13 +1039,46 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
       expect(nextRequestBetas).toBe(learnedBetaCount)
     }),
   )
+  it.live("learning for one model survives requests to another model", () =>
+    Effect.gen(function* () {
+      const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
+      const cache = yield* buildBetaCache()
+      const fakeState: FakeClientState = {
+        captured: [],
+        responder: respondFirstWith(
+          new Response(LONG_CONTEXT_BODY, { status: 400 }),
+          new Response("ok", { status: 200 }),
+        ),
+      }
+      const wrapped = buildKeychainTransformClient(
+        creds,
+        cache,
+        TEST_ENV,
+      )(makeFakeClient(fakeState))
+      const send = (model: string) =>
+        Effect.promise(() =>
+          runOk(
+            wrapped.post("https://api.anthropic.com/v1/messages", { body: jsonBody({ model }) }),
+          ),
+        )
+      // Opus learns: 400, then a narrower retry.
+      yield* send("claude-opus-4-6")
+      const learned = fakeState.captured[1]!.headers["anthropic-beta"]
+      // A child or a summarizer on another model sends in between.
+      yield* send("claude-sonnet-4-6")
+      // Opus starts from what it learned: one request, no second 400.
+      yield* send("claude-opus-4-6")
+      expect(fakeState.captured).toHaveLength(4)
+      expect(fakeState.captured[3]!.headers["anthropic-beta"]).toBe(learned)
+    }),
+  )
   it.live("429 with long-context-shaped body passes through without narrowing betas", () =>
     Effect.gen(function* () {
       // Long-context layer is 400-only. A 429 whose body happens to match
       // the long-context marker goes back to the caller untouched: the rate
       // limit is not beta-related, and the loop owns the 429 retry.
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response(LONG_CONTEXT_BODY, { status: 429 }),
@@ -1072,14 +1094,13 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
       )
       expect(fakeState.captured).toHaveLength(1)
       expect(response.status).toBe(429)
-      const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.none())
-      expect(excluded.size).toBe(0)
+      expect((yield* Ref.get(cache)).size).toBe(0)
     }),
   )
   it.live("non-long-context 400 passes through without retry", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: () => new Response(NON_LONG_CONTEXT_400, { status: 400 }),
@@ -1102,7 +1123,7 @@ describe("keychainTransformClient — long-context beta retry (Commit 2d)", () =
   it.live("exhausted candidates surface terminal 400 (every long-context beta tried)", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(validCredsIO("k1")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         // Always return long-context 400 — middleware should give up
@@ -1151,7 +1172,7 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
   it.live("401 once → invalidate creds → retry succeeds with fresh token", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(togglingCredsIO("stale", "fresh")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: respondFirstWith(
@@ -1179,7 +1200,7 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
   it.live("two consecutive 401s — second surfaces (real auth failure, no infinite loop)", () =>
     Effect.gen(function* () {
       const creds = yield* Effect.promise(() => buildCreds(togglingCredsIO("stale", "still-bad")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         // Both attempts get 401 — the second 401 is a real auth failure
@@ -1207,7 +1228,7 @@ describe("keychainTransformClient — 401 recovery (Commit 2e)", () => {
       // #2 would re-read and pick up the second token. Asserting both
       // requests use the first token proves the cache survived the 500.
       const creds = yield* Effect.promise(() => buildCreds(togglingCredsIO("first", "second")))
-      const cache = yield* Effect.promise(() => buildBetaCache())
+      const cache = yield* buildBetaCache()
       const fakeState: FakeClientState = {
         captured: [],
         responder: respondFirstWith(
@@ -1257,7 +1278,7 @@ describe("keychainTransformClient — credential failure through the SDK", () =>
               }),
           }),
         )
-        const cache = yield* Effect.promise(() => buildBetaCache())
+        const cache = yield* buildBetaCache()
         const state = makeFakeFetchState()
         const clientLayer = AnthropicSdkClient.layer({
           transformClient: buildKeychainTransformClient(creds, cache, TEST_ENV),
@@ -1871,135 +1892,6 @@ describe("buildBillingHeaderValue", () => {
   })
 })
 
-// ── anthropic/anthropic-beta-cache.test ─────────────────────────────────────
-
-/**
- * AnthropicBetaCache — cross-request beta-rejection learning.
- *
- * Outcome-based tests: assert what the next `getExcluded` returns
- * after a sequence of records / env changes / model switches. No
- * internal call counters. The cache is pure logic over `Ref<CacheCell>`
- * so a real Effect runtime + the service's own layer is the simplest
- * harness.
- */
-const run = <A, E>(eff: Effect.Effect<A, E, AnthropicBetaCache>) =>
-  Effect.scoped(eff.pipe(Effect.provide(AnthropicBetaCache.layer)))
-describe("AnthropicBetaCache — basic record / get", () => {
-  it.live("get on empty cache returns empty set", () =>
-    run(
-      Effect.gen(function* () {
-        const cache = yield* AnthropicBetaCache
-        const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-        expect(excluded.size).toBe(0)
-      }),
-    ),
-  )
-  it.live("recorded beta appears in next getExcluded for same model", () =>
-    run(
-      Effect.gen(function* () {
-        const cache = yield* AnthropicBetaCache
-        yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-        yield* cache.recordExcluded(
-          "claude-opus-4-6",
-          "context-1m-2025-08-07",
-          Option.some("flag-a"),
-        )
-        const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-        expect(excluded.has("context-1m-2025-08-07")).toBe(true)
-        expect(excluded.size).toBe(1)
-      }),
-    ),
-  )
-  it.live("multiple records accumulate in the same model's set", () =>
-    run(
-      Effect.gen(function* () {
-        const cache = yield* AnthropicBetaCache
-        yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.some("flag-a"))
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-y", Option.some("flag-a"))
-        const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-        expect(excluded.has("beta-x")).toBe(true)
-        expect(excluded.has("beta-y")).toBe(true)
-        expect(excluded.size).toBe(2)
-      }),
-    ),
-  )
-  it.live("recordExcluded is standalone-safe — no prior getExcluded required", () =>
-    // Counsel-driven contract: recordExcluded carries currentBetaFlags
-    // and applies the same env/model-change clear/seed as getExcluded.
-    // Calling record before any get must NOT lose data on the next read.
-    run(
-      Effect.gen(function* () {
-        const cache = yield* AnthropicBetaCache
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.some("flag-a"))
-        const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-        expect(excluded.has("beta-x")).toBe(true)
-        expect(excluded.size).toBe(1)
-      }),
-    ),
-  )
-})
-describe("AnthropicBetaCache — clear-on-env-change", () => {
-  it.live("changing betaFlags env clears all learned exclusions", () =>
-    run(
-      Effect.gen(function* () {
-        const cache = yield* AnthropicBetaCache
-        yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.some("flag-a"))
-        // Env changes: prior learning should be discarded.
-        const after = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-b"))
-        expect(after.size).toBe(0)
-        // And subsequent same-env requests start fresh.
-        const stillEmpty = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-b"))
-        expect(stillEmpty.size).toBe(0)
-      }),
-    ),
-  )
-  it.live("env change from undefined → defined also clears", () =>
-    // Learn under env=undefined, then switch to env="flag-a" — prior
-    // learning must be discarded.
-    run(
-      Effect.gen(function* () {
-        const cache = yield* AnthropicBetaCache
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.none())
-        const after = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-        expect(after.size).toBe(0)
-      }),
-    ),
-  )
-})
-describe("AnthropicBetaCache — clear-on-model-change", () => {
-  it.live("switching model clears prior model's learning", () =>
-    run(
-      Effect.gen(function* () {
-        const cache = yield* AnthropicBetaCache
-        yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.some("flag-a"))
-        // Different model under same env → cache cleared.
-        const haiku = yield* cache.getExcluded("claude-haiku-4-5", Option.some("flag-a"))
-        expect(haiku.size).toBe(0)
-        // Switching back doesn't restore the prior learning either.
-        const opus = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-        expect(opus.size).toBe(0)
-      }),
-    ),
-  )
-})
-describe("AnthropicBetaCache — same-model same-env stability", () => {
-  it.live("repeated getExcluded with unchanged inputs is stable across many calls", () =>
-    run(
-      Effect.gen(function* () {
-        const cache = yield* AnthropicBetaCache
-        yield* cache.recordExcluded("claude-opus-4-6", "beta-x", Option.some("flag-a"))
-        for (let i = 0; i < 5; i++) {
-          const excluded = yield* cache.getExcluded("claude-opus-4-6", Option.some("flag-a"))
-          expect(excluded.has("beta-x")).toBe(true)
-        }
-      }),
-    ),
-  )
-})
-
 // ── anthropic/anthropic-model-config.test ───────────────────────────────────
 
 /**
@@ -2249,7 +2141,7 @@ describe("AnthropicPlatform.fromSetup", () => {
  *
  *   1. **Cache-Ref lifetime**: `resolveModel` runs once per model resolution.
  *      Allocating
- *      `Ref<CredentialCacheCell>` and `Ref<BetaCacheCell>` inside
+ *      `Ref<CredentialCacheCell>` and `Ref<BetaExclusions>` inside
  *      `makeOauthAnthropicLayer` gave each request a fresh empty
  *      cache — cross-request beta learning + credential reuse were
  *      silently dead.
@@ -2456,7 +2348,7 @@ describe("Anthropic chronological context", () => {
             at: yield* Clock.currentTimeMillis,
             invalidated: false,
           })
-          const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+          const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
           const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
           const model = yield* driver.resolveModel("claude-opus-4-6", authInfo)
           for (const mode of ContextMode.literals) {
@@ -2512,7 +2404,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
       // Pre-seed the cred Ref directly (test owns it). If
       // `makeOauthAnthropicLayer` regressed to allocating its own internal
@@ -2541,7 +2433,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       Effect.gen(function* () {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-        const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+        const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
         yield* SynchronizedRef.set(credentialCellRef, {
           _tag: "Durable",
           creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
@@ -2568,7 +2460,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       Effect.gen(function* () {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-        const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+        const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
         yield* SynchronizedRef.set(credentialCellRef, {
           _tag: "Durable",
           creds: { accessToken: "first-token", refreshToken: "r", expiresAt: FUTURE_MS },
@@ -2601,7 +2493,7 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       yield* SynchronizedRef.set(credentialCellRef, {
         _tag: "Durable",
         creds: { accessToken: "t", refreshToken: "r", expiresAt: FUTURE_MS },
@@ -2612,11 +2504,10 @@ describe("buildAnthropicModelDriver — OAuth path uses external cache Refs", ()
       // is NOT sent. If the production beta cache used a fresh internal
       // Ref, this seeded exclusion wouldn't apply and the header would
       // include `context-1m-2025-08-07`.
-      yield* Ref.set(betaCellRef, {
-        map: new Map([["claude-opus-4-6", new Set(["context-1m-2025-08-07"])]]),
-        lastBetaFlags: Option.none(),
-        lastModelId: Option.some("claude-opus-4-6"),
-      })
+      yield* Ref.set(
+        betaCellRef,
+        new Map([["claude-opus-4-6", new Set(["context-1m-2025-08-07"])]]),
+      )
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
@@ -2653,7 +2544,7 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
         at: 0,
         invalidated: false,
       })
-      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriverLive(
         credentialCellRef,
         betaCellRef,
@@ -2709,7 +2600,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       )
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriverLive(
         credentialCellRef,
         betaCellRef,
@@ -2764,7 +2655,7 @@ describe("buildAnthropicModelDriver — credential order", () => {
           invalidated: false,
         },
       )
-      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriver(
         credentialCellRef,
         betaCellRef,
@@ -2782,7 +2673,7 @@ describe("buildAnthropicModelDriver — credential order", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriver(
         credentialCellRef,
         betaCellRef,
@@ -2798,7 +2689,7 @@ describe("buildAnthropicModelDriver — credential order", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriver(
         credentialCellRef,
         betaCellRef,
@@ -2816,7 +2707,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
@@ -2832,7 +2723,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
       Effect.gen(function* () {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-        const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+        const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
         const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
         const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
@@ -2849,13 +2740,13 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       expect(yield* SynchronizedRef.get(credentialCellRef)).toBe(EMPTY_CREDENTIAL_CELL)
-      expect(yield* Ref.get(betaCellRef)).toBe(EMPTY_BETA_CELL)
+      expect((yield* Ref.get(betaCellRef)).size).toBe(0)
     }),
   )
 })
