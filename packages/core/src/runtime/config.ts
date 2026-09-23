@@ -170,7 +170,7 @@ const unknownKeys = (raw: RawConfig, before: RawConfig, after: RawConfig): RawCo
   Object.fromEntries(Object.entries(raw).filter(([key]) => !(key in before) && !(key in after)))
 
 /**
- * A changed record-of-struct field (`driverOverrides`, `agents`). Its keys
+ * A changed record-of-struct field (`driverOverrides`). Its keys
  * follow `after`: an entry the decode dropped (a retired driver ref) or the
  * change cleared is removed. An entry `before` also decoded keeps the raw
  * keys gent does not know, under the encoded `after` entry.
@@ -187,8 +187,13 @@ const mergeEntries = (raw: RawConfig, before: RawConfig, after: RawConfig): RawC
     }),
   )
 
-/** The `UserConfig` fields that are a record of struct entries. */
-const ENTRY_FIELDS: ReadonlySet<string> = new Set(["driverOverrides", "agents"])
+/**
+ * The record-of-struct fields a config write changes. Only `driverOverrides`
+ * has a writer; a field no write changes never reaches the merge, because
+ * `mergeChangedFields` skips an unchanged field. A new writer for another
+ * record-of-struct field (`agents`) adds it here.
+ */
+const ENTRY_FIELDS: ReadonlySet<string> = new Set(["driverOverrides"])
 
 /**
  * `raw` with each `UserConfig` field that differs between `before` and
