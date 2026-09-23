@@ -1349,6 +1349,115 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("a reloaded op cut to fit counts and numbers lines as in its whole output", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-cut-ops")
+      const branchId = BranchId.make("branch-cut-ops")
+      const cell = ToolCallId.make("call-cell-cut")
+      const envelope = (id: number, event: AgentEvent) =>
+        EventEnvelope.make({ id: EventId.make(id), createdAt: id, event })
+      const op = (
+        id: number,
+        toolCallId: string,
+        toolName: string,
+        input: Readonly<Record<string, string>>,
+        output: string,
+      ) => [
+        envelope(
+          id,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make(toolCallId),
+            toolName,
+            input,
+            parentToolCallId: cell,
+          }),
+        ),
+        envelope(
+          id + 1,
+          AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make(toolCallId),
+            toolName,
+            summary: "done",
+            output,
+            parentToolCallId: cell,
+          }),
+        ),
+      ]
+      const numbered = Array.from({ length: 3_000 }, (_, index) => `line ${index + 1}`)
+      const [projected] = projectMessagesWithToolInteractions(
+        [
+          Message.cases.regular.make({
+            id: MessageId.make("assistant-cut-cell"),
+            sessionId,
+            branchId,
+            role: "assistant",
+            parts: [
+              Prompt.toolCallPart({
+                id: cell,
+                name: "cell",
+                params: { code: "await tools.bash({command: 'seq'})" },
+                providerExecuted: false,
+              }),
+            ],
+            createdAt: dateFromMillis(0),
+          }),
+        ],
+        toolCallReceipts([
+          ...op(
+            1,
+            "op-bash-long",
+            "bash",
+            { command: "seq 3000" },
+            encodeJson({ stdout: numbered.join("\n"), stderr: "", exitCode: 0 }),
+          ),
+          ...op(
+            3,
+            "op-read-long",
+            "read",
+            { path: "/workspace/long.txt" },
+            encodeJson({
+              path: "/workspace/long.txt",
+              content: numbered.map((text, index) => `${index + 1}\t${text}`).join("\n"),
+              lineCount: 3_000,
+            }),
+          ),
+        ]),
+      )
+      const interaction = Option.fromNullishOr(projected?.toolInteractions[0])
+      if (Option.isNone(interaction)) return yield* Effect.die("no projected cell")
+      const { operations, ...call } = interaction.value
+      const reloaded: ToolCall = {
+        ...call,
+        status: "completed",
+        operations: (operations ?? []).map((operation) => ({ ...operation })),
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <RegisteredToolMessageLists
+              items={[assistantToolMessage("assistant-cut-cell", reloaded)]}
+              fullDetail
+            />
+          ),
+          { width: 110, height: 60 },
+        ),
+      )
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (next) => next.includes("long.txt"), "cut cell ops"),
+      )
+      // bash: the whole count, its real last line, and the true number of hidden lines.
+      expect(frame).toContain("exit 0 · 3000 lines")
+      expect(frame).toContain("... [2994 lines truncated] ...")
+      // read: the tail keeps its real line numbers.
+      expect(frame).toMatch(/3000 │ line 3000/)
+      expect(frame).toContain("2994 more lines")
+    }),
+  )
+
   it.live("shows cell operation receipts in tree and detail frames", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>

@@ -58,20 +58,25 @@ export function formatHeadTail(
 }
 
 /**
- * Truncate raw text to head + tail by characters.
+ * Truncate raw text to head + tail by characters. The result, marker
+ * included, is at most `maxChars` UTF-16 units, and it never splits a code
+ * point.
  */
 export function headTailChars(text: string, maxChars: number = 64_000): HeadTailCharsResult {
   const total = text.length
   if (total <= maxChars) {
     return { text, truncated: false, totalChars: total }
   }
-
-  const half = Math.floor(maxChars / 2)
-  const head = text.slice(0, half)
-  const tail = text.slice(-half)
-
+  const marker = (cut: number) => `\n\n... [${cut} characters truncated] ...\n\n`
+  // The widest marker this text can need; a smaller count only shortens it.
+  const room = maxChars - marker(total).length
+  if (room < 0) {
+    return { text: headWithin(text, maxChars, utf16Units), truncated: true, totalChars: total }
+  }
+  const head = headWithin(text, Math.floor(room / 2), utf16Units)
+  const tail = tailWithin(text, room - head.length, utf16Units)
   return {
-    text: `${head}\n\n... [${total - maxChars} characters truncated] ...\n\n${tail}`,
+    text: `${head}${marker(total - head.length - tail.length)}${tail}`,
     truncated: true,
     totalChars: total,
   }
@@ -107,19 +112,37 @@ const ToolInteractionFields = {
   durationMs: Schema.UndefinedOr(Schema.Finite),
 }
 
+/**
+ * Where a projected output string was cut. The excerpt holds the string's
+ * head lines, one marker line, then its tail lines. `lines` is the whole
+ * string's line count and `tailLine` the 1-based line its tail starts on, so a
+ * renderer counts and numbers lines as in the whole output. `field` names the
+ * JSON field cut; it is absent when the output is plain text.
+ */
+export const OutputCut = Schema.Struct({
+  field: Schema.optional(Schema.String),
+  lines: Schema.Finite,
+  tailLine: Schema.Finite,
+})
+export type OutputCut = typeof OutputCut.Type
+
 /** One call a cell admitted, read from its stored tool receipts. */
-const ToolOperation = Schema.Struct(ToolInteractionFields)
+const ToolOperation = Schema.Struct({
+  ...ToolInteractionFields,
+  /** Where its output strings were cut to fit the snapshot; absent when none was. */
+  cuts: Schema.optional(Schema.Array(OutputCut)),
+})
 type ToolOperation = typeof ToolOperation.Type
 
 export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteraction")({
   ...ToolInteractionFields,
   /**
    * The calls a cell admitted, from the branch's tool receipts. Wire only,
-   * never stored. Each carries what its collapsed row draws: its scalar
-   * input fields within a size budget, the summary, and a bounded output
-   * (top-level scalars, each string whole within 2 KB, else its head and
-   * tail). Absent when the branch has no receipts for them, as on a fork,
-   * which copies messages but not events.
+   * never stored. Each carries what its collapsed row draws, within one
+   * encoded budget: its scalar input fields, the summary, and a bounded
+   * output (top-level scalars; a string too large is cut to head and tail,
+   * with its `cuts` record). Absent when the branch has no receipts for
+   * them, as on a fork, which copies messages but not events.
    */
   operations: Schema.optional(Schema.Array(ToolOperation)),
 }) {}
@@ -758,79 +781,251 @@ interface ToolCallReceipts {
 const callKey = (assistantMessageId: Option.Option<MessageId>, toolCallId: string): string =>
   `${Option.getOrElse(assistantMessageId, () => "")}\u0000${toolCallId}`
 
-/** Characters of string input one projected operation carries, across its fields. */
-const OPERATION_INPUT_BUDGET = 4_096
+/** Encoded characters one projected operation takes on the wire, keys and scalars included. */
+const OPERATION_BUDGET = 8_192
 
-/** Characters a projected output string keeps; a longer one keeps its head and tail. */
-const OPERATION_OUTPUT_CHARS = 2_048
+/** The most of the budget the input takes; the output takes what is left. */
+const OPERATION_INPUT_SHARE = 4_096
+
+/** The marker line between a cut string's head and tail. */
+const CUT_MARKER = "…"
+
+/** The encoded size of one code point: once for an input field, twice for an output string (JSON in a JSON string). */
+type CodePointCost = (codePoint: string) => number
+const utf16Units: CodePointCost = (codePoint) => codePoint.length
+const encodedOnce: CodePointCost = (codePoint) => encodeJson(codePoint).length - 2
+const encodedTwice: CodePointCost = (codePoint) =>
+  encodeJson(encodeJson(codePoint).slice(1, -1)).length - 2
+
+/** The cost of `text`, or the first cost past `limit` once it is known to exceed it. */
+const costUpTo = (text: string, cost: CodePointCost, limit: number): number => {
+  let used = 0
+  for (const codePoint of text) {
+    used += cost(codePoint)
+    if (used > limit) return used
+  }
+  return used
+}
+
+/** The longest prefix of whole code points that costs at most `budget`. */
+const headWithin = (text: string, budget: number, cost: CodePointCost): string => {
+  let used = 0
+  let end = 0
+  for (const codePoint of text) {
+    used += cost(codePoint)
+    if (used > budget) break
+    end += codePoint.length
+  }
+  return text.slice(0, end)
+}
+
+const isLowSurrogate = (unit: number): boolean => unit >= 0xdc00 && unit <= 0xdfff
+const isHighSurrogate = (unit: number): boolean => unit >= 0xd800 && unit <= 0xdbff
+
+/** The longest suffix of whole code points that costs at most `budget`. */
+const tailWithin = (text: string, budget: number, cost: CodePointCost): string => {
+  let used = 0
+  let start = text.length
+  while (start > 0) {
+    let width = 1
+    if (
+      start >= 2 &&
+      isLowSurrogate(text.charCodeAt(start - 1)) &&
+      isHighSurrogate(text.charCodeAt(start - 2))
+    )
+      width = 2
+    used += cost(text.slice(start - width, start))
+    if (used > budget) break
+    start -= width
+  }
+  return text.slice(start)
+}
+
+const lineCount = (text: string): number => text.split("\n").length
+
+/** The encoded size of a cut's record, with the widest numbers it can hold. */
+const cutCost = (field: Option.Option<string>): number =>
+  encodeJson({
+    ...Option.match(field, { onNone: () => ({}), onSome: (name) => ({ field: name }) }),
+    lines: Number.MAX_SAFE_INTEGER,
+    tailLine: Number.MAX_SAFE_INTEGER,
+  }).length + 1
+
+interface Excerpt {
+  readonly text: string
+  readonly cut: Option.Option<Omit<OutputCut, "field">>
+}
+
+/**
+ * `text` whole within `budget`, else its head, the marker line and its tail,
+ * cut at code points with the marker counted. `None` when not even the marker
+ * fits.
+ */
+const excerptWithin = (
+  text: string,
+  budget: number,
+  cost: CodePointCost,
+): Option.Option<Excerpt> => {
+  if (costUpTo(text, cost, budget) <= budget) return Option.some({ text, cut: Option.none() })
+  const room = budget - costUpTo(`\n${CUT_MARKER}\n`, cost, Infinity)
+  if (room < 0) return Option.none()
+  const head = headWithin(text, Math.floor(room / 2), cost)
+  const tail = tailWithin(text, room - costUpTo(head, cost, Infinity), cost)
+  return Option.some({
+    text: `${head}\n${CUT_MARKER}\n${tail}`,
+    cut: Option.some({
+      lines: lineCount(text),
+      tailLine: lineCount(text.slice(0, text.length - tail.length)),
+    }),
+  })
+}
+
+type Scalar = string | number | boolean
+
+/** The encoded size of `"key":value,` in an object. */
+const fieldCost = (name: string, value: Scalar, cost: CodePointCost): number =>
+  costUpTo(encodeJson(name), cost, Infinity) + 1 + costUpTo(encodeJson(value), cost, Infinity) + 1
 
 /**
  * An operation's input as its collapsed row reads it: top-level scalar fields.
- * A string is kept whole or not at all, shortest first, within
- * `OPERATION_INPUT_BUDGET`: a cut `oldString` draws a wrong diff and a cut path
- * a broken link, so a missing field is the honest answer. Nested values stay
- * on the branch.
+ * Every field is kept whole or not at all, cheapest first, within `budget`,
+ * keys counted: a cut `oldString` draws a wrong diff and a cut path a broken
+ * link, so a missing field is the honest answer. Nested values stay on the
+ * branch.
  */
 // oxlint-disable-next-line effect/noNullish -- ToolInteraction.input is an UndefinedOr wire field; absent input stays absent.
-type BoundedInput = string | Readonly<Record<string, string | number | boolean>> | undefined
+type BoundedInput = string | Readonly<Record<string, Scalar>> | undefined
 
 // oxlint-disable-next-line effect/noUnknownParameters -- Tool input is an external model value; only its scalar fields are kept.
-const boundedInput = (input: unknown): BoundedInput => {
+const boundedInput = (input: unknown, budget: number): BoundedInput => {
   if (Predicate.isString(input)) {
-    if (input.length <= OPERATION_INPUT_BUDGET) return input
+    if (costUpTo(input, encodedOnce, budget) + 2 <= budget) return input
     return Option.getOrUndefined(Option.none<string>())
   }
   if (!Predicate.isObject(input) || Array.isArray(input))
     return Option.getOrUndefined(Option.none<string>())
-  const fits = new Set<string>()
-  let budget = OPERATION_INPUT_BUDGET
-  const strings = Object.entries(input)
-    .filter((entry): entry is [string, string] => Predicate.isString(entry[1]))
-    .map(([key, value]) => ({ key, length: value.length }))
-  for (const { key, length } of strings.toSorted((left, right) => left.length - right.length)) {
-    if (length > budget) break
-    budget -= length
-    fits.add(key)
-  }
-  const kept: Record<string, string | number | boolean> = {}
-  for (const [key, value] of Object.entries(input)) {
-    if (Predicate.isString(value)) {
-      if (fits.has(key)) kept[key] = value
-    } else if (Predicate.isNumber(value) || Predicate.isBoolean(value)) kept[key] = value
+  const fields = Object.entries(input)
+    .filter((entry): entry is [string, Scalar] => isScalar(entry[1]))
+    .map(([key, value]) => ({ key, value, cost: fieldCost(key, value, encodedOnce) }))
+    .toSorted((left, right) => left.cost - right.cost)
+  let left = budget - 2
+  const kept: Record<string, Scalar> = {}
+  for (const field of fields) {
+    if (field.cost > left) break
+    left -= field.cost
+    kept[field.key] = field.value
   }
   return kept
 }
 
-/**
- * An output string as a collapsed row reads it: whole within
- * `OPERATION_OUTPUT_CHARS`, else its head and tail. Only size bounds it: a
- * row renderer numbers and counts the lines it is given, so a small output
- * cut by line count would draw differently after a reload than live.
- */
-const boundedText = (text: string): string => headTailChars(text, OPERATION_OUTPUT_CHARS).text
+// oxlint-disable-next-line effect/noUnknownParameters -- A decoded JSON field is an external value; only scalars are kept.
+const isScalar = (value: unknown): value is Scalar =>
+  Predicate.isString(value) || Predicate.isNumber(value) || Predicate.isBoolean(value)
+
+interface BoundedOutput {
+  // oxlint-disable-next-line effect/noNullish -- ToolInteraction.output is an UndefinedOr wire field; absent output stays absent.
+  readonly output: string | undefined
+  readonly cuts: ReadonlyArray<OutputCut>
+}
+
+const noOutput: BoundedOutput = { output: Option.getOrUndefined(Option.none()), cuts: [] }
 
 /**
- * An operation's output as its collapsed row reads it. A JSON object keeps its
- * top-level scalar fields (a bash `exitCode`, a read `lineCount`), each string
- * cut to `boundedText`; a text result is cut the same way. Nested values stay
- * on the branch.
+ * An operation's output as its collapsed row reads it, within `budget` encoded
+ * characters on the wire. A JSON object keeps its top-level numbers and
+ * booleans, cheapest first, then shares what is left among its strings, each
+ * whole or cut to head and tail with its cut recorded. A text result is cut
+ * the same way. Nested values stay on the branch.
  */
 // oxlint-disable-next-line effect/noNullish -- ToolInteraction.output is an UndefinedOr wire field; absent output stays absent.
-const boundedOutput = (output: string | undefined): string | undefined => {
-  if (Predicate.isUndefined(output)) return output
+const boundedOutput = (output: string | undefined, budget: number): BoundedOutput => {
+  if (Predicate.isUndefined(output)) return noOutput
   const decoded = decodeToolOutput(output)
   if (Option.isNone(decoded) || Predicate.isString(decoded.value)) {
-    return boundedText(Option.getOrElse(Option.filter(decoded, Predicate.isString), () => output))
+    const text = Option.getOrElse(Option.filter(decoded, Predicate.isString), () => output)
+    return Option.match(excerptWithin(text, budget - 2 - cutCost(Option.none()), encodedOnce), {
+      onNone: () => noOutput,
+      onSome: (excerpt) => ({ output: excerpt.text, cuts: Option.toArray(excerpt.cut) }),
+    })
   }
   const value = decoded.value
-  if (!Predicate.isObject(value) || Array.isArray(value))
-    return Option.getOrUndefined(Option.none<string>())
-  const kept: Record<string, string | number | boolean> = {}
-  for (const [key, field] of Object.entries(value)) {
-    if (Predicate.isString(field)) kept[key] = boundedText(field)
-    else if (Predicate.isNumber(field) || Predicate.isBoolean(field)) kept[key] = field
+  if (!Predicate.isObject(value) || Array.isArray(value)) return noOutput
+  // The output string's quotes, its braces, and the `cuts` array around the records.
+  let left = budget - 2 - costUpTo("{}", encodedTwice, Infinity) - encodeJson({ cuts: [] }).length
+  const kept: Record<string, Scalar> = {}
+  const numbers = Object.entries(value)
+    .filter(
+      (entry): entry is [string, number | boolean] =>
+        Predicate.isNumber(entry[1]) || Predicate.isBoolean(entry[1]),
+    )
+    .map(([key, field]) => ({ key, field, cost: fieldCost(key, field, encodedTwice) }))
+    .toSorted((a, b) => a.cost - b.cost)
+  for (const entry of numbers) {
+    if (entry.cost > left) break
+    left -= entry.cost
+    kept[entry.key] = entry.field
   }
-  return encodeJson(kept)
+  const strings = Object.entries(value)
+    .filter((entry): entry is [string, string] => Predicate.isString(entry[1]))
+    .map(([key, field]) => ({ key, field, cost: costUpTo(field, encodedTwice, OPERATION_BUDGET) }))
+    .toSorted((a, b) => a.cost - b.cost)
+  const cuts: Array<OutputCut> = []
+  for (const [index, entry] of strings.entries()) {
+    // Each string's share of what is left: its key, its quotes, its comma, and
+    // room for the record of its cut.
+    const share = Math.floor(left / (strings.length - index))
+    const overhead = fieldCost(entry.key, "", encodedTwice) + cutCost(Option.some(entry.key))
+    const excerpt = excerptWithin(entry.field, share - overhead, encodedTwice)
+    if (Option.isNone(excerpt)) continue
+    kept[entry.key] = excerpt.value.text
+    left -= fieldCost(entry.key, excerpt.value.text, encodedTwice)
+    if (Option.isSome(excerpt.value.cut)) {
+      cuts.push({ field: entry.key, ...excerpt.value.cut.value })
+      left -= cutCost(Option.some(entry.key))
+    }
+  }
+  return { output: encodeJson(kept), cuts }
+}
+
+interface OperationRaw {
+  readonly id: ToolCallId
+  readonly toolName: string
+  readonly status: ToolOperation["status"]
+  readonly input: unknown
+  // oxlint-disable-next-line effect/noNullish -- Absent until the terminal receipt.
+  readonly summary: string | undefined
+  // oxlint-disable-next-line effect/noNullish -- Absent until the terminal receipt.
+  readonly output: string | undefined
+  // oxlint-disable-next-line effect/noNullish -- Absent while running.
+  readonly durationMs: number | undefined
+}
+
+/**
+ * One operation as the snapshot carries it: within `OPERATION_BUDGET` encoded
+ * characters, its fixed fields and summary first, then the input up to
+ * `OPERATION_INPUT_SHARE`, then the output in what is left.
+ */
+const fitOperation = (raw: OperationRaw): ToolOperation => {
+  const fixed: ToolOperation = {
+    id: raw.id,
+    toolName: raw.toolName,
+    status: raw.status,
+    input: Option.getOrUndefined(Option.none()),
+    summary: raw.summary,
+    output: Option.getOrUndefined(Option.none()),
+    durationMs: raw.durationMs,
+  }
+  // `"input":` and `"output":` with their commas, and the fixed fields.
+  const labels = encodeJson("input").length + encodeJson("output").length + 4
+  let left = OPERATION_BUDGET - encodeJson(fixed).length - labels
+  const input = boundedInput(raw.input, Math.min(OPERATION_INPUT_SHARE, left))
+  left -= Option.match(Option.fromUndefinedOr(input), {
+    onNone: () => 0,
+    onSome: (kept) => encodeJson(kept).length,
+  })
+  const { output, cuts } = boundedOutput(raw.output, left)
+  if (cuts.length === 0) return { ...fixed, input, output }
+  return { ...fixed, input, output, cuts }
 }
 
 const noReceipts: ToolCallReceipts = { durations: new Map(), operations: new Map() }
@@ -845,6 +1040,8 @@ const noReceipts: ToolCallReceipts = { durations: new Map(), operations: new Map
 interface OperationSlot {
   readonly parent: string
   readonly index: number
+  /** The whole input, refit with the output when the terminal receipt lands. */
+  readonly input: unknown
 }
 
 /** Place one admitted call under its cell. The snapshot carries what the collapsed op row draws; the full input and output stay on the branch. */
@@ -859,16 +1056,18 @@ const admitOperation = (
   if (slots.has(key)) return
   const parent = callKey(message, event.parentToolCallId)
   const siblings = operations.get(parent) ?? []
-  slots.set(key, { parent, index: siblings.length })
-  siblings.push({
-    id: event.toolCallId,
-    toolName: event.toolName,
-    status: "running",
-    input: boundedInput(event.input),
-    summary: Option.getOrUndefined(Option.none<string>()),
-    output: Option.getOrUndefined(Option.none<string>()),
-    durationMs: Option.getOrUndefined(Option.none<number>()),
-  })
+  slots.set(key, { parent, index: siblings.length, input: event.input })
+  siblings.push(
+    fitOperation({
+      id: event.toolCallId,
+      toolName: event.toolName,
+      status: "running",
+      input: event.input,
+      summary: Option.getOrUndefined(Option.none<string>()),
+      output: Option.getOrUndefined(Option.none<string>()),
+      durationMs: Option.getOrUndefined(Option.none<number>()),
+    }),
+  )
   operations.set(parent, siblings)
 }
 
@@ -899,15 +1098,17 @@ export const toolCallReceipts = (events: ReadonlyArray<EventEnvelope>): ToolCall
     if (Predicate.isUndefined(siblings) || Predicate.isUndefined(current)) continue
     let status: ToolOperation["status"] = "completed"
     if (event._tag === "ToolCallFailed") status = "error"
-    siblings[position.index] = {
-      ...current,
+    siblings[position.index] = fitOperation({
+      id: current.id,
+      toolName: current.toolName,
       status,
+      input: position.input,
       summary: Option.getOrUndefined(
         Option.map(Option.fromUndefinedOr(event.summary), clipSummary),
       ),
-      output: boundedOutput(event.output),
+      output: event.output,
       durationMs,
-    }
+    })
   }
   return { durations, operations }
 }
