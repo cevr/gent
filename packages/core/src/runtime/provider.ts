@@ -657,49 +657,56 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
  */
 export const TEST_MODEL_CONTEXT_LIMIT_TOKENS = 128_000
 
+/**
+ * Every model the caller's profile can run, newest release first: each model
+ * driver's own catalog, read with the auth stored for that driver. Core
+ * fetches nothing. The drivers come from the `ExtensionRegistry` in scope, so
+ * a turn reads its own profile's and a server read the requesting session's;
+ * a catalog captured once at launch missed every project-scoped driver and
+ * ignored `disabledExtensions`.
+ */
+export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* () {
+  const authStore = yield* Auth
+  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  const catalog = yield* listModelCatalog(modelDrivers, (providerId) =>
+    authStore.get(providerId).pipe(
+      Effect.map((info) =>
+        Option.getOrUndefined(
+          Option.map(Option.fromUndefinedOr(info), (found) =>
+            toProviderAuthInfo(authStore, providerId, found),
+          ),
+        ),
+      ),
+      Effect.mapError(
+        (e) =>
+          new ProviderAuthError({
+            message: `Failed to read auth for provider "${providerId}"`,
+            cause: e,
+          }),
+      ),
+    ),
+  )
+  return byReleaseDateDesc(catalog)
+})
+
+/** One model of the caller's profile catalog: the turn's context limit and pricing. */
 interface ModelRegistryService {
-  readonly list: Effect.Effect<readonly Model[], DriverError | ProviderAuthError>
   readonly get: (
     modelId: string,
-  ) => Effect.Effect<Option.Option<Model>, DriverError | ProviderAuthError>
+  ) => Effect.Effect<Option.Option<Model>, DriverError | ProviderAuthError, ExtensionRegistry>
 }
 
 export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryService>()(
   "@gent/core/src/runtime/provider/ModelRegistry",
 ) {
-  static Live: Layer.Layer<ModelRegistry, never, ExtensionRegistry | Auth> = Layer.effect(
+  static Live: Layer.Layer<ModelRegistry, never, Auth> = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
-      const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
       const authStore = yield* Auth
-
-      const resolveAuthOption = (
-        providerId: string,
-      ): Effect.Effect<Option.Option<ProviderAuthInfo>, ProviderAuthError> =>
-        authStore.get(providerId).pipe(
-          Effect.map(Option.fromUndefinedOr),
-          Effect.map(Option.map((info) => toProviderAuthInfo(authStore, providerId, info))),
-          Effect.mapError(
-            (e) =>
-              new ProviderAuthError({
-                message: `Failed to read auth for provider "${providerId}"`,
-                cause: e,
-              }),
-          ),
-        )
-
-      /** Every driver's own catalog, newest release first. Core fetches nothing. */
-      const load = Effect.fn("ModelRegistry.load")(function* () {
-        const catalog = yield* listModelCatalog(modelDrivers, (providerId) =>
-          resolveAuthOption(providerId).pipe(Effect.map(Option.getOrUndefined)),
-        )
-        return byReleaseDateDesc(catalog)
-      })
-
       return ModelRegistry.of({
-        list: load(),
         get: (modelId) =>
-          load().pipe(
+          modelCatalog().pipe(
+            Effect.provideService(Auth, authStore),
             Effect.map((models) =>
               Option.fromUndefinedOr(models.find((model) => model.id === modelId)),
             ),
@@ -712,7 +719,6 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
     Layer.succeed(
       ModelRegistry,
       ModelRegistry.of({
-        list: Effect.succeed(models),
         get: (modelId) => {
           const existing = Option.fromUndefinedOr(models.find((model) => model.id === modelId))
           if (Option.isSome(existing)) return Effect.succeedSome(existing.value)

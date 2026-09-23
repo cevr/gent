@@ -51,11 +51,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSp
 import type { SqlClient } from "effect/unstable/sql"
 import type { QueueSnapshot, SteerCommand as SteerCommandType } from "../domain/message.js"
 import type { PromptSection } from "../domain/capability.js"
-import {
-  AgentLoop as AgentLoopActor,
-  AgentLoopLiveActor,
-  AgentLoopSessionGovernance,
-} from "./agent-loop.js"
+import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "./agent-loop.js"
 import {
   AgentLoopError,
   type DequeueFollowUpPayload,
@@ -69,6 +65,7 @@ import {
   steerLoop,
   submitUserMessage,
   type AgentLoopClientServices,
+  AgentLoop as AgentLoopActor,
 } from "../domain/agent-loop.js"
 import {
   type ApprovalService,

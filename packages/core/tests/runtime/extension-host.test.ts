@@ -181,6 +181,28 @@ describe("ambient extension host context", () => {
     }),
   )
 
+  it.live("an unwired file lock or state facet reports its absence, not a pass-through", () =>
+    Effect.gen(function* () {
+      const ctx = yield* ambientContext
+      const ran = yield* Ref.make(false)
+      const lockExit = yield* Effect.exit(ctx.FileLock.withLock("/tmp/a", Ref.set(ran, true)))
+      const stateExit = yield* Effect.exit(
+        ctx.State(Option.some(ExtensionId.make("probe"))).changed(),
+      )
+
+      expect(yield* Ref.get(ran)).toBe(false)
+      const expectAbsent = (exit: Exit.Exit<unknown, unknown>, name: string) => {
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.hasDies(exit.cause)).toBe(true)
+          expect(exit.cause.toString()).toContain(`${name} not available`)
+        }
+      }
+      expectAbsent(lockExit, "FileLockService")
+      expectAbsent(stateExit, "ExtensionStatePublisher")
+    }),
+  )
+
   it.live("uses the real service once its Tag is in scope", () =>
     Effect.gen(function* () {
       const ctx = yield* ambientContext
@@ -2005,7 +2027,7 @@ describe("runtime slots", () => {
             unanswered: false,
 
             messageId: MessageId.make("turn-message"),
-            usage: { inputTokens: 0, outputTokens: 0 },
+            usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
           } satisfies TurnAfterInput)
           .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx)),
       )
@@ -2041,7 +2063,7 @@ describe("runtime slots", () => {
           unanswered: false,
 
           messageId: MessageId.make("turn-message"),
-          usage: { inputTokens: 0, outputTokens: 0 },
+          usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
         } satisfies TurnAfterInput)
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
 
@@ -2080,7 +2102,7 @@ describe("runtime slots", () => {
           unanswered: false,
 
           messageId: MessageId.make("turn-message"),
-          usage: { inputTokens: 0, outputTokens: 0 },
+          usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
         } satisfies TurnAfterInput)
         .pipe(
           Effect.provideService(CurrentExtensionHostContext, hostCtx),
@@ -2167,7 +2189,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       yield* fs.writeFileString(path.join(projectDir, "../config.json"), grant)
       const denied = yield* discoverExtensions({ userDir, projectDir })
       expect(denied.loaded).toHaveLength(0)
-      expect(denied.skipped[0]?.error).toContain("not trusted")
+      expect(denied.failed[0]?.error).toContain("not trusted")
       expect(yield* fs.exists(marker)).toBe(false)
       yield* fs.writeFileString(path.join(userDir, "../config.json"), grant)
       const allowed = yield* discoverExtensions({ userDir, projectDir })
@@ -2463,9 +2485,9 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       // None of the malformed files load — they hit `loadExtensionFile`'s
       // `candidates.length === 0` branch via the `isGentExtension` guard.
       expect(result.loaded).toHaveLength(0)
-      expect(result.skipped.length).toBeGreaterThanOrEqual(4)
+      expect(result.failed.length).toBeGreaterThanOrEqual(4)
       for (const target of [fnSetupPath, objectSetupPath, nullSetupPath, validPath]) {
-        const entry = result.skipped.find((s) => s.path === target)
+        const entry = result.failed.find((s) => s.sourcePath === target)
         expect(entry).toBeDefined()
         expect(entry?.error).toContain("No GentExtension found")
       }
@@ -3335,7 +3357,7 @@ const stubEvent: TurnAfterInput = {
   unanswered: false,
 
   messageId: MessageId.make("turn-message"),
-  usage: { inputTokens: 0, outputTokens: 0 },
+  usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
 }
 
 const extRuntimeHooks = (

@@ -21,6 +21,7 @@ import {
   createRpcHarness,
 } from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
+import { builtinAgent } from "./helpers/builtin-agents"
 
 // ── skills/skills.test ──────────────────────────────────────────────────────
 
@@ -172,7 +173,7 @@ describe("SkillsExtension via RPC", () => {
         }
         const result = yield* narrowR(
           turnProjection.value.hook
-            .handler()
+            .handler({ agent: builtinAgent })
             // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
             .pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie),
         )

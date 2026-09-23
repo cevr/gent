@@ -25,13 +25,11 @@
  *
  * @module
  */
-import { Context, Schema, type Effect, type Layer, type Option, type Stream } from "effect"
+import { Schema, type Effect, type Layer, type Option, type Stream } from "effect"
 import type { LanguageModel, Model as AiModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
-import type { AgentDefinition, Model } from "./agent.js"
+import type { Model } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "../runtime/provider.js"
-import type { ToolCapability } from "./capability.js"
-import type { ExtensionHostContext } from "./extension.js"
 import type { BranchId, SessionId } from "./ids.js"
 import type { InteractionPendingError } from "./interaction.js"
 import type { Message } from "./message.js"
@@ -213,26 +211,11 @@ export class TurnError extends Schema.TaggedError<TurnError>()("TurnError", {
 export interface TurnContext {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly agent: AgentDefinition
   readonly messages: ReadonlyArray<Message>
-  readonly tools: ReadonlyArray<ToolCapability>
   readonly systemPrompt: string
   readonly cwd: string
   readonly abortSignal: AbortSignal
-  readonly hostCtx: ExtensionHostContext
 }
-
-interface ExternalToolRunnerService {
-  readonly runTool: (
-    toolName: string,
-    args: Schema.Schema.Type<typeof Schema.Unknown>,
-  ) => Effect.Effect<unknown, InteractionPendingError | TurnError>
-}
-
-export class ExternalToolRunner extends Context.Service<
-  ExternalToolRunner,
-  ExternalToolRunnerService
->()("@gent/core/src/domain/driver/ExternalToolRunner") {}
 
 /** Executor interface implemented by external drivers (ACP agents, etc.).
  *
@@ -245,7 +228,7 @@ export class ExternalToolRunner extends Context.Service<
 export interface TurnExecutor {
   readonly executeTurn: (
     ctx: TurnContext,
-  ) => Stream.Stream<TurnStreamPart, TurnError | InteractionPendingError, ExternalToolRunner>
+  ) => Stream.Stream<TurnStreamPart, TurnError | InteractionPendingError>
 }
 
 // ── ExternalDriverContribution — turn-executor-shaped driver ──

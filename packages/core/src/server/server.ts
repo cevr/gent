@@ -117,6 +117,7 @@ import {
   AuthGuard,
   ModelRegistry,
   ModelResolver,
+  modelCatalog,
   ProviderAuth,
 } from "../runtime/provider.js"
 import { ProviderAuthError } from "../domain/driver.js"
@@ -1107,7 +1108,6 @@ const RpcHandlers = GentRpcs.toLayer(
     const eventStore = yield* EventStore
     const configService = yield* ConfigService
     const sessionRuntime = yield* SessionRuntime
-    const modelRegistry = yield* ModelRegistry
     const authStore = yield* Auth
     const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
@@ -1292,12 +1292,22 @@ const RpcHandlers = GentRpcs.toLayer(
       // ----------------------------------------------------------------------
       // Config / driver / model / auth
       // ----------------------------------------------------------------------
-      "model.list": () => modelRegistry.list,
+      // The catalog and the drivers are the requesting session's profile:
+      // its project drivers count, its disabled extensions do not.
+      "model.list": ({ sessionId }: OptionalSessionPayload) =>
+        Effect.gen(function* () {
+          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
+          return yield* modelCatalog().pipe(
+            Effect.provideService(ExtensionRegistry, registry),
+            Effect.provideService(Auth, authStore),
+          )
+        }),
 
-      "driver.list": () =>
+      "driver.list": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
           const config = yield* configService.get()
-          const resolved = extensionRegistry.getResolved()
+          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
+          const resolved = registry.getResolved()
           const models = [...resolved.modelDrivers.values()]
           const externals = [...resolved.externalDrivers.values()]
           const agents = [...resolved.agents.values()]
@@ -1324,9 +1334,10 @@ const RpcHandlers = GentRpcs.toLayer(
           })
         }),
 
-      "driver.set": ({ agentName, driver }: SetDriverOverrideInput) =>
+      "driver.set": ({ agentName, driver, sessionId }: SetDriverOverrideInput) =>
         Effect.gen(function* () {
-          const resolved = extensionRegistry.getResolved()
+          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
+          const resolved = registry.getResolved()
           if (driver._tag === "Model" && !Predicate.isUndefined(driver.id)) {
             const found = resolved.modelDrivers.get(driver.id)
             if (Predicate.isUndefined(found)) {

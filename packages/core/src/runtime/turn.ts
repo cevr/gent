@@ -67,7 +67,7 @@ import {
   provideCurrentHostCtx,
 } from "./extension-host.js"
 import type * as Response from "effect/unstable/ai/Response"
-import { ExternalToolRunner, type ProviderAuthError, TurnError } from "../domain/driver.js"
+import { type ProviderAuthError, TurnError } from "../domain/driver.js"
 import {
   type AgentEvent,
   ErrorOccurred,
@@ -87,7 +87,7 @@ import {
 } from "../domain/event.js"
 import { InteractionPendingError } from "../domain/interaction.js"
 import { causeMessage, omitUndefined } from "../domain/guards.js"
-import { ProviderError, type StorageError } from "../domain/errors.js"
+import { ProviderError } from "../domain/errors.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   emptyTurnRecord,
@@ -107,7 +107,6 @@ import {
   attachToolBindingIdentity,
   compileToolPolicy,
   convertTools,
-  CurrentToolCall,
   executeToolCalls,
   processLocalReplayBindingKey,
   processLocalReplayResultKey,
@@ -119,7 +118,6 @@ import {
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
   ToolInteractionPending,
-  ToolRunner,
   type TurnInterruption,
 } from "./tools.js"
 import { ConfigService } from "./config.js"
@@ -153,7 +151,6 @@ import {
   projectModelContext,
   toPrompt,
 } from "./model-context.js"
-import { SqlClient } from "effect/unstable/sql"
 import { GentPlatform } from "./gent-platform.js"
 import type { LoopInbox } from "./agent-loop.js"
 
@@ -334,18 +331,22 @@ const wasInterrupted = (handle: ActiveStreamHandle): Effect.Effect<boolean> =>
 
 /** Mutable accumulator for per-turn wide event fields. */
 type TurnMetrics = {
+  /** The turn these totals belong to; a resume of the same turn keeps them. */
+  messageId: Option.Option<MessageId>
   agent: AgentNameType
   model: string
+  /** Tokens of the steps that reported usable counts: the known part of the turn's spend. */
   inputTokens: number
   outputTokens: number
   toolCallCount: number
   /** Model steps seen this turn; zero means no usage can be reported. */
   steps: number
-  /** False once any step reported no usage or an unusable count. */
+  /** False once any step reported no usage or an unusable count: the totals are then partial. */
   usageKnown: boolean
 }
 
 const emptyTurnMetrics = (): TurnMetrics => ({
+  messageId: Option.none(),
   agent: DEFAULT_AGENT_NAME,
   model: "",
   inputTokens: 0,
@@ -683,7 +684,13 @@ export const collectExternalTurnResponse = <R>(params: {
  *
  * A turn's token totals, tool-call count and step count accumulate across its
  * model steps and are read once, at the end, to fill `TurnCompleted`. The
- * accumulator therefore outlives no turn: the next one starts from zero.
+ * accumulator therefore outlives no turn: the next one starts from zero. A
+ * turn parked on an interaction and resumed is the same turn, so its steps
+ * before the park still count. The totals hold only what steps reported in
+ * usable counts. Steps this process never saw (a turn resumed after a
+ * restart) and steps cut short without usage add nothing and mark the totals
+ * partial: `TurnCompleted` then carries no total, and `turnAfter` gets the
+ * known part with `complete: false`.
  *
  * `beginTurn` is the reset, and a writer says what its step observed rather
  * than how to merge it; the fold (which totals to add, which counts make the
@@ -694,14 +701,16 @@ export const collectExternalTurnResponse = <R>(params: {
 
 /**
  * A token count this turn can report. A provider that returns a negative,
- * fractional or oversized number has told us nothing usable, and one
- * unusable step makes the turn's total unreportable rather than wrong.
+ * fractional or oversized number has told us nothing usable: that step adds
+ * nothing, and the turn's totals become partial rather than wrong.
  */
 const reportable = (count: number) => Number.isSafeInteger(count) && count >= 0
 
 interface TurnLedger {
-  /** A fresh turn begins, so it has spent nothing. */
-  readonly beginTurn: Effect.Effect<void>
+  /** A turn begins or resumes. A different turn starts from zero; the same one keeps its totals. */
+  readonly beginTurn: (messageId: MessageId) => Effect.Effect<void>
+  /** The turn committed steps before this ledger saw it: its total cannot be complete. */
+  readonly noteUnseenSteps: Effect.Effect<void>
   /** Which agent and model this turn runs as. Known before its first step. */
   readonly noteModel: (params: {
     readonly agent: AgentNameType
@@ -709,7 +718,7 @@ interface TurnLedger {
   }) => Effect.Effect<void>
   /**
    * One model step finished. `usage` is absent when the provider reported
-   * none, which makes this turn's total unreportable.
+   * none, which makes this turn's totals partial.
    */
   readonly noteStep: (params: {
     readonly agent: AgentNameType
@@ -724,29 +733,40 @@ interface TurnLedger {
 export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* () {
   const metrics = yield* Ref.make(emptyTurnMetrics())
   return {
-    beginTurn: Ref.set(metrics, emptyTurnMetrics()),
+    beginTurn: (messageId) =>
+      Ref.update(metrics, (m) => {
+        if (Option.contains(m.messageId, messageId)) return m
+        return { ...emptyTurnMetrics(), messageId: Option.some(messageId) }
+      }),
+    noteUnseenSteps: Ref.update(metrics, (m) => {
+      if (m.steps > 0) return m
+      return { ...m, usageKnown: false }
+    }),
     noteModel: (params) =>
       Ref.update(metrics, (m) => ({ ...m, agent: params.agent, model: params.model })),
     noteStep: (params) =>
       Ref.update(metrics, (m) => {
-        const step = Option.getOrElse(params.usage, () => ({ inputTokens: 0, outputTokens: 0 }))
-        const inputTokens = m.inputTokens + step.inputTokens
-        const outputTokens = m.outputTokens + step.outputTokens
-        return {
+        const counted = {
+          messageId: m.messageId,
           agent: params.agent,
           model: params.model,
-          inputTokens,
-          outputTokens,
+          inputTokens: m.inputTokens,
+          outputTokens: m.outputTokens,
           toolCallCount: m.toolCallCount + params.toolCallCount,
           steps: m.steps + 1,
-          usageKnown:
-            m.usageKnown &&
-            Option.isSome(params.usage) &&
-            reportable(step.inputTokens) &&
-            reportable(step.outputTokens) &&
-            reportable(inputTokens) &&
-            reportable(outputTokens),
+          usageKnown: false,
         }
+        if (Option.isNone(params.usage)) return counted
+        const step = params.usage.value
+        const inputTokens = m.inputTokens + step.inputTokens
+        const outputTokens = m.outputTokens + step.outputTokens
+        const usable =
+          reportable(step.inputTokens) &&
+          reportable(step.outputTokens) &&
+          reportable(inputTokens) &&
+          reportable(outputTokens)
+        if (!usable) return counted
+        return { ...counted, inputTokens, outputTokens, usageKnown: m.usageKnown }
       }),
     total: Ref.get(metrics),
   }
@@ -1232,21 +1252,12 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // Derive extension projections from explicit prompt/message slots.
   const allToolEntries = staticToolEntries(extensionRegistry)
   const allTools = allToolEntries.map((entry) => entry.capability)
-  const turnCtx = {
-    sessionId: params.sessionId,
-    branchId: params.branchId,
-    agent: dispatchAgent,
-    allTools,
-    interactive: params.interactive,
-    agentName: currentAgent,
-    parentToolCallId: params.runSpec?.parentToolCallId,
-  }
   // Filter out hidden messages — visible in transcript but excluded from LLM context
   const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
 
   const projEval = yield* extensionRegistry
     .getResolved()
-    .extensionHooks.resolveTurnProjection(turnCtx)
+    .extensionHooks.resolveTurnProjection({ agent: dispatchAgent })
   const extensionProjections: TurnProjection[] = projEval.policyFragments.map((p) => ({
     toolPolicy: p,
   }))
@@ -1273,12 +1284,8 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   const selectedNames = new Set(tools.map((tool) => String(getToolId(tool))))
   const toolBindings = new Map([...hostToolBindings].filter(([name]) => selectedNames.has(name)))
 
-  // Build tool-aware prompt, then run through explicit prompt slots.
-  // We hand the slot layer both the compiled `basePrompt` (for append-only
-  // rewrites) AND the structured `sections` (for slots
-  // that need to swap or strip a section by id, e.g. codemode replacing
-  // `tool-list` / `tool-guidelines` rather than appending a contradicting
-  // surface).
+  // Build the tool-aware prompt, then run it through the systemPrompt hooks,
+  // which receive the compiled `basePrompt`.
   const sections = buildTurnPromptSections(
     params.baseSections,
     effectiveAgent,
@@ -1293,9 +1300,16 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     tools,
     hostTools,
   })
+  // A failed read runs the turn on the agent's defaults; the log says so, since
+  // the model the turn uses then differs from the one the session names.
   const session = yield* sessionStorage.getSession(params.sessionId).pipe(
     Effect.map(Option.fromUndefinedOr),
-    Effect.orElseSucceed(() => Option.none()),
+    Effect.catchEager((error) =>
+      Effect.logWarning("turn.session-settings-unreadable").pipe(
+        Effect.annotateLogs({ sessionId: params.sessionId, error: String(error) }),
+        Effect.as(Option.none<SessionSettingsSource>()),
+      ),
+    ),
   )
   // The session's own settings win over the agent definition and config.
   const settings = resolveSessionSettings(
@@ -1367,11 +1381,6 @@ type ExternalTurnSource = {
   readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
-type ExternalToolPersistence = {
-  readonly assistantMessageId: MessageId
-  readonly toolResultMessageId: MessageId
-}
-
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   messageId: MessageId
   step: number
@@ -1385,14 +1394,6 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
-  randomId: Effect.Effect<string>
-  persistExternalToolCall: (
-    toolCall: Prompt.ToolCallPart,
-  ) => Effect.Effect<
-    ExternalToolPersistence,
-    StorageError | TurnError,
-    EventPublisher | EventStorage | MessageStorage | ToolCallBindingStorage
-  >
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const drivers = extensionRegistry.getResolved()
@@ -1450,79 +1451,17 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       return undefined
     }
 
-    // The executor calls back from its own context, so the tool run and its
-    // persistence carry the services they need from here.
-    const toolRunner = yield* ToolRunner
-    const extensionRegistry = yield* ExtensionRegistry
-    const eventPublisher = yield* EventPublisher
-    const eventStorage = yield* EventStorage
-    const messageStorage = yield* MessageStorage
-    const toolBindingStorage = yield* ToolCallBindingStorage
-    const sql = yield* SqlClient.SqlClient
-    const externalToolRunner = ExternalToolRunner.of({
-      runTool: (toolName, args) =>
-        Effect.gen(function* () {
-          const toolCallId = ToolCallId.make(yield* params.randomId)
-          const persistence = yield* params
-            .persistExternalToolCall(
-              Prompt.toolCallPart({
-                id: toolCallId,
-                name: toolName,
-                params: args,
-                providerExecuted: false,
-              }),
-            )
-            .pipe(Effect.catchTag("StorageError", Effect.die))
-          const result = yield* toolRunner
-            .runBound(
-              { toolCallId, toolName, input: args },
-              Option.fromUndefinedOr(resolved.toolBindings.get(toolName)),
-            )
-            .pipe(
-              provideCurrentHostCtx(hostCtx),
-              Effect.provideService(ExtensionRegistry, extensionRegistry),
-              Effect.provideService(EventPublisher, eventPublisher),
-              Effect.provideService(CurrentToolCall, {
-                toolBindings: resolved.toolBindings,
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                assistantMessageId: persistence.assistantMessageId,
-                toolCallId,
-              }),
-            )
-          yield* persistMessageParts({
-            role: "tool",
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            messageId: persistence.toolResultMessageId,
-            parts: [result],
-          }).pipe(Effect.orDie)
-          return result
-        }).pipe(
-          Effect.provideService(MessageStorage, messageStorage),
-          Effect.provideService(ToolCallBindingStorage, toolBindingStorage),
-          Effect.provideService(EventPublisher, eventPublisher),
-          Effect.provideService(EventStorage, eventStorage),
-          Effect.provideService(SqlClient.SqlClient, sql),
-        ),
-    })
-
     return {
       driverKind: "external",
       driverId: resolvedDriver.id,
-      stream: executor.value
-        .executeTurn({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          agent: resolved.agent,
-          messages: resolved.messages,
-          tools: resolved.tools,
-          systemPrompt: resolved.systemPrompt,
-          cwd: hostCtx.cwd,
-          abortSignal: params.activeStream.abortSignal,
-          hostCtx,
-        })
-        .pipe(Stream.provideService(ExternalToolRunner, externalToolRunner)),
+      stream: executor.value.executeTurn({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        messages: resolved.messages,
+        systemPrompt: resolved.systemPrompt,
+        cwd: hostCtx.cwd,
+        abortSignal: params.activeStream.abortSignal,
+      }),
       // oxlint-disable-next-line effect/noUnknownParameters -- External driver errors cross an untyped executor boundary.
       formatStreamError: (streamError: unknown) =>
         `External turn executor error: ${causeMessage(streamError)}`,
@@ -1765,15 +1704,13 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
 const computeStreamEndedCost: (params: {
   modelId: ModelId
   usage: Option.Option<{ inputTokens: number; outputTokens: number }>
-}) => Effect.Effect<Option.Option<number>, never, ModelRegistry> = Effect.fn(
+}) => Effect.Effect<Option.Option<number>, never, ModelRegistry | ExtensionRegistry> = Effect.fn(
   "TurnHelpers.computeStreamEndedCost",
 )(function* (params) {
   if (Option.isNone(params.usage)) return Option.none()
   const modelRegistry = yield* ModelRegistry
-  const pricing = yield* modelRegistry.list.pipe(
-    Effect.map((models) =>
-      Option.fromUndefinedOr(models.find((m) => m.id === params.modelId)?.pricing),
-    ),
+  const pricing = yield* modelRegistry.get(params.modelId).pipe(
+    Effect.map(Option.flatMap((model) => Option.fromUndefinedOr(model.pricing))),
     Effect.catchEager(() => Effect.succeedNone),
   )
   if (Option.isNone(pricing)) return Option.none()
@@ -1840,14 +1777,12 @@ const MAX_STEPS_INSTRUCTION =
   "You have reached the maximum number of steps for this turn, so tools are now disabled. Do not attempt another tool call. Reply with text only: say that the step limit stopped you, summarise what you established, and name what is still unfinished."
 
 const TRUNCATED_RESPONSE_INSTRUCTION =
-  "Your previous step hit the output limit before it finished, so its tool call was discarded. Retry in smaller steps: make one shorter tool call now and continue after its result."
+  "Your previous step hit the output limit before it finished. Text it wrote is saved above; a tool call it was writing was discarded. Continue in smaller steps: resume the text where it stopped without repeating it, or make one shorter tool call now and continue after its result."
 
 export const TurnOutcome = Schema.TaggedUnion({
   Done: {},
   InteractionRequested: {
     pendingRequestId: InteractionRequestId,
-    pendingToolCallId: Schema.String,
-    currentTurnAgent: AgentName,
   },
 })
 export type TurnOutcome = Schema.Schema.Type<typeof TurnOutcome>
@@ -2041,6 +1976,74 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     })
 
     /**
+     * What one step already knows about its calls, before any tool runs.
+     *
+     * None when the step's tool message exists: the step is settled, and it
+     * is closed here. Otherwise the known results, by precedence: a stored
+     * terminal event wins over a recovered result, which wins over a result
+     * this process kept. Every path that writes the step's results reads this
+     * first, so none of them overwrites a result the step already has.
+     */
+    const readKnownStepResults = Effect.fn("AgentLoop.readKnownStepResults")(function* (params: {
+      readonly messageId: RunningState["message"]["id"]
+      readonly step: number
+      readonly toolCalls: ReadonlyArray<Prompt.ToolCallPart>
+      readonly recoveredResults: ReadonlyArray<Prompt.ToolResultPart>
+    }) {
+      const address = stepAddress(params.messageId, params.step)
+      const resultKey = processLocalReplayResultKey({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        toolResultMessageId: address.toolResult,
+      })
+      const existing = yield* messageStorage.getMessage(address.toolResult)
+      if (!Predicate.isUndefined(existing)) {
+        yield* processLocalReplay.removeResults(resultKey)
+        yield* closeTurnStep({ messageId: params.messageId, step: params.step })
+        return Option.none()
+      }
+
+      const persistedResults = yield* findPersistedToolResults({
+        sessionId: scope.sessionId,
+        branchId: scope.branchId,
+        assistantMessageId: address.assistant,
+        toolCalls: params.toolCalls,
+      }).pipe(
+        Effect.catchIf(Schema.is(ToolResultReplayError), (error) =>
+          Effect.gen(function* () {
+            const failureParts = params.toolCalls.map((toolCall) =>
+              Prompt.toolResultPart({
+                id: toolCall.id,
+                name: toolCall.name,
+                isFailure: true,
+                providerExecuted: false,
+                result: {
+                  error: error.message,
+                  reason: "CorruptResult",
+                },
+              }),
+            )
+            yield* recordToolOutcome({
+              sessionId: scope.sessionId,
+              branchId: scope.branchId,
+              toolResultMessageId: address.toolResult,
+              assistantMessageId: address.assistant,
+              parts: failureParts,
+            }).pipe(Effect.orDie)
+            return yield* error
+          }),
+        ),
+      )
+      const localResults = yield* processLocalReplay.getResults(resultKey)
+      const knownResults = new Map(localResults)
+      for (const result of params.recoveredResults) knownResults.set(result.id, result)
+      for (const [toolCallId, result] of persistedResults) {
+        knownResults.set(toolCallId, result)
+      }
+      return Option.some({ resultKey, localResults, knownResults })
+    })
+
+    /**
      * Run the step's tool calls and commit their results.
      *
      * Answers with the interaction a tool parked on, if one did: a tool that
@@ -2060,55 +2063,14 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         if (params.toolCalls.length === 0) return Option.none<ToolInteractionPending>()
 
         const address = stepAddress(params.messageId, params.step)
-        const resultKey = processLocalReplayResultKey({
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          toolResultMessageId: address.toolResult,
-        })
-        const existing = yield* messageStorage.getMessage(address.toolResult)
-        if (!Predicate.isUndefined(existing)) {
-          yield* processLocalReplay.removeResults(resultKey)
-          yield* closeTurnStep({ messageId: params.messageId, step: params.step })
-          return Option.none<ToolInteractionPending>()
-        }
-
-        const persistedResults = yield* findPersistedToolResults({
-          sessionId: scope.sessionId,
-          branchId: scope.branchId,
-          assistantMessageId: address.assistant,
+        const known = yield* readKnownStepResults({
+          messageId: params.messageId,
+          step: params.step,
           toolCalls: params.toolCalls,
-        }).pipe(
-          Effect.catchIf(Schema.is(ToolResultReplayError), (error) =>
-            Effect.gen(function* () {
-              const failureParts = params.toolCalls.map((toolCall) =>
-                Prompt.toolResultPart({
-                  id: toolCall.id,
-                  name: toolCall.name,
-                  isFailure: true,
-                  providerExecuted: false,
-                  result: {
-                    error: error.message,
-                    reason: "CorruptResult",
-                  },
-                }),
-              )
-              yield* recordToolOutcome({
-                sessionId: scope.sessionId,
-                branchId: scope.branchId,
-                toolResultMessageId: address.toolResult,
-                assistantMessageId: address.assistant,
-                parts: failureParts,
-              }).pipe(Effect.orDie)
-              return yield* error
-            }),
-          ),
-        )
-        const localResults = yield* processLocalReplay.getResults(resultKey)
-        const knownResults = new Map(localResults)
-        for (const result of params.recoveredResults ?? []) knownResults.set(result.id, result)
-        for (const [toolCallId, result] of persistedResults) {
-          knownResults.set(toolCallId, result)
-        }
+          recoveredResults: params.recoveredResults ?? [],
+        })
+        if (Option.isNone(known)) return Option.none<ToolInteractionPending>()
+        const { resultKey, localResults, knownResults } = known.value
         const pendingToolCalls = params.toolCalls.filter(
           (toolCall) => !knownResults.has(toolCall.id),
         )
@@ -2195,8 +2157,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           ),
         )
 
-      let nextExternalStep = params.step
-
       const source = yield* resolveTurnSource({
         messageId: params.messageId,
         step: params.step,
@@ -2205,26 +2165,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         activeStream: params.activeStream,
-        randomId: platform.randomId,
-        persistExternalToolCall: (toolCall) => {
-          const step = nextExternalStep
-          if (step > MAX_TURN_STEPS) {
-            return Effect.fail(
-              new TurnError({
-                message: `External turn exceeded the ${MAX_TURN_STEPS} tool step limit`,
-              }),
-            )
-          }
-          nextExternalStep += 1
-          const at = stepAddress(params.messageId, step)
-          return persistAssistantPartsWithBindingsAt(at, [toolCall]).pipe(
-            Effect.as({
-              assistantMessageId: at.assistant,
-              toolResultMessageId: at.toolResult,
-            } satisfies ExternalToolPersistence),
-            Effect.orDie,
-          )
-        },
       })
 
       if (Predicate.isUndefined(source)) {
@@ -2293,10 +2233,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
 
       const outcome = classifyStep(collected)
-      let responseStep = params.step
-      if (source.driverKind === "external") responseStep = nextExternalStep
-      // The step whose messages carry this response. An external driver settles
-      // its own tool steps as it goes, so its response lands past `params.step`.
+      const responseStep = params.step
       const responseAddress = stepAddress(params.messageId, responseStep)
       const assistantParts = collected.messageProjection.assistant
       const toolParts = collected.messageProjection.tool
@@ -2401,6 +2338,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             parts: [...toolParts, ...unrun],
           })
           yield* closeTurnStep({ messageId: params.messageId, step: responseStep })
+          // A cut step spent tokens nobody reported, so the turn's total is unknown.
+          yield* scope.turnLedger.noteStep({
+            agent: params.resolved.currentTurnAgent,
+            model: params.resolved.modelId,
+            usage: Option.none(),
+            toolCallCount: 0,
+          })
         })
 
       yield* Match.type<StepOutcome>().pipe(
@@ -2430,12 +2374,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       return { collected, outcome }
     })
 
-    const interactionOutcome = (pending: ToolInteractionPending, currentTurnAgent: AgentNameType) =>
+    const interactionOutcome = (pending: ToolInteractionPending) =>
       StepResult.cases.Interaction.make({
         outcome: TurnOutcome.cases.InteractionRequested.make({
           pendingRequestId: pending.pending.requestId,
-          pendingToolCallId: String(pending.toolCallId),
-          currentTurnAgent,
         }),
       })
 
@@ -2466,16 +2408,18 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const turnEndTime = yield* DateTime.now
       const turnDurationMs = DateTime.toEpochMillis(turnEndTime) - params.startedAtMs
       const metrics = yield* scope.turnLedger.total
+      // Token totals are a receipt only when every step reported usable
+      // counts; a partial sum would read as the turn's true total.
+      const usage = Option.map(flagWhenTrue(metrics.steps > 0 && metrics.usageKnown), () => ({
+        inputTokens: metrics.inputTokens,
+        outputTokens: metrics.outputTokens,
+      }))
 
       const envelope = yield* storageTransaction(
         Effect.gen(function* () {
           yield* messageStorage.updateMessageTurnDuration(params.messageId, turnDurationMs)
           // Token totals are a receipt only when every step reported usable
           // counts; a partial sum would read as the turn's true total.
-          const usage = Option.map(flagWhenTrue(metrics.steps > 0 && metrics.usageKnown), () => ({
-            inputTokens: metrics.inputTokens,
-            outputTokens: metrics.outputTokens,
-          }))
           return yield* eventPublisher.append(
             TurnCompleted.make({
               sessionId: scope.sessionId,
@@ -2504,7 +2448,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         interrupted: params.turnInterrupted,
         streamFailed: params.streamFailed,
         unanswered: params.unanswered,
-        usage: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
+        usage: {
+          known: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
+          complete: metrics.usageKnown,
+        },
       })
       yield* Effect.logDebug("finalize.turn-after.done")
 
@@ -2672,13 +2619,51 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly currentTurnAgent: AgentNameType
       readonly turnProfile: AgentLoopTurnProfile
     }) {
-      if (params.interrupted) {
-        return { step: 0, interaction: Option.none() }
-      }
-
       const position = yield* resolveTurnPosition(params.messageId)
       const lastCompletedStep = position.step
       const pendingStep = position.step + 1
+
+      // An interrupt that lands while a step waits on its tools (a parked
+      // interaction) still owes every call of that step a result: the
+      // projection rejects a call with none. Results the step already has are
+      // kept; the rest say the interrupt stopped them.
+      if (params.interrupted) {
+        if (Option.isNone(position.pendingAssistant)) {
+          return { step: lastCompletedStep, interaction: Option.none() }
+        }
+        const known = yield* readKnownStepResults({
+          messageId: params.messageId,
+          step: pendingStep,
+          toolCalls: position.pendingToolCalls,
+          recoveredResults: [],
+        })
+        if (Option.isNone(known)) return { step: pendingStep, interaction: Option.none() }
+        const address = stepAddress(params.messageId, pendingStep)
+        const parts = position.pendingToolCalls.map(
+          (call) =>
+            known.value.knownResults.get(call.id) ??
+            Prompt.toolResultPart({
+              id: call.id,
+              name: call.name,
+              isFailure: true,
+              providerExecuted: false,
+              result: {
+                error: "The tool did not finish: the turn was interrupted.",
+                reason: "Interrupted",
+              },
+            }),
+        )
+        yield* recordToolOutcome({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          toolResultMessageId: address.toolResult,
+          assistantMessageId: position.pendingAssistant.value.id,
+          parts,
+        })
+        yield* processLocalReplay.removeResults(known.value.resultKey)
+        yield* closeTurnStep({ messageId: params.messageId, step: pendingStep })
+        return { step: pendingStep, interaction: Option.none() }
+      }
       if (Option.isNone(position.pendingAssistant)) {
         return { step: lastCompletedStep, interaction: Option.none() }
       }
@@ -2717,8 +2702,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             interaction: Option.some(
               TurnOutcome.cases.InteractionRequested.make({
                 pendingRequestId: outcome.requestId,
-                pendingToolCallId: toolCall.id,
-                currentTurnAgent: params.currentTurnAgent,
               }),
             ),
           }
@@ -2777,7 +2760,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         return { step: pendingStep, interaction: Option.none() }
       }
       const pending = interactionSignal.value
-      const outcome = interactionOutcome(pending, params.currentTurnAgent)
+      const outcome = interactionOutcome(pending)
       return { step: 1, interaction: Option.some(outcome.outcome) }
     })
 
@@ -2878,8 +2861,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       const maxSteps = Math.min(resolved.agent.maxSteps ?? MAX_TURN_STEPS, MAX_TURN_STEPS)
       if (params.step > maxSteps) {
-        // Only reachable when the final step said nothing at all: it ran with
-        // tools disabled, so it had no way to ask for another. Leaving the
+        // Only reachable when the final step still returned a tool call: it ran
+        // with tools disabled, and the calls it made ran anyway. Leaving the
         // flags false publishes a `TurnCompleted` no caller can tell from a
         // reply, and `headless-runner.ts` reads exactly that flag to pick its
         // exit code, so `gent -H` would exit 0 having printed nothing.
@@ -2938,16 +2921,16 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         return StepResult.cases.Interaction.make({
           outcome: TurnOutcome.cases.InteractionRequested.make({
             pendingRequestId: attempt.failure.requestId,
-            pendingToolCallId: "external",
-            currentTurnAgent,
           }),
         })
       }
       const { collected, outcome } = attempt.success
       // Whatever the model did produce stays; a durable instruction follows it
-      // and the same turn runs one more step. Once the budget is spent, stop.
-      const continueOr = (instruction: string, otherwise: StepResult) =>
-        continueWithinTurn({
+      // and the same turn runs one more step. Once the continuations are spent,
+      // or on the last step the budget allows, stop: no step would answer it.
+      const continueOr = (instruction: string, otherwise: StepResult) => {
+        if (finalStep) return Effect.succeed(otherwise)
+        return continueWithinTurn({
           messageId: params.state.message.id,
           step: params.step,
           instruction,
@@ -2957,6 +2940,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             return otherwise
           }),
         )
+      }
       const runTools = Effect.gen(function* () {
         const interactionSignal = yield* executeTools({
           hostToolBindings: resolved.hostToolBindings,
@@ -2967,7 +2951,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           toolBindings: resolved.toolBindings,
         })
         if (Option.isSome(interactionSignal)) {
-          return interactionOutcome(interactionSignal.value, currentTurnAgent)
+          return interactionOutcome(interactionSignal.value)
         }
         yield* clearProcessLocalReplayBindings(
           stepAddress(params.state.message.id, params.step).assistant,
@@ -3016,7 +3000,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     })
 
     const runTurn = Effect.fn("AgentLoop.runTurn")(function* (state: RunningState) {
-      yield* scope.turnLedger.beginTurn
+      yield* scope.turnLedger.beginTurn(state.message.id)
       const cancelled = yield* operations
         .isTurnCancelled({
           sessionId: scope.sessionId,
@@ -3074,6 +3058,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           preserveReplayBindings = true
           return resumed.interaction.value
         }
+        if (resumed.step > 0) yield* scope.turnLedger.noteUnseenSteps
 
         const ended = yield* runSteps(resumed.step)
         if (ended._tag === "Interaction") {

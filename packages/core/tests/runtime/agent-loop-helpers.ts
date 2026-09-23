@@ -3,7 +3,12 @@ import { BunServices } from "@effect/platform-bun"
 import { Predicate, Clock, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
-import { AgentLoopError, entityIdOf, type SessionRuntimeState } from "../../src/domain/agent-loop"
+import {
+  AgentLoop as AgentLoopActor,
+  AgentLoopError,
+  entityIdOf,
+  type SessionRuntimeState,
+} from "../../src/domain/agent-loop"
 import {
   AgentDefinition,
   AgentName,
@@ -11,11 +16,7 @@ import {
   ModelId,
   type RunSpec,
 } from "../../src/domain/agent"
-import {
-  AgentLoop as AgentLoopActor,
-  AgentLoopSessionGovernance,
-  AgentLoopTestActor,
-} from "../../src/runtime/agent-loop"
+import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
 import {
   ModelRegistry,
   ModelResolver,
@@ -365,6 +366,7 @@ export const makeLiveToolLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
   tools: ReadonlyArray<ToolCapability> = [],
   resources: AnyResourceContribution[] = [],
+  eventStoreLayer: Layer.Layer<EventStore> = EventStore.Memory,
 ) => {
   const extRegistry = makeExtRegistry(tools, resources)
   const baseDeps = Layer.mergeAll(
@@ -374,7 +376,7 @@ export const makeLiveToolLayer = (
     extRegistry,
     RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
     ConfigService.Test(),
-    EventStore.Memory,
+    eventStoreLayer,
     ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),

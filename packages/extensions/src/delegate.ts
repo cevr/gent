@@ -48,6 +48,7 @@ import {
   SessionId,
   ToolCallId,
   tool,
+  type TurnUsage,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
 
@@ -598,7 +599,7 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
   readonly interrupted: boolean
   readonly streamFailed: boolean
   readonly unanswered: boolean
-  readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
+  readonly usage: TurnUsage
 }) {
   const ctx = yield* ExtensionContext
   const session = yield* ctx.Session.getSession(input.sessionId)
@@ -620,7 +621,14 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
         parent,
         entry,
         outcomeOf(input),
-        usageOf(Option.fromUndefinedOr(input.usage)),
+        // The row shows a child's total, as its `TurnCompleted` receipt does:
+        // a partial count would read as the whole spend.
+        usageOf(
+          Option.map(
+            Option.liftPredicate(input.usage, (usage) => usage.complete),
+            (usage) => usage.known,
+          ),
+        ),
       )
       return { next: replaceEntry(entries, marked), result: true }
     }),

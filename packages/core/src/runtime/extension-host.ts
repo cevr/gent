@@ -35,7 +35,7 @@ import {
   type ExtensionSetupServices,
   type ExtensionStateFacet,
   type ExtensionStatusInfo,
-  type ExtensionTurnContext,
+  type TurnProjectionInput,
   type FailedExtension,
   type FailedExtensionPhase,
   FileLockService,
@@ -246,7 +246,6 @@ export const emptyErasedResourceLayer: ErasedResourceLayer = Layer.empty as Eras
 interface ExtensionLeafFrame {
   readonly extensionId?: ExtensionId
   readonly toolCallId?: ToolCallId
-  readonly turn?: ExtensionTurnContext
 }
 
 /**
@@ -275,7 +274,7 @@ interface CompiledExtensionHooks {
     input: SystemPromptInput,
   ) => Effect.Effect<string, never, CurrentExtensionHostContext>
   readonly resolveTurnProjection: (
-    turn: ExtensionTurnContext,
+    input: TurnProjectionInput,
   ) => Effect.Effect<ExtensionTurnProjection, never, CurrentExtensionHostContext>
   readonly emitTurnAfter: (
     input: TurnAfterInput,
@@ -294,7 +293,7 @@ interface RegisteredSystemPromptRewrite {
 
 interface HookTurnProjectionSlot {
   readonly extensionId: ExtensionId
-  readonly handler: () => Effect.Effect<
+  readonly handler: (input: TurnProjectionInput) => Effect.Effect<
     {
       readonly promptSections?: ReadonlyArray<PromptSection>
       readonly toolPolicy?: ToolPolicyFragment
@@ -334,12 +333,12 @@ const collectTurnProjection = (
   for (const fragment of projection.value.policyFragments) policyFragments.push(fragment)
 }
 
-const runTurnProjectionHook = (slot: HookTurnProjectionSlot, turn: ExtensionTurnContext) =>
+const runTurnProjectionHook = (slot: HookTurnProjectionSlot, input: TurnProjectionInput) =>
   sealErasedEffect<Option.Option<ExtensionTurnProjection>, never>(
     () =>
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off
       slot
-        .handler()
+        .handler(input)
         .pipe(
           Effect.map((projection) => {
             const promptSections = Option.getOrElse(
@@ -353,7 +352,7 @@ const runTurnProjectionHook = (slot: HookTurnProjectionSlot, turn: ExtensionTurn
             return Option.some({ promptSections, policyFragments })
           }),
         )
-        .pipe(provideExtensionLeaf({ extensionId: slot.extensionId, turn })),
+        .pipe(provideExtensionLeaf({ extensionId: slot.extensionId })),
     {
       onFailure: (error) =>
         Effect.logWarning("extension.hook.turn-projection.failed").pipe(
@@ -394,7 +393,7 @@ const collectHookSlot = (
     case "turnProjection":
       slots.turnProjection.push({
         extensionId: ext.manifest.id,
-        handler: () => eraseHookEffect(slot.hook.handler()),
+        handler: (input) => eraseHookEffect(slot.hook.handler(input)),
       })
       return
     case "turnAfter":
@@ -459,14 +458,14 @@ export const compileExtensionHooks = (
         return current
       }),
 
-    resolveTurnProjection: (turn) =>
+    resolveTurnProjection: (input) =>
       Effect.gen(function* () {
         const sectionsById = new Map<string, PromptSection>()
         const policyFragments: ToolPolicyFragment[] = []
 
         for (const slot of turnProjectionSlots) {
           collectTurnProjection(
-            yield* runTurnProjectionHook(slot, turn),
+            yield* runTurnProjectionHook(slot, input),
             sectionsById,
             policyFragments,
           )
@@ -1081,10 +1080,21 @@ export interface DiscoveredExtension {
   readonly sourcePath: string
 }
 
-interface SkippedExtension {
-  readonly path: string
-  readonly scope: ExtensionScope
-  readonly error: string
+/**
+ * A file that never produced an extension has no manifest to read, so its id
+ * comes from its path: the file name, or the directory name for an `index`
+ * entry. That id also lets `disabledExtensions` silence it.
+ */
+const importFailure = (
+  path: Path.Path,
+  sourcePath: string,
+  scope: ExtensionScope,
+  error: string,
+): FailedExtension => {
+  const parsed = path.parse(sourcePath)
+  let name = parsed.name
+  if (name === "index") name = path.basename(parsed.dir)
+  return { manifest: { id: ExtensionId.make(name) }, scope, sourcePath, phase: "load", error }
 }
 
 /** Discover and load extensions from all configured directories. Per-file isolation — one broken file does not suppress siblings. */
@@ -1092,12 +1102,13 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
   readonly userDir: string // ~/.gent/extensions
   readonly projectDir: string // .gent/extensions
 }) {
+  const path = yield* Path.Path
   const userPaths = yield* discoverDir(opts.userDir)
   const projectPaths = yield* discoverDir(opts.projectDir)
   const projectTrusted = yield* isProjectExtensionDirectoryTrusted(opts)
 
   const loaded: DiscoveredExtension[] = []
-  const skipped: SkippedExtension[] = []
+  const failed: FailedExtension[] = []
 
   /** Load one scope's files; a broken file is skipped, its siblings still load. */
   const loadScope = Effect.fn("ExtensionLoader.loadScope")(function* (
@@ -1111,8 +1122,8 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
         continue
       }
       const error = result.failure.message
-      skipped.push({ path: filePath, scope, error })
-      yield* Effect.logWarning("extension.load.skipped").pipe(
+      failed.push(importFailure(path, filePath, scope, error))
+      yield* Effect.logWarning("extension.load.failed").pipe(
         Effect.annotateLogs({ path: filePath, scope, error }),
       )
     }
@@ -1127,14 +1138,14 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
     const error =
       "Project code is not trusted. Add its canonical root to trustedProjects in the user config."
     for (const filePath of projectPaths) {
-      skipped.push({ path: filePath, scope: "project", error })
+      failed.push(importFailure(path, filePath, "project", error))
       yield* Effect.logWarning("extension.load.untrusted").pipe(
         Effect.annotateLogs({ path: filePath, error }),
       )
     }
   }
 
-  return { loaded, skipped }
+  return { loaded, failed }
 })
 
 /** Run extension setup and produce LoadedExtension. Catches defects from malformed setup functions. */
@@ -1497,20 +1508,11 @@ export const loadRuntimeProfileDeclarations = (
       Effect.catchEager((error) =>
         Effect.logWarning("runtime-profile.extension.discovery.failed").pipe(
           Effect.annotateLogs({ error: String(error), cwd: canonicalCwd }),
-          Effect.as({ loaded: [], skipped: [] }),
+          Effect.as({ loaded: [], failed: [] }),
         ),
       ),
     )
-
-    if (discovery.skipped.length > 0) {
-      yield* Effect.logWarning("runtime-profile.extension.discovery.summary").pipe(
-        Effect.annotateLogs({
-          loaded: String(discovery.loaded.length),
-          skipped: String(discovery.skipped.length),
-          cwd: canonicalCwd,
-        }),
-      )
-    }
+    const importFailed = discovery.failed.filter((ext) => !disabledSet.has(ext.manifest.id))
 
     // 3. Setup builtin + external extensions
     const setup = yield* setupExtensions({
@@ -1531,7 +1533,7 @@ export const loadRuntimeProfileDeclarations = (
     const extensionDeclarations = yield* validateLoadedExtensions(setup.active)
     const declarations: ExtensionActivationResult = {
       active: extensionDeclarations.active,
-      failed: [...setup.failed, ...extensionDeclarations.failed],
+      failed: [...importFailed, ...setup.failed, ...extensionDeclarations.failed],
     }
     // 5. Build the base prompt section: core writes the environment
     const isGitRepo = yield* fs
@@ -2083,13 +2085,12 @@ export const makeExtensionHostContextProvider = (
         ),
       ).pipe(Effect.mapError(sessionError(operation)), Effect.asVoid)
 
-    const fileLockOption = yield* Effect.serviceOption(FileLockService)
-    const FileLock: ExtensionFileLockServiceApi = Option.match(fileLockOption, {
-      onNone: () => ({ withLock: (_path, effect) => effect }),
-      onSome: (fileLock) => ({ withLock: (path, effect) => fileLock.withLock(path, effect) }),
-    })
+    const fileLock = yield* facet(FileLockService, "FileLockService")
+    const FileLock: ExtensionFileLockServiceApi = {
+      withLock: (path, effect) => fileLock((service) => service.withLock(path, effect)),
+    }
 
-    const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
+    const statePublisher = yield* facet(ExtensionStatePublisher, "ExtensionStatePublisher")
 
     // An unnamed target is the run's own branch.
     const targetIn = (
@@ -2109,35 +2110,33 @@ export const makeExtensionHostContextProvider = (
       FileLock,
 
       State: ((extensionId) =>
-        Option.match(statePublisherOption, {
-          onNone: () => ({ changed: () => Effect.void }),
-          onSome: (statePublisher) =>
-            Option.match(extensionId, {
-              onNone: () => ({
-                changed: () =>
-                  Effect.fail(
-                    new ExtensionServiceError({
-                      service: "ExtensionState",
-                      operation: "changed",
-                      message: "Extension id unavailable for state change notification",
+        Option.match(extensionId, {
+          onNone: () => ({
+            changed: () =>
+              Effect.fail(
+                new ExtensionServiceError({
+                  service: "ExtensionState",
+                  operation: "changed",
+                  message: "Extension id unavailable for state change notification",
+                }),
+              ),
+          }),
+          onSome: (id) => ({
+            changed: () =>
+              statePublisher((publisher) =>
+                mapExtensionServiceError(
+                  "ExtensionState",
+                  "changed",
+                  inWorkspace(
+                    publisher.changed({
+                      extensionId: id,
+                      sessionId: runInfo.sessionId,
+                      branchId: runInfo.branchId,
                     }),
                   ),
-              }),
-              onSome: (id) => ({
-                changed: () =>
-                  mapExtensionServiceError(
-                    "ExtensionState",
-                    "changed",
-                    inWorkspace(
-                      statePublisher.changed({
-                        extensionId: id,
-                        sessionId: runInfo.sessionId,
-                        branchId: runInfo.branchId,
-                      }),
-                    ),
-                  ),
-              }),
-            }),
+                ),
+              ),
+          }),
         })) satisfies ExtensionStateFacet,
 
       Session: {

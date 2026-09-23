@@ -1,4 +1,3 @@
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Clock, Context, Effect, Layer } from "effect"
 import type { Scope } from "effect"
 import type { FileSystem } from "effect/FileSystem"
@@ -13,7 +12,7 @@ import {
   type ServerIdentityApi,
 } from "./server.js"
 
-import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
+import type { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 
 type BuiltRpcHandlers = Layer.Success<typeof RpcHandlersLive>
 type DependenciesLayer = ReturnType<typeof createDependencies>
@@ -39,16 +38,10 @@ interface BuiltServerRoot {
 }
 
 /**
- * The Bun platform a root provides once, around `buildServerRoot` and anything
- * else it builds, so one server owns one `GentPlatform`.
+ * A root runs inside one `BunPlatformLive`, provided around `buildServerRoot`
+ * and anything else it builds, so one server owns one `GentPlatform`.
  */
-export const ServerRootPlatformLayer = Layer.mergeAll(
-  BunFileSystem.layer,
-  BunServices.layer,
-  BunGentPlatformLive,
-)
-
-type ServerRootPlatform = Layer.Success<typeof ServerRootPlatformLayer>
+type ServerRootPlatform = Layer.Success<typeof BunPlatformLive>
 
 export const buildServerRoot = (
   config: ServerRootConfig,
