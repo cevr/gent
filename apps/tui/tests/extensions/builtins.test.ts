@@ -268,6 +268,80 @@ describe("files popup across sessions", () => {
   )
 })
 
+describe("files popup listing session", () => {
+  // The listing is asked for after the session's directory resolves. A switch
+  // in that window must not send the request for the session switched to and
+  // file its reply under the one that asked.
+  filesTest("a switch while the directory resolves leaves the listing with its session", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const a = {
+        key: { sessionId: SessionId.make("sess-a"), branchId: BranchId.make("branch-a") },
+        dir: yield* fs.makeTempDirectoryScoped(),
+        paths: ["alpha/only-a.ts"],
+      }
+      const b = {
+        key: { sessionId: SessionId.make("sess-b"), branchId: BranchId.make("branch-b") },
+        dir: yield* fs.makeTempDirectoryScoped(),
+        paths: ["beta/only-b.ts"],
+      }
+      for (const entry of [a, b]) {
+        for (const file of entry.paths) {
+          yield* fs.makeDirectory(path.dirname(path.join(entry.dir, file)), { recursive: true })
+          yield* fs.writeFileString(path.join(entry.dir, file), file)
+        }
+      }
+      const bySession = new Map([
+        [a.key.sessionId, a],
+        [b.key.sessionId, b],
+      ])
+      let current = a
+      let holdCwd = true
+      const cwdGate = yield* Deferred.make<void>()
+      yield* provideClientServices(
+        Effect.gen(function* () {
+          const contributions = yield* builtinFiles.setup
+          const source = Option.getOrThrow(Option.fromUndefinedOr(contributions.autocomplete?.[0]))
+          const ids = (filter: string) => {
+            const result = source.items(filter)
+            if (!Effect.isEffect(result)) return Effect.succeed(result.map((item) => item.id))
+            return Effect.orDie(result).pipe(Effect.map((shown) => shown.map((item) => item.id)))
+          }
+          const opened = yield* Effect.forkChild(ids(""))
+          yield* Effect.yieldNow
+          current = b
+          holdCwd = false
+          yield* Deferred.succeed(cwdGate, void 0)
+          yield* Fiber.join(opened)
+          current = a
+          expect(yield* ids("ts")).toEqual(["alpha/only-a.ts"])
+        }).pipe(Effect.orDie),
+        {
+          workspace: {
+            cwd: home,
+            home,
+            sessionCwd: Effect.suspend(() => {
+              const dir = current.dir
+              if (!holdCwd) return Effect.succeed(dir)
+              return Deferred.await(cwdGate).pipe(Effect.as(dir))
+            }),
+          },
+          currentSession: () => Option.some(current.key),
+          requestEffect: (request) =>
+            Effect.succeed(
+              Option.match(Option.fromUndefinedOr(bySession.get(request.sessionId)), {
+                onNone: () => [],
+                onSome: (entry) => entry.paths,
+              }),
+            ),
+        },
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
 describe("files popup page budget", () => {
   const page = (paths: ReadonlyArray<string>, totalMatched: number) => ({ paths, totalMatched })
   const unlistedPage = Array.from({ length: 200 }, (_, index) => `ignored/${index}.ts`)

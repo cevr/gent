@@ -13,6 +13,7 @@ import {
   Schema,
 } from "effect"
 import {
+  type ActiveExtensionSession,
   type AnyExtensionClientModule,
   AskUserRenderer,
   autocompleteContribution,
@@ -318,13 +319,27 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
       readonly session: string
       readonly fiber: Fiber.Fiber<ReadonlyArray<string>>
     }>()
-    const sessionKey = () =>
-      Option.match(transport.currentSession(), {
-        onNone: () => "",
-        onSome: (current) => String(current.sessionId),
-      })
-    const fetchListing = (session: string) =>
-      transport.request(ref(FilesRpc.List), {}).pipe(
+    /**
+     * The session a key was typed in, read once per key. The listing request
+     * names it, so a switch while the key is being served cannot send the
+     * request for the session switched to.
+     */
+    interface Asker {
+      readonly key: string
+      readonly session: Option.Option<ActiveExtensionSession>
+    }
+    const askingSession = (): Asker => {
+      const session = transport.currentSession()
+      return {
+        key: Option.match(session, { onNone: () => "", onSome: (s) => String(s.sessionId) }),
+        session,
+      }
+    }
+    const fetchListing = ({ key: session, session: asked }: Asker) =>
+      Option.match(asked, {
+        onNone: () => Effect.succeed<ReadonlyArray<string>>([]),
+        onSome: (active) => transport.request(ref(FilesRpc.List), {}, active),
+      }).pipe(
         Effect.map((paths) => paths.filter(isReferenceablePath)),
         // A failed listing offers nothing until the popup opens again.
         Effect.orElseSucceed((): ReadonlyArray<string> => []),
@@ -334,11 +349,12 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
           }),
         ),
       )
-    const readListing = (session: string) =>
+    const readListing = (asker: Asker) =>
       Effect.gen(function* () {
+        const session = asker.key
         const inFlight = Option.filter(pending, (read) => read.session === session)
         if (Option.isSome(inFlight)) return yield* Fiber.join(inFlight.value.fiber)
-        const fiber = yield* lifecycle.scoped(Effect.forkScoped(fetchListing(session)))
+        const fiber = yield* lifecycle.scoped(Effect.forkScoped(fetchListing(asker)))
         pending = Option.some({ session, fiber })
         return yield* Fiber.join(fiber).pipe(
           Effect.ensuring(
@@ -348,11 +364,11 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
           ),
         )
       })
-    const listingFor = (session: string) =>
+    const listingFor = (asker: Asker) =>
       Option.match(
-        Option.filter(listing, (known) => known.session === session),
+        Option.filter(listing, (known) => known.session === asker.key),
         {
-          onNone: () => readListing(session),
+          onNone: () => readListing(asker),
           onSome: (known) => Effect.succeed(known.paths),
         },
       )
@@ -368,15 +384,15 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
       title: "Files",
       items: (filter: string) =>
         Effect.gen(function* () {
-          const session = sessionKey()
+          const asker = askingSession()
           const cwd = yield* workspace.sessionCwd
           if (filter.length === 0) {
-            const paths = yield* readListing(session)
+            const paths = yield* readListing(asker)
             // Opening the popup starts the scan, so the first typed key finds it ready.
             yield* lifecycle.scoped(Effect.forkScoped(Effect.ignore(finderFor(cwd))))
             return topLevel(paths).slice(0, MAX_RESULTS).map(formatMatch)
           }
-          const paths = yield* listingFor(session)
+          const paths = yield* listingFor(asker)
           const ranked = yield* finderFor(cwd).pipe(
             Effect.tap((entry) => entry.scanned),
             Effect.flatMap((entry) =>
