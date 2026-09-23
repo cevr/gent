@@ -9,6 +9,7 @@ import {
   headTailChars,
   latestAssistantText,
   Message,
+  OutputCut,
   messagePartsImages,
   messagePartsReasoning,
   messagePartsText,
@@ -984,6 +985,43 @@ describe("message part projection", () => {
     const tailLines = tail.split("\n")
     expect(headLines).toEqual(whole.slice(0, headLines.length))
     expect(tailLines).toEqual(whole.slice(cut.tailLine - 1))
+  })
+
+  test("a field with no room even for its marker is emptied with a cut record, never dropped", () => {
+    // Numbers are kept first; these leave the strings and the array no room.
+    const numbers = Object.fromEntries(
+      Array.from({ length: 400 }, (_, index) => [`metric_${index}_with_a_long_name`, index]),
+    )
+    const texts = Object.fromEntries(
+      Array.from({ length: 10 }, (_, index) => [`text${index}`, `line\n${"y".repeat(1_000)}\n`]),
+    )
+    const list = Array.from({ length: 30 }, (_, index) => ({ file: `f${index % 3}.ts`, n: index }))
+    const operation = projectOperation(
+      "custom",
+      { query: "q" },
+      encodeValue({ ...numbers, ...texts, list }),
+    )
+    const output = Schema.decodeUnknownSync(
+      Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+    )(operation?.output)
+    const cuts = operation?.cuts ?? []
+    // Every string is kept, cut or emptied, and its cut is recorded.
+    for (const key of Object.keys(texts)) {
+      expect(Schema.is(Schema.String)(output[key])).toBe(true)
+      expect(cuts.some((cut) => cut.field === key)).toBe(true)
+    }
+    const emptied = Object.keys(texts).filter((key) => output[key] === "")
+    expect(emptied.length).toBeGreaterThan(0)
+    for (const key of emptied) {
+      // Two lines, a final newline: the kept tail is the empty part after it.
+      expect(cuts).toContainEqual(
+        OutputCut.cases.Text.make({ field: key, lines: 3, tailLine: 3, chars: 1_006 }),
+      )
+    }
+    // The array is kept, whole or cut, and a cut is recorded.
+    const kept = Schema.decodeUnknownSync(Schema.Array(Schema.Unknown))(output["list"])
+    if (kept.length < list.length) expect(cuts.some((cut) => cut.field === "list")).toBe(true)
+    expect(encodeValue(operation).length).toBeLessThanOrEqual(8_192)
   })
 
   test("a head or tail that is part of a line says so when whole lines are left out too", () => {
