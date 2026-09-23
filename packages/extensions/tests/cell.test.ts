@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
+  Clock,
   Context,
   Deferred,
   Effect,
@@ -5380,6 +5381,55 @@ const edgeSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
     "- tools.record(input?: {} | unknown[]): Promise<Record<string, boolean>> // Returns a map.",
   ],
 ]
+
+// Each level names a union of the one below and a list of it, so a renderer
+// that expands a shared definition at every reach doubles per level.
+const sharedUnion = Array.from({ length: 22 }).reduce<Schema.Codec<unknown>>(
+  (below, _, index) =>
+    Schema.Union([below, Schema.Array(below)]).annotate({ identifier: `Level${index + 1}` }),
+  Schema.Union([Schema.Boolean, Schema.Null]).annotate({ identifier: "Level0" }),
+)
+// Anonymous unions nested with no definition to share.
+const nestedUnion = Array.from({ length: 14 }).reduce<Schema.Codec<unknown>>(
+  (below) => Schema.Union([Schema.Boolean, Schema.Null, Schema.Array(below)]),
+  Schema.Union([Schema.Boolean, Schema.Null]),
+)
+const deepUnionTools = [
+  tool({
+    id: "shared-union",
+    description: "Returns a shared union.",
+    params: Schema.Struct({ value: sharedUnion }),
+    output: sharedUnion,
+    execute: () => Effect.succeed(true),
+  }),
+  tool({
+    id: "nested-union",
+    description: "Returns a nested union.",
+    params: Schema.Struct({ value: nestedUnion }),
+    output: nestedUnion,
+    execute: () => Effect.succeed(true),
+  }),
+]
+
+describe("tool signature bound", () => {
+  for (const capability of deepUnionTools) {
+    it.live(
+      `${String(capability.id)} renders within the type limit, in one pass over its definitions`,
+      () =>
+        Effect.gen(function* () {
+          const started = yield* Clock.currentTimeMillis
+          const line = yield* renderToolSignature(capability)
+          const elapsed = (yield* Clock.currentTimeMillis) - started
+          const [, input = "", result = ""] =
+            /^- tools\["[^"]+"\]\(input: (.*)\): Promise<(.*)> \/\/ /.exec(line) ?? []
+          expect(input).toBe("object")
+          expect(result).toBe("boolean | null | unknown[]")
+          // Expanding a shared definition at every reach doubles the work per level.
+          expect(elapsed).toBeLessThan(1000)
+        }),
+    )
+  }
+})
 
 describe("tool signature edges", () => {
   for (const [capability, expected] of edgeSignatures) {
