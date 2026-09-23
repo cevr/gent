@@ -28,7 +28,12 @@ import {
   neverInterrupted,
 } from "../../src/runtime/tools"
 import { RuntimeEnvironment } from "../../src/runtime/config"
-import { type AgentEvent, EventPublisher, type ToolCallStarted } from "../../src/domain/event"
+import {
+  type AgentEvent,
+  EventPublisher,
+  type ToolCallStarted,
+  type ToolCallSucceeded,
+} from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { createRpcHarness, testToolContext } from "../../src/test-utils/harness"
 import {
@@ -790,6 +795,119 @@ describe("tool execution", () => {
         }),
       ])
     }))
+
+  const isToolTerminal = Predicate.or(
+    Predicate.isTagged("ToolCallSucceeded"),
+    Predicate.isTagged("ToolCallFailed"),
+  )
+  const summaryOf = (params: {
+    readonly tool: ReturnType<typeof tool>
+    readonly toolName: string
+    readonly input: Readonly<Record<string, string>>
+  }) =>
+    Effect.gen(function* () {
+      const summaries: Array<{
+        readonly tag: string
+        readonly summary: ToolCallSucceeded["summary"]
+      }> = []
+      const eventPublisherLayer = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: () => Effect.die("append not exercised in ToolRunner tests"),
+          deliver: () => Effect.void,
+          publish: (event: AgentEvent) =>
+            Effect.sync(() => {
+              if (isToolTerminal(event)) summaries.push({ tag: event._tag, summary: event.summary })
+            }),
+        }),
+      )
+      const deps = Layer.mergeAll(
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("test") },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: { tools: [params.tool] },
+            },
+          ]),
+        ),
+        eventPublisherLayer,
+        ApprovalService.Test(),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+      )
+      const layer = Layer.mergeAll(deps, ToolRunner.Live.pipe(Layer.provide(deps)))
+      const toolCallId = ToolCallId.make(`tc-${params.toolName}`)
+      yield* Effect.gen(function* () {
+        const runner = yield* ToolRunner
+        const entry = yield* runner.capture({ toolName: params.toolName })
+        return yield* runner
+          .runBound({ toolCallId, toolName: params.toolName, input: params.input }, entry)
+          .pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("session-summary"),
+                branchId: BranchId.make("branch-summary"),
+                toolCallId,
+                agentName: AgentName.make("cowork"),
+              }),
+            ),
+          )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(layer))
+      return summaries
+    })
+
+  test("a success carries the tool's own summary over the wire input and output", () =>
+    Effect.gen(function* () {
+      const CountTool = tool({
+        id: "count",
+        description: "Counts words",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ words: Schema.Finite, body: Schema.String }),
+        execute: (params) =>
+          Effect.succeed({ words: params.text.split(" ").length, body: "x".repeat(400) }),
+        summary: (input, output) => `${output.words} words in "${input.text}"`,
+      })
+      const summaries = yield* summaryOf({
+        tool: CountTool,
+        toolName: "count",
+        input: { text: "one two three" },
+      })
+      expect(summaries).toEqual([
+        { tag: "ToolCallSucceeded", summary: '3 words in "one two three"' },
+      ])
+    }).pipe(Effect.timeout("5 seconds")))
+
+  test("a failure, or a summary that throws, keeps the head of the output", () =>
+    Effect.gen(function* () {
+      const ThrowingTool = tool({
+        id: "throwing",
+        description: "Summary throws",
+        params: Schema.Struct({}),
+        output: Schema.Struct({ note: Schema.String }),
+        execute: () => Effect.succeed({ note: "kept" }),
+        summary: () => {
+          // oxlint-disable-next-line effect/noThrowStatement -- The subject is an author summary that throws.
+          throw new globalThis.Error("summary bug")
+        },
+      })
+      const FailingTool = tool({
+        id: "failing",
+        description: "Fails",
+        params: Schema.Struct({}),
+        // Accepts the failure body too, so only the failure check keeps "never shown" out.
+        output: Schema.Struct({}),
+        execute: () => Effect.fail(new ToolRunnerTestError({ message: "disk full" })),
+        summary: () => "never shown",
+      })
+      const thrown = yield* summaryOf({ tool: ThrowingTool, toolName: "throwing", input: {} })
+      const failed = yield* summaryOf({ tool: FailingTool, toolName: "failing", input: {} })
+      expect(thrown).toEqual([{ tag: "ToolCallSucceeded", summary: '{"note":"kept"}' }])
+      expect(failed).toHaveLength(1)
+      expect(failed[0]?.tag).toBe("ToolCallFailed")
+      expect(failed[0]?.summary).not.toBe("never shown")
+    }).pipe(Effect.timeout("5 seconds")))
 })
 
 // ── turn-interruption.test ──────────────────────────────────────────────────

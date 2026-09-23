@@ -429,6 +429,12 @@ const ReadResult = Schema.Struct({
   nextOffset: Schema.optional(Schema.Finite),
 })
 
+/** `1 line`, `3 lines`: the counted noun of a one-line tool summary. */
+export const countOf = (count: number, noun: string, plural = `${noun}s`): string => {
+  if (count === 1) return `1 ${noun}`
+  return `${count} ${plural}`
+}
+
 // Read Tool — authored through the typed `tool(...)` factory, which lowers
 // directly to a Capability.
 
@@ -440,6 +446,11 @@ export const ReadTool = tool({
   promptSnippet: "Read file contents with line numbers",
   params: ReadParams,
   output: ReadResult,
+  summary: (_input, output) => {
+    const read = `${output.path} · ${countOf(output.lineCount, "line")}`
+    if (output.truncated) return `${read} (truncated)`
+    return read
+  },
   execute: Effect.fn("ReadTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
     const fs = yield* FileSystem.FileSystem
@@ -579,6 +590,7 @@ export const WriteTool = tool({
   promptGuidelines: ["Read before writing", "Prefer edit for partial changes"],
   params: WriteParams,
   output: WriteResult,
+  summary: (_input, output) => `${output.path} · ${countOf(output.bytesWritten, "byte")}`,
   execute: Effect.fn("WriteTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
     const fs = yield* FileSystem.FileSystem
@@ -815,6 +827,7 @@ export const EditTool = tool({
   promptGuidelines: ["Use for partial changes, not full rewrites", "old_string must match exactly"],
   params: EditParams,
   output: EditResult,
+  summary: (_input, output) => `${output.path} · ${countOf(output.replacements, "replacement")}`,
   execute: Effect.fn("EditTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
     const fs = yield* FileSystem.FileSystem
@@ -963,6 +976,11 @@ export const GrepTool = tool({
   promptSnippet: "Search file contents with regex",
   params: GrepParams,
   output: GrepResult,
+  summary: (input, output) => {
+    const found = `${countOf(output.matches.length, "match", "matches")} for ${input.pattern}`
+    if (output.truncated) return `${found} (truncated)`
+    return found
+  },
   execute: Effect.fn("GrepTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
     const fs = yield* FileSystem.FileSystem

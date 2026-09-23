@@ -20,6 +20,7 @@ import {
 } from "../src/fs-tools.js"
 import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
+import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 
 // ── fs-tools/read.test ──────────────────────────────────────────────────────
 
@@ -39,6 +40,52 @@ const PlatformLayer = Layer.merge(
   }),
 )
 const ToolLayer = PlatformLayer
+
+describe("shipped file tool summaries", () => {
+  const succeeded = <A>(result: A) => ({ isFailure: false, result })
+  test("read names the path and the line count, and marks a truncated read", () => {
+    expect(
+      toolResultSummary(
+        Option.some(ReadTool),
+        { path: "a.ts" },
+        succeeded({ content: "", path: "/w/a.ts", lineCount: 12, truncated: false }),
+      ),
+    ).toBe("/w/a.ts · 12 lines")
+    expect(
+      toolResultSummary(
+        Option.some(ReadTool),
+        { path: "a.ts" },
+        succeeded({ content: "", path: "/w/a.ts", lineCount: 1, truncated: true, nextOffset: 2 }),
+      ),
+    ).toBe("/w/a.ts · 1 line (truncated)")
+  })
+  test("write and edit name the path and what changed", () => {
+    expect(
+      toolResultSummary(
+        Option.some(WriteTool),
+        { path: "a.ts", content: "x" },
+        succeeded({ path: "/w/a.ts", bytesWritten: 40 }),
+      ),
+    ).toBe("/w/a.ts · 40 bytes")
+    expect(
+      toolResultSummary(
+        Option.some(EditTool),
+        { path: "a.ts", oldString: "a", newString: "b" },
+        succeeded({ path: "/w/a.ts", replacements: 1 }),
+      ),
+    ).toBe("/w/a.ts · 1 replacement")
+  })
+  test("grep counts matches for the pattern", () => {
+    const match = { file: "a.ts", line: 1, content: "x" }
+    expect(
+      toolResultSummary(
+        Option.some(GrepTool),
+        { pattern: "TODO" },
+        succeeded({ matches: [match, match], truncated: true }),
+      ),
+    ).toBe("2 matches for TODO (truncated)")
+  })
+})
 
 describe("ReadTool", () => {
   const readTest = it.scopedLive.layer(ToolLayer)

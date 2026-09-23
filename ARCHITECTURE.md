@@ -660,7 +660,11 @@ cannot evaluate; the branch interrupt flag also stops later calls in that turn.
 Inner calls a cell admits publish the ordinary tool events with a
 `parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact
 receipts (`tool`, `outcome`, `summary`) to the saved cell result whenever a cell
-made inner calls, so the transcript keeps effects visible after reload. The TUI
+made inner calls, so the transcript keeps effects visible after reload. A
+receipt summary, like the `summary` on a terminal tool event, comes from the
+tool's optional `summary(input, output)` over wire values when the tool has one
+(read, write, edit, grep and bash do); otherwise, or when it throws, the head of
+the output. Recovery has no bindings and uses the head of the output. The TUI
 nests live inner calls under the cell, counts them in the compact tree, and shows
 receipts in the `cell` renderer. The headless runner indents nested calls.
 

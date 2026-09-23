@@ -492,7 +492,7 @@ export const stringifyOutput = (value: unknown): string => {
 }
 
 /** One-line tool summary for transcripts and the tool row; ASCII marker for plain terminals. */
-const clipSummary = (text: string): string => clipChars(text, 100, "...")
+export const clipSummary = (text: string): string => clipChars(text, 100, "...")
 
 // oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
 export const summarizeOutput = (value: unknown): string => {

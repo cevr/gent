@@ -2493,8 +2493,9 @@ describe("shipped model surface", () => {
           isFailure: false,
           result: {
             display: expect.stringContaining("shipped surface"),
-            // The saved result carries inner-operation receipts for the transcript.
-            operations: [{ tool: "read", outcome: "succeeded" }],
+            // The saved result carries inner-operation receipts for the transcript,
+            // summarized by the read tool itself.
+            operations: [{ tool: "read", outcome: "succeeded", summary: `${file} · 1 line` }],
           },
         })
         const cellToolCallId = first[0]?.id
@@ -2525,8 +2526,8 @@ describe("shipped model surface", () => {
             assistantMessageId: cellAssistant?.id,
           },
         ])
-        // A reload reads the inner call back from those events: the row's input and a
-        // bounded summary, never the full output.
+        // A reload reads the inner call back from those events: the row's input and the
+        // tool's own summary, never the full output.
         const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
         const cellInteraction = snapshot.messages
           .flatMap((message) => message.toolInteractions)
@@ -2536,7 +2537,7 @@ describe("shipped model surface", () => {
             toolName: "read",
             status: "completed",
             input: { path: file },
-            summary: expect.stringContaining("shipped surface"),
+            summary: `${file} · 1 line`,
           },
         ])
         expect(cellInteraction?.operations?.[0]?.output).toBeUndefined()

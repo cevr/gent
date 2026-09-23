@@ -17,6 +17,7 @@ import {
   Stream,
 } from "effect"
 import { SqlClient } from "effect/unstable/sql"
+import { countOf } from "./fs-tools.js"
 import {
   type BranchId,
   defineExtension,
@@ -523,6 +524,12 @@ const BashResult = Schema.Struct({
   exitCode: Schema.Finite,
 })
 
+/** Lines a stream printed; a trailing newline ends a line, it does not start one. */
+const outputLineCount = (text: string): number => {
+  if (text.length === 0) return 0
+  return text.replace(/\n$/, "").split("\n").length
+}
+
 const SIGKILL_DELAY_MS = 3000
 
 type BackgroundBashJobKey = string
@@ -831,6 +838,8 @@ export const BashTool = tool({
   promptSnippet: "Execute shell commands",
   params: BashParams,
   output: BashResult,
+  summary: (_input, output) =>
+    `exit ${output.exitCode} · ${countOf(outputLineCount(output.stdout) + outputLineCount(output.stderr), "line")}`,
   execute: Effect.fn("BashTool.execute")(function* (params: typeof BashParams.Type) {
     const ctx = yield* ExtensionContext
     const timeout = Math.min(

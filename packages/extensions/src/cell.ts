@@ -68,12 +68,12 @@ import {
   resolveStoredToolBinding,
   runAgentLoopTurnProfile,
   StorageError,
-  summarizeOutput,
   ToolBindingIdentity,
   ToolCallRecoveryError,
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
   ToolRunner,
+  toolResultSummary,
   type TurnInterruptionStatus,
 } from "@gent/core/extensions/branch-tools"
 import { SqlClient } from "effect/unstable/sql"
@@ -1668,7 +1668,14 @@ const CELL_OPERATIONS_KEY = "operations"
 const decodeJsonObject = Schema.decodeUnknownOption(Schema.JsonObject)
 const encodeReceipts = Schema.encodeSync(Schema.Array(CellOperationReceipt))
 
-const receiptFor = (operation: CellToolOperation): CellOperationReceipt => {
+/**
+ * Tools bound for this cell call, by tool id. A receipt reads the author's
+ * summary from here; recovery has no bindings and uses the output head.
+ */
+type ReceiptTools = ReadonlyMap<string, ResolvedToolCapability>
+const noReceiptTools: ReceiptTools = new Map()
+
+const receiptFor = (operation: CellToolOperation, tools: ReceiptTools): CellOperationReceipt => {
   if (operation.state._tag !== "Completed") {
     return {
       toolCallId: operation.toolCallId,
@@ -1683,7 +1690,14 @@ const receiptFor = (operation: CellToolOperation): CellOperationReceipt => {
     toolCallId: operation.toolCallId,
     tool: operation.binding.toolId,
     outcome,
-    summary: summarizeOutput(operation.state.result.result),
+    summary: toolResultSummary(
+      Option.map(
+        Option.fromUndefinedOr(tools.get(String(operation.binding.toolId))),
+        (entry) => entry.capability,
+      ),
+      operation.input,
+      operation.state.result,
+    ),
   }
 }
 
@@ -1694,13 +1708,14 @@ const receiptFor = (operation: CellToolOperation): CellOperationReceipt => {
 const withCellOperationReceipts = Effect.fn("CellOperationReceipt.attach")(function* (
   cell: OwnedToolCallAddress,
   result: Prompt.ToolResultPart,
+  tools: ReceiptTools,
 ) {
   const storage = (yield* CellStorage).operations
   const operations = yield* storage.listForToolCall(cell)
   if (operations.length === 0) return result
   const value = decodeJsonObject(result.result)
   if (Option.isNone(value)) return result
-  const receipts = encodeReceipts(operations.map((entry) => receiptFor(entry.operation)))
+  const receipts = encodeReceipts(operations.map((entry) => receiptFor(entry.operation, tools)))
   return { ...result, result: { ...value.value, [CELL_OPERATIONS_KEY]: receipts } }
 })
 
@@ -2293,7 +2308,9 @@ export const dispatchCell = Effect.fn("CellExecution.dispatch")(function* () {
   const result = yield* execution.value
     .run(cell)
     .pipe(Effect.provideService(CellOperationHost, host))
-  return yield* runAgentLoopTurnProfile(params.profile)(withCellOperationReceipts(cell, result))
+  return yield* runAgentLoopTurnProfile(params.profile)(
+    withCellOperationReceipts(cell, result, params.toolBindings),
+  )
 })
 
 // ── tool ────────────────────────────────────────────────────────────────────
@@ -2358,7 +2375,8 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
       ),
     )
   // A cell stored as completed may have died before its receipts were attached.
-  if (outer._tag === "Completed") return yield* withCellOperationReceipts(params.cell, outer.result)
+  if (outer._tag === "Completed")
+    return yield* withCellOperationReceipts(params.cell, outer.result, noReceiptTools)
   const records = yield* operations.listForToolCall(params.cell)
   const pending = yield* interactions.listPending(params.cell)
   for (const { key, operation } of records) {
@@ -2384,7 +2402,9 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
   // The receipt shape every client decodes. An operation with no recorded
   // outcome is incomplete; a completed one is read back with context.read.
   const latest = yield* operations.listForToolCall(params.cell)
-  const receipts = encodeReceipts(latest.map(({ operation }) => receiptFor(operation)))
+  const receipts = encodeReceipts(
+    latest.map(({ operation }) => receiptFor(operation, noReceiptTools)),
+  )
   const result = Prompt.toolResultPart({
     id: params.cell.toolCallId,
     name: "cell",
