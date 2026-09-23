@@ -297,12 +297,16 @@ interface ShellWord {
   readonly endSafe: boolean
   /** The word holds a parameter expansion or a command substitution: its text is known only at run time. */
   readonly dynamic: boolean
+  /** The word holds an unquoted glob or brace pattern: the shell expands it to other words. */
+  readonly pattern: boolean
 }
 
 interface ShellSegment {
   readonly words: Array<ShellWord>
   /** Here-strings and heredoc bodies: what the command reads on stdin. */
   readonly stdin: Array<ShellWord>
+  /** The targets of its output redirections: files it writes. */
+  readonly writes: Array<ShellWord>
   /** The segment that pipes into this one. */
   readonly pipedFrom: Option.Option<ShellSegment>
 }
@@ -322,6 +326,12 @@ type WordRole =
   | "input-target"
   | "here-string"
   | "heredoc-delimiter"
+
+/**
+ * Where a command list is inside an open `case`: reading its subject, a
+ * pattern (where `)` ends the pattern), or a body.
+ */
+type CaseState = "subject" | "pattern" | "body"
 
 /** Characters a backslash escapes inside double quotes. */
 const DOUBLE_QUOTE_ESCAPES = new Set(["$", "`", '"', "\\"])
@@ -346,16 +356,21 @@ interface CommandReader {
   wordEnd: number
   wordEndSafe: boolean
   dynamic: boolean
+  /** The unquoted characters of the word: where a glob or brace pattern can be. */
+  plain: string
   inWord: boolean
   quoted: boolean
   role: WordRole
   stripTabs: boolean
   readonly heredocs: Array<PendingHeredoc>
+  /** The open `case` statements, innermost last. */
+  readonly cases: Array<CaseState>
 }
 
 const makeSegment = (pipedFrom: Option.Option<ShellSegment>): ShellSegment => ({
   words: [],
   stdin: [],
+  writes: [],
   pipedFrom,
 })
 
@@ -368,6 +383,9 @@ const startsExpansion = (text: string, index: number) =>
 
 /** Text known only at run time: an expansion or a substitution. */
 const DYNAMIC_TEXT = /\$[\w{(@*#?!$-]|`/
+
+/** A glob (`*`, `?`, `[…]`) or a brace expansion (`{a,b}`, `{1..3}`) in unquoted text. */
+const PATTERN_TEXT = /[*?]|\[[^\]]*\]|\{[^{}]*(,|\.\.)[^{}]*\}/
 
 /** The characters `start` to `end` of the source as one word; `expands` when the shell expands it (a heredoc body). */
 const sourceWord = (
@@ -390,6 +408,7 @@ const sourceWord = (
     end: sourceOffset(source, end - 1) + 1,
     endSafe: sourceSafe(source, end - 1),
     dynamic: expands && DYNAMIC_TEXT.test(text),
+    pattern: false,
   }
 }
 
@@ -434,8 +453,35 @@ const clearWord = (reader: CommandReader) => {
   reader.wordSafe = []
   reader.wordEndSafe = false
   reader.dynamic = false
+  reader.plain = ""
   reader.inWord = false
   reader.quoted = false
+}
+
+/**
+ * The words that open, split and close a `case`: `case` in command position,
+ * `in` after the subject, and `esac`. Pattern words are data. Returns true
+ * when the word belongs to the `case` syntax and is no argument.
+ */
+const readCaseWord = (reader: CommandReader, word: ShellWord): boolean => {
+  const keyword = !reader.quoted && !word.dynamic
+  const depth = reader.cases.length - 1
+  const state = reader.cases[depth]
+  const commandPosition = reader.segment.words.length === 0
+  if (state === "subject" && keyword && word.text === "in") {
+    reader.cases[depth] = "pattern"
+    return true
+  }
+  if (state === "pattern") {
+    if (keyword && word.text === "esac") reader.cases.pop()
+    return true
+  }
+  if (state === "body" && keyword && commandPosition && word.text === "esac") {
+    reader.cases.pop()
+    return true
+  }
+  if (keyword && commandPosition && word.text === "case") reader.cases.push("subject")
+  return false
 }
 
 const endWord = (reader: CommandReader) => {
@@ -447,9 +493,11 @@ const endWord = (reader: CommandReader) => {
       end: reader.wordEnd,
       endSafe: reader.wordEndSafe,
       dynamic: reader.dynamic,
+      pattern: PATTERN_TEXT.test(reader.plain),
     }
-    if (reader.role === "argument") reader.segment.words.push(word)
+    if (reader.role === "argument" && !readCaseWord(reader, word)) reader.segment.words.push(word)
     if (reader.role === "here-string") reader.segment.stdin.push(word)
+    if (reader.role === "redirect-target") reader.segment.writes.push(word)
     // `bash < <(cmd)`: the shell reads a script that only exists at run time.
     if (reader.role === "input-target" && isProcessSubstitution(word)) {
       reader.segment.stdin.push(word)
@@ -471,7 +519,9 @@ const endSegment = (reader: CommandReader, piped: boolean) => {
   endWord(reader)
   reader.role = "argument"
   const segment = reader.segment
-  if (segment.words.length > 0 || segment.stdin.length > 0) reader.source.segments.push(segment)
+  if (segment.words.length > 0 || segment.stdin.length > 0 || segment.writes.length > 0) {
+    reader.source.segments.push(segment)
+  }
   let pipedFrom = Option.none<ShellSegment>()
   if (piped) pipedFrom = Option.some(segment)
   reader.segment = makeSegment(pipedFrom)
@@ -484,6 +534,49 @@ const startsSubstitution = (text: string, index: number) =>
 const readSubstitution = (source: ShellSource, index: number): number => {
   if (source.text.charAt(index) === "`") return readCommands(source, index + 1, Option.some("`"))
   return readCommands(source, index + 2, Option.some(")"))
+}
+
+/**
+ * Read the `${…}` at `index`: a `)`, `;` or quote inside it (`${x:-)}`) does
+ * not end the word or the command list around it, and a substitution inside
+ * it runs. `quoted` when the expansion is inside double quotes. Returns the
+ * index after its `}`.
+ */
+function readParameterExpansion(reader: CommandReader, index: number, quoted: boolean): number {
+  const text = reader.source.text
+  let depth = 0
+  let doubleQuoted = false
+  let at = index
+  while (at < text.length) {
+    const char = text.charAt(at)
+    if (char === "\\") {
+      at += 2
+    } else if (startsSubstitution(text, at)) {
+      at = readSubstitution(reader.source, at)
+    } else if (char === '"') {
+      doubleQuoted = !doubleQuoted
+      at++
+    } else if (doubleQuoted) {
+      at++
+    } else if (text.startsWith("${", at)) {
+      depth++
+      at += 2
+    } else if (char === "}") {
+      depth--
+      at++
+      if (depth === 0) break
+    } else if (char === "'" && !quoted) {
+      const close = text.indexOf("'", at + 1)
+      at = text.length
+      if (close !== -1) at = close + 1
+    } else {
+      at++
+    }
+  }
+  const end = Math.min(at, text.length)
+  addRange(reader, index, end, quoted)
+  reader.dynamic = true
+  return end
 }
 
 /** Read a double-quoted run from `from`; returns the index of the closing quote. */
@@ -502,6 +595,8 @@ const readDoubleQuoted = (reader: CommandReader, from: number): number => {
       addRange(reader, index, end, true)
       reader.dynamic = true
       index = end
+    } else if (text.startsWith("${", index)) {
+      index = readParameterExpansion(reader, index, true)
     } else {
       if (startsExpansion(text, index)) reader.dynamic = true
       addChar(reader, index, true)
@@ -628,6 +723,8 @@ const readEscape = (reader: CommandReader, index: number): Option.Option<number>
   if (char === "\\") {
     if (index + 1 < text.length && text.charAt(index + 1) !== "\n") {
       addChar(reader, index + 1, false)
+      // An escaped character is quoted: `<<\EOF` is a literal heredoc, `\2>` no descriptor.
+      reader.quoted = true
     }
     return Option.some(index + 2)
   }
@@ -646,6 +743,42 @@ const readSubstitutionWord = (reader: CommandReader, index: number): Option.Opti
   reader.dynamic = true
   return Option.some(end)
 }
+
+/** `${…}` outside double quotes. */
+const readParameterWord = (reader: CommandReader, index: number): Option.Option<number> => {
+  if (!reader.source.text.startsWith("${", index)) return Option.none()
+  return Option.some(readParameterExpansion(reader, index, false))
+}
+
+/**
+ * Inside a `case`: in a pattern, `(` opens it, `|` joins patterns and `)`
+ * ends it; in a body, `;;`, `;&` or `;;&` ends the body.
+ */
+const readCaseSeparator = (reader: CommandReader, index: number): Option.Option<number> => {
+  const text = reader.source.text
+  const char = text.charAt(index)
+  if (reader.cases.length === 0 || !"()|;".includes(char)) return Option.none()
+  // The word before the operator may close the `case` (`esac)`).
+  endWord(reader)
+  const depth = reader.cases.length - 1
+  const state = reader.cases[depth]
+  if (state === "pattern" && char === ")") {
+    endSegment(reader, false)
+    reader.cases[depth] = "body"
+    return Option.some(index + 1)
+  }
+  if (state === "pattern" && (char === "(" || char === "|")) return Option.some(index + 1)
+  const end = Option.fromNullishOr(/^;;&?|^;&/.exec(text.slice(index, index + 3)))
+  if (state === "body" && Option.isSome(end)) {
+    endSegment(reader, false)
+    reader.cases[depth] = "pattern"
+    return Option.some(index + end.value[0].length)
+  }
+  return Option.none()
+}
+
+const inCasePattern = (reader: CommandReader) =>
+  Arr.last(reader.cases).pipe(Option.exists((state) => state === "pattern"))
 
 /** A list or pipe operator, a subshell, or a newline (which reads pending heredoc bodies). */
 const readSeparator = (reader: CommandReader, index: number): Option.Option<number> => {
@@ -689,7 +822,8 @@ const readRedirectionOperator = (reader: CommandReader, start: number): number =
     return start + 2
   }
   reader.role = "redirect-target"
-  if (op.startsWith("<")) reader.role = "input-target"
+  // `<>` opens its target for writing too.
+  if (op.startsWith("<") && !op.startsWith("<>")) reader.role = "input-target"
   // `&>`, `&>>`, `>>`, `>|`, `>&`, `<&` and `<>` are one operator.
   if (op === "&>>") return start + 3
   if (/^(&>|>[>|&]|<[&>])/.test(op)) return start + 2
@@ -726,6 +860,7 @@ const readPlain = (reader: CommandReader, index: number): number => {
     return index + 1
   }
   if (startsExpansion(reader.source.text, index)) reader.dynamic = true
+  reader.plain += reader.source.text.charAt(index)
   addChar(reader, index, false)
   return index + 1
 }
@@ -734,7 +869,9 @@ const readStep = (reader: CommandReader, index: number): number =>
   readQuote(reader, index).pipe(
     Option.orElse(() => readEscape(reader, index)),
     Option.orElse(() => readSubstitutionWord(reader, index)),
+    Option.orElse(() => readParameterWord(reader, index)),
     Option.orElse(() => readRedirection(reader, index)),
+    Option.orElse(() => readCaseSeparator(reader, index)),
     Option.orElse(() => readSeparator(reader, index)),
     Option.getOrElse(() => readPlain(reader, index)),
   )
@@ -750,18 +887,24 @@ function readCommands(source: ShellSource, from: number, stop: Option.Option<str
     wordEnd: 0,
     wordEndSafe: false,
     dynamic: false,
+    plain: "",
     inWord: false,
     quoted: false,
     role: "argument",
     stripTabs: false,
     heredocs: [],
+    cases: [],
   }
   let index = from
   while (index < source.text.length) {
     const char = source.text.charAt(index)
     if (Option.exists(stop, (end) => end === char)) {
-      endSegment(reader, false)
-      return index + 1
+      // `$(case a in a) …;; esac)`: a `)` that ends a case pattern does not end the list.
+      endWord(reader)
+      if (!inCasePattern(reader)) {
+        endSegment(reader, false)
+        return index + 1
+      }
     }
     index = readStep(reader, index)
   }
@@ -794,6 +937,7 @@ const parseCommand = (command: string): Array<ShellSegment> =>
     end: command.length,
     endSafe: true,
     dynamic: false,
+    pattern: false,
   })
 
 /** A word made of other text: no source offsets to rewrite, no safe insertion point. */
@@ -804,6 +948,7 @@ const derivedWord = (text: string, dynamic: boolean): ShellWord => ({
   end: 0,
   endSafe: false,
   dynamic,
+  pattern: false,
 })
 
 /** The characters of `word` from `start` on, keeping their offsets and safety. */
@@ -838,6 +983,7 @@ const joinWords = (words: ReadonlyArray<ShellWord>): Option.Option<ShellWord> =>
     end: last.value.end,
     endSafe: last.value.endSafe,
     dynamic: words.some((word) => word.dynamic),
+    pattern: words.some((word) => word.pattern),
   })
 }
 

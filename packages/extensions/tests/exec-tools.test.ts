@@ -198,6 +198,11 @@ describe("injectGitTrailers", () => {
     )
   })
 
+  test("a heredoc with an escaped delimiter gets no trailer in its body", () => {
+    const command = "cat <<\\EOF > notes.md\n$(git commit -m x)\nEOF"
+    expect(inject(command)).toBe(command)
+  })
+
   test("git push → unchanged", () => {
     const cmd = "git push origin main"
     expect(inject(cmd)).toBe(cmd)
@@ -799,6 +804,32 @@ describe("classifyBashCommand", () => {
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
+  })
+
+  test("a case pattern or a parameter expansion inside $(…) does not close it early", () => {
+    for (const command of [
+      'echo "A[$(case a in a) rm -rf x;; esac)]"',
+      'echo "B[$(echo ${x:-)} ; rm -rf x)]"',
+      "x=$(case a in a|b) git reset --hard;; esac)",
+      'echo "$(case a in (a) echo;; b) rm -rf x;; esac)"',
+      "echo ${x:-$(rm -rf x)}",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      'case "$1" in start) bun run dev;; *) echo usage;; esac',
+      'echo "${HOME}/x"',
+      'echo "$(case a in a) echo hi;; esac)"',
+      'echo "${x:-)}"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a heredoc with an escaped delimiter is literal", () => {
+    expect(classifyBashCommand("cat <<\\EOF > notes.md\n$(git reset --hard)\nEOF").level).toBe(
+      "safe",
+    )
   })
 })
 
