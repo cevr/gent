@@ -102,6 +102,28 @@ describe("ReadTool", () => {
     }),
   )
 
+  for (const { name, params } of [
+    { name: "offset 0", params: { offset: 0 } },
+    { name: "offset 1.5", params: { offset: 1.5 } },
+    { name: "limit 0", params: { limit: 0 } },
+    { name: "limit -1", params: { limit: -1 } },
+    { name: "limit 2.5", params: { limit: 2.5 } },
+  ]) {
+    readTest(`refuses ${name}: a start line or line count is a positive whole number`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${tmpDir}/a.txt`, "a\nb\n")
+        const exit = yield* Effect.exit(
+          Effect.suspend(() =>
+            runToolWithCtx(ReadTool, { path: `${tmpDir}/a.txt`, ...params }, ctx),
+          ),
+        )
+        expect(exit._tag).toBe("Failure")
+      }),
+    )
+  }
+
   readTest("returns error for non-existent file", () =>
     Effect.gen(function* () {
       const result = yield* Effect.result(
@@ -818,6 +840,42 @@ describe("GrepTool", () => {
       )
       expect(match?.context?.before).toEqual([`${"c".repeat(500)} [2500 chars cut]`])
       expect(match?.context?.after).toEqual(["short"])
+    }).pipe(Effect.provide(FallbackLayer)),
+  )
+
+  for (const { name, params } of [
+    { name: "limit 0", params: { limit: 0 } },
+    { name: "limit -2", params: { limit: -2 } },
+    { name: "limit 1.5", params: { limit: 1.5 } },
+    { name: "context -1", params: { context: -1 } },
+    { name: "context 0.5", params: { context: 0.5 } },
+  ]) {
+    it.scopedLive(`refuses ${name}: a count is a whole number`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const tmpDir = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${tmpDir}/a.ts`, "foo\nfoo\n")
+        const exit = yield* Effect.exit(
+          Effect.suspend(() =>
+            runToolWithCtx(GrepTool, { pattern: "foo", path: tmpDir, ...params }, ctxGrep),
+          ),
+        )
+        expect(exit._tag).toBe("Failure")
+      }).pipe(Effect.provide(FallbackLayer)),
+    )
+  }
+
+  it.scopedLive("context 0 is no context", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/a.ts`, "x\nfoo\ny\n")
+      const result = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "foo", path: tmpDir, context: 0 },
+        ctxGrep,
+      )
+      expect(result.matches.map((match) => "context" in match)).toEqual([false])
     }).pipe(Effect.provide(FallbackLayer)),
   )
 

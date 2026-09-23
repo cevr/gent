@@ -766,17 +766,20 @@ class ReadError extends Schema.TaggedError<ReadError>()("ReadError", {
 
 // Read Tool Params
 
+/** A line number or a count of at least one: 0, a negative or a fraction is refused. */
+const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
+
 const ReadParams = Schema.Struct({
   path: Schema.String.annotate({
     description: "Absolute path to file to read",
   }),
   offset: Schema.optionalKey(
-    Schema.Finite.annotate({
+    PositiveInt.annotate({
       description: "Line number to start reading from (1-indexed)",
     }),
   ),
   limit: Schema.optionalKey(
-    Schema.Finite.annotate({
+    PositiveInt.annotate({
       description: "Maximum number of lines to read",
     }),
   ),
@@ -1317,12 +1320,12 @@ const GrepParams = Schema.Struct({
     }),
   ),
   context: Schema.optionalKey(
-    Schema.Finite.annotate({
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).annotate({
       description: "Lines of context around matches",
     }),
   ),
   limit: Schema.optionalKey(
-    Schema.Finite.annotate({
+    PositiveInt.annotate({
       description: "Maximum number of matches (default: 100)",
     }),
   ),
