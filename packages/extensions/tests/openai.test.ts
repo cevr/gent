@@ -27,6 +27,7 @@ import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/provider
 import {
   ProviderAuthError,
   type ProviderAuthInfo,
+  type ProviderHints,
   RequestId,
   type StoredOAuthCredentials,
 } from "@gent/core/extensions/api"
@@ -2048,7 +2049,11 @@ describe("OpenAI reasoning hints", () => {
       ),
     )
   }
-  const effortsFor = (authInfo: ProviderAuthInfo, models: ReadonlyArray<string>) =>
+  const effortsFor = (
+    authInfo: ProviderAuthInfo,
+    models: ReadonlyArray<string>,
+    reasoning: ProviderHints["reasoning"] = "none",
+  ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
         makeDurableCell({
@@ -2067,7 +2072,7 @@ describe("OpenAI reasoning hints", () => {
       const fetchState = makeFakeFetchState()
       for (const modelName of models) {
         const model = yield* driver.resolveModel(modelName, authInfo, {
-          reasoning: "none",
+          reasoning,
           maxTokens: 768,
         })
         yield* runOne(model, fetchState)
@@ -2107,6 +2112,41 @@ describe("OpenAI reasoning hints", () => {
           Option.none(),
         ])
       }),
+  )
+
+  it.live("an effort the model does not accept becomes the nearest one it does", () =>
+    Effect.gen(function* () {
+      // The accepted values are each model page's `reasoning.effort` list
+      // (developers.openai.com/api/docs/models).
+      const cases: ReadonlyArray<readonly [string, ProviderHints["reasoning"], string]> = [
+        // Above the ceiling: the highest accepted.
+        ["gpt-5-mini", "max", "high"],
+        ["gpt-5.4", "max", "xhigh"],
+        ["gpt-5.1", "xhigh", "high"],
+        ["gpt-5.1-codex", "max", "high"],
+        ["gpt-5.2-pro", "max", "xhigh"],
+        // A level the model skips: the next one up.
+        ["gpt-5-pro", "low", "high"],
+        ["gpt-5.4", "minimal", "low"],
+        ["gpt-5.4-pro", "low", "medium"],
+        // Accepted as sent.
+        ["gpt-5.6-sol", "max", "max"],
+        ["gpt-6-astra", "max", "max"],
+        ["gpt-5-mini", "minimal", "minimal"],
+      ]
+      for (const [model, hint, sent] of cases) {
+        const expected = [Option.some(sent)]
+        expect({
+          model,
+          hint,
+          api: yield* effortsFor(makeApiAuthInfo("hint-test-key"), [model], hint),
+        }).toEqual({ model, hint, api: expected })
+      }
+      // The ChatGPT sign-in path reads the same table.
+      expect(yield* effortsFor(makeOAuthInfo(), ["gpt-5-mini"], "max")).toEqual([
+        Option.some("high"),
+      ])
+    }),
   )
 })
 

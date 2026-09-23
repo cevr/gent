@@ -1272,29 +1272,42 @@ const OpenAiReasoningEffort = Schema.Literals([
 
 type OpenAiReasoningEffort = typeof OpenAiReasoningEffort.Type
 
+/** Every effort level, lowest first. */
+const OPENAI_EFFORT_ORDER = OpenAiReasoningEffort.literals
+
 /**
- * The lowest `reasoning.effort` each model family accepts, first match wins,
- * from the model pages at developers.openai.com/api/docs/models. A request
- * that names an effort below it fails with HTTP 400. A model none of these
- * match (GPT-5.1 and later GPT-5 releases) accepts "none".
+ * The `reasoning.effort` values each model family accepts, lowest first;
+ * first match wins. From each model page's list at
+ * developers.openai.com/api/docs/models. A request that names any other
+ * value fails with HTTP 400. A model none of these match gets the hint as
+ * it is.
  */
-const OPENAI_EFFORT_FLOORS: ReadonlyArray<{
+const OPENAI_ACCEPTED_EFFORTS: ReadonlyArray<{
   readonly pattern: RegExp
-  readonly floor: OpenAiReasoningEffort
+  readonly accepts: ReadonlyArray<OpenAiReasoningEffort>
 }> = [
-  // Pro tiers accept only "high".
-  { pattern: /-pro(-|$)/, floor: "high" },
-  { pattern: /^gpt-6-astra(-|$)/, floor: "low" },
-  { pattern: /codex|^o\d/, floor: "low" },
-  // The first GPT-5 family starts at "minimal".
-  { pattern: /^gpt-5(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/, floor: "minimal" },
+  { pattern: /^gpt-5-pro(-|$)/, accepts: ["high"] },
+  // GPT-5.2 Pro and GPT-5.4 Pro.
+  { pattern: /-pro(-|$)/, accepts: ["medium", "high", "xhigh"] },
+  { pattern: /^gpt-6-astra(-|$)/, accepts: ["low", "medium", "high", "xhigh", "max"] },
+  { pattern: /^gpt-5\.6(-|$)/, accepts: ["none", "low", "medium", "high", "xhigh", "max"] },
+  { pattern: /codex-max|^gpt-5\.[2-9]-codex/, accepts: ["low", "medium", "high", "xhigh"] },
+  { pattern: /codex|^o\d/, accepts: ["low", "medium", "high"] },
+  // The first GPT-5 family.
+  {
+    pattern: /^gpt-5(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/,
+    accepts: ["minimal", "low", "medium", "high"],
+  },
+  { pattern: /^gpt-5\.1(-|$)/, accepts: ["none", "low", "medium", "high"] },
+  { pattern: /^gpt-5\.[2-5](-|$)/, accepts: ["none", "low", "medium", "high", "xhigh"] },
 ]
 
 /**
- * The effort a request sends for a gent reasoning hint. OpenAI runs a
+ * The effort a request sends for a gent reasoning hint: the lowest value the
+ * model accepts at or above the hint, else its highest. OpenAI runs a
  * reasoning model at its default effort when the request names none, so a
- * hint of "none" names the lowest effort the model accepts
- * (`OPENAI_EFFORT_FLOORS`). A model without reasoning gets no effort.
+ * hint of "none" still names the model's lowest effort. A model without
+ * reasoning gets no effort.
  */
 const openAiReasoningEffort = (
   modelName: string,
@@ -1305,9 +1318,11 @@ const openAiReasoningEffort = (
   }
   return Schema.decodeUnknownOption(OpenAiReasoningEffort)(hint).pipe(
     Option.map((effort) => {
-      if (effort !== "none") return effort
-      const floor = OPENAI_EFFORT_FLOORS.find((entry) => entry.pattern.test(modelName))
-      return floor?.floor ?? effort
+      const family = OPENAI_ACCEPTED_EFFORTS.find((entry) => entry.pattern.test(modelName))
+      if (Predicate.isUndefined(family)) return effort
+      const rank = OPENAI_EFFORT_ORDER.indexOf(effort)
+      const atOrAbove = family.accepts.find((level) => OPENAI_EFFORT_ORDER.indexOf(level) >= rank)
+      return atOrAbove ?? family.accepts[family.accepts.length - 1] ?? effort
     }),
   )
 }
