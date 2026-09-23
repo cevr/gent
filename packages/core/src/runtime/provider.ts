@@ -30,7 +30,6 @@ import { ExtensionRegistry, listModelCatalog } from "./extension-host.js"
 import { causeMessage } from "../domain/guards.js"
 import {
   DEFAULT_RETRY_POLICY,
-  type DriverError,
   type PersistAuth,
   ProviderAuthError,
   type ProviderAuthInfo,
@@ -690,14 +689,12 @@ export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* ()
       ),
     ),
   )
-  return byReleaseDateDesc(catalog)
+  return { models: byReleaseDateDesc(catalog.models), failures: catalog.failures }
 })
 
 /** One model of the caller's profile catalog: the turn's context limit and pricing. */
 interface ModelRegistryService {
-  readonly get: (
-    modelId: string,
-  ) => Effect.Effect<Option.Option<Model>, DriverError | ProviderAuthError, ExtensionRegistry>
+  readonly get: (modelId: string) => Effect.Effect<Option.Option<Model>, never, ExtensionRegistry>
 }
 
 export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryService>()(
@@ -711,8 +708,8 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
         get: (modelId) =>
           modelCatalog().pipe(
             Effect.provideService(Auth, authStore),
-            Effect.map((models) =>
-              Option.fromUndefinedOr(models.find((model) => model.id === modelId)),
+            Effect.map((catalog) =>
+              Option.fromUndefinedOr(catalog.models.find((model) => model.id === modelId)),
             ),
           ),
       })

@@ -898,7 +898,7 @@ describe("driver resolution", () => {
         makeExt("ext", "builtin", { modelDrivers: [first, second] }),
       ])
       const result = yield* listModelCatalog(resolved.modelDrivers)
-      expect(result.map((model) => model.id)).toEqual([
+      expect(result.models.map((model) => model.id)).toEqual([
         ModelId.make("first/one"),
         ModelId.make("second/one"),
       ])
@@ -921,7 +921,7 @@ describe("driver resolution", () => {
         makeExt("ext", "builtin", { modelDrivers: [listing, silent] }),
       ])
       const result = yield* listModelCatalog(resolved.modelDrivers)
-      expect(result.map((model) => model.id)).toEqual([ModelId.make("listing/one")])
+      expect(result.models.map((model) => model.id)).toEqual([ModelId.make("listing/one")])
     }),
   )
   it.live("listModelCatalog passes resolveAuth(driverId) into each driver's listModels", () =>
@@ -970,7 +970,7 @@ describe("driver resolution", () => {
       expect(Option.isNone(authBEntry.value.auth)).toBe(true)
     }),
   )
-  it.live("listModelCatalog rejects a malformed driver catalog", () =>
+  it.live("a failing driver catalog is skipped and reported; the others still list", () =>
     Effect.gen(function* () {
       const malformed = makeCatalogModel("broken/invalid")
       Reflect.set(malformed, "name", 42)
@@ -980,19 +980,27 @@ describe("driver resolution", () => {
         resolveModel: stubResolution,
         listModels: () => Effect.succeed([malformed]),
       }
+      // A user driver whose local server is down.
+      const offline: ModelDriverContribution = {
+        id: "offline",
+        name: "Offline",
+        resolveModel: stubResolution,
+        listModels: () => Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434")),
+      }
+      const working: ModelDriverContribution = {
+        id: "working",
+        name: "Working",
+        resolveModel: stubResolution,
+        listModels: () => Effect.succeed([makeCatalogModel("working/one")]),
+      }
       const resolved = resolveExtensions([
-        makeExt("broken-ext", "builtin", { modelDrivers: [broken] }),
+        makeExt("drivers-ext", "builtin", { modelDrivers: [broken, offline, working] }),
       ])
-      const result = yield* listModelCatalog(resolved.modelDrivers).pipe(
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            let message = error.message
-            if (error._tag === "DriverError") message = error.reason
-            return message
-          }),
-        ),
-      )
-      expect(result).toContain("invalid model catalog")
+      const result = yield* listModelCatalog(resolved.modelDrivers)
+      expect(result.models.map((model) => model.id)).toEqual([ModelId.make("working/one")])
+      expect(result.failures.map((failure) => failure.driverId)).toEqual(["broken", "offline"])
+      expect(result.failures[0]?.error).toContain("invalid model catalog")
+      expect(result.failures[1]?.error).toContain("ECONNREFUSED")
     }),
   )
 })

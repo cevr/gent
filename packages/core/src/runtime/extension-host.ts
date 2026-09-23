@@ -843,8 +843,26 @@ export class ExtensionRegistry extends Context.Service<
 // ── model-catalog ───────────────────────────────────────────────────────────
 
 const decodeModelCatalog = Schema.decodeUnknownOption(Schema.Array(Model))
+const isDriverError = Schema.is(DriverError)
 
-/** Concatenate every model driver's own catalog. Core fetches nothing itself. */
+/** A model driver whose catalog could not be read; its models are left out. */
+export interface ModelCatalogFailure {
+  readonly driverId: string
+  readonly error: string
+}
+
+/** Every model the drivers listed, and every driver that could not list. */
+interface ModelCatalog {
+  readonly models: ReadonlyArray<Model>
+  readonly failures: ReadonlyArray<ModelCatalogFailure>
+}
+
+/**
+ * Concatenate every model driver's own catalog. Core fetches nothing itself.
+ * A driver whose catalog fails (an error, a defect, or a list that does not
+ * decode) is skipped and reported, so one unreachable driver never hides the
+ * models of the others.
+ */
 export const listModelCatalog = Effect.fn("ExtensionRegistry.listModelCatalog")(function* (
   modelDrivers: ReadonlyMap<string, ModelDriverContribution>,
   resolveAuth?: (
@@ -852,24 +870,42 @@ export const listModelCatalog = Effect.fn("ExtensionRegistry.listModelCatalog")(
     // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
   ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
 ) {
-  const catalog: Array<Model> = []
+  const models: Array<Model> = []
+  const failures: Array<ModelCatalogFailure> = []
   for (const driver of modelDrivers.values()) {
-    if (Predicate.isUndefined(driver.listModels)) continue
-    let auth = Option.none<ProviderAuthInfo>()
-    if (!Predicate.isUndefined(resolveAuth)) {
-      auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
-    }
-    const driverCatalog = yield* driver.listModels(Option.getOrUndefined(auth))
-    const decoded = decodeModelCatalog(driverCatalog)
-    if (decoded._tag === "None") {
-      return yield* new DriverError({
-        driver: DriverFailureId.make(driver.id),
-        reason: `Model driver "${driver.id}" returned an invalid model catalog`,
-      })
-    }
-    catalog.push(...decoded.value)
+    const listModels = driver.listModels
+    if (Predicate.isUndefined(listModels)) continue
+    const driverCatalog = yield* Effect.gen(function* () {
+      let auth = Option.none<ProviderAuthInfo>()
+      if (!Predicate.isUndefined(resolveAuth)) {
+        auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
+      }
+      const listed = yield* listModels(Option.getOrUndefined(auth))
+      const decoded = decodeModelCatalog(listed)
+      if (Option.isNone(decoded)) {
+        return yield* new DriverError({
+          driver: DriverFailureId.make(driver.id),
+          reason: `Model driver "${driver.id}" returned an invalid model catalog`,
+        })
+      }
+      return decoded.value
+    }).pipe(
+      Effect.asSome,
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+        const squashed = Cause.squash(cause)
+        let error = causeMessage(squashed)
+        if (isDriverError(squashed)) error = squashed.reason
+        failures.push({ driverId: driver.id, error })
+        return Effect.logWarning("Model driver catalog failed; its models are skipped").pipe(
+          Effect.annotateLogs({ driver: driver.id, error }),
+          Effect.as(Option.none<ReadonlyArray<Model>>()),
+        )
+      }),
+    )
+    if (Option.isSome(driverCatalog)) models.push(...driverCatalog.value)
   }
-  return catalog
+  return { models, failures } satisfies ModelCatalog
 })
 
 // ── resource-layer ──────────────────────────────────────────────────────────

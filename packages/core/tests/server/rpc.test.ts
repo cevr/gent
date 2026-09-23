@@ -56,7 +56,9 @@ import {
   AgentName,
   DEFAULT_AGENT_NAME,
   DriverRef,
+  Model,
   ModelId,
+  ProviderId,
   type ReasoningEffort,
 } from "../../src/domain/agent"
 import { createE2ELayer, createRpcClient, createRpcHarness } from "../../src/test-utils/harness"
@@ -2857,6 +2859,63 @@ describe("extension command RPCs", () => {
                 _tag: "ActivationFailed",
                 phase: "setup",
                 error: "setup boom",
+              },
+            ])
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+    }),
+  )
+  it.live("a failing driver catalog leaves model.list working and shows in extension health", () =>
+    Effect.gen(function* () {
+      const catalogDrivers: LoadedExtension = {
+        manifest: { id: ExtensionId.make("@test/catalog-drivers") },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          modelDrivers: [
+            {
+              id: "local",
+              name: "Local server",
+              resolveModel: () => Effect.succeed(stubModel),
+              listModels: () => Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434")),
+            },
+            {
+              id: "working",
+              name: "Working",
+              resolveModel: () => Effect.succeed(stubModel),
+              listModels: () =>
+                Effect.succeed([
+                  Model.make({
+                    id: ModelId.make("working/one"),
+                    name: "One",
+                    provider: ProviderId.make("working"),
+                  }),
+                ]),
+            },
+          ],
+        },
+      }
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+            const { client } = yield* createRpcClient(
+              createE2ELayer({ ...e2ePreset, providerLayer, extensions: [catalogDrivers] }),
+            )
+            const models = yield* client.model.list({})
+            expect(models.map((model) => model.id)).toContain(ModelId.make("working/one"))
+            const status = yield* client.extension.listStatus({})
+            expect(status._tag).toBe("Degraded")
+            if (status._tag !== "Degraded") return
+            const degraded = status.degradedExtensions.find(
+              (extension) => extension.manifest.id === "@test/catalog-drivers",
+            )
+            expect(degraded?.issues).toEqual([
+              {
+                _tag: "ModelCatalogFailed",
+                driverId: "local",
+                error: "connect ECONNREFUSED 127.0.0.1:11434",
               },
             ])
           }).pipe(Effect.timeout("4 seconds")),

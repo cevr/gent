@@ -290,6 +290,11 @@ export const ExtensionHealthIssue = Schema.Union([
     phase: ExtensionActivationPhase,
     error: Schema.String,
   }),
+  /** A model driver of this extension could not list its models; they are left out. */
+  Schema.TaggedStruct("ModelCatalogFailed", {
+    driverId: Schema.String,
+    error: Schema.String,
+  }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ExtensionHealthIssue = Schema.Schema.Type<typeof ExtensionHealthIssue>
 

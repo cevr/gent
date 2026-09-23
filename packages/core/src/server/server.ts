@@ -124,6 +124,7 @@ import {
   ApprovalService,
   ExtensionRegistry,
   type ExtensionRegistryService,
+  type ModelCatalogFailure,
   resolveExistingSessionBranch,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
@@ -261,23 +262,46 @@ export const getBranchTree = (
 
 // ── extension-health ────────────────────────────────────────────────────────
 
+/** Each failed catalog under the extension that contributes its driver. */
+const catalogFailuresByExtension = (
+  resolved: ReturnType<ExtensionRegistryService["getResolved"]>,
+  failures: ReadonlyArray<ModelCatalogFailure>,
+): ReadonlyMap<string, ReadonlyArray<ExtensionHealthIssue>> => {
+  const byExtension = new Map<string, Array<ExtensionHealthIssue>>()
+  for (const failure of failures) {
+    const driver = resolved.modelDrivers.get(failure.driverId)
+    const owner = resolved.extensions.find((extension) =>
+      (extension.contributions.modelDrivers ?? []).some((candidate) => candidate === driver),
+    )
+    if (Predicate.isUndefined(owner)) continue
+    const issues = byExtension.get(owner.manifest.id) ?? []
+    issues.push(
+      ExtensionHealthIssue.cases.ModelCatalogFailed.make({
+        driverId: failure.driverId,
+        error: failure.error,
+      }),
+    )
+    byExtension.set(owner.manifest.id, issues)
+  }
+  return byExtension
+}
+
 export const buildExtensionHealthSnapshot = (
   activationStatuses: ReadonlyArray<ExtensionStatusInfo>,
+  runtimeIssues: ReadonlyMap<string, ReadonlyArray<ExtensionHealthIssue>> = new Map(),
 ): ExtensionHealthSnapshot => {
   const extensions = activationStatuses.map((status) => {
-    let activationFailure = Option.none<ExtensionHealthIssue>()
+    const issues: Array<ExtensionHealthIssue> = []
     if (status.status === "failed") {
-      activationFailure = Option.some(
+      issues.push(
         ExtensionHealthIssue.cases.ActivationFailed.make({
           phase: status.phase,
           error: status.error,
         }),
       )
+    } else {
+      issues.push(...(runtimeIssues.get(status.manifest.id) ?? []))
     }
-    const issues = Option.match(activationFailure, {
-      onNone: (): ReadonlyArray<ExtensionHealthIssue> => [],
-      onSome: (issue) => [issue],
-    })
 
     const payload = {
       manifest: status.manifest,
@@ -1240,10 +1264,11 @@ const RpcHandlers = GentRpcs.toLayer(
       "model.list": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
           const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
-          return yield* modelCatalog().pipe(
+          const catalog = yield* modelCatalog().pipe(
             Effect.provideService(ExtensionRegistry, registry),
             Effect.provideService(Auth, authStore),
           )
+          return catalog.models
         }),
 
       "driver.list": ({ sessionId }: OptionalSessionPayload) =>
@@ -1358,8 +1383,16 @@ const RpcHandlers = GentRpcs.toLayer(
       "extension.listStatus": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
           const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
-          const activationStatuses = registry.getResolved().extensionStatuses
-          return buildExtensionHealthSnapshot(activationStatuses)
+          const resolved = registry.getResolved()
+          // A catalog failure is a runtime fact, so health reads the catalog now.
+          const catalog = yield* modelCatalog().pipe(
+            Effect.provideService(ExtensionRegistry, registry),
+            Effect.provideService(Auth, authStore),
+          )
+          return buildExtensionHealthSnapshot(
+            resolved.extensionStatuses,
+            catalogFailuresByExtension(resolved, catalog.failures),
+          )
         }),
 
       "extension.request": ({

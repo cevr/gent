@@ -300,12 +300,14 @@ const loadRegistryWithDrivers = (
     const raw = Context.get(context, ModelRegistry)
     const drivers = Context.get(context, ExtensionRegistry)
     const auth = Context.get(context, Auth)
+    const catalog = modelCatalog().pipe(
+      Effect.provideService(ExtensionRegistry, drivers),
+      Effect.provideService(Auth, auth),
+    )
     return {
       raw,
-      list: modelCatalog().pipe(
-        Effect.provideService(ExtensionRegistry, drivers),
-        Effect.provideService(Auth, auth),
-      ),
+      catalog,
+      list: Effect.map(catalog, (listed) => listed.models),
       get: (modelId: string) =>
         raw.get(modelId).pipe(Effect.provideService(ExtensionRegistry, drivers)),
     }
@@ -431,7 +433,7 @@ describe("model catalog resolution", () => {
     }),
   )
 
-  it.scopedLive("fails closed when a model driver returns a malformed catalog", () =>
+  it.scopedLive("a malformed catalog is left out and reported; other drivers still list", () =>
     Effect.gen(function* () {
       const malformed = catalogModel("openai/broken")
       Reflect.set(malformed, "name", 42)
@@ -442,18 +444,24 @@ describe("model catalog resolution", () => {
           resolveModel: unusedResolution,
           listModels: () => Effect.succeed([malformed]),
         },
+        {
+          id: "openai",
+          name: "OpenAI",
+          resolveModel: unusedResolution,
+          listModels: () => Effect.succeed([catalogModel("openai/gpt-5.4")]),
+        },
       ])
 
-      const error = yield* Effect.flip(registry.list)
+      const catalog = yield* registry.catalog
 
-      expect(error._tag).toBe("DriverError")
-      if (error._tag === "DriverError") {
-        expect(error.reason).toContain("returned an invalid model catalog")
-      }
+      expect(catalog.models.map((model) => model.id)).toEqual([ModelId.make("openai/gpt-5.4")])
+      expect(catalog.failures).toHaveLength(1)
+      expect(catalog.failures[0]?.driverId).toBe("malformed-driver")
+      expect(catalog.failures[0]?.error).toContain("returned an invalid model catalog")
     }),
   )
 
-  it.scopedLive("fails closed when the auth lookup fails before a driver lists", () =>
+  it.scopedLive("an auth lookup that fails before a driver lists is reported, not listed", () =>
     Effect.gen(function* () {
       let listed = false
       const registry = yield* loadRegistryWithDrivers(
@@ -472,13 +480,12 @@ describe("model catalog resolution", () => {
         failingReadAuthLayer,
       )
 
-      const error = yield* Effect.flip(registry.list)
+      const catalog = yield* registry.catalog
 
-      expect(error._tag).toBe("ProviderAuthError")
       expect(listed).toBe(false)
-      if (error._tag === "ProviderAuthError") {
-        expect(error.message).toContain('Failed to read auth for provider "auth-driver"')
-      }
+      expect(catalog.models).toEqual([])
+      expect(catalog.failures.map((failure) => failure.driverId)).toEqual(["auth-driver"])
+      expect(catalog.failures[0]?.error).toContain('Failed to read auth for provider "auth-driver"')
     }),
   )
 
@@ -526,6 +533,32 @@ describe("model catalog resolution", () => {
 
       expect(Option.isSome(found)).toBe(true)
       expect(Option.isNone(missing)).toBe(true)
+    }),
+  )
+
+  // A turn reads its model through `get`; one unreachable driver must not stop it.
+  it.scopedLive("get still resolves a model while another driver's catalog fails", () =>
+    Effect.gen(function* () {
+      const registry = yield* loadRegistryWithDrivers([
+        {
+          id: "local",
+          name: "Local server",
+          resolveModel: unusedResolution,
+          listModels: () => Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434")),
+        },
+        {
+          id: "openai",
+          name: "OpenAI",
+          resolveModel: unusedResolution,
+          listModels: () => Effect.succeed([catalogModel("openai/gpt-5.4")]),
+        },
+      ])
+
+      const found = yield* registry.get("openai/gpt-5.4")
+
+      expect(Option.map(found, (model) => model.id)).toEqual(
+        Option.some(ModelId.make("openai/gpt-5.4")),
+      )
     }),
   )
 })
