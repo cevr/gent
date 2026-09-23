@@ -15,13 +15,7 @@ import {
   type Scope,
   Stream,
 } from "effect"
-import {
-  EventId,
-  type EventPublisher,
-  EventStore,
-  EventStoreError,
-  makeEventStore,
-} from "../domain/event.js"
+import { EventId, EventStore, EventStoreError, makeEventStore } from "../domain/event.js"
 import {
   type AgentLoopQueueStorage,
   type BranchStorage,
@@ -324,7 +318,7 @@ type SessionRuntimeLayerRequirements =
   | ClusterMessageStorage.MessageStorage
   | EventStorage
   | EventStore
-  | EventPublisher
+  | EventStore
   | ExtensionRegistry
   | ModelRegistry
   | GentPlatform

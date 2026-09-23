@@ -6,7 +6,7 @@ import { ExtensionRegistry } from "../../src/runtime/extension-host.js"
 import type { BranchId, SessionId } from "../../src/domain/ids"
 import { Branch, dateFromMillis, emptyQueueSnapshot, Session } from "../../src/domain/message"
 import { AgentName } from "../../src/domain/agent"
-import { EventPublisher, EventStore, EventStoreError } from "../../src/domain/event"
+import { EventStore, EventStoreError } from "../../src/domain/event"
 import { ModelResolver } from "../../src/runtime/provider"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionRuntime, type SessionRuntimeService } from "../../src/runtime/session"
@@ -80,8 +80,10 @@ export const collectSessionEvents = <A, E>(stream: Stream.Stream<A, E>) =>
   })
 
 export const failingPublisherLayer = Layer.succeed(
-  EventPublisher,
-  EventPublisher.of({
+  EventStore,
+  EventStore.of({
+    subscribe: () => Stream.empty,
+    removeSession: () => Effect.void,
     append: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
     deliver: () => Effect.void,
     publish: () => Effect.fail(new EventStoreError({ message: "publish failed" })),
@@ -174,7 +176,7 @@ const buildSessionMutationsLayer = () => {
     sessionRuntimeLayer(),
     sessionGovernanceProbeLayer(),
     EventStore.Memory,
-    EventPublisher.Test(),
+    EventStore.Memory,
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
@@ -224,7 +226,7 @@ export const sessionMutationsLayerWithMachineProbe = (
     runtimeLayer,
     sessionGovernanceProbeLayer(runtimeRestored),
     EventStore.Memory,
-    EventPublisher.Test(),
+    EventStore.Memory,
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
@@ -256,7 +258,7 @@ export const failingDeleteSessionMutationsLayerWithMachineProbe = (
     sessionRuntimeProbeLayer(runtimeTerminated),
     sessionGovernanceProbeLayer(runtimeRestored),
     EventStore.Memory,
-    EventPublisher.Test(),
+    EventStore.Memory,
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
@@ -320,7 +322,7 @@ export const racySessionMutationsLayer = (params: {
     sessionRuntimeProbeLayer(params.runtimeTerminated),
     sessionGovernanceProbeLayer(),
     EventStore.Memory,
-    EventPublisher.Test(),
+    EventStore.Memory,
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),
@@ -367,7 +369,7 @@ export const interleavedSessionMutationsLayer = (params: {
     sessionRuntimeLayer(),
     sessionGovernanceProbeLayer(),
     EventStore.Memory,
-    EventPublisher.Test(),
+    EventStore.Memory,
     LanguageModelLayers.debug(),
     ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
     GentPlatform.Test(),

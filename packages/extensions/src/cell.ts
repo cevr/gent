@@ -48,7 +48,7 @@ import {
   CurrentInteractionOwner,
   CurrentToolCall,
   eraseResourceLayer,
-  type EventPublisher,
+  type EventStore,
   EventStoreError,
   type FeatureMigrations,
   GentPlatform,
@@ -1932,12 +1932,7 @@ export const resumeCellToolOperation = Effect.fn("CellToolHost.resume")(
  * Runtime services a host call reads beyond the turn profile. The host is made
  * inside the turn, so they are captured there and provided to each call.
  */
-type CellToolHostServices =
-  | CellStorage
-  | EventPublisher
-  | GentPlatform
-  | MessageStorage
-  | ToolRunner
+type CellToolHostServices = CellStorage | EventStore | GentPlatform | MessageStorage | ToolRunner
 
 /** One outer cell's host. The turn profile owns every admitted call. */
 export const makeCellToolHost = (

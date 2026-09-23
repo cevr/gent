@@ -1178,9 +1178,9 @@ Other notes:
   overrides, then config `agents[name]`, then the agent definition.
 - `createSession` accepts optional `initialPrompt` + `admission` for atomic create-and-send.
 
-### EventPublisher
+### Publishing events
 
-`EventPublisherLive` (`domain/event.ts`) appends an event to the `EventStore` and delivers the envelope to subscribers; `append` and `deliver` are also separate so a mutation can append inside its transaction and deliver after commit. The same layer provides `ExtensionStatePublisher`, which publishes `ExtensionStateChanged`. Publishing is cwd-agnostic; per-cwd extension behavior comes from the turn's profile.
+Runtime code yields `EventStore` (`domain/event.ts`) directly. `publish` appends an event and delivers the envelope to subscribers; `append` and `deliver` are also separate so a mutation can append inside its transaction and deliver after commit. `ExtensionStatePublisherLive` provides `ExtensionStatePublisher`, the extension facet over the store, which publishes only `ExtensionStateChanged`. Publishing is cwd-agnostic; per-cwd extension behavior comes from the turn's profile.
 
 ### TUI Extensions
 

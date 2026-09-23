@@ -5,8 +5,6 @@ import {
   BranchSwitched,
   type EventEnvelope,
   EventId,
-  EventPublisher,
-  EventPublisherLive,
   EventStore,
   type EventStoreService,
   getEventBranchId,
@@ -76,7 +74,7 @@ describe("event branch routing", () => {
   })
 })
 
-// ── event publisher ─────────────────────────────────────────────────────────
+// ── event delivery ─────────────────────────────────────────────────────────
 
 const FIXED_NOW_MILLIS = dateFromMillis(1_767_225_600_000).getTime()
 
@@ -146,15 +144,15 @@ const makeEventStoreLayer = (
           const envelope = yield* input.append(event)
           yield* deliver(envelope)
         }),
-        subscribe: () => Stream.die("subscribe not exercised in EventPublisher tests"),
+        subscribe: () => Stream.die("subscribe not exercised in delivery tests"),
         removeSession: () => Effect.void,
       }
       return Layer.succeed(EventStore, service)
     }),
   )
 
-// EventPublisher delivery is observable through EventStore append/broadcast.
-describe("EventPublisher", () => {
+// Delivery is observable through EventStore append/broadcast.
+describe("EventStore publish and delivery", () => {
   it.live("normal publish appends and broadcasts the committed event", () =>
     Effect.gen(function* () {
       const persisted: string[] = []
@@ -172,10 +170,10 @@ describe("EventPublisher", () => {
             broadcasted.push(envelope.event._tag)
           }),
       })
-      const layer = Layer.provide(EventPublisherLive, baseLayer)
+      const layer = baseLayer
       yield* Effect.gen(function* () {
-        const publisher = yield* EventPublisher
-        yield* publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
+        const eventStore = yield* EventStore
+        yield* eventStore.publish(makeEvent("OuterEvent", "session-1", "branch-1"))
       }).pipe(Effect.provide(layer))
       expect(persisted).toEqual([TAG.OuterEvent])
       expect(broadcasted).toEqual([TAG.OuterEvent])
@@ -183,7 +181,7 @@ describe("EventPublisher", () => {
   )
   it.live("publish waits for serialized delivery before returning", () =>
     Effect.gen(function* () {
-      // The publisher no longer relies on an explicit scheduler yield. Publish
+      // Publish no longer relies on an explicit scheduler yield. Publish
       // enqueues committed envelopes through a delivery worker and waits for the
       // broadcast acknowledgment before returning.
       const broadcastStarted = yield* Deferred.make<void>()
@@ -201,11 +199,11 @@ describe("EventPublisher", () => {
             yield* Deferred.await(releaseBroadcast)
           }),
       })
-      const layer = Layer.provide(EventPublisherLive, customEventStore)
+      const layer = customEventStore
       yield* Effect.gen(function* () {
-        const publisher = yield* EventPublisher
+        const eventStore = yield* EventStore
         const fiber = yield* Effect.forkScoped(
-          publisher.publish(makeEvent("OuterEvent", "session-1", "branch-1")),
+          eventStore.publish(makeEvent("OuterEvent", "session-1", "branch-1")),
         )
         yield* Deferred.await(broadcastStarted)
         const early = yield* Fiber.join(fiber).pipe(Effect.timeoutOption("1 millis"))
@@ -234,12 +232,12 @@ describe("EventPublisher", () => {
             yield* Deferred.await(releaseFirstBroadcast)
           }),
       })
-      const layer = Layer.provide(EventPublisherLive, customEventStore)
+      const layer = customEventStore
       yield* Effect.gen(function* () {
-        const publisher = yield* EventPublisher
-        const first = yield* Effect.forkScoped(publisher.deliver(envelope))
+        const eventStore = yield* EventStore
+        const first = yield* Effect.forkScoped(eventStore.deliver(envelope))
         yield* Deferred.await(firstBroadcastStarted)
-        const second = yield* Effect.forkScoped(publisher.deliver(envelope))
+        const second = yield* Effect.forkScoped(eventStore.deliver(envelope))
         expect(yield* Ref.get(broadcastCount)).toBe(1)
         yield* Deferred.succeed(releaseFirstBroadcast, void 0)
         yield* Fiber.join(first)
@@ -268,46 +266,17 @@ describe("EventPublisher", () => {
             }),
           ),
       })
-      const layer = Layer.provide(EventPublisherLive, customEventStore)
+      const layer = customEventStore
       yield* Effect.gen(function* () {
-        const publisher = yield* EventPublisher
-        const failed = yield* Effect.exit(publisher.deliver(envelope))
+        const eventStore = yield* EventStore
+        const failed = yield* Effect.exit(eventStore.deliver(envelope))
         expect(failed._tag).toBe("Failure")
-        yield* publisher.deliver(envelope)
+        yield* eventStore.deliver(envelope)
       }).pipe(Effect.provide(layer))
       expect(yield* Ref.get(attempts)).toBe(2)
     }),
   )
 })
-describe("EventPublisher server layer", () => {
-  it.live("published events persist and broadcast through the shared store", () =>
-    Effect.gen(function* () {
-      const persisted: string[] = []
-      const broadcasted: string[] = []
-      let nextId = 0
-      const baseLayer = makeEventStoreLayer({
-        append: (event: AgentEvent) =>
-          Effect.sync(() => {
-            persisted.push(event._tag)
-            nextId += 1
-            return { id: EventId.make(nextId), event, createdAt: FIXED_NOW_MILLIS }
-          }),
-        broadcast: (envelope: EventEnvelope) =>
-          Effect.sync(() => {
-            broadcasted.push(envelope.event._tag)
-          }),
-      })
-      const layer = Layer.provide(EventPublisherLive, baseLayer)
-      yield* Effect.gen(function* () {
-        const publisher = yield* EventPublisher
-        yield* publisher.publish(makeEvent("FallbackEvent", "session-secondary", "branch-1"))
-      }).pipe(Effect.provide(layer))
-      expect(persisted).toEqual([TAG.FallbackEvent])
-      expect(broadcasted).toEqual([TAG.FallbackEvent])
-    }),
-  )
-})
-
 // ── event stream delivery ───────────────────────────────────────────────────
 
 const sessionId = SessionId.make("session-delivery")

@@ -93,7 +93,6 @@ import {
 import {
   EventEnvelope,
   EventId,
-  type EventPublisher,
   EventStore,
   type EventStoreService,
   getEventSessionId,
@@ -718,7 +717,7 @@ export interface E2ELayerConfig {
   readonly approvalLayer?: Layer.Layer<
     ApprovalService,
     never,
-    EventPublisher | GentPlatform | InteractionStorage
+    EventStore | GentPlatform | InteractionStorage
   >
   /** Use the production cold-interaction service with durable pending rows. */
   readonly durableApproval?: boolean

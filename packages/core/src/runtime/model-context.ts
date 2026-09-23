@@ -20,12 +20,7 @@ import {
   messageWithParts,
   type RuntimeUserMessageType,
 } from "../domain/message.js"
-import {
-  ErrorOccurred,
-  EventPublisher,
-  type EventStoreError,
-  UsageSchema,
-} from "../domain/event.js"
+import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "../domain/event.js"
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
 import { ModelId } from "../domain/agent.js"
 import type { ToolCapability } from "../domain/capability.js"
@@ -1214,7 +1209,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   ) => Effect.Effect<Message, StorageError | EventStoreError | EventStorageError, PersistR>
   readonly summaryModel: CompactionRequest["summaryModel"]
 }) {
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   const now = yield* DateTime.nowAsDate
   let durableMessages = params.messages
   const newWindow = params.directive.pipe(Option.filter((value) => value._tag === "NewWindow"))
@@ -1275,7 +1270,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
         // is truncated instead, with a visible notice.
         Effect.gen(function* () {
           const plain = yield* params.project(window)
-          yield* eventPublisher.publish(
+          yield* eventStore.publish(
             ErrorOccurred.make({
               sessionId: params.sessionId,
               branchId: params.branchId,

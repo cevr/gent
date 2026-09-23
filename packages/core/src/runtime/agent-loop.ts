@@ -91,7 +91,7 @@ import {
   type TurnSubmissionInput,
   type WaitingForInteractionState,
 } from "../domain/agent-loop.js"
-import { type AgentEvent, ErrorOccurred, EventPublisher } from "../domain/event.js"
+import { type AgentEvent, ErrorOccurred, EventStore } from "../domain/event.js"
 import { causeChainMessage } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
@@ -1271,7 +1271,7 @@ type AgentLoopRuntimeServices =
   | ModelResolver
   | ModelRegistry
   | ToolRunner
-  | EventPublisher
+  | EventStore
   | InteractionStorage
 
 type AgentLoopRuntimeContext = Context.Context<AgentLoopRuntimeServices>
@@ -1419,7 +1419,7 @@ const makeAgentLoopBehavior = (
   | SqlClient.SqlClient
   | ModelResolver
   | ExtensionRegistry
-  | EventPublisher
+  | EventStore
   | ToolRunner
   | ProcessLocalToolReplay
   | AgentLoopFollowUp
@@ -1434,7 +1434,7 @@ const makeAgentLoopBehavior = (
   Effect.gen(function* () {
     yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
-    const eventPublisher = yield* EventPublisher
+    const eventStore = yield* EventStore
     yield* ToolCallBindingStorage
     yield* TurnRecordStorage
     yield* ToolRunner
@@ -1459,7 +1459,7 @@ const makeAgentLoopBehavior = (
       })
 
     const publishEvent = (event: AgentEvent) =>
-      eventPublisher.publish(event).pipe(asAgentLoopError(`Failed to publish ${event._tag}`))
+      eventStore.publish(event).pipe(asAgentLoopError(`Failed to publish ${event._tag}`))
 
     // Reaching another branch goes through its actor. The client tags exist
     // where an actor client layer is in scope; a bare test actor has none,

@@ -130,7 +130,7 @@ import {
   makeAgentLoopService,
   makeExtRegistry,
   makeLayer,
-  makeLayerWithEventPublisher,
+  makeLayerWithEventStore,
   makeCountingEventStore,
   makeLayerWithEvents,
   makeLiveToolLayer,
@@ -150,9 +150,9 @@ import {
   AgentEvent,
   EventEnvelope,
   EventId,
-  EventPublisher,
-  EventPublisherLive,
+  EventStore,
   EventStoreError,
+  ExtensionStatePublisherLive,
   MessageReceived,
   ToolCallStarted,
   ToolCallSucceeded,
@@ -4311,13 +4311,13 @@ const makeRuntimeLayer = (
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, baseDeps)
   const approvalLayer = ApprovalService.Live.pipe(
-    Layer.provide(Layer.merge(baseDeps, eventPublisherLayer)),
+    Layer.provide(Layer.merge(baseDeps, statePublisherLayer)),
   )
   return Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.mergeAll(baseDeps, eventPublisherLayer, approvalLayer, ProcessLocalToolReplay.Live),
+    Layer.mergeAll(baseDeps, statePublisherLayer, approvalLayer, ProcessLocalToolReplay.Live),
   )
 }
 
@@ -6829,8 +6829,10 @@ describe("streaming", () => {
         [textDeltaPart("not committed"), finishPart({ finishReason: "stop" })],
       ])
       const failingPublisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) => {
             if (event._tag === "MessageReceived" && event.message.role === "assistant") {
               return Effect.fail(new EventStoreError({ message: "append failed" }))
@@ -6859,7 +6861,7 @@ describe("streaming", () => {
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(exit._tag).toBe("Failure")
         expect(assistant).toBeUndefined()
-      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
+      }).pipe(Effect.provide(makeLayerWithEventStore(providerLayer, failingPublisherLayer)))
     }),
   )
   it.live("a turn a phase failure stops ends with one failed TurnCompleted after its error", () =>
@@ -6872,8 +6874,10 @@ describe("streaming", () => {
       // The assistant line's append fails: a storage failure inside a turn
       // phase, which the model stream never sees.
       const failingPublisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) => {
             if (event._tag === "MessageReceived" && event.message.role === "assistant") {
               return Effect.fail(new EventStoreError({ message: "append failed" }))
@@ -6912,7 +6916,7 @@ describe("streaming", () => {
         // The stored duration is the receipt's mark: the turn is complete.
         const stored = yield* messageStorage.getMessage(message.id)
         expect(stored?.turnDurationMs).toBeDefined()
-      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
+      }).pipe(Effect.provide(makeLayerWithEventStore(providerLayer, failingPublisherLayer)))
     }),
   )
   it.live("a failure after the turn stored its receipt appends no second TurnCompleted", () =>
@@ -6924,8 +6928,10 @@ describe("streaming", () => {
       // The receipt is stored, then its delivery breaks: the turn fails after
       // its completion is durable.
       const publisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) =>
             Effect.gen(function* () {
               yield* Ref.update(appended, (events) => [...events, event])
@@ -6955,7 +6961,7 @@ describe("streaming", () => {
         )
         expect(completions).toEqual([expect.objectContaining({ messageId: message.id })])
         expect(completions[0]).not.toHaveProperty("streamFailed", true)
-      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, publisherLayer)))
+      }).pipe(Effect.provide(makeLayerWithEventStore(providerLayer, publisherLayer)))
     }),
   )
   it.live("a waiting caller is not failed by an earlier turn's failure", () =>
@@ -6985,8 +6991,10 @@ describe("streaming", () => {
         )
       })
       const failFirstAssistant = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) => {
             if (
               event._tag === "MessageReceived" &&
@@ -7027,7 +7035,7 @@ describe("streaming", () => {
         expect(streamCalls).toBe(2)
       }).pipe(
         Effect.timeout("4 seconds"),
-        Effect.provide(makeLayerWithEventPublisher(providerLayer, failFirstAssistant)),
+        Effect.provide(makeLayerWithEventStore(providerLayer, failFirstAssistant)),
       )
     }),
   )
@@ -7107,8 +7115,10 @@ describe("streaming", () => {
         )
       })
       const failSecondUserMessage = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) => {
             if (event._tag === "MessageReceived" && event.message.id === second.id) {
               secondAttempts += 1
@@ -7156,7 +7166,7 @@ describe("streaming", () => {
         expect(streamCalls).toBe(2)
       }).pipe(
         Effect.timeout("4 seconds"),
-        Effect.provide(makeLayerWithEventPublisher(providerLayer, failSecondUserMessage)),
+        Effect.provide(makeLayerWithEventStore(providerLayer, failSecondUserMessage)),
       )
     }),
   )
@@ -7461,8 +7471,10 @@ describe("streaming", () => {
         [textDeltaPart("committed before finalize"), finishPart({ finishReason: "stop" })],
       ])
       const failingPublisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) => {
             if (event._tag === "TurnCompleted") {
               return Effect.fail(new EventStoreError({ message: "append failed" }))
@@ -7491,7 +7503,7 @@ describe("streaming", () => {
         const user = yield* messageStorage.getMessage(message.id)
         expect(exit._tag).toBe("Failure")
         expect(user?.turnDurationMs).toBeUndefined()
-      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
+      }).pipe(Effect.provide(makeLayerWithEventStore(providerLayer, failingPublisherLayer)))
     }),
   )
   it.live("persists assistant image parts from provider response streams", () =>
@@ -8480,7 +8492,7 @@ describe("tool binding replay", () => {
       Effect.provide(
         Layer.mergeAll(
           SqliteStorage.TestWithSql(() => Layer.empty, {}),
-          EventPublisher.Test(),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -8553,7 +8565,7 @@ describe("tool binding replay", () => {
       Effect.provide(
         Layer.mergeAll(
           SqliteStorage.TestWithSql(() => Layer.empty, {}),
-          EventPublisher.Test(),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -8594,7 +8606,7 @@ describe("tool binding replay", () => {
       Effect.provide(
         Layer.mergeAll(
           SqliteStorage.TestWithSql(() => Layer.empty, {}),
-          EventPublisher.Test(),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -8667,7 +8679,7 @@ describe("tool binding replay", () => {
       Effect.provide(
         Layer.mergeAll(
           SqliteStorage.TestWithSql(() => Layer.empty, {}),
-          EventPublisher.Test(),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -8731,7 +8743,7 @@ describe("tool binding replay", () => {
       Effect.provide(
         Layer.mergeAll(
           SqliteStorage.TestWithSql(() => Layer.empty, {}),
-          EventPublisher.Test(),
+          EventStore.Memory,
         ),
       ),
     ),

@@ -91,12 +91,7 @@ import {
   ModelId,
   type ReasoningEffort,
 } from "../../src/domain/agent"
-import {
-  type EventEnvelope,
-  EventPublisher,
-  EventStore,
-  SessionStarted,
-} from "../../src/domain/event"
+import { type EventEnvelope, EventStore, SessionStarted } from "../../src/domain/event"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { SqlClient } from "effect/unstable/sql"
@@ -2038,7 +2033,7 @@ describe("requestId idempotency", () => {
       storageLayer,
       sessionRuntimeLayer(),
       EventStore.Memory,
-      EventPublisher.Test(),
+      EventStore.Memory,
       AgentLoopSessionGovernance.Live,
       LanguageModelLayers.debug(),
       ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
@@ -2090,7 +2085,7 @@ describe("requestId idempotency", () => {
             ),
             sessionRuntimeLayer(),
             EventStore.Memory,
-            EventPublisher.Test(),
+            EventStore.Memory,
             AgentLoopSessionGovernance.Live,
             LanguageModelLayers.debug(),
             ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
@@ -2154,7 +2149,7 @@ describe("requestId idempotency", () => {
           ),
           sessionRuntimeLayer(),
           EventStore.Memory,
-          EventPublisher.Test(),
+          EventStore.Memory,
           AgentLoopSessionGovernance.Live,
           LanguageModelLayers.debug(),
           ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
@@ -2741,7 +2736,7 @@ describe("requestId idempotency", () => {
           storageLayer,
           runtimeLayer,
           EventStore.Memory,
-          EventPublisher.Test(),
+          EventStore.Memory,
           AgentLoopSessionGovernance.Live,
           LanguageModelLayers.debug(),
           ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),

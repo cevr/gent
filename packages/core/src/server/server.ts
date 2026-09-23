@@ -91,9 +91,8 @@ import {
   BranchSwitched,
   type EventEnvelope,
   EventId,
-  EventPublisher,
-  EventPublisherLive,
   EventStore,
+  ExtensionStatePublisherLive,
   type EventStoreError,
   InteractionResolved,
   SessionNameUpdated,
@@ -336,7 +335,6 @@ const makeSessionMutationsService: Effect.Effect<
   never,
   | SqlClient.SqlClient
   | EventStore
-  | EventPublisher
   | SessionStorage
   | BranchStorage
   | MessageStorage
@@ -362,7 +360,7 @@ const makeSessionMutationsService: Effect.Effect<
    * that must not hold the write lock, and that a replay must not repeat,
    * because the receipt already answers the retry.
    */
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   const once = <A, E, R>(
     operation: DurableOperation<A>,
     { requestId }: { readonly requestId?: RequestId },
@@ -397,13 +395,12 @@ const makeSessionMutationsService: Effect.Effect<
         }),
       )
       if (Option.isNone(committed.envelope)) return { result: committed.result, fresh: false }
-      yield* eventPublisher.deliver(committed.envelope.value)
+      yield* eventStore.deliver(committed.envelope.value)
       return { result: committed.result, fresh: true }
     })
   const platform = yield* GentPlatform
   const sessionRuntime = yield* SessionRuntime
   const governance = yield* AgentLoopSessionGovernance
-  const eventStore = yield* EventStore
 
   /**
    * Run `mutation` (its reads and its writes) in one storage transaction and
@@ -421,11 +418,11 @@ const makeSessionMutationsService: Effect.Effect<
         Effect.gen(function* () {
           const { result, events } = yield* mutation
           const envelopes: Array<EventEnvelope> = []
-          for (const event of events) envelopes.push(yield* eventPublisher.append(event))
+          for (const event of events) envelopes.push(yield* eventStore.append(event))
           return { result, envelopes }
         }),
       )
-      for (const envelope of committed.envelopes) yield* eventPublisher.deliver(envelope)
+      for (const envelope of committed.envelopes) yield* eventStore.deliver(envelope)
       return committed.result
     })
 
@@ -694,7 +691,7 @@ const makeSessionMutationsService: Effect.Effect<
             )
           }
         }
-        const envelope = yield* eventPublisher.append(SessionStarted.make({ sessionId, branchId }))
+        const envelope = yield* eventStore.append(SessionStarted.make({ sessionId, branchId }))
         const result: StoredCreateSessionResult = {
           sessionId,
           branchId,
@@ -734,7 +731,7 @@ const makeSessionMutationsService: Effect.Effect<
           createdAt: yield* DateTime.nowAsDate,
         })
         yield* branchStorage.createBranch(branch)
-        const envelope = yield* eventPublisher.append(
+        const envelope = yield* eventStore.append(
           BranchCreated.make({
             sessionId: branch.sessionId,
             branchId: branch.id,
@@ -788,7 +785,7 @@ const makeSessionMutationsService: Effect.Effect<
             }),
           )
         }
-        const envelope = yield* eventPublisher.append(
+        const envelope = yield* eventStore.append(
           BranchCreated.make({
             sessionId: branch.sessionId,
             branchId: branch.id,
@@ -834,7 +831,7 @@ const makeSessionMutationsService: Effect.Effect<
           input.toBranchId,
           yield* DateTime.nowAsDate,
         )
-        const envelope = yield* eventPublisher.append(
+        const envelope = yield* eventStore.append(
           BranchSwitched.make({
             sessionId: input.sessionId,
             fromBranchId: input.fromBranchId,
@@ -1052,7 +1049,7 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
 ) {
   const approvalService = yield* ApprovalService
   const sessionRuntime = yield* SessionRuntime
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   yield* resolveExistingSessionBranch({
     sessionId: input.sessionId,
     branchId: input.branchId,
@@ -1081,7 +1078,7 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
     requestId: input.requestId,
   })
   // 3. Publish resolution event
-  yield* eventPublisher
+  yield* eventStore
     .publish(
       InteractionResolved.make({
         sessionId: input.sessionId,
@@ -1565,7 +1562,7 @@ interface DependencyOverrides {
   readonly approvalLayer?: Layer.Layer<
     ApprovalService,
     never,
-    EventPublisher | GentPlatform | InteractionStorage
+    EventStore | GentPlatform | InteractionStorage
   >
   readonly configServiceLayer?: Layer.Layer<ConfigService>
   readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
@@ -1755,8 +1752,7 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const modelResolverLive = makeModelResolverLayer(config, authDeps)
 
-  const eventPublisherLive = EventPublisherLive
-  const eventServicesLive = Layer.provideMerge(eventPublisherLive, baseEventStoreLive)
+  const eventServicesLive = Layer.provideMerge(ExtensionStatePublisherLive, baseEventStoreLive)
 
   const baseServicesLive = Layer.provideMerge(
     Layer.mergeAll(

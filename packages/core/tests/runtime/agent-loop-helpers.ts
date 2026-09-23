@@ -40,8 +40,7 @@ import {
   type AgentEvent,
   EventEnvelope,
   EventId,
-  type EventPublisher,
-  EventPublisherLive,
+  ExtensionStatePublisherLive,
   EventStore,
 } from "../../src/domain/event"
 import {
@@ -287,7 +286,6 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     readonly overrides?: Layer.Layer<X, EX>
     readonly registry?: Layer.Layer<ExtensionRegistry>
     readonly eventStore?: Layer.Layer<EventStore>
-    readonly eventPublisher?: Layer.Layer<EventPublisher, never, EventStore>
     readonly models?: ReadonlyArray<Model>
     readonly toolRunner?: typeof ToolRunner.Live
   },
@@ -309,9 +307,9 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     baseDeps,
     Layer.provide(params.toolRunner ?? ToolRunner.Test(), baseDeps),
   )
-  const eventPublisherLayer = Layer.provide(params.eventPublisher ?? EventPublisherLive, deps)
+  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, deps)
   return AgentLoopTestActor({ baseSections: [] }).pipe(
-    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
+    Layer.provideMerge(Layer.mergeAll(deps, statePublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
 export const makeLayer = (
@@ -391,10 +389,11 @@ export const makeLayerWithEvents = (
     registry: makeExtRegistry(tools),
     eventStore: makeCountingEventStore(eventsRef),
   })
-export const makeLayerWithEventPublisher = (
+/** The actor root over a substitute event store, for a test about a failing append or delivery. */
+export const makeLayerWithEventStore = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
-  eventPublisherLayer: Layer.Layer<EventPublisher>,
-) => actorTestRoot({ provider: providerLayer, eventPublisher: eventPublisherLayer })
+  eventStoreLayer: Layer.Layer<EventStore>,
+) => actorTestRoot({ provider: providerLayer, eventStore: eventStoreLayer })
 /** A `waitFor` deadline expiring. Typed so a timeout fails its own test. */
 export class AgentLoopTestTimeout extends Schema.TaggedError<AgentLoopTestTimeout>()(
   "@gent/core/tests/runtime/agent-loop/AgentLoopTestTimeout",

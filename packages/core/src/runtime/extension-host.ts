@@ -107,7 +107,6 @@ import {
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
   EventId,
-  EventPublisher,
   EventStore,
   EventStoreError,
   ExtensionStatePublisher,
@@ -2329,7 +2328,7 @@ export class SessionProfileCache extends Context.Service<
 const makeApprovalInteractionService: Effect.Effect<
   InteractionService,
   never,
-  EventPublisher | GentPlatform | InteractionStorage
+  EventStore | GentPlatform | InteractionStorage
 > = Effect.gen(function* () {
   const store = yield* InteractionStorage
   const storage: InteractionStorageConfig = {
@@ -2353,10 +2352,10 @@ const makeApprovalInteractionService: Effect.Effect<
           ),
         ),
   }
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   return yield* makeInteractionService({
     onPresent: (requestId, params, ctx) =>
-      eventPublisher.publish(
+      eventStore.publish(
         InteractionPresented.make({
           sessionId: ctx.sessionId,
           branchId: ctx.branchId,
@@ -2367,7 +2366,7 @@ const makeApprovalInteractionService: Effect.Effect<
       ),
     // A dialog closed without an answer is dismissed, not declined.
     onDismiss: (requestId, ctx) =>
-      eventPublisher
+      eventStore
         .publish(
           InteractionResolved.make({
             sessionId: ctx.sessionId,
@@ -2391,11 +2390,8 @@ const makeApprovalInteractionService: Effect.Effect<
 export class ApprovalService extends Context.Service<ApprovalService, InteractionService>()(
   "@gent/core/src/runtime/extension-host/ApprovalService",
 ) {
-  static Live: Layer.Layer<
-    ApprovalService,
-    never,
-    EventPublisher | GentPlatform | InteractionStorage
-  > = Layer.effect(ApprovalService, makeApprovalInteractionService)
+  static Live: Layer.Layer<ApprovalService, never, EventStore | GentPlatform | InteractionStorage> =
+    Layer.effect(ApprovalService, makeApprovalInteractionService)
 
   static Test = (decisions?: ReadonlyArray<ApprovalDecision>): Layer.Layer<ApprovalService> => {
     const queue = [...(decisions ?? [{ approved: true }])]
@@ -2552,7 +2548,6 @@ export const makeExtensionHostContextProvider = (
     const host = input.host
     const control = via(Option.fromUndefinedOr(input.sessionControl), "SessionControl")
     const approval = yield* facet(ApprovalService, "ApprovalService")
-    const publisher = yield* facet(EventPublisher, "EventPublisher")
     const sql = yield* facet(SqlClient.SqlClient, "SqlClient")
     const sessions = yield* facet(SessionStorage, "SessionStorage")
     const branches = yield* facet(BranchStorage, "BranchStorage")
@@ -2901,12 +2896,12 @@ export const makeExtensionHostContextProvider = (
               const envelope = yield* sql((client) =>
                 messages((store) => store.createMessage(message)).pipe(
                   Effect.andThen(
-                    publisher((events) => events.append(MessageReceived.make({ message }))),
+                    eventStore((events) => events.append(MessageReceived.make({ message }))),
                   ),
                   client.withTransaction,
                 ),
               )
-              yield* publisher((events) => events.deliver(envelope))
+              yield* eventStore((events) => events.deliver(envelope))
             }),
           ),
       },

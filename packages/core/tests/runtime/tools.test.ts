@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Context, Effect, Exit, Layer, Option, Predicate, Schema } from "effect"
+import { Context, Effect, Exit, Layer, Option, Predicate, Schema, Stream } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { InteractionPendingError } from "../../src/domain/interaction"
 import {
@@ -30,7 +30,7 @@ import {
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import {
   type AgentEvent,
-  EventPublisher,
+  EventStore,
   type ToolCallStarted,
   type ToolCallSucceeded,
 } from "../../src/domain/event"
@@ -110,7 +110,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        EventPublisher.Test(),
+        EventStore.Memory,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
@@ -179,7 +179,7 @@ describe("tool execution", () => {
 
       const deps = Layer.mergeAll(
         registryLayer,
-        EventPublisher.Test(),
+        EventStore.Memory,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
@@ -285,7 +285,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        EventPublisher.Test(),
+        EventStore.Memory,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
@@ -339,7 +339,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        EventPublisher.Test(),
+        EventStore.Memory,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
@@ -390,7 +390,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        EventPublisher.Test(),
+        EventStore.Memory,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
@@ -458,7 +458,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        EventPublisher.Test(),
+        EventStore.Memory,
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -519,7 +519,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        EventPublisher.Test(),
+        EventStore.Memory,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
@@ -587,7 +587,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        EventPublisher.Test(),
+        EventStore.Memory,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         Layer.succeed(ToolWriteToken, ToolWriteToken.of({ write: Effect.succeed("outer-write") })),
@@ -664,7 +664,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        EventPublisher.Test(),
+        EventStore.Memory,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
@@ -717,9 +717,11 @@ describe("tool execution", () => {
       })
       const eventTags: Array<string> = []
       const events: Array<ToolCallStarted> = []
-      const eventPublisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+      const statePublisherLayer = Layer.succeed(
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: () => Effect.die("append not exercised in ToolRunner tests"),
           deliver: () => Effect.void,
           publish: (event: AgentEvent) =>
@@ -740,7 +742,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        eventPublisherLayer,
+        statePublisherLayer,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
@@ -800,9 +802,11 @@ describe("tool execution", () => {
         readonly tag: string
         readonly summary: ToolCallSucceeded["summary"]
       }> = []
-      const eventPublisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+      const statePublisherLayer = Layer.succeed(
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: () => Effect.die("append not exercised in ToolRunner tests"),
           deliver: () => Effect.void,
           publish: (event: AgentEvent) =>
@@ -822,7 +826,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        eventPublisherLayer,
+        statePublisherLayer,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )

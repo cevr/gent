@@ -148,7 +148,7 @@ import {
 } from "../../src/domain/extension"
 import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/unstable/cluster"
-import { AgentEvent, EventPublisher, EventPublisherLive, EventStore } from "../../src/domain/event"
+import { AgentEvent, EventStore, ExtensionStatePublisherLive } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
@@ -256,7 +256,7 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provide(
         Layer.provideMerge(
-          EventPublisherLive,
+          ExtensionStatePublisherLive,
           Layer.mergeAll(
             SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
             EventStore.Memory,
@@ -310,7 +310,7 @@ describe("ambient extension host context", () => {
         yield* ensureStorageParents({ sessionId, branchId }).pipe(
           Effect.provideService(CurrentWorkspaceId, runWorkspace),
         )
-        const publisher = yield* EventPublisher
+        const publisher = yield* EventStore
         yield* publisher
           .publish(AgentEvent.cases.SessionStarted.make({ sessionId, branchId }))
           .pipe(Effect.provideService(CurrentWorkspaceId, runWorkspace))
@@ -334,7 +334,7 @@ describe("ambient extension host context", () => {
         // under the workspace in scope at pull time; the memory store reads none.
         Effect.provide(
           Layer.provideMerge(
-            EventPublisherLive,
+            ExtensionStatePublisherLive,
             Layer.provideMerge(
               EventStoreLive,
               SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
@@ -350,7 +350,7 @@ describe("ambient extension host context", () => {
       yield* ensureStorageParents({ sessionId, branchId }).pipe(
         Effect.provideService(CurrentWorkspaceId, workspace),
       )
-      const publisher = yield* EventPublisher
+      const publisher = yield* EventStore
       const publish = (event: AgentEvent) =>
         publisher.publish(event).pipe(Effect.provideService(CurrentWorkspaceId, workspace))
       yield* publish(AgentEvent.cases.SessionStarted.make({ sessionId, branchId }))
@@ -381,7 +381,7 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provide(
         Layer.provideMerge(
-          EventPublisherLive,
+          ExtensionStatePublisherLive,
           Layer.provideMerge(
             EventStoreLive,
             SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
@@ -4356,16 +4356,16 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, baseDeps)
   const sessionRuntimeLayer = Layer.provide(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, eventPublisherLayer),
+    Layer.merge(baseDeps, statePublisherLayer),
   )
   const sessionMutationsLayer = Layer.provide(
     SessionMutationsLive,
-    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
+    Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer),
   )
-  return Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
+  return Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
 }
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
