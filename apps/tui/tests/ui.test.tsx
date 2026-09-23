@@ -15,7 +15,7 @@ import {
   usePickerGeometry,
 } from "../src/ui"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
-import { waitForRenderedFrame } from "./helpers-boundary"
+import { waitForFrame } from "./helpers-boundary"
 import {
   BranchId,
   dateFromMillis,
@@ -119,9 +119,7 @@ describe("select list keyboard", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("> Apple"), "open"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Apple"), "open")
 
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
@@ -159,13 +157,11 @@ describe("select list keyboard", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Apple"), "open"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Apple"), "open")
       setup.mockInput.pressEscape()
       // The mock terminal holds an escape until the next frame, so poll for the
       // effect rather than reading it on the press.
-      yield* Effect.promise(() => waitForRenderedFrame(setup, () => !open(), "dismissed"))
+      yield* waitForFrame(setup, () => !open(), "dismissed")
       expect(open()).toBe(false)
     }),
   )
@@ -246,15 +242,11 @@ describe("select list filter", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Cherry"), "open"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Cherry"), "open")
 
       setup.mockInput.pressKey("a")
       setup.mockInput.pressKey("n")
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => !renderFrame(setup).includes("Cherry"), "narrowed"),
-      )
+      yield* waitForFrame(setup, () => !renderFrame(setup).includes("Cherry"), "narrowed")
       // Opening reports an empty query first: a pane that owns the filter has
       // to be told the list starts unfiltered.
       expect(seen).toEqual(["", "a", "an"])
@@ -263,9 +255,7 @@ describe("select list filter", () => {
       expect(renderFrame(setup)).not.toContain("Apple")
 
       setup.mockInput.pressBackspace()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Apple"), "widened"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Apple"), "widened")
       expect(seen).toEqual(["", "a", "an", "a"])
     }),
   )
@@ -307,9 +297,7 @@ describe("select list filter", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Apple"), "open"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Apple"), "open")
       expect(renderFrame(setup)).not.toContain("›")
     }),
   )
@@ -338,14 +326,10 @@ describe("select list sticky selection", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("nothing yet"), "empty"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("nothing yet"), "empty")
 
       setRows(fruits)
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("> Cherry"), "anchored"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Cherry"), "anchored")
       expect(renderFrame(setup)).toContain("  Apple")
     }),
   )
@@ -376,17 +360,13 @@ describe("select list sticky selection", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("> Cherry"), "anchored"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Cherry"), "anchored")
 
       // "an" matches Banana only; the cursor has to land on it rather than
       // being pulled back by the anchor.
       setup.mockInput.pressKey("a")
       setup.mockInput.pressKey("n")
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("> Banana"), "narrowed"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Banana"), "narrowed")
       setup.mockInput.pressEnter()
       expect(picked).toEqual(["banana"])
     }),
@@ -407,19 +387,13 @@ describe("select list sticky selection", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Cherry"), "open"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Cherry"), "open")
       setup.mockInput.pressArrow("down")
       setup.mockInput.pressArrow("down")
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("> Cherry"), "last row"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Cherry"), "last row")
 
       setRows(fruits.slice(0, 1))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("> Apple"), "clamped"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Apple"), "clamped")
       setup.mockInput.pressEnter()
       expect(picked).toEqual(["apple"])
     }),
@@ -448,15 +422,11 @@ describe("select list rows", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("— Berries —"), "open"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("— Berries —"), "open")
       // The first press moves past a heading onto the second fruit, not onto
       // the heading itself.
       setup.mockInput.pressArrow("down")
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("> Banana"), "second"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("> Banana"), "second")
       setup.mockInput.pressEnter()
       expect(picked).toEqual(["banana"])
     }),
@@ -476,9 +446,7 @@ describe("select list rows", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("nothing matches"), "empty"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("nothing matches"), "empty")
       expect(renderFrame(setup)).not.toContain("Apple")
     }),
   )
@@ -603,9 +571,7 @@ describe("docked panes", () => {
           { width: 80, height: 40 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("open session"), "thread pane"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("open session"), "thread pane")
       // One heading, one window, one detail line: three drawn lines.
       expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(pickerLines(2, 1), 40))
     }),
@@ -628,9 +594,7 @@ describe("docked panes", () => {
           { width: 80, height: 40 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("Model · 1"), "settings pane"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Model · 1"), "settings pane")
       // One row plus the query row above it.
       expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(pickerLines(1, 1), 40))
     }),
@@ -656,9 +620,7 @@ describe("docked panes", () => {
           { width: 80, height: 40 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("side-quest"), "branch pane"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("side-quest"), "branch pane")
       expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(2, 40))
     }),
   )
@@ -689,9 +651,7 @@ describe("docked pane column budget", () => {
           { width: 58, height: 30 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("PPP"), "thread row"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("PPP"), "thread row")
       const lines = renderFrame(setup).split("\n")
       const rowLines = lines.filter((line) => line.includes("PPP"))
 
@@ -735,9 +695,7 @@ describe("docked pane column budget", () => {
           { width: 58, height: 30 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("NNN"), "settings row"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("NNN"), "settings row")
       // A row pads itself one column inside a body that pads one each side.
       expect(seen[0]).toEqual({ row: 55, section: 56 })
 
@@ -789,9 +747,7 @@ describe("docked pane column budget", () => {
           },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("LLL"), "branch row"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("LLL"), "branch row")
       // A row pads itself one column inside a body that pads one each side.
       expect(seen[0]).toEqual({ row: 55, section: 56 })
 

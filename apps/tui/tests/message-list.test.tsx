@@ -46,7 +46,7 @@ import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import { EditToolRenderer, ReadToolRenderer, useToolRenderers } from "../src/tool-renderers"
 import { destroyRenderSetup, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
-import { waitForRenderedFrame } from "./helpers-boundary"
+import { waitForFrame } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { clientContributions, defineClientExtension } from "../src/extensions/client-facets"
@@ -642,12 +642,10 @@ const renderLoaded = (items: SessionItem[], fullDetail?: boolean) =>
     const setup = yield* Effect.promise(() =>
       renderWithProviders(() => <LoadedMessageList items={items} fullDetail={fullDetail} />),
     )
-    return yield* Effect.promise(() =>
-      waitForRenderedFrame(
-        setup,
-        (frame) => !frame.includes("loading message renderers"),
-        "message renderers",
-      ),
+    return yield* waitForFrame(
+      setup,
+      (frame) => !frame.includes("loading message renderers"),
+      "message renderers",
     )
   })
 
@@ -878,12 +876,10 @@ describe("FX transcript treatment", () => {
         }
         expect(savedText.join("")).toBe("")
         yield* Deferred.complete(release, Effect.void)
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(
-            setup,
-            () => savedText.join("").includes("goal continuation"),
-            "goal row in scrollback",
-          ),
+        yield* waitForFrame(
+          setup,
+          () => savedText.join("").includes("goal continuation"),
+          "goal row in scrollback",
         )
         expect(savedText.join("")).not.toContain("RAW-GOAL-TEXT")
       }),
@@ -1144,12 +1140,10 @@ describe("FX transcript treatment", () => {
           { width: 42, height: 20 },
         ),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (next) => next.includes("#call-reg-7") && next.includes("failed"),
-          "registered renderer failure",
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("#call-reg-7") && next.includes("failed"),
+        "registered renderer failure",
       )
       expect(frame.match(/#call-reg-7/g)?.length).toBe(2)
       expect(frame.match(/failed/g)?.length).toBeGreaterThanOrEqual(2)
@@ -1193,12 +1187,10 @@ describe("FX transcript treatment", () => {
           height: 50,
         }),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (next) => (next.match(/Its source was not replayed/g)?.length ?? 0) >= 3,
-          "cell recovery error",
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => (next.match(/Its source was not replayed/g)?.length ?? 0) >= 3,
+        "cell recovery error",
       )
       expect(frame.match(/Its source was not replayed/g)?.length).toBe(3)
     }),
@@ -1327,12 +1319,10 @@ describe("FX transcript treatment", () => {
               { width: 110, height: 60 },
             ),
           )
-          const frame = yield* Effect.promise(() =>
-            waitForRenderedFrame(
-              setup,
-              (next) => next.includes("module.ts") && next.includes("other = 1"),
-              label,
-            ),
+          const frame = yield* waitForFrame(
+            setup,
+            (next) => next.includes("module.ts") && next.includes("other = 1"),
+            label,
           )
           destroyRenderSetup(setup)
           return frame
@@ -1446,9 +1436,7 @@ describe("FX transcript treatment", () => {
           { width: 110, height: 60 },
         ),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (next) => next.includes("long.txt"), "cut cell ops"),
-      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("long.txt"), "cut cell ops")
       // bash: the whole count, its real last line, and the true number of hidden lines.
       expect(frame).toContain("exit 0 · 3000 lines")
       expect(frame).toContain("... [2994 lines truncated] ...")
@@ -1466,12 +1454,10 @@ describe("FX transcript treatment", () => {
           { width: 100, height: 40 },
         ),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (next) => next.includes("#call-cell-7") && next.includes("hello from a.txt"),
-          "cell renderer",
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (next) => next.includes("#call-cell-7") && next.includes("hello from a.txt"),
+        "cell renderer",
       )
       // The compact tree says what the cell did: ops counted in the header, named in the row.
       expect(frame).toContain("1 cell · 2 ops · 1 failed")
@@ -1538,24 +1524,20 @@ describe("FX transcript treatment", () => {
           { width: 110, height: 55 },
         ),
       )
-      const preview = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("… +5 lines (ctrl+o)"),
-          "cell preview",
-        ),
+      const preview = yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("… +5 lines (ctrl+o)"),
+        "cell preview",
       )
       const row = Option.getOrThrow(
         Option.fromUndefinedOr(preview.split("\n").find((line) => line.includes("└ cell"))),
       ).trim()
       expect(row).toContain("↑ 2 ↓ 25 lines")
       yield* Effect.sync(() => setDisclosure("full"))
-      const full = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("CELL-OUTPUT-025") && frame.includes("note.content"),
-          "full cell output",
-        ),
+      const full = yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("CELL-OUTPUT-025") && frame.includes("note.content"),
+        "full cell output",
       )
       expect(full.split("\n").some((line) => line.trim() === row)).toBe(true)
       expect(full.match(/#call-stable/g)).toHaveLength(1)
@@ -1564,12 +1546,10 @@ describe("FX transcript treatment", () => {
         setDisclosure("preview")
         setFullDetail(true)
       })
-      const transcript = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("1 cell ·"),
-          "full transcript from preview",
-        ),
+      const transcript = yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("CELL-OUTPUT-025") && !frame.includes("1 cell ·"),
+        "full transcript from preview",
       )
       expect(transcript.split("\n").some((line) => line.trim() === row)).toBe(true)
       expect(transcript).not.toContain("… +5 lines")
@@ -1762,8 +1742,10 @@ describe("read_session row", () => {
           { width: 100, height: 40 },
         ),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (text) => text.includes("4 messages"), "read_session row"),
+      const frame = yield* waitForFrame(
+        setup,
+        (text) => text.includes("4 messages"),
+        "read_session row",
       )
       expect(frame).toContain("✓ 4 messages, 2 branches")
     }),
@@ -1952,12 +1934,10 @@ describe("native transcript footer room", () => {
         yield* Deferred.await(firstCommit)
         // The footer region is the terminal less the rows kept for scrollback:
         // the live tail and the footer share it, so the last footer row stays on screen.
-        const frame = yield* Effect.promise(() =>
-          waitForRenderedFrame(
-            setup,
-            (next) => next.includes("LAST-ANSWER") && next.includes("TRAY-ROW"),
-            "footer on screen",
-          ),
+        const frame = yield* waitForFrame(
+          setup,
+          (next) => next.includes("LAST-ANSWER") && next.includes("TRAY-ROW"),
+          "footer on screen",
         )
         expect(frame).toContain("STATUS-LINE")
       }).pipe(Effect.timeout("10 seconds")),

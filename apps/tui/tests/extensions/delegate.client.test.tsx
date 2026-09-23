@@ -16,7 +16,7 @@ import {
 import type { Session } from "../../src/client"
 import { useExtensionUI } from "../../src/extensions/host"
 import { createMockClient, renderWithProviders } from "../render-harness-boundary"
-import { waitForRenderedFrame } from "../helpers-boundary"
+import { waitForFrame } from "../helpers-boundary"
 
 // ── delegate.client.test ────────────────────────────────────────────────────
 
@@ -131,12 +131,10 @@ const renderList = (items: ReadonlyArray<SessionItem>, height = 40) =>
 const loadedFrame = (items: ReadonlyArray<SessionItem>, height = 40) =>
   Effect.gen(function* () {
     const setup = yield* renderList([assistant("m0", [startOp]), ...items], height)
-    return yield* Effect.promise(() =>
-      waitForRenderedFrame(
-        setup,
-        (text) => text.includes("result arrives as a message"),
-        "delegate client loaded",
-      ),
+    return yield* waitForFrame(
+      setup,
+      (text) => text.includes("result arrives as a message"),
+      "delegate client loaded",
     )
   })
 
@@ -333,15 +331,13 @@ describe("delegate.start row", () => {
         },
       ])
       const setup = yield* renderList([assistant("assistant-cell", [cell])], 80)
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (text) =>
-            text.includes("result arrives as a message") &&
-            text.includes("OP-READ-LINE-40") &&
-            text.includes("UNKNOWN-OP-SUMMARY"),
-          "cell ops through their renderers",
-        ),
+      const frame = yield* waitForFrame(
+        setup,
+        (text) =>
+          text.includes("result arrives as a message") &&
+          text.includes("OP-READ-LINE-40") &&
+          text.includes("UNKNOWN-OP-SUMMARY"),
+        "cell ops through their renderers",
       )
       // The delegate renderer draws the start and the read renderer the file
       // body; neither op falls back to its one-line receipt. The op with no

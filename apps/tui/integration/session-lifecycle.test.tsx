@@ -11,7 +11,8 @@ import {
   testAgent,
 } from "@gent/core/test-utils"
 import { Gent } from "@gent/sdk"
-import { waitForFrame, repoRoot } from "./helpers"
+import { repoRoot } from "./helpers"
+import { waitForFrame } from "../tests/helpers-boundary"
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>
   _baseLocalLayerWithProvider(p, { agents: [testAgent] })
 function StateProbe(props: { readonly onReady: (ctx: { client: ClientContextValue }) => void }) {
