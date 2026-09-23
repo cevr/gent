@@ -1639,8 +1639,56 @@ describe("useSessionFeed", () => {
           value.messages().find((message) => message.role === "assistant")?.toolCalls?.[0],
         ),
       )
-    return { cellOf, dispose }
+    const activeTool = () =>
+      Option.flatMap(feed, (value) => Option.fromUndefinedOr(value.activeTool()))
+    return { cellOf, activeTool, dispose }
   }
+
+  it.live("a cell's running ops show side by side while one of them waits", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-sibling-ops")
+      const branchId = BranchId.make("branch-feed-sibling-ops")
+      const cellId = ToolCallId.make("tool-call-sibling-cell")
+      const opStarted = (id: string, command: string) =>
+        AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make(id),
+          toolName: "bash",
+          input: { command },
+          parentToolCallId: cellId,
+        })
+      const { activeTool, dispose } = openFeed(snapshotFor(sessionId, branchId), [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: cellId,
+            toolName: "cell",
+            input: { code: "await Promise.all([tools.bash(a), tools.bash(b)])" },
+          }),
+        ),
+        makeEnvelope(3, opStarted("tool-call-ticks", "sleep 2; echo SLEPT")),
+        makeEnvelope(4, opStarted("tool-call-asks", "git checkout HEAD -- README.md")),
+      ])
+      yield* waitUntil(() =>
+        Option.exists(activeTool(), (label) => label.includes("git checkout")),
+      ).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            // The asking op does not hide the one that runs on; the cell waits on both.
+            const label = Option.getOrElse(activeTool(), () => "")
+            expect(label).toContain("sleep 2")
+            expect(label).toContain("git checkout")
+            expect(label).not.toContain("cell")
+          }),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }),
+  )
 
   it.live("an op still running when its cell fails reads as failed, as a reload draws it", () =>
     Effect.gen(function* () {
