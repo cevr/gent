@@ -822,7 +822,24 @@ function useComposerController(): ComposerController {
           })
           return userMessage
         }),
-        Effect.flatMap((userMessage) => sc.onSubmit(userMessage, "queue", target)),
+        Effect.flatMap((userMessage) =>
+          // The command has run, and its side effects are done. A refused send
+          // gives back the output as a message, never the command to run again.
+          sc
+            .onSubmit(userMessage, "queue", target)
+            .pipe(
+              Effect.catchEager((error) =>
+                Effect.sync(() =>
+                  refuse(
+                    target,
+                    { order, text: userMessage, shell: false },
+                    `The command ran; its output was not sent. ${formatError(error)}`,
+                  ),
+                ),
+              ),
+            ),
+        ),
+        // Nothing ran: the command comes back to run.
         Effect.catchEager((error) =>
           Effect.sync(() => {
             refuse(target, { order, text, shell: true }, shellRefusal(error))

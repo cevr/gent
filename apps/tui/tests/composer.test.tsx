@@ -889,6 +889,59 @@ describe("Composer submit", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  // The command ran and its side effects are done; only the send of its output
+  // was refused. What comes back is that output as a message, not the command,
+  // so Enter sends it instead of running the command a second time.
+  submitTest("a refused send of a !cmd's output restores the output, not the command", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const submitted: Array<string> = []
+      let sends = 0
+      // The first send is refused; the next one lands.
+      const sendResult = Effect.suspend(() => {
+        sends++
+        if (sends === 1) return Effect.fail(refusedSend)
+        return Effect.void
+      })
+      let client = Option.none<ClientContextValue>()
+      const CaptureClient = () => {
+        client = Option.some(useClient())
+        return <box />
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <TestComposer onSubmit={(content) => submitted.push(content)} sendResult={sendResult}>
+              <CaptureClient />
+            </TestComposer>
+          ),
+          { cwd: dir },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* Effect.promise(() => setup.mockInput.typeText("echo ran >> count; printf tu1-out"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        () =>
+          Option.exists(client, (c) =>
+            Option.exists(Option.fromNullishOr(c.error()), (m) => m.includes("send refused")),
+          ),
+        "error shown",
+      )
+      // The reason says the command ran, so the reader does not run it again.
+      const reason = Option.flatMap(client, (c) => Option.fromNullishOr(c.error()))
+      expect(Option.exists(reason, (m) => m.includes("ran"))).toBe(true)
+      yield* waitForFrame(setup, (frame) => frame.includes("tu1-out"), "output restored")
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => sends === 2, "sent again")
+      expect(submitted[1]).toContain("tu1-out")
+      expect(yield* fs.readFileString(`${dir}/count`)).toBe("ran\n")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   // The draft left the composer at submit. A send the server rejects puts it
   // back and says why, in the error line rather than as a connection issue.
   submitTest("a send the server rejects restores the draft and shows the reason", () =>
