@@ -135,10 +135,10 @@ export type MessageRole = typeof MessageRole.Type
  * with an answer rather than being cut off mid-plan. Like the others it is
  * never a turn to answer on its own.
  *
- * `steering` marks only an interjection delivered at a step boundary: the
- * turn it joined already answers it, and it never gets a `TurnCompleted` of
- * its own. An interjection that woke an idle branch is a turn in its own
- * right, carries no marker, and still recovers after a restart.
+ * `steering` is the marker older builds wrote over the custom type of an
+ * interjection delivered at a step boundary. Stored rows still carry it, so
+ * it stays a runtime type. A delivery now keeps the sender's custom type and
+ * sets `MessageMetadata.joinedTurn` instead.
  */
 export const RuntimeUserMessageType = Schema.Literals([
   "continuation",
@@ -159,6 +159,13 @@ export const MessageMetadata = Schema.Struct({
   extensionId: Schema.optional(Schema.String),
   /** If true, message is excluded from LLM context but visible in transcript */
   hidden: Schema.optional(Schema.Boolean),
+  /**
+   * Set by the loop on an interjection delivered at a step boundary. The turn
+   * it joined answers it, and it never gets a `TurnCompleted` of its own, so
+   * recovery must not read it as a turn. An interjection that woke an idle
+   * branch is a turn in its own right, carries no mark, and still recovers.
+   */
+  joinedTurn: Schema.optional(Schema.Boolean),
   /** Arbitrary structured details for the custom message */
   details: Schema.optional(Schema.Unknown),
 })
@@ -189,9 +196,9 @@ export const SteerCommand = Schema.Union([
     ...SteerTargetFields,
     message: Schema.String,
     /**
-     * Envelope on the persisted interjection: who wrote it and why. An item
-     * that joins a running turn is stamped `steering` and keeps only its
-     * `details`; one that wakes an idle branch keeps the whole envelope.
+     * Envelope on the persisted interjection: who wrote it and why. The
+     * envelope survives delivery; an item that joins a running turn also
+     * gets `joinedTurn`.
      */
     metadata: Schema.optional(MessageMetadata),
     agent: Schema.optional(AgentName),
@@ -421,11 +428,13 @@ export const assistantMessageIdForTurn = (messageId: MessageId, step = 1): Messa
 export const toolResultMessageIdForTurn = (messageId: MessageId, step = 1): MessageId =>
   MessageId.make(`${messageId}:tool-result:${step}`)
 
-/** A user-role message the runtime wrote for the model, not a turn to answer. */
+/** A user-role message the runtime wrote for the model, or one a running turn already answered. */
 export const isRuntimeUserMessage = (message: {
   readonly role: MessageRole
   readonly metadata?: MessageMetadata
-}): boolean => message.role === "user" && isRuntimeUserMessageType(message.metadata?.customType)
+}): boolean =>
+  message.role === "user" &&
+  (isRuntimeUserMessageType(message.metadata?.customType) || message.metadata?.joinedTurn === true)
 
 // ── tool-output ─────────────────────────────────────────────────────────────
 

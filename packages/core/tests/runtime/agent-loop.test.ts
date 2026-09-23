@@ -86,6 +86,7 @@ import {
   emptyLoopQueueState,
   emptyQueueSnapshot,
   encodeToolOutput,
+  isRuntimeUserMessage,
   LoopQueueState,
   type LoopQueueState as LoopQueueStateType,
   Message,
@@ -634,6 +635,45 @@ describe("continuation", () => {
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
     }),
+  )
+  it.live("a joined interjection keeps its sender's custom type and never recovers as a turn", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        { ...toolCallStep("echo", { text: "step 1" }), gated: true },
+        textStep("Done after the sender's message."),
+      ])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        const turn = makeContMessage("a sender steers this turn")
+        const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, turn))
+        yield* controls.waitForCall(0)
+        yield* steerAgentLoop({
+          _tag: "Interject",
+          sessionId: contSessionId,
+          branchId: contBranchId,
+          requestId: "req-interject-keeps-custom-type",
+          message: "from another session",
+          metadata: { customType: "session-message", details: { from: "sender" } },
+        })
+        yield* controls.emitAll(0)
+        yield* Fiber.join(fiber)
+        const messages = yield* messageStorage.listMessages(contBranchId)
+        const joined = messages.find(
+          (message) =>
+            message._tag === "interjection" &&
+            message.parts.some(
+              (part) => part.type === "text" && part.text === "from another session",
+            ),
+        )
+        // The TUI draws the sender row from the custom type; the join must not erase it.
+        expect(joined?.metadata?.customType).toBe("session-message")
+        expect(joined?.metadata?.details).toEqual({ from: "sender" })
+        // The turn it joined answered it, so a restart must not answer it again.
+        expect(Predicate.isNotUndefined(joined) && isRuntimeUserMessage(joined)).toBe(true)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayer(providerLayer, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
   )
   it.live("an interjection that asks to wake starts a turn on an idle branch", () =>
     Effect.gen(function* () {
@@ -4040,9 +4080,9 @@ describe("queue drain regression", () => {
           parts: [Prompt.textPart({ text: "answer me" })],
           createdAt: dateFromMillis(1_767_225_600_000),
         })
-        // The shape `deliverSteeringAtStepBoundary` writes: a user-role
-        // interjection carrying the runtime marker, with no completion of
-        // its own.
+        // The shape older builds of `deliverSteeringAtStepBoundary` wrote,
+        // still on disk: a user-role interjection carrying the `steering`
+        // marker, with no completion of its own.
         const delivered = Message.cases.regular.make({
           id: MessageId.make("msg-steering-replay-interject"),
           sessionId,

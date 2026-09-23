@@ -2540,18 +2540,19 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // The message joins the transcript now. Its admission time could sort it
         // between a tool call and its result, which the projection rejects.
         //
-        // `steering` marks it as answered by the turn it joined. Without the
+        // `joinedTurn` marks it as answered by the turn it joined. Without the
         // mark it is a user-role message with no `TurnCompleted` of its own,
         // and a restart reads that as an unanswered turn and answers it twice.
-        // Only delivery stamps it: an interjection that woke an idle branch
-        // never reaches this boundary and must still recover.
+        // Only delivery sets it: an interjection that woke an idle branch
+        // never reaches this boundary and must still recover. The sender's own
+        // custom type stays; the TUI draws the sender row from it.
         join: (item) =>
           Effect.gen(function* () {
             yield* persistMessageReceived({
               message: {
                 ...item.message,
                 createdAt: yield* DateTime.nowAsDate,
-                metadata: { ...item.message.metadata, customType: "steering" },
+                metadata: { ...item.message.metadata, joinedTurn: true },
               },
             })
           }),
