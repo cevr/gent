@@ -67,7 +67,7 @@ import {
   provideCurrentHostCtx,
 } from "./extension-host.js"
 import type * as Response from "effect/unstable/ai/Response"
-import { ExternalToolRunner, type ProviderAuthError, TurnError } from "../domain/driver.js"
+import { type ProviderAuthError, TurnError } from "../domain/driver.js"
 import {
   type AgentEvent,
   ErrorOccurred,
@@ -87,7 +87,7 @@ import {
 } from "../domain/event.js"
 import { InteractionPendingError } from "../domain/interaction.js"
 import { causeMessage, omitUndefined } from "../domain/guards.js"
-import { ProviderError, type StorageError } from "../domain/errors.js"
+import { ProviderError } from "../domain/errors.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   emptyTurnRecord,
@@ -107,7 +107,6 @@ import {
   attachToolBindingIdentity,
   compileToolPolicy,
   convertTools,
-  CurrentToolCall,
   executeToolCalls,
   processLocalReplayBindingKey,
   processLocalReplayResultKey,
@@ -119,7 +118,6 @@ import {
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
   ToolInteractionPending,
-  ToolRunner,
   type TurnInterruption,
 } from "./tools.js"
 import { ConfigService } from "./config.js"
@@ -153,7 +151,6 @@ import {
   projectModelContext,
   toPrompt,
 } from "./model-context.js"
-import { SqlClient } from "effect/unstable/sql"
 import { GentPlatform } from "./gent-platform.js"
 import type { LoopInbox } from "./agent-loop.js"
 
@@ -1250,21 +1247,12 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // Derive extension projections from explicit prompt/message slots.
   const allToolEntries = staticToolEntries(extensionRegistry)
   const allTools = allToolEntries.map((entry) => entry.capability)
-  const turnCtx = {
-    sessionId: params.sessionId,
-    branchId: params.branchId,
-    agent: dispatchAgent,
-    allTools,
-    interactive: params.interactive,
-    agentName: currentAgent,
-    parentToolCallId: params.runSpec?.parentToolCallId,
-  }
   // Filter out hidden messages — visible in transcript but excluded from LLM context
   const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
 
   const projEval = yield* extensionRegistry
     .getResolved()
-    .extensionHooks.resolveTurnProjection(turnCtx)
+    .extensionHooks.resolveTurnProjection({ agent: dispatchAgent })
   const extensionProjections: TurnProjection[] = projEval.policyFragments.map((p) => ({
     toolPolicy: p,
   }))
@@ -1385,11 +1373,6 @@ type ExternalTurnSource = {
   readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
-type ExternalToolPersistence = {
-  readonly assistantMessageId: MessageId
-  readonly toolResultMessageId: MessageId
-}
-
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   messageId: MessageId
   step: number
@@ -1403,14 +1386,6 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
-  randomId: Effect.Effect<string>
-  persistExternalToolCall: (
-    toolCall: Prompt.ToolCallPart,
-  ) => Effect.Effect<
-    ExternalToolPersistence,
-    StorageError | TurnError,
-    EventPublisher | EventStorage | MessageStorage | ToolCallBindingStorage
-  >
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const drivers = extensionRegistry.getResolved()
@@ -1468,79 +1443,17 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       return undefined
     }
 
-    // The executor calls back from its own context, so the tool run and its
-    // persistence carry the services they need from here.
-    const toolRunner = yield* ToolRunner
-    const extensionRegistry = yield* ExtensionRegistry
-    const eventPublisher = yield* EventPublisher
-    const eventStorage = yield* EventStorage
-    const messageStorage = yield* MessageStorage
-    const toolBindingStorage = yield* ToolCallBindingStorage
-    const sql = yield* SqlClient.SqlClient
-    const externalToolRunner = ExternalToolRunner.of({
-      runTool: (toolName, args) =>
-        Effect.gen(function* () {
-          const toolCallId = ToolCallId.make(yield* params.randomId)
-          const persistence = yield* params
-            .persistExternalToolCall(
-              Prompt.toolCallPart({
-                id: toolCallId,
-                name: toolName,
-                params: args,
-                providerExecuted: false,
-              }),
-            )
-            .pipe(Effect.catchTag("StorageError", Effect.die))
-          const result = yield* toolRunner
-            .runBound(
-              { toolCallId, toolName, input: args },
-              Option.fromUndefinedOr(resolved.toolBindings.get(toolName)),
-            )
-            .pipe(
-              provideCurrentHostCtx(hostCtx),
-              Effect.provideService(ExtensionRegistry, extensionRegistry),
-              Effect.provideService(EventPublisher, eventPublisher),
-              Effect.provideService(CurrentToolCall, {
-                toolBindings: resolved.toolBindings,
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                assistantMessageId: persistence.assistantMessageId,
-                toolCallId,
-              }),
-            )
-          yield* persistMessageParts({
-            role: "tool",
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            messageId: persistence.toolResultMessageId,
-            parts: [result],
-          }).pipe(Effect.orDie)
-          return result
-        }).pipe(
-          Effect.provideService(MessageStorage, messageStorage),
-          Effect.provideService(ToolCallBindingStorage, toolBindingStorage),
-          Effect.provideService(EventPublisher, eventPublisher),
-          Effect.provideService(EventStorage, eventStorage),
-          Effect.provideService(SqlClient.SqlClient, sql),
-        ),
-    })
-
     return {
       driverKind: "external",
       driverId: resolvedDriver.id,
-      stream: executor.value
-        .executeTurn({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          agent: resolved.agent,
-          messages: resolved.messages,
-          tools: resolved.tools,
-          systemPrompt: resolved.systemPrompt,
-          cwd: hostCtx.cwd,
-          abortSignal: params.activeStream.abortSignal,
-          hostCtx,
-        })
-        .pipe(Stream.provideService(ExternalToolRunner, externalToolRunner)),
+      stream: executor.value.executeTurn({
+        sessionId: params.sessionId,
+        branchId: params.branchId,
+        messages: resolved.messages,
+        systemPrompt: resolved.systemPrompt,
+        cwd: hostCtx.cwd,
+        abortSignal: params.activeStream.abortSignal,
+      }),
       // oxlint-disable-next-line effect/noUnknownParameters -- External driver errors cross an untyped executor boundary.
       formatStreamError: (streamError: unknown) =>
         `External turn executor error: ${causeMessage(streamError)}`,
@@ -1862,8 +1775,6 @@ export const TurnOutcome = Schema.TaggedUnion({
   Done: {},
   InteractionRequested: {
     pendingRequestId: InteractionRequestId,
-    pendingToolCallId: Schema.String,
-    currentTurnAgent: AgentName,
   },
 })
 export type TurnOutcome = Schema.Schema.Type<typeof TurnOutcome>
@@ -2211,8 +2122,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           ),
         )
 
-      let nextExternalStep = params.step
-
       const source = yield* resolveTurnSource({
         messageId: params.messageId,
         step: params.step,
@@ -2221,26 +2130,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         activeStream: params.activeStream,
-        randomId: platform.randomId,
-        persistExternalToolCall: (toolCall) => {
-          const step = nextExternalStep
-          if (step > MAX_TURN_STEPS) {
-            return Effect.fail(
-              new TurnError({
-                message: `External turn exceeded the ${MAX_TURN_STEPS} tool step limit`,
-              }),
-            )
-          }
-          nextExternalStep += 1
-          const at = stepAddress(params.messageId, step)
-          return persistAssistantPartsWithBindingsAt(at, [toolCall]).pipe(
-            Effect.as({
-              assistantMessageId: at.assistant,
-              toolResultMessageId: at.toolResult,
-            } satisfies ExternalToolPersistence),
-            Effect.orDie,
-          )
-        },
       })
 
       if (Predicate.isUndefined(source)) {
@@ -2309,10 +2198,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
 
       const outcome = classifyStep(collected)
-      let responseStep = params.step
-      if (source.driverKind === "external") responseStep = nextExternalStep
-      // The step whose messages carry this response. An external driver settles
-      // its own tool steps as it goes, so its response lands past `params.step`.
+      const responseStep = params.step
       const responseAddress = stepAddress(params.messageId, responseStep)
       const assistantParts = collected.messageProjection.assistant
       const toolParts = collected.messageProjection.tool
@@ -2453,12 +2339,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       return { collected, outcome }
     })
 
-    const interactionOutcome = (pending: ToolInteractionPending, currentTurnAgent: AgentNameType) =>
+    const interactionOutcome = (pending: ToolInteractionPending) =>
       StepResult.cases.Interaction.make({
         outcome: TurnOutcome.cases.InteractionRequested.make({
           pendingRequestId: pending.pending.requestId,
-          pendingToolCallId: String(pending.toolCallId),
-          currentTurnAgent,
         }),
       })
 
@@ -2781,8 +2665,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             interaction: Option.some(
               TurnOutcome.cases.InteractionRequested.make({
                 pendingRequestId: outcome.requestId,
-                pendingToolCallId: toolCall.id,
-                currentTurnAgent: params.currentTurnAgent,
               }),
             ),
           }
@@ -2841,7 +2723,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         return { step: pendingStep, interaction: Option.none() }
       }
       const pending = interactionSignal.value
-      const outcome = interactionOutcome(pending, params.currentTurnAgent)
+      const outcome = interactionOutcome(pending)
       return { step: 1, interaction: Option.some(outcome.outcome) }
     })
 
@@ -3002,8 +2884,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         return StepResult.cases.Interaction.make({
           outcome: TurnOutcome.cases.InteractionRequested.make({
             pendingRequestId: attempt.failure.requestId,
-            pendingToolCallId: "external",
-            currentTurnAgent,
           }),
         })
       }
@@ -3031,7 +2911,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           toolBindings: resolved.toolBindings,
         })
         if (Option.isSome(interactionSignal)) {
-          return interactionOutcome(interactionSignal.value, currentTurnAgent)
+          return interactionOutcome(interactionSignal.value)
         }
         yield* clearProcessLocalReplayBindings(
           stepAddress(params.state.message.id, params.step).assistant,

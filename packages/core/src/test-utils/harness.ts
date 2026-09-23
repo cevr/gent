@@ -92,7 +92,8 @@ import {
 } from "../domain/event.js"
 import type { LanguageModel } from "effect/unstable/ai"
 import type { GentPlatform } from "../runtime/gent-platform.js"
-import { buildServerRoot, ServerRootPlatformLayer } from "../server/server-root.js"
+import { buildServerRoot } from "../server/server-root.js"
+import { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 import { Gent } from "@gent/sdk"
 
 // ── extension-host-context ──────────────────────────────────────────────────
@@ -776,7 +777,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     identity: testIdentity(config.storagePath),
   })
   return Layer.unwrap(root.pipe(Effect.map((built) => built.coreServicesLive))).pipe(
-    Layer.provide(ServerRootPlatformLayer),
+    Layer.provide(BunPlatformLive),
   )
 }
 

@@ -22,7 +22,6 @@ import {
 import {
   BranchId,
   defineExtension,
-  ExtensionContext,
   ExtensionHost,
   ExtensionId,
   getToolId,
@@ -2616,18 +2615,12 @@ export const CellExtension = defineExtension({
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", CellTool)
-    yield* host.on("turnProjection", () =>
-      Effect.gen(function* () {
-        const ctx = yield* ExtensionContext
-        if (
-          ctx.turn?.agent.driver?._tag === "External" ||
-          ctx.turn?.agent.deniedTools?.includes("cell")
-        ) {
-          return {}
-        }
-        return { toolPolicy: { include: ["cell"], modelSet: ["cell"] } }
-      }),
-    )
+    yield* host.on("turnProjection", ({ agent }) => {
+      if (agent.driver?._tag === "External" || agent.deniedTools?.includes("cell")) {
+        return Effect.succeed({})
+      }
+      return Effect.succeed({ toolPolicy: { include: ["cell"], modelSet: ["cell"] } })
+    })
     yield* host.on("systemPrompt", (input) =>
       Effect.gen(function* () {
         if (

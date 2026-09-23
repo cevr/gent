@@ -1021,9 +1021,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       if (outcome._tag === "InteractionRequested") {
         const next = toWaitingForInteractionState({
           state: startState,
-          currentTurnAgent: outcome.currentTurnAgent,
           pendingRequestId: outcome.pendingRequestId,
-          pendingToolCallId: outcome.pendingToolCallId,
         })
         yield* scope.inbox.moveToPhase(next)
         return

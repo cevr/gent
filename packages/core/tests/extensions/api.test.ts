@@ -82,8 +82,10 @@ describe("extension authoring reference", () => {
           const hookSlot = (contributions.hooks ?? [])[0]!
           expect(hookSlot.kind).toBe("turnProjection")
           if (hookSlot.kind !== "turnProjection") return
-          // oxlint-disable-next-line effect/noNullish, effect/noInlineProvide -- Exercise the existing absent-value boundary contract. This test composes the service layer for this operation.
-          const projection = yield* hookSlot.hook.handler(undefined).pipe(Effect.provide(context))
+          const projection = yield* hookSlot.hook
+            .handler({ agent: builtinAgent })
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+            .pipe(Effect.provide(context))
           expect(projection.promptSections?.[0]?.id).toBe("session-notes")
           expect(projection.promptSections?.[0]?.content).toContain("ship the authoring loop")
           expect(projection.toolPolicy?.include).toEqual(["session_note_add"])

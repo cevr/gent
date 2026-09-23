@@ -1038,12 +1038,11 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
 
 const TOOL_CONCURRENCY = 8
 
-/** InteractionPendingError enriched with the toolCallId that triggered it */
+/** InteractionPendingError with the results of the calls that did finish */
 export class ToolInteractionPending extends Schema.TaggedError<ToolInteractionPending>(
   "@gent/core/src/runtime/tools/ToolInteractionPending",
 )("ToolInteractionPending", {
   pending: InteractionPendingError,
-  toolCallId: ToolCallId,
   completedResults: Schema.Array(Prompt.ToolResultPart),
 }) {}
 
@@ -1082,7 +1081,6 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
                 (e) =>
                   new ToolInteractionPending({
                     pending: e,
-                    toolCallId: ToolCallId.make(toolCall.id),
                     completedResults: [],
                   }),
               ),
@@ -1117,7 +1115,6 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
   if (Option.isSome(pending)) {
     return yield* new ToolInteractionPending({
       pending: pending.value.pending,
-      toolCallId: pending.value.toolCallId,
       completedResults: results,
     })
   }

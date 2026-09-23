@@ -169,7 +169,6 @@ import { e2ePreset, ModelContextCompactorLive } from "../../../extensions/tests/
 import * as AiModel from "effect/unstable/ai/Model"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import {
-  ExternalToolRunner,
   type ModelDriverContribution,
   type TurnContext,
   TurnError,
@@ -7331,174 +7330,6 @@ describe("external turn execution", () => {
       )
     }),
   )
-  it.live("external sequential calls retain results and resume before later callbacks", () =>
-    Effect.gen(function* () {
-      const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      const toolCalls = yield* Ref.make(0)
-      const completedInputs = yield* Ref.make<string[]>([])
-      const actualCallIds = yield* Ref.make<string[]>([])
-      const executorCalls = yield* Ref.make(0)
-      const pendingTool: ToolCapability = tool({
-        id: "context_probe",
-        description: "Probe tool context",
-        params: Schema.Struct({ value: Schema.String }),
-        output: Schema.Struct({
-          value: Schema.String,
-          nested: Schema.Struct({ ok: Schema.Boolean }),
-        }),
-        execute: (input: { value: string }) =>
-          Effect.gen(function* () {
-            const ctx = yield* ExtensionContext
-            yield* Ref.update(toolCalls, (value) => value + 1)
-            const actualCallId = ctx.toolCallId
-            if (Predicate.isUndefined(actualCallId))
-              return yield* Effect.die("Missing tool call ID")
-            yield* Ref.update(actualCallIds, (ids) => [...ids, actualCallId])
-            if (input.value === "park") {
-              const decision = yield* ctx.Interaction.approve({
-                text: "Approve second external call",
-              })
-              expect(decision.approved).toBe(true)
-            }
-            yield* Ref.update(completedInputs, (inputs) => [...inputs, input.value])
-            return { value: input.value, nested: { ok: true } }
-          }),
-      })
-      const executor: TurnExecutor = {
-        executeTurn: () =>
-          Stream.fromEffect(
-            Effect.gen(function* () {
-              const call = yield* Ref.getAndUpdate(executorCalls, (value) => value + 1)
-              const runner = yield* ExternalToolRunner
-              if (call === 0) {
-                yield* runner.runTool("context_probe", { value: "first" })
-                return yield* runner.runTool("context_probe", { value: "park" })
-              }
-              return yield* runner.runTool("context_probe", { value: "later" })
-            }),
-          ).pipe(
-            Stream.flatMap(() => Stream.fromIterable([textDelta("external resumed"), finish()])),
-          ),
-      }
-      const layer = makeLayerWithEventsExternalTurn(executor, eventsRef, {
-        tools: [pendingTool],
-        liveToolRunner: true,
-        liveApproval: true,
-      })
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const agentLoop = yield* makeAgentLoopServiceExternalTurn
-          yield* ensureStorageParents({
-            sessionId: sessionIdExternalTurn,
-            branchId: branchIdExternalTurn,
-          })
-          const message = makeMessageExternalTurn("park externally")
-          const fiber = yield* Effect.forkChild(
-            runAgentLoopExternalTurn(agentLoop, message, {
-              agentOverride: AgentName.make("test-external"),
-            }),
-          )
-          const actorClientFactory = yield* AgentLoopActor.Context
-          const ref = yield* actorClientFactory(
-            entityIdOf(DefaultWorkspaceId, sessionIdExternalTurn, branchIdExternalTurn),
-          )
-          const state = yield* waitFor(
-            ref.execute(
-              AgentLoopActor.GetState.make({
-                workspaceId: DefaultWorkspaceId,
-                sessionId: sessionIdExternalTurn,
-                branchId: branchIdExternalTurn,
-                commandId: ActorCommandId.make("external-pending-state"),
-              }),
-            ),
-            (snapshot) => snapshot._tag === "WaitingForInteraction",
-            4_000,
-            "external interaction pending state",
-          )
-          expect(state._tag).toBe("WaitingForInteraction")
-          if (state._tag !== "WaitingForInteraction") return
-          const messages = yield* MessageStorage
-          const bindingStorage = yield* ToolCallBindingStorage
-          const firstResult = yield* messages.getMessage(toolResultMessageIdForTurn(message.id, 1))
-          expect(firstResult?.parts).toEqual([
-            Prompt.toolResultPart({
-              id: Ref.getUnsafe(actualCallIds)[0] ?? "missing",
-              name: "context_probe",
-              isFailure: false,
-              providerExecuted: false,
-              result: { value: "first", nested: { ok: true } },
-            }),
-          ])
-          const assistant = yield* messages.getMessage(assistantMessageIdForTurn(message.id, 2))
-          expect(assistant).not.toBeUndefined()
-          if (Predicate.isUndefined(assistant)) return
-          const persistedCall = assistant.parts.find((part) => part.type === "tool-call")
-          expect(persistedCall?.type).toBe("tool-call")
-          if (persistedCall?.type !== "tool-call") return
-          expect(persistedCall.id).toBe(Ref.getUnsafe(actualCallIds)[1] ?? "missing")
-          expect(persistedCall.params).toEqual({ value: "park" })
-          expect(
-            yield* bindingStorage.get({
-              sessionId: sessionIdExternalTurn,
-              branchId: branchIdExternalTurn,
-              assistantMessageId: assistant.id,
-              toolCallId: ToolCallId.make(persistedCall.id),
-            }),
-          ).toBeUndefined()
-          const approval = yield* ApprovalService
-          const pendingRequestId = yield* approval.pendingRequestId({
-            sessionId: sessionIdExternalTurn,
-            branchId: branchIdExternalTurn,
-          })
-          expect(pendingRequestId).not.toBeUndefined()
-          if (Predicate.isUndefined(pendingRequestId)) return
-          yield* approval.storeResolution(pendingRequestId, { approved: true })
-          yield* ref.execute(
-            AgentLoopActor.RespondInteraction.make({
-              workspaceId: DefaultWorkspaceId,
-              sessionId: sessionIdExternalTurn,
-              branchId: branchIdExternalTurn,
-              requestId: pendingRequestId,
-            }),
-          )
-          yield* waitFor(
-            ref.execute(
-              AgentLoopActor.GetState.make({
-                workspaceId: DefaultWorkspaceId,
-                sessionId: sessionIdExternalTurn,
-                branchId: branchIdExternalTurn,
-                commandId: ActorCommandId.make("external-resumed-state"),
-              }),
-            ),
-            (snapshot) => snapshot._tag === "Idle",
-            4_000,
-            "external interaction resumed state",
-          )
-          expect(Ref.getUnsafe(toolCalls)).toBe(4)
-          expect(Ref.getUnsafe(executorCalls)).toBe(2)
-          expect(Ref.getUnsafe(completedInputs)).toEqual(["first", "park", "later"])
-          const ids = Ref.getUnsafe(actualCallIds)
-          expect(ids[2]).toBe(ids[1])
-          expect(ids[3]).not.toBe(ids[1])
-          const history = yield* messages.listMessages(branchIdExternalTurn)
-          const calls = history.flatMap((message) => messagePartsToolCallParts(message.parts))
-          const results = history.flatMap((message) => messagePartsToolResultParts(message.parts))
-          expect(calls.map((part) => part.id)).toEqual(ids.filter((_, index) => index !== 2))
-          expect(results.map((part) => part.id)).toEqual(calls.map((part) => part.id))
-          expect(results.map((part) => part.result)).toEqual([
-            { value: "first", nested: { ok: true } },
-            { value: "park", nested: { ok: true } },
-            { value: "later", nested: { ok: true } },
-          ])
-          expect(history.map((message) => messagePartsText(message.parts))).toContain(
-            "external resumed",
-          )
-          yield* Fiber.join(fiber)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
-    }),
-  )
   it.live("an external turn that produces nothing is marked unanswered", () =>
     Effect.gen(function* () {
       const eventsRef = yield* Ref.make<AgentEvent[]>([])
@@ -7523,70 +7354,6 @@ describe("external turn execution", () => {
           expect(completed.every((event) => event.unanswered === true)).toBe(true)
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
-      )
-    }),
-  )
-  it.live("external callback limit rejects before another side effect or saved intent", () =>
-    Effect.gen(function* () {
-      const eventsRef = yield* Ref.make<AgentEvent[]>([])
-      const executions = yield* Ref.make(0)
-      const boundedTool = tool({
-        id: "context_probe",
-        description: "Count external side effects",
-        params: Schema.Struct({ value: Schema.String }),
-        output: Schema.Finite,
-        execute: () => Ref.updateAndGet(executions, (count) => count + 1),
-      })
-      const executor: TurnExecutor = {
-        executeTurn: () =>
-          Stream.fromEffect(
-            Effect.gen(function* () {
-              const runner = yield* ExternalToolRunner
-              for (let call = 0; call < 201; call++) {
-                yield* runner.runTool("context_probe", { value: String(call) })
-              }
-              return finish()
-            }),
-          ),
-      }
-      const layer = makeLayerWithEventsExternalTurn(executor, eventsRef, {
-        tools: [boundedTool],
-        liveToolRunner: true,
-      }).pipe(Layer.provideMerge(TestClock.layer()))
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          yield* TestClock.setTime(1_767_225_600_000)
-          const loop = yield* makeAgentLoopServiceExternalTurn
-          const message = makeMessageExternalTurn("bound external calls")
-          yield* runAgentLoopExternalTurn(loop, message, {
-            agentOverride: externalAgent.name,
-          })
-          const storage = yield* MessageStorage
-          const history = yield* storage.listMessages(branchIdExternalTurn)
-          const calls = history.flatMap((message) => messagePartsToolCallParts(message.parts))
-          const results = history.flatMap((message) => messagePartsToolResultParts(message.parts))
-          expect(yield* Ref.get(executions)).toBe(200)
-          expect(calls).toHaveLength(200)
-          expect(history.map((entry) => entry.id)).toEqual([
-            message.id,
-            ...Array.from({ length: 200 }, (_, index) => index + 1).flatMap((step) => [
-              assistantMessageIdForTurn(message.id, step),
-              toolResultMessageIdForTurn(message.id, step),
-            ]),
-          ])
-          expect(results.map((result) => result.id)).toEqual(calls.map((call) => call.id))
-          expect(results.at(-1)?.result).toBe(200)
-          const errors = (yield* Ref.get(eventsRef)).filter(
-            (event) => event._tag === "ErrorOccurred",
-          )
-          expect(errors.map((event) => event.error)).toContain(
-            "External turn executor error: External turn exceeded the 200 tool step limit",
-          )
-        }).pipe(
-          // oxlint-disable-next-line effect/noInlineProvide -- This test builds the real actor under a fixed clock at its test boundary.
-          Effect.provide(layer),
-          Effect.timeout("4 seconds"),
-        ),
       )
     }),
   )
@@ -7811,12 +7578,10 @@ describe("external turn execution", () => {
       expect(capturedContexts).toHaveLength(1)
       const capturedCtx = capturedContexts[0]
       if (Predicate.isUndefined(capturedCtx)) return
-      expect(capturedCtx.agent.name).toBe(AgentName.make("test-external"))
+      expect(capturedCtx.sessionId).toBe(sessionIdExternalTurn)
+      expect(capturedCtx.branchId).toBe(branchIdExternalTurn)
       expect(capturedCtx.cwd).toBe("/tmp")
       expect(capturedCtx.abortSignal).toBeDefined()
-      expect(capturedCtx.tools.map((candidate) => String(getToolId(candidate)))).toEqual([
-        "context_probe",
-      ])
     }),
   )
   it.live("executor receives all live user message parts", () =>

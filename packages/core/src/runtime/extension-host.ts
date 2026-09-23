@@ -35,7 +35,7 @@ import {
   type ExtensionSetupServices,
   type ExtensionStateFacet,
   type ExtensionStatusInfo,
-  type ExtensionTurnContext,
+  type TurnProjectionInput,
   type FailedExtension,
   type FailedExtensionPhase,
   FileLockService,
@@ -246,7 +246,6 @@ export const emptyErasedResourceLayer: ErasedResourceLayer = Layer.empty as Eras
 interface ExtensionLeafFrame {
   readonly extensionId?: ExtensionId
   readonly toolCallId?: ToolCallId
-  readonly turn?: ExtensionTurnContext
 }
 
 /**
@@ -275,7 +274,7 @@ interface CompiledExtensionHooks {
     input: SystemPromptInput,
   ) => Effect.Effect<string, never, CurrentExtensionHostContext>
   readonly resolveTurnProjection: (
-    turn: ExtensionTurnContext,
+    input: TurnProjectionInput,
   ) => Effect.Effect<ExtensionTurnProjection, never, CurrentExtensionHostContext>
   readonly emitTurnAfter: (
     input: TurnAfterInput,
@@ -294,7 +293,7 @@ interface RegisteredSystemPromptRewrite {
 
 interface HookTurnProjectionSlot {
   readonly extensionId: ExtensionId
-  readonly handler: () => Effect.Effect<
+  readonly handler: (input: TurnProjectionInput) => Effect.Effect<
     {
       readonly promptSections?: ReadonlyArray<PromptSection>
       readonly toolPolicy?: ToolPolicyFragment
@@ -334,12 +333,12 @@ const collectTurnProjection = (
   for (const fragment of projection.value.policyFragments) policyFragments.push(fragment)
 }
 
-const runTurnProjectionHook = (slot: HookTurnProjectionSlot, turn: ExtensionTurnContext) =>
+const runTurnProjectionHook = (slot: HookTurnProjectionSlot, input: TurnProjectionInput) =>
   sealErasedEffect<Option.Option<ExtensionTurnProjection>, never>(
     () =>
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off
       slot
-        .handler()
+        .handler(input)
         .pipe(
           Effect.map((projection) => {
             const promptSections = Option.getOrElse(
@@ -353,7 +352,7 @@ const runTurnProjectionHook = (slot: HookTurnProjectionSlot, turn: ExtensionTurn
             return Option.some({ promptSections, policyFragments })
           }),
         )
-        .pipe(provideExtensionLeaf({ extensionId: slot.extensionId, turn })),
+        .pipe(provideExtensionLeaf({ extensionId: slot.extensionId })),
     {
       onFailure: (error) =>
         Effect.logWarning("extension.hook.turn-projection.failed").pipe(
@@ -394,7 +393,7 @@ const collectHookSlot = (
     case "turnProjection":
       slots.turnProjection.push({
         extensionId: ext.manifest.id,
-        handler: () => eraseHookEffect(slot.hook.handler()),
+        handler: (input) => eraseHookEffect(slot.hook.handler(input)),
       })
       return
     case "turnAfter":
@@ -459,14 +458,14 @@ export const compileExtensionHooks = (
         return current
       }),
 
-    resolveTurnProjection: (turn) =>
+    resolveTurnProjection: (input) =>
       Effect.gen(function* () {
         const sectionsById = new Map<string, PromptSection>()
         const policyFragments: ToolPolicyFragment[] = []
 
         for (const slot of turnProjectionSlots) {
           collectTurnProjection(
-            yield* runTurnProjectionHook(slot, turn),
+            yield* runTurnProjectionHook(slot, input),
             sectionsById,
             policyFragments,
           )

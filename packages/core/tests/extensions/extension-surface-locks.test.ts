@@ -501,8 +501,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadSignalError = typeof PublicExtensionApi.SignalError
     // @ts-expect-error — durable message metadata schema is storage/runtime internals
     type _BadMessageMetadata = typeof PublicExtensionApi.MessageMetadata
-    // @ts-expect-error — turn context internals are expressed through hook input shapes
-    type _BadExtensionTurnContext = PublicExtensionApi.ExtensionTurnContext
     // @ts-expect-error — host-context errors are runtime internals, not authoring API
     type _BadExtensionHostError = typeof PublicExtensionApi.ExtensionHostError
     // The event type is public (an extension reads its own branch's stream);

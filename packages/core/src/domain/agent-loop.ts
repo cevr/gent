@@ -80,9 +80,7 @@ export const LoopState = Schema.TaggedUnion({
   /** Cold state: a tool requested human approval. No turn fiber. */
   WaitingForInteraction: {
     ...RunningTurnFields,
-    currentTurnAgent: AgentName,
     pendingRequestId: InteractionRequestId,
-    pendingToolCallId: Schema.String,
   },
 })
 
@@ -211,9 +209,7 @@ export const buildRunningState = (
 
 export const toWaitingForInteractionState = (params: {
   state: RunningState
-  currentTurnAgent: AgentNameType
   pendingRequestId: InteractionRequestIdType
-  pendingToolCallId: string
 }): WaitingForInteractionState =>
   LoopState.cases.WaitingForInteraction.make({
     message: params.state.message,
@@ -221,9 +217,7 @@ export const toWaitingForInteractionState = (params: {
     agentOverride: params.state.agentOverride,
     runSpec: params.state.runSpec,
     interactive: params.state.interactive,
-    currentTurnAgent: params.currentTurnAgent,
     pendingRequestId: params.pendingRequestId,
-    pendingToolCallId: params.pendingToolCallId,
   })
 
 // ── agent-loop.entity-id ────────────────────────────────────────────────────
