@@ -265,7 +265,7 @@ interface ConfigServiceService {
 }
 
 /** A fresh config read: the merged config and every file that did not load. */
-interface FreshConfig {
+export interface FreshConfig {
   readonly config: UserConfig
   readonly failures: ReadonlyArray<ConfigLoadError>
 }

@@ -612,6 +612,49 @@ describe("session profile resolution", () => {
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
+  // A profile is derived from its cwd and the config's disabled list; an edit
+  // to the list must reach the next session without a restart.
+  it.scopedLive("a disabledExtensions edit reaches the next resolve without a restart", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const kept = markerExtension("@gent/test-session-profile/kept-live", "live")
+      const toggled = defineExtension({
+        id: "@gent/test-session-profile/toggled",
+        setup: Effect.void,
+      })
+      const projectConfig = path.join(launch, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      const ids = (profile: SessionProfile) =>
+        profile.resolved.extensions.map((extension) => String(extension.manifest.id))
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const before = yield* cache.resolve(launch)
+        expect(ids(before)).toEqual([
+          "@gent/test-session-profile/kept-live",
+          "@gent/test-session-profile/toggled",
+        ])
+        yield* fs.writeFileString(
+          projectConfig,
+          '{"disabledExtensions":["@gent/test-session-profile/toggled"]}',
+        )
+        const disabled = yield* cache.resolve(launch)
+        expect(ids(disabled)).toEqual(["@gent/test-session-profile/kept-live"])
+        // The same list again is the same profile, not a rebuild.
+        expect(yield* cache.resolve(launch)).toBe(disabled)
+        yield* fs.writeFileString(projectConfig, "{}")
+        expect(yield* cache.resolve(launch)).toBe(before)
+      }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [kept, toggled] })),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("f".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   it.scopedLive("releases a partially built profile when its build is interrupted", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

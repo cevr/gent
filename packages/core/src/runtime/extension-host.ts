@@ -95,6 +95,7 @@ import { GentPlatform } from "./gent-platform.js"
 import {
   type ConfigLoadError,
   ConfigService,
+  type FreshConfig,
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
   RuntimeEnvironment,
@@ -1720,11 +1721,25 @@ const describeFailedExtensions = (failed: ReadonlyArray<FailedExtension>): strin
   ].join("\n")
 
 export interface SessionProfileCacheService {
-  /** Get or lazily create a profile for the given cwd. */
+  /**
+   * The profile for the given cwd under the config as it is now: found, or
+   * built on first use.
+   */
   readonly resolve: (cwd: string) => Effect.Effect<SessionProfile>
 }
 
-const cacheKey = (workspaceId: WorkspaceId, cwd: string): string => `${workspaceId}\u0000${cwd}`
+/**
+ * A profile is derived from its workspace, its cwd and the effective disabled
+ * list, so the key holds all three: an edit to `disabledExtensions` reaches
+ * the next resolve without a restart, and a list seen before finds the
+ * profile it built. A profile a later edit superseded stays open until the
+ * server closes, because a turn that resolved it may still run on it.
+ */
+const cacheKey = (
+  workspaceId: WorkspaceId,
+  cwd: string,
+  disabledExtensions: ReadonlyArray<string>,
+): string => [workspaceId, cwd, ...[...new Set(disabledExtensions)].toSorted()].join("\u0000")
 
 /** The profile inputs with the merged user and project config's disabled list. */
 const effectiveInputs = (
@@ -1847,11 +1862,10 @@ export class SessionProfileCache extends Context.Service<
           extensions: config.extensions,
         })
 
-        const buildProfile = (cwd: string) =>
+        const buildProfile = (cwd: string, fresh: FreshConfig) =>
           Effect.gen(function* () {
             const profileScope = yield* Scope.fork(serverScope)
             return yield* Effect.gen(function* () {
-              const fresh = yield* configService.getFresh(cwd)
               const declarations = yield* loadRuntimeProfileDeclarations(
                 effectiveInputs(inputsFor(cwd), fresh.config),
               ).pipe(Effect.provideContext(platformServicesContext))
@@ -1894,14 +1908,19 @@ export class SessionProfileCache extends Context.Service<
           Effect.gen(function* () {
             const workspaceId = yield* CurrentWorkspaceId
             const canonicalCwd = pathSvc.resolve(cwd)
-            const key = cacheKey(workspaceId, canonicalCwd)
+            const fresh = yield* configService.getFresh(canonicalCwd)
+            const key = cacheKey(
+              workspaceId,
+              canonicalCwd,
+              effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
+            )
             const cached = Option.fromNullishOr(profiles.get(key))
             if (Option.isSome(cached)) return cached.value
             const lock = yield* lockFor(key)
             return yield* Effect.gen(function* () {
               const found = Option.fromNullishOr(profiles.get(key))
               if (Option.isSome(found)) return found.value
-              const profile = yield* buildProfile(canonicalCwd).pipe(Effect.orDie)
+              const profile = yield* buildProfile(canonicalCwd, fresh).pipe(Effect.orDie)
               profiles.set(key, profile)
               yield* Effect.logInfo("session-profile.initialized").pipe(
                 Effect.annotateLogs({
