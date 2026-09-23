@@ -83,6 +83,12 @@ export interface ProviderHints {
   readonly temperature?: number
   /** Stable conversation identity for providers that support cache routing. */
   readonly cacheKey?: string
+  /**
+   * The catalog's `Model.reasoning` for the resolved model. A driver sends no
+   * reasoning effort to a model the catalog says does not reason; absent when
+   * the catalog does not say.
+   */
+  readonly supportsReasoning?: boolean
 }
 
 /**

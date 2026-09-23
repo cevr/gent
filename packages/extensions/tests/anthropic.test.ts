@@ -2537,17 +2537,18 @@ describe("buildAnthropicModelDriver — credential order", () => {
     }),
   )
 })
-describe("buildAnthropicModelDriver — reasoning effort", () => {
-  const sentOutputConfig = (body: Option.Option<string>) =>
-    Schema.decodeSync(
-      Schema.fromJsonString(
-        Schema.Struct({ output_config: Schema.optional(Schema.Struct({ effort: Schema.String })) }),
-      ),
-    )(Option.getOrElse(body, () => "{}")).output_config
-  const sentFor = (
+describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
+  const SentReasoning = Schema.fromJsonString(
+    Schema.Struct({
+      output_config: Schema.optional(Schema.Struct({ effort: Schema.String })),
+      thinking: Schema.optional(Schema.Struct({ type: Schema.String })),
+      temperature: Schema.optional(Schema.Finite),
+    }),
+  )
+  const sentRequest = (
     modelName: string,
     authInfo: ProviderAuthInfo,
-    reasoning: ProviderHints["reasoning"] = "high",
+    hints: ProviderHints = { reasoning: "high" },
   ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
@@ -2560,22 +2561,30 @@ describe("buildAnthropicModelDriver — reasoning effort", () => {
       )
       const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
-      const model = yield* driver.resolveModel(modelName, authInfo, { reasoning })
+      const model = yield* driver.resolveModel(modelName, authInfo, hints)
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
-      return sentOutputConfig(
-        Option.flatMap(Option.fromUndefinedOr(fetchState.captured.at(-1)), (request) =>
-          Option.fromUndefinedOr(request.body),
-        ),
+      const body = Option.flatMap(Option.fromUndefinedOr(fetchState.captured.at(-1)), (request) =>
+        Option.fromUndefinedOr(request.body),
       )
+      return yield* Schema.decodeEffect(SentReasoning)(Option.getOrElse(body, () => "{}"))
     })
+  /** The same request on both auth paths; the two must agree. */
+  const sentOnBothPaths = (modelName: string, hints?: ProviderHints) =>
+    Effect.gen(function* () {
+      const api = yield* sentRequest(modelName, makeApiAuthInfo("sk-test"), hints)
+      const oauth = yield* sentRequest(modelName, makeOAuthInfo(), hints)
+      expect(oauth).toEqual(api)
+      return api
+    })
+  const sentFor = (modelName: string, reasoning: ProviderHints["reasoning"] = "high") =>
+    Effect.map(sentOnBothPaths(modelName, { reasoning }), (sent) => sent.output_config)
 
   // Anthropic answers 400 when a model outside its effort table gets one.
   it.live("a model that takes no effort gets none on either auth path", () =>
     Effect.gen(function* () {
       for (const model of ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-5-20250929"]) {
-        expect(yield* sentFor(model, makeApiAuthInfo("sk-test"))).toBeUndefined()
-        expect(yield* sentFor(model, makeOAuthInfo())).toBeUndefined()
+        expect(yield* sentOnBothPaths(model, { reasoning: "high" })).toEqual({})
       }
     }),
   )
@@ -2590,19 +2599,98 @@ describe("buildAnthropicModelDriver — reasoning effort", () => {
         "claude-sonnet-5",
         "claude-fable-5-1",
       ]) {
-        expect(yield* sentFor(model, makeApiAuthInfo("sk-test"))).toEqual({ effort: "high" })
-        expect(yield* sentFor(model, makeOAuthInfo())).toEqual({ effort: "high" })
+        expect(yield* sentFor(model)).toEqual({ effort: "high" })
       }
     }),
   )
 
   it.live("a hint maps onto the levels the model accepts", () =>
     Effect.gen(function* () {
-      const api = makeApiAuthInfo("sk-test")
-      expect(yield* sentFor("claude-opus-4-5", api, "max")).toEqual({ effort: "high" })
-      expect(yield* sentFor("claude-sonnet-4-6", api, "minimal")).toEqual({ effort: "low" })
-      expect(yield* sentFor("claude-sonnet-4-6", api, "medium")).toEqual({ effort: "medium" })
-      expect(yield* sentFor("claude-sonnet-4-6", api, "none")).toBeUndefined()
+      expect(yield* sentFor("claude-opus-4-5", "max")).toEqual({ effort: "high" })
+      expect(yield* sentFor("claude-sonnet-4-6", "minimal")).toEqual({ effort: "low" })
+      expect(yield* sentFor("claude-sonnet-4-6", "medium")).toEqual({ effort: "medium" })
+      expect(yield* sentFor("claude-sonnet-4-6", "none")).toBeUndefined()
+      // The request schema has no `xhigh`: it sends `high`.
+      expect(yield* sentFor("claude-sonnet-5", "xhigh")).toEqual({ effort: "high" })
+    }),
+  )
+
+  // The main agent runs at max; the effort page lists `max` for every model below.
+  it.live("a max hint sends max on either auth path", () =>
+    Effect.gen(function* () {
+      for (const model of [
+        "claude-sonnet-5",
+        "claude-opus-5-5",
+        "claude-opus-4-8",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-fable-5-1",
+      ]) {
+        expect(yield* sentFor(model, "max")).toEqual({ effort: "max" })
+      }
+    }),
+  )
+
+  // Opus 4.6-4.8 and Sonnet 4.6 leave thinking off unless the request turns it on.
+  it.live("a reasoning hint turns adaptive thinking on for a model that defaults to off", () =>
+    Effect.gen(function* () {
+      for (const model of [
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+      ]) {
+        expect((yield* sentOnBothPaths(model, { reasoning: "high" })).thinking).toEqual({
+          type: "adaptive",
+        })
+      }
+      // Extended-thinking-only models reject adaptive thinking with a 400.
+      for (const model of ["claude-opus-4-5", "claude-haiku-4-5", "claude-sonnet-4-5"]) {
+        expect((yield* sentOnBothPaths(model, { reasoning: "high" })).thinking).toBeUndefined()
+      }
+    }),
+  )
+
+  // The compaction summary asks for no reasoning under a 768-token cap; thinking
+  // counts toward max_tokens, so a thinking summary comes back cut or empty.
+  it.live("a none hint asks for as little reasoning as the model allows", () =>
+    Effect.gen(function* () {
+      const none: ProviderHints = { reasoning: "none", maxTokens: 768 }
+      // Thinking on by default, and it can be turned off.
+      for (const model of ["claude-sonnet-5", "claude-opus-5"]) {
+        expect(yield* sentOnBothPaths(model, none)).toEqual({ thinking: { type: "disabled" } })
+      }
+      // Thinking cannot be turned off: the lowest effort instead.
+      for (const model of [
+        "claude-opus-5-5",
+        "claude-fable-5",
+        "claude-fable-5-1",
+        "claude-mythos-5",
+      ]) {
+        expect(yield* sentOnBothPaths(model, none)).toEqual({ output_config: { effort: "low" } })
+      }
+      // Thinking already off by default: nothing to send.
+      for (const model of ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]) {
+        expect(yield* sentOnBothPaths(model, none)).toEqual({})
+      }
+    }),
+  )
+
+  // Newer models answer 400 to any non-default temperature; the 4.6 models only while thinking.
+  it.live("temperature goes only to a model that takes it", () =>
+    Effect.gen(function* () {
+      const temperature = (model: string, hints: ProviderHints) =>
+        Effect.map(
+          sentOnBothPaths(model, { ...hints, temperature: 0.2 }),
+          (sent) => sent.temperature,
+        )
+      for (const model of ["claude-sonnet-5", "claude-opus-4-8", "claude-opus-5-5"]) {
+        expect(yield* temperature(model, {})).toBeUndefined()
+      }
+      expect(yield* temperature("claude-sonnet-4-6", { reasoning: "high" })).toBeUndefined()
+      expect(yield* temperature("claude-sonnet-4-6", {})).toBe(0.2)
+      expect(yield* temperature("claude-sonnet-4-6", { reasoning: "none" })).toBe(0.2)
+      expect(yield* temperature("claude-haiku-4-5", { reasoning: "high" })).toBe(0.2)
     }),
   )
 })

@@ -95,6 +95,7 @@ import { GentPlatform } from "./gent-platform.js"
 import {
   type ConfigLoadError,
   ConfigService,
+  type FreshConfig,
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
   RuntimeEnvironment,
@@ -1720,11 +1721,36 @@ const describeFailedExtensions = (failed: ReadonlyArray<FailedExtension>): strin
   ].join("\n")
 
 export interface SessionProfileCacheService {
-  /** Get or lazily create a profile for the given cwd. */
-  readonly resolve: (cwd: string) => Effect.Effect<SessionProfile>
+  /**
+   * The profile for the given cwd under the config as it is now: found, or
+   * built on first use. The caller's scope holds a lease on it: a profile a
+   * later config edit superseded closes when its last lease is released.
+   */
+  readonly resolve: (cwd: string) => Effect.Effect<SessionProfile, never, ScopeType.Scope>
 }
 
-const cacheKey = (workspaceId: WorkspaceId, cwd: string): string => `${workspaceId}\u0000${cwd}`
+/** One (workspace, cwd) place: at most one current profile, one build lock. */
+const placeKey = (workspaceId: WorkspaceId, cwd: string): string =>
+  [workspaceId, cwd].join("\u0000")
+
+/**
+ * The raw disabled list as the config names it. It only finds a profile the
+ * same list resolved before; the profile itself is keyed by `profileKey`.
+ */
+const listKey = (place: string, disabledExtensions: ReadonlyArray<string>): string =>
+  [place, ...[...new Set(disabledExtensions)].toSorted()].join("\u0000")
+
+/**
+ * A profile is derived from its place and the extensions its config leaves
+ * set up, so the key holds the active and the failed extension ids, not the
+ * disabled list: an id no extension has builds no second profile.
+ */
+const profileKey = (place: string, declarations: ExtensionActivationResult): string =>
+  [
+    place,
+    ...declarations.active.map((extension) => `+${extension.manifest.id}`).toSorted(),
+    ...declarations.failed.map((extension) => `!${extension.manifest.id}`).toSorted(),
+  ].join("\u0000")
 
 /** The profile inputs with the merged user and project config's disabled list. */
 const effectiveInputs = (
@@ -1824,17 +1850,30 @@ export class SessionProfileCache extends Context.Service<
           Context.add(GentPlatform, platform),
         )
 
-        const profiles = new Map<string, SessionProfile>()
-        // The gate only protects creation of per-key locks. Building one cwd
-        // must not block unrelated cwd or workspace keys.
+        interface ProfileEntry {
+          readonly key: string
+          readonly place: string
+          readonly profile: SessionProfile
+          readonly scope: Scope.Closeable
+        }
+        // Every map below changes only under the place's lock.
+        const entries = new Map<string, ProfileEntry>()
+        const leases = new Map<string, number>()
+        // A raw disabled list seen before, to the profile it resolved to.
+        const aliases = new Map<string, string>()
+        // The profile the place's config selects now. Only a superseded
+        // profile retires; the current one stays cached without a lease.
+        const current = new Map<string, string>()
+        // The gate only protects creation of per-place locks. Building one cwd
+        // must not block unrelated cwd or workspace places.
         const locks = new Map<string, Semaphore.Semaphore>()
         const lockGate = yield* Semaphore.make(1)
-        const lockFor = (key: string) =>
+        const lockFor = (place: string) =>
           Effect.gen(function* () {
-            const existing = Option.fromNullishOr(locks.get(key))
+            const existing = Option.fromNullishOr(locks.get(place))
             if (Option.isSome(existing)) return existing.value
             const created = yield* Semaphore.make(1)
-            locks.set(key, created)
+            locks.set(place, created)
             return created
           }).pipe(lockGate.withPermits(1))
 
@@ -1847,14 +1886,14 @@ export class SessionProfileCache extends Context.Service<
           extensions: config.extensions,
         })
 
-        const buildProfile = (cwd: string) =>
+        const buildProfile = (
+          cwd: string,
+          fresh: FreshConfig,
+          declarations: RuntimeProfileDeclarations,
+        ) =>
           Effect.gen(function* () {
             const profileScope = yield* Scope.fork(serverScope)
-            return yield* Effect.gen(function* () {
-              const fresh = yield* configService.getFresh(cwd)
-              const declarations = yield* loadRuntimeProfileDeclarations(
-                effectiveInputs(inputsFor(cwd), fresh.config),
-              ).pipe(Effect.provideContext(platformServicesContext))
+            const profile = yield* Effect.gen(function* () {
               const started = yield* startProcessResources(
                 declarations.extensionDeclarations.active,
                 platformServicesContext,
@@ -1888,30 +1927,101 @@ export class SessionProfileCache extends Context.Service<
               // A failed or interrupted build releases everything it acquired.
               Effect.onError((cause) => Scope.close(profileScope, Exit.failCause(cause))),
             )
+            return { profile, scope: profileScope }
           })
+
+        /** The profile for a raw list: aliased, found by its extensions, or built. */
+        const entryFor = (place: string, list: string, cwd: string, fresh: FreshConfig) =>
+          Effect.gen(function* () {
+            const aliased = Option.flatMap(Option.fromNullishOr(aliases.get(list)), (key) =>
+              Option.fromNullishOr(entries.get(key)),
+            )
+            if (Option.isSome(aliased)) return aliased.value
+            const declarations = yield* loadRuntimeProfileDeclarations(
+              effectiveInputs(inputsFor(cwd), fresh.config),
+            ).pipe(Effect.provideContext(platformServicesContext))
+            const key = profileKey(place, declarations.extensionDeclarations)
+            const found = Option.fromNullishOr(entries.get(key))
+            if (Option.isSome(found)) {
+              aliases.set(list, key)
+              return found.value
+            }
+            const built = yield* buildProfile(cwd, fresh, declarations).pipe(Effect.orDie)
+            const entry: ProfileEntry = { key, place, ...built }
+            entries.set(key, entry)
+            aliases.set(list, key)
+            yield* Effect.logInfo("session-profile.initialized").pipe(
+              Effect.annotateLogs({
+                cwd: entry.profile.cwd,
+                extensionCount: entry.profile.resolved.extensions.length,
+                sectionCount: entry.profile.baseSections.length,
+              }),
+            )
+            return entry
+          })
+
+        /**
+         * Drop a superseded profile no lease holds. The caller closes the
+         * returned scope after it releases the place's lock, so an extension
+         * finalizer never runs under it.
+         */
+        const retireIfUnused = (key: string): Option.Option<Scope.Closeable> => {
+          const entry = Option.fromNullishOr(entries.get(key))
+          if (Option.isNone(entry)) return Option.none()
+          if ((leases.get(key) ?? 0) > 0) return Option.none()
+          if (current.get(entry.value.place) === key) return Option.none()
+          entries.delete(key)
+          leases.delete(key)
+          for (const [list, target] of aliases) if (target === key) aliases.delete(list)
+          return Option.some(entry.value.scope)
+        }
+
+        const closeRetired = (retired: Option.Option<Scope.Closeable>) =>
+          Option.match(retired, {
+            onNone: () => Effect.void,
+            onSome: (profileScope) =>
+              Scope.close(profileScope, Exit.void).pipe(
+                Effect.andThen(Effect.logInfo("session-profile.retired")),
+              ),
+          })
+
+        const release = (entry: ProfileEntry, lock: Semaphore.Semaphore) =>
+          Effect.sync(() => {
+            leases.set(entry.key, (leases.get(entry.key) ?? 1) - 1)
+            return retireIfUnused(entry.key)
+          }).pipe(lock.withPermits(1), Effect.flatMap(closeRetired))
 
         const resolve: SessionProfileCacheService["resolve"] = (cwd) =>
           Effect.gen(function* () {
             const workspaceId = yield* CurrentWorkspaceId
+            const callerScope = yield* Scope.Scope
             const canonicalCwd = pathSvc.resolve(cwd)
-            const key = cacheKey(workspaceId, canonicalCwd)
-            const cached = Option.fromNullishOr(profiles.get(key))
-            if (Option.isSome(cached)) return cached.value
-            const lock = yield* lockFor(key)
-            return yield* Effect.gen(function* () {
-              const found = Option.fromNullishOr(profiles.get(key))
-              if (Option.isSome(found)) return found.value
-              const profile = yield* buildProfile(canonicalCwd).pipe(Effect.orDie)
-              profiles.set(key, profile)
-              yield* Effect.logInfo("session-profile.initialized").pipe(
-                Effect.annotateLogs({
-                  cwd: profile.cwd,
-                  extensionCount: profile.resolved.extensions.length,
-                  sectionCount: profile.baseSections.length,
+            const fresh = yield* configService.getFresh(canonicalCwd)
+            const place = placeKey(workspaceId, canonicalCwd)
+            const list = listKey(
+              place,
+              effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
+            )
+            const lock = yield* lockFor(place)
+            const { entry, retired } = yield* Effect.gen(function* () {
+              const entry = yield* entryFor(place, list, canonicalCwd, fresh)
+              // The lease and its release are registered together, or not at all.
+              yield* Effect.uninterruptible(
+                Effect.gen(function* () {
+                  leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
+                  yield* Scope.addFinalizer(callerScope, release(entry, lock))
                 }),
               )
-              return profile
+              const previous = Option.fromNullishOr(current.get(place))
+              current.set(place, entry.key)
+              const retired = Option.flatMap(
+                Option.filter(previous, (key) => key !== entry.key),
+                retireIfUnused,
+              )
+              return { entry, retired }
             }).pipe(lock.withPermits(1))
+            yield* closeRetired(retired)
+            return entry.profile
           })
 
         return SessionProfileCache.of({ resolve })
@@ -2539,6 +2649,7 @@ export const sessionWorkingDirectory = (
  * Resolve the turn profile for one branch: the stored session cwd selects a
  * profile from the cache; without a session or a cache, the launch registry
  * and the host defaults apply. A storage lookup failure falls back to them as well.
+ * The caller's scope holds the profile's lease for as long as it uses it.
  */
 export const resolveTurnProfile = (params: {
   readonly sessionId: SessionId
@@ -2546,7 +2657,11 @@ export const resolveTurnProfile = (params: {
   readonly profileCache?: SessionProfileCacheService
   readonly hostProvider: ExtensionHostContextProvider
   readonly defaults: TurnProfileDefaults
-}): Effect.Effect<AgentLoopTurnProfile, never, ExtensionRegistry | SessionStorage> =>
+}): Effect.Effect<
+  AgentLoopTurnProfile,
+  never,
+  ExtensionRegistry | SessionStorage | ScopeType.Scope
+> =>
   Effect.gen(function* () {
     const launchRegistry = yield* ExtensionRegistry
     const hostProvider = params.hostProvider
