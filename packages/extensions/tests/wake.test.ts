@@ -731,6 +731,29 @@ describe("monitor guardrail", () => {
       Effect.timeout("8 seconds"),
     ),
   )
+
+  it.scopedLive("a decline's notes reach the model with the block", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("wake-monitor-notes-")
+      const base = contextWith(home, yield* Ref.make<ReadonlyArray<string>>([]))
+      const notes = "Ask your parent with session.send"
+      const ctx = {
+        ...base,
+        Interaction: {
+          ...base.Interaction,
+          approve: () => Effect.succeed({ approved: false, notes }),
+        },
+      }
+      const error = yield* Effect.flip(
+        runToolWithCtx(MonitorTool, { command: "rm -rf build", note: "gone" }, ctx),
+      )
+      expect(error.message).toContain("Command blocked")
+      expect(error.message).toContain(notes)
+    }).pipe(
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+      Effect.timeout("8 seconds"),
+    ),
+  )
 })
 
 describe("monitor command", () => {

@@ -434,6 +434,47 @@ describe("a child's completion", () => {
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
+
+  it.live(
+    "a child whose command needs an approval is declined at once, completes, and wakes its parent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // `rm -f` asks for an approval; no user sees a child, so no one could give it.
+          const guarded = "rm -f /tmp/gent-child-approval-probe"
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              if (!promptToolCallIds(options.prompt).includes("guarded-bash")) {
+                return Effect.succeed(toolStep("bash", { command: guarded }, "guarded-bash"))
+              }
+              return Effect.succeed(reply("CHILD: the command was blocked"))
+            }
+            if (!promptToolCallIds(options.prompt).includes("start-1")) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "delegate this task")
+          const snapshot = yield* afterCompletion(harness)
+          const [completion] = completionMessages(snapshot.messages)
+          expect(messageTexts([completion!])[0]).toContain("CHILD: the command was blocked")
+          expect(messageTexts(snapshot.messages)).toContain("read it")
+          const child = yield* childOf(harness)
+          const childSnapshot = yield* harness.client.session.getSnapshot(child)
+          expect(childSnapshot.runtime._tag).toBe("Idle")
+          // The child reads why, and who can answer instead.
+          expect(resultsOf("bash", childSnapshot.messages)[0]).toMatchObject({
+            result: {
+              status: "blocked",
+              stdout: expect.stringContaining('Ask your parent with session.send to "parent"'),
+            },
+          })
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
 })
 
 // ── delegate/completion-message ─────────────────────────────────────────────
@@ -508,15 +549,18 @@ describe("the completion headline", () => {
   })
 
   test("the child's task names its reply as the result and keeps session.send for later turns", () => {
-    const [source, later, blank, task] = childTaskText(SessionId.make("parent-1"), "do it").split(
-      "\n",
-    )
+    const [source, later, approvals, blank, task] = childTaskText(
+      SessionId.make("parent-1"),
+      "do it",
+    ).split("\n")
     expect(source).toContain("Your final reply in this turn is your result")
     expect(source).toContain("do not also send it with session.send")
+    // A turn the parent's answer starts returns nothing either.
     expect(later).toContain(
-      'A later turn started by one of them returns nothing by itself: send that turn\'s result with session.send to "parent"',
+      'Any later turn (a message from your parent, a wake, a monitor, a goal) returns nothing by itself: send its result with session.send to "parent"',
     )
     expect(later).not.toContain("send each one")
+    expect(approvals).toContain("an approval is declined at once: ask the parent with session.send")
     expect(blank).toBe("")
     expect(task).toBe("do it")
   })
@@ -1848,7 +1892,7 @@ describe("a child's later turn", () => {
                 return Effect.succeed(reply("armed a wake for CI"))
               }
               // The wake's turn: a model that follows its task sends the result upward.
-              const told = texts[0].includes("A later turn started by one of them returns nothing")
+              const told = texts[0].includes("Any later turn (a message from your parent")
               if (told && !ids.includes("send-later")) {
                 return Effect.succeed(
                   toolStep("session.send", { to: "parent", message: laterResult }, "send-later"),

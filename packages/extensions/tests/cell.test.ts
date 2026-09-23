@@ -324,7 +324,12 @@ describe("recorded cell execution", () => {
         const cancelled = yield* Fiber.join(running)
         expect(cancelled).toMatchObject({
           isFailure: true,
-          result: { reason: "cancelled", stateLost: true },
+          result: {
+            reason: "cancelled",
+            stateLost: true,
+            // The host recorded no operation, so no effect is claimed.
+            message: "Cell cancelled. Its source was not replayed. It made no host operation.",
+          },
         })
         expect(yield* Fiber.join(queued)).toMatchObject({
           isFailure: true,
@@ -341,6 +346,40 @@ describe("recorded cell execution", () => {
           yield* cells.run(fourth).pipe(Effect.provideService(CellOperationHost, host)),
         ).toMatchObject({ isFailure: false, result: { display: "42" } })
         expect(yield* Ref.get(calls)).toBe(1)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "a cell that reaches the executor after its loop stopped does not start",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [late] = yield* setupCalls(["await tools.mark({})"])
+        if (!late) return yield* Effect.die("Missing test cell")
+        const calls = yield* Ref.make(0)
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("mark"),
+          call: () => Ref.update(calls, (n) => n + 1).pipe(Effect.as(true)),
+        })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        yield* cells.stop
+        const exit = yield* cells
+          .run(late)
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.exit)
+        expect(Exit.hasInterrupts(exit)).toBe(true)
+        expect(yield* Ref.get(calls)).toBe(0)
+        // Never admitted: a restart re-issues the call instead of settling it.
+        expect(
+          Option.isNone(
+            yield* (yield* CellStorage).executions.get({ ...late, sessionId, branchId }),
+          ),
+        ).toBe(true)
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
   )
@@ -1609,6 +1648,15 @@ describe("cell approvals", () => {
         ])
         const results = yield* cellResultsAfterTurn(started).pipe(Effect.timeout("5 seconds"))
         expect(results).toHaveLength(1)
+        // The text follows the records: `mark` has its result, the asking call never got an answer.
+        expect(results[0]?.result).toMatchObject({
+          message: expect.stringContaining(
+            "1 operation stopped at an approval that was not answered",
+          ),
+        })
+        expect(results[0]?.result).toMatchObject({
+          message: expect.not.stringContaining("may have occurred"),
+        })
         // The cell ended at the call; nothing after it ran, and nothing acted.
         expect(yield* Ref.get(cell.marks)).toEqual(["before"])
         expect(yield* Ref.get(cell.allowed)).toBe(0)
@@ -2223,9 +2271,9 @@ it.scopedLive(
         const pending = yield* askThenLoseWorker(host, requestToolHost("2", "approve"))
         expect(yield* (yield* InteractionStorage).listOpen(cellToolHost)).toHaveLength(1)
         const undecided = yield* recoverCellExecution(hostParams).pipe(Effect.flip)
-        expect(undecided._tag).toBe("CellToolCallSuspended")
-        if (undecided._tag === "CellToolCallSuspended")
-          expect(undecided.pending.requestId).toBe(pending.requestId)
+        expect(undecided._tag).toBe("InteractionPendingError")
+        if (undecided._tag === "InteractionPendingError")
+          expect(undecided.requestId).toBe(pending.requestId)
         expect(yield* Ref.get(approvalCalls)).toBe(1)
         const resumeParams = {
           ...hostParams,
@@ -2240,7 +2288,7 @@ it.scopedLive(
         ).toBe("StorageError")
         expect(yield* Ref.get(approvalCalls)).toBe(1)
         const approval = yield* ApprovalService
-        yield* approval.storeResolution(pending.requestId, { approved: false })
+        yield* approval.storeResolution(cellToolHost, pending.requestId, { approved: false })
         const attempts = yield* Effect.all(
           [
             resumeCellToolOperation(resumeParams).pipe(Effect.exit),
@@ -2276,6 +2324,9 @@ it.scopedLive(
         expect(recovered.isFailure).toBe(true)
         expect(recovered.result).toMatchObject({
           stateLost: true,
+          error: expect.stringContaining(
+            "1 operation ran with no recorded result; its effects may have occurred.",
+          ),
           // An operation with no recorded outcome is an incomplete receipt.
           operations: expect.arrayContaining([
             {
@@ -2292,6 +2343,57 @@ it.scopedLive(
       }).pipe(Effect.provideContext(context))
     }).pipe(Effect.timeout("15 seconds")),
   20000,
+)
+
+it.scopedLive(
+  "a lost cell whose operations all have results says no effect is unrecorded",
+  () =>
+    Effect.gen(function* () {
+      const extensions: ReadonlyArray<LoadedExtension> = [
+        {
+          manifest: { id: ExtensionId.make("recorded-host") },
+          scope: "builtin",
+          sourcePath: "recorded-host",
+          artifactIdentity: LoadedArtifactIdentity.make("recorded-host-source"),
+          contributions: {
+            tools: [
+              tool({
+                id: "count",
+                description: "Count execution",
+                params: Schema.Struct({ valid: Schema.Boolean }),
+                output: Schema.Finite,
+                execute: () => Effect.succeed(1),
+              }),
+            ],
+          },
+        },
+      ]
+      const context = yield* Layer.build(
+        createE2ELayer({
+          agents: [],
+          extensionInputs: [],
+          branchTools: CellBranchTools,
+          extensions,
+          providerLayer: LanguageModelLayers.debug(),
+        }),
+      )
+      yield* Effect.gen(function* () {
+        yield* prepareCell
+        const hostParams = yield* currentHostParams
+        const host = yield* makeCellToolHost(hostParams)
+        expect(yield* host.call(requestToolHost("1", "count"))).toBe(1)
+        // The worker is lost after its one operation completed.
+        const recovered = yield* recoverCellExecution(hostParams)
+        expect(recovered.isFailure).toBe(true)
+        expect(recovered.result).toMatchObject({
+          stateLost: true,
+          error:
+            "The cell worker state was lost. Its source was not replayed. Every host operation it made has its result in operations.",
+          operations: [expect.objectContaining({ tool: "count", outcome: "succeeded" })],
+        })
+      }).pipe(Effect.provideContext(context))
+    }).pipe(Effect.timeout("10 seconds")),
+  12000,
 )
 
 it.scopedLive(
@@ -2410,7 +2512,7 @@ it.scopedLive(
             yield* prepareCell
             const host = yield* makeCellToolHost(yield* currentHostParams)
             const pending = yield* askThenLoseWorker(host, requestToolHost("1", "approve"))
-            yield* (yield* ApprovalService).storeResolution(pending.requestId, {
+            yield* (yield* ApprovalService).storeResolution(cellToolHost, pending.requestId, {
               approved: true,
             })
             return pending
@@ -2437,7 +2539,7 @@ it.scopedLive(
               yield* makeCellToolHost(hostParams),
               requestToolHost("2", "approve"),
             )
-            yield* (yield* ApprovalService).storeResolution(pending.requestId, {
+            yield* (yield* ApprovalService).storeResolution(cellToolHost, pending.requestId, {
               approved: true,
             })
             return pending
@@ -4227,14 +4329,18 @@ it.scopedLive(
       // No running call owns the open request, so the peer is refused rather
       // than left waiting for a slot nothing would free.
       const blocked = yield* askAs(peer, "Second?").pipe(Effect.flip)
-      expect(blocked._tag).toBe("EventStoreError")
+      expect(blocked._tag).toBe("InteractionSlotBusyError")
+      expect(blocked.message).toContain("Another call in this step is waiting for an approval")
       expect((yield* storage.get(peer)).state._tag).toBe("Started")
       expect(
         (yield* storedEvents(cellOperationStorage)).filter(
           (event) => event.event._tag === "InteractionPresented",
         ),
       ).toHaveLength(1)
-      yield* approval.storeResolution(firstId, { approved: false, notes: "First denied" })
+      yield* approval.storeResolution(cellOperationStorage, firstId, {
+        approved: false,
+        notes: "First denied",
+      })
       expect(yield* Fiber.join(first)).toEqual({ approved: false, notes: "First denied" })
       // The call took its answer and runs on: its receipt waits for nothing,
       // and the answer cannot be resumed a second time.
@@ -4245,7 +4351,7 @@ it.scopedLive(
       const second = yield* askAs(peer, "Second?").pipe(Effect.forkChild)
       const secondId = yield* waitingOn(peer)
       expect(secondId).not.toBe(firstId)
-      yield* approval.storeResolution(secondId, { approved: true })
+      yield* approval.storeResolution(cellOperationStorage, secondId, { approved: true })
       expect(yield* Fiber.join(second)).toEqual({ approved: true })
       expect(yield* (yield* InteractionStorage).listOpen(cellOperationStorage)).toEqual([])
     }).pipe(
@@ -4324,7 +4430,7 @@ it.live(
             ),
         ),
       ).toBe(true)
-      yield* recordInteractionDecision(requestId, { approved: true })
+      yield* recordInteractionDecision(cellOperationStorage, requestId, { approved: true })
       const resumed = yield* storage.resume(key, requestId)
       yield* storage.complete(
         key,
@@ -4374,7 +4480,7 @@ it.live("binds a decision to one waiting operation and grants one resume attempt
       true,
     )
     const decision = { approved: false, notes: "Do not write" }
-    yield* recordInteractionDecision(requestId, decision)
+    yield* recordInteractionDecision(cellOperationStorage, requestId, decision)
     const resumed = yield* storage.resume(key, requestId)
     expect(resumed.state).toEqual({ _tag: "Resuming", requestId, decision })
     expect(resumed.toolCallId).toBe(first.operation.toolCallId)
@@ -4396,7 +4502,7 @@ it.live("a stored decision that does not decode grants no resume", () =>
     yield* storage.admit(params)
     yield* storage.suspend(key, requestOperationStorage)
     // The first answer is the one the request keeps, so a corrupt one stays.
-    yield* (yield* InteractionStorage).decide(requestId, "not-json")
+    yield* (yield* InteractionStorage).decide(cellOperationStorage, requestId, "not-json")
     expect(Schema.is(StorageError)(yield* storage.resume(key, requestId).pipe(Effect.flip))).toBe(
       true,
     )
@@ -4454,7 +4560,7 @@ it.live("does not admit external work inside a caller transaction or after cell 
     ).toBe(true)
     expect((yield* storage.admit(params)).admitted).toBe(true)
     yield* storage.suspend(key, requestOperationStorage)
-    yield* recordInteractionDecision(requestId, { approved: true })
+    yield* recordInteractionDecision(cellOperationStorage, requestId, { approved: true })
     expect(
       Schema.is(StorageError)(
         yield* storage.resume(key, requestId).pipe(sql.withTransaction, Effect.flip),
@@ -4503,7 +4609,7 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
           const storage = (yield* CellStorage).operations
           yield* storage.admit(params)
           yield* storage.suspend(key, requestOperationStorage)
-          yield* recordInteractionDecision(requestId, { approved: true })
+          yield* recordInteractionDecision(cellOperationStorage, requestId, { approved: true })
         }).pipe(Effect.provideContext(context))
       }),
     )

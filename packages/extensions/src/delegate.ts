@@ -460,14 +460,17 @@ const CHILD_TASK_PREFIX = "Task from your parent session "
  * ends this turn is the result: it returns as the completion, and a child
  * told only that "a later result goes through session.send" sent this turn's
  * result that way too, so the parent read every result twice. Only a later
- * turn (a wake, a monitor, a goal) that nobody waits for reports with
- * session.send. The first message stays in every later turn's context,
- * whichever agent runs that turn.
+ * turn that nobody waits for reports with session.send: one a wake, a
+ * monitor or a goal starts, and one the parent's answer starts. A child's
+ * approval is declined, since no user sees it, so it asks the parent. The
+ * first message stays in every later turn's context, whichever agent runs
+ * that turn.
  */
 export const childTaskText = (parentSessionId: SessionId, prompt: string): string =>
   [
     `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply in this turn is your result: it returns to the parent as your completion by itself, so do not also send it with session.send. Use session.send in this turn only to ask the parent when you are blocked.`,
-    `End this turn once the task is done or handed to a wake, a monitor or a goal; do not wait for them. A later turn started by one of them returns nothing by itself: send that turn's result with session.send to "parent".`,
+    `End this turn once the task is done or handed to a wake, a monitor or a goal; do not wait for them. Any later turn (a message from your parent, a wake, a monitor, a goal) returns nothing by itself: send its result with session.send to "parent".`,
+    `No user sees this session, so a command that needs an approval is declined at once: ask the parent with session.send, then end your turn.`,
     "",
     prompt,
   ].join("\n")
