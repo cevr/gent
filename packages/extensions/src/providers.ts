@@ -24,6 +24,7 @@ import {
   ModelId,
   type ModelPricing,
   omitUndefined,
+  credentialFailureMetadata,
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderHints,
@@ -37,8 +38,8 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http"
-import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { Model as AiModel } from "effect/unstable/ai"
+import { EncodeError, HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
+import { AiError, Model as AiModel } from "effect/unstable/ai"
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
 
 // ── credentials ─────────────────────────────────────────────────────────────
@@ -78,6 +79,26 @@ const FRESH_ENOUGH_MS = 60_000
 export const freshEnoughAt = (expiresAt: number, now: number): boolean =>
   expiresAt > now + FRESH_ENOUGH_MS
 
+// ── Refresh failures ──
+
+/**
+ * A refresh that failed for a reason that passes: a transport error, a
+ * timeout, or a 429/5xx from the token endpoint. The request fails as
+ * retryable and the loop tries again. A `ProviderAuthError` is permanent:
+ * the user must sign in again.
+ */
+export class CredentialRefreshUnavailable extends Schema.TaggedError<CredentialRefreshUnavailable>(
+  "@gent/extensions/src/providers/CredentialRefreshUnavailable",
+)("CredentialRefreshUnavailable", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
+export type CredentialFailure = ProviderAuthError | CredentialRefreshUnavailable
+
+/** True when a token endpoint status means "try again later", not "sign in again". */
+export const isTransientTokenStatus = (status: number): boolean => status === 429 || status >= 500
+
 // ── Cache cell ──
 
 export const CredentialCacheCell = <C>(credentials: Schema.Schema<C>) =>
@@ -94,8 +115,13 @@ export const EMPTY_CREDENTIAL_CELL = Schema.TaggedStruct("Empty", {}).make({})
 // ── Cache ──
 
 export interface CredentialCache<C> {
-  /** Resolve cached/refreshed credentials. Fails with `ProviderAuthError` when no usable credential can be obtained. */
-  readonly getFresh: Effect.Effect<C, ProviderAuthError>
+  /**
+   * Resolve cached/refreshed credentials. Fails with `ProviderAuthError` when
+   * no usable credential can be obtained, and with
+   * `CredentialRefreshUnavailable` when the refresh failed for a reason that
+   * passes.
+   */
+  readonly getFresh: Effect.Effect<C, CredentialFailure>
   /** Skip the cache on the next `getFresh` without dropping the held credential. */
   readonly invalidate: Effect.Effect<void>
 }
@@ -118,7 +144,7 @@ interface CredentialCacheConfig<C> {
    */
   readonly read: (cached: Option.Option<C>) => Effect.Effect<Option.Option<C>>
   /** Obtain new credentials. Receives the held credential (its refresh token is the most recently rotated one). */
-  readonly refresh: (held: Option.Option<C>) => Effect.Effect<C, ProviderAuthError>
+  readonly refresh: (held: Option.Option<C>) => Effect.Effect<C, CredentialFailure>
   readonly toPersisted: (creds: C) => PersistedCredentials
 }
 
@@ -172,13 +198,13 @@ export const makeCredentialCache = <C>(
       return Option.none()
     }
 
-    const getFresh: Effect.Effect<C, ProviderAuthError> = SynchronizedRef.modifyEffect(
+    const getFresh: Effect.Effect<C, CredentialFailure> = SynchronizedRef.modifyEffect(
       config.cellRef,
       (
         cell,
       ): Effect.Effect<
-        readonly [Exit.Exit<C, ProviderAuthError>, CredentialCacheCell<C>],
-        ProviderAuthError
+        readonly [Exit.Exit<C, CredentialFailure>, CredentialCacheCell<C>],
+        CredentialFailure
       > =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis
@@ -248,24 +274,95 @@ export const withHeaders = (
   })
 
 /**
- * Convert a `ProviderAuthError` into the `HttpClientError` the SDK's
- * `transformClient` signature requires, so credential unavailability
- * reaches the caller through the standard transport channel.
+ * Convert a credential failure into the `HttpClientError` the SDK's
+ * `transformClient` signature requires.
+ *
+ * - `CredentialRefreshUnavailable` becomes a `TransportError`. The AI SDKs
+ *   map it to a retryable `NetworkError`, and the loop tries again.
+ * - `ProviderAuthError` becomes an `EncodeError`: the credential is part of
+ *   building the request, and the request cannot be built. The AI SDKs map
+ *   it to a `NetworkError` that is not retryable, so the loop does not run a
+ *   refresh that cannot succeed again. `resolveModel` checks the credential
+ *   first, and `explainCredentialFailure` gives a later failure (after a 401,
+ *   for example) the credential's own message.
  */
-const asTransportError = (
+const asRequestError = (
   req: HttpClientRequest.HttpClientRequest,
-  cause: ProviderAuthError,
-): HttpClientError =>
-  new HttpClientError({
-    reason: new TransportError({ request: req, cause, description: cause.message }),
+  cause: CredentialFailure,
+): HttpClientError => {
+  if (cause._tag === "CredentialRefreshUnavailable") {
+    return new HttpClientError({
+      reason: new TransportError({ request: req, cause, description: cause.message }),
+    })
+  }
+  return new HttpClientError({
+    reason: new EncodeError({ request: req, cause, description: cause.message }),
   })
+}
 
-/** Fetch credentials for a request, surfacing auth failure as a transport error. */
+/** Fetch credentials for a request, surfacing a failure through the transport channel. */
 export const freshCredentials = <C>(
   creds: CredentialCache<C>,
   req: HttpClientRequest.HttpClientRequest,
 ): Effect.Effect<C, HttpClientError> =>
-  creds.getFresh.pipe(Effect.mapError((cause) => asTransportError(req, cause)))
+  creds.getFresh.pipe(Effect.mapError((cause) => asRequestError(req, cause)))
+
+/** True when the SDK failed a request before it was sent: the credential is one cause. */
+const isUnbuiltRequest = (error: AiError.AiError): boolean =>
+  error.reason._tag === "NetworkError" && error.reason.reason === "EncodeError"
+
+/**
+ * Give a request that failed on its credential the credential's own message.
+ *
+ * A permanent credential failure crosses the SDK as an `EncodeError`, and the
+ * SDK drops its cause and adds a hint about the request body. This happens
+ * after the resolve-time check, for example when a 401 forces a refresh and
+ * the server rejects the refresh token. Wrap each SDK client call: when a
+ * request fails before it was sent, check the credential again. A permanent
+ * failure becomes an `AuthenticationError` that carries it in its metadata,
+ * and the loop shows the user its own message. Any other result keeps the
+ * SDK error.
+ */
+export const explainCredentialFailure =
+  <C>(creds: CredentialCache<C>) =>
+  <A>(effect: Effect.Effect<A, AiError.AiError>): Effect.Effect<A, AiError.AiError> =>
+    effect.pipe(
+      Effect.catchIf(isUnbuiltRequest, (error) =>
+        creds.getFresh.pipe(
+          Effect.matchEffect({
+            onSuccess: () => Effect.fail(error),
+            onFailure: (failure) => {
+              if (failure._tag === "CredentialRefreshUnavailable") return Effect.fail(error)
+              return Effect.fail(
+                AiError.make({
+                  module: error.module,
+                  method: error.method,
+                  reason: new AiError.AuthenticationError({
+                    kind: "Unknown",
+                    description: failure.message,
+                    metadata: credentialFailureMetadata(failure),
+                  }),
+                }),
+              )
+            },
+          }),
+        ),
+      ),
+    )
+
+/**
+ * Check the credential before a model is handed to the loop. A permanent
+ * failure fails `resolveModel` with the `ProviderAuthError` itself, which
+ * the loop reports by its own message and does not retry. A failure that
+ * passes is left to the request, which fails as retryable.
+ */
+export const checkCredentials = <C>(
+  creds: CredentialCache<C>,
+): Effect.Effect<void, ProviderAuthError> =>
+  creds.getFresh.pipe(
+    Effect.asVoid,
+    Effect.catchTag("CredentialRefreshUnavailable", () => Effect.void),
+  )
 
 /**
  * Internal error driving 401 recovery. The credential cache TTL can outlive
@@ -322,6 +419,56 @@ export const recoverUnauthorized =
         ),
       ),
     )
+
+// ── oauth token endpoint ────────────────────────────────────────────────────
+
+/**
+ * An OAuth token POST runs inside the credential lock, so a hung endpoint
+ * would block every request of that provider. The timeout bounds it.
+ */
+const OAUTH_TOKEN_TIMEOUT = "15 seconds"
+
+/** A token POST that never produced a response: transport failure or timeout. */
+class OAuthTokenPostError extends Schema.TaggedError<OAuthTokenPostError>(
+  "@gent/extensions/src/providers/OAuthTokenPostError",
+)("OAuthTokenPostError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
+interface OAuthTokenResponse {
+  readonly status: number
+  readonly body: string
+}
+
+/**
+ * POST a form to an OAuth token endpoint and read the reply. The status is
+ * the caller's to judge: each provider words its own failure. The HTTP
+ * client comes from context so a login flow can reuse the one it holds.
+ */
+export const postOAuthForm = (
+  url: string,
+  params: Record<string, string>,
+): Effect.Effect<OAuthTokenResponse, OAuthTokenPostError, HttpClient.HttpClient> =>
+  Effect.gen(function* () {
+    const http = yield* HttpClient.HttpClient
+    const response = yield* http.execute(
+      HttpClientRequest.post(url).pipe(HttpClientRequest.bodyUrlParams(params)),
+    )
+    const body = yield* response.text
+    return { status: response.status, body }
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: OAUTH_TOKEN_TIMEOUT,
+      orElse: () =>
+        Effect.fail(
+          new OAuthTokenPostError({ message: `${url} timed out after ${OAUTH_TOKEN_TIMEOUT}` }),
+        ),
+    }),
+    Effect.catchTag("HttpClientError", (cause) =>
+      Effect.fail(new OAuthTokenPostError({ message: cause.message, cause })),
+    ),
+  )
 
 // ── models.dev catalog ──────────────────────────────────────────────────────
 

@@ -1290,6 +1290,8 @@ const platformProviderRootFiles = new Set([
   "packages/core/src/host.ts",
   // The test entry hands test roots the full Bun platform.
   "packages/core/src/test-utils/index.ts",
+  // The in-process test server root provides the platform around `buildServerRoot`.
+  "packages/core/src/test-utils/harness.ts",
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])

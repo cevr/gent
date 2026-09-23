@@ -38,8 +38,8 @@ import {
   workspaceHeadersForCwd,
   workspaceIdForCwd,
   buildServerRoot,
+  BunPlatformLive,
   ScriptedLanguageModel,
-  ServerRootPlatformLayer,
   StateLocation,
 } from "@gent/core/host"
 import { runProcess, type GentExtension } from "@gent/core/extensions/api"
@@ -853,7 +853,7 @@ const resolveLanguageModelLayer = (
 // ── Platform layers ──
 
 /** Built once per `resolveServer`; the owned server's root and listener share it. */
-const LocalPlatformLayer = Layer.provideMerge(BuildFingerprint.Live, ServerRootPlatformLayer)
+const LocalPlatformLayer = Layer.provideMerge(BuildFingerprint.Live, BunPlatformLive)
 type LocalPlatform = Layer.Success<typeof LocalPlatformLayer>
 
 // ── Helpers ──

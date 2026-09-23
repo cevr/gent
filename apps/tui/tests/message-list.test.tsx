@@ -24,6 +24,7 @@ import {
   dateFromMillis,
   Message,
   MessageId,
+  MODEL_CHANGE_MESSAGE_TYPE,
   type MessagePart,
   SessionId,
   ToolCallId,
@@ -34,7 +35,7 @@ import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
-import { EditToolRenderer, ReadToolRenderer } from "../src/tool-renderers"
+import { EditToolRenderer, ReadToolRenderer, useToolRenderers } from "../src/tool-renderers"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
@@ -578,9 +579,9 @@ const compactionMessage = (): ListMessage => ({
 })
 
 function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: boolean }) {
-  const extensionUI = useExtensionUI()
+  const renderers = useToolRenderers()
   return (
-    <Show when={extensionUI.renderers().size > 0} fallback={<text>loading renderers</text>}>
+    <Show when={renderers().size > 0} fallback={<text>loading renderers</text>}>
       <MessageList
         items={props.items}
         disclosure="collapsed"
@@ -813,7 +814,7 @@ describe("FX transcript treatment", () => {
         const goalMessage: ListMessage = {
           ...userMessage("regular-message", "goal-held", "RAW-GOAL-TEXT keep going.", "queued"),
           pendingMode: absent,
-          metadata: { customType: "goal-context", extensionId: "@gent/goal" },
+          metadata: { customType: "goal-context" },
         }
         const items: SessionItem[] = [
           goalMessage,
@@ -888,7 +889,7 @@ describe("FX transcript treatment", () => {
           "queued",
         ),
         pendingMode: absent,
-        metadata: { customType: "goal-context", extensionId: "@gent/goal" },
+        metadata: { customType: "goal-context" },
       }
       const collapsedFrame = yield* renderLoaded([goalMessage])
       expect(collapsedFrame).toContain("goal continuation")
@@ -911,7 +912,6 @@ describe("FX transcript treatment", () => {
         pendingMode: absent,
         metadata: {
           customType: "wake",
-          extensionId: "@gent/wake",
           details: { outcome: "fired", note: "Run bun test and report." },
         },
       }
@@ -936,7 +936,6 @@ describe("FX transcript treatment", () => {
         pendingMode: absent,
         metadata: {
           customType: "session-message",
-          extensionId: "@gent/session-tools",
           details: {
             from: { sessionId: "0199aabbccdd", name: "auth\n\nrefactor", relation: "parent" },
           },
@@ -971,7 +970,6 @@ describe("FX transcript treatment", () => {
         pendingMode: absent,
         metadata: {
           customType: "session-message",
-          extensionId: "@gent/session-tools",
           details: { from },
         },
       }
@@ -1001,7 +999,6 @@ describe("FX transcript treatment", () => {
         pendingMode: absent,
         metadata: {
           customType: "session-message",
-          extensionId: "@gent/session-tools",
           details: { from },
         },
       }
@@ -1261,9 +1258,9 @@ describe("FX transcript treatment", () => {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => {
-            const extensionUI = useExtensionUI()
+            const renderers = useToolRenderers()
             return (
-              <Show when={extensionUI.renderers().size > 0}>
+              <Show when={renderers().size > 0}>
                 <MessageList
                   items={items}
                   disclosure={disclosure()}
@@ -1376,6 +1373,33 @@ describe("FX transcript treatment", () => {
       const frame = renderFrame(setup)
       expect(frame.match(/⇣ context handoff · 3 messages summarized/g)?.length).toBe(2)
       expect(frame.match(/renamed the loader/g)?.length).toBe(1)
+    }),
+  )
+
+  it.live("the runtime's model-change notice folds to one line", () =>
+    Effect.gen(function* () {
+      const notice: ListMessage = {
+        ...compactionMessage(),
+        id: "model-change:b1:m5",
+        content: "MODEL-NOTICE-BODY",
+        metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[notice]}
+              disclosure="collapsed"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 100, height: 10 },
+        ),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("⇄ model changed")
+      expect(frame).not.toContain("MODEL-NOTICE-BODY")
     }),
   )
 })

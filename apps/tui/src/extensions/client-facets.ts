@@ -8,6 +8,7 @@ import {
   type Path,
   Schema,
   Scope,
+  Stream,
 } from "effect"
 import {
   type ActiveInteraction,
@@ -22,7 +23,7 @@ import {
   SessionId,
 } from "@gent/core/protocol"
 import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
-import type { CapabilityRef, DriverRef } from "@gent/core/extensions/api"
+import { omitUndefined, type CapabilityRef, type DriverRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -61,8 +62,6 @@ export class ClientSetupError extends Schema.TaggedError<ClientSetupError>()("Cl
   message: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
-
-// ── Transport ─────────────────────────────────────────────────────────────
 
 // ── Dependencies ──────────────────────────────────────────────────────────
 
@@ -112,6 +111,27 @@ const unknownActivity = (): ClientActivitySnapshot => ({ state: "unknown" })
 
 // ── transport facet ─────────────────────────────────────────────────────────
 
+export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
+
+/**
+ * Per-loop detail, for one loop at a time.
+ *
+ * Enumerating every loop must not fan out into N snapshot reads, so listings
+ * carry identity and liveness only and a client asks for this separately —
+ * for the row a reader is actually looking at. A session that has never
+ * streamed reads zero turns, zero cost and its resolved model.
+ */
+export interface ExtensionAgentDetail {
+  /** Runtime state tag, e.g. `"Idle"` / `"Running"`. */
+  readonly status: string
+  readonly model: string
+  readonly turns: number
+  readonly costUsd: number
+  readonly durationMs: number
+  /** Messages the last projection left out of the model's view; 0 before a turn has run. */
+  readonly omittedMessages: number
+}
+
 /**
  * `ClientContext.transport` — the typed transport surface for client extensions.
  *
@@ -137,28 +157,6 @@ const unknownActivity = (): ClientActivitySnapshot => ({ state: "unknown" })
  * The TUI's `ExtensionUIProvider` builds one `ManagedRuntime` per provider
  * with `makeClientRuntime`, and `loadTuiExtensions` runs each setup on it.
  */
-
-export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
-
-/**
- * Per-loop detail, for one loop at a time.
- *
- * Enumerating every loop must not fan out into N snapshot reads, so listings
- * carry identity and liveness only and a client asks for this separately —
- * for the row a reader is actually looking at. Every field is optional
- * because a session that has never streamed has no model and no cost yet.
- */
-export interface ExtensionAgentDetail {
-  /** Runtime state tag, e.g. `"Idle"` / `"Running"`. */
-  readonly status: Option.Option<string>
-  readonly model: Option.Option<string>
-  readonly turns: number
-  readonly costUsd: number
-  readonly durationMs: number
-  /** Messages the last projection left out of the model's view; 0 before a turn has run. */
-  readonly omittedMessages: number
-}
-
 export interface ClientTransport {
   /** Active (sessionId, branchId); `None` before a session is mounted. */
   readonly currentSession: () => Option.Option<ActiveExtensionSession>
@@ -179,6 +177,14 @@ export interface ClientTransport {
   ) => () => void
   /** Subscribe to every event for the active session/branch. */
   readonly onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
+  /**
+   * Every event of one branch, by explicit key: its saved history from the
+   * start, then its live events. The key is usually not the session the shell
+   * is on — a delegate row reads its child's tools and text through this.
+   */
+  readonly sessionEvents: (
+    key: ActiveExtensionSession,
+  ) => Stream.Stream<EventEnvelope, ClientTransportRequestError>
   /**
    * Read live detail for one loop, by explicit key rather than the active
    * session: the caller is asking about a row, which is usually not the
@@ -238,6 +244,18 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   ) => requestExtensionAt(payload, ref, input, activeSession),
   onExtensionStateChanged: payload.onExtensionStateChanged,
   onSessionEvent: payload.onSessionEvent,
+  sessionEvents: (key) =>
+    payload.client.session.events({ ...key, after: 0 }).pipe(
+      Stream.mapError(
+        (cause) =>
+          new ClientTransportRequestError({
+            extensionId: "@gent/tui/client-transport",
+            tag: "session.events",
+            message: `session.events failed: ${String(cause)}`,
+            cause,
+          }),
+      ),
+    ),
   agentDetail: (key) => agentDetailAt(payload, key),
   deleteSession: (sessionId) =>
     shellRead(payload, "session.delete", (client) => client.session.delete({ sessionId })).pipe(
@@ -247,9 +265,16 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
     shellRead(payload, "session.thread", (client) => client.session.thread({ sessionId })),
   listMessages: (branchId) =>
     shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
-  driverList: shellRead(payload, "driver.list", (client) => client.driver.list()),
+  // Drivers belong to the active session's profile: its project drivers count.
+  driverList: Effect.suspend(() =>
+    shellRead(payload, "driver.list", (client) =>
+      client.driver.list(activeSessionPayload(payload)),
+    ),
+  ),
   driverSet: (input) =>
-    shellRead(payload, "driver.set", (client) => client.driver.set(input)).pipe(Effect.asVoid),
+    shellRead(payload, "driver.set", (client) =>
+      client.driver.set({ ...input, ...activeSessionPayload(payload) }),
+    ).pipe(Effect.asVoid),
   driverClear: (input) =>
     shellRead(payload, "driver.clear", (client) => client.driver.clear(input)).pipe(Effect.asVoid),
 })
@@ -335,6 +360,14 @@ const requestExtensionAt = <Input, Output>(
   })
 
 /** One shell RPC read, with its failure named by the RPC it came from. */
+/** `{ sessionId }` of the active session, or `{}` before one exists. */
+const activeSessionPayload = (transport: ClientShellTransport) =>
+  omitUndefined({
+    sessionId: Option.getOrUndefined(
+      Option.map(transport.currentSession(), (session) => session.sessionId),
+    ),
+  })
+
 const shellRead = <A>(
   transport: ClientShellTransport,
   tag: string,
@@ -365,8 +398,8 @@ const agentDetailAt = (
     client.session.getSnapshot({ sessionId: key.sessionId, branchId: key.branchId }),
   ).pipe(
     Effect.map((snapshot) => ({
-      status: Option.some(snapshot.runtime._tag),
-      model: Option.some(snapshot.resolvedModelId),
+      status: snapshot.runtime._tag,
+      model: snapshot.resolvedModelId,
       turns: snapshot.metrics.turns,
       costUsd: snapshot.metrics.costUsd,
       durationMs: snapshot.metrics.durationMs,
@@ -404,6 +437,21 @@ export interface ClientShell {
   }) => void
   /** Fork an extension-owned Effect from a sync UI callback. */
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
+  /**
+   * The one docked pane under the composer. The host keeps a single slot,
+   * shared with its own pickers: opening a pane closes whatever pane or picker
+   * was open. A pane widget renders while `isOpen` answers true for its name.
+   */
+  readonly pane: PaneOwner
+}
+
+/** Open and close panes by name; at most one is open. */
+export interface PaneOwner {
+  readonly open: (id: string) => void
+  /** Closes the named pane only; a pane that has since replaced it stays open. */
+  readonly close: (id: string) => void
+  /** Reactive: re-read inside a Solid scope to follow the slot. */
+  readonly isOpen: (id: string) => boolean
 }
 
 interface ClientLifecycle {
@@ -443,21 +491,21 @@ export class ClientContext extends Context.Service<
 >()("@gent/tui/src/extensions/client-facets/ClientContext") {}
 
 /**
- * What a surface supplies: the transport, the workspace, and the `cast` of its
- * connected runtime. The other shell callbacks, the activity reader, and the
+ * What a surface supplies: the transport, the workspace, the `cast` of its
+ * connected runtime, and the pane slot. The other shell callbacks, the activity reader, and the
  * cleanup registry default to no-ops, so a test does not restate them.
  */
 export interface ClientContextDeps {
   readonly transport: ClientShellTransport
   readonly workspace: ClientWorkspace
-  readonly shell: Pick<ClientShell, "cast"> & Partial<Omit<ClientShell, "cast">>
+  readonly shell: Pick<ClientShell, "cast" | "pane"> & Partial<Omit<ClientShell, "cast" | "pane">>
   /** Current UI activity; absent when the surface has no activity to report. */
   readonly activity?: () => ClientActivitySnapshot
   /** Cleanup registry; absent when the surface disposes the runtime whole. */
   readonly lifecycle?: Pick<ClientLifecycle, "addCleanup">
 }
 
-const noopShell: Omit<ClientShell, "cast"> = { notify: () => {}, switchSession: () => {} }
+const noopShell: Omit<ClientShell, "cast" | "pane"> = { notify: () => {}, switchSession: () => {} }
 
 const noopLifecycle: Pick<ClientLifecycle, "addCleanup"> = { addCleanup: () => {} }
 
@@ -605,7 +653,7 @@ export const sessionQuery = <A>(opts: {
 //     sort by priority.
 //   - commands: the same rule by id, slash and keybind, applied by the host's
 //     `resolveCommands` over the session's, the extensions' and the server's
-//   - border labels: collected (no winner), sorted by priority
+//   - status labels: collected (no winner), sorted by priority
 //   - autocomplete: collected (no winner), scope-ordered
 
 /** Widget placement slots in the session view */
@@ -674,13 +722,13 @@ interface WidgetContribution {
 }
 
 interface InteractionRendererContribution {
-  /** Matches against metadata.type. undefined = default fallback renderer. */
-  readonly metadataType?: string
+  /** Matches `metadata.type`; the host's prompt renderer draws an unmatched interaction. */
+  readonly metadataType: string
   readonly component: InteractionRendererComponent
 }
 
-export type BorderLabelPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right"
-export type BorderLabelColor =
+/** A theme color by name, or a resolved one. */
+export type StatusLabelColor =
   | RGBA
   | "warning"
   | "info"
@@ -689,16 +737,19 @@ export type BorderLabelColor =
   | "text"
   | "textMuted"
 
-export interface BorderLabelItem {
+export interface StatusLabelItem {
   readonly text: string
-  readonly color: BorderLabelColor
+  readonly color: StatusLabelColor
 }
 
-interface BorderLabelContribution {
-  readonly position: BorderLabelPosition
+/**
+ * Text on the composer's status row. The row is one line: the host's labels,
+ * then every extension label by priority, then the right-anchored gauge and cost.
+ */
+interface StatusLabelContribution {
   /** Lower = earlier; default 100. */
   readonly priority?: number
-  readonly produce: () => ReadonlyArray<BorderLabelItem>
+  readonly produce: () => ReadonlyArray<StatusLabelItem>
 }
 
 export interface AutocompleteContribution {
@@ -727,9 +778,27 @@ export interface ClientContributions {
   readonly widgets?: ReadonlyArray<WidgetContribution>
   readonly commands?: ReadonlyArray<Command>
   readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
-  readonly borderLabels?: ReadonlyArray<BorderLabelContribution>
+  readonly statusLabels?: ReadonlyArray<StatusLabelContribution>
   readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
 }
+
+/**
+ * Every contribution bucket. The loader fails an extension that returns any
+ * other key, so a renamed bucket fails loudly instead of dropping its items.
+ */
+const CONTRIBUTION_BUCKETS = {
+  renderers: true,
+  messageRenderers: true,
+  widgets: true,
+  commands: true,
+  interactionRenderers: true,
+  statusLabels: true,
+  autocomplete: true,
+} satisfies Record<keyof ClientContributions, true>
+
+/** The first key a setup returned that is not a contribution bucket. */
+export const unknownContributionKey = (keys: ReadonlyArray<string>): Option.Option<string> =>
+  Option.fromUndefinedOr(keys.find((key) => !Object.hasOwn(CONTRIBUTION_BUCKETS, key)))
 
 type MutableClientContributions = {
   -readonly [Key in keyof ClientContributions]: ClientContributions[Key]
@@ -760,7 +829,7 @@ export const clientContributions = (
     out.widgets = append(out.widgets, part.widgets)
     out.commands = append(out.commands, part.commands)
     out.interactionRenderers = append(out.interactionRenderers, part.interactionRenderers)
-    out.borderLabels = append(out.borderLabels, part.borderLabels)
+    out.statusLabels = append(out.statusLabels, part.statusLabels)
     out.autocomplete = append(out.autocomplete, part.autocomplete)
   }
 
@@ -797,17 +866,11 @@ export const clientCommandContribution = (opts: Command): ClientContributions =>
  */
 export const interactionRendererContribution = (
   component: InteractionRendererComponent,
-  metadataType?: string,
-): ClientContributions => {
-  const renderer = Option.match(Option.fromNullishOr(metadataType), {
-    onNone: () => ({ component }),
-    onSome: (value) => ({ metadataType: value, component }),
-  })
-  return { interactionRenderers: [renderer] }
-}
+  metadataType: string,
+): ClientContributions => ({ interactionRenderers: [{ metadataType, component }] })
 
-export const borderLabelContribution = (opts: BorderLabelContribution): ClientContributions => ({
-  borderLabels: [opts],
+export const statusLabelContribution = (opts: StatusLabelContribution): ClientContributions => ({
+  statusLabels: [opts],
 })
 
 export const autocompleteContribution = (opts: AutocompleteContribution): ClientContributions => ({

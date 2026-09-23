@@ -566,17 +566,27 @@ describe("a start nobody waits for", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const harness = yield* harnessWithHome(startThenEnd("secret extraction"))
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("nothing new"),
+          ])
+          const harness = yield* harnessWithHome(providerLayer)
           const { client, sessionId, branchId } = harness
-          yield* sendPrompt(harness, "delegate this task")
-          yield* afterCompletion(harness)
-          // The row an older binary wrote for a `read_session` child whose waiter died after its answer.
-          const [done] = yield* harness.registryOf(branchId)
-          if (Predicate.isUndefined(done)) return yield* Effect.die("no registry row")
+          // The row an older binary wrote for a `read_session` child whose waiter
+          // died after its answer; this process reads it on its first turn.
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
           yield* harness.writeRegistry(branchId, [
             {
-              ...Struct.omit(done, ["completed", "preview", "usage"]),
+              requestId: RequestId.make("old-private"),
+              sessionId: child.sessionId,
+              branchId: child.branchId,
+              agentName: DELEGATE_AGENT_NAME,
+              prompt: "a side question",
               private: true,
+              submitted: true,
               delivered: false,
             },
           ])
@@ -585,18 +595,15 @@ describe("a start nobody waits for", () => {
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
               current.runtime._tag === "Idle" &&
-              messageTexts(current.messages).filter((text) => text === "read it").length >= 2,
+              messageTexts(current.messages).includes("nothing new"),
             8_000,
-            "the parent answered its second prompt",
+            "the parent answered",
           )
-          // One completion and one answer per prompt: the private child woke no one.
-          expect(completionMessages(snapshot.messages)).toHaveLength(1)
-          expect(messageTexts(snapshot.messages).filter((text) => text === "read it")).toHaveLength(
-            2,
-          )
+          // The private child woke no one, and reconcile removed it with its session.
+          expect(completionMessages(snapshot.messages)).toHaveLength(0)
           expect(yield* harness.registryOf(branchId)).toEqual([])
           const sessions = yield* client.session.list()
-          expect(sessions.some((session) => session.id === done.sessionId)).toBe(false)
+          expect(sessions.some((session) => session.id === child.sessionId)).toBe(false)
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
@@ -731,6 +738,165 @@ const sessionMessages = <
       message.metadata?.details,
     ),
   )
+
+/** The system text of one model call. */
+const systemText = (prompt: Prompt.Prompt): string =>
+  prompt.content
+    .flatMap((message) => {
+      if (message.role !== "system") return []
+      return [message.content]
+    })
+    .join("\n")
+
+describe("turn-time reconcile", () => {
+  it.live(
+    "a branch's turns reconcile once per process, so later model steps do not replay child logs",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("first"),
+            textStep("second"),
+          ])
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          const idleAfter = (text: string) =>
+            waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (current) =>
+                current.runtime._tag === "Idle" && messageTexts(current.messages).includes(text),
+              5_000,
+              `the parent answered ${text}`,
+            )
+          yield* sendPrompt(harness, "one")
+          yield* idleAfter("first")
+          // A row that only a crash leaves, planted after this process reconciled the branch.
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          yield* harness.writeRegistry(branchId, [
+            {
+              requestId: RequestId.make("planted-start"),
+              sessionId: child.sessionId,
+              branchId: child.branchId,
+              agentName: DELEGATE_AGENT_NAME,
+              prompt: childTask,
+              private: false,
+              submitted: false,
+              delivered: false,
+            },
+          ])
+          yield* sendPrompt(harness, "two")
+          yield* idleAfter("second")
+          const [entry] = yield* harness.registryOf(branchId)
+          expect(entry?.submitted).toBe(false)
+          expect(yield* client.message.list(child)).toHaveLength(0)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+})
+
+describe("a failed completion delivery", () => {
+  it.live(
+    "is delivered on the parent's next turn, although the branch was reconciled in this process",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const gate = yield* Deferred.make<boolean>()
+          const harness = yield* harnessWithHome(
+            startThenEnd("pong", Deferred.await(gate).pipe(Effect.asVoid)),
+          )
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate this task")
+          const [row] = yield* waitFor(
+            harness.registryOf(branchId).pipe(Effect.orElseSucceed(() => [])),
+            (entries) => entries.length === 1 && entries[0]?.submitted === true,
+            5_000,
+            "the child is admitted",
+          )
+          if (Predicate.isUndefined(row)) return yield* Effect.die("no registry row")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "the parent ended its turn",
+          )
+          // The child's receipt cannot reach the registry: its hook delivery fails.
+          const fs = yield* FileSystem.FileSystem
+          const file = `${harness.home}/.gent/delegates/${branchId}.json`
+          yield* fs.chmod(file, 0o000)
+          yield* Deferred.succeed(gate, true)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId: row.sessionId, branchId: row.branchId }),
+            (child) =>
+              child.runtime._tag === "Idle" && messageTexts(child.messages).includes("pong"),
+            5_000,
+            "the child answered and its delivery failed",
+          )
+          yield* fs.chmod(file, 0o644)
+          const [stuck] = yield* harness.registryOf(branchId)
+          expect(stuck?.delivered).toBe(false)
+          yield* sendPrompt(harness, "anything new?")
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              completionMessages(current.messages).length === 1 && current.runtime._tag === "Idle",
+            8_000,
+            "the next parent turn delivered the completion",
+          )
+          expect(completionMessages(snapshot.messages)).toHaveLength(1)
+          const [entry] = yield* harness.registryOf(branchId)
+          expect(entry?.delivered).toBe(true)
+        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+})
+
+describe("delegation guidance", () => {
+  it.live(
+    "the parent's prompt says how to use children; a child, which cannot delegate, does not get it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const parentSystems: Array<string> = []
+          const childSystems: Array<string> = []
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            if (promptTexts(options.prompt)[0]?.endsWith(childTask) === true) {
+              childSystems.push(systemText(options.prompt))
+              return Effect.succeed(reply("pong"))
+            }
+            parentSystems.push(systemText(options.prompt))
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "delegate the ping")
+          yield* afterCompletion(harness)
+          expect(parentSystems.length).toBeGreaterThan(0)
+          expect(childSystems.length).toBeGreaterThan(0)
+          for (const text of parentSystems) {
+            expect(text).toContain("# Children")
+            expect(text).toContain("# Sessions")
+          }
+          for (const text of childSystems) {
+            expect(text).not.toContain("# Children")
+            // A child still asks its parent with session.send.
+            expect(text).toContain("# Sessions")
+          }
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+})
 
 describe("a forked child", () => {
   it.live(

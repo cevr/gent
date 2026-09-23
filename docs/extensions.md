@@ -60,7 +60,7 @@ You need at most 7 concepts to write a complete extension:
 | 6   | `AgentDefinition` | Agent profile registered under `"agent"`            |
 
 Registration domains: `"tool"`, `"request"`, `"resource"`, `"agent"`,
-`"modelDriver"`, `"externalDriver"`. Hook kinds: `"systemPrompt"`,
+`"modelDriver"`. Hook kinds: `"systemPrompt"`,
 `"turnProjection"`, `"turnAfter"`.
 
 Extensions import authoring primitives from one path:

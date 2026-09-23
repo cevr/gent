@@ -3,7 +3,7 @@ import { Effect, FileSystem, Option } from "effect"
 import {
   beginAuthCheck,
   buildContextLabels,
-  buildTopRightLabels,
+  buildModelLabels,
   canNavigateAtCursor,
   clearQueue,
   closeAuthGateState,
@@ -17,6 +17,7 @@ import {
   queuedDraftText,
   readEntries,
   resolveModelQuery,
+  overlayHoldsComposer,
   SessionUiState,
   setQueue,
   transitionComposerInteraction,
@@ -474,9 +475,9 @@ const contextLabels = (
     theme,
   })
 
-describe("buildTopRightLabels", () => {
+describe("buildModelLabels", () => {
   test("empty when no data", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.none(),
       theme,
       debugMode: false,
@@ -485,7 +486,7 @@ describe("buildTopRightLabels", () => {
   })
 
   test("shows thinking level when set", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.some("high"),
       theme,
       debugMode: false,
@@ -496,7 +497,7 @@ describe("buildTopRightLabels", () => {
   })
 
   test("debug mode shows debug label", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.none(),
       theme,
       debugMode: true,
@@ -506,7 +507,7 @@ describe("buildTopRightLabels", () => {
   })
 
   test("carries no context gauge — that anchors to the right edge", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.some("high"),
       theme,
       debugMode: true,
@@ -650,7 +651,7 @@ const contextLabelsOrder = (
 
 describe("effort sits with the model and the gauge anchors right", () => {
   test("reports the effort without the context gauge", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.some("medium"),
       theme: themeOrder,
       debugMode: false,
@@ -659,7 +660,7 @@ describe("effort sits with the model and the gauge anchors right", () => {
   })
 
   test("reports no effort when none is set", () => {
-    const labels = buildTopRightLabels({
+    const labels = buildModelLabels({
       reasoningLevel: Option.none(),
       theme: themeOrder,
       debugMode: false,
@@ -720,6 +721,47 @@ describe("transcript disclosure", () => {
     const preview = transitionSessionUi(SessionUiState.initial(), { _tag: "CycleDisclosure" })
     const cleared = transitionSessionUi(preview.state, { _tag: "ClearDisplay" })
     expect(cleared.state.disclosure).toBe("preview")
+  })
+})
+
+describe("one pane slot", () => {
+  const open = (id: string) =>
+    transitionSessionUi(SessionUiState.initial(), { _tag: "OpenPane", id }).state
+
+  test("an extension pane replaces the open settings picker", () => {
+    const picker = transitionSessionUi(SessionUiState.initial(), {
+      _tag: "OpenSettingsPicker",
+      picker: "model",
+    }).state
+    const pane = transitionSessionUi(picker, { _tag: "OpenPane", id: "agents.pane" }).state
+    expect(pane.overlay).toEqual({ _tag: "pane", id: "agents.pane" })
+  })
+
+  test("a second pane replaces the first", () => {
+    const next = transitionSessionUi(open("btw.pane"), { _tag: "OpenPane", id: "thread.pane" })
+    expect(next.state.overlay).toEqual({ _tag: "pane", id: "thread.pane" })
+  })
+
+  test("a settings picker replaces an open pane", () => {
+    const picker = transitionSessionUi(open("btw.pane"), {
+      _tag: "OpenSettingsPicker",
+      picker: "reasoning",
+    })
+    expect(picker.state.overlay).toEqual({ _tag: "reasoning" })
+  })
+
+  test("closing a pane that was replaced leaves the open one", () => {
+    const thread = transitionSessionUi(open("btw.pane"), { _tag: "OpenPane", id: "thread.pane" })
+    const late = transitionSessionUi(thread.state, { _tag: "ClosePane", id: "btw.pane" })
+    expect(late.state.overlay).toEqual({ _tag: "pane", id: "thread.pane" })
+    const closed = transitionSessionUi(late.state, { _tag: "ClosePane", id: "thread.pane" })
+    expect(closed.state.overlay).toEqual({ _tag: "none" })
+  })
+
+  test("a pane leaves the composer and the session keys live; a picker holds them", () => {
+    expect(overlayHoldsComposer(open("agents.pane").overlay)).toBe(false)
+    expect(overlayHoldsComposer({ _tag: "model" })).toBe(true)
+    expect(overlayHoldsComposer({ _tag: "none" })).toBe(false)
   })
 })
 

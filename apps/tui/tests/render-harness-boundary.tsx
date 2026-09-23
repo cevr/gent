@@ -229,6 +229,8 @@ export const renderWithProviders = (
     cwd?: string
     /** Client extension builtins; defaults to the shipped ones. */
     builtins?: ReadonlyArray<AnyExtensionClientModule>
+    /** The UI scope main.tsx hands the extension host; closing it is shutdown. */
+    uiScope?: Scope.Scope
     /**
      * Test-only override for the platform services context (e.g. supplying
      * a `LinkOpener.Test` layer). Defaults to the shared host context.
@@ -294,7 +296,10 @@ export const renderWithProviders = (
                               )}
                               initialAgent={options?.initialAgent}
                             >
-                              <ExtensionUIProvider builtins={options?.builtins}>
+                              <ExtensionUIProvider
+                                builtins={options?.builtins}
+                                scope={options?.uiScope}
+                              >
                                 {node()}
                               </ExtensionUIProvider>
                             </ClientProvider>

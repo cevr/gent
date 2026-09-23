@@ -115,7 +115,12 @@ describe("tool execution", () => {
         const runner = yield* ToolRunner
         const toolCallId = ToolCallId.make("tc1")
         return yield* runner
-          .run({ toolCallId, toolName: "echo", input: { message: "hello" } })
+          .capture({ toolName: "echo" })
+          .pipe(
+            Effect.flatMap((entry) =>
+              runner.runBound({ toolCallId, toolName: "echo", input: { message: "hello" } }, entry),
+            ),
+          )
           .pipe(
             provideCurrentHostCtx(
               testToolContext({
@@ -293,7 +298,12 @@ describe("tool execution", () => {
           agentName: AgentName.make("cowork"),
         })
         return yield* runner
-          .run({ toolCallId, toolName: "probe", input: {} })
+          .capture({ toolName: "probe" })
+          .pipe(
+            Effect.flatMap((entry) =>
+              runner.runBound({ toolCallId, toolName: "probe", input: {} }, entry),
+            ),
+          )
           .pipe(provideCurrentHostCtx(ctx))
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -336,16 +346,23 @@ describe("tool execution", () => {
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
         const toolCallId = ToolCallId.make("tc1")
-        return yield* runner.run({ toolCallId, toolName: "fail", input: {} }).pipe(
-          provideCurrentHostCtx(
-            testToolContext({
-              sessionId: SessionId.make("s"),
-              branchId: BranchId.make("b"),
-              toolCallId,
-              agentName: AgentName.make("cowork"),
-            }),
-          ),
-        )
+        return yield* runner
+          .capture({ toolName: "fail" })
+          .pipe(
+            Effect.flatMap((entry) =>
+              runner.runBound({ toolCallId, toolName: "fail", input: {} }, entry),
+            ),
+          )
+          .pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("s"),
+                branchId: BranchId.make("b"),
+                toolCallId,
+                agentName: AgentName.make("cowork"),
+              }),
+            ),
+          )
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
@@ -381,16 +398,23 @@ describe("tool execution", () => {
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
         const toolCallId = ToolCallId.make("tc1")
-        return yield* runner.run({ toolCallId, toolName: "strict", input: { path: 42 } }).pipe(
-          provideCurrentHostCtx(
-            testToolContext({
-              sessionId: SessionId.make("s"),
-              branchId: BranchId.make("b"),
-              toolCallId,
-              agentName: AgentName.make("cowork"),
-            }),
-          ),
-        )
+        return yield* runner
+          .capture({ toolName: "strict" })
+          .pipe(
+            Effect.flatMap((entry) =>
+              runner.runBound({ toolCallId, toolName: "strict", input: { path: 42 } }, entry),
+            ),
+          )
+          .pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("s"),
+                branchId: BranchId.make("b"),
+                toolCallId,
+                agentName: AgentName.make("cowork"),
+              }),
+            ),
+          )
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(true)
@@ -441,18 +465,25 @@ describe("tool execution", () => {
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
         const toolCallId = ToolCallId.make("tc-inspect")
-        return yield* runner.run({ toolCallId, toolName: "inspect", input: {} }).pipe(
-          provideCurrentHostCtx(
-            testToolContext({
-              sessionId: SessionId.make("session-inspect"),
-              branchId: BranchId.make("branch-inspect"),
-              toolCallId,
-              agentName: AgentName.make("deepwork"),
-              cwd: "/runtime/cwd",
-              home: "/runtime/home",
-            }),
-          ),
-        )
+        return yield* runner
+          .capture({ toolName: "inspect" })
+          .pipe(
+            Effect.flatMap((entry) =>
+              runner.runBound({ toolCallId, toolName: "inspect", input: {} }, entry),
+            ),
+          )
+          .pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("session-inspect"),
+                branchId: BranchId.make("branch-inspect"),
+                toolCallId,
+                agentName: AgentName.make("deepwork"),
+                cwd: "/runtime/cwd",
+                home: "/runtime/home",
+              }),
+            ),
+          )
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
@@ -503,17 +534,24 @@ describe("tool execution", () => {
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
         const toolCallId = ToolCallId.make("tc-context")
-        return yield* runner.run({ toolCallId, toolName: "context_tool", input: {} }).pipe(
-          provideCurrentHostCtx(
-            testToolContext({
-              sessionId: SessionId.make("session-context"),
-              branchId: BranchId.make("branch-context"),
-              toolCallId,
-              agentName: AgentName.make("cowork"),
-            }),
-          ),
-          provideCurrentCapabilityContext(erasedCapabilityContext),
-        )
+        return yield* runner
+          .capture({ toolName: "context_tool" })
+          .pipe(
+            Effect.flatMap((entry) =>
+              runner.runBound({ toolCallId, toolName: "context_tool", input: {} }, entry),
+            ),
+          )
+          .pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("session-context"),
+                branchId: BranchId.make("branch-context"),
+                toolCallId,
+                agentName: AgentName.make("cowork"),
+              }),
+            ),
+            provideCurrentCapabilityContext(erasedCapabilityContext),
+          )
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
@@ -567,17 +605,24 @@ describe("tool execution", () => {
       const result = yield* Effect.gen(function* () {
         const runner = yield* ToolRunner
         const toolCallId = ToolCallId.make("tc-read-context")
-        return yield* runner.run({ toolCallId, toolName: "read_context_tool", input: {} }).pipe(
-          provideCurrentHostCtx(
-            testToolContext({
-              sessionId: SessionId.make("session-read-context"),
-              branchId: BranchId.make("branch-read-context"),
-              toolCallId,
-              agentName: AgentName.make("cowork"),
-            }),
-          ),
-          provideCurrentCapabilityContext(erasedCapabilityContext),
-        )
+        return yield* runner
+          .capture({ toolName: "read_context_tool" })
+          .pipe(
+            Effect.flatMap((entry) =>
+              runner.runBound({ toolCallId, toolName: "read_context_tool", input: {} }, entry),
+            ),
+          )
+          .pipe(
+            provideCurrentHostCtx(
+              testToolContext({
+                sessionId: SessionId.make("session-read-context"),
+                branchId: BranchId.make("branch-read-context"),
+                toolCallId,
+                agentName: AgentName.make("cowork"),
+              }),
+            ),
+            provideCurrentCapabilityContext(erasedCapabilityContext),
+          )
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
       expect(result.isFailure).toBe(false)
@@ -632,7 +677,12 @@ describe("tool execution", () => {
         const runner = yield* ToolRunner
         const toolCallId = ToolCallId.make("tc-read-extension-context")
         return yield* runner
-          .run({ toolCallId, toolName: "read_extension_context", input: {} })
+          .capture({ toolName: "read_extension_context" })
+          .pipe(
+            Effect.flatMap((entry) =>
+              runner.runBound({ toolCallId, toolName: "read_extension_context", input: {} }, entry),
+            ),
+          )
           .pipe(
             provideCurrentHostCtx(
               testToolContext({
@@ -704,16 +754,23 @@ describe("tool execution", () => {
         const runner = yield* ToolRunner
         const toolCallId = ToolCallId.make("tc-pending")
         return yield* Effect.flip(
-          runner.run({ toolCallId, toolName: "pending", input: {} }).pipe(
-            provideCurrentHostCtx(
-              testToolContext({
-                sessionId: SessionId.make("session-pending"),
-                branchId: BranchId.make("branch-pending"),
-                toolCallId,
-                agentName: AgentName.make("cowork"),
-              }),
+          runner
+            .capture({ toolName: "pending" })
+            .pipe(
+              Effect.flatMap((entry) =>
+                runner.runBound({ toolCallId, toolName: "pending", input: {} }, entry),
+              ),
+            )
+            .pipe(
+              provideCurrentHostCtx(
+                testToolContext({
+                  sessionId: SessionId.make("session-pending"),
+                  branchId: BranchId.make("branch-pending"),
+                  toolCallId,
+                  agentName: AgentName.make("cowork"),
+                }),
+              ),
             ),
-          ),
         )
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))

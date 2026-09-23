@@ -23,6 +23,7 @@ import {
 import {
   App,
   AppBootstrapError,
+  ConnectionWidget,
   type InitialState,
   QueueWidget,
   resolveInitialState,
@@ -42,7 +43,6 @@ import { runEffectBoundary } from "./run-effect-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
-import { ConnectionWidget } from "../src/extensions/builtins"
 import { useExtensionUI } from "../src/extensions/host"
 
 // ── app-bootstrap.test ──────────────────────────────────────────────────────

@@ -68,7 +68,6 @@ import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
-  ExternalDriverRef,
   CONTEXT_WINDOW_MESSAGE_TYPE,
   messagePartsText,
   toolResultMessageIdForTurn,
@@ -81,11 +80,9 @@ import {
   defineExtension,
   ExtensionContext,
   ExtensionHost,
-  ExternalToolRunner,
   tool,
   type ToolCapability,
   LoadedArtifactIdentity,
-  type TurnExecutor,
 } from "@gent/core/extensions/api"
 import {
   InteractionRequestId,
@@ -2485,94 +2482,6 @@ describe("shipped model surface", () => {
   )
 })
 
-// ── cell/cell-external-driver.test ──────────────────────────────────────────
-
-const CellResult = Schema.Struct({
-  isFailure: Schema.Boolean,
-  result: Schema.Struct({ display: Schema.String }),
-})
-
-describe("external driver cell dispatch", () => {
-  it.scopedLive(
-    "an external executor runs code through the branch's persistent cell",
-    () =>
-      Effect.gen(function* () {
-        // The executor is the second interpreter's replacement: it asks the host for
-        // the `cell` tool instead of evaluating code itself.
-        const executor: TurnExecutor = {
-          executeTurn: () =>
-            Stream.fromEffect(
-              Effect.gen(function* () {
-                const runner = yield* ExternalToolRunner
-                const first = yield* runner.runTool("cell", {
-                  code: "const kept = 20; kept + 1",
-                })
-                const second = yield* runner.runTool("cell", {
-                  code: "kept + 2",
-                })
-                return [first, second]
-              }),
-            ).pipe(
-              Stream.flatMap((results) =>
-                Stream.fromIterable([
-                  textDeltaPart(
-                    results
-                      .map((part) => Schema.decodeUnknownSync(CellResult)(part).result.display)
-                      .join(","),
-                  ),
-                  finishPart({ finishReason: "stop" }),
-                ]),
-              ),
-            ),
-        }
-        const ext = defineExtension({
-          id: "@test/external-cell",
-          setup: Effect.gen(function* () {
-            const host = yield* ExtensionHost
-            yield* host.register("externalDriver", {
-              id: "test-cell-runner",
-              executor,
-              invalidate: Effect.void,
-            })
-          }),
-        })
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("unused")])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...shippedPreset,
-          providerLayer,
-          extensionInputs: [...shippedPreset.extensionInputs, ext],
-          branchTools: CellBranchTools,
-        })
-        // The runtime driver override points the default agent at the external driver.
-        yield* client.driver.set({
-          agentName: DEFAULT_AGENT_NAME,
-          driver: ExternalDriverRef.make({ id: "test-cell-runner" }),
-        })
-        yield* client.message.send({
-          sessionId,
-          branchId,
-          content: "run through the cell",
-        })
-        const messages = yield* waitFor(
-          client.message.list({ branchId }),
-          (list) =>
-            list.some(
-              (message) =>
-                message.role === "assistant" && messagePartsText(message.parts) === "21,22",
-            ),
-          6_000,
-          "external reply from cell results",
-        )
-        const cellResults = messages
-          .flatMap((message) => message.parts)
-          .filter((part): part is Prompt.ToolResultPart => part.type === "tool-result")
-          .filter((part) => part.name === "cell")
-        expect(cellResults).toHaveLength(2)
-      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
-    18000,
-  )
-})
-
 // ── cell/cell-child.test ────────────────────────────────────────────────────
 
 describe("child cell", () => {
@@ -4329,6 +4238,19 @@ describe("cell prompt guidelines", () => {
         "console output, process.stdout and process.stderr writes, and inherited output of spawned processes return with the cell result",
       )
     }),
+  )
+
+  it.effect(
+    "names the compute deadline and sends builds and tests to bash, which stops that clock",
+    () =>
+      Effect.sync(() => {
+        const guidelines = (getToolMetadata(CellTool).promptGuidelines ?? []).join("\n")
+        expect(guidelines).toContain("A cell gets 30 seconds of its own compute")
+        expect(guidelines).toContain(
+          "run builds, test suites, and other long commands through tools.bash({ command, timeout })",
+        )
+        expect(guidelines).not.toContain("Bun.$ and Bun.spawn are for reading: builds, tests")
+      }),
   )
 })
 

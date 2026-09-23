@@ -28,24 +28,28 @@ import {
   type CredentialCacheCell,
   EMPTY_CREDENTIAL_CELL,
 } from "../src/providers.js"
-import { ProviderAuthError, type ProviderAuthInfo } from "@gent/core/extensions/api"
+import { ProviderAuthError, type ProviderAuthInfo, RequestId } from "@gent/core/extensions/api"
 import {
+  FetchHttpClient,
   HttpBody,
   HttpClient,
   type HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http"
-import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
+import { EncodeError, HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { runEffectBoundary } from "./run-effect-boundary.js"
-import { LanguageModel } from "effect/unstable/ai"
+import { AiError, LanguageModel } from "effect/unstable/ai"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
+import { e2ePreset } from "./helpers/test-preset.js"
 import {
   type CapturedRequest,
   fakeFetchLayer,
   type FakeFetchState,
   makeFakeFetchState,
+  createRpcHarness,
   oneGenerate,
+  waitFor,
 } from "@gent/core/test-utils"
 import { SessionId } from "@gent/core/protocol"
 
@@ -178,6 +182,46 @@ describe("OpenAICredentialService — initial seed from authInfo", () => {
           expect(errOpt.value.message).toContain("unavailable")
         }
       }
+    }),
+  )
+})
+describe("OpenAICredentialService — token endpoint timeout", () => {
+  it.live("a token endpoint that never answers fails the refresh instead of holding the lock", () =>
+    Effect.gen(function* () {
+      let fetchCalls = 0
+      const hangingFetch = Object.assign(
+        () => {
+          fetchCalls += 1
+          // The endpoint accepted the socket and went silent: a fetch that never settles.
+          // oxlint-disable-next-line effect/noNewPromise, gent/no-promise-control-flow-in-tests -- The fake implements the Promise-based Fetch contract.
+          return Promise.race<Response>([])
+        },
+        { preconnect: () => {} },
+      )
+      const cellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const layer = OpenAICredentialService.layerFromRef(cellRef, {
+        type: "oauth",
+        access: "stale-access",
+        refresh: "stale-refresh",
+        expires: 0,
+        persist: () => Effect.void,
+      })
+      const exit = yield* runWithTestClock(
+        Effect.gen(function* () {
+          const svc = yield* OpenAICredentialService
+          const fiber = yield* Effect.forkChild(Effect.exit(svc.getFresh))
+          yield* Effect.yieldNow.pipe(Effect.repeat({ until: () => fetchCalls > 0, times: 1000 }))
+          expect(fetchCalls).toBe(1)
+          yield* TestClock.adjust("31 seconds")
+          return yield* Fiber.join(fiber)
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          Effect.provide(Layer.merge(layer, Layer.succeed(FetchHttpClient.Fetch, hangingFetch))),
+        ),
+      ).pipe(Effect.timeout("3 seconds"))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(String(exit.cause)).toContain("timed out")
     }),
   )
 })
@@ -1375,9 +1419,9 @@ describe("codexTransformClient — auth headers (O2)", () => {
       }
       const err = failReasonOption.value.error
       expect(err).toBeInstanceOf(HttpClientError)
-      expect(err.reason).toBeInstanceOf(TransportError)
-      if (!(err.reason instanceof TransportError)) {
-        return yield* Effect.die(new Error("expected transport error"))
+      expect(err.reason).toBeInstanceOf(EncodeError)
+      if (!(err.reason instanceof EncodeError)) {
+        return yield* Effect.die(new Error("expected request-build error"))
       }
       const reason = err.reason
       expect(Schema.is(ProviderAuthError)(reason.cause)).toBe(true)
@@ -1945,9 +1989,9 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
         }
         const err = failReasonOption.value.error
         expect(err).toBeInstanceOf(HttpClientError)
-        expect(err.reason).toBeInstanceOf(TransportError)
-        if (!(err.reason instanceof TransportError)) {
-          return yield* Effect.die(new Error("expected transport error"))
+        expect(err.reason).toBeInstanceOf(EncodeError)
+        if (!(err.reason instanceof EncodeError)) {
+          return yield* Effect.die(new Error("expected request-build error"))
         }
         const reason = err.reason
         expect(Schema.is(ProviderAuthError)(reason.cause)).toBe(true)
@@ -2178,6 +2222,283 @@ describe("buildOpenAIModelDriver — OAuth callback state", () => {
       if (exit._tag === "Failure") {
         expect(exit.cause.toString()).toContain("missing or expired")
       }
+    }),
+  )
+})
+describe("buildOpenAIModelDriver — OAuth login lifetime", () => {
+  type PendingCallbacks = Parameters<typeof buildOpenAIModelDriver>[1]
+  const makeDriver = (pending: PendingCallbacks) =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        pending,
+        Option.none(),
+        testCatalogSource(),
+      )
+      const authorize = Option.fromUndefinedOr(driver.auth?.authorize)
+      const callback = Option.fromUndefinedOr(driver.auth?.callback)
+      if (Option.isNone(authorize) || Option.isNone(callback)) {
+        return yield* Effect.die(new Error("OpenAI driver auth hooks missing"))
+      }
+      return { authorize: authorize.value, callback: callback.value }
+    })
+  const authContext = (methodIndex: number, authorizationId: string) => ({
+    sessionId: SessionId.make("s1"),
+    methodIndex,
+    authorizationId,
+    persist: () => Effect.void,
+  })
+
+  it.live("drops an abandoned login after five minutes", () =>
+    Effect.gen(function* () {
+      const pending: PendingCallbacks = new Map()
+      const { authorize } = yield* makeDriver(pending)
+      const fetchState = makeFakeFetchState()
+      yield* runWithTestClock(
+        Effect.gen(function* () {
+          // Production runs `authorize` in its own request fiber, which ends when it returns.
+          const request = yield* Effect.forkChild(authorize(authContext(1, "abandoned")))
+          yield* Fiber.join(request)
+          expect(pending.has("abandoned")).toBe(true)
+          yield* TestClock.adjust("5 minutes")
+          yield* Effect.yieldNow.pipe(
+            Effect.repeat({ until: () => !pending.has("abandoned"), times: 100 }),
+          )
+          expect(pending.has("abandoned")).toBe(false)
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
+          Effect.provide(
+            fakeFetchLayer(fetchState, () => ({
+              status: 200,
+              body: '{"device_auth_id":"device-auth-1","user_code":"ABCD-1234","interval":"1"}',
+            })),
+          ),
+        ),
+      )
+    }),
+  )
+
+  it.scopedLive("a redirect server that cannot bind fails the waiting callback", () =>
+    Effect.gen(function* () {
+      // Hold the redirect port so the login's own server cannot bind it.
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Option.liftThrowable(() =>
+            // oxlint-disable-next-line effect/noGlobals -- Plays a foreign process that already holds the port.
+            Bun.serve({ port: 1455, fetch: () => new Response("busy") }),
+          )(),
+        ),
+        (server) =>
+          Option.match(server, {
+            onNone: () => Effect.void,
+            onSome: (held) => Effect.promise(() => held.stop(true)),
+          }),
+      )
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      yield* authorize(authContext(0, "blocked"))
+      const exit = yield* Effect.exit(callback({ ...authContext(0, "blocked") })).pipe(
+        Effect.timeout("3 seconds"),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(String(exit.cause)).toContain("redirect server failed")
+    }),
+  )
+
+  it.live("escapes the provider's error text on the redirect page", () =>
+    Effect.gen(function* () {
+      const pending: PendingCallbacks = new Map()
+      const { authorize, callback } = yield* makeDriver(pending)
+      const authorization = yield* authorize(authContext(0, "escaped"))
+      if (Option.isNone(authorization)) return yield* Effect.die(new Error("no authorization"))
+      const state = new URL(authorization.value.url).searchParams.get("state") ?? ""
+      const query = new URLSearchParams({
+        state,
+        error: "access_denied",
+        error_description: "<script>alert(1)</script>",
+      })
+      // The redirect server starts on its own fiber; retry until it listens.
+      const page = yield* waitFor(
+        HttpClient.get(`http://localhost:1455/auth/callback?${query.toString()}`).pipe(
+          Effect.flatMap((response) => response.text),
+          // oxlint-disable-next-line effect/noInlineProvide -- The browser's side of the redirect is this operation's HTTP client.
+          Effect.provide(FetchHttpClient.layer),
+        ),
+        () => true,
+        2_000,
+        "redirect server",
+      )
+      expect(page).toContain("&lt;script&gt;alert(1)&lt;/script&gt;")
+      expect(page).not.toContain("<script>alert")
+      // Completes the flow: stops the timer and closes the redirect server.
+      yield* Effect.exit(callback(authContext(0, "escaped")))
+    }),
+  )
+})
+describe("buildOpenAIModelDriver — token endpoint outage", () => {
+  it.live(
+    "a 503 from the token endpoint fails the attempt as retryable, and the retry succeeds",
+    () =>
+      Effect.gen(function* () {
+        const credentialCellRef =
+          yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+        const driver = buildOpenAIModelDriver(
+          credentialCellRef,
+          noopCallbacks(),
+          Option.none(),
+          testCatalogSource(),
+        )
+        let tokenEndpointDown = true
+        const fetchState = makeFakeFetchState()
+        const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+          if (!request.url.endsWith("/oauth/token")) return openaiResponsesHappyResponse()
+          if (tokenEndpointDown) return { status: 503, body: "service unavailable" }
+          return {
+            status: 200,
+            body: '{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}',
+          }
+        })
+        const authInfo: ProviderAuthInfo = {
+          type: "oauth",
+          access: "expired-access",
+          refresh: "old-refresh",
+          expires: 0,
+          persist: () => Effect.void,
+        }
+        // One attempt of the loop: resolve the model, then send one request.
+        const attempt = Effect.gen(function* () {
+          const model = yield* driver.resolveModel("gpt-5.4", authInfo)
+          return yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
+            Effect.provide(Layer.provideMerge(model, fetchLayer)),
+          )
+          // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
+        }).pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit)
+
+        const first = yield* attempt
+        expect(Exit.isFailure(first)).toBe(true)
+        if (!Exit.isFailure(first)) return
+        const error = Cause.findErrorOption(first.cause).pipe(Option.filter(AiError.isAiError))
+        // The loop retries only a retryable AiError: an outage must be one.
+        expect(Option.isSome(error) && error.value.isRetryable).toBe(true)
+
+        tokenEndpointDown = false
+        const retry = yield* attempt
+        expect(Exit.isSuccess(retry)).toBe(true)
+        expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer new-access")
+      }),
+  )
+})
+describe("buildOpenAIModelDriver — revoked sign-in", () => {
+  it.live("a rejected refresh token tells the user to sign in again with /auth", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+      )
+      const fetchState = makeFakeFetchState()
+      const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+        if (!request.url.endsWith("/oauth/token")) return openaiResponsesHappyResponse()
+        return { status: 400, body: '{"error":"invalid_grant"}' }
+      })
+      const authInfo: ProviderAuthInfo = {
+        type: "oauth",
+        access: "expired-access",
+        refresh: "revoked-refresh",
+        expires: 0,
+        persist: () => Effect.void,
+      }
+      const exit = yield* Effect.gen(function* () {
+        const model = yield* driver.resolveModel("gpt-5.4", authInfo)
+        return yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the model layer for this operation.
+          Effect.provide(Layer.provideMerge(model, fetchLayer)),
+        )
+        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
+      }).pipe(Effect.scoped, Effect.provide(fetchLayer), Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (!Exit.isFailure(exit)) return
+      // Core shows the failure's own message to the user.
+      const shown = Option.match(Cause.findErrorOption(exit.cause), {
+        onNone: () => "",
+        onSome: (error) => error.message,
+      })
+      expect(shown).toContain("Sign in again with /auth.")
+      expect(shown).toContain("400")
+      expect(shown).not.toContain("request body")
+      // The model request is never sent with the rejected credential.
+      expect(fetchState.captured.every((request) => request.url.endsWith("/oauth/token"))).toBe(
+        true,
+      )
+    }),
+  )
+  it.live("a sign-in revoked mid-turn tells the user to sign in again with /auth", () =>
+    Effect.gen(function* () {
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+      )
+      // The held token passes the resolve-time check; the server then
+      // revokes it: the model request gets a 401 and the refresh a 400.
+      const fetchState = makeFakeFetchState()
+      const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+        if (request.url.endsWith("/oauth/token")) {
+          return { status: 400, body: '{"error":"invalid_grant"}' }
+        }
+        return { status: 401, body: '{"error":{"message":"token revoked"}}' }
+      })
+      const authInfo: ProviderAuthInfo = {
+        type: "oauth",
+        access: "revoked-access",
+        refresh: "revoked-refresh",
+        expires: FAR_FUTURE_MS,
+        persist: () => Effect.void,
+      }
+      const shown = yield* Effect.gen(function* () {
+        const model = yield* driver.resolveModel("gpt-5.4", authInfo)
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer: Layer.provide(model, fetchLayer),
+        })
+        const errorEvent = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter((envelope) => envelope.event._tag === "ErrorOccurred"),
+          Stream.runHead,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({
+          sessionId,
+          branchId,
+          content: "hello",
+          requestId: RequestId.make("revoked-mid-turn"),
+        })
+        const event = yield* Fiber.join(errorEvent)
+        if (Option.isNone(event) || event.value.event._tag !== "ErrorOccurred") {
+          return yield* Effect.die("the turn ended without an error event")
+        }
+        return event.value.event.error
+      }).pipe(
+        Effect.timeout("10 seconds"),
+        Effect.scoped,
+        // oxlint-disable-next-line effect/noInlineProvide -- The fake endpoints are this operation's HTTP boundary.
+        Effect.provide(fetchLayer),
+      )
+
+      expect(shown).toBe(
+        "ChatGPT sign-in expired: Token refresh failed: 400. Sign in again with /auth.",
+      )
+      // The fake endpoint answered the refresh; no request left the test.
+      expect(fetchState.captured.some((request) => request.url.endsWith("/oauth/token"))).toBe(true)
     }),
   )
 })

@@ -9,11 +9,7 @@ import { describe, it, expect } from "effect-bun-test"
 import { Data, Effect } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { testAgent } from "../helpers/test-preset"
-import type {
-  ExtensionHookHandler,
-  ExtensionTurnContext,
-  LoadedExtension,
-} from "../../src/domain/extension.js"
+import type { ExtensionHookHandler, LoadedExtension } from "../../src/domain/extension.js"
 import { hook } from "../../src/domain/extension.js"
 import { BranchId, SessionId, ExtensionId } from "../../src/domain/ids"
 import {
@@ -22,19 +18,11 @@ import {
 } from "../../src/runtime/extension-host"
 import { testExtensionHostContext } from "../../src/test-utils/harness"
 
-const turnCtx: ExtensionTurnContext = {
-  sessionId: SessionId.make("s"),
-  branchId: BranchId.make("b"),
-  agent: testAgent,
-  allTools: [],
-  interactive: true,
-}
-
 const hookCtx = {
-  projection: turnCtx,
+  projection: { agent: testAgent },
   host: testExtensionHostContext({
-    sessionId: turnCtx.sessionId,
-    branchId: turnCtx.branchId,
+    sessionId: SessionId.make("s"),
+    branchId: BranchId.make("b"),
     cwd: "/tmp",
     home: "/tmp",
   }),

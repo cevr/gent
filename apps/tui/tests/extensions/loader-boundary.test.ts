@@ -7,7 +7,6 @@ import {
   autocompleteContribution,
   type AutocompleteContribution,
   type AutocompleteItem,
-  borderLabelContribution,
   clientCommandContribution,
   clientContributions,
   type ClientContributions,
@@ -25,6 +24,7 @@ import {
   type MessageRowProps,
   NoActiveSessionError,
   rendererContribution,
+  statusLabelContribution,
   type WidgetComponent,
   widgetContribution,
 } from "../../src/extensions/client-facets"
@@ -42,9 +42,12 @@ import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs" // esli
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path" // eslint-disable-line effect/noNodeBuiltinImport -- synchronous path fixture setup is a test boundary.
 import { BunServices } from "@effect/platform-bun"
+import { BuiltinExtensions } from "@gent/extensions"
+import { collectTestContributions } from "@gent/core/test-utils"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
+  makePaneSlot,
   runClientExtensionSetup,
 } from "../extension-test-harness-boundary"
 import { defineRequests, ExtensionId, ref, request } from "@gent/core/extensions/api"
@@ -214,7 +217,11 @@ describe("resolveTuiExtensions", () => {
 
   test("interaction renderers resolve by metadata type with scope precedence", () => {
     const resolved = resolveTuiExtensions([
-      make("builtin-default", "builtin", interactionRendererContribution(widget("default"))),
+      make(
+        "builtin-prompt",
+        "builtin",
+        interactionRendererContribution(widget("prompt"), "prompt"),
+      ),
       make("builtin-ask", "builtin", interactionRendererContribution(widget("ask"), "ask-user")),
       make(
         "project-ask",
@@ -223,12 +230,12 @@ describe("resolveTuiExtensions", () => {
       ),
     ])
 
-    const defaultRenderer = Option.fromNullishOr(resolved.interactionRenderers.get(absent))
+    const defaultRenderer = Option.fromNullishOr(resolved.interactionRenderers.get("prompt"))
     const askRenderer = Option.fromNullishOr(resolved.interactionRenderers.get("ask-user"))
     expect(Option.isSome(defaultRenderer)).toBe(true)
     expect(Option.isSome(askRenderer)).toBe(true)
     if (Option.isNone(defaultRenderer) || Option.isNone(askRenderer)) return
-    expect(defaultRenderer.value(interactionProps)).toBe("default")
+    expect(defaultRenderer.value(interactionProps)).toBe("prompt")
     expect(askRenderer.value(interactionProps)).toBe("project-ask")
   })
 
@@ -253,13 +260,12 @@ describe("resolveTuiExtensions", () => {
     ])
   })
 
-  test("border labels remain collected and priority sorted", () => {
+  test("status labels remain collected and priority sorted", () => {
     const resolved = resolveTuiExtensions([
       make(
         "builtin-label",
         "builtin",
-        borderLabelContribution({
-          position: "top-left",
+        statusLabelContribution({
           priority: 30,
           produce: () => [{ text: "30", color: "info" }],
         }),
@@ -268,13 +274,11 @@ describe("resolveTuiExtensions", () => {
         "project-labels",
         "project",
         clientContributions(
-          borderLabelContribution({
-            position: "bottom-left",
+          statusLabelContribution({
             priority: 20,
             produce: () => [{ text: "20", color: "success" }],
           }),
-          borderLabelContribution({
-            position: "top-right",
+          statusLabelContribution({
             priority: 10,
             produce: () => [{ text: "10", color: "warning" }],
           }),
@@ -282,7 +286,7 @@ describe("resolveTuiExtensions", () => {
       ),
     ])
 
-    expect(resolved.borderLabels.map((label) => label.priority)).toEqual([10, 20, 30])
+    expect(resolved.statusLabels.map((label) => label.priority)).toEqual([10, 20, 30])
   })
 
   test("autocomplete contributions stay scope ordered and additive", () => {
@@ -417,6 +421,37 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive("a contribution key outside the known buckets fails the extension by name", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../.."),
+        prefix: ".tmp-client-unknown-key-",
+      })
+      const userDir = path.join(root, "home/.gent/extensions")
+      const projectDir = path.join(root, "project/.gent/extensions")
+      yield* fs.makeDirectory(userDir, { recursive: true })
+      // A user extension written against the old vocabulary.
+      yield* fs.writeFileString(
+        path.join(userDir, "stale.client.ts"),
+        `
+import { Effect } from "effect";
+export default {
+  id: "@user/stale-labels",
+  setup: Effect.succeed({ borderLabels: [{ position: "top-left", produce: () => [] }] }),
+};
+`,
+      )
+      const result = yield* Effect.promise(() =>
+        loadTuiExtensions({ userDir, projectDir, runtime }),
+      )
+      expect(result.failures).toEqual([
+        { id: "@user/stale-labels", reason: 'unknown contribution "borderLabels"' },
+      ])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.live("Effect setup is run through the runtime; FileSystem is provided", () =>
     Effect.gen(function* () {
       const fxSetup: ClientEffect<ClientContributions> = Effect.gen(function* () {
@@ -476,6 +511,33 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
       expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
       expect(result.failures.map((failure) => failure.id)).toEqual(["@test/broken"])
     }),
+  )
+  it.live("a setup that never ends becomes a failure and the others still load", () =>
+    Effect.gen(function* () {
+      const good: ExtensionClientModule = {
+        id: "@test/good-beside-hung",
+        setup: Effect.succeed(
+          autocompleteContribution({
+            prefix: "!",
+            title: "good",
+            items: () => [{ id: "good", label: "good" }],
+          }),
+        ),
+      }
+      const hung: ExtensionClientModule = { id: "@test/hung", setup: Effect.never }
+      const result = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: [good, hung],
+          userDir: "/tmp/u-hung-setup",
+          projectDir: "/tmp/p-hung-setup",
+          loadTimeout: "50 millis",
+          runtime,
+        }),
+      )
+      expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
+      expect(result.failures.map((failure) => failure.id)).toEqual(["@test/hung"])
+      expect(result.failures[0]?.reason).toContain("setup timed out")
+    }).pipe(Effect.timeout("5 seconds")),
   )
   // Regression lock — discovered (not pre-imported) modules with an
   // Effect-valued `setup` must pass `importExtension`'s shape validator.
@@ -1060,7 +1122,7 @@ const testRuntime = makeClientRuntime({
     onSessionEvent: () => () => {},
   },
   workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
-  shell: { cast: castTestShellEffect },
+  shell: { cast: castTestShellEffect, pane: makePaneSlot() },
 })
 /** Run the loader on a client runtime, the stub one unless the test gives its own. */
 const loadTuiExtensions = (
@@ -1409,8 +1471,8 @@ export default defineClientExtension("@test/b", {
             runtime: activeSessionRuntime,
           }),
         )
-        const borderPositions = new Set(resolved.borderLabels.map((label) => label.position))
-        expect(borderPositions.has("bottom-right")).toBe(true)
+        // The goal label is the one builtin status label.
+        expect(resolved.statusLabels.map((label) => label.priority)).toEqual([40])
       }).pipe(
         Effect.ensuring(
           Effect.gen(function* () {
@@ -1434,4 +1496,34 @@ describe("session UI state", () => {
     expect(withPicker.state.overlay).toEqual({ _tag: "model" })
     expect(closed.state.overlay).toEqual({ _tag: "none" })
   })
+})
+
+// ── tool renderer reach ─────────────────────────────────────────────────────
+
+describe("tool renderer reach", () => {
+  it.live("every builtin tool renderer names a tool a shipped extension registers", () =>
+    Effect.gen(function* () {
+      // The model sees only `cell`, and a cell hands each op to the renderer
+      // registered for its tool: a renderer is reachable exactly when its name
+      // is a real tool id.
+      const loaded = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: builtinClientModules,
+          userDir: "/tmp/u-renderer-reach",
+          projectDir: "/tmp/p-renderer-reach",
+        }),
+      )
+      const toolIds = new Set<string>()
+      for (const extension of BuiltinExtensions) {
+        const contributions = yield* collectTestContributions(extension.setup, {
+          cwd: "/tmp",
+          home: "/tmp",
+        })
+        for (const tool of contributions.tools ?? []) toolIds.add(tool.id)
+      }
+      expect(loaded.failures).toEqual([])
+      expect(loaded.renderers.has("delegate.start")).toBe(true)
+      expect([...loaded.renderers.keys()].filter((name) => !toolIds.has(name))).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
 })

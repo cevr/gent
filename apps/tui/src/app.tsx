@@ -36,16 +36,17 @@ import {
 import { collectDiagrams, MermaidViewer } from "./mermaid"
 import { useEnv, useWorkspace } from "./workspace"
 import {
-  type BorderLabelItem,
+  type StatusRowLabel,
   buildContextLabels,
-  buildTopRightLabels,
+  buildModelLabels,
   createSessionController,
   formatCwdGit,
+  overlayHoldsComposer,
   SessionControllerContext,
 } from "./session"
 import { useExtensionUI } from "./extensions/host"
 import { Auth } from "./auth"
-import type { BorderLabelColor, WidgetSlot } from "./extensions/client-facets.js"
+import type { StatusLabelColor, WidgetSlot } from "./extensions/client-facets.js"
 import { useRenderer } from "@opentui/solid"
 
 // ── boot flow ───────────────────────────────────────────────────────────────
@@ -414,6 +415,83 @@ export const resolveInitialState = (input: {
     return { _tag: "session", session: created, prompt: promptText } satisfies InitialState
   })
 
+// ── connection widget ───────────────────────────────────────────────────────
+
+/**
+ * Host chrome: connection issues and extensions that failed to load. It reads
+ * the host's own contexts, so it is not an extension, and no extension id can
+ * disable or shadow the report of failed extensions.
+ */
+
+export function ConnectionWidget() {
+  const client = useClient()
+  const ext = useExtensionUI()
+  const { theme } = useTheme()
+  const disconnectedReason = () => {
+    const state = Option.fromNullishOr(client.connectionState())
+    if (Option.isNone(state)) return Option.none<string>()
+    if (state.value._tag !== "Disconnected" || state.value.reason === "stopped") {
+      return Option.none<string>()
+    }
+    return Option.some(state.value.reason)
+  }
+  const connectionIssue = () => Option.fromNullishOr(client.connectionIssue())
+  const degradedExtensions = () => {
+    const health = client.extensionHealth()
+    if (health._tag === "Degraded") return health.degradedExtensions
+    return []
+  }
+  const failedExtensions = () => [
+    ...degradedExtensions()
+      .filter((extension) => extension.issues.some((issue) => issue._tag === "ActivationFailed"))
+      .map((extension) => extension.manifest.id),
+    ...ext.failures().map((failure) => failure.id),
+  ]
+  const hasFailedExtensions = () => failedExtensions().length > 0
+  // Reconnecting and the restart count belong to the status row;
+  // this widget draws what the label cannot: issues and failed extensions.
+  const visible = () =>
+    Option.isSome(connectionIssue()) || Option.isSome(disconnectedReason()) || hasFailedExtensions()
+  const accent = () => {
+    if (hasFailedExtensions()) return theme.warning
+    return theme.error
+  }
+  const subtitle = () => {
+    if (hasFailedExtensions()) return "extension activation degraded"
+    if (Option.isSome(disconnectedReason())) return "runtime unavailable"
+    return Option.getOrElse(connectionIssue(), () => "")
+  }
+  return (
+    <Show when={visible()}>
+      <box flexDirection="column" paddingLeft={2} marginTop={1} marginBottom={1}>
+        <text>
+          <span style={{ fg: accent(), bold: true }}>• connection</span>
+          <span style={{ fg: theme.textMuted }}> · {subtitle()}</span>
+        </text>
+        <box flexDirection="column" paddingLeft={2}>
+          <Show when={Option.isSome(connectionIssue())}>
+            <text>
+              <span style={{ fg: theme.text }}>{Option.getOrUndefined(connectionIssue())}</span>
+            </text>
+          </Show>
+          <Show when={Option.isSome(disconnectedReason())}>
+            <text>
+              <span style={{ fg: theme.text }}>{Option.getOrUndefined(disconnectedReason())}</span>
+            </text>
+          </Show>
+          <Show when={hasFailedExtensions()}>
+            <text>
+              <span style={{ fg: theme.text }}>
+                failed extensions: {failedExtensions().join(", ")}
+              </span>
+            </text>
+          </Show>
+        </box>
+      </box>
+    </Show>
+  )
+}
+
 // ── queue widget ────────────────────────────────────────────────────────────
 
 interface QueueWidgetProps {
@@ -509,26 +587,29 @@ export function Session(props: SessionProps) {
   })
 
   // Map semantic color names from extensions to resolved theme colors
-  const resolveColor = (color: BorderLabelColor | string): RGBA => {
-    if (Predicate.isString(color)) {
-      const colorMap = {
-        warning: theme.warning,
-        info: theme.info,
-        success: theme.success,
-        primary: theme.primary,
-        text: theme.text,
-        textMuted: theme.textMuted,
-      }
-      const isKnownColor = (name: string): name is keyof typeof colorMap =>
-        Object.hasOwn(colorMap, name)
-      if (isKnownColor(color)) return colorMap[color]
-      return theme.text
+  const resolveColor = (color: StatusLabelColor): RGBA => {
+    if (!Predicate.isString(color)) return color
+    const colorMap = {
+      warning: theme.warning,
+      info: theme.info,
+      success: theme.success,
+      primary: theme.primary,
+      text: theme.text,
+      textMuted: theme.textMuted,
     }
-    return color
+    return colorMap[color]
   }
 
-  const topLeftLabels = (): BorderLabelItem[] => {
-    const items: BorderLabelItem[] = []
+  /** Every extension status label, by priority, after the host's own. */
+  const extensionLabels = (): StatusRowLabel[] =>
+    ext
+      .statusLabels()
+      .flatMap((label) =>
+        label.produce().map((item) => ({ text: item.text, color: resolveColor(item.color) })),
+      )
+
+  const connectionLabels = (): StatusRowLabel[] => {
+    const items: StatusRowLabel[] = []
 
     // Core chrome: connection/restart status
     const conn = client.connectionState()
@@ -538,38 +619,29 @@ export function Session(props: SessionProps) {
       items.push({ text: `restart ${conn.generation}`, color: theme.textMuted })
     }
 
-    // Extension-contributed labels
-    for (const label of ext.borderLabels()) {
-      if (label.position === "top-left") {
-        for (const item of label.produce()) {
-          items.push({ text: item.text, color: resolveColor(item.color) })
-        }
-      }
-    }
-
     return items
   }
 
   /**
    * The running total, rendered last of everything.
    *
-   * Cost used to sit in the top-left group, which put it between the
+   * Cost used to sit in the connection group, which put it between the
    * connection state and the model. It is the one number a reader glances at
    * without reading the rest of the row, so it belongs at the far end where
    * its position is fixed and nothing before it can shift it.
    */
-  const costLabels = (): BorderLabelItem[] => {
+  const costLabels = (): StatusRowLabel[] => {
     const c = client.cost()
     if (c <= 0) return []
     return [{ text: `$${c.toFixed(2)}`, color: theme.textMuted }]
   }
 
-  const topRightLabels = (): BorderLabelItem[] => {
+  const modelLabels = (): StatusRowLabel[] => {
     const model = Option.fromNullishOr(client.modelInfo())
-    const items: BorderLabelItem[] = []
+    const items: StatusRowLabel[] = []
     if (Option.isSome(model)) items.push({ text: model.value.name, color: theme.textMuted })
     return items.concat(
-      buildTopRightLabels({
+      buildModelLabels({
         reasoningLevel: Option.fromNullishOr(client.reasoningLevel()),
         theme,
         debugMode: props.debugMode === true,
@@ -582,16 +654,16 @@ export function Session(props: SessionProps) {
    * total. Both are numbers a reader checks at a glance without reading the
    * row, so they hold their place and the left group truncates instead.
    */
-  const rightAnchoredLabels = (): BorderLabelItem[] =>
+  const rightAnchoredLabels = (): StatusRowLabel[] =>
     buildContextLabels({
       metrics: client.sessionMetrics(),
       contextLength: client.modelInfo()?.contextLength,
       theme,
     }).concat(costLabels())
 
-  const bottomLeftLabels = (): BorderLabelItem[] => {
+  const phaseLabels = (): StatusRowLabel[] => {
     const a = controller.activity()
-    const items: BorderLabelItem[] = []
+    const items: StatusRowLabel[] = []
     if (controller.uiState().transcriptExpanded) {
       items.push({ text: "transcript · Esc to return", color: theme.textMuted })
     }
@@ -622,30 +694,6 @@ export function Session(props: SessionProps) {
       color: theme.textMuted,
     })
 
-    // Extension-contributed labels
-    for (const label of ext.borderLabels()) {
-      if (label.position === "bottom-left") {
-        for (const item of label.produce()) {
-          items.push({ text: item.text, color: resolveColor(item.color) })
-        }
-      }
-    }
-
-    return items
-  }
-
-  const bottomRightLabels = (): BorderLabelItem[] => {
-    const items: BorderLabelItem[] = []
-
-    // Extension-contributed labels
-    for (const bl of ext.borderLabels()) {
-      if (bl.position === "bottom-right") {
-        for (const item of bl.produce()) {
-          items.push({ text: item.text, color: resolveColor(item.color) })
-        }
-      }
-    }
-
     return items
   }
 
@@ -660,7 +708,7 @@ export function Session(props: SessionProps) {
           expanded={controller.uiState().transcriptExpanded}
           disclosure={controller.uiState().disclosure}
           displayRevision={controller.uiState().displayRevision}
-          overlayOpen={command.paletteOpen() || controller.uiState().overlay._tag !== "none"}
+          overlayOpen={command.paletteOpen() || overlayHoldsComposer(controller.uiState().overlay)}
           renderItems={(items, streaming) => (
             <MessageList
               items={items}
@@ -668,7 +716,6 @@ export function Session(props: SessionProps) {
               fullDetail={controller.uiState().transcriptExpanded}
               syntaxStyle={syntaxStyle}
               streaming={streaming}
-              getChildSessions={controller.getChildren}
             />
           )}
         >
@@ -680,6 +727,7 @@ export function Session(props: SessionProps) {
               </text>
             </box>
           </Show>
+          <ConnectionWidget />
           <ExtensionWidgets slot="below-messages" />
           {/* QueueWidget stays hardwired because its data comes from session controller
               state that is not exposed through the extension context. */}
@@ -714,10 +762,10 @@ export function Session(props: SessionProps) {
 
           <ComposerFrame
             labels={[
-              ...bottomLeftLabels(),
-              ...topLeftLabels(),
-              ...topRightLabels(),
-              ...bottomRightLabels(),
+              ...phaseLabels(),
+              ...connectionLabels(),
+              ...modelLabels(),
+              ...extensionLabels(),
               ...rightAnchoredLabels(),
             ]}
             rightLabels={rightAnchoredLabels().length}

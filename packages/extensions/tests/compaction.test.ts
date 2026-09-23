@@ -238,6 +238,19 @@ describe("context handoff", () => {
     }),
   )
 
+  it.effect("a long branch picks its newest fitting run without formatting every suffix", () =>
+    Effect.sync(() => {
+      // 5,000 messages at the clip size: a per-suffix search formats billions of characters.
+      const long = Array.from({ length: 5_000 }, (_, index) =>
+        textMessage(`m-${index}`, "assistant", "c".repeat(8_000), index),
+      )
+      const source = selectSummarySource(long, 32_768, [])
+      // 32,768 tokens hold 131,072 characters: 16 messages of about 8,020 fit, a 17th does not.
+      expect(source.length).toBe(16)
+      expect(source.at(-1)?.id).toBe(MessageId.make("m-4999"))
+    }),
+  )
+
   it.scopedLive("one oversized message is clipped so the older turns still get summarized", () => {
     let user = ""
     return Effect.gen(function* () {

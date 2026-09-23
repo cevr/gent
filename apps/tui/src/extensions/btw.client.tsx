@@ -234,6 +234,9 @@ export function ForkPane(props: {
   )
 }
 
+/** The fork pane's name in the host's one pane slot. */
+const BTW_PANE = "btw.pane"
+
 export default defineClientExtension(BTW_EXTENSION_ID, {
   setup: Effect.gen(function* () {
     const { transport, shell, lifecycle } = yield* ClientContext
@@ -251,7 +254,7 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
             .pipe(Effect.map((result) => Option.fromUndefinedOr(result.fork))),
         ),
     })
-    const [open, setOpen] = createSignal(false)
+    const open = () => shell.pane.isOpen(BTW_PANE)
     // Each pulse from the btw extension means the fork's view changed; read it again.
     lifecycle.addCleanup(
       transport.onExtensionStateChanged((pulse) => {
@@ -261,7 +264,7 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
       }),
     )
     const show = () => {
-      setOpen(true)
+      shell.pane.open(BTW_PANE)
       controller.refresh()
     }
     return clientContributions(
@@ -279,16 +282,16 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
         },
       }),
       widgetContribution({
-        id: "btw.pane",
+        id: BTW_PANE,
         slot: "below-input",
         component: () => (
           <ForkPane
             open={open()}
             controller={controller}
-            onClose={() => setOpen(false)}
+            onClose={() => shell.pane.close(BTW_PANE)}
             onOpen={() => {
               Option.map(controller.fork(), (fork) => {
-                setOpen(false)
+                shell.pane.close(BTW_PANE)
                 shell.switchSession({
                   sessionId: fork.sessionId,
                   branchId: fork.branchId,

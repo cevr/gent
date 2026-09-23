@@ -20,7 +20,7 @@ import {
   Schema,
   Scope,
 } from "effect"
-import { AgentName, BranchId, ModelDriverRef, SessionId } from "@gent/core/protocol"
+import { AgentName, BranchId, DriverRef, SessionId } from "@gent/core/protocol"
 import { testAgent } from "@gent/core/test-utils"
 import {
   type ClientActivitySnapshot,
@@ -31,6 +31,7 @@ import {
 import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import {
   makeClientTestTransport,
+  makePaneSlot,
   runClientExtensionSetupWithRuntime,
 } from "../extension-test-harness-boundary"
 import { createSignal } from "solid-js"
@@ -158,7 +159,7 @@ const contextLayer = (deps: Partial<ClientContextDeps> = {}) =>
   makeClientContextLayer({
     transport: makeClientTestTransport({ currentSession: () => Option.none() }),
     workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
-    shell: { cast: createMockRuntime().cast },
+    shell: { cast: createMockRuntime().cast, pane: makePaneSlot() },
     ...deps,
   })
 
@@ -231,7 +232,7 @@ describe("driver routing through the client transport", () => {
       return Effect.gen(function* () {
         const { transport: service } = yield* ClientContext
         const error = yield* service
-          .driverSet({ agentName, driver: ModelDriverRef.make({ id: "model:nope" }) })
+          .driverSet({ agentName, driver: DriverRef.make({ id: "model:nope" }) })
           .pipe(Effect.flip)
         expect(error._tag).toBe("ClientTransportRequestError")
         expect(error.tag).toBe("driver.set")

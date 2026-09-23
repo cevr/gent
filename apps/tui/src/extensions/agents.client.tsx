@@ -194,13 +194,12 @@ interface AgentsController {
   readonly detail: () => Option.Option<ExtensionAgentDetail>
   /** Tell the controller which row is selected, so it can fetch that detail. */
   readonly select: (row: Option.Option<AgentRowEntry>) => void
-  /**
-   * Whether the pane is showing. A docked widget is always mounted, so
-   * visibility is controller state.
-   */
+  /** Whether the pane is showing: the host's pane slot names it. */
   readonly open: () => boolean
-  readonly setOpen: (open: boolean) => void
 }
+
+/** The agents pane's name in the host's one pane slot. */
+const AGENTS_PANE = "agents.pane"
 
 export const makeAgentsController = (
   fetchRows: (
@@ -263,8 +262,6 @@ export const makeAgentsController = (
       )
     }
 
-    const [open, setOpen] = createSignal(false)
-
     return {
       rows: listing.value,
       current: transport.currentSession,
@@ -274,8 +271,7 @@ export const makeAgentsController = (
       reload: listing.refresh,
       detail,
       select,
-      open,
-      setOpen,
+      open: () => shell.pane.isOpen(AGENTS_PANE),
     }
   })
 
@@ -316,13 +312,10 @@ const indentFor = (depth: number): string => "  ".repeat(Math.max(0, depth))
 
 /** What the selected row is doing, from its detail read; other rows carry nothing. */
 const activityFor = (detail: Option.Option<ExtensionAgentDetail>): string =>
-  Option.match(
-    Option.flatMap(detail, (value) => value.status),
-    {
-      onNone: () => "",
-      onSome: (status) => status.toLowerCase(),
-    },
-  )
+  Option.match(detail, {
+    onNone: () => "",
+    onSome: (value) => value.status.toLowerCase(),
+  })
 
 /** Right-aligned age from the row's last update; blank when the row never ran. */
 const ageFor = (row: AgentRowEntry, now: number): string =>
@@ -330,6 +323,21 @@ const ageFor = (row: AgentRowEntry, now: number): string =>
     onNone: () => "",
     onSome: (updatedAt) => formatAge(now - updatedAt),
   })
+
+/**
+ * Marks a session spawned beside its parent's work (a delegate child or a
+ * `/btw` fork), so side work reads apart from a handoff before opening it.
+ */
+const sideThreadMark = (row: AgentRowEntry): string => {
+  if (row.sideThread) return "side thread"
+  return ""
+}
+
+/** One pane row: the left text, padded, and the right column drawn muted. */
+interface RowLine {
+  readonly left: string
+  readonly right: string
+}
 
 /** Marks the loop the shell is on, so a reader can find themselves in the list. */
 const currentMarker = (current: boolean): string => {
@@ -372,10 +380,7 @@ const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string =>
     onNone: () => "",
     onSome: (value) => {
       const parts = [
-        ...Option.match(value.model, {
-          onNone: () => [],
-          onSome: (model) => [shortModel(model)],
-        }),
+        shortModel(value.model),
         formatTurns(value.turns),
         formatCost(value.costUsd),
         formatDuration(value.durationMs, "padded"),
@@ -467,18 +472,29 @@ export function AgentsPane(props: {
     return colorFor(section, selected)
   }
 
-  /** `<marker><indent><glyph> name  ·  activity` padded so the age sits on the right edge. */
-  const rowLine = (row: AgentRowEntry, selected: boolean): string => {
+  /**
+   * `<marker><indent><glyph> name  ·  activity` on the left, padded so the
+   * right column (the side-thread mark, then the age) sits on the right edge.
+   */
+  const rowLine = (row: AgentRowEntry, selected: boolean): RowLine => {
     if (Option.contains(armed(), row.sessionId)) {
-      return "^x again to delete this session and its children"
+      return { left: "^x again to delete this session and its children", right: "" }
     }
-    const age = ageFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))
+    const right = [sideThreadMark(row), ageFor(row, DateTime.toEpochMillis(DateTime.nowUnsafe()))]
+      .filter((part) => part.length > 0)
+      .join("  ")
     let activity = ""
     if (selected) activity = activityFor(props.controller.detail())
     let left = `${currentMarker(isCurrent(row))}${indentFor(row.depth)}${glyphFor(row.section)} ${nameFor(row)}`
     if (activity.length > 0) left = `${left}  ·  ${activity}`
-    const width = Math.max(0, rowWidth() - age.length - 2)
-    return `${truncate(left, width).padEnd(width)}  ${age}`
+    const width = Math.max(0, rowWidth() - right.length - 2)
+    return { left: `${truncate(left, width).padEnd(width)}  `, right }
+  }
+
+  const rightColor = (row: AgentRowEntry, selected: boolean) => {
+    if (selected || Option.contains(armed(), row.sessionId))
+      return lineColor(row, row.section, selected)
+    return theme.textMuted
   }
 
   const rows = (): ReadonlyArray<SelectListRow<AgentRowEntry>> =>
@@ -509,9 +525,12 @@ export function AgentsPane(props: {
               style={{ fg: lineColor(item.row, section(), selected()) }}
             >
               <span style={{ fg: glyphColorFor(section(), selected()) }}>
-                {rowLine(item.row, selected()).slice(0, 1)}
+                {rowLine(item.row, selected()).left.slice(0, 1)}
               </span>
-              {rowLine(item.row, selected()).slice(1)}
+              {rowLine(item.row, selected()).left.slice(1)}
+              <span style={{ fg: rightColor(item.row, selected()) }}>
+                {rowLine(item.row, selected()).right}
+              </span>
             </text>
           </box>
         )
@@ -620,18 +639,20 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
       }),
       clientCommandContribution({
         id: "agents.view",
-        title: "Agents",
-        description: "Show every agent loop, live and stored",
+        // The one session browser: the palette item, `/sessions`, `/agents` and
+        // `/tree` all open this pane.
+        title: "Sessions",
+        description: "Browse and switch sessions: every agent loop, live and stored",
         category: "Session",
-        slash: "agents",
-        aliases: ["tree"],
+        slash: "sessions",
+        aliases: ["agents", "tree"],
         onSelect: () => {
-          controller.setOpen(true)
+          shell.pane.open(AGENTS_PANE)
           controller.refresh("")
         },
       }),
       widgetContribution({
-        id: "agents.pane",
+        id: AGENTS_PANE,
         // Docked under the composer rather than covering the transcript: the
         // agent list is something you read *while* working, not instead of it.
         slot: "below-input",
@@ -639,11 +660,14 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
           <AgentsPane
             open={controller.open()}
             controller={controller}
-            onClose={() => controller.setOpen(false)}
+            onClose={() => shell.pane.close(AGENTS_PANE)}
             onToggle={() => {
-              const next = !controller.open()
-              controller.setOpen(next)
-              if (next) controller.refresh("")
+              if (controller.open()) {
+                shell.pane.close(AGENTS_PANE)
+                return
+              }
+              shell.pane.open(AGENTS_PANE)
+              controller.refresh("")
             }}
             onDelete={(row) =>
               shell.cast(
@@ -660,7 +684,7 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
               )
             }
             onSelect={(row) => {
-              controller.setOpen(false)
+              shell.pane.close(AGENTS_PANE)
               // Rows are already keyed per branch, so there is no active-branch
               // lookup to do — the row *is* the loop being switched to.
               shell.switchSession({

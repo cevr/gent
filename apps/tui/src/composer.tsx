@@ -17,9 +17,10 @@ import {
 } from "solid-js"
 import {
   type AutocompleteState,
-  type BorderLabelItem,
+  type StatusRowLabel,
   ComposerEvent,
   ComposerInteractionEvent,
+  overlayHoldsComposer,
   usePromptHistory,
   useSessionController,
 } from "./session"
@@ -37,7 +38,12 @@ import {
 } from "./ui"
 import { useExtensionUI } from "./extensions/host"
 import { useClient, useRuntime } from "./client"
-import type { AutocompleteContribution, AutocompleteItem } from "./extensions/client-facets.js"
+import type {
+  AutocompleteContribution,
+  AutocompleteItem,
+  InteractionRendererComponent,
+} from "./extensions/client-facets.js"
+import { PromptRenderer } from "./interaction-renderers"
 import { runAutocompleteContributions } from "./extensions/loader-boundary"
 import { ghostCompletion } from "./autocomplete"
 import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
@@ -145,7 +151,7 @@ const runCommand = (
 // ── composer frame ──────────────────────────────────────────────────────────
 
 interface ComposerFrameProps {
-  labels: readonly BorderLabelItem[]
+  labels: readonly StatusRowLabel[]
   /**
    * How many of `labels`, counted from the end, are laid out from the right
    * edge inward instead of after the left group.
@@ -163,8 +169,8 @@ interface ComposerFrameProps {
 const SEPARATOR_WIDTH = 3
 
 /** Joins labels with the separator, measuring the columns they occupy. */
-const layout = (labels: readonly BorderLabelItem[], budget: number) => {
-  const shown: BorderLabelItem[] = []
+const layout = (labels: readonly StatusRowLabel[], budget: number) => {
+  const shown: StatusRowLabel[] = []
   let used = 0
   for (const label of labels) {
     if (label.text.length === 0) continue
@@ -506,7 +512,6 @@ interface ComposerController {
   }) => void
   readonly handleSubmitFromTextarea: () => void
   readonly resolveInteraction: (result: ApprovalResult) => void
-  readonly cancelInteraction: () => void
   /** Enter on a row: completes, and dispatches when the row names a command. */
   readonly handleAutocompleteSelect: (value: string) => void
   /** Tab on a row: completes only, never dispatches. */
@@ -1019,7 +1024,7 @@ function useComposerController(): ComposerController {
       !command.paletteOpen() &&
       !sc.promptSearch.isOpen() &&
       effectiveMode() !== "interaction" &&
-      sc.uiState().overlay._tag === "none",
+      !overlayHoldsComposer(sc.uiState().overlay),
     attachTextarea: (renderable) => {
       inputRef = Option.fromNullishOr(renderable)
       if (Option.isSome(inputRef)) {
@@ -1031,9 +1036,6 @@ function useComposerController(): ComposerController {
     handleSubmitFromTextarea,
     resolveInteraction: (result: ApprovalResult) => {
       sc.dispatchComposer(ComposerEvent.cases.ResolveInteraction.make({ result }))
-    },
-    cancelInteraction: () => {
-      sc.dispatchComposer(ComposerEvent.cases.CancelInteraction.make({}))
     },
     handleAutocompleteSelect,
     handleAutocompleteComplete,
@@ -1108,46 +1110,30 @@ export function Composer(props: ComposerProps) {
     return ghost()
   }
 
+  /**
+   * The interaction to draw. It waits for the client extensions: a renderer
+   * chosen before they load would be the fallback for good.
+   */
   const activeInteraction = (): Option.Option<ActiveInteraction> => {
     const cs = sc.composerState()
-    if (cs._tag !== "interaction") return Option.none()
+    if (cs._tag !== "interaction" || !ext.loaded()) return Option.none()
     return Option.some(cs.interaction)
   }
 
-  const interactionRenderer = () => {
-    const interaction = activeInteraction()
-    if (Option.isNone(interaction)) return Option.none()
-    // Route by metadata.type if present, fall back to default renderer (undefined key)
-    const meta = interaction.value.metadata
-    const metadataType = decodeMetadata(meta).pipe(
+  /** The renderer for `metadata.type`; the host's `PromptRenderer` draws the rest. */
+  const interactionRenderer = (interaction: ActiveInteraction): InteractionRendererComponent =>
+    decodeMetadata(interaction.metadata).pipe(
       Option.flatMap((metadata) => decodeString(metadata["type"])),
+      Option.flatMap((type) => Option.fromNullishOr(ext.interactionRenderers().get(type))),
+      Option.getOrElse(() => PromptRenderer),
     )
-    const specific = Option.flatMap(metadataType, (type) =>
-      Option.fromNullishOr(ext.interactionRenderers().get(type)),
-    )
-    const defaultKey = Option.getOrUndefined(Option.none<string>())
-    return Option.orElse(specific, () =>
-      Option.fromNullishOr(ext.interactionRenderers().get(defaultKey)),
-    )
-  }
 
   return (
     <ComposerContext.Provider value={contextValue}>
       <Show when={Option.getOrUndefined(activeInteraction())} keyed>
         {(interaction) => {
-          const Renderer = interactionRenderer()
-          if (Option.isNone(Renderer)) {
-            // Graceful degradation: cancel interaction so the tool doesn't hang
-            controller.cancelInteraction()
-            return (
-              <box paddingLeft={1} paddingTop={1}>
-                <text style={{ fg: theme.warning }}>
-                  No renderer for {interaction._tag} — interaction cancelled
-                </text>
-              </box>
-            )
-          }
-          return Renderer.value({
+          const Renderer = interactionRenderer(interaction)
+          return Renderer({
             event: interaction,
             resolve: (result: ApprovalResult) => {
               controller.resolveInteraction(result)

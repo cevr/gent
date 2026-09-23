@@ -1,6 +1,5 @@
 import { Predicate, Deferred, Effect, Layer, Stream } from "effect"
 import { RpcClient, RpcTest } from "effect/unstable/rpc"
-import { defineExtension, ExtensionContext, ExtensionHost } from "@gent/core/extensions/api"
 import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
 import { ExtensionRegistry } from "../../src/runtime/extension-host.js"
 import type { BranchId, SessionId } from "../../src/domain/ids"
@@ -329,30 +328,3 @@ export const racySessionMutationsLayer = (params: {
   )
   return Layer.provideMerge(SessionMutationsLive, deps)
 }
-
-export const parentToolCallProbeExtension = defineExtension({
-  id: "parent-tool-call-probe",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.on("turnProjection", () =>
-      Effect.gen(function* () {
-        const ctx = yield* ExtensionContext
-        let promptSections: ReadonlyArray<{
-          readonly id: string
-          readonly content: string
-          readonly priority: number
-        }> = []
-        if (!Predicate.isUndefined(ctx.turn?.parentToolCallId)) {
-          promptSections = [
-            {
-              id: "parent-tool-call-probe",
-              content: `parentToolCallId:${ctx.turn.parentToolCallId}`,
-              priority: 45,
-            },
-          ]
-        }
-        return { promptSections }
-      }),
-    )
-  }),
-})

@@ -34,11 +34,12 @@ const row = (id: string, live = true): AgentRowEntry => ({
   section: "idle",
   live,
   depth: 0,
+  sideThread: false,
 })
 
 const detail = (turns: number): ExtensionAgentDetail => ({
-  status: Option.none(),
-  model: Option.none(),
+  status: "Idle",
+  model: "anthropic/claude-sonnet-5",
   turns,
   costUsd: 0,
   durationMs: 0,
@@ -176,6 +177,7 @@ const rowPane = (id: string, name: string, depth: number): AgentRowEntry => ({
   name,
   live: false,
   depth,
+  sideThread: false,
 })
 
 /**
@@ -218,7 +220,6 @@ describe("Agents pane navigation", () => {
               detail: () => Option.none(),
               select: () => {},
               open: () => true,
-              setOpen: () => {},
             }}
             onSelect={(value) => {
               selected = Option.some(value)
@@ -268,8 +269,8 @@ describe("Agents pane navigation", () => {
                     asked.push(value.sessionId)
                     setDetail(
                       Option.some({
-                        status: Option.some("Running"),
-                        model: Option.some("anthropic/claude-sonnet-5"),
+                        status: "Running",
+                        model: "anthropic/claude-sonnet-5",
                         turns: 7,
                         costUsd: 0.125,
                         durationMs: 93_000,
@@ -280,7 +281,6 @@ describe("Agents pane navigation", () => {
                 })
               },
               open: () => true,
-              setOpen: () => {},
             }}
             onSelect={() => {}}
             onToggle={() => {}}
@@ -325,8 +325,8 @@ describe("Agents pane navigation", () => {
               reload: () => {},
               detail: () =>
                 Option.some({
-                  status: Option.some("Running"),
-                  model: Option.none(),
+                  status: "Running",
+                  model: "anthropic/claude-sonnet-5",
                   turns: 1,
                   costUsd: 0,
                   durationMs: 0,
@@ -334,7 +334,6 @@ describe("Agents pane navigation", () => {
                 }),
               select: () => {},
               open: () => true,
-              setOpen: () => {},
             }}
             onSelect={() => {}}
             onToggle={() => {}}
@@ -371,7 +370,6 @@ describe("Agents pane navigation", () => {
               detail: () => Option.none(),
               select: () => {},
               open,
-              setOpen,
             }}
             onSelect={() => {}}
             onToggle={() => {
@@ -417,7 +415,6 @@ describe("Agents pane delete", () => {
               detail: () => Option.none(),
               select: () => {},
               open: () => true,
-              setOpen: () => {},
             }}
             onSelect={() => {}}
             onToggle={() => {}}
@@ -464,8 +461,8 @@ describe("Agents pane reopen", () => {
           (key) => {
             asked.push(key.sessionId)
             return Effect.succeed({
-              status: Option.none(),
-              model: Option.none(),
+              status: "Idle",
+              model: "anthropic/claude-sonnet-5",
               turns: turns(),
               costUsd: 0,
               durationMs: 0,
@@ -530,8 +527,8 @@ describe("Agents pane framing", () => {
                 reload: () => {},
                 detail: () =>
                   Option.some({
-                    status: Option.none(),
-                    model: Option.some("anthropic/claude-sonnet-5"),
+                    status: "Idle",
+                    model: "anthropic/claude-sonnet-5",
                     turns: 7,
                     costUsd: 0.125,
                     durationMs: 93_000,
@@ -539,7 +536,6 @@ describe("Agents pane framing", () => {
                   }),
                 select: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onToggle={() => {}}
@@ -603,7 +599,6 @@ describe("Agents pane framing", () => {
                 detail: () => Option.none(),
                 select: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onToggle={() => {}}
@@ -658,7 +653,6 @@ describe("Agents pane framing", () => {
                 detail: () => Option.none(),
                 select: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onToggle={() => {}}
@@ -715,7 +709,6 @@ describe("Agents pane framing", () => {
                 detail: () => Option.none(),
                 select: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onToggle={() => {}}
@@ -785,7 +778,6 @@ describe("Agents pane framing", () => {
                 detail: () => Option.none(),
                 select: () => {},
                 open: () => true,
-                setOpen: () => {},
               }}
               onSelect={() => {}}
               onToggle={() => {}}
@@ -823,6 +815,7 @@ const root = (id: string, section: AgentRowEntry["section"]): AgentRowEntry => (
   section,
   live: section !== "inactive",
   depth: 0,
+  sideThread: false,
 })
 
 const child = (id: string, section: AgentRowEntry["section"], parent: string): AgentRowEntry => ({
@@ -897,7 +890,6 @@ describe("Subagent tray", () => {
               detail: () => Option.none(),
               select: () => {},
               open,
-              setOpen,
             }}
           />
         )),
@@ -937,7 +929,6 @@ describe("Subagent tray", () => {
               detail: () => Option.none(),
               select: () => {},
               open: () => false,
-              setOpen: () => {},
             }}
           />
         )),
@@ -976,6 +967,7 @@ const rowStaleReply = (id: string): AgentRowEntry => ({
   section: "idle",
   live: true,
   depth: 0,
+  sideThread: false,
 })
 
 describe("Agents controller across a session switch", () => {

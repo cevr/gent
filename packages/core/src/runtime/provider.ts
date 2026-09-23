@@ -18,13 +18,11 @@ import { KeyValueStore } from "effect/unstable/persistence"
 import {
   AgentName,
   byReleaseDateDesc,
-  DriverRef,
   Model,
   ModelId,
   parseModelId,
   parseModelProvider,
   ProviderId,
-  resolveAgentDriver,
   resolveAgentModel,
   resolveDefaultAgentModel,
 } from "../domain/agent.js"
@@ -136,28 +134,18 @@ export const AuthProviderInfo = Schema.Struct({
 export type AuthProviderInfo = typeof AuthProviderInfo.Type
 
 /**
- * Public RPC payload for `auth.listProviders`. Carries `sessionId` (for
- * cwd-scoped config resolution) and `agentName` (so external-routed
- * agents skip model auth). Excludes `driverOverrides`: those are
- * server-derived from config and never trusted from the wire.
+ * Public RPC payload for `auth.listProviders`. `agentName` adds that agent's
+ * model to the providers that need auth; an unknown `sessionId` fails.
  */
-// Public RPC payload — the server re-derives `driverOverrides` from session-cwd
-// config, so callers cannot smuggle in an override that bypasses model auth.
 export const ListAuthProvidersPayload = Schema.Struct({
   agentName: Schema.optional(AgentName),
   sessionId: Schema.optional(SessionId),
 })
 export type ListAuthProvidersPayload = typeof ListAuthProvidersPayload.Type
 
-/**
- * Internal query passed from the RPC handler into `AuthGuard`. Adds
- * server-side resolved `driverOverrides`. Kept separate from the wire
- * payload so callers can't smuggle in an override that bypasses model
- * auth.
- */
+/** Internal query passed from the RPC handler into `AuthGuard`. */
 const AuthProviderQuery = Schema.Struct({
   agentName: Schema.optional(AgentName),
-  driverOverrides: Schema.optional(Schema.Record(AgentName, DriverRef)),
 })
 type AuthProviderQuery = typeof AuthProviderQuery.Type
 
@@ -270,9 +258,7 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
    * Composes auth info (`Auth.get`) with registry-derived metadata
    * (the resolved model drivers) and per-session routing
    * (`resolveDefaultAgentModel` + resolved extension agents) to compute
-   * which providers are required *and* present. External-routed
-   * agents (driver._tag === "External") own their own auth, so model
-   * auth is short-circuited for them.
+   * which providers are required *and* present.
    */
   static Live: Layer.Layer<AuthGuard, never, Auth | ExtensionRegistry> = Layer.effect(
     AuthGuard,
@@ -291,10 +277,6 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
         if (!Predicate.isUndefined(query.agentName)) {
           const selectedAgent = agents.find((agent) => agent.name === query.agentName)
           if (!Predicate.isUndefined(selectedAgent)) {
-            const resolved = resolveAgentDriver(selectedAgent, query.driverOverrides)
-            if (resolved.driver?._tag === "External") {
-              return providers
-            }
             if (!Predicate.isUndefined(selectedAgent.model)) {
               modelIds.push(resolveAgentModel(selectedAgent))
             }
@@ -657,49 +639,56 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
  */
 export const TEST_MODEL_CONTEXT_LIMIT_TOKENS = 128_000
 
+/**
+ * Every model the caller's profile can run, newest release first: each model
+ * driver's own catalog, read with the auth stored for that driver. Core
+ * fetches nothing. The drivers come from the `ExtensionRegistry` in scope, so
+ * a turn reads its own profile's and a server read the requesting session's;
+ * a catalog captured once at launch missed every project-scoped driver and
+ * ignored `disabledExtensions`.
+ */
+export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* () {
+  const authStore = yield* Auth
+  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
+  const catalog = yield* listModelCatalog(modelDrivers, (providerId) =>
+    authStore.get(providerId).pipe(
+      Effect.map((info) =>
+        Option.getOrUndefined(
+          Option.map(Option.fromUndefinedOr(info), (found) =>
+            toProviderAuthInfo(authStore, providerId, found),
+          ),
+        ),
+      ),
+      Effect.mapError(
+        (e) =>
+          new ProviderAuthError({
+            message: `Failed to read auth for provider "${providerId}"`,
+            cause: e,
+          }),
+      ),
+    ),
+  )
+  return byReleaseDateDesc(catalog)
+})
+
+/** One model of the caller's profile catalog: the turn's context limit and pricing. */
 interface ModelRegistryService {
-  readonly list: Effect.Effect<readonly Model[], DriverError | ProviderAuthError>
   readonly get: (
     modelId: string,
-  ) => Effect.Effect<Option.Option<Model>, DriverError | ProviderAuthError>
+  ) => Effect.Effect<Option.Option<Model>, DriverError | ProviderAuthError, ExtensionRegistry>
 }
 
 export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryService>()(
   "@gent/core/src/runtime/provider/ModelRegistry",
 ) {
-  static Live: Layer.Layer<ModelRegistry, never, ExtensionRegistry | Auth> = Layer.effect(
+  static Live: Layer.Layer<ModelRegistry, never, Auth> = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
-      const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
       const authStore = yield* Auth
-
-      const resolveAuthOption = (
-        providerId: string,
-      ): Effect.Effect<Option.Option<ProviderAuthInfo>, ProviderAuthError> =>
-        authStore.get(providerId).pipe(
-          Effect.map(Option.fromUndefinedOr),
-          Effect.map(Option.map((info) => toProviderAuthInfo(authStore, providerId, info))),
-          Effect.mapError(
-            (e) =>
-              new ProviderAuthError({
-                message: `Failed to read auth for provider "${providerId}"`,
-                cause: e,
-              }),
-          ),
-        )
-
-      /** Every driver's own catalog, newest release first. Core fetches nothing. */
-      const load = Effect.fn("ModelRegistry.load")(function* () {
-        const catalog = yield* listModelCatalog(modelDrivers, (providerId) =>
-          resolveAuthOption(providerId).pipe(Effect.map(Option.getOrUndefined)),
-        )
-        return byReleaseDateDesc(catalog)
-      })
-
       return ModelRegistry.of({
-        list: load(),
         get: (modelId) =>
-          load().pipe(
+          modelCatalog().pipe(
+            Effect.provideService(Auth, authStore),
             Effect.map((models) =>
               Option.fromUndefinedOr(models.find((model) => model.id === modelId)),
             ),
@@ -712,7 +701,6 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
     Layer.succeed(
       ModelRegistry,
       ModelRegistry.of({
-        list: Effect.succeed(models),
         get: (modelId) => {
           const existing = Option.fromUndefinedOr(models.find((model) => model.id === modelId))
           if (Option.isSome(existing)) return Effect.succeedSome(existing.value)

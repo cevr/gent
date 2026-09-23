@@ -86,15 +86,12 @@ import {
 import { dateFromMillis, Session, Branch, messagePartsDisplayText } from "../../src/domain/message"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import type {
-  ExternalDriverContribution,
   ModelDriverContribution,
   ProviderAuthInfo,
   ProviderResolution,
-  TurnExecutor,
 } from "../../src/domain/driver"
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
-import * as Response from "effect/unstable/ai/Response"
-import { finishPart, ModelRegistry, ModelResolver } from "../../src/runtime/provider"
+import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
@@ -177,6 +174,28 @@ describe("ambient extension host context", () => {
         expect(Cause.hasDies(exit.cause)).toBe(true)
         expect(exit.cause.toString()).toContain("ApprovalService not available")
       }
+    }),
+  )
+
+  it.live("an unwired file lock or state facet reports its absence, not a pass-through", () =>
+    Effect.gen(function* () {
+      const ctx = yield* ambientContext
+      const ran = yield* Ref.make(false)
+      const lockExit = yield* Effect.exit(ctx.FileLock.withLock("/tmp/a", Ref.set(ran, true)))
+      const stateExit = yield* Effect.exit(
+        ctx.State(Option.some(ExtensionId.make("probe"))).changed(),
+      )
+
+      expect(yield* Ref.get(ran)).toBe(false)
+      const expectAbsent = (exit: Exit.Exit<unknown, unknown>, name: string) => {
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.hasDies(exit.cause)).toBe(true)
+          expect(exit.cause.toString()).toContain(`${name} not available`)
+        }
+      }
+      expectAbsent(lockExit, "FileLockService")
+      expectAbsent(stateExit, "ExtensionStatePublisher")
     }),
   )
 
@@ -708,11 +727,11 @@ describe("resolveTurnProfile", () => {
           scope: "project",
           sourcePath: "/test/profile-driver-ext",
           contributions: {
-            externalDrivers: [
+            modelDrivers: [
               {
                 id: "profile-driver",
-                executor: { executeTurn: () => Stream.die("unused in test") },
-                invalidate: Effect.void,
+                name: "Profile driver",
+                resolveModel: () => stubResolution(),
               },
             ],
           },
@@ -760,10 +779,10 @@ describe("resolveTurnProfile", () => {
           hostProvider,
           defaults: { baseSections: [] },
         })
-        const drivers = resolved.turnExtensionRegistry.getResolved().externalDrivers
+        const drivers = resolved.turnExtensionRegistry.getResolved().modelDrivers
         expect(resolved.turnHostCtx.cwd).toBe("/tmp/profile-driver-scope")
         expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
-        expect(extensionRegistry.getResolved().externalDrivers.has("profile-driver")).toBe(false)
+        expect(extensionRegistry.getResolved().modelDrivers.has("profile-driver")).toBe(false)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
@@ -773,13 +792,11 @@ describe("resolveTurnProfile", () => {
 // ── ../drivers/driver-registry.test ─────────────────────────────────────────
 
 /**
- * Driver resolution — both categories (model + external) resolve into the
- * extension registry with scope precedence, and listModelCatalog concatenates
- * every driver's catalog. Every agent turn dispatches through
+ * Driver resolution — model drivers resolve into the extension registry with
+ * scope precedence, and listModelCatalog concatenates every driver's catalog. Every agent turn dispatches through
  * `agent.driver: DriverRef → ExtensionRegistry`, so a scope-precedence
  * regression breaks per-cwd extension resolution.
  */
-const noopInvalidate = Effect.void
 const stubResolution = (): Effect.Effect<ProviderResolution> =>
   Effect.succeed(
     AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel)),
@@ -799,38 +816,16 @@ const makeCatalogModel = (id: string, keep = true): Model => {
     contextLength,
   })
 }
-const makeExecutor = (label: string): TurnExecutor => ({
-  executeTurn: () =>
-    Stream.fromIterable([
-      Response.makePart("text-delta", { id: "test-text", delta: label }),
-      finishPart({ finishReason: "stop" }),
-    ]),
-})
 const makeExt = (
   id: string,
   scope: "builtin" | "user" | "project",
-  opts: {
-    readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
-    readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
-  },
-): LoadedExtension => {
-  let contributions: ExtensionContributions
-  if (!Predicate.isUndefined(opts.modelDrivers) && !Predicate.isUndefined(opts.externalDrivers)) {
-    contributions = { modelDrivers: opts.modelDrivers, externalDrivers: opts.externalDrivers }
-  } else if (!Predicate.isUndefined(opts.modelDrivers)) {
-    contributions = { modelDrivers: opts.modelDrivers }
-  } else if (!Predicate.isUndefined(opts.externalDrivers)) {
-    contributions = { externalDrivers: opts.externalDrivers }
-  } else {
-    contributions = {}
-  }
-  return {
-    manifest: { id: ExtensionId.make(id) },
-    scope,
-    sourcePath: `/test/${id}`,
-    contributions,
-  }
-}
+  opts: { readonly modelDrivers: ReadonlyArray<ModelDriverContribution> },
+): LoadedExtension => ({
+  manifest: { id: ExtensionId.make(id) },
+  scope,
+  sourcePath: `/test/${id}`,
+  contributions: { modelDrivers: opts.modelDrivers },
+})
 describe("driver resolution", () => {
   test("getModel resolves a registered model driver", () => {
     const resolved = resolveExtensions([
@@ -839,17 +834,6 @@ describe("driver resolution", () => {
     const result = resolved.modelDrivers.get("anthropic")
     expect(result?.id).toBe("anthropic")
   })
-  test("getExternal resolves a registered external driver", () => {
-    const exec = makeExecutor("hello")
-    const resolved = resolveExtensions([
-      makeExt("acp-ext", "builtin", {
-        externalDrivers: [{ id: "acp-claude-code", executor: exec, invalidate: noopInvalidate }],
-      }),
-    ])
-    const result = resolved.externalDrivers.get("acp-claude-code")
-    expect(result?.id).toBe("acp-claude-code")
-    expect(result?.executor).toBe(exec)
-  })
   test("project scope shadows builtin for same model driver id", () => {
     const resolved = resolveExtensions([
       makeExt("ext-builtin", "builtin", { modelDrivers: [makeModel("openai", "Builtin")] }),
@@ -857,20 +841,6 @@ describe("driver resolution", () => {
     ])
     const result = resolved.modelDrivers.get("openai")
     expect(result?.name).toBe("Project")
-  })
-  test("project scope shadows builtin for same external driver id", () => {
-    const builtinExec = makeExecutor("builtin")
-    const projectExec = makeExecutor("project")
-    const resolved = resolveExtensions([
-      makeExt("ext-builtin", "builtin", {
-        externalDrivers: [{ id: "shared", executor: builtinExec, invalidate: noopInvalidate }],
-      }),
-      makeExt("ext-project", "project", {
-        externalDrivers: [{ id: "shared", executor: projectExec, invalidate: noopInvalidate }],
-      }),
-    ])
-    const driver = resolved.externalDrivers.get("shared")
-    expect(driver?.executor).toBe(projectExec)
   })
   it.live("listModelCatalog concatenates every driver's own catalog", () =>
     Effect.gen(function* () {
@@ -2004,7 +1974,7 @@ describe("runtime slots", () => {
             unanswered: false,
 
             messageId: MessageId.make("turn-message"),
-            usage: { inputTokens: 0, outputTokens: 0 },
+            usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
           } satisfies TurnAfterInput)
           .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx)),
       )
@@ -2040,7 +2010,7 @@ describe("runtime slots", () => {
           unanswered: false,
 
           messageId: MessageId.make("turn-message"),
-          usage: { inputTokens: 0, outputTokens: 0 },
+          usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
         } satisfies TurnAfterInput)
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
 
@@ -2079,7 +2049,7 @@ describe("runtime slots", () => {
           unanswered: false,
 
           messageId: MessageId.make("turn-message"),
-          usage: { inputTokens: 0, outputTokens: 0 },
+          usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
         } satisfies TurnAfterInput)
         .pipe(
           Effect.provideService(CurrentExtensionHostContext, hostCtx),
@@ -2166,7 +2136,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       yield* fs.writeFileString(path.join(projectDir, "../config.json"), grant)
       const denied = yield* discoverExtensions({ userDir, projectDir })
       expect(denied.loaded).toHaveLength(0)
-      expect(denied.skipped[0]?.error).toContain("not trusted")
+      expect(denied.failed[0]?.error).toContain("not trusted")
       expect(yield* fs.exists(marker)).toBe(false)
       yield* fs.writeFileString(path.join(userDir, "../config.json"), grant)
       const allowed = yield* discoverExtensions({ userDir, projectDir })
@@ -2462,9 +2432,9 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       // None of the malformed files load — they hit `loadExtensionFile`'s
       // `candidates.length === 0` branch via the `isGentExtension` guard.
       expect(result.loaded).toHaveLength(0)
-      expect(result.skipped.length).toBeGreaterThanOrEqual(4)
+      expect(result.failed.length).toBeGreaterThanOrEqual(4)
       for (const target of [fnSetupPath, objectSetupPath, nullSetupPath, validPath]) {
-        const entry = result.skipped.find((s) => s.path === target)
+        const entry = result.failed.find((s) => s.sourcePath === target)
         expect(entry).toBeDefined()
         expect(entry?.error).toContain("No GentExtension found")
       }
@@ -3332,7 +3302,7 @@ const stubEvent: TurnAfterInput = {
   unanswered: false,
 
   messageId: MessageId.make("turn-message"),
-  usage: { inputTokens: 0, outputTokens: 0 },
+  usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
 }
 
 const extRuntimeHooks = (
@@ -3659,78 +3629,6 @@ describe("agent override behavior", () => {
       }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
     }).pipe(Effect.provide(BunCrypto.layer)),
   )
-})
-
-// ── ../extensions/turn-executor.test ────────────────────────────────────────
-
-/**
- * ExternalDriver primitive — unit tests.
- *
- * Covers: registry compilation, getExternal resolution, duplicate ID
- * handling.
- */
-const noopExecutor: TurnExecutor = {
-  executeTurn: () => Stream.empty,
-}
-const echoExecutor: TurnExecutor = {
-  executeTurn: (ctx) =>
-    Stream.fromIterable([
-      Response.makePart("text-delta", { id: "test-text", delta: `echo: ${ctx.systemPrompt}` }),
-      finishPart({ finishReason: "stop" }),
-    ]),
-}
-const makeExtTurnExecutor = (
-  id: string,
-  externalDrivers?: Array<{
-    id: string
-    executor: TurnExecutor
-  }>,
-): LoadedExtension => {
-  const drivers = externalDrivers?.map((d) => ({ ...d, invalidate: Effect.void }))
-  let contributions: ExtensionContributions = {}
-  if (!Predicate.isUndefined(drivers) && drivers.length > 0) {
-    contributions = { externalDrivers: drivers }
-  }
-  return {
-    manifest: { id: ExtensionId.make(id) },
-    scope: "builtin",
-    sourcePath: `/test/${id}`,
-    contributions,
-  }
-}
-describe("ExternalDriver registry", () => {
-  test("compiles external drivers from extensions", () => {
-    const resolved = resolveExtensions([
-      makeExtTurnExecutor("ext-a", [{ id: "acp-claude-code", executor: noopExecutor }]),
-      makeExtTurnExecutor("ext-b", [{ id: "acp-opencode", executor: echoExecutor }]),
-    ])
-    expect(resolved.externalDrivers.size).toBe(2)
-    expect(resolved.externalDrivers.has("acp-claude-code")).toBe(true)
-    expect(resolved.externalDrivers.has("acp-opencode")).toBe(true)
-  })
-  test("empty extensions produce empty external driver map", () => {
-    const resolved = resolveExtensions([])
-    expect(resolved.externalDrivers.size).toBe(0)
-  })
-  test("single extension with multiple drivers", () => {
-    const resolved = resolveExtensions([
-      makeExtTurnExecutor("ext-multi", [
-        { id: "exec-a", executor: noopExecutor },
-        { id: "exec-b", executor: echoExecutor },
-      ]),
-    ])
-    expect(resolved.externalDrivers.size).toBe(2)
-    expect(resolved.externalDrivers.get("exec-a")?.executor).toBe(noopExecutor)
-    expect(resolved.externalDrivers.get("exec-b")?.executor).toBe(echoExecutor)
-  })
-  test("later scope wins for same-ID driver", () => {
-    const resolved = resolveExtensions([
-      makeExtTurnExecutor("ext-first", [{ id: "shared-id", executor: noopExecutor }]),
-      makeExtTurnExecutor("ext-second", [{ id: "shared-id", executor: echoExecutor }]),
-    ])
-    expect(resolved.externalDrivers.size).toBe(1)
-    expect(resolved.externalDrivers.get("shared-id")?.executor).toBe(echoExecutor)
-  })
 })
 
 // ── addressed session verbs ─────────────────────────────────────────────────

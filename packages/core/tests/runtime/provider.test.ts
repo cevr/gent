@@ -35,6 +35,7 @@ import {
   ProviderAuth,
   retryProviderCall,
   ModelRegistry,
+  modelCatalog,
   finishPart,
   toolCallPart,
 } from "../../src/runtime/provider"
@@ -47,7 +48,6 @@ import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
-  ExternalDriverRef,
   ModelId,
   ProviderId,
   Model,
@@ -273,7 +273,7 @@ const makeRegistryLayerWithDrivers = (
   overrideAuthLayer: Layer.Layer<Auth> = authLayer,
 ) =>
   ModelRegistry.Live.pipe(
-    Layer.provide(
+    Layer.provideMerge(
       Layer.mergeAll(
         ExtensionRegistry.fromResolved(
           resolveExtensions([
@@ -298,10 +298,64 @@ const loadRegistryWithDrivers = (
     const context = yield* Layer.build(
       makeRegistryLayerWithDrivers(modelDrivers, overrideAuthLayer),
     )
-    return Context.get(context, ModelRegistry)
+    const raw = Context.get(context, ModelRegistry)
+    const drivers = Context.get(context, ExtensionRegistry)
+    const auth = Context.get(context, Auth)
+    return {
+      raw,
+      list: modelCatalog().pipe(
+        Effect.provideService(ExtensionRegistry, drivers),
+        Effect.provideService(Auth, auth),
+      ),
+      get: (modelId: string) =>
+        raw.get(modelId).pipe(Effect.provideService(ExtensionRegistry, drivers)),
+    }
   })
 
 describe("model catalog resolution", () => {
+  it.scopedLive("reads the drivers of the caller's profile, not the launch profile", () =>
+    Effect.gen(function* () {
+      const launch = yield* loadRegistryWithDrivers([
+        {
+          id: "openai",
+          name: "OpenAI",
+          resolveModel: unusedResolution,
+          listModels: () => Effect.succeed([catalogModel("openai/gpt-5.4")]),
+        },
+      ])
+      const projectProfile = ExtensionRegistry.of({
+        getResolved: () =>
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("project-driver") },
+              scope: "project",
+              sourcePath: "test",
+              contributions: {
+                modelDrivers: [
+                  {
+                    id: "local",
+                    name: "Local",
+                    resolveModel: unusedResolution,
+                    listModels: () => Effect.succeed([catalogModel("local/tiny")]),
+                  },
+                ],
+              },
+            },
+          ]),
+      })
+      const inProject = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Effect.provideService(effect, ExtensionRegistry, projectProfile)
+
+      const found = yield* inProject(launch.raw.get("local/tiny"))
+      const launchModel = yield* inProject(launch.raw.get("openai/gpt-5.4"))
+
+      expect(Option.map(found, (model) => model.id)).toEqual(
+        Option.some(ModelId.make("local/tiny")),
+      )
+      expect(Option.isNone(launchModel)).toBe(true)
+    }),
+  )
+
   it.scopedLive("concatenates the catalog each model driver lists", () =>
     Effect.gen(function* () {
       const registry = yield* loadRegistryWithDrivers([
@@ -708,32 +762,10 @@ describe("AuthGuard", () => {
       expect(required).not.toContain(ProviderId.make("openai"))
     }).pipe(Effect.provide(layer))
   })
-
-  it.live("agent routed externally via driverOverrides skips model auth requirements", () => {
-    const layer = guardLayerWithSeed({}, testRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      // main is an anthropic-modeled agent, but config-routes through
-      // an external driver (e.g. Claude Code SDK). The external driver
-      // owns its own auth, so model providers should not be required.
-      const result = yield* guard.listProviders({
-        agentName: DEFAULT_AGENT_NAME,
-        driverOverrides: {
-          [DEFAULT_AGENT_NAME]: ExternalDriverRef.make({ id: "acp-claude-code" }),
-        },
-      })
-      expect(result.filter((p) => p.required)).toEqual([])
-    }).pipe(Effect.provide(layer))
-  })
 })
 
 describe("ListAuthProvidersPayload schema", () => {
-  // The RPC handler resolves project config from the session's cwd,
-  // not the launch cwd. The wire payload must carry sessionId so the
-  // TUI can opt into per-session resolution. Notably it does NOT
-  // carry `driverOverrides` — the server re-derives those from
-  // session-cwd config so a wire caller can't smuggle in an override
-  // that bypasses model auth.
+  // The wire payload carries an optional sessionId and agentName.
   //
   // Plain `bunTest` here: these are pure schema decode checks with
   // no Effect context, so the `effect-bun-test` `it.live`/`it.effect`
@@ -759,20 +791,6 @@ describe("ListAuthProvidersPayload schema", () => {
     const query = decode({})
     expect(query.agentName).toBeUndefined()
     expect(query.sessionId).toBeUndefined()
-  })
-
-  bunTest("rejects driverOverrides — those are server-derived, not wire-supplied", () => {
-    // Schema is closed-by-default? No — Schema.Struct is open by default.
-    // The point of the split is that consumers see a type without
-    // driverOverrides; runtime decode of an unknown field is a no-op.
-    // This test documents intent: callers shouldn't include driverOverrides.
-    const query = decode({
-      sessionId: SessionId.make("019d-test-session-id"),
-      driverOverrides: { [DEFAULT_AGENT_NAME]: { _tag: "External", id: "evil" } },
-    })
-    expect(query.sessionId).toBe(SessionId.make("019d-test-session-id"))
-    // The decoded type intentionally has no `driverOverrides` field.
-    expect("driverOverrides" in query).toBe(false)
   })
 })
 

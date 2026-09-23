@@ -906,7 +906,11 @@ export function ToolCallIdentityProvider(props: ToolCallIdentityProviderProps) {
 
 const ToolFrameBodyContext = createContext(false)
 
-/** The transcript row owns the header; registered renderers supply its body. */
+/**
+ * The transcript row owns the header; registered renderers supply its body.
+ * It holds for one frame: a frame nested in that body (a cell's op) draws its
+ * own header again.
+ */
 export function ToolFrameBody(props: { children: JSX.Element }) {
   return (
     <ToolFrameBodyContext.Provider value={true}>{props.children}</ToolFrameBodyContext.Provider>
@@ -1003,14 +1007,18 @@ export function ToolFrame(props: ToolFrameProps) {
         fallback={
           <Show when={props.collapsedContent}>
             <box paddingLeft={2} flexDirection="column">
-              {props.collapsedContent}
+              <ToolFrameBodyContext.Provider value={false}>
+                {props.collapsedContent}
+              </ToolFrameBodyContext.Provider>
             </box>
           </Show>
         }
       >
         <Show when={props.children}>
           <box paddingLeft={2} flexDirection="column">
-            {props.children}
+            <ToolFrameBodyContext.Provider value={false}>
+              {props.children}
+            </ToolFrameBodyContext.Provider>
           </box>
         </Show>
       </Show>

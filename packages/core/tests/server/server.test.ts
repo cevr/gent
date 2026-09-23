@@ -26,7 +26,7 @@ import {
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
 } from "../../src/server/rpc"
-import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
+import { BranchId, ExtensionId, MessageId, SessionId } from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
 import { StorageError } from "../../src/domain/errors.js"
 import {
@@ -63,7 +63,6 @@ import {
   FIXED_NOW,
   makeClient,
   makeRpcHandlersClient,
-  parentToolCallProbeExtension,
   racySessionMutationsLayer,
   sessionMutationsLayer,
   sessionMutationsLayerWithMachineProbe,
@@ -3071,55 +3070,6 @@ describe("message.send", () => {
           yield* controls.assertDone
         }).pipe(Effect.timeout("6 seconds")),
       ),
-  )
-
-  it.live("threads runSpec parentToolCallId through the public message contract", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const assistantText = "parent tool call acceptance reply"
-        const parentToolCallId = ToolCallId.make("tc-parent-acceptance")
-        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          {
-            ...textStep(assistantText),
-            assertOptions: (options) => {
-              expect(encodeJson(options.prompt)).toContain(`parentToolCallId:${parentToolCallId}`)
-            },
-          },
-        ])
-        const { client } = yield* createRpcClient(
-          createE2ELayer({
-            ...e2ePreset,
-            providerLayer,
-            extensionInputs: [...e2ePreset.extensionInputs, parentToolCallProbeExtension],
-          }),
-        )
-        const created = yield* client.session.create({ cwd: process.cwd() })
-
-        yield* client.message.send({
-          sessionId: created.sessionId,
-          branchId: created.branchId,
-          content: "thread parent tool call id",
-          runSpec: { parentToolCallId },
-        })
-
-        yield* waitFor(
-          client.session.getSnapshot({
-            sessionId: created.sessionId,
-            branchId: created.branchId,
-          }),
-          (current) =>
-            current.messages.some(
-              (message) =>
-                message.role === "assistant" &&
-                message.parts.some((part) => part.type === "text" && part.text === assistantText),
-            ),
-          5_000,
-          "assistant reply from parentToolCallId turn",
-        )
-
-        yield* controls.assertDone
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
   )
 
   it.live("rejects a deleted session before provider dispatch", () =>

@@ -277,7 +277,7 @@ export class SlashCommandInfo extends Schema.Class<SlashCommandInfo>("SlashComma
   capabilityId: Schema.String,
 }) {}
 
-const ExtensionActivationPhase = Schema.Literals(["setup", "validation", "startup"])
+const ExtensionActivationPhase = Schema.Literals(["load", "setup", "validation", "startup"])
 
 const ExtensionManifestInfo = Schema.Struct({
   id: Schema.String,
@@ -325,15 +325,10 @@ export type ExtensionHealthSnapshot = Schema.Schema.Type<typeof ExtensionHealthS
 // ---------------------------------------------------------------------------
 
 /** Per-driver descriptor returned by `driver.list`. The `_tag` matches `DriverRef`. */
-export const DriverInfo = Schema.Union([
-  Schema.TaggedStruct("Model", {
-    id: Schema.String,
-  }),
-  Schema.TaggedStruct("External", {
-    id: Schema.String,
-  }),
-]).pipe(Schema.toTaggedUnion("_tag"))
-export type DriverInfo = Schema.Schema.Type<typeof DriverInfo>
+export const DriverInfo = Schema.TaggedStruct("Model", {
+  id: Schema.String,
+})
+export type DriverInfo = typeof DriverInfo.Type
 
 /** Snapshot returned by `driver.list`. Carries every registered driver
  *  and the active per-agent override map. The TUI joins these against
@@ -347,6 +342,8 @@ export class DriverListResult extends Schema.Class<DriverListResult>("DriverList
 export const SetDriverOverrideInput = Schema.Struct({
   agentName: AgentName,
   driver: DriverRef,
+  /** Validate the driver against this session's profile; the launch profile without one. */
+  sessionId: Schema.optional(SessionId),
 })
 export type SetDriverOverrideInput = typeof SetDriverOverrideInput.Type
 
@@ -570,6 +567,7 @@ class ExtensionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("driver.list", {
+    payload: { sessionId: Schema.optional(SessionId) },
     success: DriverListResult,
     error: GentRpcError,
   }),
@@ -582,6 +580,7 @@ class ExtensionRpcs extends RpcGroup.make(
     error: GentRpcError,
   }),
   Rpc.make("model.list", {
+    payload: { sessionId: Schema.optional(SessionId) },
     success: Schema.Array(Model),
     error: GentRpcError,
   }),

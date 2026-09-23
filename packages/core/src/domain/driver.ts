@@ -1,40 +1,22 @@
 /**
- * Driver primitives — unified registration for both model providers and
- * external turn executors.
+ * Model driver primitives. A `ModelDriverContribution` wraps an LLM provider:
+ * auth, `listModels`, and `resolveModel` returning a model that provides an
+ * `effect/unstable/ai` `LanguageModel`. The gent providers
+ * (anthropic/openai/google/mistral) register one each.
  *
- * One `TurnDriver` interface for both would lose the provider-shaped
- * capabilities (auth + listModels + resolveModel), so drivers split by
- * **capability** under one registry:
- *
- *   - `ModelDriverContribution`     — wraps an LLM provider (auth, listModels,
- *                                     resolveModel returning a Layer that
- *                                     produces an `effect/unstable/ai`
- *                                     `LanguageModel`). Four gent providers
- *                                     (anthropic/openai/google/mistral)
- *                                     register one each.
- *   - `ExternalDriverContribution`  — wraps a `TurnExecutor` that streams
- *                                     Effect AI response parts for fully external loops
- *                                     (ACP agents: claude-code/opencode/gemini-cli).
- *
- * Agents reference a driver by `driver: DriverRef`; the agent loop dispatches
- * through the turn's `ExtensionRegistry`, so both kinds of backend reach a turn through one
- * capability-shaped union resolved in one place — `composability-not-flags`.
+ * An agent may name a driver with `driver: DriverRef`; otherwise the loop
+ * derives the driver from the provider segment of its model id.
  *
  * The auth, hint, and resolution shapes live here too: they are
  * model-driver-only concepts and belong with their sole consumer.
  *
  * @module
  */
-import { Context, Schema, type Effect, type Layer, type Option, type Stream } from "effect"
-import type { LanguageModel, Model as AiModel } from "effect/unstable/ai"
-import type * as Response from "effect/unstable/ai/Response"
-import type { AgentDefinition, Model } from "./agent.js"
+import { Option, Predicate, Schema, type Effect, type Layer } from "effect"
+import { AiError, type LanguageModel, type Model as AiModel } from "effect/unstable/ai"
+import type { Model } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "../runtime/provider.js"
-import type { ToolCapability } from "./capability.js"
-import type { ExtensionHostContext } from "./extension.js"
-import type { BranchId, SessionId } from "./ids.js"
-import type { InteractionPendingError } from "./interaction.js"
-import type { Message } from "./message.js"
+import type { SessionId } from "./ids.js"
 
 export const DriverFailureId = Schema.String.pipe(Schema.brand("DriverFailureId"))
 export type DriverFailureId = typeof DriverFailureId.Type
@@ -56,6 +38,32 @@ export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+/**
+ * AiError metadata that carries a credential failure through a provider SDK.
+ * The SDK keeps a reason's metadata but drops its cause, and it adds its own
+ * text to the message. A driver attaches the failure here; the loop shows the
+ * user the failure's own message.
+ */
+const CredentialFailureMetadata = Schema.Struct({
+  gent: Schema.Struct({ credentialFailure: Schema.String }),
+})
+
+/** The AiError reason metadata that carries `error` to the loop. */
+export const credentialFailureMetadata = (
+  error: ProviderAuthError,
+): typeof CredentialFailureMetadata.Type => ({ gent: { credentialFailure: error.message } })
+
+/** The credential failure message a model error carries, if a driver attached one. */
+// oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
+export const credentialFailureMessage = (error: unknown): Option.Option<string> => {
+  if (!AiError.isAiError(error) || !Predicate.hasProperty(error.reason, "metadata")) {
+    return Option.none()
+  }
+  return Schema.decodeUnknownOption(CredentialFailureMetadata)(error.reason.metadata).pipe(
+    Option.map((metadata) => metadata.gent.credentialFailure),
+  )
+}
 
 /** Upstream Effect AI model returned by a model driver's `resolveModel`.
  *  It must be fully self-contained: auth, tool naming, cache control, and
@@ -195,80 +203,4 @@ export interface ModelDriverContribution {
   readonly auth?: ProviderAuthContribution
   /** Retry policy for this driver's transient failures; `DEFAULT_RETRY_POLICY` when absent. */
   readonly retry?: RetryPolicy
-}
-
-// ── External-driver shapes ──
-//
-// External drivers stream upstream Effect AI response parts directly. Gent's
-// durable events remain receipts derived at the runtime edge.
-export type TurnStreamPart = Response.AnyPart
-
-/** Failure raised by an external driver while streaming a turn. */
-export class TurnError extends Schema.TaggedError<TurnError>()("TurnError", {
-  message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
-
-/** What an external driver receives per turn. */
-export interface TurnContext {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly agent: AgentDefinition
-  readonly messages: ReadonlyArray<Message>
-  readonly tools: ReadonlyArray<ToolCapability>
-  readonly systemPrompt: string
-  readonly cwd: string
-  readonly abortSignal: AbortSignal
-  readonly hostCtx: ExtensionHostContext
-}
-
-interface ExternalToolRunnerService {
-  readonly runTool: (
-    toolName: string,
-    args: Schema.Schema.Type<typeof Schema.Unknown>,
-  ) => Effect.Effect<unknown, InteractionPendingError | TurnError>
-}
-
-export class ExternalToolRunner extends Context.Service<
-  ExternalToolRunner,
-  ExternalToolRunnerService
->()("@gent/core/src/domain/driver/ExternalToolRunner") {}
-
-/** Executor interface implemented by external drivers (ACP agents, etc.).
- *
- *  Cancellation is per-turn via `ctx.abortSignal` inside `executeTurn` — each
- *  driver wires the signal to its own cancel mechanism (ACP `conn.cancel`,
- *  SDK `q.interrupt`). A driver-wide `cancel(sessionId)` hook would only see
- *  the outer session string, not the full `(sessionId, branchId, driverId)`
- *  cache key, so it cannot target a specific cached session correctly.
- *  Counsel  — drop the dead optional rather than keep it as a no-op stub. */
-export interface TurnExecutor {
-  readonly executeTurn: (
-    ctx: TurnContext,
-  ) => Stream.Stream<TurnStreamPart, TurnError | InteractionPendingError, ExternalToolRunner>
-}
-
-// ── ExternalDriverContribution — turn-executor-shaped driver ──
-
-/**
- * Registers an external execution loop as a driver. The wrapped
- * `TurnExecutor` streams Effect AI response parts; the agent loop collects them into an
- * assistant draft. The driver registry routes a
- * `DriverRef({ _tag: "External", id })` to the matching contribution.
- */
-export interface ExternalDriverContribution {
-  /** Driver id — referenced by `agent.driver: DriverRef({ _tag: "External", id })`. */
-  readonly id: string
-  /** The turn executor implementation. */
-  readonly executor: TurnExecutor
-  /**
-   * Hook called by the runtime when a config change makes any cached
-   * external session for this driver stale (e.g. `driver.set` /
-   * `driver.clear` swaps an agent's routing). Implementations should tear
-   * down every cached session keyed under this driver id. External drivers
-   * are the only contributors to this primitive, and an absent `invalidate`
-   * hides cache-staleness bugs. Stateless drivers supply `Effect.void`
-   * explicitly so reviewers see the intent.
-   */
-  readonly invalidate: Effect.Effect<void>
 }

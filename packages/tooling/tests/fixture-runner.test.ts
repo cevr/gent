@@ -109,8 +109,16 @@ const CASES: ReadonlyArray<RuleCase> = [
     invalid: "apps/tui/src/extensions/core-entry-boundary.invalid.ts",
     valid: "apps/tui/src/extensions/loader-boundary.ts",
     // a protocol subpath, host, test-utils, a relative path to core's host,
-    // a core re-export, a dynamic import
-    expectedCount: 6,
+    // a core re-export, a dynamic import, and the two host Solid contexts
+    expectedCount: 8,
+  },
+  {
+    // The TUI host reads no extension module; a client extension owns that view.
+    rule: "gent/core-entry-boundary",
+    invalid: "apps/tui/src/tui-host-boundary.invalid.ts",
+    valid: "apps/tui/src/tui-host-boundary.valid.ts",
+    // a subpath import, a type import, a re-export of the root, a dynamic import
+    expectedCount: 4,
   },
   {
     // A reference extension is held to the same two entries.

@@ -9,7 +9,6 @@ import {
   Layer,
   MutableRef,
   Option,
-  Path,
   Predicate,
   Schema,
   Scope,
@@ -41,13 +40,7 @@ import {
   toolCallStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import {
-  AgentName,
-  DEFAULT_AGENT_NAME,
-  DEFAULT_MODEL_ID,
-  ExternalDriverRef,
-  ModelDriverRef,
-} from "../../src/domain/agent"
+import { AgentName, DEFAULT_AGENT_NAME, DriverRef } from "../../src/domain/agent"
 import { createE2ELayer, createRpcClient, createRpcHarness } from "../../src/test-utils/harness"
 import { e2ePreset } from "../helpers/test-preset"
 import {
@@ -92,7 +85,7 @@ import { encodeInteractionDecision } from "../../src/domain/interaction.js"
 import { MinimumLogLevel } from "effect/References"
 import { narrowR } from "../helpers/effect"
 import { type Message, messageSingleText } from "../../src/domain/message"
-import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
+import { ConfigService } from "../../src/runtime/config"
 import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
 // ── rpc-contract.test ───────────────────────────────────────────────────────
@@ -159,7 +152,7 @@ describe("ExtensionRpcs", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const before = yield* client.driver.list()
+        const before = yield* client.driver.list({})
         expect(before).toBeInstanceOf(DriverListResult)
         expect(before.drivers[0]?._tag).toBeDefined()
         // Built-in agents extension contributes the "anthropic" model driver
@@ -177,16 +170,16 @@ describe("ExtensionRpcs", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const drivers = (yield* client.driver.list()).drivers
+        const drivers = (yield* client.driver.list({})).drivers
         const someModel = drivers.find((d) => d._tag === "Model")
         if (Predicate.isUndefined(someModel)) {
           return yield* Effect.die(new Error("no model driver registered in test layer"))
         }
         yield* client.driver.set({
           agentName: DEFAULT_AGENT_NAME,
-          driver: ModelDriverRef.make({ id: someModel.id }),
+          driver: DriverRef.make({ id: someModel.id }),
         })
-        const after = yield* client.driver.list()
+        const after = yield* client.driver.list({})
         expect(after.overrides[DEFAULT_AGENT_NAME]?._tag).toBe("Model")
       }).pipe(Effect.timeout("4 seconds")),
     ),
@@ -200,7 +193,7 @@ describe("ExtensionRpcs", () => {
         const result = yield* client.driver
           .set({
             agentName: DEFAULT_AGENT_NAME,
-            driver: ExternalDriverRef.make({ id: "definitely-not-registered" }),
+            driver: DriverRef.make({ id: "definitely-not-registered" }),
           })
           .pipe(Effect.flip)
         expect(result._tag).toBe("NotFoundError")
@@ -213,17 +206,17 @@ describe("ExtensionRpcs", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const drivers = (yield* client.driver.list()).drivers
+        const drivers = (yield* client.driver.list({})).drivers
         const someModel = drivers.find((d) => d._tag === "Model")
         if (Predicate.isUndefined(someModel)) {
           return yield* Effect.die(new Error("no model driver registered in test layer"))
         }
         yield* client.driver.set({
           agentName: DEFAULT_AGENT_NAME,
-          driver: ModelDriverRef.make({ id: someModel.id }),
+          driver: DriverRef.make({ id: someModel.id }),
         })
         yield* client.driver.clear({ agentName: DEFAULT_AGENT_NAME })
-        const after = yield* client.driver.list()
+        const after = yield* client.driver.list({})
         expect(after.overrides).toEqual({})
       }).pipe(Effect.timeout("4 seconds")),
     ),
@@ -235,7 +228,7 @@ describe("ExtensionRpcs", () => {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         yield* client.driver.clear({ agentName: AgentName.make("does-not-exist") })
-        const after = yield* client.driver.list()
+        const after = yield* client.driver.list({})
         expect(after.overrides).toEqual({})
       }).pipe(Effect.timeout("4 seconds")),
     ),
@@ -288,7 +281,9 @@ describe("model context RPC boundary", () => {
           if (errorEvent.value.event._tag !== "ErrorOccurred") {
             return yield* Effect.die("unexpected event in error stream")
           }
-          expect(errorEvent.value.event.error).toContain("ModelContextProjectionError")
+          // The user reads the error's own message, not its class tag.
+          expect(errorEvent.value.event.error).toContain("BudgetExceeded projecting the context")
+          expect(errorEvent.value.event.error).not.toContain("ModelContextProjectionError")
           // The transcript prints this text; stack frames belong in the log.
           expect(errorEvent.value.event.error).not.toContain("\n    at ")
           const snapshot = yield* waitFor(
@@ -341,13 +336,8 @@ describe("model context RPC boundary", () => {
 /**
  * `auth.listProviders` RPC acceptance tests.
  *
- * The handler resolves project config from the session's cwd, not the
- * launch cwd. A bug here (regression to `configService.get()`) would
- * silently re-block external-routed sessions on launch-cwd model auth.
- * The unit-level AuthGuard tests at `auth-guard.test.ts:181` prove the
- * `driverOverrides` short-circuit works; this test proves the *RPC
- * handler* threads `sessionId` → `session.cwd` →
- * `configService.get(cwd)` → `driverOverrides`.
+ * An unknown session fails the listing; otherwise the selected agent's
+ * model decides which providers need auth.
  */
 
 const failingAuthStoreLayer = Layer.succeed(
@@ -427,86 +417,6 @@ describe("auth.listProviders", () => {
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
         const providers = yield* client.auth.listProviders({})
         expect(providers.length).toBeGreaterThan(0)
-      }).pipe(Effect.timeout("4 seconds")),
-    ),
-  )
-  it.live(
-    "driver override written at session cwd is honored by auth.listProviders(sessionId) through ConfigService.Live",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
-          const path = yield* Path.Path
-          // Three distinct dirs so we can prove the handler resolves config
-          // from the *session's* cwd, not the server's launch cwd. Writing
-          // the override into the session cwd's project config (and NOT
-          // into the launch cwd or user config) means a launch-cwd-only
-          // regression would return required=true here.
-          const launch = yield* fs.makeTempDirectoryScoped()
-          const sessionCwd = yield* fs.makeTempDirectoryScoped()
-          const home = yield* fs.makeTempDirectoryScoped()
-          // Seed the session cwd's project config with a driver override
-          // for `main`. Any external driver id marks the agent as
-          // externally routed, so no model provider is required.
-          yield* fs.makeDirectory(path.join(sessionCwd, ".gent"), { recursive: true })
-          yield* fs.writeFileString(
-            path.join(sessionCwd, ".gent", "config.json"),
-            '{"driverOverrides":{"main":{"_tag":"External","id":"acp-claude-code"}}}',
-          )
-          const runtimeEnvironmentLive = RuntimeEnvironment.Live({
-            cwd: launch,
-            home,
-          })
-          const configServiceLive = ConfigService.Live.pipe(
-            Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
-          )
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client } = yield* createRpcClient(
-            createE2ELayer({
-              ...e2ePreset,
-              providerLayer,
-              configServiceLayer: configServiceLive,
-            }),
-          )
-          // The provider required by `main` follows DEFAULT_MODEL_ID, so this
-          // test states the override invariant rather than a shipped model.
-          const defaultProvider = DEFAULT_MODEL_ID.slice(0, DEFAULT_MODEL_ID.indexOf("/"))
-          // Launch cwd has no override -> main requires its model's
-          // provider. Proves the override is NOT in user config.
-          const launchSession = yield* client.session.create({ cwd: launch })
-          const launchList = yield* client.auth.listProviders({
-            agentName: DEFAULT_AGENT_NAME,
-            sessionId: launchSession.sessionId,
-          })
-          expect(launchList.find((p) => p.provider === defaultProvider)?.required).toBe(true)
-          // Session cwd has the project override -> that provider is NOT
-          // required because the agent is externally routed.
-          const overriddenSession = yield* client.session.create({ cwd: sessionCwd })
-          const overriddenList = yield* client.auth.listProviders({
-            agentName: DEFAULT_AGENT_NAME,
-            sessionId: overriddenSession.sessionId,
-          })
-          expect(overriddenList.find((p) => p.provider === defaultProvider)?.required).toBe(false)
-        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
-      ),
-  )
-  it.live("driver.set followed by no-sessionId listProviders honors launch-cwd override", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const drivers = (yield* client.driver.list()).drivers
-        const externalDriver = drivers.find((d) => d._tag === "External")
-        if (Predicate.isUndefined(externalDriver)) return
-        yield* client.driver.set({
-          agentName: DEFAULT_AGENT_NAME,
-          driver: ExternalDriverRef.make({ id: externalDriver.id }),
-        })
-        // No sessionId → launch cwd path. Under ConfigService.Test this
-        // still works because driver.set writes to the in-memory user
-        // ref that `get(undefined)` also reads.
-        const list = yield* client.auth.listProviders({ agentName: DEFAULT_AGENT_NAME })
-        expect(list.find((p) => p.provider === "openai")?.required).toBe(false)
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )

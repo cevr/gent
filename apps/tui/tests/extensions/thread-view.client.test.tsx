@@ -248,7 +248,6 @@ describe("thread pane", () => {
               loading: () => false,
               refresh: () => {},
               open: () => true,
-              setOpen: () => {},
             }}
             onSelect={(value) => {
               selected = Option.some(value)

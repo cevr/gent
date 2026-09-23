@@ -485,8 +485,12 @@ describe("Effect-purity locks (compile-time)", () => {
   test("public extension api does not expose host extension-loading helpers", () => {
     // @ts-expect-error — disabled-extension config loading is host UI plumbing
     type _BadReadDisabledExtensions = typeof PublicExtensionApi.readDisabledExtensions
-    // @ts-expect-error — ToolRunner is runtime engine plumbing; external drivers yield ExternalToolRunner
+    // @ts-expect-error — ToolRunner is runtime engine plumbing
     type _BadToolRunner = typeof PublicExtensionApi.ToolRunner
+    // @ts-expect-error — external turn executors are removed; a driver is a model driver
+    type _BadExternalToolRunner = typeof PublicExtensionApi.ExternalToolRunner
+    // @ts-expect-error — external turn executors are removed; a driver is a model driver
+    type _BadExternalDriverRef = typeof PublicExtensionApi.ExternalDriverRef
     // @ts-expect-error — todo lifecycle events are private; extensions publish state pulses
     type _BadTodoCreated = typeof PublicExtensionApi.TodoCreated
     // @ts-expect-error — todo schemas belong to @gent/todo, not core author API
@@ -501,8 +505,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadSignalError = typeof PublicExtensionApi.SignalError
     // @ts-expect-error — durable message metadata schema is storage/runtime internals
     type _BadMessageMetadata = typeof PublicExtensionApi.MessageMetadata
-    // @ts-expect-error — turn context internals are expressed through hook input shapes
-    type _BadExtensionTurnContext = PublicExtensionApi.ExtensionTurnContext
     // @ts-expect-error — host-context errors are runtime internals, not authoring API
     type _BadExtensionHostError = typeof PublicExtensionApi.ExtensionHostError
     // The event type is public (an extension reads its own branch's stream);

@@ -1,4 +1,4 @@
-import { Crypto, Effect, Option, Predicate, Schema } from "effect"
+import { Crypto, Effect, Option, Predicate, Schema, Struct } from "effect"
 import {
   BranchId,
   defineExtension,
@@ -37,6 +37,8 @@ export const GoalState = Schema.Struct({
   continuationsUsed: Schema.Int,
   /** Set once the turn that completed the goal has been charged. */
   finalized: Schema.optional(Schema.Boolean),
+  /** Why the harness paused the goal on its own; absent for a pause the person asked for. */
+  pausedReason: Schema.optional(Schema.String),
   createdAt: Schema.Int,
   updatedAt: Schema.Int,
 })
@@ -112,10 +114,17 @@ ${budgetLine(goal)}
 
 The harness stops continuing this goal. Report to the user what is done, what remains, and what the next step would be. Do not mark the goal complete unless every requirement is met. The user can resume it with /goal resume or clear it with /goal clear.`
 
+/** Shown with a goal the harness paused on its own. */
+export const GOAL_PAUSED_STREAM_FAILED = "the model stream failed"
+export const GOAL_PAUSED_USAGE_UNKNOWN =
+  "a turn's token usage is unknown, so the remaining budget cannot be established"
+
 export const formatGoalUsage = (goal: GoalState) => {
   const seconds = Math.round(goal.timeUsedMs / 1000)
+  let status: string = goal.status
+  if (Predicate.isNotUndefined(goal.pausedReason)) status = `${goal.status}: ${goal.pausedReason}`
   const parts = [
-    `${goal.status}`,
+    status,
     plural(goal.continuationsUsed, "continuation"),
     `${goal.tokensUsed} tokens`,
     `${seconds}s`,
@@ -321,8 +330,9 @@ const setStatus = (change: StatusChange) =>
         // A resume is a continuation: the counter keeps its queued message id unique.
         let continuationsUsed = current.value.continuationsUsed
         if (change.status === "active") continuationsUsed += 1
+        // A status the person sets replaces any reason the harness paused for.
         const updated: GoalState = {
-          ...current.value,
+          ...Struct.omit(current.value, ["pausedReason"]),
           status: change.status,
           continuationsUsed,
           ...omitUndefined({
@@ -376,7 +386,12 @@ const continueGoal = (input: TurnAfterInput) =>
           const goal = current.value
           if (goal.status !== "active") return { next: current, result: false }
           return {
-            next: Option.some<GoalState>({ ...goal, status: "paused", updatedAt: yield* now }),
+            next: Option.some<GoalState>({
+              ...goal,
+              status: "paused",
+              pausedReason: GOAL_PAUSED_STREAM_FAILED,
+              updatedAt: yield* now,
+            }),
             result: true,
           }
         }),
@@ -391,6 +406,9 @@ const continueGoal = (input: TurnAfterInput) =>
       )
       return
     }
+    // The known part is charged even when a step's usage is missing (a step
+    // cut short, or a restart): it is spent either way.
+    const turnTokens = input.usage.known.inputTokens + input.usage.known.outputTokens
     const decision = yield* modifyGoal((current) =>
       Effect.gen(function* () {
         if (Option.isNone(current)) return { next: current, result: Option.none<GoalState>() }
@@ -399,7 +417,7 @@ const continueGoal = (input: TurnAfterInput) =>
         if (goal.status === "complete" && goal.finalized !== true) {
           const finalized: GoalState = {
             ...goal,
-            tokensUsed: goal.tokensUsed + input.usage.inputTokens + input.usage.outputTokens,
+            tokensUsed: goal.tokensUsed + turnTokens,
             timeUsedMs: goal.timeUsedMs + input.durationMs,
             finalized: true,
             updatedAt: yield* now,
@@ -409,13 +427,23 @@ const continueGoal = (input: TurnAfterInput) =>
         if (goal.status !== "active") return { next: current, result: Option.none<GoalState>() }
         const charged: GoalState = {
           ...goal,
-          tokensUsed: goal.tokensUsed + input.usage.inputTokens + input.usage.outputTokens,
+          tokensUsed: goal.tokensUsed + turnTokens,
           timeUsedMs: goal.timeUsedMs + input.durationMs,
           updatedAt: yield* now,
         }
         if (Option.contains(remainingTokens(charged), 0)) {
           const limited: GoalState = { ...charged, status: "budget_limited" }
           return { next: Option.some(limited), result: Option.some(limited) }
+        }
+        // With a budget and a partial count, the remaining budget is unknown.
+        // Continuing could overspend it, so the goal waits for the person.
+        if (!input.usage.complete && Predicate.isNotUndefined(charged.tokenBudget)) {
+          const paused: GoalState = {
+            ...charged,
+            status: "paused",
+            pausedReason: GOAL_PAUSED_USAGE_UNKNOWN,
+          }
+          return { next: Option.some(paused), result: Option.some(paused) }
         }
         const continued: GoalState = {
           ...charged,
@@ -427,6 +455,12 @@ const continueGoal = (input: TurnAfterInput) =>
     yield* ctx.State.changed()
     if (Option.isNone(decision)) return
     const goal = decision.value
+    if (goal.status === "paused") {
+      yield* Effect.logWarning("goal.paused.usage-unknown").pipe(
+        Effect.annotateLogs({ sessionId: String(input.sessionId), goalId: goal.goalId }),
+      )
+      return
+    }
     if (goal.status === "budget_limited") {
       yield* queueGoalMessage(goal, budgetLimitPrompt(goal))
       return

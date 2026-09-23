@@ -26,7 +26,7 @@ import {
   type RequestCapability,
   type ToolCapability,
 } from "./capability.js"
-import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
+import type { ModelDriverContribution } from "./driver.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import {
@@ -180,9 +180,6 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
  * this file. Each leaf carries a stable resource identity; the leaf is widened
  * by structural assignability at the bucket boundary.
  *
- * Drivers split into `modelDrivers` and `externalDrivers`; one untagged
- * `drivers: []` bucket would erase the correlated union.
- *
  * @module
  */
 
@@ -193,11 +190,6 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
  * an extension that contributes nothing returns `{}`. Each bucket is
  * homogeneously typed — there is no discriminator, the field name is the
  * discrimination.
- *
- * Driver split: `modelDrivers` / `externalDrivers` are separate buckets. They
- * share `id` (driver registry key) but nothing else, so a single `drivers`
- * bucket would re-introduce the union-shape unsoundness that the correlated
- * `DriverKindContribution` fixed.
  */
 export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
@@ -217,7 +209,6 @@ export interface ExtensionContributions {
   readonly agents?: ReadonlyArray<AgentDefinition>
   readonly hooks?: ReadonlyArray<AnyExtensionHook>
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
-  readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
 }
 
 // ── extension ───────────────────────────────────────────────────────────────
@@ -257,7 +248,8 @@ export interface LoadedExtension {
   readonly contributions: ExtensionContributions
 }
 
-export type FailedExtensionPhase = "setup" | "validation" | "startup"
+/** `load` is a file that never became an extension: no import, no export, or untrusted. */
+export type FailedExtensionPhase = "load" | "setup" | "validation" | "startup"
 
 export interface FailedExtension {
   readonly manifest: ExtensionManifest
@@ -326,18 +318,6 @@ export class ExtensionLoadError extends Schema.TaggedError<ExtensionLoadError>(
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
-// Run Context — per-run metadata for tool policy decisions
-
-interface RunContext {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly agentName?: AgentName
-  readonly parentToolCallId?: ToolCallId
-  /** Whether this is an interactive session (human at the terminal).
-   *  False for headless mode and subagent contexts. */
-  readonly interactive?: boolean
-}
-
 // Turn-scoped input shapes for the explicit runtime seams. Prompt/context
 // shaping, turn/message hooks, and tool-result enrichment live on hooks.
 
@@ -346,12 +326,17 @@ export interface SystemPromptInput {
   readonly agent: AgentDefinition
   readonly interactive?: boolean
   /**
-   * Tools resolved for this turn. ACP-aware hooks need this to render
-   * the codemode `gent.<tool>(...)` shape into the rewritten prompt.
+   * Tools resolved for this turn, for a hook that renders them into the
+   * rewritten prompt.
    */
   readonly tools?: ReadonlyArray<ToolCapability>
   /** Admitted host tools, including tools hidden from the model by modelSet. */
   readonly hostTools?: ReadonlyArray<ToolCapability>
+}
+
+/** What a `turnProjection` hook reads: the agent the turn dispatches, after config and run overrides. */
+export interface TurnProjectionInput {
+  readonly agent: AgentDefinition
 }
 
 export interface TurnAfterInput {
@@ -377,8 +362,21 @@ export interface TurnAfterInput {
   readonly streamFailed: boolean
   /** The turn spent its continuations and never answered. */
   readonly unanswered: boolean
-  /** Provider-reported tokens summed over every model call of the turn. */
-  readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
+  /** What the turn's model calls spent, and whether that is all of it. */
+  readonly usage: TurnUsage
+}
+
+/**
+ * Provider-reported tokens of one turn.
+ *
+ * `known` sums the steps that reported usable counts. `complete` is false when
+ * a step reported none, was cut short, or ran before a restart: `known` is then
+ * a lower bound, not the turn's total. `TurnCompleted.usage` carries a total
+ * only when it is complete.
+ */
+export interface TurnUsage {
+  readonly known: { readonly inputTokens: number; readonly outputTokens: number }
+  readonly complete: boolean
 }
 
 // ── Lifecycle hooks ──
@@ -395,7 +393,7 @@ export type ExtensionHook<Input, Output, E = never, R = never> = {
 /** Input and output of every runtime hook kind. `host.on(kind, handler)` is typed by this map. */
 interface ExtensionHookSignatures {
   readonly systemPrompt: { readonly input: SystemPromptInput; readonly output: string }
-  readonly turnProjection: { readonly input: void; readonly output: TurnProjection }
+  readonly turnProjection: { readonly input: TurnProjectionInput; readonly output: TurnProjection }
   readonly turnAfter: { readonly input: TurnAfterInput; readonly output: void }
 }
 
@@ -433,11 +431,6 @@ export const hook = <K extends ExtensionHookKind, E = never, R = never>(
 ): AnyExtensionHook =>
   // oxlint-disable-next-line effect/noAs, typescript/no-unsafe-type-assertion -- Hook slots intentionally erase author error and service types at the runtime membrane.
   ({ kind, hook: { handler } }) as AnyExtensionHook
-
-export interface ExtensionTurnContext extends RunContext {
-  readonly agent: AgentDefinition
-  readonly allTools: ReadonlyArray<ToolCapability>
-}
 
 /** Fragment a `turnProjection` hook returns to shape the turn's tools */
 export interface ToolPolicyFragment {
@@ -502,7 +495,7 @@ export interface GentExtension<R = ExtensionSetupServices> {
  * and the two registration primitives:
  *
  * - `register(domain, ...values)` adds typed leaves to one registration
- *   domain: tools, requests, agents, resources, model or external drivers.
+ *   domain: tools, requests, agents, resources, model drivers.
  * - `on(kind, handler)` adds one runtime hook.
  *
  * The loader provides the service around `GentExtension.setup`, collects the
@@ -520,7 +513,6 @@ interface RegistrationDomainMap {
   readonly agent: "agents"
   readonly resource: "resources"
   readonly modelDriver: "modelDrivers"
-  readonly externalDriver: "externalDrivers"
 }
 
 const registrationDomains: RegistrationDomainMap = {
@@ -529,7 +521,6 @@ const registrationDomains: RegistrationDomainMap = {
   agent: "agents",
   resource: "resources",
   modelDriver: "modelDrivers",
-  externalDriver: "externalDrivers",
 }
 
 type RegistrationDomain = keyof typeof registrationDomains
@@ -639,7 +630,6 @@ export const registerContributions = (contributions: ExtensionContributions) =>
     yield* host.register("request", ...(contributions.requests ?? []))
     yield* host.register("agent", ...(contributions.agents ?? []))
     yield* host.register("modelDriver", ...(contributions.modelDrivers ?? []))
-    yield* host.register("externalDriver", ...(contributions.externalDrivers ?? []))
     for (const slot of contributions.hooks ?? []) yield* replayHook(host, slot)
   })
 
@@ -870,7 +860,6 @@ export interface ExtensionContextService {
   readonly branchId: BranchId
   readonly agentName?: AgentName
   readonly toolCallId?: ToolCallId
-  readonly turn?: ExtensionTurnContext
   readonly cwd: string
   readonly home: string
   readonly Session: ExtensionSessionService
@@ -891,10 +880,7 @@ export class ExtensionContext extends Context.Service<ExtensionContext, Extensio
  * inputs.
  */
 const extensionServicesFromHostContext = (
-  ctx: ExtensionHostContext & {
-    readonly toolCallId?: ToolCallId
-    readonly turn?: ExtensionTurnContext
-  },
+  ctx: ExtensionHostContext & { readonly toolCallId?: ToolCallId },
 ): Context.Context<ExtensionContext> => {
   const extensionIdOption = Option.fromUndefinedOr(ctx.extensionId)
   return Context.empty().pipe(
@@ -904,7 +890,6 @@ const extensionServicesFromHostContext = (
       branchId: ctx.branchId,
       agentName: ctx.agentName,
       toolCallId: ctx.toolCallId,
-      turn: ctx.turn,
       cwd: ctx.cwd,
       home: ctx.home,
       Session: ctx.Session,
@@ -916,10 +901,7 @@ const extensionServicesFromHostContext = (
 }
 
 export const provideExtensionServices = <A, E, R>(
-  ctx: ExtensionHostContext & {
-    readonly toolCallId?: ToolCallId
-    readonly turn?: ExtensionTurnContext
-  },
+  ctx: ExtensionHostContext & { readonly toolCallId?: ToolCallId },
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, Exclude<R, ExtensionContext>> =>
   effect.pipe(Effect.provideContext(extensionServicesFromHostContext(ctx)))
@@ -1062,14 +1044,6 @@ const validateDriverIds = (contribs: ExtensionContributions): Option.Option<stri
     }
     allDriverIds.set(d.id, `modelDrivers[${i}]`)
   }
-  for (const [i, d] of (contribs.externalDrivers ?? []).entries()) {
-    if (allDriverIds.has(d.id)) {
-      return Option.some(
-        `externalDrivers[${i}] (${d.id}): driver id already used by ${allDriverIds.get(d.id)}`,
-      )
-    }
-    allDriverIds.set(d.id, `externalDrivers[${i}]`)
-  }
   return Option.none()
 }
 
@@ -1080,7 +1054,6 @@ const allowedContributionBuckets = new Set([
   "agents",
   "hooks",
   "modelDrivers",
-  "externalDrivers",
 ])
 
 const unknownBucketMessage = (key: string) =>

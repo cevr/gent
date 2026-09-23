@@ -7,13 +7,16 @@ import {
   parseSlashCommand,
   useCommand,
 } from "../src/commands"
-import { createEffect, onMount } from "solid-js"
+import { createEffect, For, onCleanup, onMount } from "solid-js"
 import { resolveCommands } from "../src/extensions/loader-boundary"
-import { Effect, Option, Predicate } from "effect"
+import { Effect, Option } from "effect"
 import { BranchId, dateFromMillis, SessionId } from "@gent/core/protocol"
 import { type ClientContextValue, useClient } from "../src/client"
+import { useExtensionUI } from "../src/extensions/host"
+import type { AgentRowEntry } from "@gent/extensions/client"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
+import { makePaneSlot } from "./extension-test-harness-boundary"
 
 // ── slash-commands.test ─────────────────────────────────────────────────────
 
@@ -165,14 +168,14 @@ describe("executeSlashCommand", () => {
         commands: [cmd({ id: "session.model", slash: "model" })],
       },
       {
-        id: "@gent/acp-agents",
+        id: "@gent/example-models",
         scope: "builtin",
-        source: "server:@gent/acp-agents",
+        source: "server:@gent/example-models",
         commands: [cmd({ id: "server:model", slash: "model" })],
       },
     ])
     expect(commands.map((command) => command.id)).toEqual(["session.model"])
-    expect(failures.map((failure) => failure.id)).toEqual(["@gent/acp-agents"])
+    expect(failures.map((failure) => failure.id)).toEqual(["@gent/example-models"])
   })
 
   test("a slash beats another command's alias", () => {
@@ -240,6 +243,92 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
   return <box />
 }
 
+function ExtensionProbe(props: {
+  readonly onReady: (ext: ReturnType<typeof useExtensionUI>) => void
+}) {
+  const ext = useExtensionUI()
+  onMount(() => {
+    props.onReady(ext)
+  })
+  return <box />
+}
+
+/** The agents extension's docked pane, as the session view mounts it below the composer
+ * and owns its one pane slot. */
+function AgentsPaneWidget() {
+  const ext = useExtensionUI()
+  ext.setPaneOwner(Option.some(makePaneSlot()))
+  onCleanup(() => ext.setPaneOwner(Option.none()))
+  return (
+    <For each={ext.widgets().filter((widget) => widget.id === "agents.pane")}>
+      {(widget) => {
+        const Widget = widget.component
+        return <Widget />
+      }}
+    </For>
+  )
+}
+
+const rootId = SessionId.make("session-root")
+const rootBranchId = BranchId.make("branch-root")
+const delegateId = SessionId.make("session-delegate")
+const delegateBranchId = BranchId.make("branch-delegate")
+
+const rootSession = {
+  id: rootId,
+  activeBranchId: rootBranchId,
+  name: "Root",
+  createdAt: dateFromMillis(0),
+  updatedAt: dateFromMillis(3),
+}
+
+/**
+ * Three stored sessions and no live loop: a root, the handoff that continues
+ * its thread, and a delegate run that opened a thread of its own.
+ */
+const storedRows: ReadonlyArray<AgentRowEntry> = [
+  {
+    sessionId: rootId,
+    branchId: rootBranchId,
+    section: "inactive",
+    name: "Root",
+    live: false,
+    depth: 0,
+    sideThread: false,
+  },
+  {
+    sessionId: SessionId.make("session-handoff"),
+    branchId: BranchId.make("branch-handoff"),
+    section: "inactive",
+    name: "Handoff",
+    live: false,
+    depth: 1,
+    parentSessionId: rootId,
+    sideThread: false,
+  },
+  {
+    sessionId: delegateId,
+    branchId: delegateBranchId,
+    section: "inactive",
+    name: "Delegate",
+    live: false,
+    depth: 1,
+    parentSessionId: rootId,
+    sideThread: true,
+  },
+]
+
+const storedSessionsClient = () =>
+  createMockClient({
+    extension: {
+      request: (input: { readonly capabilityId: string }) =>
+        Effect.sync(() => {
+          if (input.capabilityId === "list-agents") return { rows: storedRows }
+          return absent
+        }),
+    },
+  })
+
 describe("CommandPalette renderer", () => {
   it.live("opens the theme submenu through keyboard navigation and activation", () =>
     Effect.gen(function* () {
@@ -250,8 +339,7 @@ describe("CommandPalette renderer", () => {
         }),
       )
       expect(renderFrame(setup)).toContain("Commands")
-      setup.mockInput.pressArrow("down")
-      yield* Effect.promise(() => setup.renderOnce())
+      // Theme is the first row.
       setup.mockInput.pressKey("RETURN")
       yield* Effect.promise(() => setup.renderOnce())
       // The theme level enumerates the catalog; Dark/Light is the Mode level.
@@ -286,66 +374,31 @@ describe("CommandPalette renderer", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("Esc Close"), "root again"),
       )
-      // Down from the last row lands on the first: Sessions.
+      // Down from the last row lands on the first: Theme.
       setup.mockInput.pressArrow("up")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("+ New Session"), "sessions level"),
+        waitForRenderedFrame(setup, (frame) => frame.includes("System"), "theme level"),
       )
     }),
   )
 
-  it.live("switches sessions through the sessions palette", () =>
+  it.live("the palette Sessions item opens the agents pane and a row switches to it", () =>
     Effect.gen(function* () {
       let ctx: Option.Option<ClientContextValue> = Option.none()
-      const alphaSessionId = SessionId.make("session-alpha")
-      const alphaBranchId = BranchId.make("branch-alpha")
-      const betaSessionId = SessionId.make("session-beta")
-      const betaBranchId = BranchId.make("branch-beta")
-      const client = createMockClient({
-        session: {
-          list: () =>
-            Effect.succeed([
-              {
-                id: alphaSessionId,
-                activeBranchId: alphaBranchId,
-                name: "Alpha",
-                createdAt: dateFromMillis(0),
-                updatedAt: dateFromMillis(1),
-              },
-              {
-                id: betaSessionId,
-                activeBranchId: betaBranchId,
-                name: "Beta",
-                createdAt: dateFromMillis(1),
-                updatedAt: dateFromMillis(2),
-              },
-            ]),
-        },
-      })
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
             <>
               <OpenPaletteOnMount />
+              <AgentsPaneWidget />
               <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
             </>
           ),
-          {
-            client,
-            initialSession: {
-              id: alphaSessionId,
-              activeBranchId: alphaBranchId,
-              name: "Alpha",
-              createdAt: dateFromMillis(0),
-              updatedAt: dateFromMillis(1),
-            },
-            width: 90,
-            height: 28,
-          },
+          { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
         ),
       )
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
@@ -356,190 +409,76 @@ describe("CommandPalette renderer", () => {
           "commands root",
         ),
       )
+      yield* Effect.promise(() => setup.mockInput.typeText("Sessions"))
       setup.mockInput.pressEnter()
       yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
-          (frame) => frame.includes("Sessions") && frame.includes("Beta"),
-          "sessions level",
+          (frame) => frame.includes("Agents ·") && frame.includes("Delegate"),
+          "agents pane",
         ),
       )
+      // Every row is stored: no loop runs, and the pane still lists them all.
+      expect(renderFrame(setup)).toContain("Inactive (3)")
+      // The pane opens on the current session; the delegate is two rows down.
+      setup.mockInput.pressArrow("down")
+      yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
       yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => !frame.includes("Sessions"),
-          "sessions palette closed",
-        ),
+        waitForRenderedFrame(setup, (frame) => !frame.includes("Agents ·"), "agents pane closed"),
       )
       expect(ctx.value.session()).toEqual({
-        sessionId: betaSessionId,
-        branchId: betaBranchId,
-        name: "Beta",
+        sessionId: delegateId,
+        branchId: delegateBranchId,
+        name: "Delegate",
         modelId: absent,
         reasoningLevel: absent,
       })
     }),
   )
 
-  it.live("marks a spawned session so side work is visible before opening it", () =>
+  it.live("/sessions opens the agents pane over stored sessions and marks side threads", () =>
     Effect.gen(function* () {
-      const rootId = SessionId.make("session-root")
-      const rootBranchId = BranchId.make("branch-root")
-      const handoffId = SessionId.make("session-handoff")
-      const spawnId = SessionId.make("session-spawn")
-      // The three shapes the picker has to tell apart: a root, the handoff that
-      // continues its thread, and a delegate run that opened a thread of its own.
-      const client = createMockClient({
-        session: {
-          list: () =>
-            Effect.succeed([
-              {
-                id: rootId,
-                activeBranchId: rootBranchId,
-                threadId: rootId,
-                name: "Root",
-                createdAt: dateFromMillis(0),
-                updatedAt: dateFromMillis(3),
-              },
-              {
-                id: handoffId,
-                activeBranchId: BranchId.make("branch-handoff"),
-                parentSessionId: rootId,
-                threadId: rootId,
-                name: "Handoff",
-                createdAt: dateFromMillis(1),
-                updatedAt: dateFromMillis(2),
-              },
-              {
-                id: spawnId,
-                activeBranchId: BranchId.make("branch-spawn"),
-                parentSessionId: rootId,
-                threadId: spawnId,
-                name: "Delegate",
-                createdAt: dateFromMillis(2),
-                updatedAt: dateFromMillis(1),
-              },
-            ]),
-        },
-      })
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(() => <OpenPaletteOnMount />, {
-          client,
-          initialSession: {
-            id: rootId,
-            activeBranchId: rootBranchId,
-            name: "Root",
-            createdAt: dateFromMillis(0),
-            updatedAt: dateFromMillis(3),
-          },
-          width: 90,
-          height: 28,
-        }),
-      )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Commands") && frame.includes("Sessions"),
-          "commands root",
-        ),
-      )
-      setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Delegate") && frame.includes("Handoff"),
-          "sessions level",
-        ),
-      )
-      const frame = renderFrame(setup)
-      // The marker rides the row, so the reader sees it without opening anything.
-      const delegateRow = frame.split("\n").find((line) => line.includes("Delegate"))
-      const handoffRow = frame.split("\n").find((line) => line.includes("Handoff"))
-      expect(delegateRow).toContain("side thread")
-      expect(handoffRow).not.toContain("side thread")
-    }),
-  )
-
-  it.live("creates palette sessions with workspace cwd", () =>
-    Effect.gen(function* () {
-      let ctx: Option.Option<ClientContextValue> = Option.none()
-      const createdSessionId = SessionId.make("session-created")
-      const createdBranchId = BranchId.make("branch-created")
-      const createInputs: Array<{
-        cwd?: string
-        requestId?: string
-      }> = []
-      const workspaceCwd = process.cwd()
-      const client = createMockClient({
-        session: {
-          create: (input: { cwd?: string; requestId?: string }) =>
-            Effect.sync(() => {
-              createInputs.push(input)
-              return {
-                sessionId: createdSessionId,
-                branchId: createdBranchId,
-                name: "Created",
-              }
-            }),
-        },
-      })
+      let ext: Option.Option<ReturnType<typeof useExtensionUI>> = Option.none()
       const setup = yield* Effect.promise(() =>
         renderWithProviders(
           () => (
             <>
-              <OpenPaletteOnMount />
-              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+              <AgentsPaneWidget />
+              <ExtensionProbe onReady={(value) => (ext = Option.some(value))} />
             </>
           ),
-          {
-            client,
-            cwd: workspaceCwd,
-            width: 90,
-            height: 28,
-          },
+          { client: storedSessionsClient(), initialSession: rootSession, width: 90, height: 28 },
         ),
       )
+      if (Option.isNone(ext)) return yield* Effect.die("extension context not ready")
+      const commands = () =>
+        ext.pipe(
+          Option.map((value) => value.commands()),
+          Option.getOrElse(() => []),
+        )
       yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
-          (frame) => frame.includes("Commands") && frame.includes("Sessions"),
-          "commands root",
+          () => commands().some((command) => command.slash === "sessions"),
+          "extension commands loaded",
         ),
       )
-      if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
-      setup.mockInput.pressEnter()
+      expect(executeSlashCommand("sessions", "", commands())).toEqual({ handled: true })
       yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
-          (frame) => frame.includes("Sessions") && frame.includes("+ New Session"),
-          "sessions level",
+          (frame) => frame.includes("Agents ·") && frame.includes("Delegate"),
+          "agents pane",
         ),
       )
-      setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => !frame.includes("Sessions"),
-          "palette closed after create",
-        ),
-      )
-      expect(createInputs).toHaveLength(1)
-      const firstInput = Option.fromNullishOr(createInputs[0])
-      if (Option.isNone(firstInput)) return yield* Effect.die("session create was not called")
-      expect(firstInput.value.cwd).toBe(workspaceCwd)
-      expect(Predicate.isString(firstInput.value.requestId)).toBe(true)
-      // The created session becomes the active one; the shell mounts what the
-      // client says, so there is no second place a navigation could go wrong.
-      expect(ctx.value.session()).toEqual({
-        sessionId: createdSessionId,
-        branchId: createdBranchId,
-        name: "Created",
-        modelId: absent,
-        reasoningLevel: absent,
-      })
+      const lines = renderFrame(setup).split("\n")
+      // The marker rides the row, so the reader sees side work before opening it.
+      expect(lines.find((line) => line.includes("Delegate"))).toContain("side thread")
+      expect(lines.find((line) => line.includes("Handoff"))).not.toContain("side thread")
+      expect(lines.find((line) => line.includes("Root"))).not.toContain("side thread")
     }),
   )
 })

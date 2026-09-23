@@ -246,9 +246,12 @@ interface ThreadController {
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: () => void
+  /** Whether the pane is showing: the host's pane slot names it. */
   readonly open: () => boolean
-  readonly setOpen: (open: boolean) => void
 }
+
+/** The thread pane's name in the host's one pane slot. */
+const THREAD_PANE = "thread.pane"
 
 export const makeThreadController = (
   fetchSessions: (
@@ -263,8 +266,7 @@ export const makeThreadController = (
   }) => Effect.Effect<number, { readonly message: string }>,
 ): Effect.Effect<ThreadController, never, ClientContext> =>
   Effect.gen(function* () {
-    const { transport } = yield* ClientContext
-    const [open, setOpen] = createSignal(false)
+    const { transport, shell } = yield* ClientContext
 
     /** The branch a session contributes: the shell's branch for its own session, else the active one. */
     const branchFor = (
@@ -313,8 +315,7 @@ export const makeThreadController = (
       error: loaded.error,
       loading: loaded.loading,
       refresh: loaded.refresh,
-      open,
-      setOpen,
+      open: () => shell.pane.isOpen(THREAD_PANE),
     }
   })
 
@@ -513,20 +514,20 @@ export default defineClientExtension(THREAD_VIEW_EXTENSION_ID, {
         category: "Session",
         slash: "thread",
         onSelect: () => {
-          controller.setOpen(true)
+          shell.pane.open(THREAD_PANE)
           controller.refresh()
         },
       }),
       widgetContribution({
-        id: "thread.pane",
+        id: THREAD_PANE,
         slot: "below-input",
         component: () => (
           <ThreadPane
             open={controller.open()}
             controller={controller}
-            onClose={() => controller.setOpen(false)}
+            onClose={() => shell.pane.close(THREAD_PANE)}
             onSelect={(window) => {
-              controller.setOpen(false)
+              shell.pane.close(THREAD_PANE)
               const active = controller.current()
               if (Option.isSome(active) && active.value.sessionId === window.sessionId) return
               shell.switchSession({
