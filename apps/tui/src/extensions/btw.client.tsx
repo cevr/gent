@@ -4,17 +4,19 @@ import { createSignal, For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
 import { BTW_EXTENSION_ID, BtwRpc, type ForkViewType } from "@gent/extensions/client"
 import {
-  clientCommandContribution,
-  clientContributions,
-  ClientContext,
-  defineClientExtension,
-  sessionQuery,
   type ActiveExtensionSession,
+  ChromePanel,
+  clientCommandContribution,
+  ClientContext,
+  clientContributions,
+  defineClientExtension,
+  PickerFrame,
+  sessionQuery,
+  useScopedKeyboard,
+  useTerminalDimensions,
+  useTheme,
   widgetContribution,
-} from "./client-facets.js"
-import { ChromePanel, PickerFrame } from "../ui"
-import { useTheme } from "../theme"
-import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
+} from "@gent/tui/extensions"
 
 // ── builtins/btw.client ─────────────────────────────────────────────────────
 

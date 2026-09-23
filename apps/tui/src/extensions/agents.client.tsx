@@ -2,34 +2,36 @@
 import { DateTime, Effect, Option, Predicate, Schedule } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
 import { type AgentRowEntry, AgentsViewRpc, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
-import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
-import { useTheme } from "../theme"
-import { formatAge, formatDuration, truncate, workingIconFrame } from "../utils"
-import { textWidth } from "../text-width-adapter"
 import {
+  type ActiveExtensionSession,
   ChromePanel,
+  clientCommandContribution,
+  ClientContext,
+  clientContributions,
+  coalescedRead,
   decoration,
+  defineClientExtension,
+  type ExtensionAgentDetail,
+  formatAge,
+  formatDuration,
   PickerFrame,
   pickerHeight,
   pickerLines,
   selectable,
   SelectList,
   type SelectListRow,
-  usePickerGeometry,
-  useSpinnerClock,
-} from "../ui"
-import { ref } from "@gent/core/extensions/api"
-import {
-  clientCommandContribution,
-  clientContributions,
-  ClientContext,
-  defineClientExtension,
-  type ActiveExtensionSession,
-  type ExtensionAgentDetail,
-  coalescedRead,
   sessionQuery,
+  textWidth,
+  truncate,
+  usePickerGeometry,
+  useScopedKeyboard,
+  useSpinnerClock,
+  useTerminalDimensions,
+  useTheme,
   widgetContribution,
-} from "./client-facets"
+  workingIconFrame,
+} from "@gent/tui/extensions"
+import { ref } from "@gent/core/extensions/api"
 
 // ── builtins/agents-tray.client ─────────────────────────────────────────────
 

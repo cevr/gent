@@ -9,17 +9,20 @@ import {
   DELEGATE_EXTENSION_ID,
   readChildCompletionHeadline,
 } from "@gent/extensions/client"
-import { useTheme } from "../theme"
-import { ToolFrame, UserRow } from "../ui"
-import { formatUsageStats, shortId, type ToolInput } from "../utils"
-import type { ToolRendererProps } from "../tool-renderers"
 import {
   clientContributions,
   defineClientExtension,
+  formatUsageStats,
   messageRendererContribution,
   type MessageRowProps,
   rendererContribution,
-} from "./client-facets.js"
+  shortId,
+  ToolFrame,
+  type ToolInput,
+  type ToolRendererProps,
+  UserRow,
+  useTheme,
+} from "@gent/tui/extensions"
 
 // ── builtins/delegate.client ────────────────────────────────────────────────
 

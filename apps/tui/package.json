@@ -5,6 +5,10 @@
     "gent": "bin/gent"
   },
   "type": "module",
+  "exports": {
+    "./extensions": "./src/extensions.ts",
+    "./extensions.js": "./src/extensions.ts"
+  },
   "scripts": {
     "dev": "bun --preload @opentui/solid/preload src/main.tsx",
     "build": "env -u FORCE_COLOR NO_COLOR=1 bun scripts/build.ts",

@@ -547,7 +547,7 @@ export default {
           join(userDir, "discovered.client.ts"),
           `
 import { Effect } from "effect"
-import { autocompleteContribution } from "../../src/extensions/client-facets"
+import { autocompleteContribution } from "@gent/tui/extensions"
 
 export default {
   id: "@test/discovered-effect",
@@ -1142,7 +1142,7 @@ import {
   clientCommandContribution,
   rendererContribution,
   widgetContribution,
-} from "../../../src/extensions/client-facets"
+} from "@gent/tui/extensions"
 
 export default defineClientExtension("@test/custom-read", {
   setup: Effect.succeed(clientContributions(
@@ -1155,7 +1155,7 @@ export default defineClientExtension("@test/custom-read", {
     writeFileSync(
       join(PROJECT_DIR, "override-bash.client.ts"),
       `import { Effect } from "effect"
-import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets"
+import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
 
 export default defineClientExtension("@test/override-bash", {
   setup: Effect.succeed(
@@ -1165,28 +1165,28 @@ export default defineClientExtension("@test/override-bash", {
     )
     writeFileSync(
       join(USER_DIR, "alpha.client.ts"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/alpha', { setup: Effect.succeed(clientCommandContribution({ id: 'alpha', title: 'Alpha', onSelect: () => {} })) })",
+      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/alpha', { setup: Effect.succeed(clientCommandContribution({ id: 'alpha', title: 'Alpha', onSelect: () => {} })) })",
     )
     writeFileSync(
       join(USER_DIR, "zeta.client.ts"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/zeta', { setup: Effect.succeed(clientCommandContribution({ id: 'zeta', title: 'Zeta', onSelect: () => {} })) })",
+      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/zeta', { setup: Effect.succeed(clientCommandContribution({ id: 'zeta', title: 'Zeta', onSelect: () => {} })) })",
     )
     writeFileSync(
       join(USER_DIR, ".hidden.client.tsx"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/hidden', { setup: Effect.succeed(clientCommandContribution({ id: 'hidden', title: 'Hidden', onSelect: () => {} })) })",
+      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/hidden', { setup: Effect.succeed(clientCommandContribution({ id: 'hidden', title: 'Hidden', onSelect: () => {} })) })",
     )
     writeFileSync(
       join(USER_DIR, "_internal.client.tsx"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/internal', { setup: Effect.succeed(clientCommandContribution({ id: 'internal', title: 'Internal', onSelect: () => {} })) })",
+      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/internal', { setup: Effect.succeed(clientCommandContribution({ id: 'internal', title: 'Internal', onSelect: () => {} })) })",
     )
     mkdirSync(join(USER_DIR, "__tests__"), { recursive: true })
     writeFileSync(
       join(USER_DIR, "__tests__", "test.client.tsx"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../../src/extensions/client-facets.js'; export default defineClientExtension('@test/spec-only', { setup: Effect.succeed(clientCommandContribution({ id: 'spec-only', title: 'Spec Only', onSelect: () => {} })) })",
+      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../@gent/tui/extensions'; export default defineClientExtension('@test/spec-only', { setup: Effect.succeed(clientCommandContribution({ id: 'spec-only', title: 'Spec Only', onSelect: () => {} })) })",
     )
     writeFileSync(
       join(PROJECT_DIR, "prebuilt.client.mjs"),
-      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '../../src/extensions/client-facets.js'; export default defineClientExtension('@test/prebuilt', { setup: Effect.succeed(clientCommandContribution({ id: 'prebuilt', title: 'Prebuilt', onSelect: () => {} })) })",
+      "import { Effect } from 'effect'; import { defineClientExtension, clientCommandContribution } from '@gent/tui/extensions'; export default defineClientExtension('@test/prebuilt', { setup: Effect.succeed(clientCommandContribution({ id: 'prebuilt', title: 'Prebuilt', onSelect: () => {} })) })",
     )
   }),
   () => Effect.sync(() => rmSync(TEST_DIR, { recursive: true, force: true })),
@@ -1273,7 +1273,7 @@ describe("loadTuiExtensions", () => {
       writeFileSync(
         join(userOverrideDir, "override.client.ts"),
         `import { Effect } from "effect"
-import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets"
+import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
 
 export default defineClientExtension("@test/user-bash", {
   setup: Effect.succeed(
@@ -1356,7 +1356,7 @@ export default {
       writeFileSync(
         join(collisionDir, "a.client.ts"),
         `import { Effect } from "effect"
-import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets"
+import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
 
 export default defineClientExtension("@test/a", {
   setup: Effect.succeed(rendererContribution(["my_tool"], () => "a")),
@@ -1365,7 +1365,7 @@ export default defineClientExtension("@test/a", {
       writeFileSync(
         join(collisionDir, "b.client.ts"),
         `import { Effect } from "effect"
-import { defineClientExtension, rendererContribution } from "../../src/extensions/client-facets"
+import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
 
 export default defineClientExtension("@test/b", {
   setup: Effect.succeed(rendererContribution(["my_tool"], () => "b")),
@@ -1484,6 +1484,35 @@ describe("tool renderer reach", () => {
       expect(loaded.failures).toEqual([])
       expect(loaded.renderers.has("delegate.start")).toBe(true)
       expect([...loaded.renderers.keys()].filter((name) => !toolIds.has(name))).toEqual([])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+})
+
+// ── public client entry ─────────────────────────────────────────────────────
+
+describe("public client entry", () => {
+  it.live("a shipped client extension reaches the TUI only through @gent/tui/extensions", () =>
+    Effect.gen(function* () {
+      // A user extension can import `@gent/tui/extensions` and nothing else of
+      // the TUI. A shipped one that reaches past the entry is more privileged
+      // than a user one. Only the builtin roster may name its sibling modules.
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = path.join(import.meta.dir, "../../src/extensions")
+      const shipped = (yield* fs.readDirectory(dir)).filter(
+        (name) => name.endsWith(".client.tsx") || name === "builtins.tsx",
+      )
+      expect(shipped.length).toBeGreaterThan(5)
+      const reaches: string[] = []
+      for (const name of shipped) {
+        const text = yield* fs.readFileString(path.join(dir, name))
+        for (const match of text.matchAll(/from\s+"(\.[^"]+)"/g)) {
+          const specifier = match[1] ?? ""
+          if (/^\.\/[a-z-]+\.client$/.test(specifier)) continue
+          reaches.push(`${name}: ${specifier}`)
+        }
+      }
+      expect(reaches).toEqual([])
     }).pipe(Effect.provide(BunServices.layer)),
   )
 })

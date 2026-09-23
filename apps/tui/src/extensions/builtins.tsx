@@ -14,21 +14,33 @@ import {
 } from "effect"
 import {
   type AnyExtensionClientModule,
+  AskUserRenderer,
   autocompleteContribution,
+  BUILTIN_TOOL_RENDERERS,
   type ClientActivitySnapshot,
   clientCommandContribution,
-  clientContributions,
   ClientContext,
+  clientContributions,
+  CollapsedRow,
   defineClientExtension,
+  formatFileRef,
+  HandoffRenderer,
   interactionRendererContribution,
+  isReferenceablePath,
   messageRendererContribution,
+  PromptRenderer,
+  rankAutocompleteItems,
+  readFrecencyLookup,
+  recordFrecencyPick,
   rendererContribution,
   sessionQuery,
+  shortId,
   statusLabelContribution,
-} from "./client-facets.js"
-import { formatFileRef, isReferenceablePath, shortId, truncate, truncatePath } from "../utils"
-import { CollapsedRow, UserRow } from "../ui"
-import { textWidth } from "../text-width-adapter"
+  textWidth,
+  truncate,
+  truncatePath,
+  UserRow,
+} from "@gent/tui/extensions"
 import { BunSocket } from "@effect/platform-bun"
 import { createEffect, createRoot, Show } from "solid-js"
 import { AgentName, DriverRef } from "@gent/core/protocol"
@@ -46,14 +58,11 @@ import {
   FilesRpc,
   SkillsRpc,
 } from "@gent/extensions/client"
-import { BUILTIN_TOOL_RENDERERS } from "../tool-renderers"
-import { AskUserRenderer, HandoffRenderer, PromptRenderer } from "../interaction-renderers"
 import builtinAgentsView from "./agents.client"
 import builtinBtw from "./btw.client"
 import builtinDelegate from "./delegate.client"
 import builtinWake from "./wake.client"
 import builtinThreadView from "./thread-view.client"
-import { rankAutocompleteItems, readFrecencyLookup, recordFrecencyPick } from "../autocomplete"
 
 // ── file tags ───────────────────────────────────────────────────────────────
 

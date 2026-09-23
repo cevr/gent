@@ -1040,6 +1040,7 @@ Extension shape lives in:
 - `packages/core/src/extensions/api.ts` — public authoring surface (`defineExtension` + smart-constructor re-exports)
 - `packages/core/src/domain/extension.ts` — `ExtensionContributions` typed-bucket carrier (core primitives only)
 - `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetupServices`)
+- `apps/tui/src/extensions.ts` — public client authoring surface (`@gent/tui/extensions`); every shipped client extension imports the TUI only through it
 - `apps/tui/src/extensions/client-facets.ts` — TUI-owned client facet model
 - `packages/core/src/runtime/extension-host.ts` — server registry
 - `packages/extensions/src/` — shipped extension implementations

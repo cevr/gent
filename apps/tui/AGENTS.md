@@ -202,6 +202,14 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                             |
 | `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row            |
 
+Client extensions author against one public entry, `@gent/tui/extensions`
+(`src/extensions.ts`): `defineClientExtension`, `ClientContext`, the
+contribution constructors, `sessionQuery` and the rendering kit. A shipped
+client extension imports the TUI through that entry and nothing else, so a user
+`*.client.ts(x)` file reaches everything a shipped one does; a loader test
+fails on a shipped file that imports past it. Only the builtin roster in
+`builtins.tsx` names its sibling `*.client` modules.
+
 Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions
 
 - Builtins are statically imported in `host.tsx` for Bun compiled binary compatibility
