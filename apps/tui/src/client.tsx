@@ -61,6 +61,7 @@ import { omitUndefined } from "@gent/core/extensions/api"
 import {
   formatConnectionIssue,
   formatError,
+  isErrorNotice,
   randomId,
   type UiError,
   useRequiredContext,
@@ -383,6 +384,8 @@ export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate =>
     case "TurnCompleted":
       return { status: AgentStatus.cases.Idle.make({}) }
     case "ErrorOccurred":
+      // A notice leaves the turn running.
+      if (isErrorNotice(event)) return {}
       return { status: AgentStatus.cases.Error.make({ error: event.error }) }
     case "MessageReceived":
       if (event.message.role === "user") {

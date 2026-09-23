@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, type Duration, Effect, Option, Predicate, Schedule } from "effect"
+import { DateTime, Effect, Option, Predicate, Schedule } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
 import { type AgentRowEntry, AgentsViewRpc, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
 import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
@@ -222,36 +222,31 @@ type RowKey = Pick<AgentRowEntry, "sessionId" | "branchId">
 const sameKey = (left: RowKey, right: RowKey): boolean =>
   left.sessionId === right.sessionId && left.branchId === right.branchId
 
+/** What a listing row says about its loop's progress: `updatedAt` moves on every step. */
+const progressStamp = (row: AgentRowEntry): string =>
+  `${String(row.status)} ${String(row.updatedAt)}`
+
+/** The slow clock a child's own turns are read on; they raise no event in this session. */
+const POLL_EVERY = "2 seconds"
+
 export const makeAgentsController = (
   fetchRows: (
     query: string,
   ) => Effect.Effect<ReadonlyArray<AgentRowEntry>, { readonly message: string }>,
   fetchDetail: (key: RowKey) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
-  /** The slow clock a child's own turns are read on; they raise no event in this session. */
-  pollEvery: Duration.Input = "2 seconds",
 ): Effect.Effect<AgentsController, never, ClientContext> =>
   Effect.gen(function* () {
     const { transport, shell, lifecycle } = yield* ClientContext
-    // The pane refetches across session switches (on `current()` changing and on
-    // the poll), so the session query owns the guard that drops a reply for the
-    // session the shell already left.
     const empty: ReadonlyArray<AgentRowEntry> = []
     // The filter the reader typed; a reload re-reads under it.
     let query = ""
-    const listing = yield* sessionQuery({
-      initial: empty,
-      follow: false,
-      fetch: () => fetchRows(query),
-    })
-    const refresh = (next: string): void => {
-      query = next
-      listing.refresh()
-    }
     const open = () => shell.pane.isOpen(AGENTS_PANE)
 
     const [detail, setDetail] = createSignal<Option.Option<ExtensionAgentDetail>>(Option.none())
     // The row the cursor is on, while it has a loop to ask.
     let selected = Option.none<RowKey>()
+    // The selected row's progress as the listing showed it at the last detail read.
+    let readStamp = ""
     // One detail read runs at a time, for the row the cursor is on when it
     // starts. Arrow keys move faster than a round trip, so a reply writes only
     // while its row is still selected; otherwise it would show one row's cost
@@ -274,6 +269,35 @@ export const makeAgentsController = (
       }),
     )
 
+    // The detail is a whole session snapshot. A running loop's cost moves
+    // between the steps of one turn while its listing row stays the same, so
+    // each listing reply reads a running row's detail again. A row that is not
+    // running changes only when its status or `updatedAt` moves.
+    const detailAfterListing = (rows: ReadonlyArray<AgentRowEntry>): void => {
+      if (Option.isNone(selected)) return
+      const key = selected.value
+      const now = rows.find((entry) => entry.live && sameKey(entry, key))
+      if (Predicate.isUndefined(now)) return
+      const stamp = progressStamp(now)
+      if (now.section !== "running" && stamp === readStamp) return
+      readStamp = stamp
+      readDetail()
+    }
+
+    // The pane refetches across session switches (on `current()` changing and on
+    // the poll), so the session query owns the guard that drops a reply for the
+    // session the shell already left.
+    const listing = yield* sessionQuery({
+      initial: empty,
+      follow: false,
+      fetch: () =>
+        fetchRows(query).pipe(Effect.tap((rows) => Effect.sync(() => detailAfterListing(rows)))),
+    })
+    const refresh = (next: string): void => {
+      query = next
+      listing.refresh()
+    }
+
     const select = (row: Option.Option<AgentRowEntry>) => {
       // A detail read goes through the loop actor, and an actor read spawns the
       // entity: asking a stored session what it is doing would make it live.
@@ -287,13 +311,14 @@ export const makeAgentsController = (
       // One read per selection: a re-render that hands back the same row asks nothing.
       if (Option.exists(selected, (current) => sameKey(current, key))) return
       selected = Option.some(key)
+      readStamp = progressStamp(row.value)
       setDetail(Option.none())
       readDetail()
     }
 
     /**
-     * Read again what is showing: the open pane under its filter, with the
-     * selected row's detail on the same tick, or the tray's whole listing.
+     * Read again what is showing: the open pane under its filter, or the
+     * tray's whole listing. The reply decides whether the detail is read.
      */
     const tick = (): void => {
       if (!open()) {
@@ -301,10 +326,6 @@ export const makeAgentsController = (
         return
       }
       listing.refresh()
-      const live = Option.exists(selected, (current) =>
-        listing.value().some((row) => row.live && sameKey(row, current)),
-      )
-      if (live) readDetail()
     }
 
     // A delegate pulse in the current session means its subtree changed.
@@ -320,7 +341,7 @@ export const makeAgentsController = (
       Effect.forkScoped(
         Effect.sync(() => {
           if (open() || subtreeRows(listing.value(), transport.currentSession()).length > 0) tick()
-        }).pipe(Effect.repeat(Schedule.spaced(pollEvery))),
+        }).pipe(Effect.repeat(Schedule.spaced(POLL_EVERY))),
       ),
     )
 

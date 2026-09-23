@@ -120,11 +120,27 @@ Components derive state from providers, not props. Add/remove rows per view.
 | `-s, --session`  | Resume specific session ID                      |
 | `-H, --headless` | Headless mode + prompt arg                      |
 | `-a, --agent`    | Agent override for headless mode                |
+| `--approve-all`  | Headless: approve every ask (default: decline)  |
 
 `gent resume [session-id]` opens a stored session; with no id it opens the last
 session in this directory.
 
 Priority: headless → session → continue → prompt → home
+
+A headless run has no user, so it declines every interaction its turn presents,
+with notes that name `--approve-all`. `--approve-all` approves them all, the
+destructive-command guard's asks included. The run follows only its own turn:
+the live events from the `MessageReceived` of the prompt it sent (the first
+client-sent user message with the prompt's text after the send) to the
+`TurnCompleted` that names that message. A resumed session's history and an
+older turn still running on the branch are not printed and do not settle it. An
+`ErrorOccurred` alone does not end the run. It exits 1 when the turn ended
+unanswered, or with an error and no answer text; an error marked
+`notice: true` (a compaction fallback) is only a warning. The client status
+also ignores a notice. A failed turn phase
+publishes no `TurnCompleted`; the send fails then, and that ends the run. The
+run's end owns stderr: a failed run prints one line, an answered run prints one
+`Warning:` line for each notice.
 
 ## Input Prefixes
 

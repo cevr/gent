@@ -4,7 +4,13 @@ import { Match, Option, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
 import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
-import { formatHeadTail, headTail, type OutputCut, splitLines } from "@gent/core/protocol"
+import {
+  formatHeadTail,
+  headTail,
+  lineCount,
+  type OutputCut,
+  splitLines,
+} from "@gent/core/protocol"
 import {
   type ActivityOperation,
   CellOperationReceipts,
@@ -130,10 +136,8 @@ interface DiffLineCount {
 }
 
 export function countDiffLines(oldStr: string, newStr: string): DiffLineCount {
-  let oldLines = 0
-  if (oldStr.length > 0) oldLines = oldStr.split("\n").length
-  let newLines = 0
-  if (newStr.length > 0) newLines = newStr.split("\n").length
+  const oldLines = lineCount(oldStr)
+  const newLines = lineCount(newStr)
   if (newLines > oldLines) {
     return { added: newLines - oldLines, removed: 0 }
   } else if (oldLines > newLines) {
@@ -198,7 +202,7 @@ export function GenericToolRenderer(props: ToolRendererProps) {
   const remainingLines = () => {
     const output = outputText() ?? ""
     const summary = summaryText() ?? ""
-    return Math.max(0, output.split("\n").length - summary.split("\n").length)
+    return Math.max(0, lineCount(output) - lineCount(summary))
   }
 
   const hasOutput = () => summaryText() || outputText()
@@ -714,7 +718,9 @@ function CellToolRenderer(props: ToolRendererProps) {
 
   // Each live op draws through the renderer registered for its tool, as a
   // collapsed sub-row: its header and its summary, never its full body. An op
-  // with no renderer keeps its one-line receipt.
+  // with no renderer keeps its one-line receipt. A blank line separates each op
+  // and the cell's own text after them, as it separates transcript blocks;
+  // one-line receipts stay a tight list.
   const Operations = () => (
     <Show
       when={liveOperations().length > 0}
@@ -726,7 +732,7 @@ function CellToolRenderer(props: ToolRendererProps) {
         </Show>
       }
     >
-      <box flexDirection="column">
+      <box flexDirection="column" gap={1}>
         <For each={liveOperations()}>
           {(call) => (
             <RegisteredToolCall
@@ -761,7 +767,7 @@ function CellToolRenderer(props: ToolRendererProps) {
       status={props.toolCall.status}
       expanded={props.expanded}
       collapsedContent={
-        <box flexDirection="column">
+        <box flexDirection="column" gap={1}>
           <Operations />
           <Failure />
           <Show when={displayLines().length > 0}>
@@ -770,14 +776,16 @@ function CellToolRenderer(props: ToolRendererProps) {
         </box>
       }
     >
-      <Show when={code().length > 0}>
-        <GutterText lines={codeLines()} startLine={1} />
-      </Show>
-      <Operations />
-      <Failure />
-      <Show when={displayLines().length > 0}>
-        <text style={{ fg: theme.text }}>{formatHeadTail(displayLines(), 100)}</text>
-      </Show>
+      <box flexDirection="column" gap={1}>
+        <Show when={code().length > 0}>
+          <GutterText lines={codeLines()} startLine={1} />
+        </Show>
+        <Operations />
+        <Failure />
+        <Show when={displayLines().length > 0}>
+          <text style={{ fg: theme.text }}>{formatHeadTail(displayLines(), 100)}</text>
+        </Show>
+      </box>
       <Show when={truncated()}>
         <text style={{ fg: theme.warning }}>display truncated</text>
       </Show>
