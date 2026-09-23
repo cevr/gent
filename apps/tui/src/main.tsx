@@ -35,7 +35,7 @@ import {
   resolveStartupAuthState,
 } from "./app"
 import { TerminalDimensionsProvider } from "./terminal"
-import { ComposerDraftsProvider, SessionShellProvider } from "./session"
+import { ComposerMemoryProvider, SessionShellProvider } from "./session"
 import { detectColorScheme } from "./theme"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
 import { ExtensionUIProvider } from "./extensions/host"
@@ -380,14 +380,14 @@ const runGent = ({
                     )}
                   >
                     <TerminalDimensionsProvider>
-                      <ComposerDraftsProvider>
+                      <ComposerMemoryProvider>
                         <App
                           debugMode={debug}
                           missingAuthProviders={missingAuth}
                           initialBranches={bootstrap.initialBranches}
                           initialThemeMode={initialThemeMode}
                         />
-                      </ComposerDraftsProvider>
+                      </ComposerMemoryProvider>
                     </TerminalDimensionsProvider>
                   </SessionShellProvider>
                 </ExtensionUIProvider>
