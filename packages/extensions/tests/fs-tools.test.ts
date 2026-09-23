@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { spyOn } from "bun:test"
 import { FileFinder as NativeFileFinder } from "@ff-labs/fff-bun"
-import { Effect, FileSystem, Layer, Option, Path, Predicate } from "effect"
+import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Path, Predicate } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import {
   detectRedaction,
@@ -802,6 +802,77 @@ describe("FileIndex native-first layer", () => {
       expect(docs.map((f) => f.relativePath)).toEqual(["b.txt"])
       expect(create).toHaveBeenCalledTimes(1)
     }).pipe(Effect.provide(LiveLayer)),
+  )
+
+  it.scopedLive("an evicted finder stays alive until its in-flight listing finishes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const roots: Array<string> = []
+      for (let index = 0; index < 5; index++) {
+        const root = yield* fs.makeTempDirectoryScoped()
+        yield* fs.writeFileString(`${root}/file-${index}.txt`, "x")
+        roots.push(root)
+      }
+      const [first, ...others] = roots
+      const firstRoot = Option.getOrThrow(Option.fromUndefinedOr(first))
+
+      // Hold the first finder's scan open until the others have evicted it.
+      const services = yield* Effect.context<never>()
+      const scanStarted = yield* Deferred.make<boolean>()
+      const releaseScan = yield* Deferred.make<boolean>()
+      const create = spyOn(NativeFileFinder, "create")
+      const heldFinder = () =>
+        Option.fromUndefinedOr(create.mock.results[0]).pipe(
+          Option.map((created): unknown => created.value),
+          Option.filter(Predicate.hasProperty("value")),
+          Option.map((result) => result.value),
+          Option.filter((finder) => finder instanceof NativeFileFinder),
+        )
+      const isHeld = (finder: NativeFileFinder) =>
+        Option.exists(heldFinder(), (held) => held === finder)
+      const wait = spyOn(NativeFileFinder.prototype, "waitForScan").mockImplementation(function (
+        this: NativeFileFinder,
+        timeoutMs?: number,
+      ) {
+        const scan = Effect.sync(() => this.waitForScanBlocking(timeoutMs))
+        let held = scan
+        if (isHeld(this)) {
+          held = Deferred.succeed(scanStarted, true).pipe(
+            Effect.andThen(Deferred.await(releaseScan)),
+            Effect.andThen(scan),
+          )
+        }
+        // oxlint-disable-next-line gent/no-promise-control-flow-in-tests -- The fake implements the finder's Promise-based waitForScan contract.
+        return Effect.runPromiseWith(services)(held)
+      })
+      const destroy = spyOn(NativeFileFinder.prototype, "destroy")
+      const search = spyOn(NativeFileFinder.prototype, "fileSearch")
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          for (const spy of [wait, destroy, search, create]) spy.mockRestore()
+        }),
+      )
+      const heldWas = (calls: ReadonlyArray<unknown>) =>
+        calls.some(
+          (context) =>
+            Predicate.isObject(context) && context instanceof NativeFileFinder && isHeld(context),
+        )
+
+      const fileIndex = yield* FileIndex
+      const inFlight = yield* Effect.forkChild(
+        fileIndex.listFiles({ root: firstRoot, cwd: firstRoot }),
+      )
+      yield* Deferred.await(scanStarted)
+      for (const root of others) yield* fileIndex.listFiles({ root, cwd: root })
+      // The first finder is evicted, but its listing still holds it.
+      expect(heldWas(destroy.mock.contexts)).toBe(false)
+
+      yield* Deferred.succeed(releaseScan, true)
+      const files = yield* Fiber.join(inFlight)
+      expect(files.map((file) => file.relativePath)).toEqual(["file-0.txt"])
+      expect(heldWas(search.mock.contexts)).toBe(true)
+      expect(heldWas(destroy.mock.contexts)).toBe(true)
+    }).pipe(Effect.provide(LiveLayer), Effect.timeout("8 seconds")),
   )
 
   it.scopedLive("per-method fallback: invalid cwd yields FileIndexError or an empty list", () =>

@@ -173,6 +173,48 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("git global options, env prefixes and quoting do not hide a force push", () => {
+    for (const command of [
+      "git -c x=y push -f",
+      "git -C /repo push origin main --force",
+      "git --git-dir=.git --work-tree=. push -f",
+      "git --no-pager push origin +main",
+      "git -c core.pager=cat -C sub push origin main --force-with-lease",
+      "FOO=1 git push -f",
+      "env FOO=1 BAR=2 git push origin main --force-with-lease=main",
+      'git push origin main "--force"',
+      "git push origin main '-f'",
+      "sudo -u me git push -f",
+      "(cd sub && git push -f)",
+      "echo $(git push -f)",
+      "bash -c 'git push --force'",
+      'sh -c "git -c a=b push -f"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("git global options do not hide other destructive git commands", () => {
+    for (const command of [
+      "git -c x=y reset --hard",
+      "git -C repo clean -fdx",
+      "git --no-pager checkout -- file.ts",
+      "git -C repo restore --staged a.ts",
+      "git -C repo add -A",
+      "git add .",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a git command that only mentions push or force is not a push", () => {
+    expect(classifyBashCommand('git commit -m "fix push -f handling"').level).toBe("safe")
+    expect(classifyBashCommand("git log --grep=push -- src/force.ts").level).toBe("safe")
+    expect(classifyBashCommand("git -c color.ui=never status").level).toBe("safe")
+    expect(classifyBashCommand("git -c x=y push origin my-feature").level).toBe("external")
+    expect(classifyBashCommand("git add src/file.ts").level).toBe("safe")
+  })
+
   test("a push of a branch whose name contains -f is external", () => {
     for (const command of [
       "git push",

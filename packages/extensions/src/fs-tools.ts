@@ -214,6 +214,9 @@ export const FallbackFileIndexLive: Layer.Layer<
 interface FinderEntry {
   finder: NativeFileFinder
   scanned: boolean
+  /** Listings that hold the finder; an evicted finder is destroyed at zero. */
+  users: number
+  evicted: boolean
 }
 
 const SCAN_TIMEOUT_MS = 5000
@@ -246,10 +249,15 @@ const makeNativeService = (
 
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
-        for (const [, entry] of finders) destroy(entry)
+        for (const [, entry] of finders) evict(entry)
         finders.clear()
       }),
     )
+
+    const evict = (entry: FinderEntry) => {
+      entry.evicted = true
+      if (entry.users === 0) destroy(entry)
+    }
 
     const getOrCreate = (root: string): Option.Option<FinderEntry> => {
       const existing = Option.fromUndefinedOr(finders.get(root))
@@ -271,27 +279,43 @@ const makeNativeService = (
 
       if (!result.ok) return Option.none()
 
-      const entry: FinderEntry = { finder: result.value, scanned: false }
+      const entry: FinderEntry = { finder: result.value, scanned: false, users: 0, evicted: false }
       finders.set(root, entry)
       for (const [key, oldest] of finders) {
         if (finders.size <= MAX_FINDERS) break
         finders.delete(key)
-        destroy(oldest)
+        evict(oldest)
       }
       return Option.some(entry)
     }
 
+    /** Hold a root's finder for one listing; eviction waits for the release. */
+    const acquireFinder = (params: { readonly root: string; readonly cwd: string }) =>
+      Effect.acquireRelease(
+        Effect.suspend(() =>
+          Option.match(getOrCreate(params.root), {
+            onNone: () =>
+              Effect.fail(
+                new FileIndexError({ message: "failed to create finder", cwd: params.cwd }),
+              ),
+            onSome: (entry) =>
+              Effect.sync(() => {
+                entry.users++
+                return entry
+              }),
+          }),
+        ),
+        (entry) =>
+          Effect.sync(() => {
+            entry.users--
+            if (entry.evicted && entry.users === 0) destroy(entry)
+          }),
+      )
+
     return {
       listFiles: (params) =>
         Effect.gen(function* () {
-          const entry = getOrCreate(params.root)
-          if (Option.isNone(entry)) {
-            return yield* new FileIndexError({
-              message: "failed to create finder",
-              cwd: params.cwd,
-            })
-          }
-          const finderEntry = entry.value
+          const finderEntry = yield* acquireFinder(params)
 
           if (!finderEntry.scanned) {
             const completed = yield* waitForScan(finderEntry.finder)
@@ -335,7 +359,7 @@ const makeNativeService = (
           }
 
           return allFiles
-        }),
+        }).pipe(Effect.scoped),
     }
   })
 

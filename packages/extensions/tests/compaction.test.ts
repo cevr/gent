@@ -348,12 +348,23 @@ describe("context handoff", () => {
     ),
   )
 
-  it.scopedLive("the provider cap leaves room for dense tokens under the summary bound", () => {
+  it.scopedLive("a summary that fills the provider cap with dense tokens is accepted", () => {
     let requested = Option.none<number>()
+    // The fake fills whatever cap the compactor asks for at 5 characters per
+    // token, denser than the 4-per-token estimate the accept bound uses.
+    const denseProvider = LanguageModelLayers.testStream(() =>
+      Effect.sync(() => {
+        const cap = Option.getOrElse(requested, () => 0)
+        return Stream.fromIterable([
+          textDeltaPart("dense".repeat(cap)),
+          finishPart({ finishReason: "length", usage: { inputTokens: 120, outputTokens: cap } }),
+        ])
+      }),
+    )
     return Effect.gen(function* () {
       const model = yield* LanguageModel.LanguageModel
       const compactor = yield* ModelContextCompactor
-      yield* compactor.compact({
+      const result = yield* compactor.compact({
         modelId,
         sessionId,
         branchId,
@@ -365,12 +376,11 @@ describe("context handoff", () => {
           return Effect.succeed(model)
         },
       })
-      // A summary that fills the cap at 5 characters per token still passes
-      // the 4-characters-per-token estimate bound.
       const cap = Option.getOrThrow(requested)
-      expect(Math.ceil((cap * 5) / 4)).toBeLessThanOrEqual(MODEL_COMPACTION_OUTPUT_TOKENS)
+      expect(result.notice).toContain(`Summary:\n${"dense".repeat(cap)}`)
+      expect(result.notice).toContain("[Summary cut at the output limit.]")
     }).pipe(
-      Effect.provide(Layer.mergeAll(ModelContextCompactorLive, summaryProvider("focused"))),
+      Effect.provide(Layer.mergeAll(ModelContextCompactorLive, denseProvider)),
       Effect.timeout("10 seconds"),
     )
   })

@@ -116,6 +116,21 @@ describe("AskUser Tool", () => {
     )
   })
 
+  it.live("a decoded answer list is normalized to one list per question", () => {
+    const run = (notes: string) =>
+      runToolWithCtx(
+        AskUserTool,
+        { questions: [{ question: "One?" }, { question: "Two?" }] },
+        makeCtx(Effect.succeed({ approved: true, notes })).ctx,
+      )
+    return Effect.gen(function* () {
+      // A short list is padded with empty answers.
+      expect((yield* run('[["A"]]')).answers).toEqual([["A"], []])
+      // A long list is truncated to the question count.
+      expect((yield* run('[["A"],["B"],["C"]]')).answers).toEqual([["A"], ["B"]])
+    })
+  })
+
   it.live("free-text notes answer the first question and leave the rest empty", () => {
     const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "free text" }))
 
