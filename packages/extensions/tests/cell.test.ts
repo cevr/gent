@@ -620,6 +620,56 @@ describe("recorded cell execution", () => {
   )
 
   it.scopedLive(
+    "an error keeps the detail it holds outside its message, and a caught one shows no stack",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [aggregate, syntax, shell, caught] = yield* setupCalls([
+          "await Promise.any([Promise.reject(new Error('first')), Promise.reject(new RangeError('second'))])",
+          "const a = 1\nlet x = ;",
+          "await Bun.$`sh -c 'echo shell-detail >&2; exit 3'`",
+          "try { await tools.nope({}) } catch (e) { console.log(e) }",
+        ])
+        if (!aggregate || !syntax || !shell || !caught)
+          return yield* Effect.die("Missing test cells")
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("start"),
+          call: () => Effect.succeed({}),
+        })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        // A failure carries its text as `message`; a finished cell as `display`.
+        const ReplyText = Schema.Union([
+          Schema.Struct({ message: Schema.String }),
+          Schema.Struct({ display: Schema.String }),
+        ])
+        const reply = (call: typeof aggregate) =>
+          cells.run(call).pipe(
+            Effect.provideService(CellOperationHost, host),
+            Effect.map((result) => {
+              const text = Schema.decodeUnknownSync(ReplyText)(result.result)
+              if ("message" in text) return text.message
+              return text.display
+            }),
+          )
+        const aggregateText = yield* reply(aggregate)
+        expect(aggregateText).toContain("AggregateError")
+        expect(aggregateText).toContain("Error: first")
+        expect(aggregateText).toContain("RangeError: second")
+        expect(yield* reply(syntax)).toMatch(/line \d+, column \d+: let x = ;/)
+        expect(yield* reply(shell)).toContain("shell-detail")
+        const caughtText = yield* reply(caught)
+        expect(caughtText).toContain("tools.nope is not a host tool")
+        expect(caughtText).not.toMatch(/\bat [^ ]+ \(/)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "restores the saved namespace into a replaced worker and into a new branch owner",
     () =>
       Effect.gen(function* () {
