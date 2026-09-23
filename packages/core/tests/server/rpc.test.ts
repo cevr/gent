@@ -3316,30 +3316,28 @@ describe("extension command RPCs", () => {
           .filter((extension) => extension.sourcePath === projectConfig)
           .flatMap((extension) => extension.issues)
       }
-      yield* narrowR(
-        Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
-          const { client, sessionId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            configServiceLayer: ConfigService.Live.pipe(
-              Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
-              Layer.provide(BunPlatformLive),
-            ),
-            // This test is about the failure report, so the load must survive it.
-            allowFailedExtensions: true,
-            cwd: project,
-          })
-          const broken = configIssues(yield* client.extension.listStatus({ sessionId }))
-          expect(broken).toHaveLength(1)
-          expect(broken[0]).toMatchObject({ _tag: "ActivationFailed", phase: "load" })
-          expect(broken[0]?.error).toContain(projectConfig)
+      yield* Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          configServiceLayer: ConfigService.Live.pipe(
+            Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+            Layer.provide(BunPlatformLive),
+          ),
+          // This test is about the failure report, so the load must survive it.
+          allowFailedExtensions: true,
+          cwd: project,
+        })
+        const broken = configIssues(yield* client.extension.listStatus({ sessionId }))
+        expect(broken).toHaveLength(1)
+        expect(broken[0]).toMatchObject({ _tag: "ActivationFailed", phase: "load" })
+        expect(broken[0]?.error).toContain(projectConfig)
 
-          // Fixed on disk, same server: the next read has no config issue.
-          yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"] }')
-          expect(configIssues(yield* client.extension.listStatus({ sessionId }))).toEqual([])
-        }).pipe(Effect.timeout("4 seconds")),
-      )
+        // Fixed on disk, same server: the next read has no config issue.
+        yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"] }')
+        expect(configIssues(yield* client.extension.listStatus({ sessionId }))).toEqual([])
+      }).pipe(Effect.timeout("4 seconds"))
     }).pipe(Effect.scoped, Effect.provide(BunPlatformLive)),
   )
   it.live("a failing driver catalog leaves model.list working and shows in extension health", () =>
