@@ -39,6 +39,8 @@ import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
+import { builtinClientModules } from "../src/extensions/builtins"
+import { clientContributions, defineClientExtension } from "../src/extensions/client-facets"
 
 // ── message-list.test ───────────────────────────────────────────────────────
 
@@ -885,6 +887,83 @@ describe("FX transcript treatment", () => {
       }),
     )
   }
+
+  it.live(
+    "native history holds rows until client extensions load, then commits them rendered",
+    () =>
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void>()
+        const held = defineClientExtension("@test/held-load", {
+          setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
+        })
+        const savedText: string[] = []
+        const goalMessage: ListMessage = {
+          ...userMessage("regular-message", "goal-held", "RAW-GOAL-TEXT keep going.", "queued"),
+          pendingMode: absent,
+          metadata: { customType: "goal-context", extensionId: "@gent/goal" },
+        }
+        const items: SessionItem[] = [
+          goalMessage,
+          ...Array.from({ length: 6 }, (_, index) =>
+            userMessage(
+              "regular-message",
+              `filler-${index}`,
+              `filler ${index}\nsecond line\nthird line`,
+              "queued",
+            ),
+          ),
+        ]
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => {
+              const renderer = useRenderer()
+              const capture = (event: CliRendererExternalOutputEvent) => {
+                savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+              }
+              renderer.on("external_output", capture)
+              onCleanup(() => renderer.off("external_output", capture))
+              return (
+                <NativeTranscript
+                  items={items}
+                  streaming={false}
+                  footerHeight={3}
+                  expanded={false}
+                  disclosure="collapsed"
+                  displayRevision={0}
+                  overlayOpen={false}
+                  renderItems={(visible) => (
+                    <MessageList
+                      items={visible}
+                      disclosure="collapsed"
+                      syntaxStyle={syntaxStyle}
+                      streaming={false}
+                    />
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+              )
+            },
+            { width: 60, height: 14, builtins: [...builtinClientModules, held] },
+          ),
+        )
+        // Held: the live view overflows, but nothing may reach scrollback yet.
+        for (let pass = 0; pass < 20; pass++) {
+          yield* Effect.promise(() => setup.flush())
+          yield* Effect.yieldNow
+        }
+        expect(savedText.join("")).toBe("")
+        yield* Deferred.complete(release, Effect.void)
+        yield* Effect.promise(() =>
+          waitForRenderedFrame(
+            setup,
+            () => savedText.join("").includes("goal continuation"),
+            "goal row in scrollback",
+          ),
+        )
+        expect(savedText.join("")).not.toContain("RAW-GOAL-TEXT")
+      }),
+  )
 
   it.live("goal continuations collapse to one line until full detail is on", () =>
     Effect.gen(function* () {

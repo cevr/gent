@@ -996,6 +996,7 @@ class NativeSettleError extends Schema.TaggedError<NativeSettleError>()("NativeS
 /** Owns native history snapshots. The session feed remains the source of truth. */
 export function NativeTranscript(props: NativeTranscriptProps) {
   const renderer = useRenderer()
+  const ext = useExtensionUI()
   const owner = getOwner()
   const dimensions = useTerminalDimensions()
   const [ready, setReady] = createSignal(false)
@@ -1285,7 +1286,10 @@ export function NativeTranscript(props: NativeTranscriptProps) {
     })
   })
 
+  // Scrollback is immutable, so nothing commits until every client renderer
+  // has loaded; the live view draws the plain rows meanwhile.
   createEffect(() => {
+    if (!ext.loaded()) return
     if (!nativeOutputReady() || props.streaming || props.expanded || props.overlayOpen) return
     const items = displayedItems()
     const next = items.map((item) => transcriptFingerprint(item))

@@ -3,6 +3,7 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   type AutocompleteContribution,
   type ClientActivitySnapshot,
+  type AnyExtensionClientModule,
   type ClientContextDeps,
   type ClientRuntime,
   type InteractionRendererComponent,
@@ -64,6 +65,11 @@ export const makeClientRuntime = (deps: ClientContextDeps): ClientRuntime =>
 // Static builtin imports — Bun's bundler needs these reachable for compiled binary
 
 interface ExtensionUIContextValue {
+  /**
+   * True once every client extension has loaded or failed. Native history
+   * waits for it: a row committed before its renderer exists stays plain.
+   */
+  readonly loaded: Accessor<boolean>
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
   readonly renderers: Accessor<Map<string, ToolRenderer>>
   /** Message-row renderers by `metadata.customType`. */
@@ -102,7 +108,12 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
 
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
 
-export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scope.Scope }) {
+export function ExtensionUIProvider(props: {
+  children: JSX.Element
+  scope?: Scope.Scope
+  /** The statically imported builtins; a test adds a module to hold the load. */
+  builtins?: ReadonlyArray<AnyExtensionClientModule>
+}) {
   const workspace = useWorkspace()
   const client = useClient()
 
@@ -111,6 +122,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   )
 
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
+  const [loaded, setLoaded] = createSignal(false)
   const [sessionCommands, setSessionCommands] = createSignal<ReadonlyArray<Command>>([])
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<CommandSource>>([])
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
@@ -175,7 +187,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
 
   onMount(() => {
     void loadExtensionUi(clientRuntime, {
-      builtins: builtinClientModules,
+      builtins: props.builtins ?? builtinClientModules,
       home: workspace.home,
       cwd: workspace.cwd,
     })
@@ -186,6 +198,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
           failures: [{ id: "client extensions", reason: String(error) }],
         }),
       )
+      .finally(() => setLoaded(true))
   })
 
   // The contributed rows belong to the session, not to its name: track the id
@@ -294,6 +307,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   return (
     <ExtensionUIContext.Provider
       value={{
+        loaded,
         renderers: () => resolved().renderers,
         messageRenderers: () => resolved().messageRenderers,
         widgets: () => resolved().widgets,
