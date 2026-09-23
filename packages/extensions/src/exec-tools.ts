@@ -1183,24 +1183,12 @@ interface ValueOptions {
   readonly attached?: string
   /** A `-name` word is one long option, not a cluster of letters (`arch -arm64`, `-arch x`). */
   readonly singleDash?: boolean
-  /** Letters of the options that take no value. A runner asks on an option its table does not name. */
-  readonly flags?: string
-  /** Long names of the options that take no value, or only one after `=`. */
-  readonly longFlags?: ReadonlyArray<string>
 }
 
 const names = (text: string) => text.split(" ").filter((name) => name.length > 0)
 
-/**
- * Options that take a value: the letters, and the long names separated by
- * spaces; then the flags, which take none, in the same two forms.
- */
-const options = (short: string, long = "", flags = "", longFlags = ""): ValueOptions => ({
-  short,
-  long: names(long),
-  flags,
-  longFlags: names(longFlags),
-})
+/** Options that take a value: the letters, and the long names separated by spaces. */
+const options = (short: string, long = ""): ValueOptions => ({ short, long: names(long) })
 
 /** Where an option's value starts: argument `word`, from character `from`. */
 interface OptionValue {
@@ -1208,10 +1196,12 @@ interface OptionValue {
   readonly from: number
 }
 
-/** One option read: its letter, or its long name as written, and its value when it takes one. */
+/** One option read: its letter, or its long name as written, its word, and its value when it takes one. */
 interface ParsedOption {
   readonly name: string
   readonly long: boolean
+  /** The index of the argument that holds the option. */
+  readonly at: number
   readonly value: Option.Option<OptionValue>
 }
 
@@ -1270,15 +1260,11 @@ const readLongOption = (
   let next = index + 1
   if (equals !== -1) {
     value = Option.some({ word: index, from: equals + 1 })
-  } else if (
-    // An exact flag name wins over a valued name it abbreviates (`--tag`, `--tagstring`).
-    !(valued.longFlags ?? []).includes(name) &&
-    (valued.long ?? []).some((option) => abbreviates(name, option))
-  ) {
+  } else if ((valued.long ?? []).some((option) => abbreviates(name, option))) {
     value = Option.some({ word: index + 1, from: 0 })
     next = index + 2
   }
-  into.options.push({ name, long: true, value })
+  into.options.push({ name, long: true, at: index, value })
   return next
 }
 
@@ -1304,6 +1290,7 @@ const readOption = (
       into.options.push({
         name: letter,
         long: false,
+        at: index,
         value: Option.some({ word: index + taken, from: 0 }),
       })
     } else if (short.includes(letter) || attached.includes(letter)) {
@@ -1318,10 +1305,10 @@ const readOption = (
         value = Option.none()
         next = index + 1
       }
-      into.options.push({ name: letter, long: false, value })
+      into.options.push({ name: letter, long: false, at: index, value })
       return next
     } else {
-      into.options.push({ name: letter, long: false, value: Option.none() })
+      into.options.push({ name: letter, long: false, at: index, value: Option.none() })
     }
   }
   return index + 1 + taken
@@ -1520,16 +1507,70 @@ const commandStart = (
   return end
 }
 
-/** The commands a run starts, each from its command word. */
+/**
+ * Whether the words after `option` may be read wrong: its table does not
+ * name it as written (a letter, or a long name in full), and no `=value`
+ * shows that it takes no word after it. It may take none, one or more of
+ * them (`uv run --directory sub pytest`); an abbreviated name may be another
+ * option (parallel's `--tag` is not `--tagstring`).
+ */
+const isUnsure = (valued: ValueOptions, option: ParsedOption) => {
+  if (!option.long) return !`${valued.short ?? ""}${valued.attached ?? ""}`.includes(option.name)
+  if ((valued.long ?? []).includes(option.name)) return false
+  return !Option.exists(option.value, (value) => value.word === option.at)
+}
+
+/**
+ * Where the command of a `Command`, `Joined` or `Stdin` run may start, as
+ * indexes into `words`. A runner's table names only its options that take a
+ * value. After an option it does not name, which word is the command is not
+ * known, so each later word that is not an option may be: each is read, and
+ * the strongest risk wins. The first index is the reading that takes the
+ * option to have no value.
+ */
+const commandStarts = (
+  words: ReadonlyArray<ShellWord>,
+  valued: ValueOptions,
+  run: CommandFields,
+): ReadonlyArray<number> => {
+  const start = commandStart(words, valued, run)
+  if ((run.after ?? []).length > 0) return [start]
+  const { options: read } = parseWords(words, valued, "leading")
+  return Option.match(
+    Arr.findFirst(read, (option) => isUnsure(valued, option)),
+    {
+      onNone: () => [start],
+      onSome: ({ at }) => [
+        start,
+        // `at` counts from the word after the command path.
+        ...words.flatMap((word, index) => {
+          if (index <= at + 1 || index === start || isOptionWord(word.text, valued)) return []
+          return [index]
+        }),
+      ],
+    },
+  )
+}
+
+/**
+ * The commands a run starts, each from its command word: one per reading of
+ * the runner's options (`commandStarts`), or only the reading that takes
+ * each option it does not name to have no value (`first`).
+ */
 const runCommands = (
   resolved: ResolvedCommand,
   run: Run,
+  readings: "every" | "first" = "every",
 ): ReadonlyArray<ReadonlyArray<ShellWord>> => {
   const {
     words,
     spec: { valued },
   } = resolved
-  if (run._tag === "Stdin") return [wrapperWords(resolved).command]
+  if (run._tag === "Stdin") {
+    let starts = wrapperStarts(resolved)
+    if (readings === "first") starts = starts.slice(0, 1)
+    return starts.map((start) => wrapperWords(resolved, start).command)
+  }
   if (run._tag === "FindExec") {
     return words.flatMap((word, index) => {
       if (!run.actions.includes(word.text)) return []
@@ -1540,9 +1581,13 @@ const runCommands = (
     })
   }
   if (run._tag !== "Command") return []
-  const rest = words.slice(commandStart(words, valued, run))
-  if (run.head === "") return [rest]
-  return [[derivedWord(run.head, false), ...rest]]
+  let starts = commandStarts(words, valued, run)
+  if (readings === "first") starts = starts.slice(0, 1)
+  return starts.map((start) => {
+    const rest = words.slice(start)
+    if (run.head === "") return rest
+    return [derivedWord(run.head, false), ...rest]
+  })
 }
 
 /** The scripts the option values of an `OptionScript` run are. */
@@ -1578,7 +1623,11 @@ const inputShellRuns = (
   return segmentInputs(invocation.segment)
 }
 
-/** Whether an `InputShell` run starts a shell that reads its input, with no script of its own. */
+/**
+ * Whether an `InputShell` run starts a shell that reads its input, with no
+ * script of its own. A command that only a later reading of an unnamed
+ * option finds (`sudo -s -u root`) does not stop the shell.
+ */
 const inputShellStarts = (
   resolved: ResolvedCommand,
   run: typeof Run.cases.InputShell.Type,
@@ -1590,46 +1639,8 @@ const inputShellStarts = (
     if (other._tag === "OptionScript") {
       return hasShort(parsed, ...other.short) || hasLong(parsed, ...other.long)
     }
-    return runCommands(resolved, other).some((wrapped) => wrapped.length > 0)
+    return runCommands(resolved, other, "first").some((wrapped) => wrapped.length > 0)
   })
-}
-
-/** Whether `valued` names `option`, as an option that takes a value or as a flag. */
-const knowsOption = (valued: ValueOptions, option: ParsedOption) => {
-  if (!option.long) {
-    return `${valued.short ?? ""}${valued.attached ?? ""}${valued.flags ?? ""}`.includes(
-      option.name,
-    )
-  }
-  const known = [...(valued.long ?? []), ...(valued.longFlags ?? [])]
-  return known.some((name) => abbreviates(option.name, name))
-}
-
-/**
- * A runner that starts the command after its leading options, given an
- * option its table does not name: whether that option takes the next word
- * is not known, so neither is the command. It asks.
- */
-const unknownOptionRuns = ({
-  path,
-  words,
-  spec: { valued, runs },
-}: ResolvedCommand): SegmentRuns => {
-  const starts = runs.some(
-    (run) =>
-      (run._tag === "Command" && run.after.length === 0) ||
-      run._tag === "Joined" ||
-      run._tag === "Stdin",
-  )
-  if (!starts) return NO_RUNS
-  const { options: read } = parseWords(words, valued, "leading")
-  return Option.match(
-    Arr.findFirst(read, (option) => !knowsOption(valued, option)),
-    {
-      onNone: () => NO_RUNS,
-      onSome: ({ name }) => unreadableRun(`an option of ${path} the guard does not know: ${name}`),
-    },
-  )
 }
 
 /** What a `Joined`, `OptionScript`, `Stdin` or `InputShell` run runs beyond the commands it starts. */
@@ -1639,8 +1650,11 @@ const specRuns = (invocation: Invocation, resolved: ResolvedCommand, run: Run): 
   if (run._tag === "Stdin") return inputWrapperRuns(invocation, resolved)
   if (run._tag === "InputShell") return inputShellRuns(invocation, resolved, run)
   if (run._tag !== "Joined") return NO_RUNS
-  const start = commandStart(words, spec.valued, run)
-  return joinedRuns(path, words.slice(start, start + run.take))
+  return mergeRuns(
+    commandStarts(words, spec.valued, run).map((start) =>
+      joinedRuns(path, words.slice(start, start + run.take)),
+    ),
+  )
 }
 
 /**
@@ -2030,7 +2044,7 @@ const PARALLEL_REPLACEMENT = "\\{(-?\\d+)?(//|/\\.|/|\\.|#|%)?\\}|\\{-?\\d*="
 /** parallel options that add replacement strings: their text is not rebuilt. */
 const PARALLEL_REPLACE_OPTIONS = [
   ...["extensionreplace", "er", "basenamereplace", "bnr", "dirnamereplace", "dnr"],
-  ...["basenameextensionreplace", "bner", "seqreplace", "slotreplace"],
+  ...["basenameextensionreplace", "bner", "seqreplace", "slotreplace", "rpl"],
 ]
 
 const replacementPattern = (replace: string) =>
@@ -2392,8 +2406,24 @@ interface WrapperWords {
   readonly sources: ReadonlyArray<ParallelSource>
 }
 
-const wrapperWords = ({ path, words, spec: { valued } }: ResolvedCommand): WrapperWords => {
-  const rest = words.slice(commandStart(words, valued, {}))
+/**
+ * Where the command of an `xargs` or `parallel` may start (`commandStarts`):
+ * a later reading starts before parallel's first source, so every reading
+ * has the same sources.
+ */
+const wrapperStarts = ({ path, words, spec: { valued } }: ResolvedCommand) => {
+  const [first = words.length, ...later] = commandStarts(words, valued, {})
+  if (path !== "parallel") return [first, ...later]
+  const source = words.findIndex((word, index) => index > 0 && PARALLEL_SOURCE.test(word.text))
+  return [first, ...later.filter((start) => source === -1 || start < source)]
+}
+
+/** The words of an `xargs` or `parallel` whose command starts at `start` (the first reading by default). */
+const wrapperWords = (
+  { path, words, spec: { valued } }: ResolvedCommand,
+  start = commandStart(words, valued, {}),
+): WrapperWords => {
+  const rest = words.slice(start)
   if (path !== "parallel") return { command: rest, sources: [] }
   const command: Array<ShellWord> = []
   const sources: Array<ParallelSource> = []
@@ -2510,12 +2540,21 @@ const parallelGroups = (
  * guard cannot divide or group asks. When the input cannot be read, the
  * wrapper asks only if the input names what runs (see `inputNamesCommand`);
  * anything else stays quiet (`find … | xargs rm`). A shell under the wrapper
- * reads its input through `shellRuns`.
+ * reads its input through `shellRuns`. Each reading of the wrapper's
+ * options (`wrapperStarts`) is read.
  */
-const inputWrapperRuns = ({ segment }: Invocation, resolved: ResolvedCommand): SegmentRuns => {
+const inputWrapperRuns = ({ segment }: Invocation, resolved: ResolvedCommand): SegmentRuns =>
+  mergeRuns(wrapperStarts(resolved).map((start) => inputWrapperReading(segment, resolved, start)))
+
+/** What `inputWrapperRuns` reads when the wrapper's command starts at `start`. */
+const inputWrapperReading = (
+  segment: ShellSegment,
+  resolved: ResolvedCommand,
+  start: number,
+): SegmentRuns => {
   const name = commandName(resolved.words[0]?.text ?? "")
   const use = inputUse(resolved)
-  const { command, sources } = wrapperWords(resolved)
+  const { command, sources } = wrapperWords(resolved, start)
   const inputs = segmentInputs(wrapperSegment(segment, use, sources))
   const commandTexts = command.map((word) => word.text)
   const isMarked = (text: string) => Option.exists(use.marker, (marker) => marker.test(text))
@@ -2576,13 +2615,14 @@ const inputFillsScript = (
 ): boolean => {
   const { words, spec } = resolved
   if (run._tag === "Joined") {
-    const start = commandStart(words, spec.valued, run)
-    const script = words.slice(start, start + run.take)
-    // The script reaches past the last word: appended input joins it.
-    const reachesEnd = start + run.take > words.length
-    return (
-      script.length === 0 || script.some((word) => isMarked(word.text)) || (appends && reachesEnd)
-    )
+    return commandStarts(words, spec.valued, run).some((start) => {
+      const script = words.slice(start, start + run.take)
+      // The script reaches past the last word: appended input joins it.
+      const reachesEnd = start + run.take > words.length
+      return (
+        script.length === 0 || script.some((word) => isMarked(word.text)) || (appends && reachesEnd)
+      )
+    })
   }
   if (run._tag === "OptionScript") {
     let order: OptionOrder = "anywhere"
@@ -2784,10 +2824,7 @@ const commandRuns = (invocation: Invocation): SegmentRuns => {
   if (name === "source" || name === ".")
     return scriptFileRuns(invocation.segment, Option.fromUndefinedOr(words[1]))
   const resolved = resolveCommand(words)
-  const runs = [
-    unknownOptionRuns(resolved),
-    ...resolved.spec.runs.map((run) => specRuns(invocation, resolved, run)),
-  ]
+  const runs = resolved.spec.runs.map((run) => specRuns(invocation, resolved, run))
   if (name === "git") runs.push(gitRuns(invocation))
   return mergeRuns(runs)
 }
@@ -3004,12 +3041,13 @@ const rmRisk: CommandRisk = ({ parsed }) =>
     "rm with -r/-f flags",
   )
 
-/** `sudo rm`, with or without flags. */
+/** `sudo rm`, with or without flags, in any reading of sudo's options. */
 const rootRmRisk: CommandRisk = ({ resolved }) => {
   const { words, spec } = resolved
-  const wrapped = Option.fromUndefinedOr(words[commandStart(words, spec.valued, {})])
   return destructiveWhen(
-    Option.exists(wrapped, (word) => commandName(word.text) === "rm"),
+    commandStarts(words, spec.valued, {}).some(
+      (start) => commandName(words[start]?.text ?? "") === "rm",
+    ),
     "sudo rm",
   )
 }
@@ -3055,11 +3093,8 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ...each(["!", "{", "if", "then", "elif", "else", "do", "while", "until"], runner()),
     ...each(["busybox", "toybox", "nohup", "builtin"], runner()),
     // bash's `time -p`, and GNU and BSD `/usr/bin/time -o FILE -f FORMAT`.
-    time: runner(options("fo", "format output", "aplqv", "append portability verbose quiet")),
-    setsid: runner(options("", "", "cfw", "ctty fork wait")),
-    chronic: runner(options("", "", "ev")),
-    unbuffer: runner(options("", "", "p")),
-    command: runner(options("", "", "pvV")),
+    time: runner(options("fo", "format output")),
+    ...each(["setsid", "chronic", "unbuffer", "command"], runner()),
     coproc: runner({}, { named: true }),
     // `function f { … }`: the word after the name opens the body.
     function: runner({}, { positionals: 1 }),
@@ -3067,103 +3102,68 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       options(
         "cCDghpRrTtUu",
         "user group close-from chdir host prompt role type command-timeout other-user chroot",
-        "AbBEeHiKklnNPSsVvh",
-        "askpass background bell preserve-env edit set-home login remove-timestamp reset-timestamp list non-interactive preserve-groups stdin shell validate",
       ),
       [command(), inputShell("si", ["shell", "login"])],
       rootRmRisk,
     ),
-    doas: spec(options("uC", "", "nsL"), [command(), inputShell("s")], rootRmRisk),
+    doas: spec(options("uC"), [command(), inputShell("s")], rootRmRisk),
     // `-S` splits its value into the command it runs.
-    env: spec(
-      options(
-        "aCLPSUu",
-        "argv0 unset chdir split-string",
-        "iv0",
-        "ignore-environment null debug ignore-signal default-signal block-signal list-signal-handling",
-      ),
-      [command(), optionScript("S", ["split-string"], true)],
-    ),
-    exec: runner(options("a", "", "cl")),
-    pkexec: runner(options("", "user", "", "disable-internal-agent keep-cwd")),
+    env: spec(options("aCLPSUu", "argv0 unset chdir split-string"), [
+      command(),
+      optionScript("S", ["split-string"], true),
+    ]),
+    exec: runner(options("a")),
+    pkexec: runner(options("", "user")),
     // macOS `arch -arm64 cmd`, `arch -arch x86_64 -e VAR=v cmd`.
-    arch: runner({
-      long: ["arch", "e", "d"],
-      longFlags: names("arm64 arm64e x86_64 x86_64h i386 32 64 c h"),
-      singleDash: true,
-    }),
+    arch: runner({ long: ["arch", "e", "d"], singleDash: true }),
     unshare: runner(
       options(
         "SGRw",
         "setuid setgid root wd propagation map-user map-group map-users map-groups setgroups",
-        "cCfimnpTuUr",
-        "fork mount uts ipc net pid user cgroup time map-root-user map-current-user kill-child mount-proc keep-caps",
       ),
     ),
     "systemd-run": runner(
       options(
         "HMCpuE",
         "host machine capsule property unit setenv description slice uid gid nice working-directory service-type on-active on-boot on-startup on-unit-active on-unit-inactive on-calendar timer-property path-property socket-property",
-        "dGPqStr",
-        "user system scope pty pipe quiet wait collect same-dir shell no-block no-ask-password remain-after-exit send-sighup",
       ),
     ),
     // `sg group cmd` and `sg group -c cmd` run a shell script. Shadow's sg
     // runs only the first word; the words after it are read too, in case
     // another sg joins them.
     sg: spec(options("c"), [joined(1), optionScript("c")]),
-    // `nice -10 cmd`: an old form of `-n 10`.
-    ...each(["nice", "gnice"], runner(options("n", "adjustment", "0123456789"))),
-    ionice: runner(options("cnpPu", "class classdata pid pgid uid", "t", "ignore")),
+    ...each(["nice", "gnice"], runner(options("n", "adjustment"))),
+    ionice: runner(options("cnpPu", "class classdata pid pgid uid")),
     ...each(
       ["timeout", "gtimeout"],
-      runner(options("sk", "signal kill-after", "v", "verbose preserve-status foreground"), {
-        positionals: 1,
-      }),
+      runner(options("sk", "signal kill-after"), { positionals: 1 }),
     ),
     stdbuf: runner(options("ioe", "input output error")),
-    caffeinate: runner(options("tw", "", "dimsu")),
-    flock: spec(
-      options(
-        "cEw",
-        "command timeout conflict-exit-code",
-        "enosuxF",
-        "shared exclusive nonblock nb unlock close no-fork verbose",
-      ),
-      [command({ positionals: 1 }), optionScript("c", ["command"])],
-    ),
-    strace: runner(
-      options("abeEIoOpPsSuX", "output attach user env", "cCdDfFhiknqrtTvVwxyzZ", "summary-only"),
-    ),
-    ltrace: runner(options("aeFnopsu", "output", "bcCdfhiLrStTV")),
-    chroot: runner(options("", "userspec groups", "", "skip-chdir"), { positionals: 1 }),
-    taskset: runner(options("", "", "acp", "all-tasks cpu-list pid"), { positionals: 1 }),
-    runuser: spec(
-      options(
-        "cgGsuw",
-        "command group supp-group shell user",
-        "flmpP",
-        "login preserve-environment pty fast",
-      ),
-      [command(), optionScript("c", ["command"])],
-    ),
+    caffeinate: runner(options("tw")),
+    flock: spec(options("cEw", "command timeout conflict-exit-code"), [
+      command({ positionals: 1 }),
+      optionScript("c", ["command"]),
+    ]),
+    strace: runner(options("abeEIoOpPsSuX", "output attach user env")),
+    ltrace: runner(options("aeFnopsu", "output")),
+    chroot: runner(options("", "userspec groups"), { positionals: 1 }),
+    taskset: runner({}, { positionals: 1 }),
+    runuser: spec(options("cgGsuw", "command group supp-group shell user"), [
+      command(),
+      optionScript("c", ["command"]),
+    ]),
     // BSD `script [-q] file command…`.
-    script: spec(
-      options(
-        "cEIOT",
-        "command log-in log-out log-timing",
-        "adefFkqr",
-        "append return flush quiet force",
-      ),
-      [command({ positionals: 1 }), optionScript("c", ["command"])],
-    ),
+    script: spec(options("cEIOT", "command log-in log-out log-timing"), [
+      command({ positionals: 1 }),
+      optionScript("c", ["command"]),
+    ]),
     // With no `-c`, `su` starts the user's shell, and it runs its input.
     su: spec(options("cgGsw", "command session-command"), [
       optionScript("c", ["command", "session-command"]),
       inputShell(""),
     ]),
     "nix-shell": spec(options("AIp", "run command attr"), [optionScript("", ["run", "command"])]),
-    dotenv: runner(options("ecpv", "", "o", "debug no-expand override")),
+    dotenv: runner(options("ecpv")),
     // `-e`, `-i` and `-l` take only an attached value; so do `--max-lines`,
     // `--replace` and `--eof`, after `=`.
     xargs: spec(
@@ -3171,8 +3171,6 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         ...options(
           "aEdILnPsJRS",
           "arg-file delimiter max-args max-procs max-chars process-slot-var",
-          "0oprtx",
-          "null no-run-if-empty verbose interactive open-tty exit show-limits eof replace max-lines",
         ),
         attached: "eil",
       },
@@ -3182,8 +3180,6 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       options(
         "aCdEIjLnNPSs",
         `arg-file colsep delimiter jobs max-args max-replace-args max-lines max-chars sshlogin sshloginfile results joblog tmpdir workdir tagstring timeout retries load memfree basefile env halt delay nice ${PARALLEL_REPLACE_OPTIONS.join(" ")}`,
-        "0gkmqrtuvX",
-        "keep-order bar progress eta quote ungroup line-buffer lb group dry-run null no-run-if-empty xargs tag files pipe plus shuf tty silent verbose will-cite no-notice",
       ),
       [Run.cases.Stdin.make({})],
     ),
@@ -3194,18 +3190,10 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ),
     fd: spec({}, [Run.cases.FindExec.make({ actions: ["-x", "-X", "--exec", "--exec-batch"] })]),
     eval: spec({}, [joined()]),
-    ssh: spec(options("bcDEeFIiJLlmOopQRSWwB", "", "46AaCfGgKkMNnqsTtVvXxYy"), [joined(1)]),
-    watch: spec(
-      options(
-        "n",
-        "interval",
-        "bcdegprtwx",
-        "beep color differences errexit chgexit precise no-title no-wrap exec",
-      ),
-      [joined()],
-    ),
+    ssh: spec(options("bcDEeFIiJLlmOopQRSWwB"), [joined(1)]),
+    watch: spec(options("n", "interval"), [joined()]),
     // `trap '<script>' SIGNAL`: the script runs when the signal (or `EXIT`) comes.
-    trap: spec(options("", "", "lp"), [joined(0, 1)]),
+    trap: spec({}, [joined(0, 1)]),
     // Package managers and runners.
     pnpm: spec(options("CF", `filter dir ${PUBLISH_OPTIONS}`)),
     npm: spec(options("w", `workspace prefix userconfig cache ${PUBLISH_OPTIONS}`)),
@@ -3215,19 +3203,19 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       ...spec(options("pZ", "package manifest-path registry token config index color")),
       toolchain: true,
     },
-    "pnpm exec": runner(
-      options("", "resume-from", "r", "recursive parallel report-summary workspace-root"),
-    ),
-    "yarn exec": runner(),
+    // `pnpm exec -c` (`--shell-mode`) runs its words as a shell script; so
+    // does Yarn Berry's `yarn exec`.
+    "pnpm exec": spec(options("c", "resume-from shell-mode"), [
+      command(),
+      optionScript("c", ["shell-mode"], true),
+    ]),
+    "yarn exec": spec({}, [joined()]),
     // `npx -c '<script>'` runs a shell script.
     ...each(
       ["npm exec", "npm x", "npx"],
-      spec(
-        options("pcw", "package call workspace", "qy", "yes no no-install quiet workspaces ws"),
-        [command(), optionScript("c", ["call"])],
-      ),
+      spec(options("pcw", "package call workspace"), [command(), optionScript("c", ["call"])]),
     ),
-    ...each(["bunx", "bun x"], runner(options("p", "package", "", "bun silent verbose"))),
+    ...each(["bunx", "bun x"], runner(options("p", "package"))),
     ...each(
       ["pnpm publish", "npm publish", "yarn publish", "yarn npm publish", "bun publish"],
       PUBLISH,
@@ -3260,15 +3248,8 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     docker: spec(options("Hcl", "host context config log-level tlscacert tlscert tlskey")),
     ...each(["docker push", "docker image push"], risky(external("docker push"))),
     uv: spec(options("", "directory project")),
-    "uv run": runner(
-      options(
-        "",
-        "with python package env-file extra group",
-        "mqv",
-        "module frozen locked no-sync no-project isolated all-extras no-dev script quiet verbose",
-      ),
-    ),
-    "op run": runner(options("", "env-file", "", "no-masking")),
+    "uv run": runner(options("", "with python package env-file extra group")),
+    "op run": runner(options("", "env-file")),
     ...each(["mise exec", "mise x"], runner({}, { after: ["--"] })),
     "direnv exec": runner({}, { positionals: 1 }),
     ...each(["nix develop", "nix shell"], runner({}, { after: ["-c", "--command"] })),

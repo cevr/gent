@@ -1641,23 +1641,38 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  test("an option a runner's table does not know asks; its known options keep their reading", () => {
-    const r = "rm -rf /nonexistent/gent-probe-x"
+  // A runner's table names only its options that take a value. After an
+  // option it does not name, every later word may be the command: each is
+  // read, and the strongest risk wins.
+  test("after an option a runner's table does not name, every later word may be the command", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
     for (const command of [
       `parallel --nice 10 ${r}`,
-      "parallel --arg-sep @@ rm -rf @@ /nonexistent/gent-probe-x",
+      `parallel --arg-sep @@ rm -rf @@ ${x}`,
       `echo x | parallel --block 1M ${r}`,
       `echo x | parallel --rpl '{Z} $_="${r}"' {Z}`,
-      `/usr/bin/time -o /nonexistent/gent-probe-x ${r}`,
+      `/usr/bin/time -o ${x} ${r}`,
       `command time -f %e ${r}`,
       `env --argv0 x ${r}`,
-      // An exact flag name is that flag, not a prefix of a valued option (`--tagstring`).
+      // An abbreviated name may be another option: `--tag` is not `--tagstring`.
       `parallel --tag ${r} ::: a`,
-      // An unknown option asks even when the word after it runs nothing.
-      "timeout --gent-probe-unknown 5 ls",
-      "nohup --gent-probe-unknown ls",
-      "xargs --gent-probe-unknown echo",
-      "ssh -Z host ls",
+      // The unnamed option may take the word after it, or more.
+      `nohup --gent-probe-unknown ${x} ${r}`,
+      `timeout --gent-probe-unknown 5 ${x} ${r}`,
+      `uv run --gent-probe-unknown ${x} ${r}`,
+      `npx --gent-probe-unknown ${x} ${r}`,
+      `bunx --gent-probe-unknown ${x} ${r}`,
+      `echo ${x} | xargs --gent-probe-unknown ${x} rm -rf`,
+      `echo x | parallel --gent-probe-unknown ${x} ${r}`,
+      `ssh -Z ${x} host ${r}`,
+      `sudo --gent-probe-unknown ${x} rm ${x}`,
+      // A command a later reading finds does not stop sudo's input shell.
+      `echo '${r}' | sudo -s -u root`,
+      // Shell mode runs the words as a script.
+      `pnpm exec -c '${r}'`,
+      `pnpm exec --shell-mode '${r}'`,
+      `yarn exec '${r}'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -1672,12 +1687,27 @@ describe("classifyBashCommand", () => {
       "sudo -E ls",
       "nice -10 ls",
       "timeout --preserve-status 5 bun test",
+      "timeout --gent-probe-unknown 5 ls",
+      "nohup --gent-probe-unknown ls",
       "xargs -0 -r echo",
+      "xargs --gent-probe-unknown echo",
       "setsid -f ls",
       "ssh -t host uptime",
+      "ssh -Z host ls",
       "watch -d ls",
       "npx -y prettier --check .",
+      "npx --prefix sub eslint .",
+      "npx --registry https://registry.example tsc",
+      "bunx --no-install tsc",
       "uv run --frozen pytest",
+      "uv run --directory sub pytest",
+      "uv run -p 3.12 pytest",
+      "uv run --no-group dev --offline --refresh pytest",
+      "uv run --index-url https://index.example pytest",
+      "ls | parallel --max-procs 2 wc -l",
+      "ls | parallel --resume --joblog j --halt-on-error 1 wc -l",
+      "pnpm exec -c 'tsc --noEmit'",
+      "yarn exec tsc",
       "strace -f -c ls",
       "flock -n /nonexistent/gent-probe-x/l ls",
       "caffeinate -i ls",
