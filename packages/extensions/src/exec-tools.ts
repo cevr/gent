@@ -103,6 +103,7 @@ interface BackgroundBashStorageService {
     key: BackgroundBashJobKeyFields,
     message: string,
   ) => Effect.Effect<void, BackgroundBashStorageError>
+  /** Marks the running jobs an earlier server process started as interrupted. */
   readonly reconcileInterrupted: Effect.Effect<void, BackgroundBashStorageError>
 }
 
@@ -144,11 +145,24 @@ export class BackgroundBashStorage extends Context.Service<
               completed_at INTEGER,
               exit_code INTEGER,
               message TEXT,
+              owner_generation TEXT,
               PRIMARY KEY (session_id, branch_id, tool_call_id)
             )
           `,
           )
           .pipe(Effect.mapError(mapError("Failed to create background bash jobs table")))
+        // A table from before `owner_generation` gets the column; its rows keep NULL.
+        const columns = yield* sql<{ readonly name: string }>`
+          SELECT name FROM pragma_table_info('background_bash_jobs')
+        `.pipe(Effect.mapError(mapError("Failed to read background bash jobs columns")))
+        if (!columns.some((column) => column.name === "owner_generation")) {
+          yield* sql
+            .unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN owner_generation TEXT`)
+            .pipe(Effect.mapError(mapError("Failed to add background bash jobs owner column")))
+        }
+        // The server process that owns the jobs this layer starts: every
+        // profile in one process shares it, a restarted server has another.
+        const generation = yield* Effect.sync(() => String(performance.timeOrigin))
 
         const selectJob = Effect.fn("BackgroundBashStorage.selectJob")(function* (
           key: BackgroundBashJobKeyFields,
@@ -205,7 +219,8 @@ export class BackgroundBashStorage extends Context.Service<
                     command,
                     cwd,
                     status,
-                    started_at
+                    started_at,
+                    owner_generation
                   )
                   VALUES (
                     ${input.sessionId},
@@ -214,7 +229,8 @@ export class BackgroundBashStorage extends Context.Service<
                     ${input.command},
                     ${Option.getOrNull(input.cwd)},
                     'running',
-                    ${startedAt}
+                    ${startedAt},
+                    ${generation}
                   )
                 `
                 return BackgroundBashClaim.cases.Started.make({})
@@ -245,6 +261,7 @@ export class BackgroundBashStorage extends Context.Service<
                   completed_at = ${completedAt},
                   message = 'Background command interrupted by server restart'
               WHERE status = 'running'
+                AND (owner_generation IS NULL OR owner_generation != ${generation})
             `
           }).pipe(
             Effect.mapError(mapError("Failed to reconcile interrupted background bash jobs")),
@@ -297,13 +314,20 @@ interface ShellWord {
   readonly endSafe: boolean
   /** The word holds a parameter expansion or a command substitution: its text is known only at run time. */
   readonly dynamic: boolean
+  /** The word holds an unquoted glob or brace pattern: the shell expands it to other words. */
+  readonly pattern: boolean
 }
 
 interface ShellSegment {
   readonly words: Array<ShellWord>
   /** Here-strings and heredoc bodies: what the command reads on stdin. */
   readonly stdin: Array<ShellWord>
-  /** The segment that pipes into this one. */
+  /** The targets of its output redirections: files it writes. */
+  readonly writes: Array<ShellWord>
+  /**
+   * The segment whose output this one reads on stdin: the command piped into
+   * it, or into the subshell, group, loop or `if` around it.
+   */
   readonly pipedFrom: Option.Option<ShellSegment>
 }
 
@@ -322,6 +346,12 @@ type WordRole =
   | "input-target"
   | "here-string"
   | "heredoc-delimiter"
+
+/**
+ * Where a command list is inside an open `case`: reading its subject, a
+ * pattern (where `)` ends the pattern), or a body.
+ */
+type CaseState = "subject" | "pattern" | "body"
 
 /** Characters a backslash escapes inside double quotes. */
 const DOUBLE_QUOTE_ESCAPES = new Set(["$", "`", '"', "\\"])
@@ -346,16 +376,25 @@ interface CommandReader {
   wordEnd: number
   wordEndSafe: boolean
   dynamic: boolean
+  /** The unquoted characters of the word: where a glob or brace pattern can be. */
+  plain: string
   inWord: boolean
   quoted: boolean
   role: WordRole
   stripTabs: boolean
   readonly heredocs: Array<PendingHeredoc>
+  /** The open `case` statements, innermost last. */
+  readonly cases: Array<CaseState>
+  /** The stdin of this command list: what the command around a `(…)` or `$(…)` reads. */
+  readonly input: Option.Option<ShellSegment>
+  /** The stdin of each open `{`, `if`, `while`, `until`, `for`, `select` or `case`, innermost last. */
+  readonly compounds: Array<Option.Option<ShellSegment>>
 }
 
 const makeSegment = (pipedFrom: Option.Option<ShellSegment>): ShellSegment => ({
   words: [],
   stdin: [],
+  writes: [],
   pipedFrom,
 })
 
@@ -368,6 +407,9 @@ const startsExpansion = (text: string, index: number) =>
 
 /** Text known only at run time: an expansion or a substitution. */
 const DYNAMIC_TEXT = /\$[\w{(@*#?!$-]|`/
+
+/** A glob (`*`, `?`, `[…]`) or a brace expansion (`{a,b}`, `{1..3}`) in unquoted text. */
+const PATTERN_TEXT = /[*?]|\[[^\]]*\]|\{[^{}]*(,|\.\.)[^{}]*\}/
 
 /** The characters `start` to `end` of the source as one word; `expands` when the shell expands it (a heredoc body). */
 const sourceWord = (
@@ -390,6 +432,7 @@ const sourceWord = (
     end: sourceOffset(source, end - 1) + 1,
     endSafe: sourceSafe(source, end - 1),
     dynamic: expands && DYNAMIC_TEXT.test(text),
+    pattern: false,
   }
 }
 
@@ -434,9 +477,51 @@ const clearWord = (reader: CommandReader) => {
   reader.wordSafe = []
   reader.wordEndSafe = false
   reader.dynamic = false
+  reader.plain = ""
   reader.inWord = false
   reader.quoted = false
 }
+
+/**
+ * The words that open, split and close a `case`: `case` in command position,
+ * `in` after the subject, and `esac`. Pattern words are data. Returns true
+ * when the word belongs to the `case` syntax and is no argument.
+ */
+const readCaseWord = (reader: CommandReader, word: ShellWord): boolean => {
+  const keyword = !reader.quoted && !word.dynamic
+  const depth = reader.cases.length - 1
+  const state = reader.cases[depth]
+  const commandPosition = reader.segment.words.length === 0
+  if (state === "subject" && keyword && word.text === "in") {
+    reader.cases[depth] = "pattern"
+    return true
+  }
+  if (state === "pattern") {
+    if (keyword && word.text === "esac") reader.cases.pop()
+    return true
+  }
+  if (state === "body" && keyword && commandPosition && word.text === "esac") {
+    reader.cases.pop()
+    return true
+  }
+  if (keyword && commandPosition && word.text === "case") reader.cases.push("subject")
+  return false
+}
+
+/** Words that open a compound command whose commands share its stdin, and the words that close one. */
+const COMPOUND_OPENERS = new Set(["{", "if", "while", "until", "for", "select", "case"])
+const COMPOUND_CLOSERS = new Set(["}", "fi", "done", "esac"])
+
+/** A compound command in command position passes its stdin to the commands inside it. */
+const readCompoundWord = (reader: CommandReader, word: ShellWord) => {
+  if (reader.quoted || word.dynamic || reader.segment.words.length > 0) return
+  if (COMPOUND_OPENERS.has(word.text)) reader.compounds.push(reader.segment.pipedFrom)
+  if (COMPOUND_CLOSERS.has(word.text)) reader.compounds.pop()
+}
+
+/** The stdin of a command that no pipe feeds: that of the innermost compound around it. */
+const inheritedInput = (reader: CommandReader): Option.Option<ShellSegment> =>
+  Option.getOrElse(Arr.last(reader.compounds), () => reader.input)
 
 const endWord = (reader: CommandReader) => {
   if (reader.inWord) {
@@ -447,9 +532,12 @@ const endWord = (reader: CommandReader) => {
       end: reader.wordEnd,
       endSafe: reader.wordEndSafe,
       dynamic: reader.dynamic,
+      pattern: PATTERN_TEXT.test(reader.plain),
     }
-    if (reader.role === "argument") reader.segment.words.push(word)
+    if (reader.role === "argument") readCompoundWord(reader, word)
+    if (reader.role === "argument" && !readCaseWord(reader, word)) reader.segment.words.push(word)
     if (reader.role === "here-string") reader.segment.stdin.push(word)
+    if (reader.role === "redirect-target") reader.segment.writes.push(word)
     // `bash < <(cmd)`: the shell reads a script that only exists at run time.
     if (reader.role === "input-target" && isProcessSubstitution(word)) {
       reader.segment.stdin.push(word)
@@ -471,8 +559,10 @@ const endSegment = (reader: CommandReader, piped: boolean) => {
   endWord(reader)
   reader.role = "argument"
   const segment = reader.segment
-  if (segment.words.length > 0 || segment.stdin.length > 0) reader.source.segments.push(segment)
-  let pipedFrom = Option.none<ShellSegment>()
+  if (segment.words.length > 0 || segment.stdin.length > 0 || segment.writes.length > 0) {
+    reader.source.segments.push(segment)
+  }
+  let pipedFrom = inheritedInput(reader)
   if (piped) pipedFrom = Option.some(segment)
   reader.segment = makeSegment(pipedFrom)
 }
@@ -480,10 +570,62 @@ const endSegment = (reader: CommandReader, piped: boolean) => {
 const startsSubstitution = (text: string, index: number) =>
   text.charAt(index) === "`" || (text.charAt(index) === "$" && text.charAt(index + 1) === "(")
 
-/** Read the commands of the `$(...)` or backticks at `index`; returns the index after them. */
-const readSubstitution = (source: ShellSource, index: number): number => {
-  if (source.text.charAt(index) === "`") return readCommands(source, index + 1, Option.some("`"))
-  return readCommands(source, index + 2, Option.some(")"))
+/**
+ * Read the commands of the `$(...)` or backticks at `index`; returns the
+ * index after them. They read the stdin of the command around them, `input`.
+ */
+const readSubstitution = (
+  source: ShellSource,
+  index: number,
+  input: Option.Option<ShellSegment>,
+): number => {
+  if (source.text.charAt(index) === "`") {
+    return readCommands(source, index + 1, Option.some("`"), input)
+  }
+  return readCommands(source, index + 2, Option.some(")"), input)
+}
+
+/**
+ * Read the `${…}` at `index`: a `)`, `;` or quote inside it (`${x:-)}`) does
+ * not end the word or the command list around it, and a substitution inside
+ * it runs. `quoted` when the expansion is inside double quotes. Returns the
+ * index after its `}`.
+ */
+function readParameterExpansion(reader: CommandReader, index: number, quoted: boolean): number {
+  const text = reader.source.text
+  let depth = 0
+  let doubleQuoted = false
+  let at = index
+  while (at < text.length) {
+    const char = text.charAt(at)
+    if (char === "\\") {
+      at += 2
+    } else if (startsSubstitution(text, at)) {
+      at = readSubstitution(reader.source, at, reader.segment.pipedFrom)
+    } else if (char === '"') {
+      doubleQuoted = !doubleQuoted
+      at++
+    } else if (doubleQuoted) {
+      at++
+    } else if (text.startsWith("${", at)) {
+      depth++
+      at += 2
+    } else if (char === "}") {
+      depth--
+      at++
+      if (depth === 0) break
+    } else if (char === "'" && !quoted) {
+      const close = text.indexOf("'", at + 1)
+      at = text.length
+      if (close !== -1) at = close + 1
+    } else {
+      at++
+    }
+  }
+  const end = Math.min(at, text.length)
+  addRange(reader, index, end, quoted)
+  reader.dynamic = true
+  return end
 }
 
 /** Read a double-quoted run from `from`; returns the index of the closing quote. */
@@ -498,10 +640,12 @@ const readDoubleQuoted = (reader: CommandReader, from: number): number => {
       addChar(reader, index + 1, true)
       index += 2
     } else if (startsSubstitution(text, index)) {
-      const end = readSubstitution(reader.source, index)
+      const end = readSubstitution(reader.source, index, reader.segment.pipedFrom)
       addRange(reader, index, end, true)
       reader.dynamic = true
       index = end
+    } else if (text.startsWith("${", index)) {
+      index = readParameterExpansion(reader, index, true)
     } else {
       if (startsExpansion(text, index)) reader.dynamic = true
       addChar(reader, index, true)
@@ -586,7 +730,8 @@ const heredocBodyEnd = (text: string, from: number, heredoc: PendingHeredoc) => 
 const readExpansions = (source: ShellSource, from: number, to: number) => {
   for (let index = from; index < to; index++) {
     if (source.text.charAt(index) === "\\") index++
-    else if (startsSubstitution(source.text, index)) index = readSubstitution(source, index) - 1
+    else if (startsSubstitution(source.text, index))
+      index = readSubstitution(source, index, Option.none()) - 1
   }
 }
 
@@ -628,6 +773,8 @@ const readEscape = (reader: CommandReader, index: number): Option.Option<number>
   if (char === "\\") {
     if (index + 1 < text.length && text.charAt(index + 1) !== "\n") {
       addChar(reader, index + 1, false)
+      // An escaped character is quoted: `<<\EOF` is a literal heredoc, `\2>` no descriptor.
+      reader.quoted = true
     }
     return Option.some(index + 2)
   }
@@ -641,11 +788,47 @@ const readEscape = (reader: CommandReader, index: number): Option.Option<number>
 /** `$(...)` or backticks in a word: the commands run, and the text stays in the word. */
 const readSubstitutionWord = (reader: CommandReader, index: number): Option.Option<number> => {
   if (!startsSubstitution(reader.source.text, index)) return Option.none()
-  const end = readSubstitution(reader.source, index)
+  const end = readSubstitution(reader.source, index, reader.segment.pipedFrom)
   addRange(reader, index, end, false)
   reader.dynamic = true
   return Option.some(end)
 }
+
+/** `${…}` outside double quotes. */
+const readParameterWord = (reader: CommandReader, index: number): Option.Option<number> => {
+  if (!reader.source.text.startsWith("${", index)) return Option.none()
+  return Option.some(readParameterExpansion(reader, index, false))
+}
+
+/**
+ * Inside a `case`: in a pattern, `(` opens it, `|` joins patterns and `)`
+ * ends it; in a body, `;;`, `;&` or `;;&` ends the body.
+ */
+const readCaseSeparator = (reader: CommandReader, index: number): Option.Option<number> => {
+  const text = reader.source.text
+  const char = text.charAt(index)
+  if (reader.cases.length === 0 || !"()|;".includes(char)) return Option.none()
+  // The word before the operator may close the `case` (`esac)`).
+  endWord(reader)
+  const depth = reader.cases.length - 1
+  const state = reader.cases[depth]
+  if (state === "pattern" && char === ")") {
+    endSegment(reader, false)
+    reader.cases[depth] = "body"
+    return Option.some(index + 1)
+  }
+  if (state === "pattern" && (char === "(" || char === "|")) return Option.some(index + 1)
+  const end = Option.fromNullishOr(/^;;&?|^;&/.exec(text.slice(index, index + 3)))
+  if (state === "body" && Option.isSome(end)) {
+    endSegment(reader, false)
+    reader.cases[depth] = "pattern"
+    return Option.some(index + end.value[0].length)
+  }
+  return Option.none()
+}
+
+const inCasePattern = (reader: CommandReader) =>
+  Arr.last(reader.cases).pipe(Option.exists((state) => state === "pattern"))
 
 /** A list or pipe operator, a subshell, or a newline (which reads pending heredoc bodies). */
 const readSeparator = (reader: CommandReader, index: number): Option.Option<number> => {
@@ -653,8 +836,10 @@ const readSeparator = (reader: CommandReader, index: number): Option.Option<numb
   const char = text.charAt(index)
   const pair = text.slice(index, index + 2)
   if (char === "(") {
+    // A subshell reads the stdin of the command in whose place it stands.
+    const input = reader.segment.pipedFrom
     endSegment(reader, false)
-    return Option.some(readCommands(reader.source, index + 1, Option.some(")")))
+    return Option.some(readCommands(reader.source, index + 1, Option.some(")"), input))
   }
   if (char === "\n") {
     endSegment(reader, false)
@@ -689,7 +874,8 @@ const readRedirectionOperator = (reader: CommandReader, start: number): number =
     return start + 2
   }
   reader.role = "redirect-target"
-  if (op.startsWith("<")) reader.role = "input-target"
+  // `<>` opens its target for writing too.
+  if (op.startsWith("<") && !op.startsWith("<>")) reader.role = "input-target"
   // `&>`, `&>>`, `>>`, `>|`, `>&`, `<&` and `<>` are one operator.
   if (op === "&>>") return start + 3
   if (/^(&>|>[>|&]|<[&>])/.test(op)) return start + 2
@@ -709,7 +895,7 @@ const readRedirection = (reader: CommandReader, index: number): Option.Option<nu
   if (char === "&" && next !== ">") return Option.none()
   if (char !== "<" && char !== ">" && char !== "&") return Option.none()
   if (next === "(" && char !== "&") {
-    const end = readCommands(reader.source, index + 2, Option.some(")"))
+    const end = readCommands(reader.source, index + 2, Option.some(")"), Option.none())
     addRange(reader, index, end, false)
     reader.dynamic = true
     return Option.some(end)
@@ -726,6 +912,7 @@ const readPlain = (reader: CommandReader, index: number): number => {
     return index + 1
   }
   if (startsExpansion(reader.source.text, index)) reader.dynamic = true
+  reader.plain += reader.source.text.charAt(index)
   addChar(reader, index, false)
   return index + 1
 }
@@ -734,34 +921,49 @@ const readStep = (reader: CommandReader, index: number): number =>
   readQuote(reader, index).pipe(
     Option.orElse(() => readEscape(reader, index)),
     Option.orElse(() => readSubstitutionWord(reader, index)),
+    Option.orElse(() => readParameterWord(reader, index)),
     Option.orElse(() => readRedirection(reader, index)),
+    Option.orElse(() => readCaseSeparator(reader, index)),
     Option.orElse(() => readSeparator(reader, index)),
     Option.getOrElse(() => readPlain(reader, index)),
   )
 
-/** Read commands from `from` until an unquoted `stop`; returns the index after it. */
-function readCommands(source: ShellSource, from: number, stop: Option.Option<string>): number {
+/** Read commands from `from` until an unquoted `stop`; returns the index after it. `input` is their stdin. */
+function readCommands(
+  source: ShellSource,
+  from: number,
+  stop: Option.Option<string>,
+  input: Option.Option<ShellSegment>,
+): number {
   const reader: CommandReader = {
     source,
-    segment: makeSegment(Option.none()),
+    segment: makeSegment(input),
     wordText: "",
     wordMap: [],
     wordSafe: [],
     wordEnd: 0,
     wordEndSafe: false,
     dynamic: false,
+    plain: "",
     inWord: false,
     quoted: false,
     role: "argument",
     stripTabs: false,
     heredocs: [],
+    cases: [],
+    input,
+    compounds: [],
   }
   let index = from
   while (index < source.text.length) {
     const char = source.text.charAt(index)
     if (Option.exists(stop, (end) => end === char)) {
-      endSegment(reader, false)
-      return index + 1
+      // `$(case a in a) …;; esac)`: a `)` that ends a case pattern does not end the list.
+      endWord(reader)
+      if (!inCasePattern(reader)) {
+        endSegment(reader, false)
+        return index + 1
+      }
     }
     index = readStep(reader, index)
   }
@@ -773,28 +975,33 @@ function readCommands(source: ShellSource, from: number, stop: Option.Option<str
  * Split `text` into command segments of shell words. The script word gives
  * the source offset and insertion safety of each character. Command substitutions, subshells and
  * process substitutions become segments of their own, because they run.
+ * `input` is the stdin of the script: what the command that runs it reads.
  */
-const parseShell = (script: ShellWord): Array<ShellSegment> => {
+const parseShell = (script: ShellWord, input: Option.Option<ShellSegment>): Array<ShellSegment> => {
   const source: ShellSource = {
     text: script.text,
     map: script.map,
     safe: script.safe,
     segments: [],
   }
-  readCommands(source, 0, Option.none())
+  readCommands(source, 0, Option.none(), input)
   return source.segments
 }
 
 /** A whole command: every character is its own source offset, and every insertion point is safe. */
 const parseCommand = (command: string): Array<ShellSegment> =>
-  parseShell({
-    text: command,
-    map: Array.from({ length: command.length }, (_, index) => index),
-    safe: Array.from({ length: command.length }, () => true),
-    end: command.length,
-    endSafe: true,
-    dynamic: false,
-  })
+  parseShell(
+    {
+      text: command,
+      map: Array.from({ length: command.length }, (_, index) => index),
+      safe: Array.from({ length: command.length }, () => true),
+      end: command.length,
+      endSafe: true,
+      dynamic: false,
+      pattern: false,
+    },
+    Option.none(),
+  )
 
 /** A word made of other text: no source offsets to rewrite, no safe insertion point. */
 const derivedWord = (text: string, dynamic: boolean): ShellWord => ({
@@ -804,6 +1011,7 @@ const derivedWord = (text: string, dynamic: boolean): ShellWord => ({
   end: 0,
   endSafe: false,
   dynamic,
+  pattern: false,
 })
 
 /** The characters of `word` from `start` on, keeping their offsets and safety. */
@@ -838,163 +1046,484 @@ const joinWords = (words: ReadonlyArray<ShellWord>): Option.Option<ShellWord> =>
     end: last.value.end,
     endSafe: last.value.endSafe,
     dynamic: words.some((word) => word.dynamic),
+    pattern: words.some((word) => word.pattern),
   })
 }
 
-const SHELL_NAMES = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"])
-/** Shell options whose value is the next word (`-o pipefail`). */
-const SHELL_OPTIONS_WITH_VALUE = /^[-+][oO]$/
-/** A short option cluster that holds `-c`: the script is the next argument. */
-const SHELL_COMMAND_OPTION = /^-[a-zA-Z]*c[a-zA-Z]*$/
-/** Commands whose printed text is their own arguments. */
-const PRINTING_COMMANDS = new Set(["echo", "printf"])
+/** Shells whose `-c` script the guard reads as shell words. */
+const SHELL_NAMES = new Set([
+  ...["bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "yash", "rbash"],
+  ...["csh", "tcsh", "fish", "nu", "xonsh", "elvish"],
+])
+/** Shells whose scripts are not shell words: any script they are given cannot be read. */
+const FOREIGN_SHELLS = new Set(["pwsh", "powershell"])
+/** A PowerShell option that runs text: `-c`, `-Command` and its prefixes, `-e`/`-EncodedCommand`. */
+const FOREIGN_SCRIPT_OPTION = /^-(c|com\w*|e|ec|enc\w*)$/i
 /** `NAME=value` before a command sets its environment. */
 const ASSIGNMENT = /^[A-Za-z_]\w*\+?=/
 
 const commandName = (word: string): string => word.slice(word.lastIndexOf("/") + 1)
 
-/** How a command that runs another command reads its own words first. */
-interface Prefix {
-  /** Options whose value is the next word. */
-  readonly valued: ReadonlySet<string>
-  /** Words after the options that belong to the prefix (`timeout 5`, `ssh host`). */
-  readonly positionals: number
+// ── options ──
+//
+// One reader for the options of every command: wrappers, shells, git and
+// the commands the guard classifies. A table of `ValueOptions` per command
+// says which options take a value.
+
+/** The options of a command that take the next word (or the rest of a short cluster) as a value. */
+interface ValueOptions {
+  readonly short?: string
+  readonly long?: ReadonlyArray<string>
+  /** `+o`, `+x`: a `+` cluster is options too (shells). */
+  readonly plus?: boolean
 }
 
-const prefix = (valued: ReadonlyArray<string> = [], positionals = 0): Prefix => ({
-  valued: new Set(valued),
+/** Where an option's value starts: argument `word`, from character `from`. */
+interface OptionValue {
+  readonly word: number
+  readonly from: number
+}
+
+/** One option read: its letter, or its long name as written, and its value when it takes one. */
+interface ParsedOption {
+  readonly name: string
+  readonly long: boolean
+  readonly value: Option.Option<OptionValue>
+}
+
+/** The options and operands of one command (a git subcommand, `rm`, `npm`). */
+interface ParsedArguments {
+  /** Letters of every short option cluster (`-fd` holds `f` and `d`). */
+  readonly shorts: ReadonlySet<string>
+  /** Long option names as written, without `--` and `=value`. */
+  readonly longs: ReadonlyArray<string>
+  readonly options: ReadonlyArray<ParsedOption>
+  /** Operands before `--`; for a leading read, every word from the first operand on. */
+  readonly operands: ReadonlyArray<string>
+  /** Operands after `--`. */
+  readonly pathspecs: ReadonlyArray<string>
+  /** The index of the first operand, or of the word after `--`. */
+  readonly end: number
+  readonly separated: boolean
+}
+
+/**
+ * Where options may be: `anywhere` (GNU permutes them among the operands),
+ * or `leading`, before the first operand (a wrapper, a shell, git's global
+ * options: the first operand starts what they run).
+ */
+type OptionOrder = "anywhere" | "leading"
+
+/**
+ * Git reads any unambiguous prefix of a long option as that option
+ * (`--ha` is `--hard`), as getopt_long does. A written name that is a prefix
+ * of `name` is read as `name`. An ambiguous prefix makes the command exit
+ * with an error, so reading it as the risky option asks for approval of a
+ * command that would do nothing.
+ */
+const abbreviates = (written: string, name: string) =>
+  written.length > 0 && name.startsWith(written)
+
+interface OptionsRead {
+  readonly shorts: Set<string>
+  readonly longs: Array<string>
+  readonly options: Array<ParsedOption>
+}
+
+/** Read the option word at `index`; returns the index of the next word. */
+const readOption = (
+  args: ReadonlyArray<string>,
+  index: number,
+  valued: ValueOptions,
+  into: OptionsRead,
+): number => {
+  const arg = args[index] ?? ""
+  if (arg.startsWith("--")) {
+    const [name = ""] = arg.slice(2).split("=", 1)
+    into.longs.push(name)
+    const equals = arg.indexOf("=")
+    let value = Option.none<OptionValue>()
+    let next = index + 1
+    if (equals !== -1) {
+      value = Option.some({ word: index, from: equals + 1 })
+    } else if ((valued.long ?? []).some((option) => abbreviates(name, option))) {
+      value = Option.some({ word: index + 1, from: 0 })
+      next = index + 2
+    }
+    into.options.push({ name, long: true, value })
+    return next
+  }
+  for (let at = 1; at < arg.length; at++) {
+    const letter = arg.charAt(at)
+    into.shorts.add(letter)
+    if ((valued.short ?? "").includes(letter)) {
+      // The rest of the cluster is the value; a bare letter takes the next word.
+      if (at < arg.length - 1) {
+        into.options.push({
+          name: letter,
+          long: false,
+          value: Option.some({ word: index, from: at + 1 }),
+        })
+        return index + 1
+      }
+      into.options.push({
+        name: letter,
+        long: false,
+        value: Option.some({ word: index + 1, from: 0 }),
+      })
+      return index + 2
+    }
+    into.options.push({ name: letter, long: false, value: Option.none() })
+  }
+  return index + 1
+}
+
+const isOptionWord = (arg: string, valued: ValueOptions) =>
+  arg.length > 1 && (arg.startsWith("-") || (valued.plus === true && arg.startsWith("+")))
+
+const parseArguments = (
+  args: ReadonlyArray<string>,
+  valued: ValueOptions = {},
+  order: OptionOrder = "anywhere",
+): ParsedArguments => {
+  const into: OptionsRead = { shorts: new Set(), longs: [], options: [] }
+  const operands: Array<string> = []
+  let index = 0
+  while (index < args.length) {
+    const arg = args[index] ?? ""
+    if (arg === "--") {
+      return {
+        ...into,
+        operands,
+        pathspecs: args.slice(index + 1),
+        end: index + 1,
+        separated: true,
+      }
+    }
+    if (isOptionWord(arg, valued)) {
+      index = readOption(args, index, valued, into)
+    } else if (order === "leading") {
+      return { ...into, operands: args.slice(index), pathspecs: [], end: index, separated: false }
+    } else {
+      operands.push(arg)
+      index++
+    }
+  }
+  return { ...into, operands, pathspecs: [], end: args.length, separated: false }
+}
+
+/** The values of the options named by a letter in `letters` or a long name in `names`. */
+const optionValues = (
+  parsed: ParsedArguments,
+  letters: string,
+  names: ReadonlyArray<string> = [],
+): ReadonlyArray<OptionValue> =>
+  parsed.options.flatMap((option) => {
+    let named = letters.includes(option.name)
+    if (option.long) named = names.some((name) => abbreviates(option.name, name))
+    if (!named) return []
+    return Option.toArray(option.value)
+  })
+
+/** The text of an option value in `args`. */
+const valueText = (args: ReadonlyArray<string>, value: OptionValue) =>
+  (args[value.word] ?? "").slice(value.from)
+
+const hasShort = (parsed: ParsedArguments, ...letters: ReadonlyArray<string>) =>
+  letters.some((letter) => parsed.shorts.has(letter))
+
+const hasLong = (parsed: ParsedArguments, ...names: ReadonlyArray<string>) =>
+  parsed.longs.some((written) => names.some((name) => abbreviates(written, name)))
+
+/** The options of the words after a command word, read in `order`. */
+const parseWords = (
+  words: ReadonlyArray<ShellWord>,
+  valued: ValueOptions,
+  order: OptionOrder,
+): ParsedArguments =>
+  parseArguments(
+    words.slice(1).map((word) => word.text),
+    valued,
+    order,
+  )
+
+/** The word an option value of `parseWords(words)` stands for, from its first character. */
+const valueWord = (words: ReadonlyArray<ShellWord>, value: OptionValue): Option.Option<ShellWord> =>
+  Option.map(Option.fromUndefinedOr(words[value.word + 1]), (word) => wordFrom(word, value.from))
+
+// ── commands that run commands ──
+
+/** How a command that runs another command reads its own words first. */
+interface Prefix {
+  readonly valued: ValueOptions
+  /** Words after the options that belong to the prefix (`timeout 5`, `ssh host`). */
+  readonly positionals: number
+  /** An optional name before a `{` compound: `coproc NAME { … }`. */
+  readonly named: boolean
+  /**
+   * The command starts after the first of these words, not after the
+   * options: `mise exec node@20 -- cmd`, `nix develop .#x -c cmd`.
+   */
+  readonly after: ReadonlyArray<string>
+}
+
+const prefix = (valued: ValueOptions = {}, positionals = 0, named = false): Prefix => ({
+  valued,
   positionals,
+  named,
+  after: [],
 })
 
-const INPUT_WRAPPER_OPTIONS = ["-I", "-n", "-P", "-L", "-a", "-d", "-s", "-E", "-j"]
+const runsAfter = (...after: ReadonlyArray<string>): Prefix => ({ ...prefix(), after })
+
+/** `env` options whose value is the next word; `-S` splits its value into the command it runs. */
+const ENV_OPTIONS: ValueOptions = { short: "CPSu", long: ["unset", "chdir", "split-string"] }
+
+/** `xargs` options whose value is the next word; `-e`, `-i` and `-l` take only an attached one. */
+const XARGS_OPTIONS: ValueOptions = {
+  short: "aEdILnPsJRS",
+  long: ["arg-file", "delimiter", "max-lines", "max-args", "max-procs", "max-chars"],
+}
+
+const PARALLEL_OPTIONS: ValueOptions = {
+  short: "aCdEIjLnNPSs",
+  long: [
+    ...["arg-file", "colsep", "delimiter", "jobs", "max-args", "max-replace-args", "max-lines"],
+    ...["max-chars", "sshlogin", "sshloginfile", "results", "joblog", "tmpdir", "workdir"],
+    ...["tagstring", "timeout", "retries", "load", "memfree", "basefile", "env", "halt", "delay"],
+  ],
+}
 
 /**
  * Keywords and commands that run the command after them with its own words
  * (`sudo git push`, `if git diff`, `xargs git add`). The word after one is in
- * command position again.
+ * command position again. A command missing here runs nothing the guard
+ * sees: its words are data.
  */
 const WRAPPERS: ReadonlyMap<string, Prefix> = new Map([
   ...["!", "{", "if", "then", "elif", "else", "do", "while", "until", "time"].map(
     (keyword): readonly [string, Prefix] => [keyword, prefix()],
   ),
-  ["sudo", prefix(["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-T", "-U", "--user"])],
-  ["doas", prefix(["-u", "-C"])],
-  ["env", prefix(["-u", "-C", "--unset", "--chdir"])],
+  ["coproc", prefix({}, 0, true)],
+  // `function f { … }`: the word after the name opens the body.
+  ["function", prefix({}, 1)],
+  [
+    "sudo",
+    prefix({
+      short: "CDghpRrTtUu",
+      long: [
+        ...["user", "group", "close-from", "chdir", "host", "prompt", "role", "type"],
+        ...["command-timeout", "other-user", "chroot"],
+      ],
+    }),
+  ],
+  ["doas", prefix({ short: "uC" })],
+  ["env", prefix(ENV_OPTIONS)],
   // Multicall binaries: the next word is the applet (`busybox rm -rf x`).
   ["busybox", prefix()],
   ["toybox", prefix()],
   ["nohup", prefix()],
+  ["setsid", prefix()],
+  ["chronic", prefix()],
+  ["unbuffer", prefix()],
   ["command", prefix()],
   ["builtin", prefix()],
-  ["exec", prefix(["-a"])],
-  ["nice", prefix(["-n", "--adjustment"])],
-  ["ionice", prefix(["-c", "-n", "-p", "-P", "-u"])],
-  ["timeout", prefix(["-s", "-k", "--signal", "--kill-after"], 1)],
-  ["stdbuf", prefix(["-i", "-o", "-e"])],
-  ["caffeinate", prefix(["-t", "-w"])],
-  ["xargs", prefix(INPUT_WRAPPER_OPTIONS)],
-  ["parallel", prefix(INPUT_WRAPPER_OPTIONS)],
+  ["exec", prefix({ short: "a" })],
+  ...["nice", "gnice"].map((name): readonly [string, Prefix] => [
+    name,
+    prefix({ short: "n", long: ["adjustment"] }),
+  ]),
+  ["ionice", prefix({ short: "cnpPu", long: ["class", "classdata", "pid", "pgid", "uid"] })],
+  ...["timeout", "gtimeout"].map((name): readonly [string, Prefix] => [
+    name,
+    prefix({ short: "sk", long: ["signal", "kill-after"] }, 1),
+  ]),
+  ["stdbuf", prefix({ short: "ioe", long: ["input", "output", "error"] })],
+  ["caffeinate", prefix({ short: "tw" })],
+  ["flock", prefix({ short: "Ew", long: ["timeout", "conflict-exit-code"] }, 1)],
+  ["strace", prefix({ short: "abeEIoOpPsSuX", long: ["output", "attach", "user", "env"] })],
+  ["ltrace", prefix({ short: "aeFnopsu", long: ["output"] })],
+  ["chroot", prefix({ long: ["userspec", "groups"] }, 1)],
+  ["taskset", prefix({}, 1)],
+  ["runuser", prefix({ short: "gGsu", long: ["group", "supp-group", "shell", "user"] })],
+  // BSD `script [-q] file command…`.
+  ["script", prefix({ short: "cEIOT", long: ["command", "log-in", "log-out", "log-timing"] }, 1)],
+  ["dotenv", prefix({ short: "ecv" })],
+  ["xargs", prefix(XARGS_OPTIONS)],
+  ["parallel", prefix(PARALLEL_OPTIONS)],
 ])
 
 /** Commands that run the rest of their words joined into one script (`eval`, `ssh host cmd`). */
 const SCRIPT_JOINERS: ReadonlyMap<string, Prefix> = new Map([
   ["eval", prefix()],
-  [
-    "ssh",
-    prefix(
-      [
-        ...["-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O"],
-        ...["-o", "-p", "-Q", "-R", "-S", "-W", "-w", "-B"],
-      ],
-      1,
-    ),
-  ],
-  ["watch", prefix(["-n", "--interval"])],
+  ["ssh", prefix({ short: "bcDEeFIiJLlmOopQRSWwB" }, 1)],
+  ["watch", prefix({ short: "n", long: ["interval"] })],
 ])
+
+/**
+ * Commands whose subcommand runs the command after it: `pnpm exec`, `uv
+ * run`, `nix develop -c`. `valued` reads the options before the subcommand.
+ */
+interface SubcommandRunner {
+  readonly valued: ValueOptions
+  readonly subcommand: string
+  readonly prefix: Prefix
+}
+
+const SUBCOMMAND_RUNNERS: ReadonlyMap<string, ReadonlyArray<SubcommandRunner>> = new Map([
+  [
+    "pnpm",
+    [{ valued: { short: "CF", long: ["filter", "dir"] }, subcommand: "exec", prefix: prefix() }],
+  ],
+  [
+    "npm",
+    [
+      {
+        valued: { short: "w", long: ["workspace", "prefix"] },
+        subcommand: "exec",
+        prefix: prefix(),
+      },
+    ],
+  ],
+  ["yarn", [{ valued: { long: ["cwd"] }, subcommand: "exec", prefix: prefix() }]],
+  [
+    "uv",
+    [
+      {
+        valued: { long: ["directory", "project"] },
+        subcommand: "run",
+        prefix: prefix({ long: ["with", "python", "package", "env-file", "extra", "group"] }),
+      },
+    ],
+  ],
+  ["op", [{ valued: {}, subcommand: "run", prefix: prefix({ long: ["env-file"] }) }]],
+  [
+    "mise",
+    ["exec", "x"].map((subcommand) => ({ valued: {}, subcommand, prefix: runsAfter("--") })),
+  ],
+  ["direnv", [{ valued: {}, subcommand: "exec", prefix: prefix({}, 1) }]],
+  [
+    "nix",
+    ["develop", "shell"].map((subcommand) => ({
+      valued: {},
+      subcommand,
+      prefix: runsAfter("-c", "--command"),
+    })),
+  ],
+])
+
+/** The words a runner wraps, from its own command word, and how it reads them. */
+const runnerOf = (
+  command: ReadonlyArray<ShellWord>,
+): Option.Option<{ readonly words: ReadonlyArray<ShellWord>; readonly spec: Prefix }> => {
+  const name = commandName(command[0]?.text ?? "")
+  const wrapper = Option.fromUndefinedOr(WRAPPERS.get(name))
+  if (Option.isSome(wrapper)) return Option.some({ words: command, spec: wrapper.value })
+  const runners = SUBCOMMAND_RUNNERS.get(name) ?? []
+  return Option.map(
+    Arr.findFirst(runners, (runner) => {
+      const at = 1 + parseWords(command, runner.valued, "leading").end
+      return command[at]?.text === runner.subcommand
+    }),
+    (runner) => {
+      const at = 1 + parseWords(command, runner.valued, "leading").end
+      return { words: command.slice(at), spec: runner.prefix }
+    },
+  )
+}
 
 /** The index of the first word after a prefix's own options and positionals. */
 const prefixEnd = (words: ReadonlyArray<ShellWord>, spec: Prefix): number => {
-  let cursor = 1
-  while (cursor < words.length) {
-    const text = words[cursor]?.text ?? ""
-    if (text === "--") {
-      cursor++
-      break
-    }
-    if (!text.startsWith("-") || text.length === 1) break
-    if (spec.valued.has(text)) cursor++
-    cursor++
+  if (spec.after.length > 0) {
+    const at = words.findIndex((word, index) => index > 0 && spec.after.includes(word.text))
+    if (at === -1) return words.length
+    return at + 1
   }
-  return cursor + spec.positionals
+  let end = 1 + parseWords(words, spec.valued, "leading").end + spec.positionals
+  if (spec.named && words[end + 1]?.text === "{") end++
+  // No command is named `--`: after the positionals it ends the options (`ssh host -- cmd`).
+  if (words[end]?.text === "--") end++
+  return end
 }
 
-/** `env` options whose value is the next word. */
-const ENV_OPTIONS_WITH_VALUE = new Set(["-u", "-C", "--unset", "--chdir"])
-/** An `env` flag cluster that ends in `-S`: `-S`, `-iS`, `-S'cmd'`. */
-const ENV_SPLIT_OPTION = /^-[iv0]*S/
-const ENV_SPLIT_LONG = "--split-string="
+/** A command that runs an option's value as a shell script. */
+interface ScriptOptions {
+  /** Every option that takes a value, the script options included. */
+  readonly valued: ValueOptions
+  /** The options whose value is a script. */
+  readonly scripts: ValueOptions
+}
 
-/**
- * `env -S <string>` splits the string into words and runs them, followed by
- * the words after it. The command it runs is those words joined, from the
- * string on.
- */
+const scriptOptions = (scripts: ValueOptions, other: ValueOptions = {}): ScriptOptions => ({
+  scripts,
+  valued: {
+    short: `${scripts.short ?? ""}${other.short ?? ""}`,
+    long: [...(scripts.long ?? []), ...(other.long ?? [])],
+  },
+})
+
+/** Commands that run an option's value as a shell script (`su -c`, `flock -c`, `nix-shell --run`). */
+const OPTION_SCRIPTS: ReadonlyMap<string, ScriptOptions> = new Map([
+  ["su", scriptOptions({ short: "c", long: ["command", "session-command"] }, { short: "gGsw" })],
+  ["runuser", scriptOptions({ short: "c", long: ["command"] }, { short: "gGsuw" })],
+  ["flock", scriptOptions({ short: "c", long: ["command"] }, { short: "Ew" })],
+  ["script", scriptOptions({ short: "c", long: ["command"] }, { short: "EIOT" })],
+  ["nix-shell", scriptOptions({ long: ["run", "command"] }, { short: "AIp", long: ["attr"] })],
+])
+
+/** The scripts the options of `words` run. */
+const optionScripts = (words: ReadonlyArray<ShellWord>, spec: ScriptOptions) => {
+  const parsed = parseWords(words, spec.valued, "anywhere")
+  return optionValues(parsed, spec.scripts.short ?? "", spec.scripts.long).flatMap((value) =>
+    Option.toArray(valueWord(words, value)),
+  )
+}
+
+/** The words `env -S <string>` runs: the string, then the words after it. */
 const envSplitWords = (
   words: ReadonlyArray<ShellWord>,
 ): Option.Option<ReadonlyArray<ShellWord>> => {
   if (commandName(words[0]?.text ?? "") !== "env") return Option.none()
-  let valueNext = false
-  for (const [index, word] of words.entries()) {
-    const text = word.text
-    const rest = words.slice(index + 1)
-    if (index === 0 || valueNext) {
-      valueNext = false
-      continue
-    }
-    if (text === "--" || !text.startsWith("-")) return Option.none()
-    if (text === "--split-string") return Option.some(rest)
-    if (text.startsWith(ENV_SPLIT_LONG)) {
-      return Option.some([wordFrom(word, ENV_SPLIT_LONG.length), ...rest])
-    }
-    const split = Option.fromNullishOr(ENV_SPLIT_OPTION.exec(text))
-    if (Option.isSome(split)) {
-      const after = split.value[0].length
-      if (after === text.length) return Option.some(rest)
-      return Option.some([wordFrom(word, after), ...rest])
-    }
-    valueNext = ENV_OPTIONS_WITH_VALUE.has(text)
-  }
-  return Option.none()
+  const parsed = parseWords(words, ENV_OPTIONS, "leading")
+  const split = Arr.head(optionValues(parsed, "S", ["split-string"]))
+  return Option.flatMap(split, (value) =>
+    Option.map(valueWord(words, value), (script) => [script, ...words.slice(value.word + 2)]),
+  )
 }
 
 /**
  * One command a segment runs: its words from the command word on. Only a
  * word in command position is a command; the same name as an argument
- * (`grep bash`, `echo git commit`) is data.
+ * (`grep bash`, `echo git commit`, `ls rm`) is data.
  */
 interface Invocation {
   readonly segment: ShellSegment
   readonly words: ReadonlyArray<ShellWord>
+  /** The `NAME=value` words before it: its environment. */
+  readonly assignments: ReadonlyArray<ShellWord>
 }
 
 const FIND_EXEC_ACTIONS = new Set(["-exec", "-execdir", "-ok", "-okdir"])
 
-/** The commands `words` runs: the first after env assignments, the one after each wrapper, and each `find -exec` command. */
+/** The commands `words` runs: the first after env assignments, the one after each runner, and each `find -exec` command. */
 const collectInvocations = (
   segment: ShellSegment,
   words: ReadonlyArray<ShellWord>,
   into: Array<Invocation>,
 ): void => {
-  const start = words.findIndex((word) => !ASSIGNMENT.test(word.text))
-  if (start === -1) return
+  let start = words.findIndex((word) => !ASSIGNMENT.test(word.text))
+  if (start === -1) start = words.length
   const command = words.slice(start)
-  into.push({ segment, words: command })
-  const name = commandName(command[0]?.text ?? "")
-  const wrapper = Option.fromUndefinedOr(WRAPPERS.get(name))
-  if (Option.isSome(wrapper)) {
-    collectInvocations(segment, command.slice(prefixEnd(command, wrapper.value)), into)
+  const assignments = words.slice(0, start)
+  if (command.length === 0 && assignments.length === 0) return
+  into.push({ segment, words: command, assignments })
+  const runner = runnerOf(command)
+  if (Option.isSome(runner)) {
+    const { words: wrapped, spec } = runner.value
+    collectInvocations(segment, wrapped.slice(prefixEnd(wrapped, spec)), into)
+    return
   }
-  if (name !== "find") return
+  if (commandName(command[0]?.text ?? "") !== "find") return
   for (const [index, word] of command.entries()) {
     if (!FIND_EXEC_ACTIONS.has(word.text)) continue
     const rest = command.slice(index + 1)
@@ -1026,65 +1555,138 @@ const mergeRuns = (runs: ReadonlyArray<SegmentRuns>): SegmentRuns => ({
   unreadable: runs.flatMap((run) => run.unreadable),
 })
 
+const scriptRuns = (scripts: ReadonlyArray<ShellWord>): SegmentRuns => ({ scripts, unreadable: [] })
+
+const unreadableRun = (reason: string): SegmentRuns => ({ scripts: [], unreadable: [reason] })
+
 /**
- * The input of a command in `segment`: a here-string, a heredoc body, the
- * arguments of an `echo`/`printf` piped into it, or the stdin of a bare `cat`
- * piped into it. The output of any other
- * command, and text a shell expands at run time, cannot be read.
+ * The text of `word` with its backslash escapes decoded, as `printf` and
+ * `echo -e` print it. `\c` (stop printing) and `\0NNN` (echo's octal) are
+ * not decoded: that text cannot be read.
+ */
+const decodedRuns = (word: ShellWord, command: string): SegmentRuns => {
+  if (/\\[c0]/.test(word.text)) return unreadableRun(`text \`${command}\` decodes: ${word.text}`)
+  let text = ""
+  let index = 0
+  while (index < word.text.length) {
+    const escape = Option.fromNullishOr(ANSI_C_ESCAPE.exec(word.text.slice(index, index + 10)))
+    if (Option.isSome(escape)) {
+      text += ansiCChar(escape.value)
+      index += escape.value[0].length
+    } else {
+      text += word.text.charAt(index)
+      index++
+    }
+  }
+  return scriptRuns([derivedWord(text, word.dynamic)])
+}
+
+/** `echo` prints its arguments joined by spaces; `-e` decodes escapes, `-E` does not. */
+const echoRuns = (args: ReadonlyArray<ShellWord>): SegmentRuns => {
+  let index = 0
+  let escapes = false
+  while (/^-[neE]+$/.test(args[index]?.text ?? "")) {
+    const flags = args[index]?.text ?? ""
+    if (flags.includes("e") || flags.includes("E"))
+      escapes = flags.lastIndexOf("e") > flags.lastIndexOf("E")
+    index++
+  }
+  const joined = joinWords(args.slice(index))
+  if (Option.isNone(joined)) return NO_RUNS
+  if (escapes && joined.value.text.includes("\\")) return decodedRuns(joined.value, "echo -e")
+  return scriptRuns([joined.value])
+}
+
+/**
+ * `printf` prints its format: escapes decoded, `%%` as `%`. A format with a
+ * directive (`%s`) prints its arguments in a shape the guard does not
+ * rebuild, and `-v` prints nothing.
+ */
+const printfRuns = (args: ReadonlyArray<ShellWord>): SegmentRuns => {
+  // `-v` is an option only before `--`: `printf -- '-v; …'` prints it.
+  if (args[0]?.text.startsWith("-v") === true) return NO_RUNS
+  let rest = args
+  if (rest[0]?.text === "--") rest = rest.slice(1)
+  const format = Option.fromUndefinedOr(rest[0])
+  if (Option.isNone(format)) return NO_RUNS
+  const text = format.value.text
+  if (text.replaceAll("%%", "").includes("%")) {
+    return unreadableRun(`printf output with format directives: ${text}`)
+  }
+  if (!text.includes("%") && !text.includes("\\")) return scriptRuns([format.value])
+  return decodedRuns({ ...format.value, text: text.replaceAll("%%", "%") }, "printf")
+}
+
+/**
+ * The input of a command in `segment`: a here-string, a heredoc body, or the
+ * text of the `echo`/`printf` whose output it reads. Only those producers
+ * can be read: the output of any other command (`cat`, `tee`, a subshell or
+ * group), and text a shell expands at run time, cannot.
  */
 const segmentInputs = (segment: ShellSegment): SegmentRuns => {
-  const scripts: Array<ShellWord> = [...segment.stdin]
-  const unreadable: Array<string> = []
+  const runs: Array<SegmentRuns> = [scriptRuns(segment.stdin)]
   if (Option.isSome(segment.pipedFrom)) {
     const from = segment.pipedFrom.value
     const name = commandName(from.words[0]?.text ?? "")
-    // `cat` with no file prints its own stdin: `cat <<EOF | sh`.
-    if (name === "cat" && from.words.length === 1) scripts.push(...from.stdin)
-    else if (PRINTING_COMMANDS.has(name)) scripts.push(...from.words.slice(1))
-    else unreadable.push(`the output of \`${name}\``)
+    if (name === "echo") runs.push(echoRuns(from.words.slice(1)))
+    else if (name === "printf") runs.push(printfRuns(from.words.slice(1)))
+    else if (name === "") runs.push(unreadableRun("the output of a compound command"))
+    else runs.push(unreadableRun(`the output of \`${name}\``))
   }
-  for (const word of scripts) {
-    if (word.dynamic) unreadable.push(`text expanded at run time: ${word.text}`)
-  }
-  return { scripts, unreadable }
+  const inputs = mergeRuns(runs)
+  const expanded = inputs.scripts
+    .filter((word) => word.dynamic)
+    .map((word) => `text expanded at run time: ${word.text}`)
+  return { scripts: inputs.scripts, unreadable: [...inputs.unreadable, ...expanded] }
 }
 
 /** A script file a shell or `source` runs: not read, unless it only exists at run time. */
 const scriptFileRuns = (file: Option.Option<ShellWord>): SegmentRuns => {
   if (Option.exists(file, isProcessSubstitution)) {
-    return { scripts: [], unreadable: ["a script from a process substitution"] }
+    return unreadableRun("a script from a process substitution")
   }
   return NO_RUNS
 }
 
+/** Shell options whose value is the next word (`-o pipefail`, `--rcfile x`). */
+const SHELL_OPTIONS: ValueOptions = { short: "oO", long: ["rcfile", "init-file"], plus: true }
+
 /**
- * A shell: the argument after `-c`, or its stdin when it has no script
- * argument. A script that is not a literal (`sh -c '{}'` under xargs,
- * `sh -c "$CMD"`) takes the input as the script, as a pipe into a shell
- * does. A script file is not read: its content is not in the command.
+ * A shell: the argument after its options with `-c`; its stdin with `-s` or
+ * with no argument; else a script file, which is not read: its content is
+ * not in the command. A script that is not a literal (`sh -c '{}'` under
+ * xargs, `sh -c "$CMD"`) takes the input as the script, as a pipe into a
+ * shell does.
  */
 const shellRuns = ({ segment, words }: Invocation): SegmentRuns => {
-  let cursor = 1
-  let fromArgument = false
-  while (cursor < words.length && /^[-+]/.test(words[cursor]?.text ?? "")) {
-    const option = words[cursor]?.text ?? ""
-    if (SHELL_COMMAND_OPTION.test(option)) fromArgument = true
-    if (SHELL_OPTIONS_WITH_VALUE.test(option)) cursor++
-    cursor++
+  const parsed = parseWords(words, SHELL_OPTIONS, "leading")
+  let end = 1 + parsed.end
+  // `-` ends the options as `--` does.
+  if (!parsed.separated && words[end]?.text === "-") end++
+  const operand = Option.fromUndefinedOr(words[end])
+  if (!hasShort(parsed, "c")) {
+    if (hasShort(parsed, "s") || Option.isNone(operand)) return segmentInputs(segment)
+    return scriptFileRuns(operand)
   }
-  if (!fromArgument && cursor < words.length) {
-    return scriptFileRuns(Option.fromUndefinedOr(words[cursor]))
-  }
-  if (!fromArgument) return segmentInputs(segment)
-  const script = Option.fromUndefinedOr(words[cursor])
-  const literal = Option.filter(script, (word) => !word.dynamic && !word.text.includes("{}"))
-  if (Option.isSome(literal)) return { scripts: [literal.value], unreadable: [] }
+  const literal = Option.filter(operand, (word) => !word.dynamic && !word.text.includes("{}"))
+  if (Option.isSome(literal)) return scriptRuns([literal.value])
   const inputs = segmentInputs(segment)
   let unreadable = inputs.unreadable
   if (inputs.scripts.length === 0 && unreadable.length === 0) {
     unreadable = ["a shell script that is not in the command"]
   }
-  return { scripts: [...Option.toArray(script), ...inputs.scripts], unreadable }
+  return { scripts: [...Option.toArray(operand), ...inputs.scripts], unreadable }
+}
+
+/** PowerShell: a script it is given, as an option or on stdin, cannot be read. */
+const foreignShellRuns = ({ segment, words }: Invocation): SegmentRuns => {
+  const name = commandName(words[0]?.text ?? "")
+  const given =
+    Option.isSome(segment.pipedFrom) ||
+    segment.stdin.length > 0 ||
+    words.some((word) => FOREIGN_SCRIPT_OPTION.test(word.text))
+  if (given) return unreadableRun(`a ${name} script`)
+  return NO_RUNS
 }
 
 /** `eval`, `ssh host`, `watch` and `env -S` run `script` joined; an expanded word is known only at run time. */
@@ -1099,11 +1701,13 @@ const joinedRuns = (name: string, script: ReadonlyArray<ShellWord>): SegmentRuns
 /**
  * `xargs` and `parallel` run their command with the input words appended, or
  * put into `{}`; `parallel ::: a b` also runs each word after `:::` when it
- * has no command. The wrapped command is classified with its input when it
- * is a git command the guard checks. A shell under the wrapper reads its
+ * has no command, and `parallel` with no command runs each input line. Bare
+ * `xargs` runs `echo`. The wrapped command is classified with its input when
+ * it is a git command the guard checks. A shell under the wrapper reads its
  * input through `shellRuns`.
  */
 const inputWrapperRuns = ({ segment, words }: Invocation, spec: Prefix): SegmentRuns => {
+  const name = commandName(words[0]?.text ?? "")
   const rest = words.slice(prefixEnd(words, spec))
   const separator = rest.findIndex((word) => word.text === ":::")
   let command = rest
@@ -1113,6 +1717,7 @@ const inputWrapperRuns = ({ segment, words }: Invocation, spec: Prefix): Segment
     listed = rest.slice(separator + 1)
   }
   const commandTexts = command.map((word) => word.text)
+  if (command.length === 0 && name === "xargs") return NO_RUNS
   if (command.length === 0 || commandTexts.every((text) => text === "{}")) {
     const inputs = segmentInputs(segment)
     return { scripts: [...listed, ...inputs.scripts], unreadable: inputs.unreadable }
@@ -1123,9 +1728,9 @@ const inputWrapperRuns = ({ segment, words }: Invocation, spec: Prefix): Segment
   )
   if (!checked) return NO_RUNS
   let inputs = segmentInputs(segment)
-  if (listed.length > 0) inputs = { scripts: listed, unreadable: [] }
+  if (listed.length > 0) inputs = scriptRuns(listed)
   if (inputs.scripts.length === 0 && inputs.unreadable.length === 0) {
-    return { scripts: [], unreadable: [`the input of \`${commandName(words[0]?.text ?? "")}\``] }
+    return unreadableRun(`the input of \`${name}\``)
   }
   const input = inputs.scripts.map((word) => word.text).join(" ")
   let text = `${commandTexts.join(" ")} ${input}`
@@ -1135,28 +1740,49 @@ const inputWrapperRuns = ({ segment, words }: Invocation, spec: Prefix): Segment
   return { scripts: [derivedWord(text, dynamic)], unreadable: inputs.unreadable }
 }
 
-/** Git global options whose value is the next word. */
-const GIT_OPTIONS_WITH_VALUE = new Set([
-  "-c",
-  "-C",
-  "--git-dir",
-  "--work-tree",
-  "--namespace",
-  "--config-env",
-  "--super-prefix",
-  "--attr-source",
+/** Environment variables whose value a command runs as a shell command. */
+const SHELL_VARIABLES = new Set([
+  ...["GIT_SSH_COMMAND", "GIT_SSH", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_PAGER"],
+  ...["GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "GIT_PROXY_COMMAND", "SSH_ASKPASS"],
+  ...["EDITOR", "VISUAL", "PAGER"],
 ])
+
+/** Builtins whose `NAME=value` arguments set variables. */
+const DECLARATION_COMMANDS = new Set(["export", "declare", "typeset", "local", "readonly"])
+
+/** `GIT_SSH_COMMAND=… git fetch`, `export EDITOR=…`: a value a later command runs as a script. */
+const assignmentRuns = ({ words, assignments }: Invocation): SegmentRuns => {
+  let candidates = assignments
+  if (DECLARATION_COMMANDS.has(commandName(words[0]?.text ?? ""))) {
+    candidates = [...assignments, ...words.slice(1)]
+  }
+  return scriptRuns(
+    candidates.flatMap((word) => {
+      const assignment = Option.fromNullishOr(ASSIGNMENT.exec(word.text))
+      const named = Option.filter(assignment, (match) =>
+        SHELL_VARIABLES.has(match[0].replace(/\+?=$/, "")),
+      )
+      return Option.toArray(Option.map(named, (match) => wordFrom(word, match[0].length)))
+    }),
+  )
+}
+
+/** Git global options whose value is the next word. */
+const GIT_GLOBAL_OPTIONS: ValueOptions = {
+  short: "cC",
+  long: [...["git-dir", "work-tree", "namespace", "config-env", "super-prefix", "attr-source"]],
+}
 
 /** The index of the subcommand word of a git invocation (`words[0]` is `git`). */
 const gitSubcommandIndex = (words: ReadonlyArray<string>): Option.Option<number> => {
-  let cursor = 1
-  while (cursor < words.length && (words[cursor] ?? "").startsWith("-")) {
-    if (GIT_OPTIONS_WITH_VALUE.has(words[cursor] ?? "")) cursor++
-    cursor++
-  }
-  if (cursor < words.length) return Option.some(cursor)
+  const at = 1 + parseArguments(words.slice(1), GIT_GLOBAL_OPTIONS, "leading").end
+  if (at < words.length) return Option.some(at)
   return Option.none()
 }
+
+/** Git config keys whose value git runs as a shell command. */
+const GIT_SHELL_KEYS =
+  /^(core\.(pager|editor|sshcommand|fsmonitor|askpass|gitproxy)|sequence\.editor|diff\.external|gpg\.([^.]+\.)?program|credential\.(.+\.)?helper|interactive\.difffilter|pager\.[^.]+|(filter|diff|merge)\..+\.(clean|smudge|process|textconv|command|driver)|remote\..+\.(uploadpack|receivepack|proxy)|sendemail\.(smtpserver|tocmd|cccmd)|uploadpack\.packobjectshook)$/i
 
 /** The value of an alias definition as the script it runs: `!cmd` runs a shell, anything else a git command. */
 const aliasScript = (value: ShellWord): ShellWord => {
@@ -1170,185 +1796,230 @@ const aliasScript = (value: ShellWord): ShellWord => {
   }
 }
 
-/**
- * What a git invocation runs beyond its own words. `git -c alias.x=<value> x`
- * runs the value now, so it keeps its source offsets. `git config alias.x
- * <value>` stores the value for later runs in any session: it is classified
- * now, as a derived word that nothing rewrites. A subcommand known only at
- * run time (`git $(…)`) cannot be read.
- */
-const gitRuns = ({ words }: Invocation): SegmentRuns => {
-  const texts = words.map((word) => word.text)
-  const scripts: Array<ShellWord> = []
-  const unreadable: Array<string> = []
-  const at = gitSubcommandIndex(texts)
-  const end = Option.getOrElse(at, () => words.length)
-  for (let index = 1; index < end; index++) {
-    const value = Option.fromUndefinedOr(words[index + 1])
-    const definition = Option.flatMap(value, (word) =>
-      Option.fromNullishOr(/^alias\.[^=]+=/.exec(word.text)),
-    )
-    if (texts[index] === "-c" && Option.isSome(value) && Option.isSome(definition)) {
-      scripts.push(aliasScript(wordFrom(value.value, definition.value[0].length)))
-    }
-  }
-  if (Option.isNone(at)) return { scripts, unreadable }
-  const subcommand = words[at.value]
-  if (subcommand?.dynamic === true) {
-    unreadable.push(`a git subcommand known only at run time: ${subcommand.text}`)
-  }
-  if (subcommand?.text !== "config") return { scripts, unreadable }
-  for (let index = at.value + 1; index < words.length; index++) {
-    const value = Option.fromUndefinedOr(words[index + 1])
-    if (/^alias\.[^=]+$/.test(texts[index] ?? "") && Option.isSome(value)) {
-      const stored = aliasScript(value.value)
-      scripts.push(derivedWord(stored.text, stored.dynamic))
-    }
-  }
-  return { scripts, unreadable }
+/** The script a config value runs: an alias, or the value of a shell-running key (`!` optional). */
+const configScript = (key: string, value: ShellWord): Option.Option<ShellWord> => {
+  if (/^alias\.[^=]+$/i.test(key)) return Option.some(aliasScript(value))
+  if (!GIT_SHELL_KEYS.test(key)) return Option.none()
+  if (value.text.startsWith("!")) return Option.some(wordFrom(value, 1))
+  return Option.some(value)
+}
+
+/** `-c key=value`: the value runs now, with its source offsets. */
+const configDefinitionRuns = (definition: ShellWord): SegmentRuns => {
+  const equals = definition.text.indexOf("=")
+  if (equals === -1) return NO_RUNS
+  const key = definition.text.slice(0, equals)
+  return scriptRuns(Option.toArray(configScript(key, wordFrom(definition, equals + 1))))
+}
+
+/** Git subcommands that run an option's value as a shell command. */
+const GIT_SCRIPT_OPTIONS: ReadonlyMap<string, ScriptOptions> = new Map([
+  [
+    "rebase",
+    scriptOptions(
+      { short: "x", long: ["exec"] },
+      { short: "sXC", long: ["strategy", "strategy-option", "onto"] },
+    ),
+  ],
+  ["difftool", scriptOptions({ short: "x", long: ["extcmd"] }, { short: "t", long: ["tool"] })],
+  ...["fetch", "pull", "ls-remote"].map((name): readonly [string, ScriptOptions] => [
+    name,
+    scriptOptions({ long: ["upload-pack"] }),
+  ]),
+  [
+    "clone",
+    scriptOptions(
+      { short: "u", long: ["upload-pack"] },
+      { short: "bco", long: ["branch", "origin", "config", "depth"] },
+    ),
+  ],
+  [
+    "push",
+    scriptOptions(
+      { long: ["receive-pack", "exec"] },
+      { short: "o", long: ["push-option", "repo"] },
+    ),
+  ],
+  [
+    "archive",
+    scriptOptions(
+      { long: ["exec"] },
+      { short: "o", long: ["output", "remote", "format", "prefix"] },
+    ),
+  ],
+  [
+    "filter-branch",
+    scriptOptions(
+      {
+        long: [
+          ...["setup", "env-filter", "tree-filter", "index-filter", "parent-filter"],
+          ...["msg-filter", "commit-filter", "tag-name-filter"],
+        ],
+      },
+      { short: "d", long: ["subdirectory-filter", "original", "state-branch"] },
+    ),
+  ],
+])
+
+/** Git subcommands whose action runs the words after it: `submodule foreach`, `bisect run`. */
+const GIT_COMMAND_ACTIONS: ReadonlyMap<string, string> = new Map([
+  ["submodule", "foreach"],
+  ["bisect", "run"],
+])
+
+/** `git submodule foreach <cmd>` and `git bisect run <cmd>` run their remaining words. */
+const gitCommandRuns = (subcommand: string, args: ReadonlyArray<ShellWord>): SegmentRuns => {
+  const action = Option.fromUndefinedOr(GIT_COMMAND_ACTIONS.get(subcommand))
+  const texts = args.map((word) => word.text)
+  const at = parseArguments(texts, {}, "leading").end
+  if (Option.isNone(action) || texts[at] !== action.value) return NO_RUNS
+  const start = at + 1 + parseArguments(texts.slice(at + 1), {}, "leading").end
+  return joinedRuns(`git ${subcommand} ${action.value}`, args.slice(start))
 }
 
 /**
- * The scripts one command runs: the argument after a shell's `-c`, what a
- * shell with no script argument reads on stdin, the joined words of `eval`,
- * `ssh` and `watch`, the input of `xargs`/`parallel`, and git aliases.
- * Quoted text anywhere else, such as a commit message or `cat <<EOF` notes,
- * is data.
+ * What a git invocation runs beyond its own words. `git -c key=<value>` runs
+ * an alias or a shell-running key (`core.pager`, `core.sshCommand`) now, so
+ * the value keeps its source offsets. `git config key <value>` stores it
+ * for later runs in any session: it is classified now, as a derived word
+ * that nothing rewrites. `rebase -x`, `submodule foreach` and `bisect run`
+ * run their commands. A subcommand known only at run time (`git $(…)`), or a
+ * shell-running value read from the environment, cannot be read.
  */
-const invocationRuns = (invocation: Invocation): SegmentRuns => {
+const gitRuns = ({ words }: Invocation): SegmentRuns => {
+  const texts = words.slice(1).map((word) => word.text)
+  const global = parseArguments(texts, GIT_GLOBAL_OPTIONS, "leading")
+  const runs: Array<SegmentRuns> = []
+  for (const value of optionValues(global, "c")) {
+    runs.push(...Option.toArray(Option.map(valueWord(words, value), configDefinitionRuns)))
+  }
+  for (const value of optionValues(global, "", ["config-env"])) {
+    const key = valueText(texts, value).split("=", 1)[0] ?? ""
+    if (GIT_SHELL_KEYS.test(key) || /^alias\./i.test(key)) {
+      runs.push(unreadableRun(`a git config value read from the environment: ${key}`))
+    }
+  }
+  const at = 1 + global.end
+  const subcommand = Option.fromUndefinedOr(words[at])
+  if (Option.isNone(subcommand)) return mergeRuns(runs)
+  if (subcommand.value.dynamic) {
+    runs.push(unreadableRun(`a git subcommand known only at run time: ${subcommand.value.text}`))
+  }
+  const name = subcommand.value.text
+  const args = words.slice(at + 1)
+  const scripts = Option.fromUndefinedOr(GIT_SCRIPT_OPTIONS.get(name))
+  if (Option.isSome(scripts))
+    runs.push(scriptRuns(optionScripts([subcommand.value, ...args], scripts.value)))
+  runs.push(gitCommandRuns(name, args))
+  if (name === "config") {
+    for (const [index, key] of args.entries()) {
+      const value = Option.fromUndefinedOr(args[index + 1])
+      const stored = Option.flatMap(value, (word) => configScript(key.text, word))
+      if (Option.isSome(stored)) {
+        runs.push(scriptRuns([derivedWord(stored.value.text, stored.value.dynamic)]))
+      }
+    }
+  }
+  return mergeRuns(runs)
+}
+
+/** `trap '<script>' SIGNAL`: the script runs when the signal (or `EXIT`) comes. */
+const trapRuns = ({ words }: Invocation): SegmentRuns => {
+  const parsed = parseWords(words, {}, "leading")
+  const script = words.slice(1 + parsed.end, 2 + parsed.end)
+  if (parsed.operands.length < 2) return NO_RUNS
+  return joinedRuns("trap", script)
+}
+
+/**
+ * The scripts one command's words run: the argument after a shell's `-c`,
+ * what a shell with no script argument reads on stdin, the joined words of
+ * `eval`, `ssh` and `watch`, the input of `xargs`/`parallel`, a `su -c`
+ * script, and what git runs. Quoted text anywhere else, such as a commit
+ * message or `cat <<EOF` notes, is data.
+ */
+const commandRuns = (invocation: Invocation): SegmentRuns => {
   const name = invocationName(invocation)
   const { words } = invocation
+  const head = Option.fromUndefinedOr(words[0])
+  if (Option.isNone(head)) return NO_RUNS
   // `$(printf git) reset --hard`, `$G reset --hard`: the command itself is computed.
-  if (words[0]?.dynamic === true) {
-    return { scripts: [], unreadable: [`a command known only at run time: ${words[0].text}`] }
-  }
+  if (head.value.dynamic)
+    return unreadableRun(`a command known only at run time: ${head.value.text}`)
+  // `/bin/r? -rf x`, `{rm,-rf,/}`: the shell expands the command word to other words.
+  if (head.value.pattern)
+    return unreadableRun(`a command word the shell expands: ${head.value.text}`)
   const split = envSplitWords(words)
   if (Option.isSome(split)) return joinedRuns(name, split.value)
   if (SHELL_NAMES.has(name)) return shellRuns(invocation)
-  if (name === "source" || name === ".") {
-    return scriptFileRuns(Option.fromUndefinedOr(invocation.words[1]))
-  }
+  if (FOREIGN_SHELLS.has(name)) return foreignShellRuns(invocation)
+  if (name === "source" || name === ".") return scriptFileRuns(Option.fromUndefinedOr(words[1]))
   if (name === "git") return gitRuns(invocation)
+  if (name === "trap") return trapRuns(invocation)
+  const runs: Array<SegmentRuns> = []
+  const options = Option.fromUndefinedOr(OPTION_SCRIPTS.get(name))
+  if (Option.isSome(options)) runs.push(scriptRuns(optionScripts(words, options.value)))
   const joiner = Option.fromUndefinedOr(SCRIPT_JOINERS.get(name))
-  if (Option.isSome(joiner)) {
-    return joinedRuns(name, words.slice(prefixEnd(words, joiner.value)))
-  }
+  if (Option.isSome(joiner))
+    runs.push(joinedRuns(name, words.slice(prefixEnd(words, joiner.value))))
   const wrapper = Option.fromUndefinedOr(WRAPPERS.get(name))
   if ((name === "xargs" || name === "parallel") && Option.isSome(wrapper)) {
-    return inputWrapperRuns(invocation, wrapper.value)
+    runs.push(inputWrapperRuns(invocation, wrapper.value))
   }
-  return NO_RUNS
+  return mergeRuns(runs)
 }
+
+/** What one command runs: the scripts of its words and of its environment. */
+const invocationRuns = (invocation: Invocation): SegmentRuns =>
+  mergeRuns([assignmentRuns(invocation), commandRuns(invocation)])
 
 const MAX_NESTED_COMMAND_DEPTH = 4
 
-/** Every command of a command line and of the scripts it runs, and what could not be read. */
+/** Every command of a command line and of the scripts it runs, the files it redirects into, and what could not be read. */
 interface CommandView {
   readonly invocations: ReadonlyArray<Invocation>
+  readonly writes: ReadonlyArray<ShellWord>
   readonly unreadable: ReadonlyArray<string>
+}
+
+/**
+ * The stdin of a script a command in `segment` runs: the command's own. Its
+ * heredoc or here-string reaches the script through the command, a producer
+ * the guard does not trace.
+ */
+const scriptInput = (segment: ShellSegment): Option.Option<ShellSegment> => {
+  if (segment.stdin.length === 0) return segment.pipedFrom
+  return Option.some(makeSegment(Option.none()))
 }
 
 /** The commands of `segments` and of the scripts they run, up to `maxDepth` levels deep. */
 const viewCommand = (segments: ReadonlyArray<ShellSegment>, maxDepth: number): CommandView => {
   const invocations: Array<Invocation> = []
+  const writes: Array<ShellWord> = []
   const unreadable: Array<string> = []
   for (const segment of segments) {
+    writes.push(...segment.writes)
     const found: Array<Invocation> = []
     collectInvocations(segment, segment.words, found)
     invocations.push(...found)
-    const runs = mergeRuns(found.map(invocationRuns))
-    unreadable.push(...runs.unreadable)
-    if (runs.scripts.length > 0 && maxDepth <= 0) unreadable.push("scripts nested too deep")
-    if (maxDepth <= 0) continue
-    for (const script of runs.scripts) {
-      const nested = viewCommand(parseShell(script), maxDepth - 1)
-      invocations.push(...nested.invocations)
-      unreadable.push(...nested.unreadable)
+    for (const invocation of found) {
+      const runs = invocationRuns(invocation)
+      unreadable.push(...runs.unreadable)
+      if (runs.scripts.length > 0 && maxDepth <= 0) unreadable.push("scripts nested too deep")
+      if (maxDepth <= 0) continue
+      for (const script of runs.scripts) {
+        const input = scriptInput(invocation.segment)
+        const nested = viewCommand(parseShell(script, input), maxDepth - 1)
+        invocations.push(...nested.invocations)
+        writes.push(...nested.writes)
+        unreadable.push(...nested.unreadable)
+      }
     }
   }
-  return { invocations, unreadable }
+  return { invocations, writes, unreadable }
 }
 
 // ── command classification ──
-
-/** The options and operands of one command (a git subcommand, `rm`, `npm`). */
-interface ParsedArguments {
-  /** Letters of every short option cluster (`-fd` holds `f` and `d`). */
-  readonly shorts: ReadonlySet<string>
-  /** Long option names as written, without `--` and `=value`. */
-  readonly longs: ReadonlyArray<string>
-  /** Operands before `--`. */
-  readonly operands: ReadonlyArray<string>
-  /** Operands after `--`. */
-  readonly pathspecs: ReadonlyArray<string>
-}
-
-/** The options of a command that take the next word (or the rest of a short cluster) as a value. */
-interface ValueOptions {
-  readonly short?: string
-  readonly long?: ReadonlyArray<string>
-}
-
-/**
- * Git reads any unambiguous prefix of a long option as that option
- * (`--ha` is `--hard`). A written name that is a prefix of `name` is read as
- * `name`. An ambiguous prefix makes git exit with an error, so reading it as
- * the risky option asks for approval of a command that would do nothing.
- */
-const abbreviates = (written: string, name: string) =>
-  written.length > 0 && name.startsWith(written)
-
-/** Record one option word; returns true when the next word is its value. */
-const readOption = (
-  arg: string,
-  valued: ValueOptions,
-  shorts: Set<string>,
-  longs: Array<string>,
-): boolean => {
-  if (arg.startsWith("--")) {
-    const [name = ""] = arg.slice(2).split("=", 1)
-    longs.push(name)
-    return !arg.includes("=") && (valued.long ?? []).some((option) => abbreviates(name, option))
-  }
-  for (let at = 1; at < arg.length; at++) {
-    const letter = arg.charAt(at)
-    shorts.add(letter)
-    // The rest of the cluster is the value; a bare letter takes the next word.
-    if ((valued.short ?? "").includes(letter)) return at === arg.length - 1
-  }
-  return false
-}
-
-const parseArguments = (
-  args: ReadonlyArray<string>,
-  valued: ValueOptions = {},
-): ParsedArguments => {
-  const shorts = new Set<string>()
-  const longs: Array<string> = []
-  const operands: Array<string> = []
-  let options = args
-  let pathspecs: ReadonlyArray<string> = []
-  const separator = args.indexOf("--")
-  if (separator !== -1) {
-    options = args.slice(0, separator)
-    pathspecs = args.slice(separator + 1)
-  }
-  for (let index = 0; index < options.length; index++) {
-    const arg = options[index] ?? ""
-    if (arg.startsWith("-") && arg.length > 1) {
-      if (readOption(arg, valued, shorts, longs)) index++
-    } else {
-      operands.push(arg)
-    }
-  }
-  return { shorts, longs, operands, pathspecs }
-}
-
-const hasShort = (parsed: ParsedArguments, ...letters: ReadonlyArray<string>) =>
-  letters.some((letter) => parsed.shorts.has(letter))
-
-const hasLong = (parsed: ParsedArguments, ...names: ReadonlyArray<string>) =>
-  parsed.longs.some((written) => names.some((name) => abbreviates(written, name)))
 
 const destructive = (reason: string) => Option.some<BashRisk>({ level: "destructive", reason })
 
@@ -1488,13 +2159,13 @@ const gitRisk = (args: ReadonlyArray<string>): Option.Option<BashRisk> => {
 
 const KILL_SIGNALS = new Set(["9", "KILL", "SIGKILL"])
 
-/** `kill -9`, `kill -KILL`, `kill -s KILL`. */
+/** `kill -9`, `kill -KILL`, `kill -s KILL`, `kill -sKILL`, `kill --signal=KILL`. */
 const killsHard = (args: ReadonlyArray<string>) =>
-  args.some(
-    (arg, index) =>
-      KILL_SIGNALS.has(arg.replace(/^-/, "")) ||
-      ((arg === "-s" || arg === "-n") && KILL_SIGNALS.has(args[index + 1] ?? "")),
-  )
+  args.some((arg, index) => {
+    const signals = [arg.replace(/^-/, ""), /^(?:-[sn]|--signal=)(.+)$/.exec(arg)?.[1] ?? ""]
+    if (["-s", "-n", "--signal"].includes(arg)) signals.push(args[index + 1] ?? "")
+    return signals.some((signal) => KILL_SIGNALS.has(signal))
+  })
 
 const SQL_DESTRUCTIVE = /\b(drop|truncate)\s+table\b/i
 
@@ -1521,15 +2192,25 @@ const SENSITIVE_FILES: ReadonlyArray<readonly [RegExp, string]> = [
   [/(^|\/)(credentials|secrets?)(\.(json|ya?ml|toml|ini|txt))?$/i, "modifies credentials"],
 ]
 
+/** A key or secret file named by `path`. */
+const sensitiveFile = (path: string): Option.Option<BashRisk> =>
+  Option.map(
+    Option.fromUndefinedOr(SENSITIVE_FILES.find(([pattern]) => pattern.test(path))),
+    ([, reason]): BashRisk => ({ level: "sensitive", reason }),
+  )
+
+const sensitiveOperands = (parsed: ParsedArguments): Option.Option<BashRisk> =>
+  Arr.findFirst([...parsed.operands, ...parsed.pathspecs], (operand) => sensitiveFile(operand))
+
 /** A command that writes, moves or deletes a key or secret file. */
-const sensitiveRisk = (args: ReadonlyArray<string>): Option.Option<BashRisk> => {
+const sensitiveRisk = (args: ReadonlyArray<string>): Option.Option<BashRisk> =>
+  sensitiveOperands(parseArguments(args))
+
+/** `sed -i` rewrites its files in place. */
+const sedRisk = (args: ReadonlyArray<string>): Option.Option<BashRisk> => {
   const parsed = parseArguments(args)
-  for (const operand of [...parsed.operands, ...parsed.pathspecs]) {
-    for (const [pattern, reason] of SENSITIVE_FILES) {
-      if (pattern.test(operand)) return Option.some({ level: "sensitive", reason })
-    }
-  }
-  return Option.none()
+  if (!hasShort(parsed, "i") && !hasLong(parsed, "in-place")) return Option.none()
+  return sensitiveOperands(parsed)
 }
 
 type CommandRisk = (args: ReadonlyArray<string>, invocation: Invocation) => Option.Option<BashRisk>
@@ -1556,18 +2237,77 @@ const rootRmRisk: CommandRisk = (_args, { words }) => {
   )
 }
 
-/** The first two operands name the action: `docker push`, `docker image push`, `yarn npm publish`. */
-const actionIs = (args: ReadonlyArray<string>, action: string) =>
-  parseArguments(args).operands.slice(0, 2).includes(action)
+/**
+ * The command's subcommand is the action: the first word after its leading
+ * options and any group words (`docker image push`, `npm -w pkg publish`,
+ * `yarn workspace x npm publish`). The same word later is an argument:
+ * `docker run alpine push` runs a container.
+ */
+const actionRisk = (
+  action: string,
+  reason: string,
+  valued: ValueOptions = {},
+  groups: ReadonlyMap<string, number> = new Map(),
+): CommandRisk => {
+  const subcommandIs = (args: ReadonlyArray<string>): boolean => {
+    const at = parseArguments(args, valued, "leading").end
+    const word = Option.fromUndefinedOr(args[at])
+    if (Option.isNone(word)) return false
+    const skip = Option.fromUndefinedOr(groups.get(word.value))
+    if (Option.isSome(skip)) return subcommandIs(args.slice(at + 1 + skip.value))
+    return word.value === action
+  }
+  return (args) => {
+    let rest = args
+    // `cargo +nightly publish`: a toolchain before the subcommand.
+    if (rest[0]?.startsWith("+") === true) rest = rest.slice(1)
+    return Option.filter(Option.some<BashRisk>({ level: "external", reason }), () =>
+      subcommandIs(rest),
+    )
+  }
+}
 
-const externalWhen = (condition: boolean, reason: string) =>
-  Option.filter(Option.some<BashRisk>({ level: "external", reason }), () => condition)
+const PUBLISH_OPTIONS = ["tag", "access", "registry", "otp"]
+
+/** Package managers: the options before their subcommand that take a value, and the words that group subcommands (`yarn workspace foo npm publish`). */
+const PUBLISHERS: ReadonlyArray<readonly [string, ValueOptions, ReadonlyMap<string, number>]> = [
+  [
+    "npm",
+    { short: "w", long: ["workspace", "prefix", "userconfig", "cache", ...PUBLISH_OPTIONS] },
+    new Map(),
+  ],
+  ["pnpm", { short: "CF", long: ["filter", "dir", ...PUBLISH_OPTIONS] }, new Map()],
+  [
+    "yarn",
+    { long: ["cwd", ...PUBLISH_OPTIONS] },
+    new Map([
+      ["workspace", 1],
+      ["npm", 0],
+    ]),
+  ],
+  ["bun", { short: "F", long: ["cwd", "filter", "config", ...PUBLISH_OPTIONS] }, new Map()],
+  [
+    "cargo",
+    {
+      short: "pZ",
+      long: ["package", "manifest-path", "registry", "token", "config", "index", "color"],
+    },
+    new Map(),
+  ],
+]
+
+/** Docker global options that take a value. */
+const DOCKER_OPTIONS: ValueOptions = {
+  short: "Hcl",
+  long: ["host", "context", "config", "log-level", "tlscacert", "tlscert", "tlskey"],
+}
 
 /** The risk of each command the guard checks, read from its words. */
 const COMMAND_RISKS: ReadonlyMap<string, ReadonlyArray<CommandRisk>> = new Map([
   ...riskOf(["git"], gitRisk),
   ...riskOf(["rm"], rmRisk, sensitiveRisk),
   ...riskOf(["cp", "mv", "chmod", "chown", "tee"], sensitiveRisk),
+  ...riskOf(["sed"], sedRisk),
   ...riskOf(["find"], (args) => destructiveWhen(args.includes("-delete"), "find -delete")),
   ...riskOf(["kill"], (args) => destructiveWhen(killsHard(args), "kill -9")),
   ...riskOf(["pkill", "killall"], (_args, { words }) => destructive(words[0]?.text ?? "")),
@@ -1580,11 +2320,12 @@ const COMMAND_RISKS: ReadonlyMap<string, ReadonlyArray<CommandRisk>> = new Map([
   ),
   ...riskOf(["sudo", "doas"], rootRmRisk),
   ...riskOf(["psql", "mysql", "mariadb", "sqlite3", "duckdb"], sqlRisk),
-  ...riskOf(["npm", "pnpm", "yarn", "bun", "cargo"], (args) =>
-    externalWhen(actionIs(args, "publish"), "publishes a package"),
-  ),
-  ...riskOf(["docker"], (args) => externalWhen(actionIs(args, "push"), "docker push")),
-  ...riskOf(["twine"], (args) => externalWhen(actionIs(args, "upload"), "twine upload")),
+  ...PUBLISHERS.map(([name, valued, groups]): readonly [string, ReadonlyArray<CommandRisk>] => [
+    name,
+    [actionRisk("publish", "publishes a package", valued, groups)],
+  ]),
+  ...riskOf(["docker"], actionRisk("push", "docker push", DOCKER_OPTIONS, new Map([["image", 0]]))),
+  ...riskOf(["twine"], actionRisk("upload", "twine upload")),
 ])
 
 const invocationRisks = (invocation: Invocation): Array<BashRisk> => {
@@ -1604,13 +2345,14 @@ const RISK_RANK = {
 /**
  * The strongest risk of every command in `command` and in every script it
  * runs (`bash -c '...'`, `eval "..."`, `$(...)`, a heredoc fed to a shell, a
- * git alias). A script the guard cannot read asks, as a destructive command
- * does.
+ * git alias), and of every file it redirects into. A script the guard cannot
+ * read asks, as a destructive command does.
  */
 export function classifyBashCommand(command: string): BashRisk {
   const view = viewCommand(parseCommand(command), MAX_NESTED_COMMAND_DEPTH)
   const risks: Array<BashRisk> = [
     ...view.invocations.flatMap(invocationRisks),
+    ...view.writes.flatMap((word) => Option.toArray(sensitiveFile(word.text))),
     ...view.unreadable.map((reason): BashRisk => ({
       level: "destructive",
       reason: `runs a script the guard cannot read: ${reason}`,
@@ -1712,6 +2454,21 @@ export function splitCdCommand(cmd: string): Option.Option<{ cwd: string; comman
   return Option.none()
 }
 
+/** `git commit` options whose value is the next word. */
+const COMMIT_OPTIONS: ValueOptions = {
+  short: "mFCct",
+  long: [
+    ...["message", "file", "reuse-message", "reedit-message", "template", "author", "date"],
+    ...["cleanup", "fixup", "squash", "trailer", "pathspec-from-file"],
+  ],
+}
+
+/** A commit that already passes a `Session-Id` trailer; a message that reads `--trailer` passes none. */
+const namesSessionTrailer = (args: ReadonlyArray<string>) =>
+  optionValues(parseArguments(args, COMMIT_OPTIONS), "", ["trailer"]).some((value) =>
+    /^session-id\s*[:=]/i.test(valueText(args, value)),
+  )
+
 /** A session id bash reads as one plain word: the trailer needs no quoting at any depth. */
 const SHELL_PLAIN_WORD = /^[\w.:@%+-]+$/
 
@@ -1719,8 +2476,10 @@ const SHELL_PLAIN_WORD = /^[\w.:@%+-]+$/
  * Add the session trailer to each `git commit`, right after its `commit`
  * word, so it lands before any `--` pathspec. Commits are found from shell
  * words, so a message, a heredoc body or other quoted text that mentions
- * `git commit` is never changed. A commit that passes its own `--trailer`
- * keeps it. A commit in a script a shell runs (`bash -c '...'`, `$(...)`, a
+ * `git commit` is never changed. A commit that passes its own `Session-Id`
+ * trailer keeps it; another trailer does not stop this one. A command found
+ * only by name among another command's words (`nix develop -c git commit`)
+ * gets none: it may be data. A commit in a script a shell runs (`bash -c '...'`, `$(...)`, a
  * `-c alias.x=` alias) gets the trailer too, when the id needs no quoting and
  * the insertion stays inside the quoted script word. An escaped script word
  * (`bash -c git\\ commit`) gets none: an unescaped space would split it. A
@@ -1741,7 +2500,7 @@ export function injectGitTrailers(cmd: string, sessionId: SessionId): string {
     const texts = invocation.words.map((word) => word.text)
     const at = Option.filter(gitSubcommandIndex(texts), (index) => texts[index] === "commit")
     if (Option.isNone(at)) continue
-    if (texts.slice(at.value + 1).some((arg) => arg.startsWith("--trailer"))) continue
+    if (namesSessionTrailer(texts.slice(at.value + 1))) continue
     const word = Option.fromUndefinedOr(invocation.words[at.value])
     if (Option.isSome(word) && word.value.endSafe) offsets.add(word.value.end)
   }
@@ -2124,8 +2883,9 @@ export const BashTool = tool({
 
 const EXEC_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/exec-tools")
 
-// A job still marked running belongs to a process that is gone: mark it
-// interrupted before the supervisor takes new work.
+// A job still marked running that an earlier server process started belongs
+// to a process that is gone: mark it interrupted before the supervisor takes
+// new work. A job this process runs stays running when another profile builds.
 const ReconcileInterruptedJobs = Layer.effectDiscard(
   Effect.gen(function* () {
     const storage = yield* BackgroundBashStorage
