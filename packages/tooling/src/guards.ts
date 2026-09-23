@@ -2288,39 +2288,6 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
   },
 ]
 
-/**
- * Exports kept alive on purpose, each with the reason.
- *
- * An entry here is a claim that the name earns its keep despite having no
- * consumer. Prefer deleting the export.
- */
-const ALLOWLIST: ReadonlyMap<string, string> = new Map([
-  [
-    "formatBranchLabel",
-    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
-  ],
-  [
-    "transition",
-    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
-  ],
-  [
-    "AuthOauth",
-    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
-  ],
-  [
-    "resolveTurnContext",
-    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
-  ],
-  [
-    "resolveTurnSource",
-    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
-  ],
-  [
-    "StepOutcome",
-    "named only in another file's comment; the batch that owns the file drops the `export`, then this entry",
-  ],
-])
-
 const surfaceOf = (file: string): Option.Option<ScannedSurface> =>
   Option.fromNullishOr(SCANNED_SURFACES.find((surface) => file.startsWith(surface.prefix)))
 
@@ -2919,7 +2886,6 @@ export const findUnconsumedExports = (
   for (const [file, facts] of factsByFile) {
     const reported = new Set<string>()
     for (const declaration of facts.declarations) {
-      if (ALLOWLIST.has(declaration.name)) continue
       if (isConsumed(file, declaration)) continue
       if (Option.isSome(declaration.surface.specifier)) {
         if (reported.has(declaration.name)) continue

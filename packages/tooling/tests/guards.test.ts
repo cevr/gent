@@ -1692,6 +1692,26 @@ void Orphan
     ])
   })
 
+  test("no name is exempt by itself: a dead export is reported whatever it is called", () => {
+    // A name-keyed exemption table once let `transition` and five other names
+    // die silently on every surface, long after the exports it meant were gone.
+    const names = [
+      "formatBranchLabel",
+      "transition",
+      "AuthOauth",
+      "resolveTurnContext",
+      "resolveTurnSource",
+      "StepOutcome",
+    ]
+    const findings = findingsFor([
+      {
+        file: "packages/core/src/runtime/probe.ts",
+        text: names.map((name) => `export const ${name} = 1\n`).join(""),
+      },
+    ])
+    expect(findings.map((finding) => finding.message.split("`")[1])).toEqual(names)
+  })
+
   test("core's exempt entry points declare nothing as a module", () => {
     const source = `export const tool = 1\n`
     expect(declaredNames(API_FILE, source)).toEqual([])
