@@ -1215,7 +1215,7 @@ export const compileToolPolicy = (
   // 3. Re-apply agent deny list — extensions can't escape denials
   tools = applyDenyFilter(tools, agent)
 
-  // 4. Filter interactive tools in a turn no user started (`turnCanAsk`)
+  // 4. Filter interactive tools in a turn no user watches (`turnCanAsk`)
   if (turn.interactive === false) {
     tools = tools.filter((t) => getToolMetadata(t).interactive !== true)
   }

@@ -23,6 +23,7 @@ import {
   Session,
   type SessionAdmission,
   toolCallReceipts,
+  clientMetadata,
 } from "../domain/message.js"
 import {
   BranchStorage,
@@ -151,6 +152,18 @@ import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "..
 import { messagesInCurrentWindow, settledMessages } from "../runtime/model-context.js"
 import { RpcSerialization, RpcServer, RpcTest } from "effect/unstable/rpc"
 import type { Headers } from "effect/unstable/http"
+
+// ── client origin ───────────────────────────────────────────────────────────
+
+/**
+ * A client's steer as the loop receives it: an interjection carries the
+ * server's client origin over whatever the client set (`clientMetadata`), so
+ * no client can claim an extension author or drop its own origin.
+ */
+const clientSteer = (command: TransportSteerCommand): TransportSteerCommand => {
+  if (command._tag !== "Interject") return command
+  return { ...command, metadata: clientMetadata(command.metadata) }
+}
 
 // ── connection-tracker ──────────────────────────────────────────────────────
 
@@ -530,6 +543,7 @@ const makeSessionMutationsService: Effect.Effect<
       sessionId: operation.sessionId,
       branchId: operation.branchId,
       content: operation.initialPrompt,
+      metadata: clientMetadata(),
     }
     if (Option.isSome(requestId)) {
       message = { ...message, requestId: `session.create:${requestId.value}:initial` }
@@ -1195,6 +1209,7 @@ const RpcHandlers = GentRpcs.toLayer(
             branchId: input.branchId,
             content: input.content,
             requestId: input.requestId,
+            metadata: clientMetadata(),
           })
           .pipe(
             Effect.tap(() =>
@@ -1324,7 +1339,7 @@ const RpcHandlers = GentRpcs.toLayer(
       "message.list": ({ branchId }: BranchPayload) => messageStorage.listMessages(branchId),
 
       "steer.command": ({ command }: { readonly command: TransportSteerCommand }) =>
-        rpc("steer.command", sessionRuntime.steer(command), () => ({
+        rpc("steer.command", sessionRuntime.steer(clientSteer(command)), () => ({
           sessionId: command.sessionId,
           branchId: command.branchId,
           steerTag: command._tag,

@@ -1220,9 +1220,9 @@ type AgentLoopBehavior = {
    * the withdrawal has to reach the admission gate as well.
    */
   withdrawFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
-  /** The profile for one run; `interactive` says whether a user can answer in it. */
+  /** The profile for one run; `openedByClient` says whether a client opened it (`turnCanAsk`). */
   resolveTurnProfile: (run: {
-    readonly interactive: boolean
+    readonly openedByClient: boolean
   }) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
   /**
    * Branch-lifetime services: the cell kernel, the model context ledger, and
@@ -1393,12 +1393,12 @@ const makeAgentLoopBehavior = (
       },
     })
 
-    const resolveTurnProfile = (run: { readonly interactive: boolean }) =>
+    const resolveTurnProfile = (run: { readonly openedByClient: boolean }) =>
       provideAgentLoopRuntimeContext(runtimeContext)(
         resolveSessionTurnProfile({
           sessionId,
           branchId,
-          interactive: run.interactive,
+          openedByClient: run.openedByClient,
           profileCache,
           hostProvider,
           defaults: { baseSections },
@@ -1431,7 +1431,7 @@ const makeAgentLoopBehavior = (
       // The branch's Resources are built over this profile's services, so
       // the loop holds its lease until the branch closes. No turn's origin
       // reaches them.
-      const profile = yield* resolveTurnProfile({ interactive: true }).pipe(
+      const profile = yield* resolveTurnProfile({ openedByClient: true }).pipe(
         Scope.provide(loopScope),
       )
       return yield* Effect.uninterruptible(
@@ -2469,7 +2469,7 @@ const buildAgentLoopActorHandlers = (config: {
             yield* ensureTarget(operation)
             const handle = yield* ensureStarted
             // A request comes from a client, which can answer.
-            const environment = yield* handle.resolveTurnProfile({ interactive: true })
+            const environment = yield* handle.resolveTurnProfile({ openedByClient: true })
             const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
             const capabilityId = RpcId.make(operation.capabilityId)
             let input: unknown = Option.getOrUndefined(Option.none())

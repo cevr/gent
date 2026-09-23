@@ -557,7 +557,7 @@ export function ensureStorageParents(input: {
 
 /**
  * Where a turn or leaf runs: its session, its branch, and optionally its cwd.
- * `interactive: false` runs it as a turn an extension opened; absent, a user
+ * `interactive: false` runs it as a turn no user watches; absent, a user
  * can answer.
  */
 interface HarnessRun {
@@ -581,6 +581,7 @@ export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (ru
     turnExtensionRegistry: profile.registryService,
     turnBaseSections: profile.baseSections,
     turnHostCtx: hostProvider.forRun(hostRun(run)),
+    turnInteractive: hostRun(run).interactive,
   }
   const toolBindings = yield* Effect.gen(function* () {
     const bindings = new Map<string, ResolvedToolCapability>()

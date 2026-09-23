@@ -225,10 +225,17 @@ export const MessageMetadata = Schema.Struct({
   customType: Schema.optional(Schema.String),
   /**
    * The extension that authored this message. `Session.send` sets it on
-   * every message an extension admits, so a turn such a message opens (a
-   * child's task, a parent's message, a wake, a monitor) has no user to ask.
+   * every message an extension admits (a child's task, a parent's message, a
+   * wake, a monitor). A client's message never carries it: the server removes
+   * it at the RPC boundary.
    */
   extensionId: Schema.optional(Schema.String),
+  /**
+   * Set by the server on every message a client sends (`clientMetadata`),
+   * over any value the client gave; an extension's `Session.send` removes it.
+   * A turn such a message opens has a user watching it (`turnCanAsk`).
+   */
+  fromClient: Schema.optional(Schema.Boolean),
   /** If true, message is excluded from LLM context but visible in transcript */
   hidden: Schema.optional(Schema.Boolean),
   /**
@@ -244,13 +251,34 @@ export const MessageMetadata = Schema.Struct({
 export type MessageMetadata = typeof MessageMetadata.Type
 
 /**
- * Whether a turn can ask its user: only a turn a client's prompt opened has
- * one watching it. A turn an extension admitted declines every approval at
- * once. The answer comes from the turn's opening message, so it holds for
- * the turn's whole life, a restart included.
+ * The envelope of a message a client sends: the server's client origin over
+ * whatever the client set, and no extension author. Only the server calls
+ * this, at the RPC boundary, so no client can forge either field.
  */
-export const turnCanAsk = (opening: Message): boolean =>
-  Predicate.isUndefined(opening.metadata?.extensionId)
+export const clientMetadata = (metadata?: MessageMetadata): MessageMetadata => {
+  const { extensionId: _author, ...rest } = Option.getOrElse(
+    Option.fromUndefinedOr(metadata),
+    (): MessageMetadata => ({}),
+  )
+  return { ...rest, fromClient: true }
+}
+
+/**
+ * Whether a turn can ask its user. A top-level session always has its user
+ * watching, so its wake, monitor and child-completion turns ask too. A child
+ * session's turn asks only when a client opened it: no one watches a turn its
+ * parent, a wake or a monitor opened, so an approval there declines at once.
+ * A child row stored before the client origin existed has no stamp, so it
+ * declines. The answer comes from the turn's opening message and the stored
+ * session, so it holds for the turn's whole life, a restart included.
+ */
+export const turnCanAsk = (turn: {
+  readonly sessionHasParent: boolean
+  readonly openedByClient: boolean
+}): boolean => !turn.sessionHasParent || turn.openedByClient
+
+/** Whether a client sent the message that opens a turn (`clientMetadata`). */
+export const openedByClient = (opening: Message): boolean => opening.metadata?.fromClient === true
 
 // Steer Command — RPC payload that targets a session/branch loop.
 // Lives beside the message vocabulary: an Interject carries the envelope of

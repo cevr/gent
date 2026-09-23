@@ -856,7 +856,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-profile"),
           branchId: BranchId.make("branch-runtime-context-profile"),
-          interactive: true,
+          openedByClient: true,
           profileCache,
           hostProvider,
           defaults: { baseSections: [] },
@@ -887,7 +887,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
-          interactive: true,
+          openedByClient: true,
           hostProvider,
           defaults,
         })
@@ -923,7 +923,7 @@ describe("resolveTurnProfile", () => {
           resolveTurnProfile({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            interactive: true,
+            openedByClient: true,
             hostProvider,
             defaults: { baseSections: [] },
           }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
@@ -992,7 +992,7 @@ describe("resolveTurnProfile", () => {
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
-          interactive: true,
+          openedByClient: true,
           profileCache: fakeProfileCache,
           hostProvider,
           defaults: { baseSections: [] },

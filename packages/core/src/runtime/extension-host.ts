@@ -128,7 +128,13 @@ import {
 import { SqlClient } from "effect/unstable/sql"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { ActorStateRegistry, listStateEntityIds, stateOf } from "effect-encore"
-import { type Branch, Message, type MessageMetadata, type Session } from "../domain/message.js"
+import {
+  type Branch,
+  Message,
+  type MessageMetadata,
+  type Session,
+  turnCanAsk,
+} from "../domain/message.js"
 import {
   AgentLoop as AgentLoopActor,
   entityIdOf,
@@ -2209,8 +2215,8 @@ interface MakeExtensionHostContextRunInfo {
   /** Session-scoped cwd. Falls back to RuntimeEnvironment.cwd when absent. */
   readonly sessionCwd?: string
   /**
-   * False: an extension opened this turn (`turnCanAsk`), so no user can
-   * answer an approval in it.
+   * False: no user watches this turn (`turnCanAsk`), so no one can answer
+   * an approval in it.
    */
   readonly interactive: boolean
 }
@@ -2656,8 +2662,8 @@ export const sessionWorkingDirectory = (
 export const resolveTurnProfile = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  /** Whether a user can answer in this run (`turnCanAsk` of its opening message). */
-  readonly interactive: boolean
+  /** Whether a client opened this run (`openedByClient` of its opening message). */
+  readonly openedByClient: boolean
   readonly profileCache?: SessionProfileCacheService
   readonly hostProvider: ExtensionHostContextProvider
   readonly defaults: TurnProfileDefaults
@@ -2671,11 +2677,17 @@ export const resolveTurnProfile = (params: {
     const hostProvider = params.hostProvider
     const session = yield* storedSession(params.sessionId)
     const sessionCwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
+    const interactive = turnCanAsk({
+      sessionHasParent: Option.exists(session, (value) =>
+        Predicate.isNotUndefined(value.parentSessionId),
+      ),
+      openedByClient: params.openedByClient,
+    })
     const runInfo = {
       sessionId: params.sessionId,
       branchId: params.branchId,
       sessionCwd: Option.getOrUndefined(sessionCwd),
-      interactive: params.interactive,
+      interactive,
     }
     const profile = yield* Option.match(
       Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),
@@ -2689,12 +2701,14 @@ export const resolveTurnProfile = (params: {
         turnExtensionRegistry: launchRegistry,
         turnBaseSections: params.defaults.baseSections,
         turnHostCtx: hostProvider.forRun(runInfo),
+        turnInteractive: interactive,
       }
     }
     return {
       turnExtensionRegistry: profile.value.registryService,
       turnBaseSections: profile.value.baseSections,
       turnHostCtx: hostProvider.forRun(runInfo),
+      turnInteractive: interactive,
       turnCapabilityContext: profile.value.layerContext,
       turnGenerationId: profile.value.generationId,
     }

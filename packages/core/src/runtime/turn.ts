@@ -33,7 +33,7 @@ import {
   type SessionAdmission,
   stringifyOutput,
   summarizeOutput,
-  turnCanAsk,
+  openedByClient,
 } from "../domain/message.js"
 import {
   type ActorCommandId,
@@ -260,6 +260,8 @@ export interface AgentLoopTurnProfile {
   readonly turnExtensionRegistry: ExtensionRegistryService
   readonly turnBaseSections: ReadonlyArray<PromptSection>
   readonly turnHostCtx: ExtensionHostContext
+  /** Whether a user can answer in this turn (`turnCanAsk`). */
+  readonly turnInteractive: boolean
   readonly turnCapabilityContext?: Context.Context<never>
   /**
    * Identity of the process that built the profile. Absent for direct actor
@@ -1673,7 +1675,7 @@ type AgentLoopTurnExecutionContext = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly resolveTurnProfile: (run: {
-    readonly interactive: boolean
+    readonly openedByClient: boolean
   }) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnLedger: TurnLedger
@@ -2334,7 +2336,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         sessionId: scope.sessionId,
         baseSections: turnProfile.turnBaseSections,
-        interactive: turnCanAsk(state.message),
+        interactive: turnProfile.turnInteractive,
       })
 
     const resolveReplayHostBindings = Effect.fn("AgentLoop.resolveReplayHostBindings")(
@@ -2921,9 +2923,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         .pipe(asAgentLoopError("Cannot read targeted cancellation"))
       if (cancelled) yield* scope.turnInterruption.interrupt
 
-      // Whether a user can answer comes from what opened the turn.
+      // Whether a user can answer comes from what opened the turn and
+      // whether its session has a parent (`turnCanAsk`).
       const turnProfile = yield* scope.resolveTurnProfile({
-        interactive: turnCanAsk(state.message),
+        openedByClient: openedByClient(state.message),
       })
 
       const provideTurnContext = <A, E, R>(effect: Effect.Effect<A, E, R>) =>

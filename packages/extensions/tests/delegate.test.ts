@@ -542,6 +542,59 @@ describe("a child's completion", () => {
       ),
     12_000,
   )
+
+  it.live(
+    "a top-level session's wake turn that runs a guarded command gets a real approval",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const guarded = "rm -f /tmp/gent-top-level-wake-approval-probe"
+          const note = "WAKE: run the guarded command"
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            const called = promptToolCallIds(options.prompt)
+            if (texts.some((text) => text.includes(note))) {
+              if (!called.includes("wake-bash")) {
+                return Effect.succeed(toolStep("bash", { command: guarded }, "wake-bash"))
+              }
+              return Effect.succeed(reply("ran it on the wake"))
+            }
+            if (!called.includes("set-wake")) {
+              return Effect.succeed(toolStep("wake", { afterSeconds: 0.2, note }, "set-wake"))
+            }
+            return Effect.succeed(reply("alarm set"))
+          })
+          const harness = yield* harnessWithHome(providerLayer, { dialogs: true })
+          const top = { sessionId: harness.sessionId, branchId: harness.branchId }
+          const presented = yield* harness.client.session.events(top).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* sendPrompt(harness, "set an alarm")
+          // The wake opens a turn nobody sent; the session's user still sees it.
+          const dialog = Array.from(yield* Fiber.join(presented))[0]?.event
+          if (dialog?._tag !== "InteractionPresented") return yield* Effect.die("no dialog")
+          expect(dialog.text).toContain(guarded)
+          yield* harness.client.interaction.respondInteraction({
+            ...top,
+            requestId: dialog.requestId,
+            approved: true,
+          })
+          const after = yield* waitFor(
+            harness.client.session.getSnapshot(top),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes("ran it on the wake"),
+            5_000,
+            "the wake turn ran the approved command",
+          )
+          expect(resultsOf("bash", after.messages)[0]).toMatchObject({ result: { exitCode: 0 } })
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
 })
 
 // ── child completion message ────────────────────────────────────────────────

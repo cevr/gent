@@ -34,9 +34,11 @@ import {
   WORKSPACE_ID_HEADER,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
+  WorkspaceId,
 } from "../../src/server/workspace-rpc"
 import { describe, expect, it } from "effect-bun-test"
 import { RpcClient } from "effect/unstable/rpc"
+import { SqlClient } from "effect/unstable/sql"
 import {
   finishPart,
   textDeltaPart,
@@ -102,12 +104,12 @@ import {
   type SessionProfile,
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
-import { InteractionStorage, SqliteStorage } from "../../src/storage/storage"
+import { InteractionStorage, MessageStorage, SqliteStorage } from "../../src/storage/storage"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { CurrentInteractionOwner, encodeInteractionDecision } from "../../src/domain/interaction.js"
 import { EventStoreError } from "../../src/domain/event"
 import { MinimumLogLevel } from "effect/References"
-import { type Message, messageSingleText } from "../../src/domain/message"
+import { Message, messageSingleText } from "../../src/domain/message"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
@@ -1306,13 +1308,14 @@ describe("interaction.respondInteraction", () => {
   )
 
   it.live(
-    "a turn an extension opens declines an approval at once; a client's prompt on the same session asks",
+    "an extension's turn asks in a top-level session and declines in a child; a client's turn in the child asks, and no client or extension forges the origin",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const probeExtensionId = ExtensionId.make("@test/interaction-origin")
           // A wake, a monitor, a child's task and a parent's message all reach
-          // the branch through `Session.send`, as this request does.
+          // a branch through `Session.send`, as this request does. It also
+          // claims the client origin, which the send removes.
           const OriginExtension: LoadedExtension = {
             ...InteractionProbeExtension,
             manifest: { id: probeExtensionId },
@@ -1330,6 +1333,7 @@ describe("interaction.respondInteraction", () => {
                       delivery: "queue",
                       sourceId: "nudge",
                       content: "extension nudge",
+                      metadata: { fromClient: true },
                       wake: true,
                     })
                   }),
@@ -1338,10 +1342,14 @@ describe("interaction.respondInteraction", () => {
             },
           }
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("approval_probe", { text: "approve from the nudge?" }),
-            textStep("nudge turn done"),
-            toolCallStep("approval_probe", { text: "approve from the user?" }),
-            textStep("user turn done"),
+            toolCallStep("approval_probe", { text: "approve from the top-level nudge?" }),
+            textStep("top-level nudge done"),
+            toolCallStep("approval_probe", { text: "approve from the child's nudge?" }),
+            textStep("child nudge done"),
+            toolCallStep("approval_probe", { text: "approve from the client's steer?" }),
+            textStep("child steer done"),
+            toolCallStep("approval_probe", { text: "approve from the child's user?" }),
+            textStep("child user done"),
           ])
           const { client } = yield* createRpcClient(
             createE2ELayer({
@@ -1351,58 +1359,184 @@ describe("interaction.respondInteraction", () => {
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
-          const presented = yield* client.session.events({ sessionId, branchId }).pipe(
-            Stream.filterMap((envelope) => {
-              if (envelope.event._tag === "InteractionPresented")
-                return Result.succeed(envelope.event)
-              return Result.failVoid
-            }),
-            Stream.take(1),
-            Stream.runCollect,
-            Effect.forkScoped,
+          const nudge = (target: { sessionId: SessionId; branchId: BranchId }) =>
+            client.extension.request({
+              ...target,
+              extensionId: probeExtensionId,
+              capabilityId: "nudge",
+              input: {},
+            })
+          /** Start `trigger`, answer the dialog it opens, and wait for `reply`. */
+          const approves = <E>(
+            target: { sessionId: SessionId; branchId: BranchId },
+            trigger: Effect.Effect<unknown, E>,
+            question: string,
+            reply: string,
+          ) =>
+            Effect.gen(function* () {
+              const presented = yield* client.session.events(target).pipe(
+                Stream.filterMap((envelope) => {
+                  if (envelope.event._tag === "InteractionPresented")
+                    return Result.succeed(envelope.event)
+                  return Result.failVoid
+                }),
+                Stream.filter((event) => event.text === question),
+                Stream.take(1),
+                Stream.runCollect,
+                Effect.forkScoped,
+              )
+              yield* trigger
+              const dialog = Array.from(yield* Fiber.join(presented))[0]
+              if (Predicate.isUndefined(dialog)) return yield* Effect.die("no dialog")
+              yield* client.interaction.respondInteraction({
+                ...target,
+                requestId: dialog.requestId,
+                approved: true,
+              })
+              yield* waitForReply({ client, ...target, reply })
+            })
+
+          // A top-level session's user watches its extension turns: a wake
+          // or a child's completion there asks.
+          const top = yield* client.session.create({ cwd: "/tmp" })
+          yield* approves(
+            top,
+            nudge(top),
+            "approve from the top-level nudge?",
+            "top-level nudge done",
           )
-          yield* client.extension.request({
-            sessionId,
-            branchId,
-            extensionId: probeExtensionId,
-            capabilityId: "nudge",
-            input: {},
+
+          // In a child, the same turn declines at once, its claimed origin
+          // removed.
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: top.sessionId,
+            parentBranchId: top.branchId,
           })
+          yield* nudge(child)
           const nudged = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
+            client.session.getSnapshot(child),
             (current) =>
               current.runtime._tag === "Idle" &&
               current.messages.some((message) =>
                 message.parts.some(
-                  (part) => part.type === "text" && part.text === "nudge turn done",
+                  (part) => part.type === "text" && part.text === "child nudge done",
                 ),
               ),
             5_000,
-            "the nudge turn ended without a dialog",
+            "the child's nudge turn ended without a dialog",
           )
-          // The opening message names its author; its turn declined at once.
           const opening = nudged.messages.find((message) =>
             message.parts.some((part) => part.type === "text" && part.text === "extension nudge"),
           )
           expect(opening?.metadata?.extensionId).toBe(probeExtensionId)
+          expect(opening?.metadata?.fromClient).toBeUndefined()
           const [declined] = toolResultTexts(nudged.messages)
           expect(declined).toContain('"approved":false')
           expect(declined).toContain("no user started this turn")
-          // A client's prompt on the same session is a turn a user watches: it asks.
-          yield* client.message.send({ sessionId, branchId, content: "run the probe" })
-          const dialog = Array.from(yield* Fiber.join(presented))[0]
-          if (Predicate.isUndefined(dialog)) return yield* Effect.die("no dialog")
-          expect(dialog.text).toBe("approve from the user?")
-          yield* client.interaction.respondInteraction({
-            sessionId,
-            branchId,
-            requestId: dialog.requestId,
-            approved: true,
-          })
-          yield* waitForReply({ client, sessionId, branchId, reply: "user turn done" }).pipe(
-            Effect.timeout("5 seconds"),
+
+          // A client's steer that claims an extension author and denies its
+          // own origin still carries the server's client origin: it asks.
+          yield* approves(
+            child,
+            client.steer.command({
+              command: {
+                _tag: "Interject",
+                ...child,
+                requestId: RequestId.make("forged-origin"),
+                message: "steer the child",
+                metadata: { extensionId: probeExtensionId, fromClient: false },
+                wake: true,
+              },
+            }),
+            "approve from the client's steer?",
+            "child steer done",
           )
+          const steered = (yield* client.session.getSnapshot(child)).messages.find((message) =>
+            message.parts.some((part) => part.type === "text" && part.text === "steer the child"),
+          )
+          expect(steered?.metadata).toMatchObject({ fromClient: true })
+          expect(steered?.metadata?.extensionId).toBeUndefined()
+
+          // A user's prompt in the child asks.
+          yield* approves(
+            child,
+            client.message.send({ ...child, content: "run the probe" }),
+            "approve from the child's user?",
+            "child user done",
+          )
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live(
+    "a child turn stored before the client origin existed declines its approval on recovery",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("approval_probe", { text: "approve after the upgrade?" }),
+            textStep("recovered child done"),
+          ])
+          const context = yield* Layer.build(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [InteractionProbeExtension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { client } = yield* createRpcClient(Layer.succeedContext(context))
+          const top = yield* client.session.create({ cwd: "/tmp" })
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: top.sessionId,
+            parentBranchId: top.branchId,
+          })
+          // What an older build left for the child: its prompt stored with no
+          // origin, and the queue row holding it in flight beside the retired
+          // `interactive: false`.
+          const legacyMessage = {
+            _tag: "regular",
+            id: "legacy-in-flight",
+            sessionId: child.sessionId,
+            branchId: child.branchId,
+            role: "user",
+            parts: [{ options: {}, type: "text", text: "run the probe" }],
+            createdAt: 1767225600000,
+          }
+          const legacyQueueJson = encodeJson({
+            steering: [],
+            followUp: [],
+            inFlight: { message: legacyMessage, interactive: false },
+          })
+          yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            const rows = yield* sql<{
+              readonly workspace_id: string
+            }>`SELECT workspace_id FROM sessions WHERE id = ${child.sessionId}`
+            const workspaceId = WorkspaceId.make(rows[0]?.workspace_id ?? "")
+            yield* (yield* MessageStorage)
+              .createMessage(yield* Schema.decodeUnknownEffect(Message)(legacyMessage))
+              .pipe(Effect.provideService(CurrentWorkspaceId, workspaceId))
+            yield* sql`INSERT INTO agent_loop_queues (workspace_id, session_id, branch_id, queue_json, updated_at) VALUES (${workspaceId}, ${child.sessionId}, ${child.branchId}, ${legacyQueueJson}, ${1767225600000})`
+          }).pipe(Effect.provideContext(context))
+          // Opening the loop recovers the turn; its approval declines at once.
+          const recovered = yield* waitFor(
+            client.session.getSnapshot(child),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              current.messages.some((message) =>
+                message.parts.some(
+                  (part) => part.type === "text" && part.text === "recovered child done",
+                ),
+              ),
+            5_000,
+            "the recovered child turn ended without a dialog",
+          )
+          const [declined] = toolResultTexts(recovered.messages)
+          expect(declined).toContain('"approved":false')
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

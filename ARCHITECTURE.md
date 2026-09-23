@@ -535,15 +535,21 @@ Tools that need human input call `ctx.Interaction.approve()`, which delegates to
 `ApprovalService`. The turn parks without keeping a blocked tool fiber. Cold
 replay also requires a trusted, unchanged saved tool binding.
 
-Whether a turn can ask comes from its origin, not from a stored flag
-(`turnCanAsk` in `domain/message.ts`). `Session.send` stamps the sending
-extension's id on every message it admits (`metadata.extensionId`), so a turn
-such a message opens (a child's task from `delegate.start`, a parent's
-`session.send`, a wake, a monitor, a delegate completion, a `/btw` question)
-has no user watching. Its `approve` declines at once, and the tools that ask
-the user are withheld. A turn a client's prompt opens asks as usual, in any
-session, a delegate child included. The loop reads the fact from the turn's
-opening message, so it survives a restart. The decline's notes say to report
+Whether a turn can ask comes from its session and its origin, not from a
+stored flag (`turnCanAsk` in `domain/message.ts`): a turn can ask unless its
+session has a parent and no client opened it. A top-level session's user
+watches every turn there, so its wake, monitor and delegate-completion turns
+ask. In a child session, only a turn a client opened asks (a user who prompts
+or steers the child); a turn its parent's `delegate.start` or `session.send`,
+a wake or a monitor opened declines. The origin is trusted: the server stamps
+`metadata.fromClient` on every message a client sends (`message.send`, a
+session's initial prompt, a `steer.command` interjection) over whatever the
+client set, and removes a client-supplied `extensionId`; an extension's
+`Session.send` stamps its own id and removes `fromClient`. A child row stored
+before the stamp existed has no origin, so its turn declines on recovery. A
+declined turn's `approve` answers at once, and the tools that ask the user are
+withheld. The loop reads the fact from the turn's opening message and the
+stored session, so it survives a restart. The decline's notes say to report
 the command the way the turn reports its result (a child's task turn: its
 reply, which its completion carries; a later turn: `session.send`), and that
 no message can grant it: the reader runs the command, or a user prompts the
