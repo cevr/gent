@@ -4119,6 +4119,55 @@ describe("queue drain regression", () => {
   )
 
   it.live(
+    "startup does not replay a failed turn that newer completed turns followed",
+    () =>
+      Effect.gen(function* () {
+        // A turn that failed writes no `TurnCompleted`. Once a later turn has
+        // completed, the failed one is history: reopening must not answer it.
+        const sessionId = SessionId.make("session-loop-stale-failure")
+        const branchId = BranchId.make("branch-loop-stale-failure")
+        const providerCalled = yield* Deferred.make<void>()
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+            yield* Deferred.succeed(providerCalled, undefined).pipe(Effect.ignore)
+            return Stream.fromIterable([
+              textDeltaPart("replayed"),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const failed = makeMessage(sessionId, branchId, "the turn that failed")
+        const answered = Message.cases.regular.make({
+          ...makeMessage(sessionId, branchId, "the turn that answered"),
+          createdAt: dateFromMillis(1_767_225_600_010),
+        })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* ensureStorageParents({ sessionId, branchId })
+            const eventStorage = yield* EventStorage
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: failed }))
+            yield* eventStorage.appendEvent(MessageReceived.make({ message: answered }))
+            yield* eventStorage.appendEvent(
+              TurnCompleted.make({ sessionId, branchId, messageId: answered.id, durationMs: 1 }),
+            )
+
+            const agentLoop = yield* makeAgentLoopService
+            const state = yield* agentLoop.getState({ sessionId, branchId })
+            expect(state._tag).toBe("Idle")
+            const called = yield* Deferred.await(providerCalled).pipe(
+              Effect.timeout("500 millis"),
+              Effect.option,
+            )
+            expect(Option.isNone(called)).toBe(true)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(makeLayer(providerLayer))),
+        )
+      }),
+    15000,
+  )
+
+  it.live(
     "steering reaches the transcript before the queue lets it go",
     () =>
       Effect.gen(function* () {
