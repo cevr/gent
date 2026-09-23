@@ -51,7 +51,7 @@ import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "ef
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
 import type { LanguageModel } from "effect/unstable/ai"
-import { GentObservability } from "./logger.js"
+import { GentLogLevel, GentObservability } from "./logger.js"
 
 // ── data-paths ──────────────────────────────────────────────────────────────
 
@@ -1097,8 +1097,13 @@ const buildOwnedServer = (
         Sqlite: () => Effect.asSome(resolveDbPath(home)),
       }),
     )
+    const logLevel = yield* GentLogLevel.pipe(
+      Effect.mapError(
+        (error) => new GentConnectionError({ message: `invalid GENT_LOG_LEVEL: ${error.message}` }),
+      ),
+    )
     const serverRoot = yield* buildServerRoot({
-      observability: GentObservability(options.cwd),
+      observability: GentObservability(options.cwd, logLevel),
       dependencies: {
         cwd: options.cwd,
         // One broken user extension is reported, not fatal: the rest of the profile runs.

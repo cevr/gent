@@ -4,7 +4,7 @@ import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base"
 import {
   Cause,
   Config,
-  Context,
+  type Context,
   DateTime,
   Effect,
   FileSystem,
@@ -280,36 +280,47 @@ const GentLogger = (cwd: string): Layer.Layer<never, never, FileSystem.FileSyste
     }).pipe(Effect.orElseSucceed(() => Layer.empty)),
   )
 
+/** The `GENT_LOG_LEVEL` names; each selects the one level of the same name. */
+type LogLevelName = "trace" | "debug" | "info" | "warn" | "error" | "fatal"
+
+const levelOf = (name: LogLevelName): LogLevel => {
+  switch (name) {
+    case "trace":
+      return "Trace"
+    case "debug":
+      return "Debug"
+    case "info":
+      return "Info"
+    case "warn":
+      return "Warn"
+    case "error":
+      return "Error"
+    case "fatal":
+      return "Fatal"
+  }
+}
+
+const LOG_LEVEL_NAMES: ReadonlyArray<LogLevelName> = [
+  "trace",
+  "debug",
+  "info",
+  "warn",
+  "error",
+  "fatal",
+]
+
 /**
- * Minimum log level from `GENT_LOG_LEVEL`: `trace`, `info`, `warning`, or
- * `error`. Unset, or any other value, keeps the Debug floor.
+ * Minimum log level from `GENT_LOG_LEVEL`. Unset keeps the Debug floor; a
+ * name outside {@link LOG_LEVEL_NAMES} fails with a config error.
  */
-const GentLogLevel: Layer.Layer<never> = Layer.unwrap(
-  Effect.gen(function* () {
-    const envOpt = yield* Config.option(Config.string("GENT_LOG_LEVEL"))
-    const env = Option.getOrUndefined(envOpt)
-    const level: LogLevel = (() => {
-      switch (env) {
-        case "trace":
-          return "Trace"
-        case "info":
-          return "Info"
-        case "warning":
-          return "Warn"
-        case "error":
-          return "Error"
-        default:
-          return "Debug"
-      }
-    })()
-    return Layer.effectContext(Effect.succeed(Context.make(MinimumLogLevel, level)))
-  }).pipe(
-    Effect.catchEager(() =>
-      Effect.succeed(Layer.effectContext(Effect.succeed(Context.make(MinimumLogLevel, "Info")))),
-    ),
-  ),
-)
+export const GentLogLevel: Config.Config<LogLevel> = Config.literals(
+  LOG_LEVEL_NAMES,
+  "GENT_LOG_LEVEL",
+).pipe(Config.withDefault<LogLevelName>("debug"), Config.map(levelOf))
 
 /** File logger under `/tmp/gent/logs`, the `GENT_LOG_LEVEL` floor, and OTLP tracing when configured. */
-export const GentObservability = (cwd: string): Layer.Layer<never, never, FileSystem.FileSystem> =>
-  Layer.mergeAll(GentLogger(cwd), GentLogLevel, GentTracerLive)
+export const GentObservability = (
+  cwd: string,
+  logLevel: LogLevel,
+): Layer.Layer<never, never, FileSystem.FileSystem> =>
+  Layer.mergeAll(GentLogger(cwd), Layer.succeed(MinimumLogLevel, logLevel), GentTracerLive)

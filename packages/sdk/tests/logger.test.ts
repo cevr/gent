@@ -1,7 +1,13 @@
 import { describe, expect, it } from "effect-bun-test"
 import { BunFileSystem } from "@effect/platform-bun"
 import { ConfigProvider, Effect, FileSystem, Layer, Random, Schema } from "effect"
-import { buildLogPaths, GentObservability, GentTracerLive, LOG_DIR } from "../src/logger"
+import {
+  buildLogPaths,
+  GentLogLevel,
+  GentObservability,
+  GentTracerLive,
+  LOG_DIR,
+} from "../src/logger"
 
 // ── logger.test ─────────────────────────────────────────────────────────────
 
@@ -42,7 +48,7 @@ describe("GentObservability", () => {
       const fs = yield* FileSystem.FileSystem
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const context = yield* Layer.build(GentObservability(cwd))
+          const context = yield* Layer.build(GentObservability(cwd, "Debug"))
           yield* Effect.logInfo("hello-from-test").pipe(
             Effect.annotateLogs({ sessionId: "s-1" }),
             Effect.provideContext(context),
@@ -89,5 +95,45 @@ describe("tracer configuration", () => {
         }),
       ),
     ),
+  )
+})
+
+// ── log-level.test ──────────────────────────────────────────────────────────
+
+const logLevelWith = (env: Record<string, string>) =>
+  Effect.provideService(
+    GentLogLevel,
+    ConfigProvider.ConfigProvider,
+    ConfigProvider.fromEnvRecord(env),
+  )
+
+describe("GENT_LOG_LEVEL", () => {
+  it.effect("unset keeps the Debug floor", () =>
+    Effect.gen(function* () {
+      expect(yield* logLevelWith({})).toBe("Debug")
+    }),
+  )
+
+  it.effect("each level name maps to its own level", () =>
+    Effect.gen(function* () {
+      const cases: ReadonlyArray<readonly [string, string]> = [
+        ["trace", "Trace"],
+        ["debug", "Debug"],
+        ["info", "Info"],
+        ["warn", "Warn"],
+        ["error", "Error"],
+        ["fatal", "Fatal"],
+      ]
+      for (const [name, level] of cases) {
+        expect(String(yield* logLevelWith({ GENT_LOG_LEVEL: name }))).toBe(level)
+      }
+    }),
+  )
+
+  it.effect("an unknown name fails with a config error that names the variable", () =>
+    Effect.gen(function* () {
+      const error = yield* logLevelWith({ GENT_LOG_LEVEL: "verbose" }).pipe(Effect.flip)
+      expect(String(error)).toContain("GENT_LOG_LEVEL")
+    }),
   )
 })
