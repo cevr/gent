@@ -39,6 +39,7 @@ import {
   type Session,
   sessionSettings,
   SessionState,
+  SteerCommandInput,
   SessionStateEvent,
   transitionSessionState,
   useClient,
@@ -51,6 +52,8 @@ import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { useSessionFeed } from "../src/session"
 import { useExtensionUI } from "../src/extensions/host"
 import { ClientContext, type ClientRuntime } from "../src/extensions/client-facets"
+import { RpcClientDefect, RpcClientError } from "effect/unstable/rpc/RpcClientError"
+import { SocketCloseError } from "effect/unstable/socket/Socket"
 
 // ── agent lifecycle ─────────────────────────────────────────────────────────
 
@@ -1250,54 +1253,74 @@ const isSessionEvent = Predicate.or(
 describe("ClientProvider send", () => {
   const refused = Schema.decodeSync(GentRpcError)({ _tag: "InvalidStateError", message: "refused" })
   const target = { sessionId: FIRST.sessionId, branchId: FIRST.branchId }
-  const mountWithSend = (
-    send: (input: {
-      readonly requestId?: string
-    }) => Effect.Effect<void, GentConnectionError | GentRpcError>,
-  ) =>
+  type Failure = GentConnectionError | GentRpcError | RpcClientError
+  /**
+   * A client whose send and steer both answer the first attempt with `first`
+   * and then land. Each verb records the request id of every attempt.
+   */
+  const mountFailingOnce = (first: Failure) =>
     Effect.gen(function* () {
+      const requestIds: Array<string> = []
+      const attempt = (input: { readonly requestId?: string }) =>
+        Effect.suspend(() => {
+          requestIds.push(input.requestId ?? "<missing>")
+          if (requestIds.length === 1) return Effect.fail(first)
+          return Effect.void
+        })
       let ctx = Option.none<ClientContextValue>()
       yield* Effect.promise(() =>
         renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
-          client: createMockClient({ message: { send } }),
+          client: createMockClient({
+            message: { send: attempt },
+            steer: {
+              command: (input: { readonly command: { readonly requestId?: string } }) =>
+                attempt(input.command),
+            },
+          }),
         }),
       )
-      return yield* requireClient(ctx)
+      return { client: yield* requireClient(ctx), requestIds }
     })
+  const verbs = {
+    send: (client: ClientContextValue) => client.sendMessage(target, "once"),
+    steer: (client: ClientContextValue) =>
+      client.steer(target, SteerCommandInput.cases.Interject.make({ message: "once" })),
+  }
+  const lost = {
+    "a gent connection error": new GentConnectionError({ message: "socket closed" }),
+    "a socket close": new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
+  }
+  const answered = {
+    "a refusal": refused,
+    "a protocol defect": new RpcClientError({
+      reason: new RpcClientDefect({ message: "Error decoding message", cause: "bad frame" }),
+    }),
+  }
 
-  it.live("a lost connection retries the send under its first request id", () =>
-    Effect.gen(function* () {
-      const requestIds: Array<string> = []
-      const client = yield* mountWithSend((input) =>
-        Effect.suspend(() => {
-          requestIds.push(input.requestId ?? "<missing>")
-          if (requestIds.length === 1) {
-            return Effect.fail(new GentConnectionError({ message: "socket closed" }))
-          }
-          return Effect.void
-        }),
+  for (const [verb, run] of Object.entries(verbs)) {
+    for (const [name, failure] of Object.entries(lost)) {
+      it.live(`${verb}: ${name} retries under the first request id`, () =>
+        Effect.gen(function* () {
+          const { client, requestIds } = yield* mountFailingOnce(failure)
+          yield* run(client)
+          expect(requestIds).toHaveLength(2)
+          expect(new Set(requestIds).size).toBe(1)
+          expect(requestIds[0]).not.toBe("<missing>")
+        }).pipe(Effect.timeout("5 seconds")),
       )
-      yield* client.sendMessage(target, "once")
-      expect(requestIds).toHaveLength(2)
-      expect(new Set(requestIds).size).toBe(1)
-      expect(requestIds[0]).not.toBe("<missing>")
-    }).pipe(Effect.timeout("5 seconds")),
-  )
-
-  it.live("a refusal is final at once", () =>
-    Effect.gen(function* () {
-      let calls = 0
-      const client = yield* mountWithSend(() =>
-        Effect.suspend(() => {
-          calls++
-          return Effect.fail(refused)
-        }),
+    }
+    // Not a lost connection: another try gets the same answer.
+    for (const [name, failure] of Object.entries(answered)) {
+      it.live(`${verb}: ${name} is final at once`, () =>
+        Effect.gen(function* () {
+          const { client, requestIds } = yield* mountFailingOnce(failure)
+          const exit = yield* Effect.exit(run(client))
+          expect(exit._tag).toBe("Failure")
+          expect(requestIds).toHaveLength(1)
+        }).pipe(Effect.timeout("5 seconds")),
       )
-      const exit = yield* Effect.exit(client.sendMessage(target, "refused"))
-      expect(exit._tag).toBe("Failure")
-      expect(calls).toBe(1)
-    }).pipe(Effect.timeout("5 seconds")),
-  )
+    }
+  }
 })
 
 // ── errors ──────────────────────────────────────────────────────────────────

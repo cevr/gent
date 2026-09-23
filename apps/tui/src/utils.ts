@@ -197,13 +197,35 @@ export const ClientError = (message: string): ClientError => ({
 export type UiError = GentClientRpcError | ClientError
 
 /**
+ * The `RpcClientError` reasons that mean the bytes did not make the round
+ * trip: a socket that failed or closed, an HTTP transport failure, a worker
+ * that could not take or give the message. A protocol defect (a frame that
+ * does not decode) and an HTTP status, decode or encode error are answers,
+ * and another try gets the same one.
+ */
+const TRANSPORT_REASONS: ReadonlySet<string> = new Set([
+  "SocketReadError",
+  "SocketWriteError",
+  "SocketOpenError",
+  "SocketCloseError",
+  "WorkerSendError",
+  "WorkerReceiveError",
+])
+
+const isTransportReason = (reason: RpcClientError["reason"]): boolean => {
+  if (reason._tag === "HttpError") return reason.kind === "TransportError"
+  return TRANSPORT_REASONS.has(reason._tag)
+}
+
+/**
  * A failure of the connection, not an answer from the server: the request
  * may have landed and only its reply was lost.
  */
-export const isConnectionLoss: (error: UiError) => boolean = Predicate.or(
-  Predicate.isTagged("RpcClientError"),
-  Predicate.isTagged("@gent/core/GentConnectionError"),
-)
+export const isConnectionLoss = (error: UiError): boolean => {
+  if (Predicate.isTagged(error, "@gent/core/GentConnectionError")) return true
+  if (error._tag !== "RpcClientError") return false
+  return isTransportReason(error.reason)
+}
 
 /**
  * How a send retries a lost connection: four more tries from 200 ms. Every
