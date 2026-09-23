@@ -589,6 +589,11 @@ const REFUSED_SEPARATOR = "\n\n"
  * order; once the reader has edited them, it goes ahead of the whole draft.
  * A draft of shell commands only stays in shell mode; a mixed one is a
  * message, each command written with its `!`.
+ *
+ * `write` is how the draft holds a message: a composer on screen writes a
+ * large one as a paste placeholder. A command is always written as text, so
+ * the reader sees what Enter runs. A text a kept draft held as itself is
+ * written again when its block joins a composer on screen.
  */
 interface RefusedMerge {
   readonly draft: ComposerDraft
@@ -603,7 +608,15 @@ export const mergeRefused = (
   refused: RefusedSubmission,
   write: (text: string) => string = writeAsIs,
 ): RefusedMerge => {
-  const added: WrittenRefusal = { ...refused, written: write(refused.text) }
+  const writeEntry = (entry: RefusedSubmission): string => {
+    if (entry.shell) return entry.text
+    return write(entry.text)
+  }
+  const rewrite = (entry: WrittenRefusal): WrittenRefusal => {
+    if (entry.written !== entry.text) return entry
+    return { ...entry, written: writeEntry(entry) }
+  }
+  const added: WrittenRefusal = { ...refused, written: writeEntry(refused) }
   // The block stands whole: the draft is it, or it and then a separator.
   const kept =
     block.shown.length > 0 &&
@@ -612,7 +625,7 @@ export const mergeRefused = (
   let entries: ReadonlyArray<WrittenRefusal> = [added]
   let typed = current.draft
   if (kept) {
-    entries = [...block.entries, added].toSorted((a, b) => a.order - b.order)
+    entries = [...block.entries.map(rewrite), added].toSorted((a, b) => a.order - b.order)
     typed = current.draft.slice(block.shown.length + REFUSED_SEPARATOR.length)
   }
   const hasTyped = typed.trim().length > 0
