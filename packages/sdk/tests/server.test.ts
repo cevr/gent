@@ -612,6 +612,32 @@ describe("Server Lock", () => {
     ),
   )
 
+  it.scopedLive("an attached client reads the workspace its cwd names", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const cwdA = yield* makeTmpHomeScoped
+        const cwdB = yield* makeTmpHomeScoped
+        const options = {
+          cwd: home,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        }
+        expect((yield* Gent.server(options))._tag).toBe("Owned")
+        const attached = yield* Gent.server(options)
+        expect(attached._tag).toBe("Attached")
+        const clientA = (yield* Gent.client(attached, { cwd: cwdA })).client
+        const clientB = (yield* Gent.client(attached, { cwd: cwdB })).client
+
+        const created = yield* clientA.session.create({ name: "Workspace A", cwd: cwdA })
+        const listed = (sessions: ReadonlyArray<{ readonly id: string }>) =>
+          sessions.map((session) => session.id)
+        expect(listed(yield* clientA.session.list())).toContain(created.sessionId)
+        expect(listed(yield* clientB.session.list())).not.toContain(created.sessionId)
+      }).pipe(Effect.timeout("20 seconds")),
+    ),
+  )
+
   it.scopedLive("a fixed-port server does not start on a database another server owns", () =>
     provideFs(
       Effect.gen(function* () {

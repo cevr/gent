@@ -218,6 +218,12 @@ export const Gent = {
         return yield* connectWs(serverOrUrl, workspaceHeadersForCwd(cwd))
       }
 
+      // One header rule for both transports: a client cwd names its
+      // workspace; without one, the client reads the server's workspace.
+      const headersOr = (serverHeaders: () => Record<string, string>) =>
+        Option.fromNullishOr(options?.cwd).pipe(
+          Option.match({ onNone: serverHeaders, onSome: workspaceHeadersForCwd }),
+        )
       return yield* Match.value(serverOrUrl).pipe(
         Match.tagsExhaustive({
           Owned: (ownedServer) =>
@@ -227,18 +233,16 @@ export const Gent = {
                   () => new GentConnectionError({ message: "owned server internal state missing" }),
                 ),
               )
-              const headers = Option.fromNullishOr(options?.cwd).pipe(
-                Option.match({
-                  onNone: () => internal.headers,
-                  onSome: workspaceHeadersForCwd,
-                }),
+              return yield* inProcessBundle<Scope.Scope>(
+                internal.handlerContext,
+                headersOr(() => internal.headers),
               )
-              return yield* inProcessBundle<Scope.Scope>(internal.handlerContext, headers)
             }),
           Attached: (attachedServer) =>
-            connectWs(attachedServer.url, {
-              [WORKSPACE_ID_HEADER]: attachedServer.workspaceId,
-            }),
+            connectWs(
+              attachedServer.url,
+              headersOr(() => ({ [WORKSPACE_ID_HEADER]: attachedServer.workspaceId })),
+            ),
         }),
       )
     }),
