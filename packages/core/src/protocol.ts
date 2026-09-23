@@ -72,5 +72,6 @@ export {
   ExtensionHealthSnapshot,
   GentConnectionError,
   type GentLifecycle,
+  type SessionSettings,
   SessionSnapshot,
 } from "./server/rpc.js"

@@ -52,7 +52,7 @@ class WaitForTimeout extends Schema.TaggedError<WaitForTimeout>()("WaitForTimeou
  * Suitable for DOM-shaped retries (frame N may not have rendered the element
  * yet; frame N+1 will) where there is no event signal to subscribe to.
  */
-export const waitFor = <A,>(
+const waitFor = <A,>(
   probe: () => Option.Option<A>,
   options: { label: string; intervalMs?: number; timeoutMs?: number },
 ): Effect.Effect<A, WaitForTimeout> =>

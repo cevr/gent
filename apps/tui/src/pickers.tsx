@@ -484,7 +484,7 @@ export const reasoningRows = (resolved: Option.Option<ReasoningEffort>): readonl
   ...ReasoningEffort.literals.map((level) => ({ id: level, name: level, detail: "" })),
 ]
 
-export const filterRows = (rows: readonly PickerRow[], query: string): readonly PickerRow[] => {
+const filterRows = (rows: readonly PickerRow[], query: string): readonly PickerRow[] => {
   const needle = query.trim().toLowerCase()
   if (needle.length === 0) return rows
   return rows.filter(

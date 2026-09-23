@@ -44,6 +44,7 @@ import {
   type GentNamespacedClient,
   type Message,
   type QueueSnapshot,
+  type SessionSettings,
   type SessionSnapshot,
   type SteerCommand,
 } from "@gent/core/protocol"
@@ -213,14 +214,6 @@ export interface Session {
    */
   // eslint-disable-next-line effect/noNullish -- a switch by id carries no cwd until the session is read.
   readonly cwd: string | undefined
-}
-
-/** The session's mutable settings, always carried whole. */
-export interface SessionSettings {
-  // eslint-disable-next-line effect/noNullish -- an unset model falls back to the agent's.
-  readonly modelId: ModelId | undefined
-  // eslint-disable-next-line effect/noNullish -- an unset level falls back to the agent's.
-  readonly reasoningLevel: ReasoningEffort | undefined
 }
 
 export const sessionSettings = (session: Session): SessionSettings => ({
