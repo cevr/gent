@@ -1090,6 +1090,97 @@ describe("grep's file listing inside a git work tree", () => {
   )
 })
 
+/** git with a fixed identity, no signing and no global hooks, for test commits. */
+const git = (repo: string, args: ReadonlyArray<string>) =>
+  runProcess("git", [
+    "-C",
+    repo,
+    "-c",
+    "user.name=test",
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "protocol.file.allow=always",
+    ...args,
+  ])
+
+/** Both listing paths answer each listing question the same way. */
+const bothLayers = [
+  { name: "fallback", layer: FallbackLayer },
+  { name: "native-first", layer: LiveLayer },
+]
+
+describe("git decides the listing inside a work tree", () => {
+  for (const { name, layer } of bothLayers) {
+    it.scopedLive(`${name}: a package session applies every exclude source above it`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* fs.makeTempDirectoryScoped()
+        yield* runProcess("git", ["init", "-q", repo])
+        yield* writeTree(
+          repo,
+          [
+            "packages/foo/src/a.ts",
+            "packages/foo/dist/out.js",
+            "packages/foo/x.secret",
+            "packages/foo/y.local",
+          ],
+          { ".gitignore": "dist/\n", excludes: "*.local\n" },
+        )
+        yield* fs.writeFileString(`${repo}/.git/info/exclude`, "*.secret\nexcludes\n")
+        yield* git(repo, ["config", "core.excludesFile", `${repo}/excludes`])
+
+        expect(yield* listed(`${repo}/packages/foo`)).toEqual(["src/a.ts"])
+      }).pipe(Effect.provide(layer), Effect.timeout("8 seconds")),
+    )
+
+    it.scopedLive(`${name}: a session inside an ignored directory lists its files`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* fs.makeTempDirectoryScoped()
+        yield* runProcess("git", ["init", "-q", repo])
+        yield* writeTree(repo, ["scratch/a.ts", "scratch/sub/b.ts", "scratch/c.log", "top.ts"], {
+          ".gitignore": "scratch/\n",
+          "scratch/.gitignore": "*.log\n",
+        })
+
+        expect(yield* listed(`${repo}/scratch`)).toEqual([".gitignore", "a.ts", "sub/b.ts"])
+      }).pipe(Effect.provide(layer), Effect.timeout("8 seconds")),
+    )
+
+    it.scopedLive(`${name}: nested repositories and submodules are listed by their own git`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* fs.makeTempDirectoryScoped()
+        const source = yield* fs.makeTempDirectoryScoped()
+        yield* runProcess("git", ["init", "-q", source])
+        yield* writeTree(source, ["s.ts"], {})
+        yield* git(source, ["add", "."])
+        yield* git(source, ["commit", "-qm", "source"])
+        yield* runProcess("git", ["init", "-q", repo])
+        yield* writeTree(repo, ["top.ts"], {})
+        yield* git(repo, ["submodule", "add", "-q", source, "mods/s"])
+        yield* runProcess("git", ["init", "-q", `${repo}/vendor/lib`])
+        yield* writeTree(repo, ["vendor/lib/inner.ts", "vendor/lib/x.tmp"], {
+          "vendor/lib/.gitignore": "*.tmp\n",
+        })
+
+        expect(yield* listed(repo)).toEqual([
+          ".gitmodules",
+          "mods/s/s.ts",
+          "top.ts",
+          "vendor/lib/.gitignore",
+          "vendor/lib/inner.ts",
+        ])
+      }).pipe(Effect.provide(layer), Effect.timeout("8 seconds")),
+    )
+  }
+})
+
 describe("an ignored directory with tracked files", () => {
   for (const { name, layer } of [
     { name: "fallback", layer: FallbackLayer },

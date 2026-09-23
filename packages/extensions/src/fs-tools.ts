@@ -21,17 +21,18 @@ import {
   tool,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
-import { ChildProcessSpawner } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 
 // ── file index ──────────────────────────────────────────────────────────────
 
 /**
  * Indexed file discovery for the grep tool.
  *
- * Native-first (`@ff-labs/fff-bun`, one cached finder per search root) with a
- * `.gitignore`-aware FileSystem walk as the per-call fallback. The layer
- * always succeeds: a missing native module or a per-call native failure
- * degrades to the walk.
+ * Inside a git work tree git decides which files are listed, and the native
+ * index (`@ff-labs/fff-bun`, one cached finder per search root) only orders
+ * them. Outside a work tree the native index lists, with a `.gitignore`-aware
+ * FileSystem walk as the per-call fallback. The layer always succeeds: a
+ * missing native module or a per-call native failure degrades to the walk.
  */
 
 interface IndexedFile {
@@ -266,142 +267,6 @@ const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSys
     }
   })
 
-// ── Fallback inside a git work tree: git lists the files ──
-
-/**
- * Inside a git work tree git lists the files itself, so every exclude source
- * applies as git applies it: the `.gitignore` files above the search root,
- * `.git/info/exclude` and `core.excludesFile`. Tracked files are listed even
- * when a pattern matches them, as git treats them. `None` outside a work
- * tree or without git; the matcher walk lists then.
- */
-const listGitFiles = (
-  cwd: string,
-): Effect.Effect<
-  Option.Option<ReadonlyArray<IndexedFile>>,
-  FileIndexError,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const listed = yield* runProcess("git", [
-      "-C",
-      cwd,
-      "ls-files",
-      "-z",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-    ]).pipe(Effect.option)
-    if (Option.isNone(listed) || listed.value.exitCode !== 0) return Option.none()
-    const relativePaths = [...new Set(listed.value.stdout.split("\0"))].filter(
-      (entry) => entry.length > 0,
-    )
-    if (relativePaths.length > FALLBACK_MAX_FILES) {
-      return yield* new FileIndexError({
-        message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
-        cwd,
-      })
-    }
-    // A deleted tracked file and a submodule are listed too; keep regular files.
-    const files = yield* Effect.forEach(
-      relativePaths,
-      (relativePath) => {
-        const absolutePath = path.join(cwd, relativePath)
-        return fs.stat(absolutePath).pipe(
-          Effect.option,
-          Effect.map((info) =>
-            Option.filter(info, (value) => value.type === "File").pipe(
-              Option.as({ path: absolutePath, relativePath }),
-            ),
-          ),
-        )
-      },
-      { concurrency: 32 },
-    )
-    return Option.some(Arr.getSomes(files))
-  })
-
-/** Git lists inside a work tree; the matcher walk lists elsewhere. */
-const makeWalkService = (
-  matcherWalk: FileIndexService,
-): Effect.Effect<
-  FileIndexService,
-  never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> =>
-  Effect.gen(function* () {
-    const platform = yield* Effect.context<
-      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-    >()
-    return {
-      listFiles: (params) =>
-        listGitFiles(params.cwd).pipe(
-          Effect.provideContext(platform),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => matcherWalk.listFiles(params),
-              onSome: Effect.succeed,
-            }),
-          ),
-        ),
-    }
-  })
-
-/**
- * Git's answer for whether `cwd` itself is ignored, from its own exclude
- * sources and without the index: a directory that holds tracked files is
- * still ignored for its untracked ones. `None` outside a work tree.
- */
-const gitIgnoresDirectory = (
-  cwd: string,
-): Effect.Effect<Option.Option<boolean>, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  runProcess("git", ["-C", cwd, "check-ignore", "-q", "--no-index", "--", "."]).pipe(
-    Effect.map((result) => {
-      if (result.exitCode === 0) return Option.some(true)
-      if (result.exitCode === 1) return Option.some(false)
-      return Option.none()
-    }),
-    Effect.orElseSucceed(() => Option.none<boolean>()),
-  )
-
-/**
- * A shared root does not index its gitignored subtrees (`dist/`,
- * `node_modules/x`), so an explicit ignored target is walked from its own
- * root: when git says the target is ignored, or when the index lists nothing
- * for it. Git's answer matters because git lists a tracked file inside an
- * ignored directory, and that one file would hide the untracked rest. The
- * walk has a bound and holds no watcher, so listing many ignored targets
- * never evicts the root's cached finder. An unignored directory keeps its
- * children's ignore rules (`logs/` with `*.log`), as ripgrep does.
- */
-const listIgnoredTargets = (
-  index: FileIndexService,
-  walk: FileIndexService,
-): Effect.Effect<FileIndexService, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-    const walkTarget = (cwd: string) => walk.listFiles({ root: cwd, cwd })
-    return {
-      listFiles: (params) => {
-        if (params.root === params.cwd) return index.listFiles(params)
-        return gitIgnoresDirectory(params.cwd).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.flatMap((ignored) => {
-            if (Option.getOrElse(ignored, () => false)) return walkTarget(params.cwd)
-            return index.listFiles(params).pipe(
-              Effect.filterOrElse(
-                (files) => files.length > 0,
-                () => walkTarget(params.cwd),
-              ),
-            )
-          }),
-        )
-      },
-    }
-  })
-
 // ── Native: fff-bun finders, one per search root ──
 
 interface FinderEntry {
@@ -559,6 +424,158 @@ const makeNativeService = (
     return { listFiles: listUnder }
   })
 
+// ── Inside a git work tree: git decides the listing ──
+
+/**
+ * Git lists the files itself, so every exclude source applies as git applies
+ * it: the `.gitignore` files above the search root, `.git/info/exclude` and
+ * `core.excludesFile`. Tracked files are listed even when a pattern matches
+ * them, as git treats them. A nested repository or a submodule is listed by
+ * its own git, with its own rules. `None` outside a work tree or without git.
+ */
+const listGitFiles: (
+  cwd: string,
+) => Effect.Effect<
+  Option.Option<ReadonlyArray<IndexedFile>>,
+  FileIndexError,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> = Effect.fn("FileIndex.listGitFiles")(function* (cwd: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const listed = yield* runProcess("git", [
+    "-C",
+    cwd,
+    "ls-files",
+    "-z",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+  ]).pipe(Effect.option)
+  if (Option.isNone(listed) || listed.value.exitCode !== 0) return Option.none()
+  const relativePaths = [...new Set(listed.value.stdout.split("\0"))].filter(
+    (entry) => entry.length > 0,
+  )
+  // A deleted tracked file is listed too; a directory is a nested repository
+  // (`vendor/lib/`) or a submodule's gitlink.
+  const nested = yield* Effect.forEach(
+    relativePaths,
+    Effect.fnUntraced(function* (entry) {
+      const relativePath = entry.replace(/\/$/, "")
+      const absolutePath = path.join(cwd, relativePath)
+      const info = yield* fs.stat(absolutePath).pipe(Effect.option)
+      if (Option.isNone(info)) return []
+      if (info.value.type === "File") return [{ path: absolutePath, relativePath }]
+      if (info.value.type !== "Directory") return []
+      // An uninitialized submodule has no `.git` and nothing to list.
+      const isRepository = yield* fs
+        .exists(path.join(absolutePath, ".git"))
+        .pipe(Effect.orElseSucceed(() => false))
+      if (!isRepository) return []
+      const inner = yield* listGitFiles(absolutePath)
+      return Option.getOrElse(inner, (): ReadonlyArray<IndexedFile> => []).map((file) => ({
+        path: file.path,
+        relativePath: `${relativePath}/${file.relativePath}`,
+      }))
+    }),
+    { concurrency: 32 },
+  )
+  const files = nested.flat()
+  if (files.length > FALLBACK_MAX_FILES) {
+    return yield* new FileIndexError({
+      message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
+      cwd,
+    })
+  }
+  return Option.some(files)
+})
+
+/**
+ * Git's answer for whether `cwd` itself is ignored, from its own exclude
+ * sources and without the index: a directory that holds tracked files is
+ * still ignored for its untracked ones. `None` outside a work tree.
+ */
+const gitIgnoresDirectory = (
+  cwd: string,
+): Effect.Effect<Option.Option<boolean>, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  runProcess("git", ["-C", cwd, "check-ignore", "-q", "--no-index", "--", "."]).pipe(
+    Effect.map((result) => {
+      if (result.exitCode === 0) return Option.some(true)
+      if (result.exitCode === 1) return Option.some(false)
+      return Option.none()
+    }),
+    Effect.orElseSucceed(() => Option.none<boolean>()),
+  )
+
+/** Git's files, in the native index's order; files the index has not seen yet go last. */
+const inIndexOrder = (
+  files: ReadonlyArray<IndexedFile>,
+  ordered: ReadonlyArray<IndexedFile>,
+): ReadonlyArray<IndexedFile> => {
+  const unordered = new Map(files.map((file) => [file.path, file]))
+  const result: Array<IndexedFile> = []
+  for (const file of ordered) {
+    const listed = Option.fromUndefinedOr(unordered.get(file.path))
+    if (Option.isNone(listed)) continue
+    result.push(listed.value)
+    unordered.delete(file.path)
+  }
+  return [...result, ...unordered.values()]
+}
+
+/**
+ * One listing rule for both paths. Inside a git work tree, git's listing
+ * decides which files grep may read; the native index, when present, only
+ * orders them. An ignored `cwd` (an explicit `dist/`, or a session started in
+ * one) is walked from its own root, as ripgrep searches a named path: git
+ * would list none of its untracked files. Outside a work tree the native
+ * index lists, with the walk as its per-call fallback, and an explicit target
+ * the root's index skips is walked from its own root. The walk has a bound
+ * and holds no watcher, so listing ignored targets never evicts a finder.
+ */
+const makeFileIndex = (
+  native: Option.Option<FileIndexService>,
+): Effect.Effect<
+  FileIndexService,
+  never,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.gen(function* () {
+    const walk = yield* makeMatcherWalk
+    const platform = yield* Effect.context<
+      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+    >()
+    const walkTarget = (cwd: string) => walk.listFiles({ root: cwd, cwd })
+    const outsideWorkTree = Option.match(native, {
+      onNone: () => walk,
+      onSome: (index) => withFallback(index, walk),
+    })
+
+    const listFiles = Effect.fn("FileIndex.listFiles")(function* (params: {
+      readonly root: string
+      readonly cwd: string
+    }) {
+      const ignored = yield* gitIgnoresDirectory(params.cwd)
+      if (Option.getOrElse(ignored, () => false)) return yield* walkTarget(params.cwd)
+
+      const gitFiles = yield* listGitFiles(params.cwd)
+      if (Option.isSome(gitFiles)) {
+        if (Option.isNone(native)) return gitFiles.value
+        const ordered = yield* native.value
+          .listFiles(params)
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<IndexedFile> => []))
+        return inIndexOrder(gitFiles.value, ordered)
+      }
+
+      const files = yield* outsideWorkTree.listFiles(params)
+      if (files.length > 0 || params.root === params.cwd) return files
+      return yield* walkTarget(params.cwd)
+    })
+
+    return {
+      listFiles: (params) => listFiles(params).pipe(Effect.provideContext(platform)),
+    }
+  })
+
 /** Wrap a primary service with per-method fallback on FileIndexError. */
 const withFallback = (primary: FileIndexService, fallback: FileIndexService): FileIndexService => ({
   listFiles: (params) =>
@@ -578,16 +595,12 @@ export const FileIndexLive = (options: {
   Layer.effect(
     FileIndex,
     Effect.gen(function* () {
-      const matcherWalk = yield* makeMatcherWalk
-      const walk = yield* makeWalkService(matcherWalk)
-      if (!NativeFileFinder.isAvailable()) return yield* listIgnoredTargets(walk, matcherWalk)
-
+      if (!NativeFileFinder.isAvailable()) return yield* makeFileIndex(Option.none())
       const path = yield* Path.Path
       const fs = yield* FileSystem.FileSystem
       const dbDir = path.join(options.home, ".gent", "fff")
       yield* fs.makeDirectory(dbDir, { recursive: true }).pipe(Effect.ignore)
-      const native = yield* makeNativeService(dbDir)
-      return yield* listIgnoredTargets(withFallback(native, walk), matcherWalk)
+      return yield* makeFileIndex(Option.some(yield* makeNativeService(dbDir)))
     }),
   )
 
