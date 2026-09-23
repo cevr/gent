@@ -112,6 +112,28 @@ export type CredentialCacheCellRef<C> = SynchronizedRef.SynchronizedRef<Credenti
 
 export const EMPTY_CREDENTIAL_CELL = Schema.TaggedStruct("Empty", {}).make({})
 
+/**
+ * Replace the held credential with a new sign-in. A cell lives as long as
+ * the extension, and `makeCredentialCache` seeds it only while it is empty,
+ * so a sign-in must write the cell itself: without that, the old account
+ * stays in use and its next refresh writes it back over the new one.
+ * `write` stores the sign-in; it runs under the cell lock, so a refresh in
+ * flight cannot store the old account after it.
+ */
+export const replaceHeldCredential = <C, E>(
+  credentials: Schema.Schema<C>,
+  cellRef: CredentialCacheCellRef<C>,
+  creds: C,
+  write: Effect.Effect<void, E>,
+): Effect.Effect<void, E> =>
+  SynchronizedRef.updateEffect(cellRef, () =>
+    Effect.gen(function* () {
+      yield* write
+      const at = yield* Clock.currentTimeMillis
+      return CredentialCacheCell(credentials).cases.Durable.make({ creds, at, invalidated: false })
+    }),
+  )
+
 // ── Cache ──
 
 export interface CredentialCache<C> {

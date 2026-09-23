@@ -61,6 +61,7 @@ import {
   postOAuthForm,
   readOptionalEnv,
   recoverUnauthorized,
+  replaceHeldCredential,
   withHeaders,
 } from "./providers.js"
 import {
@@ -1501,22 +1502,18 @@ export const buildOpenAIModelDriver = (
           ),
           Effect.ensuring(pendingEntry.value.close),
         )
-        const accountId = Option.fromNullishOr(result.accountId)
-        if (Option.isNone(accountId)) {
-          return yield* ctx.persist({
-            type: "oauth",
-            access: result.access,
-            refresh: result.refresh,
-            expires: result.expires,
-          })
-        }
-        yield* ctx.persist({
-          type: "oauth",
+        const signedIn: OpenAICredentials = {
           access: result.access,
           refresh: result.refresh,
           expires: result.expires,
-          accountId: accountId.value,
-        })
+          accountId: Option.fromNullishOr(result.accountId),
+        }
+        yield* replaceHeldCredential(
+          OpenAICredentials,
+          credentialCellRef,
+          signedIn,
+          ctx.persist(result),
+        )
       }),
   },
 })
