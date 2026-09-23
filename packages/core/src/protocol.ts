@@ -68,7 +68,6 @@ export {
   BranchTreeNode,
   ConnectionState,
   CreateSessionInput,
-  DriverListResult,
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
   GentConnectionError,

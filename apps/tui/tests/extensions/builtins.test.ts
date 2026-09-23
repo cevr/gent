@@ -24,7 +24,6 @@ import {
   Scope,
 } from "effect"
 import { AgentName, BranchId, SessionId } from "@gent/core/protocol"
-import { testAgent } from "@gent/core/test-utils"
 import {
   type AutocompleteItem,
   type ClientActivitySnapshot,
@@ -406,7 +405,7 @@ const contextLayer = (deps: Partial<ClientContextDeps> = {}) =>
 // ── driver transport ────────────────────────────────────────────────────────
 
 /**
- * `/driver` routes through `transport.driverList/driverSet/driverClear`.
+ * `/driver` routes through `transport.driverSet/driverClear`.
  *
  * The transport seals every shell RPC failure into a
  * `ClientTransportRequestError` that names the RPC and keeps the server's
@@ -421,12 +420,6 @@ class DriverRejected extends Schema.TaggedError<DriverRejected>()("DriverRejecte
 const absent = Option.getOrUndefined(Option.none())
 const agentName = AgentName.make("main")
 const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }
-
-const driverListReply = {
-  drivers: [{ _tag: "Model", id: "model:sonnet" }],
-  overrides: {},
-  agents: [testAgent],
-}
 
 /**
  * Run the `/driver` slash once. Resolves with the notices the shell received
@@ -489,7 +482,6 @@ describe("driver routing through the client transport", () => {
       const seen: Array<{ readonly agentName: string; readonly driverId: string }> = []
       const client = createMockClient({
         driver: {
-          list: () => Effect.succeed(driverListReply),
           set: (input: { agentName: AgentName; driver: { id: string } }) => {
             seen.push({ agentName: input.agentName, driverId: input.driver.id })
             return Deferred.succeed(settled, absent)
@@ -512,7 +504,6 @@ describe("driver routing through the client transport", () => {
     Effect.gen(function* () {
       const client = createMockClient({
         driver: {
-          list: () => Effect.succeed(driverListReply),
           set: () => Effect.fail(new DriverRejected({ driverId: "model:sonnet" })),
         },
       })
