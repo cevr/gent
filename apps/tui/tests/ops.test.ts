@@ -4,6 +4,7 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   ConfigProvider,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Logger,
@@ -11,12 +12,13 @@ import {
   Path,
   Random,
   Schema,
+  Sink,
+  Stdio,
 } from "effect"
 import { MinimumLogLevel } from "effect/References"
 import {
   classifyLogFile,
   dataPaths,
-  dataPathsIn,
   makeJsonFileLogger,
   serverLock,
   ServerLockEntry,
@@ -33,6 +35,7 @@ import {
   makeDoctorReport,
   readDoctorExtensionHealth,
   refuseResetWhileServing,
+  reportFailureOnStderr,
   resetStorage,
 } from "../src/ops"
 import { SqliteClient as BunSqliteClient } from "@effect/sql-sqlite-bun"
@@ -40,7 +43,7 @@ import { SqlClient } from "effect/unstable/sql"
 import { GentPlatform } from "@gent/core/host"
 import { ExtensionHealthIssue, ExtensionHealthSnapshot } from "@gent/core/protocol"
 
-// ── client-logs.test ────────────────────────────────────────────────────────
+// ── client logs ─────────────────────────────────────────────────────────────
 
 /**
  * The client log file and the doctor's log section.
@@ -118,6 +121,44 @@ const writeLog = (dir: string, name: string, ageRank: number) =>
     yield* fs.utimes(path, seconds, seconds)
     return path
   })
+
+class UnknownAgentError extends Schema.TaggedError<UnknownAgentError>()("NotFoundError", {
+  message: Schema.String,
+}) {}
+
+const reported = { stdout: "", stderr: "" }
+const captureTo = (stream: "stdout" | "stderr") =>
+  Sink.forEach((chunk: string | Uint8Array) =>
+    Effect.sync(() => {
+      reported[stream] += String(chunk)
+    }),
+  )
+const reportTest = it.live.layer(
+  Stdio.layerTest({ stdout: () => captureTo("stdout"), stderr: () => captureTo("stderr") }),
+)
+
+describe("startup failure report", () => {
+  reportTest("a failure is one line on stderr, and stdout stays the session's output", () =>
+    Effect.gen(function* () {
+      reported.stdout = ""
+      reported.stderr = ""
+      const exit = yield* Effect.exit(
+        reportFailureOnStderr(new UnknownAgentError({ message: "Unknown agent: revieww" })),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(reported.stderr).toBe("NotFoundError: Unknown agent: revieww\n")
+      expect(reported.stdout).toBe("")
+    }),
+  )
+
+  reportTest("an interrupt reports nothing", () =>
+    Effect.gen(function* () {
+      reported.stderr = ""
+      yield* Effect.exit(reportFailureOnStderr(Effect.interrupt))
+      expect(reported.stderr).toBe("")
+    }),
+  )
+})
 
 describe("client trace logger", () => {
   it.scopedLive("creates the log directory it writes into", () =>
@@ -216,7 +257,7 @@ describe("inspect logs", () => {
   )
 })
 
-// ── local-health.test ───────────────────────────────────────────────────────
+// ── local health ────────────────────────────────────────────────────────────
 
 const absentServer = ServerLockStatus.cases.None.make({})
 
@@ -457,7 +498,7 @@ describe("local health", () => {
       // `home` holds no database; the server wrote to `dataDir` instead.
       const home = yield* fs.makeTempDirectoryScoped()
       const dataDir = yield* fs.makeTempDirectoryScoped()
-      const { dbPath } = dataPathsIn(dataDir)
+      const { dbPath } = yield* dataPaths(home).pipe(withDataDir(dataDir))
       yield* createDb(
         dbPath,
         "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",
@@ -477,7 +518,7 @@ describe("local health", () => {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
       const dataDir = yield* fs.makeTempDirectoryScoped()
-      const { dbPath } = dataPathsIn(dataDir)
+      const { dbPath } = yield* dataPaths(home).pipe(withDataDir(dataDir))
       yield* createDb(
         dbPath,
         "CREATE TABLE gent_storage_migrations (migration_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL)",

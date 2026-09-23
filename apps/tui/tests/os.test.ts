@@ -3,7 +3,7 @@ import { Effect, FileSystem, Option } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
 import { parseEditorCommand, resolveEditor } from "../src/os"
 
-// ── external-editor.test ────────────────────────────────────────────────────
+// ── external editor ─────────────────────────────────────────────────────────
 
 // ── Editor resolution ─────────────────────────────────────────────────
 

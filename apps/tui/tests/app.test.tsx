@@ -45,7 +45,7 @@ import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
 import { useExtensionUI } from "../src/extensions/host"
 
-// ── app-bootstrap.test ──────────────────────────────────────────────────────
+// ── app bootstrap ───────────────────────────────────────────────────────────
 
 const absent = Option.getOrUndefined(Option.none())
 const nullValue = Option.getOrNull(Option.none())
@@ -405,7 +405,7 @@ describe("resolveInitialState", () => {
   )
 })
 
-// ── app-auth.test ───────────────────────────────────────────────────────────
+// ── app auth ────────────────────────────────────────────────────────────────
 
 class MessageTimeoutError extends Schema.TaggedError<MessageTimeoutError>()("MessageTimeoutError", {
   message: Schema.String,
@@ -1620,7 +1620,7 @@ describe("App auth gate", () => {
   )
 })
 
-// ── widgets-render.test ─────────────────────────────────────────────────────
+// ── widgets render ──────────────────────────────────────────────────────────
 
 const syntaxStyle = () => SyntaxStyle.create()
 const testSession: Session = {
@@ -2101,7 +2101,7 @@ describe("uiModel schema validation", () => {
   })
 })
 
-// ── debug-playground.test ───────────────────────────────────────────────────
+// ── debug playground ────────────────────────────────────────────────────────
 
 describe("debug playground", () => {
   it.live(

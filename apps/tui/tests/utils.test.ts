@@ -24,6 +24,7 @@ import {
   formatGroupDuration,
   formatPreviewFooter,
   formatRowCounts,
+  lineCount,
   formatTokens,
   formatToolInput,
   formatUsageStats,
@@ -41,7 +42,7 @@ import { BunServices } from "@effect/platform-bun"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import os from "node:os"
 
-// ── context-window.test ─────────────────────────────────────────────────────
+// ── context window ──────────────────────────────────────────────────────────
 
 // ── Context window % computation (extracted logic) ───────────────────
 
@@ -126,7 +127,7 @@ describe("context window utilization", () => {
   })
 })
 
-// ── file-refs.test ──────────────────────────────────────────────────────────
+// ── file refs ───────────────────────────────────────────────────────────────
 
 describe("parseFileRefs", () => {
   test("parses simple file reference", () => {
@@ -333,7 +334,7 @@ describe("expandFileRefs", () => {
   )
 })
 
-// ── format-duration.test ────────────────────────────────────────────────────
+// ── format duration ─────────────────────────────────────────────────────────
 
 describe("formatDuration", () => {
   describe("compact", () => {
@@ -381,7 +382,7 @@ describe("formatDuration", () => {
   })
 })
 
-// ── format-error.test ───────────────────────────────────────────────────────
+// ── format error ────────────────────────────────────────────────────────────
 
 describe("formatError", () => {
   test("ClientError → message", () => {
@@ -427,7 +428,7 @@ describe("formatError", () => {
   })
 })
 
-// ── format-tool.test ────────────────────────────────────────────────────────
+// ── format tool ─────────────────────────────────────────────────────────────
 
 const HOME = os.homedir()
 const absent = Option.getOrUndefined(Option.none())
@@ -591,7 +592,7 @@ describe("toolArgSummary", () => {
   })
 })
 
-// ── generic-format.test ─────────────────────────────────────────────────────
+// ── generic format ──────────────────────────────────────────────────────────
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
@@ -628,7 +629,7 @@ describe("formatGenericToolText", () => {
   })
 })
 
-// ── message-list-utils.test ─────────────────────────────────────────────────
+// ── message list utils ──────────────────────────────────────────────────────
 
 describe("truncatePath", () => {
   test("returns short paths unchanged", () => {
@@ -773,7 +774,7 @@ describe("formatActivityHeader", () => {
         cell([op("write", "b.ts", "failed")]),
         cell([], "error"),
       ]),
-    ).toBe("3 cells · 3 ops · 2 children · 2 failed")
+    ).toBe("3 cells · 3 ops · 2 children · 1 failed · 1 cell failed")
     expect(formatActivityHeader([cell([])])).toBe("1 cell")
   })
 
@@ -784,11 +785,22 @@ describe("formatActivityHeader", () => {
       "1 cell · 1 op · 1 failed",
     )
     expect(
+      formatActivityHeader([cell([op("bash", "a", "failed"), op("bash", "b", "failed")], "error")]),
+    ).toBe("1 cell · 2 ops · 2 failed")
+  })
+
+  test("a cell that failed while its ops succeeded is worded apart from op failures", () => {
+    // After a restart the op row shows exit 0; the header must not call it failed.
+    expect(formatActivityHeader([cell([op("bash", "pwd")], "error")])).toBe(
+      "1 cell · 1 op · 1 cell failed",
+    )
+    expect(
       formatActivityHeader([
-        cell([op("bash", "a", "failed"), op("bash", "b", "failed")], "error"),
+        cell([op("bash", "a", "failed")], "error"),
         cell([op("read", "c.ts")], "error"),
+        cell([], "error"),
       ]),
-    ).toBe("2 cells · 3 ops · 3 failed")
+    ).toBe("3 cells · 2 ops · 1 failed · 2 cells failed")
   })
 
   test("a finished group carries the sum of its call durations", () => {
@@ -925,20 +937,50 @@ describe("working icon and age", () => {
 
 describe("progressive disclosure helpers", () => {
   test("cell rows count code in and display out; bash rows count output only", () => {
-    expect(formatRowCounts("cell", { input: "a\nb\nc", output: "x\ny" })).toBe("↑ 3 ↓ 2 lines")
-    expect(formatRowCounts("bash", { input: "ls", output: "x" })).toBe("↓ 1 line")
-    expect(formatRowCounts("read", { input: "", output: "x" })).toBe("")
+    expect(
+      formatRowCounts("cell", { inputLines: lineCount("a\nb\nc"), outputLines: lineCount("x\ny") }),
+    ).toBe("↑ 3 ↓ 2 lines")
+    expect(
+      formatRowCounts("bash", { inputLines: lineCount("ls"), outputLines: lineCount("x") }),
+    ).toBe("↓ 1 line")
+    expect(
+      formatRowCounts("read", { inputLines: lineCount(""), outputLines: lineCount("x") }),
+    ).toBe("")
+  })
+
+  test("a final newline ends the last line and does not start one", () => {
+    expect(lineCount("")).toBe(0)
+    expect(lineCount("\n")).toBe(1)
+    expect(lineCount("hello\n")).toBe(1)
+    expect(lineCount("a\nb\n")).toBe(2)
+    expect(lineCount("a\n\n")).toBe(2)
+    expect(
+      formatRowCounts("bash", { inputLines: lineCount("ls\n"), outputLines: lineCount("hello\n") }),
+    ).toBe("↓ 1 line")
+    expect(
+      formatRowCounts("cell", { inputLines: lineCount("a\nb\n"), outputLines: lineCount("x\n") }),
+    ).toBe("↑ 2 ↓ 1 lines")
   })
 
   test("one count of one line reads singular; two counts share the plural", () => {
-    expect(formatRowCounts("bash", { input: "ls", output: "x" })).toBe("↓ 1 line")
-    expect(formatRowCounts("cell", { input: "a", output: "x" })).toBe("↑ 1 ↓ 1 lines")
+    expect(
+      formatRowCounts("bash", { inputLines: lineCount("ls"), outputLines: lineCount("x") }),
+    ).toBe("↓ 1 line")
+    expect(
+      formatRowCounts("cell", { inputLines: lineCount("a"), outputLines: lineCount("x") }),
+    ).toBe("↑ 1 ↓ 1 lines")
   })
 
   test("a zero count is left out, so a cell with no output shows only its code", () => {
-    expect(formatRowCounts("cell", { input: "a", output: "" })).toBe("↑ 1 line")
-    expect(formatRowCounts("bash", { input: "ls", output: "" })).toBe("")
-    expect(formatRowCounts("cell", { input: "", output: "" })).toBe("")
+    expect(
+      formatRowCounts("cell", { inputLines: lineCount("a"), outputLines: lineCount("") }),
+    ).toBe("↑ 1 line")
+    expect(
+      formatRowCounts("bash", { inputLines: lineCount("ls"), outputLines: lineCount("") }),
+    ).toBe("")
+    expect(formatRowCounts("cell", { inputLines: lineCount(""), outputLines: lineCount("") })).toBe(
+      "",
+    )
   })
 
   test("a preview keeps the head and names the hidden remainder", () => {
@@ -952,7 +994,7 @@ describe("progressive disclosure helpers", () => {
   })
 })
 
-// ── truncate.test ───────────────────────────────────────────────────────────
+// ── truncate ────────────────────────────────────────────────────────────────
 
 /**
  * The one column-budget truncation.

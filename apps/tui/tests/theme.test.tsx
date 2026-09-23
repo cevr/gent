@@ -7,7 +7,7 @@ import { CommandPalette, useCommand } from "../src/commands"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 
-// ── theme-view.test ─────────────────────────────────────────────────────────
+// ── theme view ──────────────────────────────────────────────────────────────
 
 const dark = resolveTheme(DEFAULT_THEMES.fx, "dark")
 const light = resolveTheme(DEFAULT_THEMES.fx, "light")
@@ -57,7 +57,7 @@ describe("theme view", () => {
   })
 })
 
-// ── components/theme-picker.test ────────────────────────────────────────────
+// ── theme picker ────────────────────────────────────────────────────────────
 
 /**
  * The palette's Theme level over the bundled catalog.

@@ -8,6 +8,7 @@ import {
   on,
   onCleanup,
   type ParentProps,
+  type Setter,
 } from "solid-js"
 import {
   type Array as Arr,
@@ -1716,14 +1717,14 @@ const applyToolCallResult = (
 
 const handleToolCallResult = (
   setStore: SetStoreFunction<SessionFeedStore>,
-  setActiveTool: (value: Option.Option<string>) => void,
+  setRunningCalls: Setter<ReadonlyArray<RunningCall>>,
   toolEvent: ToolResultEvent,
   completedAt: number,
 ) => {
   let status: "error" | "completed" = "completed"
   if (toolEvent._tag === "ToolCallFailed") status = "error"
 
-  if (Predicate.isUndefined(toolEvent.parentToolCallId)) setActiveTool(Option.none())
+  setRunningCalls((calls) => endCall(calls, toolEvent.toolCallId))
   updateToolMessage(
     setStore,
     (message) => {
@@ -1775,6 +1776,46 @@ const activeToolLabel = (event: ToolStartedEvent): string => {
   const inputSummary = formatToolInput(event.toolName, event.input)
   if (inputSummary.length === 0) return event.toolName
   return `${event.toolName}(${inputSummary})`
+}
+
+/** A call that started and has no result yet; an op names the cell that admitted it. */
+interface RunningCall {
+  readonly id: string
+  readonly parent: Option.Option<string>
+  readonly label: string
+}
+
+/** A started call joins the running set once: a cold interaction resume starts it again. */
+const startCall = (
+  calls: ReadonlyArray<RunningCall>,
+  event: ToolStartedEvent,
+): ReadonlyArray<RunningCall> => {
+  if (calls.some((call) => call.id === event.toolCallId)) return calls
+  return [
+    ...calls,
+    {
+      id: event.toolCallId,
+      parent: Option.fromUndefinedOr(event.parentToolCallId),
+      label: activeToolLabel(event),
+    },
+  ]
+}
+
+/** A result ends its call, and a cell's result ends the ops it admitted. */
+const endCall = (calls: ReadonlyArray<RunningCall>, id: string): ReadonlyArray<RunningCall> =>
+  calls.filter((call) => call.id !== id && !Option.contains(call.parent, id))
+
+/**
+ * The status-line label: every running call that is not waiting on an op of
+ * its own, so a cell's sibling ops show side by side, the one that asks and
+ * the one that runs on.
+ */
+const runningLabel = (calls: ReadonlyArray<RunningCall>): Option.Option<string> => {
+  const leaves = calls.filter(
+    (call) => !calls.some((other) => Option.contains(other.parent, call.id)),
+  )
+  if (leaves.length === 0) return Option.none()
+  return Option.some(leaves.map((call) => call.label).join(" · "))
 }
 
 /** Put a new call on its owning message, or under the cell that admitted it. */
@@ -1845,7 +1886,7 @@ export function useSessionFeed(
     events: [],
   })
   const [turnCount, setTurnCount] = createSignal(0)
-  const [activeTool, setActiveTool] = createSignal<Option.Option<string>>(Option.none())
+  const [runningCalls, setRunningCalls] = createSignal<ReadonlyArray<RunningCall>>([])
   const [streamReadyKey, setStreamReadyKey] = createSignal<Option.Option<string>>(Option.none())
   let streamMessageId = Option.none<string>()
   let eventSeq = 0
@@ -1886,7 +1927,7 @@ export function useSessionFeed(
         return
 
       case "ToolCallStarted":
-        setActiveTool(Option.some(activeToolLabel(event)))
+        setRunningCalls((calls) => startCall(calls, event))
         startToolCall(setStore, event, receivedAt)
         return
 
@@ -1992,7 +2033,7 @@ export function useSessionFeed(
   const resetProjection = () => {
     setStore({ messages: [], events: [] })
     setTurnCount(0)
-    setActiveTool(Option.none())
+    setRunningCalls([])
     setStreamReadyKey(Option.none())
     streamMessageId = Option.none()
     eventSeq = 0
@@ -2286,7 +2327,7 @@ export function useSessionFeed(
       if (!live && isSnapshotHeldEvent(event)) return
 
       if (isToolResultEvent(event)) {
-        handleToolCallResult(setStore, setActiveTool, event, envelope.createdAt)
+        handleToolCallResult(setStore, setRunningCalls, event, envelope.createdAt)
         return
       }
 
@@ -2295,7 +2336,7 @@ export function useSessionFeed(
           resolveRetryingEvents(setStore)
           if (!live) break
           setTurnCount((n) => n + 1)
-          setActiveTool(Option.none())
+          setRunningCalls([])
           yield* openStreamedAnswer(event, stampedAt)
           break
 
@@ -2313,7 +2354,7 @@ export function useSessionFeed(
     items,
     messages: () => store.messages,
     turnCount,
-    activeTool: () => Option.getOrUndefined(activeTool()),
+    activeTool: () => Option.getOrUndefined(runningLabel(runningCalls())),
   }
 }
 

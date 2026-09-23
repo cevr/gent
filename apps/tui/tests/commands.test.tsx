@@ -18,7 +18,7 @@ import { createMockClient, renderFrame, renderWithProviders } from "./render-har
 import { waitForFrame } from "./helpers-boundary"
 import { makePaneSlot } from "./extension-test-harness-boundary"
 
-// ── slash-commands.test ─────────────────────────────────────────────────────
+// ── slash commands ──────────────────────────────────────────────────────────
 
 describe("parseSlashCommand", () => {
   test("parses simple command", () => {
@@ -223,7 +223,7 @@ describe("executeSlashCommand", () => {
   })
 })
 
-// ── components/command-palette.test ─────────────────────────────────────────
+// ── command palette ─────────────────────────────────────────────────────────
 
 const absent = Option.getOrUndefined(Option.none())
 

@@ -334,10 +334,21 @@ const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> 
   return items
 }
 
-/** "1 running, 0 idle, 3 inactive" for the pane title. */
-const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
-  const count = (section: AgentRowEntry["section"]) =>
-    rows.filter((row) => row.section === section).length
+/**
+ * What a loop itself is doing. A row's section can differ: a parent is
+ * grouped with its running children so the tree stays whole, while its own
+ * loop is idle.
+ */
+const ownState = (row: AgentRowEntry): AgentRowEntry["section"] => {
+  if (!row.live) return "inactive"
+  if (Predicate.isUndefined(row.status) || row.status === "Idle") return "idle"
+  return "running"
+}
+
+/** "1 running, 0 idle, 3 inactive" for the pane title: each loop counted by what it does itself. */
+export const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
+  const count = (state: AgentRowEntry["section"]) =>
+    rows.filter((row) => ownState(row) === state).length
   return `${count("running")} running, ${count("idle")} idle, ${count("inactive")} inactive`
 }
 
@@ -405,21 +416,27 @@ const formatTurns = (turns: number): string => {
  * shown as placeholders — a session that never streamed has no model, and a
  * row of dashes reads as broken rather than as empty.
  *
- * Status is deliberately absent: every row already carries it in the section
- * column, and this line is the widest content in the panel — repeating it here
- * costs the columns that cost and duration need.
+ * Turns and time count finished turns. A working loop names the turn it is
+ * on instead and leaves the time out, so a child a minute into its first
+ * turn does not read "0 turns · 0s".
  */
-const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string =>
+export const detailLabel = (detail: Option.Option<ExtensionAgentDetail>): string =>
   Option.match(detail, {
     onNone: () => "",
     onSome: (value) => {
-      const parts = [
+      if (value.status === "Idle") {
+        return [
+          shortModel(value.model),
+          formatTurns(value.turns),
+          formatCost(value.costUsd),
+          formatDuration(value.durationMs, "padded"),
+        ].join("  ·  ")
+      }
+      return [
         shortModel(value.model),
-        formatTurns(value.turns),
+        `turn ${value.turns + 1} running`,
         formatCost(value.costUsd),
-        formatDuration(value.durationMs, "padded"),
-      ]
-      return parts.join("  ·  ")
+      ].join("  ·  ")
     },
   })
 

@@ -121,11 +121,18 @@ const ToolInteractionFields = {
  *   line its tail starts on, and `chars` the code points left out. Head and
  *   tail keep whole lines; a piece with no line break is a fragment of the one
  *   line it sits in, so `tailLine` equals the head's last line when the cut
- *   falls inside a single line. `field` is absent when the output is plain text.
+ *   falls inside a single line. `headCut` says the head's last line stops
+ *   before its line break; `tailCut` says the tail's first line starts after
+ *   its line's start. `field` is absent when the output is plain text.
  * - `Items`: the array keeps its head items, then its tail items from the
  *   1-based `tailItem`; `items` is the whole array's length. `files` is the
  *   count of distinct `file` values over the whole array, present when its
  *   items name files, as a search result's matches do.
+ *
+ * A field with no room even for the marker is kept empty, its cut counting
+ * all it left out: its tail starts past its end (`tailItem` one past the last
+ * item, `tailLine` one past the last line, or the last line itself when that
+ * is the empty part after a final newline).
  */
 export const OutputCut = Schema.TaggedUnion({
   Text: {
@@ -133,6 +140,8 @@ export const OutputCut = Schema.TaggedUnion({
     lines: Schema.Finite,
     tailLine: Schema.Finite,
     chars: Schema.Finite,
+    headCut: Schema.optional(Schema.Literal(true)),
+    tailCut: Schema.optional(Schema.Literal(true)),
   },
   Items: {
     field: Schema.String,
@@ -549,12 +558,17 @@ export const stringifyOutput = (value: unknown): string => {
   return Option.getOrElse(tryPrettyStringifyJson(value), () => String(value))
 }
 
-/** One-line tool summary for transcripts and the tool row; ASCII marker for plain terminals. */
-export const clipSummary = (text: string): string => clipChars(text, 100, "...")
+/**
+ * One-line tool summary for transcripts and the tool row: the first line, cut
+ * to 100 characters with an ASCII marker for plain terminals. A multi-line
+ * author summary would break every surface that draws one row per call.
+ */
+export const clipSummary = (text: string): string =>
+  clipChars(text.trim().split("\n")[0]?.trimEnd() ?? "", 100, "...")
 
 // oxlint-disable-next-line effect/noUnknownParameters -- Tool output is an external provider value parsed by the JSON codec below.
 export const summarizeOutput = (value: unknown): string => {
-  if (Predicate.isString(value)) return clipSummary(value.split("\n")[0] ?? "")
+  if (Predicate.isString(value)) return clipSummary(value)
   return Option.match(tryStringifyJson(value), {
     onNone: () => String(value),
     onSome: clipSummary,
@@ -888,6 +902,8 @@ const textCutCost = (field: Option.Option<string>): number =>
       lines: Number.MAX_SAFE_INTEGER,
       tailLine: Number.MAX_SAFE_INTEGER,
       chars: Number.MAX_SAFE_INTEGER,
+      headCut: true,
+      tailCut: true,
     }),
   ).length + 1
 
@@ -942,14 +958,14 @@ const excerptWithin = (
   const head = wholeHeadLines(text, headWithin(text, Math.floor(room / 2), cost))
   const tail = wholeTailLines(text, tailWithin(text, room - costUpTo(head, cost, Infinity), cost))
   const tailStart = text.length - tail.length
-  return Option.some({
-    text: `${head}\n${CUT_MARKER}\n${tail}`,
-    cut: Option.some({
-      lines: lineCount(text),
-      tailLine: lineCount(text.slice(0, tailStart)),
-      chars: [...text.slice(head.length, tailStart)].length,
-    }),
-  })
+  let cut: TextCut = {
+    lines: lineCount(text),
+    tailLine: lineCount(text.slice(0, tailStart)),
+    chars: [...text.slice(head.length, tailStart)].length,
+  }
+  if (head.length > 0 && text.charAt(head.length) !== "\n") cut = { ...cut, headCut: true }
+  if (tail.length > 0 && text.charAt(tailStart - 1) !== "\n") cut = { ...cut, tailCut: true }
+  return Option.some({ text: `${head}\n${CUT_MARKER}\n${tail}`, cut: Option.some(cut) })
 }
 
 type Scalar = string | number | boolean
@@ -1083,29 +1099,48 @@ interface BoundedOutput {
 
 const noOutput: BoundedOutput = { output: Option.getOrUndefined(Option.none()), cuts: [] }
 
-/** A top-level output field that is cut to fit rather than kept whole or dropped. */
+/** A cuttable field's value within its share, and the record of its cut. */
+interface FittedField {
+  readonly value: string | ReadonlyArray<Item>
+  readonly cut: Option.Option<OutputCut>
+}
+
+/** A top-level output field that is cut to fit rather than kept whole. */
 interface CuttableField {
   readonly key: string
   /** The least share that keeps the value whole: key, value, and room for a cut record. */
   readonly need: number
+  /** What the field costs emptied: its key, an empty value, and its cut record. */
+  readonly emptyCost: number
   /** The value within `share` of the budget, key and cut record counted; `None` when not even its marker fits. */
-  readonly fit: (share: number) => Option.Option<{
-    readonly value: string | ReadonlyArray<Item>
-    readonly cut: Option.Option<OutputCut>
-  }>
+  readonly fit: (share: number) => Option.Option<FittedField>
+  /** The field emptied, with a cut record that counts all it left out: nothing is dropped unmarked. */
+  readonly emptied: FittedField
 }
 
 /** A string field: whole, or its head and tail around a marker line. */
 const textField = (key: string, text: string): CuttableField => {
   const overhead = fieldCost(key, "", encodedTwice) + textCutCost(Option.some(key))
+  const lines = lineCount(text)
+  // Emptied, the kept tail is the empty part after a final newline, if any,
+  // so a reader drops that part as it does for any cut string.
+  let tailLine = lines + 1
+  if (text.endsWith("\n")) tailLine = lines
   return {
     key,
     need: overhead + costUpTo(text, encodedTwice, OPERATION_BUDGET),
+    emptyCost: overhead,
     fit: (share) =>
       Option.map(excerptWithin(text, share - overhead, encodedTwice), (excerpt) => ({
         value: excerpt.text,
         cut: Option.map(excerpt.cut, (cut) => OutputCut.cases.Text.make({ field: key, ...cut })),
       })),
+    emptied: {
+      value: "",
+      cut: Option.some(
+        OutputCut.cases.Text.make({ field: key, lines, tailLine, chars: [...text].length }),
+      ),
+    },
   }
 }
 
@@ -1121,6 +1156,22 @@ const itemsField = (key: string, items: ReadonlyArray<Item>): CuttableField => {
         OPERATION_BUDGET,
         costUpTo(encodeJson(items), encodedTwice, OPERATION_BUDGET) - 2 + items.length,
       ),
+    emptyCost: overhead,
+    // Emptied, the tail starts past the last item.
+    emptied: {
+      value: [],
+      cut: Option.some(
+        OutputCut.cases.Items.make({
+          field: key,
+          items: items.length,
+          tailItem: items.length + 1,
+          ...Option.match(distinctFiles(items), {
+            onNone: () => ({}),
+            onSome: (files) => ({ files }),
+          }),
+        }),
+      ),
+    },
     fit: (share) => {
       const room = share - overhead
       if (room < 0) return Option.none()
@@ -1198,7 +1249,10 @@ const planOutput = (output: string | undefined): OutputPlan => {
     room:
       frame + sum(numbers.map((entry) => entry.cost)) + sum(cuttable.map((entry) => entry.need)),
     fit: (budget) => {
-      let left = budget - frame
+      // Each string or array keeps room to be emptied with its cut record,
+      // so a field that cannot fit is still marked, never dropped silently.
+      // An output with no room for that is left out whole.
+      let left = budget - frame - sum(cuttable.map((entry) => entry.emptyCost))
       if (left < 0) return noOutput
       const kept: Record<string, Scalar | ReadonlyArray<Item>> = {}
       for (const entry of numbers) {
@@ -1208,15 +1262,18 @@ const planOutput = (output: string | undefined): OutputPlan => {
       }
       const cuts: Array<OutputCut> = []
       for (const [index, entry] of cuttable.entries()) {
-        // Each field's share of what is left: its key, its quotes or brackets,
-        // its comma, and room for the record of its cut.
-        const fitted = entry.fit(Math.floor(left / (cuttable.length - index)))
-        if (Option.isNone(fitted)) continue
-        kept[entry.key] = fitted.value.value
-        left -= fieldCost(entry.key, fitted.value.value, encodedTwice)
-        if (Option.isSome(fitted.value.cut)) {
-          cuts.push(fitted.value.cut.value)
-          left -= encodeJson(fitted.value.cut.value).length + 1
+        // This field's room returns to what is left. Its share: its key, its
+        // quotes or brackets, its comma, and room for the record of its cut.
+        left += entry.emptyCost
+        const fitted = Option.getOrElse(
+          entry.fit(Math.floor(left / (cuttable.length - index))),
+          () => entry.emptied,
+        )
+        kept[entry.key] = fitted.value
+        left -= fieldCost(entry.key, fitted.value, encodedTwice)
+        if (Option.isSome(fitted.cut)) {
+          cuts.push(fitted.cut.value)
+          left -= encodeJson(fitted.cut.value).length + 1
         }
       }
       return { output: encodeJson(kept), cuts }

@@ -17,7 +17,6 @@ import {
   assistantMessageIdForTurn,
   BranchId,
   dateFromMillis,
-  DEFAULT_AGENT_NAME,
   EventEnvelope,
   Message,
   MessageId,
@@ -51,7 +50,7 @@ import { useSessionFeed } from "../src/session"
 import { useExtensionUI } from "../src/extensions/host"
 import { ClientContext, type ClientRuntime } from "../src/extensions/client-facets"
 
-// ── agent-lifecycle.test ────────────────────────────────────────────────────
+// ── agent lifecycle ─────────────────────────────────────────────────────────
 
 const makeMessage = (role: "user" | "assistant") =>
   Message.cases.regular.make({
@@ -125,7 +124,7 @@ describe("reduceAgentLifecycle", () => {
   })
 })
 
-// ── session-settings-state.test ─────────────────────────────────────────────
+// ── session settings state ──────────────────────────────────────────────────
 
 const absent = Option.getOrUndefined(Option.none())
 
@@ -165,7 +164,7 @@ describe("session settings", () => {
   })
 })
 
-// ── client-provider-contract.test ───────────────────────────────────────────
+// ── client provider contract ────────────────────────────────────────────────
 
 /**
  * The merged client provider's contract.
@@ -300,7 +299,7 @@ describe("ClientProvider contract", () => {
   )
 })
 
-// ── client-session-metrics.test ─────────────────────────────────────────────
+// ── client session metrics ──────────────────────────────────────────────────
 
 /**
  * Session metrics must not cross a session boundary.
@@ -534,7 +533,7 @@ describe("ClientProvider session metrics", () => {
   )
 })
 
-// ── client-session-state.test ───────────────────────────────────────────────
+// ── client session state ────────────────────────────────────────────────────
 
 class ClientSessionStateTestError extends Schema.TaggedError<ClientSessionStateTestError>()(
   "ClientSessionStateTestError",
@@ -596,7 +595,7 @@ describe("ClientProvider session lifecycle", () => {
       })
     }),
   )
-  it.live("a new session after resuming another agent's session starts as the default agent", () =>
+  it.live("a new session takes its agent from its snapshot, never from the session before it", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const client = createMockClient({
@@ -631,7 +630,21 @@ describe("ClientProvider session lifecycle", () => {
         () => active.session()?.sessionId === SessionId.make("session-new"),
         "new session active",
       )
-      expect(active.agent()).toBe(DEFAULT_AGENT_NAME)
+      // No guess before the snapshot: a handoff inherits its parent's agent,
+      // so assuming the default would flicker.
+      expect(active.agent()).toBeUndefined()
+      active.applySessionSnapshot({
+        sessionId: SessionId.make("session-new"),
+        branchId: BranchId.make("branch-new"),
+        messages: [],
+        lastEventId: 1,
+        reasoningLevel: absent,
+        resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+        agent: AgentName.make("deepwork"),
+        runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+        metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+      })
+      expect(active.agent()).toBe(AgentName.make("deepwork"))
     }),
   )
   it.live("runtime idle clears finishing activity only for the current branch", () =>
@@ -1122,7 +1135,7 @@ describe("ClientProvider session lifecycle", () => {
   )
 })
 
-// ── use-session-feed.test ───────────────────────────────────────────────────
+// ── use session feed ────────────────────────────────────────────────────────
 
 type FeedClient = Parameters<typeof useSessionFeed>[2]
 
@@ -1639,8 +1652,56 @@ describe("useSessionFeed", () => {
           value.messages().find((message) => message.role === "assistant")?.toolCalls?.[0],
         ),
       )
-    return { cellOf, dispose }
+    const activeTool = () =>
+      Option.flatMap(feed, (value) => Option.fromUndefinedOr(value.activeTool()))
+    return { cellOf, activeTool, dispose }
   }
+
+  it.live("a cell's running ops show side by side while one of them waits", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-feed-sibling-ops")
+      const branchId = BranchId.make("branch-feed-sibling-ops")
+      const cellId = ToolCallId.make("tool-call-sibling-cell")
+      const opStarted = (id: string, command: string) =>
+        AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: ToolCallId.make(id),
+          toolName: "bash",
+          input: { command },
+          parentToolCallId: cellId,
+        })
+      const { activeTool, dispose } = openFeed(snapshotFor(sessionId, branchId), [
+        makeEnvelope(1, AgentEvent.cases.StreamStarted.make({ sessionId, branchId })),
+        makeEnvelope(
+          2,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: cellId,
+            toolName: "cell",
+            input: { code: "await Promise.all([tools.bash(a), tools.bash(b)])" },
+          }),
+        ),
+        makeEnvelope(3, opStarted("tool-call-ticks", "sleep 2; echo SLEPT")),
+        makeEnvelope(4, opStarted("tool-call-asks", "git checkout HEAD -- README.md")),
+      ])
+      yield* waitUntil(() =>
+        Option.exists(activeTool(), (label) => label.includes("git checkout")),
+      ).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            // The asking op does not hide the one that runs on; the cell waits on both.
+            const label = Option.getOrElse(activeTool(), () => "")
+            expect(label).toContain("sleep 2")
+            expect(label).toContain("git checkout")
+            expect(label).not.toContain("cell")
+          }),
+        ),
+        Effect.ensuring(Effect.sync(dispose)),
+      )
+    }),
+  )
 
   it.live("an op still running when its cell fails reads as failed, as a reload draws it", () =>
     Effect.gen(function* () {

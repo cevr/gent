@@ -49,6 +49,7 @@ const durable = (overrides: {
   cwd?: string
   parentSession?: string
   parentBranch?: string
+  createdAt?: number
   updatedAt?: number
   sideThread?: boolean
 }): DurableAgentRow => ({
@@ -65,7 +66,7 @@ const durable = (overrides: {
       branchId: bid(parentBranch),
     })),
   ),
-  createdAt: 0,
+  createdAt: overrides.createdAt ?? 0,
   updatedAt: overrides.updatedAt ?? 0,
   sideThread: overrides.sideThread ?? false,
 })
@@ -250,6 +251,34 @@ describe("agents view projection", () => {
       expect(rows.map((row) => row.section)).toEqual(["running", "idle", "inactive"])
     })
 
+    test("draws children under their parent in the order they started, as the tray does", () => {
+      const child = (session: string, createdAt: number, updatedAt: number) =>
+        durable({
+          session,
+          branch: "b",
+          parentSession: "parent",
+          parentBranch: "b",
+          createdAt,
+          updatedAt,
+        })
+      const rows = buildRowTree(
+        reconcileAgentRows({
+          live: [],
+          durable: [
+            // The newest update first, as a listing returns them.
+            child("gamma", 300, 900),
+            child("beta", 200, 800),
+            child("alpha", 100, 700),
+            durable({ session: "parent", branch: "b", createdAt: 50, updatedAt: 600 }),
+            durable({ session: "other", branch: "b", createdAt: 10, updatedAt: 650 }),
+          ],
+        }),
+      )
+      expect(rows.map((row) => row.sessionId)).toEqual(
+        ["other", "parent", "alpha", "beta", "gamma"].map(sid),
+      )
+    })
+
     test("orders more recent rows first within a section", () => {
       const rows = buildRowTree(
         reconcileAgentRows({
@@ -408,12 +437,13 @@ describe("agents view live activity", () => {
   const sessionId = sid("activity-session")
   const branchId = bid("activity-branch")
   const fold = (events: ReadonlyArray<AgentEvent>) => events.reduce(foldActivity, emptyActivity)
-  const started = (id: string, toolName: string) =>
+  const started = (id: string, toolName: string, input: Readonly<Record<string, string>> = {}) =>
     AgentEvent.cases.ToolCallStarted.make({
       sessionId,
       branchId,
       toolCallId: ToolCallId.make(id),
       toolName,
+      input,
     })
   const chunk = (text: string) =>
     AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: text })
@@ -436,6 +466,19 @@ describe("agents view live activity", () => {
       }),
     )
     expect(Option.getOrUndefined(activityText(afterBash))).toBe("running cell")
+  })
+
+  test("a running tool names the first line of the command, path or pattern it works on", () => {
+    const bash = fold([
+      started("tc-bash", "bash", { command: "  bun test tests/money.test.ts\necho done" }),
+    ])
+    expect(Option.getOrUndefined(activityText(bash))).toBe(
+      "running bash bun test tests/money.test.ts",
+    )
+    const read = fold([started("tc-read", "read", { path: "src/loader.ts" })])
+    expect(Option.getOrUndefined(activityText(read))).toBe("running read src/loader.ts")
+    const long = fold([started("tc-long", "bash", { command: "x".repeat(200) })])
+    expect([...(Option.getOrUndefined(activityText(long)) ?? "")].length).toBe(80)
   })
 
   test("a completed turn reports nothing", () => {
@@ -511,22 +554,21 @@ const listAgents = (input: { readonly query?: string }) =>
 /**
  * One loop behind a scripted `Session`: `events` reads a queue the test feeds,
  * and `listActiveLoops` reports the loop with `status`, or not at all once it
- * is `None`. `checks` counts the liveness reads, one per follower start and
- * one per turn end, so a test sees whether a follower still runs.
+ * is `None`. `checks` counts the listing reads: one per follow, one per
+ * follower start and one per turn end, so a test sees whether a follower
+ * still runs.
  */
 const scriptedLoop = Effect.gen(function* () {
   const loop = { sessionId: sid("child-session"), branchId: bid("child-branch") }
   const events = yield* Queue.unbounded<AgentEvent>()
   const status = yield* Ref.make<Option.Option<string>>(Option.some("Running"))
-  const checks = yield* Ref.make(0)
   const base = testToolContext()
   const ctx = testLeafContext(
     testToolContext({
       Session: {
         ...base.Session,
         events: () => Stream.fromQueue(events),
-        listActiveLoops: Ref.update(checks, (count) => count + 1).pipe(
-          Effect.andThen(Ref.get(status)),
+        listActiveLoops: Ref.get(status).pipe(
           Effect.map((current) =>
             Option.toArray(
               Option.map(current, (value) => ({ ...loop, status: Option.some(value) })),
@@ -544,41 +586,29 @@ const scriptedLoop = Effect.gen(function* () {
     events,
     AgentEvent.cases.TurnCompleted.make({ ...loop, durationMs: 1 }),
   )
-  return { loop, status, checks, activity, follow, chunk, turnCompleted }
+  return { loop, status, ctx, activity, follow, chunk, turnCompleted }
 })
 
-describe("AgentActivity followers", () => {
+describe("AgentActivity watchers", () => {
   it.live(
-    "a follower for a loop that is not working ends at once",
-    () =>
-      Effect.gen(function* () {
-        const script = yield* scriptedLoop
-        yield* Ref.set(script.status, Option.some("Idle"))
-        // Each follow starts a follower only when none runs, so the liveness
-        // reads climb only while every follower has already ended.
-        yield* waitFor(
-          script.follow.pipe(Effect.andThen(Ref.get(script.checks))),
-          (checks) => checks >= 3,
-          2_000,
-          "a new follower on each follow",
-        )
-        yield* script.chunk("never read")
-        expect(Option.isNone(yield* script.activity.read(script.loop))).toBe(true)
-      }).pipe(Effect.provide(AgentActivityLive), Effect.scoped, Effect.timeout("4 seconds")),
-    6_000,
-  )
-
-  it.live(
-    "a follower ends at the turn end that finds its loop gone, and forgets its line",
+    "a watcher keeps its loop across an idle turn end: the line clears, and the next turn shows at once",
     () =>
       Effect.gen(function* () {
         const script = yield* scriptedLoop
         yield* script.follow
         yield* script.chunk("Reading the loader.")
         yield* waitFor(script.activity.read(script.loop), Option.isSome, 2_000, "the streamed line")
-        // Live at a turn's end: the follower stays for the next turn.
+        // The child finishes its turn and settles idle.
+        yield* Ref.set(script.status, Option.some("Idle"))
         yield* script.turnCompleted
-        yield* waitFor(Ref.get(script.checks), (checks) => checks >= 2, 2_000, "turn end check")
+        yield* waitFor(
+          script.activity.read(script.loop),
+          Option.isNone,
+          2_000,
+          "the line cleared at the turn end",
+        )
+        // A queued turn starts with no listing in between: its first line shows.
+        yield* Ref.set(script.status, Option.some("Running"))
         yield* script.chunk("Checking the tests.")
         const next = yield* waitFor(
           script.activity.read(script.loop),
@@ -587,16 +617,40 @@ describe("AgentActivity followers", () => {
           "the next turn's line",
         )
         expect(Option.getOrUndefined(next)).toBe("Checking the tests.")
-        // Gone at a turn's end: the follower ends, so the next follow starts
-        // a new one, which finds the loop gone and ends at once.
-        yield* Ref.set(script.status, Option.none())
-        yield* script.turnCompleted
+      }).pipe(Effect.provide(AgentActivityLive), Effect.scoped, Effect.timeout("4 seconds")),
+    6_000,
+  )
+
+  it.live(
+    "a follow keeps the watcher of a loop the runtime lists idle",
+    () =>
+      Effect.gen(function* () {
+        const script = yield* scriptedLoop
+        yield* script.follow
+        yield* Ref.set(script.status, Option.some("Idle"))
+        yield* script.activity.follow([]).pipe(Effect.provideService(ExtensionContext, script.ctx))
+        yield* script.chunk("Reading the loader.")
         yield* waitFor(
-          script.follow.pipe(Effect.andThen(Ref.get(script.checks))),
-          (checks) => checks >= 4,
+          script.activity.read(script.loop),
+          Option.isSome,
           2_000,
-          "a new follower after the old one ended",
+          "the idle loop's next line",
         )
+      }).pipe(Effect.provide(AgentActivityLive), Effect.scoped, Effect.timeout("4 seconds")),
+    6_000,
+  )
+
+  it.live(
+    "a follow stops the watcher of a loop the runtime no longer lists",
+    () =>
+      Effect.gen(function* () {
+        const script = yield* scriptedLoop
+        yield* script.follow
+        yield* script.chunk("Reading the loader.")
+        yield* waitFor(script.activity.read(script.loop), Option.isSome, 2_000, "the streamed line")
+        // No event reads the change: only the next listing can stop it.
+        yield* Ref.set(script.status, Option.none())
+        yield* script.activity.follow([]).pipe(Effect.provideService(ExtensionContext, script.ctx))
         expect(Option.isNone(yield* script.activity.read(script.loop))).toBe(true)
       }).pipe(Effect.provide(AgentActivityLive), Effect.scoped, Effect.timeout("4 seconds")),
     6_000,
@@ -773,7 +827,7 @@ describe("AgentsViewExtension via RPC", () => {
   )
 
   it.live(
-    "a child's next turn reports from its first event, with no listing between turns",
+    "a child's next turn reports its first line with no listing between the turns",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -807,7 +861,7 @@ describe("AgentsViewExtension via RPC", () => {
             content: "look at the loader",
           })
           yield* controls.waitForStreamStart
-          // Turn one: the tray lists the running child, which opens its follower.
+          // Turn one: the tray lists the running child.
           yield* waitFor(
             requestRows(harness, {}),
             ({ reply }) => rowOf(reply, child.sessionId)?.section === "running",
@@ -815,15 +869,15 @@ describe("AgentsViewExtension via RPC", () => {
             "child running",
           )
           yield* controls.emitAll
-          const idle = yield* waitFor(
+          // The agents pane opens on the idle child: its one listing sees the
+          // child idle, and no listing follows until turn two has streamed.
+          yield* waitFor(
             requestRows(harness, {}),
             ({ reply }) => rowOf(reply, child.sessionId)?.section === "idle",
             5_000,
             "child idle",
           )
-          // The turn's end clears the line.
-          expect(rowOf(idle.reply, child.sessionId)?.activity).toBeUndefined()
-          // Turn two streams its first line before any listing sees it running.
+          // Turn two starts from the loop itself, and streams its first line.
           yield* harness.client.message.send({
             sessionId: child.sessionId,
             branchId: child.branchId,
@@ -836,12 +890,8 @@ describe("AgentsViewExtension via RPC", () => {
             ({ reply }) => Predicate.isNotUndefined(rowOf(reply, child.sessionId)?.activity),
             3_000,
             "second turn activity",
-          ).pipe(Effect.option)
-          expect(
-            Option.getOrUndefined(
-              Option.map(shown, ({ reply }) => rowOf(reply, child.sessionId)?.activity),
-            ),
-          ).toBe("Reading the loader.")
+          )
+          expect(rowOf(shown.reply, child.sessionId)?.activity).toBe("Reading the loader.")
           yield* controls.emitAll
         }).pipe(Effect.timeout("8 seconds")),
       ),

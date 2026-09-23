@@ -64,7 +64,7 @@ import {
 import { makeClientRuntime } from "../../src/extensions/host"
 import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 
-// ── ../extensions-resolve.test ──────────────────────────────────────────────
+// ── extensions resolve ──────────────────────────────────────────────────────
 
 /** The commands a load resolves to, before the session and the server add theirs. */
 const commandsOf = (resolved: ResolvedTuiExtensions) =>
@@ -377,7 +377,7 @@ describe("resolveTuiExtensions", () => {
   })
 })
 
-// ── ../extension-effect-setup.test ──────────────────────────────────────────
+// ── extension effect setup ──────────────────────────────────────────────────
 
 /**
  * Lock: `loadTuiExtensions` runs Effect-typed `setup` values through the
@@ -574,7 +574,7 @@ export default {
   })
 })
 
-// ── ../autocomplete-effect-items.test ───────────────────────────────────────
+// ── autocomplete effect items ───────────────────────────────────────────────
 
 /**
  *  lock: autocomplete `items()` returning an Effect that yields
@@ -756,7 +756,7 @@ describe("autocomplete Effect items() through the client transport", () => {
   )
 })
 
-// ── ../autocomplete-contribution-order.test ─────────────────────────────────
+// ── autocomplete contribution order ─────────────────────────────────────────
 
 /**
  * Ranking at the seams that actually ship.
@@ -919,7 +919,7 @@ describe("skills autocomplete contribution", () => {
   )
 })
 
-// ── ../autocomplete-frecency-seam.test ──────────────────────────────────────
+// ── autocomplete frecency seam ──────────────────────────────────────────────
 
 /**
  * Frecency at the seams that actually ship.
@@ -1072,7 +1072,7 @@ describe("skills autocomplete records and reads pick history", () => {
   )
 })
 
-// ── ../extension-integration.test ───────────────────────────────────────────
+// ── extension integration ───────────────────────────────────────────────────
 
 /**
  * TUI extension integration contracts.

@@ -12,8 +12,6 @@ import {
 } from "@gent/core/test-utils"
 import SessionNotesExtension from "../extensions/session-notes.js"
 
-// ── session-notes.test ──────────────────────────────────────────────────────
-
 /**
  * Acceptance for the one-file authoring reference: the example loads through
  * the public entries only and runs its tool, slash request, and turn

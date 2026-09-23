@@ -10,7 +10,7 @@ import {
 } from "../src/logger"
 import { resolveLogDir } from "../src/server"
 
-// ── logger.test ─────────────────────────────────────────────────────────────
+// ── log paths ───────────────────────────────────────────────────────────────
 
 describe("buildLogPaths", () => {
   it.effect("returns a deterministic shape under the central log dir", () =>
@@ -86,7 +86,7 @@ describe("GentObservability", () => {
   )
 })
 
-// ── tracer.test ─────────────────────────────────────────────────────────────
+// ── tracer ──────────────────────────────────────────────────────────────────
 
 const tracerWithConfig = (env: Record<string, string>) =>
   Layer.provide(GentTracerLive, ConfigProvider.layer(ConfigProvider.fromEnv({ env })))
@@ -118,7 +118,7 @@ describe("tracer configuration", () => {
   )
 })
 
-// ── log-level.test ──────────────────────────────────────────────────────────
+// ── log level ───────────────────────────────────────────────────────────────
 
 const logLevelWith = (env: Record<string, string>) =>
   Effect.provideService(

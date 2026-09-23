@@ -6,18 +6,24 @@ import { buildSyntaxStyle, useTheme } from "./theme"
 import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
 import { formatHeadTail, headTail, type OutputCut } from "@gent/core/protocol"
 import {
+  type ActivityOperation,
   CellOperationReceipts,
   decodeToolOutput,
+  countNoun,
   decodeToolOutputOption,
   describeCellCode,
   fileUrl,
   formatGenericToolDetail,
   formatGenericToolInput,
   formatGenericToolText,
+  formatOperationLabels,
   formatToolInput,
   getString,
   isAbsPath,
   plural,
+  shortSessionId,
+  splitLines,
+  toolArgSummary,
   type ToolInput,
   truncatePath,
 } from "./utils"
@@ -244,11 +250,20 @@ export function GenericToolRenderer(props: ToolRendererProps) {
 
 /**
  * A line of a tool output, numbered as in the whole output, or a run left
- * out: whole lines, or the characters of a cut inside a line.
+ * out: whole lines, or the characters of a cut inside a line. A line a cut
+ * left only part of names the side it lost: `end` for a head line that stops
+ * early, `start` for a tail line that starts late.
  */
 type WindowedLine =
-  | { _tag: "line"; text: string; lineNum: number }
+  | { _tag: "line"; text: string; lineNum: number; part?: "end" | "start" }
   | { _tag: "elision"; count: number; unit: "lines" | "chars" }
+
+/** A line's text as drawn: a part of a line is marked on the side it lost. */
+const drawnText = (row: Extract<WindowedLine, { _tag: "line" }>): string => {
+  if (row.part === "end") return `${row.text} …`
+  if (row.part === "start") return `… ${row.text}`
+  return row.text
+}
 
 interface OutputRows {
   readonly rows: ReadonlyArray<WindowedLine>
@@ -273,8 +288,8 @@ const itemsCutFor = (call: ToolCall, field: string): Option.Option<ItemsCut> =>
     (call.cuts ?? []).find((cut): cut is ItemsCut => cut._tag === "Items" && cut.field === field),
   )
 
-/** The marker a cut inside one line draws, in place of the characters it left out. */
-const charsMarker = (chars: number): string => `… [${plural(chars, "char")} truncated] …`
+/** The one truncation marker, `formatHeadTail`'s spelling: `... [12 lines truncated] ...`. */
+const truncationMarker = (counted: string): string => `... [${counted} truncated] ...`
 
 /**
  * An output string as numbered rows. A cut string's excerpt is its head lines,
@@ -283,38 +298,67 @@ const charsMarker = (chars: number): string => `… [${plural(chars, "char")} tr
  * output, before or after a reload. A cut inside one line draws that line
  * once, its two ends joined by a marker of the characters left out.
  */
-const outputRows = (text: string, cut: Option.Option<TextCut>): OutputRows => {
-  const parts = text.split("\n")
-  const line = (lineText: string, lineNum: number): WindowedLine => ({
-    _tag: "line",
-    text: lineText,
-    lineNum,
-  })
-  const whole = Option.match(cut, {
-    onNone: () => ({
-      rows: parts.map((part, index) => line(part, index + 1)),
-      total: parts.length,
-    }),
-    onSome: ({ lines, tailLine, chars }) => {
-      const tailCount = lines - tailLine + 1
-      const head = parts.slice(0, Math.max(0, parts.length - tailCount - 1))
-      const tail = parts.slice(parts.length - tailCount)
-      const headRows = head.map((part, index) => line(part, index + 1))
-      const tailRows = tail.map((part, index) => line(part, tailLine + index))
-      if (tailLine === head.length) {
-        const joined = line(`${head.at(-1) ?? ""} ${charsMarker(chars)} ${tail[0] ?? ""}`, tailLine)
-        return {
-          rows: [...headRows.slice(0, -1), joined, ...tailRows.slice(1)],
-          total: lines,
-        }
-      }
-      // Whole lines left out, else only the characters of a line cut in two.
-      const skipped = tailLine - head.length - 1
-      let gap: WindowedLine = { _tag: "elision", count: chars, unit: "chars" }
-      if (skipped > 0) gap = { _tag: "elision", count: skipped, unit: "lines" }
-      return { rows: [...headRows, gap, ...tailRows], total: lines }
+const numberedLine = (text: string, lineNum: number): WindowedLine => ({
+  _tag: "line",
+  text,
+  lineNum,
+})
+
+const outputRows = (text: string, cut: Option.Option<TextCut>): OutputRows =>
+  Option.match(cut, {
+    onNone: () => {
+      const rows = splitLines(text).map((part, index) => numberedLine(part, index + 1))
+      return { rows, total: rows.length }
     },
+    onSome: (textCut) => cutRows(text, textCut),
   })
+
+/**
+ * A cut string's rows. The cut record counts the parts of `split("\n")`, so a
+ * final newline's empty part is dropped once the excerpt is placed, as
+ * `splitLines` drops it from a whole string.
+ */
+const cutRows = (text: string, cut: TextCut): OutputRows => {
+  const { lines, tailLine, chars } = cut
+  const parts = text.split("\n")
+  const tailCount = lines - tailLine + 1
+  const head = parts.slice(0, Math.max(0, parts.length - tailCount - 1))
+  const tail = parts.slice(parts.length - tailCount)
+  const headRows = head.map((part, index) => numberedLine(part, index + 1))
+  const tailRows = tail.map((part, index) => numberedLine(part, tailLine + index))
+  const placed = (): OutputRows => {
+    if (tailLine === head.length) {
+      const joined = numberedLine(
+        `${head.at(-1) ?? ""} ${truncationMarker(plural(chars, "char"))} ${tail[0] ?? ""}`,
+        tailLine,
+      )
+      return { rows: [...headRows.slice(0, -1), joined, ...tailRows.slice(1)], total: lines }
+    }
+    // Whole lines left out, else only the characters of a line cut in two.
+    const skipped = tailLine - head.length - 1
+    if (skipped === 0) {
+      const gap: WindowedLine = { _tag: "elision", count: chars, unit: "chars" }
+      return { rows: [...headRows, gap, ...tailRows], total: lines }
+    }
+    // The gap counts whole lines, so a head or tail line cut short is marked
+    // on its own row: the gap does not count the characters it lost.
+    const marked = (
+      rows: ReadonlyArray<WindowedLine>,
+      index: number,
+      part: "end" | "start",
+    ): Array<WindowedLine> =>
+      rows.map((row, at) => {
+        if (at !== index || row._tag !== "line") return row
+        return { ...row, part }
+      })
+    let headDrawn: ReadonlyArray<WindowedLine> = headRows
+    if (cut.headCut === true) headDrawn = marked(headRows, headRows.length - 1, "end")
+    let tailDrawn: ReadonlyArray<WindowedLine> = tailRows
+    if (cut.tailCut === true) tailDrawn = marked(tailRows, 0, "start")
+    const gap: WindowedLine = { _tag: "elision", count: skipped, unit: "lines" }
+    return { rows: [...headDrawn, gap, ...tailDrawn], total: lines }
+  }
+  const whole = placed()
   const last = whole.rows.at(-1)
   if (last?._tag === "line" && last.text.length === 0) {
     return { rows: whole.rows.slice(0, -1), total: whole.total - 1 }
@@ -375,16 +419,10 @@ const gutterParts = (rows: ReadonlyArray<WindowedLine>): ReadonlyArray<GutterPar
       continue
     }
     if (run.length === 0) runStart = row.lineNum
-    run.push(row.text)
+    run.push(drawnText(row))
   }
   flush()
   return parts
-}
-
-/** The noun a count takes: `line` for one, `lines` otherwise. */
-const countNoun = (count: number, singular: string, pluralForm = `${singular}s`): string => {
-  if (count === 1) return singular
-  return pluralForm
 }
 
 const unitNoun = (unit: "lines" | "chars"): string => {
@@ -398,12 +436,8 @@ const rowsText = (rows: ReadonlyArray<WindowedLine>): string =>
     .flatMap((row) =>
       Match.value(row).pipe(
         Match.tagsExhaustive({
-          line: (item) => [item.text],
-          elision: (item) => [
-            "",
-            `... [${plural(item.count, unitNoun(item.unit))} truncated] ...`,
-            "",
-          ],
+          line: (item) => [drawnText(item)],
+          elision: (item) => ["", truncationMarker(plural(item.count, unitNoun(item.unit))), ""],
         }),
       ),
     )
@@ -451,6 +485,27 @@ function parseBashOutput(
   }))
 }
 
+/**
+ * A bash result as numbered rows: stdout then stderr, each numbered and
+ * counted as in the whole output, a cut stream by its cut record. The row
+ * header counts `total` too, so a row and its body name one number, live and
+ * after a reload.
+ */
+export const bashOutputRows = (call: ToolCall): OutputRows =>
+  Option.match(parseBashOutput(call.output), {
+    onNone: () => ({ rows: [], total: 0 }),
+    onSome: (value) => {
+      const streams = [
+        outputRows(value.stdout, textCutFor(call, Option.some("stdout"))),
+        outputRows(value.stderr, textCutFor(call, Option.some("stderr"))),
+      ]
+      return {
+        rows: streams.flatMap((stream) => stream.rows),
+        total: streams.reduce((sum, stream) => sum + stream.total, 0),
+      }
+    },
+  })
+
 function getCommand(input: ToolInput): string {
   return getString(input, "command")
 }
@@ -461,19 +516,7 @@ function BashToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => parseBashOutput(props.toolCall.output))
   const command = createMemo(() => getCommand(props.toolCall.input))
 
-  // stdout then stderr, each numbered and counted as in the whole output.
-  const output = createMemo((): OutputRows => {
-    const d = data()
-    if (Option.isNone(d)) return { rows: [], total: 0 }
-    const streams = [
-      outputRows(d.value.stdout, textCutFor(props.toolCall, Option.some("stdout"))),
-      outputRows(d.value.stderr, textCutFor(props.toolCall, Option.some("stderr"))),
-    ]
-    return {
-      rows: streams.flatMap((stream) => stream.rows),
-      total: streams.reduce((sum, stream) => sum + stream.total, 0),
-    }
-  })
+  const output = createMemo(() => bashOutputRows(props.toolCall))
 
   const collapsedText = createMemo(() => rowsText(windowRows(output().rows, 6)))
   const expandedText = createMemo(() => rowsText(windowRows(output().rows, 100)))
@@ -573,10 +616,31 @@ interface OperationLine {
   readonly summary: string
 }
 
-const liveOutcome = (status: ToolRendererProps["toolCall"]["status"]): OperationLine["outcome"] => {
+const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
   if (status === "running") return "running"
   if (status === "error") return "failed"
   return "succeeded"
+}
+
+/** Calls a cell admitted: live nested calls carry arguments; saved receipts carry tool and outcome. */
+export const cellOperations = (call: ToolCall): ReadonlyArray<ActivityOperation> => {
+  const live = Option.fromNullishOr(call.operations)
+  if (Option.isSome(live) && live.value.length > 0) {
+    return live.value.map((operation) => ({
+      tool: operation.toolName,
+      outcome: liveOutcome(operation.status),
+      detail: toolArgSummary(operation.toolName, operation.input),
+    }))
+  }
+  return Option.match(decodeToolOutputOption(CellOperationReceipts, call.output), {
+    onNone: () => [],
+    onSome: (value) =>
+      (value.operations ?? []).map((operation) => ({
+        tool: operation.tool,
+        outcome: operation.outcome,
+        detail: "",
+      })),
+  })
 }
 
 function CellToolRenderer(props: ToolRendererProps) {
@@ -585,11 +649,14 @@ function CellToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => decodeToolOutputOption(CellOutputSchema, props.toolCall.output))
   const code = createMemo(() => getString(props.toolCall.input, "code"))
   const codeLines = createMemo(() => code().split("\n"))
-  // The verbs the source spells out; the first code line only when it spells none.
+  // The ops that ran, once there are any, as the header counts them; before
+  // that the verbs the source spells out, else its first line.
   const subtitle = createMemo(() => {
+    const operations = cellOperations(props.toolCall)
     const verbs = describeCellCode(code())
     let first = codeLines()[0] ?? ""
     if (verbs.length > 0) first = verbs.join(" · ")
+    if (operations.length > 0) first = formatOperationLabels(operations)
     if (first.length > 60) return `${first.slice(0, 60)}…`
     return first
   })
@@ -818,11 +885,12 @@ export function ReadToolRenderer(props: ToolRendererProps) {
       (row) =>
         Match.value(row).pipe(
           Match.tagsExhaustive({
-            line: (item): WindowedLine => ({
-              _tag: "line",
-              text: parseContentLines(item.text)[0] ?? "",
-              lineNum: start + item.lineNum - 1,
-            }),
+            // A tail line that starts late has lost its `N\t` prefix: its text is content.
+            line: (item): WindowedLine => {
+              let text = parseContentLines(item.text)[0] ?? ""
+              if (item.part === "start") text = item.text
+              return { ...item, text, lineNum: start + item.lineNum - 1 }
+            },
             elision: (item): WindowedLine => item,
           }),
         ),
@@ -871,7 +939,7 @@ export function ReadToolRenderer(props: ToolRendererProps) {
                             <span style={{ fg: theme.border }}>
                               {String(item.lineNum).padStart(4)} │{" "}
                             </span>
-                            <span style={{ fg: theme.textMuted }}>{item.text}</span>
+                            <span style={{ fg: theme.textMuted }}>{drawnText(item)}</span>
                           </text>
                         ),
                       }),
@@ -1123,7 +1191,14 @@ interface GrepOutput {
   readonly total: number
   /** Files in the whole result, the ones between a cut's head and tail too. */
   readonly files: number
+  /** How many kept matches come before a cut's gap; `None` when nothing was cut. */
+  readonly headMatches: Option.Option<number>
 }
+
+/** The expanded body's parts: each file's run of matches, and the gap a cut left. */
+type GrepPart =
+  | { readonly _tag: "file"; readonly file: string; readonly matches: ReadonlyArray<GrepMatch> }
+  | { readonly _tag: "gap"; readonly count: number }
 
 const GrepMatchSchema = Schema.Struct({
   file: Schema.String,
@@ -1146,7 +1221,30 @@ function parseGrepOutput(call: ToolCall): Option.Option<GrepOutput> {
       Option.flatMap(cut, (value) => Option.fromUndefinedOr(value.files)),
       () => new Set(d.matches.map((match) => match.file)).size,
     ),
+    // The tail holds the whole array's items from `tailItem` on; the head is the rest kept.
+    headMatches: Option.map(cut, (value) => d.matches.length - (value.items - value.tailItem + 1)),
   }))
+}
+
+/**
+ * Head matches by file, the gap, then tail matches by file. A file with
+ * matches on both sides of the gap draws twice, so no run joins across it.
+ */
+function grepParts(output: GrepOutput): ReadonlyArray<GrepPart> {
+  const byFile = (matches: ReadonlyArray<GrepMatch>): ReadonlyArray<GrepPart> =>
+    Array.from(groupByFile(matches), ([file, fileMatches]): GrepPart => ({
+      _tag: "file",
+      file,
+      matches: fileMatches,
+    }))
+  return Option.match(output.headMatches, {
+    onNone: () => byFile(output.matches),
+    onSome: (headCount) => [
+      ...byFile(output.matches.slice(0, headCount)),
+      { _tag: "gap", count: output.total - output.matches.length },
+      ...byFile(output.matches.slice(headCount)),
+    ],
+  })
 }
 
 function getPattern(input: ToolInput): string {
@@ -1154,7 +1252,7 @@ function getPattern(input: ToolInput): string {
 }
 
 /** Group matches by file */
-function groupByFile(matches: readonly GrepMatch[]): Map<string, GrepMatch[]> {
+function groupByFile(matches: ReadonlyArray<GrepMatch>): Map<string, GrepMatch[]> {
   const groups = new Map<string, GrepMatch[]>()
   for (const m of matches) {
     const existing = Option.fromNullishOr(groups.get(m.file))
@@ -1172,14 +1270,29 @@ function GrepToolRenderer(props: ToolRendererProps) {
 
   const data = createMemo(() => parseGrepOutput(props.toolCall))
   const pattern = createMemo(() => getPattern(props.toolCall.input))
-  const grouped = createMemo(() => {
-    const d = data()
-    if (Option.isNone(d)) return new Map<string, GrepMatch[]>()
-    return groupByFile(d.value.matches)
-  })
+  const parts = createMemo(() => Option.match(data(), { onNone: () => [], onSome: grepParts }))
+  const collapsedFiles = createMemo(() =>
+    [
+      ...new Set(
+        Option.match(data(), { onNone: () => [], onSome: (d) => d.matches }).map((m) => m.file),
+      ),
+    ].slice(0, 3),
+  )
 
-  const fileNames = createMemo(() => [...grouped().keys()])
-  const collapsedFiles = createMemo(() => fileNames().slice(0, 3))
+  // The whole result's counts, the matches a cut left out included.
+  const Totals = (totals: { output: GrepOutput }) => (
+    <text>
+      <span style={{ fg: theme.success, bold: true }}>{totals.output.total}</span>
+      <span style={{ fg: theme.textMuted }}>
+        {" "}
+        {countNoun(totals.output.total, "match", "matches")} in{" "}
+        {plural(totals.output.files, "file")}
+      </span>
+      <Show when={totals.output.truncated}>
+        <span style={{ fg: theme.warning }}> (truncated)</span>
+      </Show>
+    </text>
+  )
 
   return (
     <ToolFrame
@@ -1194,16 +1307,7 @@ function GrepToolRenderer(props: ToolRendererProps) {
         >
           {(d) => (
             <box flexDirection="column">
-              <text>
-                <span style={{ fg: theme.success, bold: true }}>{d().total}</span>
-                <span style={{ fg: theme.textMuted }}>
-                  {" "}
-                  {countNoun(d().total, "match", "matches")} in {plural(d().files, "file")}
-                </span>
-                <Show when={d().truncated}>
-                  <span style={{ fg: theme.warning }}> (truncated)</span>
-                </Show>
-              </text>
+              <Totals output={d()} />
               <For each={collapsedFiles()}>
                 {(file) => <text style={{ fg: theme.textMuted }}> {truncatePath(file)}</text>}
               </For>
@@ -1218,29 +1322,54 @@ function GrepToolRenderer(props: ToolRendererProps) {
         </Show>
       }
     >
-      <Show when={Option.getOrUndefined(data())}>
-        <box flexDirection="column">
-          <For each={fileNames()}>
-            {(file) => {
-              const matches = () => grouped().get(file) ?? []
-              return (
-                <box flexDirection="column" marginBottom={1}>
-                  <text>
-                    <span style={{ fg: theme.info, bold: true }}>{truncatePath(file, 60)}</span>
-                  </text>
-                  <For each={matches()}>
-                    {(m) => (
-                      <text>
-                        <span style={{ fg: theme.textMuted }}>{String(m.line).padStart(4)} │ </span>
-                        <span style={{ fg: theme.text }}>{m.content}</span>
-                      </text>
-                    )}
-                  </For>
-                </box>
-              )
-            }}
-          </For>
-        </box>
+      <Show
+        when={Option.getOrUndefined(data())}
+        fallback={<SummaryLine toolCall={props.toolCall} />}
+      >
+        {(d) => (
+          <box flexDirection="column">
+            <box marginBottom={1}>
+              <Totals output={d()} />
+            </box>
+            <For each={parts()}>
+              {(part) =>
+                Match.value(part).pipe(
+                  Match.tagsExhaustive({
+                    gap: (gap) => (
+                      <box marginBottom={1}>
+                        <text>
+                          <span style={{ fg: theme.border }}>{"· ··· "}</span>
+                          <span style={{ fg: theme.textMuted }}>
+                            {plural(gap.count, "more match", "more matches")}
+                          </span>
+                        </text>
+                      </box>
+                    ),
+                    file: (run) => (
+                      <box flexDirection="column" marginBottom={1}>
+                        <text>
+                          <span style={{ fg: theme.info, bold: true }}>
+                            {truncatePath(run.file, 60)}
+                          </span>
+                        </text>
+                        <For each={run.matches}>
+                          {(m) => (
+                            <text>
+                              <span style={{ fg: theme.textMuted }}>
+                                {String(m.line).padStart(4)} │{" "}
+                              </span>
+                              <span style={{ fg: theme.text }}>{m.content}</span>
+                            </text>
+                          )}
+                        </For>
+                      </box>
+                    ),
+                  }),
+                )
+              }
+            </For>
+          </box>
+        )}
       </Show>
     </ToolFrame>
   )
@@ -1269,7 +1398,7 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
   const subtitle = () => {
     const sid = getInputField(props.toolCall.input, "sessionId")
     if (Option.isNone(sid)) return Option.getOrUndefined(Option.none<string>())
-    return sid.value.slice(0, 8) + "…"
+    return shortSessionId(sid.value)
   }
 
   const summary = (): Option.Option<string> => {

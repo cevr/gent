@@ -1,7 +1,5 @@
 import {
   type ActivityCall,
-  type ActivityOperation,
-  CellOperationReceipts,
   decodeToolOutputOption,
   formatActivityHeader,
   formatCellRowLabel,
@@ -12,8 +10,8 @@ import {
   getString,
   plural,
   previewOutput,
-  toolArgSummary,
   workingIconFrame,
+  lineCount,
 } from "./utils"
 import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
 import { useTheme } from "./theme"
@@ -43,7 +41,13 @@ import {
 } from "solid-js"
 import type { ScrollBoxRenderable, ScrollbackSurface, SyntaxStyle } from "@opentui/core"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
-import { GenericToolRenderer, RegisteredToolCall, type ToolCall } from "./tool-renderers"
+import {
+  bashOutputRows,
+  cellOperations,
+  GenericToolRenderer,
+  RegisteredToolCall,
+  type ToolCall,
+} from "./tool-renderers"
 import { useExtensionUI } from "./extensions/host"
 import type { MessageRenderer, MessageRowProps } from "./extensions/client-facets"
 import {
@@ -216,6 +220,7 @@ const CellFailure = Schema.Struct({
 const BashOutput = Schema.Struct({
   stdout: Schema.String,
   stderr: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.Literals(["blocked", "background"])),
 })
 
 /** The part of a window marker's details the transcript shows: how much history a handoff replaced. */
@@ -226,33 +231,6 @@ type HandoffDetails = typeof HandoffDetails.Type
 const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
 
 const PREVIEW_LINES = 20
-
-const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
-  if (status === "completed") return "succeeded"
-  if (status === "error") return "failed"
-  return "running"
-}
-
-/** Calls a cell admitted: live nested calls carry arguments; saved receipts carry tool and outcome. */
-const cellOperations = (call: ToolCall): ReadonlyArray<ActivityOperation> => {
-  const live = Option.fromNullishOr(call.operations)
-  if (Option.isSome(live) && live.value.length > 0) {
-    return live.value.map((operation) => ({
-      tool: operation.toolName,
-      outcome: liveOutcome(operation.status),
-      detail: toolArgSummary(operation.toolName, operation.input),
-    }))
-  }
-  return Option.match(decodeToolOutputOption(CellOperationReceipts, call.output), {
-    onNone: () => [],
-    onSome: (value) =>
-      (value.operations ?? []).map((operation) => ({
-        tool: operation.tool,
-        outcome: operation.outcome,
-        detail: "",
-      })),
-  })
-}
 
 const toActivityCall = (call: ToolCall): ActivityCall => ({
   toolName: call.toolName,
@@ -281,17 +259,43 @@ const rowOutputText = (call: ToolCall): string => {
   if (call.toolName === "bash") {
     return Option.match(decodeToolOutputOption(BashOutput, call.output), {
       onNone: () => formatGenericToolText(call.output) ?? "",
-      onSome: (value) => [value.stdout, value.stderr ?? ""].filter((t) => t.length > 0).join("\n"),
+      // Each stream's final newline ends its last line, so the joined text
+      // holds as many lines as the two streams do.
+      onSome: (value) =>
+        [value.stdout, value.stderr ?? ""]
+          .filter((text) => text.length > 0)
+          .map((text) => text.replace(/\n$/, ""))
+          .join("\n"),
     })
   }
   return formatGenericToolText(call.output) ?? ""
 }
 
+/**
+ * Lines a row counts beneath itself. A bash row counts as its body does, so a
+ * cut stream counts the whole output its record names, not the kept excerpt.
+ */
+const rowOutputLines = (call: ToolCall): number => {
+  if (call.toolName === "bash" && Option.isSome(decodeToolOutputOption(BashOutput, call.output))) {
+    return bashOutputRows(call).total
+  }
+  return lineCount(rowOutputText(call))
+}
+
+/** A declined command never ran and a background one has not ended: neither has lines to count. */
+const hasNoOutputYet = (call: ToolCall): boolean =>
+  call.toolName === "bash" &&
+  Option.isSome(
+    Option.flatMap(decodeToolOutputOption(BashOutput, call.output), (value) =>
+      Option.fromUndefinedOr(value.status),
+    ),
+  )
+
 const rowCounts = (call: ToolCall): string => {
-  if (call.status === "running") return ""
+  if (call.status === "running" || hasNoOutputYet(call)) return ""
   return formatRowCounts(call.toolName, {
-    input: getString(call.input, "code"),
-    output: rowOutputText(call),
+    inputLines: lineCount(getString(call.input, "code")),
+    outputLines: rowOutputLines(call),
   })
 }
 

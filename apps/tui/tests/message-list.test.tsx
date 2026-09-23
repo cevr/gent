@@ -25,6 +25,7 @@ import {
   Message,
   MessageId,
   MODEL_CHANGE_MESSAGE_TYPE,
+  OutputCut,
   SessionId,
   ToolCallId,
   AgentEvent,
@@ -45,7 +46,12 @@ import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
-import { EditToolRenderer, ReadToolRenderer, useToolRenderers } from "../src/tool-renderers"
+import {
+  BUILTIN_TOOL_RENDERERS,
+  EditToolRenderer,
+  ReadToolRenderer,
+  useToolRenderers,
+} from "../src/tool-renderers"
 import { destroyRenderSetup, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
 import { waitForFrame } from "./helpers-boundary"
@@ -53,9 +59,7 @@ import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import { clientContributions, defineClientExtension } from "../src/extensions/client-facets"
 
-// ── message-list.test ───────────────────────────────────────────────────────
-
-// ── split-footer-height.test ────────────────────────────────────────────────
+// ── split footer height ─────────────────────────────────────────────────────
 
 /**
  * The split footer must always leave the terminal room to scroll.
@@ -120,7 +124,7 @@ describe("split footer height", () => {
   )
 })
 
-// ── reasoning-text.test ─────────────────────────────────────────────────────
+// ── reasoning text ──────────────────────────────────────────────────────────
 
 /**
  * Reasoning summaries must read as separate lines.
@@ -177,7 +181,7 @@ describe("reasoning text", () => {
   )
 })
 
-// ── session-event-indicator.test ────────────────────────────────────────────
+// ── session event indicator ─────────────────────────────────────────────────
 
 describe("session event labels", () => {
   test("formats retrying progress", () => {
@@ -241,7 +245,7 @@ describe("worked-for row", () => {
   })
 })
 
-// ── sdk-utilities.test ──────────────────────────────────────────────────────
+// ── tool interaction projection ─────────────────────────────────────────────
 
 const absent = Option.getOrUndefined(Option.none())
 let messageIndex = 0
@@ -462,7 +466,7 @@ describe("projectMessagesWithToolInteractions", () => {
   })
 })
 
-// ── message-list-render.test ────────────────────────────────────────────────
+// ── message list render ─────────────────────────────────────────────────────
 
 const syntaxStyle = () => SyntaxStyle.create()
 
@@ -570,6 +574,20 @@ const bashMessage = (id: string, lines: number): ListMessage =>
       stderr: "",
       exitCode: 0,
     }),
+  })
+
+/** A bash row whose output fields are given as the tool wrote them. */
+const bashOutputMessage = (
+  id: string,
+  output: { readonly stdout: string; readonly stderr: string; readonly status?: string },
+): ListMessage =>
+  assistantToolMessage(`assistant-${id}`, {
+    id,
+    toolName: "bash",
+    status: "completed",
+    input: { command: "echo hello" },
+    summary: absent,
+    output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({ ...output, exitCode: 0 }),
   })
 
 const compactionMessage = (): ListMessage => ({
@@ -1060,7 +1078,7 @@ describe("FX transcript treatment", () => {
       }
       const frame = yield* renderLoaded([sent])
       // A blank line in the name or the body leaves the header strip whole.
-      expect(frame).toContain('» from your parent "auth refactor" · 0199aabb')
+      expect(frame).toContain('» from your parent "auth refactor" · aabbccdd')
       expect(frame).toContain("Use the v2 token route.")
       expect(frame).toContain("Then rerun the suite.")
       expect(frame).not.toContain("Message from your parent")
@@ -1091,7 +1109,7 @@ describe("FX transcript treatment", () => {
         },
       }
       const frame = yield* renderLoaded([sent])
-      expect(frame).toContain('» from your child "delegate: Use session.send with…" · 01a0ca0c')
+      expect(frame).toContain('» from your child "delegate: Use session.send with…" · ca0cb3e7')
       expect(frame).toContain("hello from the child")
       // The status line is for the model; the row already says who is writing.
       expect(frame).not.toContain("not its completion")
@@ -1123,7 +1141,7 @@ describe("FX transcript treatment", () => {
       expect(frame).toContain("old question")
       expect(frame).not.toContain("Message from your child")
       // Wide characters count two columns: 15 of them fit before the ellipsis, and the id stays on the line.
-      expect(frame).toContain(`"${Array.from(from.name).slice(0, 15).join("")}…" · 01a0ca0c`)
+      expect(frame).toContain(`"${Array.from(from.name).slice(0, 15).join("")}…" · ca0cb3e7`)
     }),
   )
 
@@ -1675,11 +1693,53 @@ describe("FX transcript treatment", () => {
       )
       expect(frame).toMatch(/exit 0 · 1 line(?!s)/)
       expect(frame).toMatch(/1 line(?!s)\s+1 │/)
-      expect(frame).toMatch(/\[[\d,]+ chars truncated\]/)
+      expect(frame).toMatch(/\.\.\. \[[\d,]+ chars truncated\] \.\.\./)
       expect(frame).not.toContain("0 lines truncated")
       // The read gutter numbers the one line once; the other line 1 is the cell's code.
       expect(frame.match(/ 1 │/g)?.length).toBe(2)
       expect(frame).toContain('1 │ {"rows"')
+    }),
+  )
+
+  it.live("a reloaded head or tail that keeps part of a line marks the side it lost", () =>
+    Effect.gen(function* () {
+      const long = (label: string) => `${label}${"x".repeat(20_000)}`
+      const { reloaded } = yield* cellBeforeAndAfterReload("assistant-part-lines", [
+        {
+          id: "op-bash-head-part",
+          toolName: "bash",
+          input: { command: "gen head" },
+          summary: "exit 0 · 3 lines",
+          output: encodeJson({
+            stdout: `${long("first")}\n${long("second")}\nshort-tail`,
+            stderr: "",
+            exitCode: 0,
+          }),
+        },
+        {
+          id: "op-bash-tail-part",
+          toolName: "bash",
+          input: { command: "gen tail" },
+          summary: "exit 0 · 3 lines",
+          output: encodeJson({
+            stdout: `short-head\n${long("second")}\n${long("third")}y`,
+            stderr: "",
+            exitCode: 0,
+          }),
+        },
+      ])
+      const frame = yield* drawnCell(
+        "assistant-part-lines",
+        reloaded,
+        (next) => next.includes("gen head") && next.includes("gen tail"),
+        "reloaded part lines",
+        400,
+      )
+      const text = frame.replace(/\s*\n\s*/g, "")
+      // Line 1 stops early, line 2 is left out whole, line 3 is whole.
+      expect(text).toContain("xxx …... [1 line truncated] ...short-tail")
+      // Line 1 is whole, line 2 is left out whole, line 3 starts late.
+      expect(text).toContain("short-head... [1 line truncated] ...…xxx")
     }),
   )
 
@@ -1841,6 +1901,78 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("a bash row counts lines as its body does: a final newline ends a line", () =>
+    Effect.gen(function* () {
+      const items: SessionItem[] = [
+        bashOutputMessage("call-one-line", { stdout: "hello\n", stderr: "" }),
+        bashOutputMessage("call-two-streams", { stdout: "a\n", stderr: "b\n" }),
+        bashOutputMessage("call-declined", {
+          stdout: "Command blocked: destructive\n",
+          stderr: "",
+          status: "blocked",
+        }),
+        bashOutputMessage("call-background", {
+          stdout: "started pid 42\nlog at /tmp/x\n",
+          stderr: "",
+          status: "background",
+        }),
+      ]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={items}
+              disclosure="preview"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 80, height: 40 },
+        ),
+      )
+      const rows = renderFrame(setup)
+        .split("\n")
+        .filter((line) => line.includes("└ bash"))
+        .map((line) => line.trim().split(/\s{2,}/)[0])
+      expect(rows).toEqual([
+        "└ bash echo hello · ↓ 1 line",
+        "└ bash echo hello · ↓ 2 lines",
+        "└ bash echo hello",
+        "└ bash echo hello",
+      ])
+    }),
+  )
+
+  it.live("a cut bash row counts the whole output, as its body does", () =>
+    Effect.gen(function* () {
+      const list = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[assistantToolMessage("assistant-cut", cutBashCall)]}
+              disclosure="preview"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 80, height: 20 },
+        ),
+      )
+      const row = renderFrame(list)
+        .split("\n")
+        .find((line) => line.includes("└ bash"))
+      expect(row?.trim().split(/\s{2,}/)[0]).toBe("└ bash seq 1 1000 · ↓ 1000 lines")
+      const BashToolRenderer = builtinRenderer("bash")
+      const body = yield* Effect.promise(() =>
+        renderWithProviders(() => <BashToolRenderer expanded={true} toolCall={cutBashCall} />, {
+          width: 80,
+          height: 20,
+        }),
+      )
+      expect(renderFrame(body)).toContain("1000 lines")
+    }),
+  )
+
   it.live("collapsed keeps the group header and hides finished rows and output", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
@@ -1991,6 +2123,159 @@ describe("compact file tool bodies", () => {
   )
 })
 
+// A reloaded 1000-line stdout keeps two head lines, the marker and two tail lines.
+const cutBashCall: ToolCall = {
+  id: "call-cut",
+  toolName: "bash",
+  status: "completed",
+  input: { command: "seq 1 1000" },
+  summary: absent,
+  output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
+    stdout: "1\n2\n... [996 lines truncated] ...\n999\n1000",
+    stderr: "",
+    exitCode: 0,
+  }),
+  cuts: [OutputCut.cases.Text.make({ field: "stdout", lines: 1000, tailLine: 999, chars: 0 })],
+}
+
+const builtinRenderer = (tool: string) =>
+  Option.getOrThrow(
+    Option.fromUndefinedOr(
+      BUILTIN_TOOL_RENDERERS.find((entry) => entry.toolNames.includes(tool))?.component,
+    ),
+  )
+
+describe("cell frame header", () => {
+  it.live("names the ops that ran once there are any, not the verbs its source spells", () =>
+    Effect.gen(function* () {
+      const CellToolRenderer = builtinRenderer("cell")
+      const code =
+        "const [a, b] = await Promise.all([tools.bash({command: 'sleep 2'}), tools.bash({command: 'git checkout HEAD -- a'})])"
+      const header = (operations: ReadonlyArray<ToolCall>) =>
+        Effect.promise(() =>
+          renderWithProviders(
+            () => (
+              <CellToolRenderer
+                expanded={false}
+                toolCall={{
+                  id: "cell-header",
+                  toolName: "cell",
+                  status: "running",
+                  input: { code },
+                  summary: absent,
+                  output: absent,
+                  operations: [...operations],
+                }}
+              />
+            ),
+            { width: 100, height: 12 },
+          ),
+        ).pipe(Effect.map((setup) => renderFrame(setup).split("\n")[0] ?? ""))
+      // No op has run: the source's verbs.
+      expect(yield* header([])).toContain("cell bash ×2")
+      // One op ran: that op, as the group header counts it.
+      const ran = yield* header([
+        {
+          id: "op-sleep",
+          toolName: "bash",
+          status: "running",
+          input: { command: "sleep 2" },
+          summary: absent,
+          output: absent,
+        },
+      ])
+      expect(ran).toContain("cell bash sleep 2")
+      expect(ran).not.toContain("×2")
+    }),
+  )
+})
+
+const GrepToolRenderer = Option.getOrThrow(
+  Option.fromUndefinedOr(
+    BUILTIN_TOOL_RENDERERS.find((entry) => entry.toolNames.includes("grep"))?.component,
+  ),
+)
+
+describe("expanded grep body", () => {
+  it.live("a cut result draws its total and a gap between head and tail matches", () =>
+    Effect.gen(function* () {
+      const matches = [
+        { file: "src/a.ts", line: 1, content: "head one" },
+        { file: "src/a.ts", line: 2, content: "head two" },
+        { file: "src/a.ts", line: 90, content: "tail one" },
+        { file: "src/b.ts", line: 5, content: "tail two" },
+      ]
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        matches,
+        truncated: false,
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <GrepToolRenderer
+              expanded={true}
+              toolCall={{
+                id: "grep-cut",
+                toolName: "grep",
+                status: "completed",
+                input: { pattern: "one" },
+                summary: "50 matches for one",
+                output,
+                cuts: [
+                  OutputCut.cases.Items.make({
+                    field: "matches",
+                    items: 50,
+                    tailItem: 49,
+                    files: 7,
+                  }),
+                ],
+              }}
+            />
+          ),
+          { width: 80, height: 30 },
+        ),
+      )
+      const lines = renderFrame(setup)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+      expect(lines).toContain("50 matches in 7 files")
+      const headTwo = lines.findIndex((line) => line.endsWith("head two"))
+      const gap = lines.findIndex((line) => line === "· ··· 46 more matches")
+      const tailOne = lines.findIndex((line) => line.endsWith("tail one"))
+      expect(headTwo).toBeGreaterThan(-1)
+      expect(gap).toBeGreaterThan(headTwo)
+      expect(tailOne).toBeGreaterThan(gap)
+      // The same file on both sides of the cut draws its name again after the gap.
+      expect(lines.slice(gap + 1, tailOne).some((line) => line.includes("src/a.ts"))).toBe(true)
+    }),
+  )
+
+  it.live("a result with no body draws the summary expanded as it does collapsed", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <GrepToolRenderer
+              expanded={true}
+              toolCall={{
+                id: "grep-no-body",
+                toolName: "grep",
+                status: "completed",
+                input: { pattern: "one" },
+                summary: "900 matches for one",
+                output: absent,
+              }}
+            />
+          ),
+          { width: 80, height: 20 },
+        ),
+      )
+      expect(renderFrame(setup)).toContain("900 matches for one")
+    }),
+  )
+})
+
 describe("read_session row", () => {
   it.live("draws the counts the result carries", () =>
     Effect.gen(function* () {
@@ -2033,7 +2318,7 @@ describe("read_session row", () => {
   )
 })
 
-// ── native-transcript-markdown.test ─────────────────────────────────────────
+// ── native transcript markdown ──────────────────────────────────────────────
 
 const assistant = (id: string, content: string): ListMessage => ({
   _tag: "regular-message",
@@ -2106,7 +2391,7 @@ describe("native transcript markdown", () => {
   )
 })
 
-// ── native-transcript-footer-room.test ──────────────────────────────────────
+// ── native transcript footer room ───────────────────────────────────────────
 
 /** A long resumed session: a model switch, four child completions, a cell with two ops. */
 const longHistory = (): SessionItem[] => {
@@ -2226,7 +2511,7 @@ describe("native transcript footer room", () => {
   )
 })
 
-// ── native-transcript-mouse.test ────────────────────────────────────────────
+// ── native transcript mouse ─────────────────────────────────────────────────
 
 describe("native transcript mouse tracking", () => {
   it.live("native history leaves the wheel to the terminal; the expanded view takes it back", () =>
@@ -2260,7 +2545,7 @@ describe("native transcript mouse tracking", () => {
   )
 })
 
-// ── native-transcript-fingerprint.test ──────────────────────────────────────
+// ── native transcript fingerprint ───────────────────────────────────────────
 
 /**
  * A committed item keeps its fingerprint when the feed rebuilds it.
@@ -2436,7 +2721,7 @@ describe("native transcript rebuild", () => {
   )
 })
 
-// ── native-transcript-commit.test ───────────────────────────────────────────
+// ── native transcript commit ────────────────────────────────────────────────
 
 /**
  * Native history hands a completed item to scrollback and only then drops it

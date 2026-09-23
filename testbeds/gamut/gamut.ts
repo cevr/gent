@@ -381,16 +381,24 @@ const status = async () => {
     .all() as Array<{ session_id: string; text: string | null }>
   console.log(`\nuser messages (${userMessages.length}):`)
   for (const message of userMessages) {
-    console.log(`  [${message.session_id.slice(0, 8)}] ${JSON.stringify(message.text)}`)
+    console.log(`  [${message.session_id.slice(-8)}] ${JSON.stringify(message.text)}`)
   }
   db.close()
 
   console.log("\nbun test in the work dir:")
   const tests = await $`bun test`.cwd(state.work).quiet().nothrow()
-  const output = tests.stderr.toString() + tests.stdout.toString()
-  const pass = /^\s*(\d+) pass/m.exec(output)?.[1] ?? "?"
-  const fail = /^\s*(\d+) fail/m.exec(output)?.[1] ?? "?"
-  console.log(`  ${pass} pass, ${fail} fail`)
+  console.log(`  ${testSummary(tests.stderr.toString() + tests.stdout.toString())}`)
+}
+
+/**
+ * `17 pass, 0 fail` from a `bun test` run. Bun colours its summary even when
+ * piped (`\x1b[0m\x1b[32m 17 pass`), so the colour is stripped before reading.
+ */
+export const testSummary = (output: string): string => {
+  const plain = Bun.stripANSI(output)
+  const pass = /^\s*(\d+) pass/m.exec(plain)?.[1] ?? "?"
+  const fail = /^\s*(\d+) fail/m.exec(plain)?.[1] ?? "?"
+  return `${pass} pass, ${fail} fail`
 }
 
 // ── the rest ────────────────────────────────────────────────────────────

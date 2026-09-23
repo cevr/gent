@@ -36,7 +36,7 @@ import { BunServices } from "@effect/platform-bun"
 import type { QueueEntryInfo } from "@gent/sdk"
 import { RGBA } from "@opentui/core"
 
-// ── composer-interaction-state.test ─────────────────────────────────────────
+// ── composer interaction state ──────────────────────────────────────────────
 
 const testContributions: AutocompleteContribution[] = [
   { prefix: "$", title: "Skills", items: () => [] },
@@ -135,7 +135,7 @@ describe("transitionComposerInteraction", () => {
   })
 })
 
-// ── model-query.test ────────────────────────────────────────────────────────
+// ── model query ─────────────────────────────────────────────────────────────
 
 const model = (id: string, name: string): Model =>
   new Model({ id: ModelId.make(id), name, provider: ProviderId.make(id.split("/")[0] ?? "") })
@@ -182,7 +182,7 @@ describe("resolveModelQuery", () => {
   })
 })
 
-// ── prompt-history.test ─────────────────────────────────────────────────────
+// ── prompt history ──────────────────────────────────────────────────────────
 
 describe("canNavigateAtCursor", () => {
   test("up at cursor 0 → true", () => {
@@ -347,7 +347,7 @@ describe("prompt history navigation", () => {
   })
 })
 
-// ── prompt-history-store.test ───────────────────────────────────────────────
+// ── prompt history store ────────────────────────────────────────────────────
 
 /**
  * The cache path follows the workspace home the shell mounted with. A build
@@ -393,7 +393,7 @@ describe("prompt history store", () => {
   )
 })
 
-// ── session-controller-state.test ───────────────────────────────────────────
+// ── session controller state ────────────────────────────────────────────────
 
 const queueEntry = (tag: QueueEntryInfo["_tag"], id: string, content: string): QueueEntryInfo => ({
   _tag: tag,
@@ -452,7 +452,7 @@ describe("session controller state", () => {
   })
 })
 
-// ── session-labels.test ─────────────────────────────────────────────────────
+// ── session labels ──────────────────────────────────────────────────────────
 
 const absent = Option.getOrUndefined(Option.none())
 
@@ -607,7 +607,7 @@ describe("formatCwdGit", () => {
   })
 })
 
-// ── session-labels-order.test ───────────────────────────────────────────────
+// ── session labels order ────────────────────────────────────────────────────
 
 /**
  * The status row reads left to right as: where you are, what you are running
@@ -689,7 +689,7 @@ describe("effort sits with the model and the gauge anchors right", () => {
   })
 })
 
-// ── session-ui-state.test ───────────────────────────────────────────────────
+// ── session ui state ────────────────────────────────────────────────────────
 
 describe("transcript disclosure", () => {
   test("a fresh session starts collapsed", () => {

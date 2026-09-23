@@ -24,7 +24,7 @@ import {
 } from "../src/autocomplete"
 import type { AutocompleteItem } from "../src/extensions/client-facets"
 
-// ── autocomplete-frecency-store.test ────────────────────────────────────────
+// ── autocomplete frecency store ─────────────────────────────────────────────
 
 /**
  * The store is the impure edge, and its whole contract is that it degrades.
@@ -118,7 +118,7 @@ describe("autocomplete frecency store", () => {
   )
 })
 
-// ── autocomplete-frecency.test ──────────────────────────────────────────────
+// ── autocomplete frecency ───────────────────────────────────────────────────
 
 /**
  * Frecency is arithmetic on a pick history, and the arithmetic is the part
@@ -350,7 +350,7 @@ describe("ranking with pick history", () => {
   })
 })
 
-// ── autocomplete-frecency-cross-writer.test ─────────────────────────────────
+// ── autocomplete frecency cross writer ──────────────────────────────────────
 
 /**
  * A pick from one surface must survive a pick from another.
@@ -482,7 +482,7 @@ describe("a pick from one surface survives a pick from another", () => {
   )
 })
 
-// ── autocomplete-frecency-durability.test ───────────────────────────────────
+// ── autocomplete frecency durability ────────────────────────────────────────
 
 /**
  * A pick must survive a writer that is not this process, and a filter too
@@ -614,7 +614,7 @@ describe("a filter too short to mean anything ignores pick history", () => {
   })
 })
 
-// ── autocomplete-ranking.test ───────────────────────────────────────────────
+// ── autocomplete ranking ────────────────────────────────────────────────────
 
 /**
  * Ranking is what decides the popup's first row, and the first row is what

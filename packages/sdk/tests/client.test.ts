@@ -24,7 +24,7 @@ import {
   messagePartsText,
 } from "@gent/core/protocol"
 
-// ── client.test ─────────────────────────────────────────────────────────────
+// ── client helpers ──────────────────────────────────────────────────────────
 
 describe("sdk client helpers", () => {
   test("canonical tool interactions expose running calls", () => {
@@ -98,7 +98,7 @@ describe("sdk client helpers", () => {
   })
 })
 
-// ── server-options.test ─────────────────────────────────────────────────────
+// ── server options ──────────────────────────────────────────────────────────
 
 /**
  * `Gent.server` is the single server composition root. These tests pin the

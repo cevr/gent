@@ -27,7 +27,7 @@ import { BunServices } from "@effect/platform-bun"
 import { hostname, tmpdir } from "node:os"
 import { Gent } from "../src/client"
 
-// ── build-fingerprint.test ──────────────────────────────────────────────────
+// ── build fingerprint ───────────────────────────────────────────────────────
 
 // Compiled-binary execPath path. computeLocalFingerprintUncached takes the
 // binary-mtime branch and calls fs.stat(exe), so a counter-driven mtime
@@ -146,7 +146,7 @@ describe("BuildFingerprint", () => {
   )
 })
 
-// ── launch-config.test ──────────────────────────────────────────────────────
+// ── launch config ───────────────────────────────────────────────────────────
 
 /**
  * The launch values `apps/server/src/main.ts` reads its environment through.
@@ -317,7 +317,7 @@ describe("mode words", () => {
   )
 })
 
-// ── server-lock.test ────────────────────────────────────────────────────────
+// ── server lock ─────────────────────────────────────────────────────────────
 
 // @effect-diagnostics nodeBuiltinImport:off
 

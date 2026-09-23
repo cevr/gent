@@ -588,6 +588,10 @@ export const dueAtOf = (
   return Effect.succeed(dueAt.value)
 }
 
+/** A wake or monitor row: its schedule, then its note when it has one. */
+const summaryWithNote = (schedule: ReadonlyArray<string>, note: string): string =>
+  [...schedule, note.trim()].filter((part) => part.length > 0).join(" · ")
+
 export const WakeTool = tool({
   id: "wake",
   readonly: true,
@@ -604,13 +608,15 @@ export const WakeTool = tool({
   params: WakeParams,
   output: WakeResult,
   summary: (_input, output) =>
-    [
-      `${output.mode} at ${output.dueAt}`,
-      ...Option.toArray(
-        Option.map(Option.fromUndefinedOr(output.everySeconds), (every) => `every ${every}s`),
-      ),
+    summaryWithNote(
+      [
+        `${output.mode} at ${output.dueAt}`,
+        ...Option.toArray(
+          Option.map(Option.fromUndefinedOr(output.everySeconds), (every) => `every ${every}s`),
+        ),
+      ],
       output.note,
-    ].join(" · "),
+    ),
   execute: Effect.fn("WakeTool.execute")(function* (params: typeof WakeParams.Type) {
     const now = yield* Clock.currentTimeMillis
     const dueAt = yield* dueAtOf(params, now)
@@ -704,6 +710,11 @@ export const MonitorTool = tool({
   ],
   params: MonitorParams,
   output: MonitorResult,
+  summary: (_input, output) =>
+    summaryWithNote(
+      [`${output.mode} · every ${output.everySeconds}s until ${output.deadline}`],
+      output.note,
+    ),
   execute: Effect.fn("MonitorTool.execute")(function* (params: typeof MonitorParams.Type) {
     const ctx = yield* ExtensionContext
     const path = yield* Path.Path

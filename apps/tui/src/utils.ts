@@ -629,10 +629,22 @@ export function describeCellCode(code: string): ReadonlyArray<string> {
   return collapseRepeats(found.map((entry) => entry.label))
 }
 
-export const plural = (count: number, singular: string, pluralForm = `${singular}s`) => {
-  if (count === 1) return `${count} ${singular}`
-  return `${count} ${pluralForm}`
+/**
+ * A session id as rows show it: its last 8 characters. A session id is a
+ * UUIDv7, whose head is its start time, so children started together share
+ * the head; the tail is random.
+ */
+export const shortSessionId = (sessionId: string): string => sessionId.slice(-8)
+
+/** The noun a count takes, without the count: `line` for one, `lines` otherwise. */
+export const countNoun = (count: number, singular: string, pluralForm = `${singular}s`): string => {
+  if (count === 1) return singular
+  return pluralForm
 }
+
+/** A count and its noun: `1 line`, `3 lines`. */
+export const plural = (count: number, singular: string, pluralForm = `${singular}s`) =>
+  `${count} ${countNoun(count, singular, pluralForm)}`
 
 const isChildOperation = (operation: ActivityOperation) => operation.tool === "delegate.start"
 
@@ -647,13 +659,14 @@ export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string
   }
   const operations = calls.flatMap((call) => call.operations)
   const children = operations.filter(isChildOperation).length
-  // A cell that failed with a failed op is one failure, the op's: a reload
-  // settles an interrupted op as failed, and the count must not grow with it.
-  const failed = calls.reduce((sum, call) => {
-    const failedOps = call.operations.filter((operation) => operation.outcome === "failed").length
-    if (failedOps === 0 && call.status === "error") return sum + 1
-    return sum + failedOps
-  }, 0)
+  // "N failed" counts ops whose exit or status failed. A cell that failed with
+  // no failed op (a throw after its ops, or a restart) is its own failure,
+  // worded apart; one that failed with a failed op is that op's failure.
+  const isFailedOp = (operation: ActivityOperation) => operation.outcome === "failed"
+  const failed = operations.filter(isFailedOp).length
+  const failedCells = calls.filter(
+    (call) => call.status === "error" && !call.operations.some(isFailedOp),
+  ).length
   const parts = [plural(calls.length, "cell")]
   if (operations.length > 0) parts.push(plural(operations.length, "op"))
   else {
@@ -662,10 +675,22 @@ export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string
   }
   if (children > 0) parts.push(plural(children, "child", "children"))
   if (failed > 0) parts.push(`${failed} failed`)
+  if (failedCells > 0) parts.push(`${plural(failedCells, "cell")} failed`)
   const duration = formatGroupDuration(calls)
   if (duration.length > 0) parts.push(duration)
   return parts.join(" · ")
 }
+
+/** The ops a cell ran, in order: each tool with its arguments, a failed one marked, repeats folded. */
+export const formatOperationLabels = (operations: ReadonlyArray<ActivityOperation>): string =>
+  collapseRepeats(
+    operations.map((operation) => {
+      let label = operation.tool
+      if (operation.detail.length > 0) label = `${operation.tool} ${operation.detail}`
+      if (operation.outcome === "failed") label = `✕ ${label}`
+      return label
+    }),
+  ).join(" · ")
 
 /** One-line label for a cell row: its error, else its operations, else its verbs, else its result, else its code. */
 export function formatCellRowLabel(
@@ -676,17 +701,7 @@ export function formatCellRowLabel(
   if (call.status === "error" && fallback.error.length > 0) {
     return truncate(fallback.error.split("\n")[0] ?? "", maxLength)
   }
-  if (call.operations.length > 0) {
-    const labels = collapseRepeats(
-      call.operations.map((operation) => {
-        let label = operation.tool
-        if (operation.detail.length > 0) label = `${operation.tool} ${operation.detail}`
-        if (operation.outcome === "failed") label = `✕ ${label}`
-        return label
-      }),
-    )
-    return truncate(labels.join(" · "), maxLength)
-  }
+  if (call.operations.length > 0) return truncate(formatOperationLabels(call.operations), maxLength)
   const verbs = describeCellCode(fallback.code)
   if (verbs.length > 0) return truncate(verbs.join(" · "), maxLength)
   const display = fallback.display.split("\n").find((line) => line.trim().length > 0) ?? ""
@@ -697,19 +712,27 @@ export function formatCellRowLabel(
 // ── Progressive disclosure ──
 // Row labels stay the same at every level; levels only add output beneath them.
 
-const lineCount = (text: string) => {
-  if (text.length === 0) return 0
-  return text.split("\n").length
+/** The lines of a text. A final newline ends the last line; it does not start one. `""` has none. */
+export const splitLines = (text: string): Array<string> => {
+  if (text.length === 0) return []
+  return text.replace(/\n$/, "").split("\n")
 }
 
-/** Line counts for a row: cells show code in and display out, bash shows output only; a zero count is left out. The unit keeps them apart from token counts. */
+/** How many lines a text holds, by the `splitLines` rule: the rule every row and body count uses. */
+export const lineCount = (text: string): number => splitLines(text).length
+
+/**
+ * Line counts for a row: cells show code in and display out, bash shows output
+ * only; a zero count is left out. The unit keeps them apart from token counts.
+ * The caller counts, so a cut output counts the whole output its body numbers.
+ */
 export function formatRowCounts(
   toolName: string,
-  counts: { readonly input: string; readonly output: string },
+  counts: { readonly inputLines: number; readonly outputLines: number },
 ): string {
-  const out = { arrow: "↓", count: lineCount(counts.output) }
+  const out = { arrow: "↓", count: counts.outputLines }
   let all: ReadonlyArray<{ readonly arrow: string; readonly count: number }> = []
-  if (toolName === "cell") all = [{ arrow: "↑", count: lineCount(counts.input) }, out]
+  if (toolName === "cell") all = [{ arrow: "↑", count: counts.inputLines }, out]
   if (toolName === "bash") all = [out]
   // A zero count says nothing: a cell with no output shows only its code.
   const shown = all.filter((entry) => entry.count > 0)
