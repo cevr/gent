@@ -611,6 +611,34 @@ describe("model context window", () => {
     expect(latestUserMessageId([...history, marker])).toEqual(Option.some(MessageId.make("u2")))
   })
 
+  test("a line the runtime writes after the user's prompt never anchors the window", () => {
+    const prompt = messageModelContextWindow("u2", "user", 3)
+    const history = [
+      messageModelContextWindow("u1", "user", 1),
+      messageModelContextWindow("a1", "assistant", 2),
+      prompt,
+    ]
+    const runtimeLine = (
+      id: string,
+      metadata: { readonly customType?: string; readonly joinedTurn?: boolean },
+    ) =>
+      Message.cases.regular.make({
+        ...messageModelContextWindow(id, "user", 4),
+        metadata,
+      })
+    const lines = [
+      runtimeLine("notice", { customType: "model-change" }),
+      runtimeLine("final", { customType: "max-steps" }),
+      runtimeLine("continue", { customType: "continuation" }),
+      runtimeLine("legacy-steer", { customType: "steering" }),
+      runtimeLine("steer", { customType: "wake", joinedTurn: true }),
+    ]
+    for (const line of lines) {
+      expect(latestUserMessageId([...history, line])).toEqual(Option.some(prompt.id))
+    }
+    expect(latestUserMessageId([...history, ...lines])).toEqual(Option.some(prompt.id))
+  })
+
   test("the marker survives a projection so tight that only the latest user unit fits", () => {
     const wide = (id: string, role: "user" | "assistant", ordinal: number) =>
       Message.cases.regular.make({

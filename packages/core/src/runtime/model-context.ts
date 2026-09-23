@@ -14,6 +14,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   encodeToolOutput,
   headTailChars,
+  isRuntimeUserMessage,
   Message,
   MessageRole,
   messageWithParts,
@@ -279,12 +280,17 @@ export const windowDetails = (message: Message): Option.Option<ContextWindowDeta
   return Option.some(details)
 }
 
-/** The newest user message anchors a window: the model keeps that unit and loses what came before. */
+/**
+ * The newest user message anchors a window: the model keeps that unit and loses
+ * what came before. A line the runtime wrote inside a turn (a window marker, a
+ * model-change notice, a max-steps or continuation line, a joined steer) is part
+ * of that turn, never its start; anchoring on it would summarize the prompt away.
+ */
 export const latestUserMessageId = (messages: ReadonlyArray<Message>): Option.Option<MessageId> => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (Predicate.isNotUndefined(message) && message.role === "user") {
-      if (Option.isSome(windowDetails(message))) continue
+      if (isRuntimeUserMessage(message)) continue
       return Option.some(message.id)
     }
   }

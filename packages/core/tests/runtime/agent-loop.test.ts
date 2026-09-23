@@ -3140,6 +3140,64 @@ describe("model-change notice", () => {
   )
 
   it.scopedLive(
+    "a model switch that overflows the window keeps the user's new prompt, not only the notice",
+    () =>
+      Effect.gen(function* () {
+        const prompts = yield* Ref.make<ReadonlyArray<string>>([])
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            const seen = yield* Ref.updateAndGet(prompts, (all) => [
+              ...all,
+              promptText(options.prompt),
+            ])
+            // The first reply fills the window so the next turn must hand off.
+            const text = [`big ${"x".repeat(600_000)}`][seen.length - 1] ?? `reply ${seen.length}`
+            return Stream.fromIterable([
+              textDeltaPart(text),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "first turn" })
+        yield* waitFor(
+          client.message.list({ branchId }),
+          (current) => current.some((message) => message.role === "assistant"),
+          10_000,
+          "the first turn answered",
+        )
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: ModelId.make("custom/next-model"),
+          reasoningLevel: Option.getOrUndefined(Option.none()),
+        })
+        const newPrompt = "SECOND-USER-PROMPT"
+        yield* client.message.send({ sessionId, branchId, content: newPrompt })
+        const messages = yield* waitFor(
+          client.message.list({ branchId }),
+          (current) => current.filter((message) => message.role === "assistant").length >= 2,
+          15_000,
+          "the second turn answered",
+        )
+        const prompt = messages.find((message) =>
+          message.parts.some((part) => part.type === "text" && part.text === newPrompt),
+        )
+        const marker = messages.findLast(
+          (message) => message.metadata?.customType === "context-window",
+        )
+        expect(Predicate.isNotUndefined(prompt)).toBe(true)
+        expect(marker?.metadata?.details).toMatchObject({ keepFromMessageId: prompt?.id })
+        const last = (yield* Ref.get(prompts)).at(-1) ?? ""
+        // The prompt reaches the model as the user's words, not folded into the summary.
+        expect(last).toContain(newPrompt)
+      }).pipe(Effect.timeout("30 seconds")),
+    40_000,
+  )
+
+  it.scopedLive(
     "a turn under another agent writes no notice; the turn after it notices the change back",
     () =>
       Effect.gen(function* () {
