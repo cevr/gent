@@ -369,7 +369,7 @@ export default defineExtension({
 
 Setup already runs as an Effect, so a resource that needs host facts reads
 them from the same `host` value (`host.cwd`, `host.home`,
-`host.host.osInfo`, `host.host.execPath`) before registering; the resource itself should
+`host.host.osInfo`, `host.host.homeDirectory`) before registering; the resource itself should
 still expose the smallest service Tag it needs.
 
 ## Agent

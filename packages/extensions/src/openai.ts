@@ -1,7 +1,6 @@
 import {
   Array as Arr,
   Clock,
-  Context,
   Crypto,
   Deferred,
   Duration,
@@ -38,6 +37,7 @@ import {
   type ModelDriverContribution,
   ProviderAuthError,
   type ProviderAuthInfo,
+  type StoredOAuthCredentials,
   type ProviderAuthorizationResult,
   type ProviderHints,
 } from "@gent/core/extensions/api"
@@ -57,10 +57,12 @@ import {
   freshCredentials,
   isTransientTokenStatus,
   makeCredentialCache,
+  type CredentialStore,
   makeOpenAiCompatResolution,
   postOAuthForm,
   readOptionalEnv,
   recoverUnauthorized,
+  replaceHeldCredential,
   withHeaders,
 } from "./providers.js"
 import {
@@ -119,7 +121,8 @@ const decodeDeviceError = Schema.decodeUnknownOption(Schema.fromJsonString(Devic
 /**
  * Typed error for the OpenAI OAuth flow. `reason` discriminates the
  * failure mode so the surrounding `ProviderAuthError` boundary in
- * `index.ts` preserves structure in `cause`, not just a string.
+ * `buildOpenAIModelDriver`'s `authorize`/`callback` preserves structure
+ * in `cause`, not just a string.
  */
 export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
   reason: Schema.Literals([
@@ -505,7 +508,7 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
  *
  * Either way, `callback` returns the structured `OpenAIOAuthTokens` the
  * extension persists. `cancel` interrupts the deferred (used by the
- * 5-minute abandoned-flow timer in `index.ts`).
+ * 5-minute abandoned-flow timer in `buildOpenAIModelDriver`'s `authorize`).
  */
 const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.Scope> = Effect.gen(
   function* () {
@@ -778,8 +781,9 @@ export const authorizeOpenAIDevice: Effect.Effect<
 
 /**
  * Device-code counterpart of `allocateOpenAIAuthorization`. Nothing to
- * tear down, so `close` is a no-op; the shape matches so `index.ts`
- * keeps one pending-callback table for both OAuth methods.
+ * tear down, so `close` is a no-op; the shape matches so
+ * `buildOpenAIModelDriver` keeps one pending-callback table for both
+ * OAuth methods.
  */
 const allocateOpenAIDeviceAuthorization: Effect.Effect<
   {
@@ -796,8 +800,8 @@ const allocateOpenAIDeviceAuthorization: Effect.Effect<
 /**
  * Allocate a detached scope and run `authorizeOpenAI` inside it,
  * returning the flow handle plus a `close` Effect that tears the scope
- * down. Used by `index.ts` to bridge between the `authorize` /
- * `callback` calls — the scope must outlive the first call so the
+ * down. Used by `buildOpenAIModelDriver` to bridge between the
+ * `authorize` / `callback` calls — the scope must outlive the first call so the
  * redirect server stays up until the user completes (or the timeout
  * fires).
  *
@@ -823,14 +827,14 @@ const allocateOpenAIAuthorization: Effect.Effect<
 // ── credential service ──────────────────────────────────────────────────────
 
 /**
- * OpenAICredentialService — ChatGPT OAuth (Codex) credentials behind the
- * shared credential cache (`makeCredentialCache` in `providers.ts`).
+ * ChatGPT OAuth (Codex) credentials behind the shared credential cache (`makeCredentialCache` in `providers.ts`).
  *
- * There is no keychain: the initial credentials come from `authInfo` and
- * the cache cell is the sole copy of the rotated refresh token until
- * persist write-back lands. The refresh path therefore always prefers
- * the held credential's refresh token over the bootstrap one — the OAuth
- * server may have revoked the bootstrap token when it issued the rotation.
+ * There is no keychain: the gent auth store owns the credential, and every
+ * profile's cell reads and refreshes through `authInfo.update`. The cell is
+ * the sole copy of a rotated refresh token only while its write is pending.
+ * The refresh path prefers the held credential's refresh token over the
+ * bootstrap one — the OAuth server may have revoked the bootstrap token
+ * when it issued the rotation — unless the store holds another sign-in.
  */
 
 // ── Credential shape (matches AuthOauth) ──
@@ -879,40 +883,6 @@ const realIO: OpenAICredentialIO = {
     ),
 }
 
-// ── Service tag ──
-
-export class OpenAICredentialService extends Context.Service<
-  OpenAICredentialService,
-  CredentialCache<OpenAICredentials>
->()("@gent/extensions/src/openai/OpenAICredentialService") {
-  /**
-   * Production layer. The cache cell is provided externally so its
-   * lifetime is hoisted above the per-`resolveModel` layer build; a Ref
-   * allocated per build would disable the cache and the rotated
-   * refresh-token contract. `authInfo.persist` (when present) durably
-   * writes refreshed credentials back to Auth.
-   */
-  static layerFromRef = (
-    cellRef: CredentialCacheCellRef<OpenAICredentials>,
-    authInfo: ProviderAuthInfo,
-  ) => OpenAICredentialService.layerFromRefAndIO(cellRef, realIO, authInfo)
-
-  /** Test-friendly variant — accepts the IO seam so tests can drive `refresh` deterministically. */
-  static layerFromIO = (io: OpenAICredentialIO, authInfo: ProviderAuthInfo) =>
-    Layer.effect(
-      OpenAICredentialService,
-      SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
-        Effect.flatMap((cellRef) => build(cellRef, io, authInfo)),
-      ),
-    )
-
-  static layerFromRefAndIO = (
-    cellRef: CredentialCacheCellRef<OpenAICredentials>,
-    io: OpenAICredentialIO,
-    authInfo: ProviderAuthInfo,
-  ) => Layer.effect(OpenAICredentialService, build(cellRef, io, authInfo))
-}
-
 const seedFromAuthInfo = (authInfo: ProviderAuthInfo): Option.Option<OpenAICredentials> => {
   const access = Option.getOrElse(Option.fromNullishOr(authInfo.access), () => "")
   const refresh = Option.getOrElse(Option.fromNullishOr(authInfo.refresh), () => "")
@@ -925,7 +895,51 @@ const seedFromAuthInfo = (authInfo: ProviderAuthInfo): Option.Option<OpenAICrede
   })
 }
 
-const build = (
+const fromStored = (stored: StoredOAuthCredentials): OpenAICredentials => ({
+  access: stored.access,
+  refresh: stored.refresh,
+  expires: stored.expires,
+  accountId: Option.fromNullishOr(stored.accountId),
+})
+
+const toStored = (creds: OpenAICredentials): StoredOAuthCredentials => {
+  const fields = { access: creds.access, refresh: creds.refresh, expires: creds.expires }
+  if (Option.isNone(creds.accountId)) return fields
+  return { ...fields, accountId: creds.accountId.value }
+}
+
+/**
+ * The gent auth store behind `authInfo.update`. Every profile's cell reads
+ * and refreshes through it, so a sign-in or a refresh in one profile is the
+ * credential the others adopt.
+ */
+const openAIStore = (
+  authInfo: ProviderAuthInfo,
+): Option.Option<CredentialStore<OpenAICredentials>> =>
+  Option.map(Option.fromNullishOr(authInfo.update), (update) => ({
+    update: <A, E>(
+      f: (
+        stored: Option.Option<OpenAICredentials>,
+      ) => Effect.Effect<readonly [A, Option.Option<OpenAICredentials>], E>,
+    ) =>
+      update((stored) =>
+        Effect.map(
+          f(Option.map(stored, fromStored)),
+          (pair): readonly [A, Option.Option<StoredOAuthCredentials>] => [
+            pair[0],
+            Option.map(pair[1], toStored),
+          ],
+        ),
+      ),
+    same: (a, b) => a.refresh === b.refresh,
+  }))
+
+/**
+ * The OpenAI credential cache over a cell that outlives one `resolveModel`
+ * call. A cell allocated per call would disable the cache and lose the
+ * rotated refresh token.
+ */
+export const makeOpenAICredentialCache = (
   cellRef: CredentialCacheCellRef<OpenAICredentials>,
   io: OpenAICredentialIO,
   authInfo: ProviderAuthInfo,
@@ -934,10 +948,10 @@ const build = (
     label: "OpenAI",
     credentials: OpenAICredentials,
     cellRef,
-    authInfo: Option.some(authInfo),
     seed: seedFromAuthInfo(authInfo),
     expiresAt: (creds) => creds.expires,
-    read: (cached) => Effect.succeed(cached),
+    // The gent auth store is the source of truth; see `store`.
+    read: Option.none(),
     refresh: (held) => {
       // The held token is the most recently rotated one; the bootstrap
       // `authInfo.refresh` only applies before any rotation.
@@ -961,13 +975,8 @@ const build = (
         })),
       )
     },
-    toPersisted: (creds) => ({
-      access: creds.access,
-      refresh: creds.refresh,
-      expires: creds.expires,
-      accountId: Option.getOrUndefined(creds.accountId),
-    }),
-  }).pipe(Effect.map(OpenAICredentialService.of))
+    store: openAIStore(authInfo),
+  })
 
 // ── codex transform ─────────────────────────────────────────────────────────
 
@@ -991,16 +1000,13 @@ const build = (
  *   - 401 recovery: invalidate creds + retry once
  *
 
- * Why a factory `(creds) => (client) => client` instead of grabbing
- * the service from context inside `mapRequestEffect`: the SDK's
+ * Why a factory `(creds) => (client) => client`: the SDK's
  * `transformClient` signature is `(HttpClient) => HttpClient`, which
- * requires the returned client's requirement channel to stay empty.
- * Yielding the service from context inside `mapRequestEffect` would
- * surface `OpenAICredentialService` as a requirement and break the
- * type. The factory captures the service instance in a closure;
- * per-request semantics survive because each call to `creds.getFresh`
- * still consults the live `Ref` cache. The Anthropic
- * `buildKeychainTransformClient` factory has the same shape.
+ * requires the returned client's requirement channel to stay empty, so
+ * the credential cache is a closure argument. Per-request semantics
+ * survive because each call to `creds.getFresh` still consults the live
+ * `Ref` cache. The Anthropic `buildKeychainTransformClient` factory has
+ * the same shape.
  */
 
 // ── Codex routing ──
@@ -1183,8 +1189,7 @@ const buildOauthHeaders = (
 /**
  * Build the `transformClient` value the OpenAI-compat SDK accepts.
  *
- * Takes the `OpenAICredentialService` instance as a closure argument
- * (not via `yield*` inside `mapRequestEffect`) for the type reasons
+ * Takes the credential cache as a closure argument for the type reasons
  * documented above.
  *
  * Per-request semantics are preserved: each request invokes
@@ -1390,7 +1395,7 @@ export const buildOpenAIModelDriver = (
             message: `Model "${modelName}" not available with ChatGPT OAuth`,
           })
         }
-        const creds = yield* build(credentialCellRef, realIO, auth.value)
+        const creds = yield* makeOpenAICredentialCache(credentialCellRef, realIO, auth.value)
         yield* checkCredentials(creds)
         return AiModel.make("openai", modelName, makeOauthOpenAILayer(modelName, config, creds))
       }
@@ -1501,22 +1506,18 @@ export const buildOpenAIModelDriver = (
           ),
           Effect.ensuring(pendingEntry.value.close),
         )
-        const accountId = Option.fromNullishOr(result.accountId)
-        if (Option.isNone(accountId)) {
-          return yield* ctx.persist({
-            type: "oauth",
-            access: result.access,
-            refresh: result.refresh,
-            expires: result.expires,
-          })
-        }
-        yield* ctx.persist({
-          type: "oauth",
+        const signedIn: OpenAICredentials = {
           access: result.access,
           refresh: result.refresh,
           expires: result.expires,
-          accountId: accountId.value,
-        })
+          accountId: Option.fromNullishOr(result.accountId),
+        }
+        yield* replaceHeldCredential(
+          OpenAICredentials,
+          credentialCellRef,
+          signedIn,
+          ctx.persist(result),
+        )
       }),
   },
 })

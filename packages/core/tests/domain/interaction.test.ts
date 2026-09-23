@@ -8,13 +8,12 @@ import {
 import { ensureStorageParents } from "../../src/test-utils/harness"
 import { EventStoreError } from "../../src/domain/event"
 import {
-  decodeInteractionParams,
   InteractionPendingError,
   type InteractionRequestRecord,
   type InteractionStorageConfig,
   makeInteractionService,
 } from "../../src/domain/interaction"
-import { BranchId, InteractionRequestId, SessionId } from "../../src/domain/ids"
+import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 
@@ -211,6 +210,37 @@ describe("Interaction Request", () => {
       ])
     }).pipe(Effect.provide(storageLive)),
   )
+  it.live("a stored owner loads back, and a row stored without one still loads", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const sessionId = SessionId.make("s-owner")
+      const owned = { sessionId, branchId: BranchId.make("b-owned") }
+      const legacy = { sessionId, branchId: BranchId.make("b-legacy") }
+      yield* ensureStorageParents(owned)
+      yield* ensureStorageParents(legacy)
+      const owner = { toolCallId: ToolCallId.make("call-1"), occurrence: 2 }
+      yield* is.persist({
+        requestId: InteractionRequestId.make("req-owned"),
+        ...owned,
+        paramsJson: "{}",
+        status: "pending",
+        createdAt: 1,
+        owner,
+      })
+      yield* is.persist({
+        requestId: InteractionRequestId.make("req-legacy"),
+        ...legacy,
+        paramsJson: "{}",
+        status: "pending",
+        createdAt: 2,
+      })
+      const [ownedRow] = yield* is.listPending(owned)
+      const [legacyRow] = yield* is.listPending(legacy)
+      expect(ownedRow?.owner).toEqual(owner)
+      expect(legacyRow?.requestId).toBe(InteractionRequestId.make("req-legacy"))
+      expect(legacyRow?.owner).toBeUndefined()
+    }).pipe(Effect.provide(storageLive)),
+  )
   it.live("service fails closed when durable pending singleton rejects a second request", () =>
     Effect.gen(function* () {
       const is = yield* InteractionStorage
@@ -287,7 +317,14 @@ describe("Interaction Request", () => {
       const branchId = BranchId.make("b-restart")
       const requestId = InteractionRequestId.make("req-restart-1")
       // Rehydrate rebuilds the pendingByContext reverse lookup
-      yield* interaction.rehydrate(requestId, { text: "Approve?" }, { sessionId, branchId })
+      yield* interaction.rehydrate({
+        requestId,
+        sessionId,
+        branchId,
+        paramsJson: `{"text":"Approve?"}`,
+        status: "pending",
+        createdAt: 0,
+      })
       // Client responds — store the resolution
       yield* interaction.storeResolution(requestId, { approved: true, notes: "yes" })
       // Tool re-calls present() — should find stored resolution via context lookup
@@ -326,8 +363,7 @@ describe("Interaction Request", () => {
       })
       // Load pending request from storage and rehydrate
       const persisted = pending.find((r) => r.requestId === requestId)!
-      const params = yield* decodeInteractionParams(persisted.paramsJson)
-      yield* service2.rehydrate(requestId, params, { sessionId, branchId })
+      yield* service2.rehydrate(persisted)
       // Client responds
       yield* service2.storeResolution(requestId, { approved: true, notes: "ship it" })
       // Tool re-calls present() — should find the stored resolution

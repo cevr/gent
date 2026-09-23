@@ -208,7 +208,9 @@ describe("ambient extension host context", () => {
         present: () => Effect.succeed({ approved: true }),
         pendingRequestId: () => Effect.die("not used"),
         storeResolution: () => Effect.die("not used"),
-        rehydrate: () => Effect.void,
+        rehydrate: () => Effect.die("not used"),
+        beginStep: () => Effect.die("not used"),
+        ownCall: () => (self) => self,
       }),
     ),
   )
@@ -431,6 +433,42 @@ describe("session profile resolution", () => {
       }).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [counted] })),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive("a broken config file resolves the profile and reports the file as a failure", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const launch = yield* fs.makeTempDirectoryScoped()
+      const project = yield* fs.makeTempDirectoryScoped()
+      const home = yield* fs.makeTempDirectoryScoped()
+      const projectConfig = path.join(project, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      // A trailing comma: not JSON.
+      yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"], }')
+      const healthy = markerExtension("@gent/test-session-profile/config-healthy", "live")
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const profile = yield* cache.resolve(project)
+        expect(profile.resolved.extensions.map((extension) => extension.manifest.id)).toEqual([
+          ExtensionId.make("@gent/test-session-profile/config-healthy"),
+        ])
+        expect(profile.resolved.failedExtensions).toMatchObject([
+          { sourcePath: projectConfig, scope: "project", phase: "load" },
+        ])
+      }).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(
+          makeCacheLayer({
+            cwd: launch,
+            home,
+            extensions: [healthy],
+            allowFailedExtensions: true,
+          }),
+        ),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
   )
@@ -2438,6 +2476,36 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
         expect(entry).toBeDefined()
         expect(entry?.error).toContain("No GentExtension found")
       }
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
+  it.scopedLive("a dangling symlink fails alone; its siblings still load", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const repositoryRoot = path.resolve(import.meta.dir, "../../..")
+      const dir = yield* fs.makeTempDirectoryScoped({
+        directory: repositoryRoot,
+        prefix: ".tmp-loader-dangling-",
+      })
+      yield* fs.writeFileString(
+        path.join(dir, "good.ts"),
+        'import { Effect } from "effect"\nexport default { manifest: { id: "good" }, setup: Effect.void }\n',
+      )
+      const danglingPath = path.join(dir, "zz-dangling.ts")
+      yield* fs.symlink(path.join(dir, "nowhere.ts"), danglingPath)
+
+      const result = yield* discoverExtensions({
+        userDir: dir,
+        projectDir: "/nonexistent-project-dir-loader-test",
+      })
+
+      expect(result.loaded.map((entry) => entry.extension.manifest.id)).toEqual([
+        ExtensionId.make("good"),
+      ])
+      expect(result.failed).toMatchObject([
+        { sourcePath: danglingPath, scope: "user", phase: "load" },
+      ])
     }).pipe(Effect.provide(fsLayer)),
   )
 

@@ -2,6 +2,7 @@ import { test } from "bun:test"
 import {
   Cause,
   Context,
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -10,6 +11,7 @@ import {
   MutableRef,
   Option,
   Predicate,
+  Result,
   Schema,
   Scope,
   Stream,
@@ -17,6 +19,7 @@ import {
 import {
   DriverListResult,
   ExtensionProtocolError,
+  type GentNamespacedClient,
   type GentRpcClient,
   GentRpcs,
   makeNamespacedClient,
@@ -32,15 +35,30 @@ import {
 } from "../../src/server/workspace-rpc"
 import { describe, expect, it } from "effect-bun-test"
 import { RpcClient } from "effect/unstable/rpc"
-import { finishPart, textDeltaPart, Auth, AuthError, AuthMethod } from "../../src/runtime/provider"
+import {
+  finishPart,
+  textDeltaPart,
+  Auth,
+  AuthError,
+  AuthMethod,
+  serializeAuthStore,
+} from "../../src/runtime/provider"
 import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  multiToolCallStep,
   textStep,
   toolCallStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { AgentName, DEFAULT_AGENT_NAME, DriverRef } from "../../src/domain/agent"
+import {
+  AgentDefinition,
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  DriverRef,
+  ModelId,
+  type ReasoningEffort,
+} from "../../src/domain/agent"
 import { createE2ELayer, createRpcClient, createRpcHarness } from "../../src/test-utils/harness"
 import { e2ePreset } from "../helpers/test-preset"
 import {
@@ -81,7 +99,8 @@ import {
 } from "../../src/runtime/extension-host"
 import { InteractionStorage, SqliteStorage } from "../../src/storage/storage"
 import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
-import { encodeInteractionDecision } from "../../src/domain/interaction.js"
+import { CurrentInteractionOwner, encodeInteractionDecision } from "../../src/domain/interaction.js"
+import { EventStoreError } from "../../src/domain/event"
 import { MinimumLogLevel } from "effect/References"
 import { narrowR } from "../helpers/effect"
 import { type Message, messageSingleText } from "../../src/domain/message"
@@ -331,6 +350,82 @@ describe("model context RPC boundary", () => {
   )
 })
 
+// ── branch-fork ─────────────────────────────────────────────────────────────
+
+const EchoProbeExtension: LoadedExtension = {
+  manifest: { id: ExtensionId.make("@test/echo-probe") },
+  scope: "builtin",
+  sourcePath: "test",
+  artifactIdentity: LoadedArtifactIdentity.make("@test/echo-probe@artifact-1"),
+  contributions: {
+    tools: [
+      tool({
+        id: "echo_probe",
+        description: "Return the text",
+        params: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ text: Schema.String }),
+        execute: (params) => Effect.succeed({ text: params.text }),
+      }),
+    ],
+  },
+}
+
+const hasText = (messages: ReadonlyArray<Message>, text: string) =>
+  messages.some((message) =>
+    message.parts.some((part) => part.type === "text" && part.text === text),
+  )
+
+describe("branch.fork", () => {
+  it.scopedLive(
+    "a fork at an assistant tool-call message can run a turn",
+    () =>
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("echo_probe", { text: "ping" }),
+          textStep("first done"),
+          textStep("fork done"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensions: [EchoProbeExtension],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "call echo" })
+        const settled = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) => current.runtime._tag === "Idle" && hasText(current.messages, "first done"),
+          5_000,
+          "first turn settles",
+        )
+        const callMessage = settled.messages.find((message) =>
+          message.parts.some((part) => part.type === "tool-call"),
+        )
+        if (Predicate.isUndefined(callMessage)) return yield* Effect.die("tool call missing")
+
+        const fork = yield* client.branch.fork({
+          sessionId,
+          fromBranchId: branchId,
+          atMessageId: callMessage.id,
+          name: "at tool call",
+        })
+        yield* client.message.send({ sessionId, branchId: fork.branchId, content: "go on" })
+        const forked = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId: fork.branchId }),
+          (current) => current.runtime._tag === "Idle" && hasText(current.messages, "fork done"),
+          5_000,
+          "fork turn settles",
+        )
+        // The copied prefix keeps no call without its result.
+        expect(
+          forked.messages.some((message) =>
+            message.parts.some((part) => part.type === "tool-call"),
+          ),
+        ).toBe(false)
+      }).pipe(Effect.timeout("10 seconds")),
+    12_000,
+  )
+})
+
 // ── auth-rpc.test ───────────────────────────────────────────────────────────
 
 /**
@@ -342,19 +437,23 @@ describe("model context RPC boundary", () => {
 
 const failingAuthStoreLayer = Layer.succeed(
   Auth,
-  Auth.of({
-    get: () => Effect.as(Effect.void, void 0),
-    set: () => Effect.fail(new AuthError({ message: "write failed" })),
-    remove: () => Effect.fail(new AuthError({ message: "delete failed" })),
-  }),
+  Auth.of(
+    serializeAuthStore({
+      get: () => Effect.as(Effect.void, void 0),
+      set: () => Effect.fail(new AuthError({ message: "write failed" })),
+      remove: () => Effect.fail(new AuthError({ message: "delete failed" })),
+    }),
+  ),
 )
 const failingReadAuthStoreLayer = Layer.succeed(
   Auth,
-  Auth.of({
-    get: () => Effect.fail(new AuthError({ message: "read failed" })),
-    set: () => Effect.void,
-    remove: () => Effect.void,
-  }),
+  Auth.of(
+    serializeAuthStore({
+      get: () => Effect.fail(new AuthError({ message: "read failed" })),
+      set: () => Effect.void,
+      remove: () => Effect.void,
+    }),
+  ),
 )
 const stubModel = AiModel.make(
   "test",
@@ -409,7 +508,67 @@ const makePersistingExtensions = (): ReadonlyArray<LoadedExtension> => {
     },
   ]
 }
+const authDriversExtension: LoadedExtension = {
+  manifest: { id: ExtensionId.make("@test/auth-drivers") },
+  scope: "builtin",
+  sourcePath: "test",
+  contributions: {
+    modelDrivers: [
+      { id: "anthropic", name: "Anthropic", resolveModel: () => Effect.succeed(stubModel) },
+      { id: "otherprov", name: "Other", resolveModel: () => Effect.succeed(stubModel) },
+    ],
+    agents: [
+      AgentDefinition.make({
+        name: AgentName.make("helper"),
+        model: ModelId.make("otherprov/helper-model"),
+      }),
+    ],
+  },
+}
+
 describe("auth.listProviders", () => {
+  it.live("a session's model override decides the required provider", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({ ...e2ePreset, providerLayer, extensions: [authDriversExtension] }),
+        )
+        const session = yield* client.session.create({ cwd: process.cwd() })
+        const required = (providers: ReadonlyArray<{ provider: string; required: boolean }>) =>
+          providers.filter((entry) => entry.required).map((entry) => entry.provider)
+        expect(
+          required(yield* client.auth.listProviders({ sessionId: session.sessionId })),
+        ).toEqual(["anthropic"])
+        yield* client.session.updateSettings({
+          sessionId: session.sessionId,
+          modelId: ModelId.make("otherprov/model"),
+          reasoningLevel: Option.getOrUndefined(Option.none<ReasoningEffort>()),
+        })
+        expect(
+          required(yield* client.auth.listProviders({ sessionId: session.sessionId })),
+        ).toEqual(["otherprov"])
+        // Without a session the launch default still decides.
+        expect(required(yield* client.auth.listProviders({}))).toEqual(["anthropic"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live("a named agent adds its model's provider; other agents do not", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({ ...e2ePreset, providerLayer, extensions: [authDriversExtension] }),
+        )
+        const required = (providers: ReadonlyArray<{ provider: string; required: boolean }>) =>
+          providers.filter((entry) => entry.required).map((entry) => entry.provider)
+        expect(required(yield* client.auth.listProviders({}))).toEqual(["anthropic"])
+        expect(
+          required(yield* client.auth.listProviders({ agentName: AgentName.make("helper") })),
+        ).toEqual(["anthropic", "otherprov"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
   it.live("returns launch-cwd providers without sessionId", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -596,6 +755,157 @@ const InteractionProbeExtension: LoadedExtension = {
 // The same derivation the server and its clients use; a third copy here
 // would be a third thing to keep in step.
 const currentTestWorkspaceId = () => workspaceIdForCwd(process.cwd())
+
+// ── owner-keyed interaction fixtures ────────────────────────────────────────
+
+const OrderedApprovalParams = Schema.Struct({ label: Schema.String, text: Schema.String })
+type OrderedApprovalParams = typeof OrderedApprovalParams.Type
+
+/**
+ * One tool, `ordered_approval`, whose body the test scripts per label and per
+ * run. The run number lets a call act differently when its step runs again.
+ */
+const orderedApprovalExtension = <E>(
+  run: (
+    params: OrderedApprovalParams,
+    attempt: number,
+  ) => Effect.Effect<string, E, ExtensionContext>,
+): LoadedExtension => {
+  const attempts = new Map<string, number>()
+  const nextAttempt = (label: string) =>
+    Effect.sync(() => {
+      const attempt = Option.getOrElse(Option.fromUndefinedOr(attempts.get(label)), () => 0) + 1
+      attempts.set(label, attempt)
+      return attempt
+    })
+  return {
+    manifest: { id: ExtensionId.make("@test/ordered-approval") },
+    scope: "builtin",
+    sourcePath: "test",
+    artifactIdentity: LoadedArtifactIdentity.make("@test/ordered-approval@artifact-1"),
+    contributions: {
+      tools: [
+        tool({
+          id: "ordered_approval",
+          description: "Ask approval in a scripted order",
+          params: OrderedApprovalParams,
+          output: Schema.Struct({ answer: Schema.String }),
+          execute: Effect.fn("ordered_approval")(function* (params) {
+            const attempt = yield* nextAttempt(params.label)
+            return { answer: yield* run(params, attempt) }
+          }),
+        }),
+      ],
+    },
+  }
+}
+
+/** Ask through the extension facet and name the answer after the asking call. */
+const approveAs = (params: OrderedApprovalParams) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const decision = yield* ctx.Interaction.approve({ text: params.text })
+    return `${params.label}=${String(decision.notes)}`
+  })
+
+/**
+ * Ask as a dispatching tool's inner call would, through an owner that rejects
+ * the request (a cell whose receipt refuses it). Reports the refusal.
+ */
+const approveThroughRejectingOwner = (params: OrderedApprovalParams) =>
+  Effect.gen(function* () {
+    const ctx = yield* ExtensionContext
+    const owner = {
+      sessionId: ctx.sessionId,
+      branchId: ctx.branchId,
+      persist: () => Effect.fail(new EventStoreError({ message: "the owner refused the request" })),
+      resumeRequestId: Effect.succeedNone,
+    }
+    const exit = yield* Effect.exit(
+      ctx.Interaction.approve({ text: params.text }).pipe(
+        Effect.provideService(CurrentInteractionOwner, owner),
+      ),
+    )
+    if (Exit.isSuccess(exit)) return `${params.label}=${String(exit.value.notes)}`
+    return `${params.label}=rejected`
+  })
+
+/** The text of every tool result in a snapshot. */
+const toolResultTexts = (messages: ReadonlyArray<Message>) =>
+  messages.flatMap((message) =>
+    message.parts.flatMap((part) => {
+      if (part.type === "tool-result") return [encodeJson(part.result)]
+      return []
+    }),
+  )
+
+/**
+ * Answer each presented dialog in order, once the branch has parked on it.
+ * The n-th answer carries `answers[n]` as its notes. `presented` completes on
+ * the first dialog, so a script can hold a call until one request is open.
+ */
+const answerInOrder = (params: {
+  readonly client: GentNamespacedClient
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly answers: ReadonlyArray<string>
+  readonly presented: Deferred.Deferred<void>
+  /** Read events after this id, to skip what an earlier server published. */
+  readonly after?: number
+}) =>
+  params.client.session
+    .events({ sessionId: params.sessionId, branchId: params.branchId, after: params.after })
+    .pipe(
+      Stream.filterMap((envelope) => {
+        if (envelope.event._tag === "InteractionPresented") return Result.succeed(envelope.event)
+        return Result.failVoid
+      }),
+      Stream.take(params.answers.length),
+      Stream.zipWithIndex,
+      Stream.mapEffect(([presented, index]) =>
+        Effect.gen(function* () {
+          yield* Deferred.completeWith(params.presented, Effect.void)
+          yield* waitFor(
+            params.client.session.getSnapshot({
+              sessionId: params.sessionId,
+              branchId: params.branchId,
+            }),
+            (current) => current.runtime._tag === "WaitingForInteraction",
+            5_000,
+            `parked on dialog ${index}`,
+          )
+          yield* params.client.interaction.respondInteraction({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            requestId: presented.requestId,
+            approved: true,
+            notes: params.answers[index],
+          })
+          return presented.text
+        }),
+      ),
+      Stream.runCollect,
+    )
+
+/** The snapshot once the turn has replied `reply` and the loop is idle. */
+const waitForReply = (params: {
+  readonly client: GentNamespacedClient
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly reply: string
+}) =>
+  waitFor(
+    params.client.session.getSnapshot({ sessionId: params.sessionId, branchId: params.branchId }),
+    (current) =>
+      current.runtime._tag === "Idle" &&
+      current.messages.some(
+        (message) =>
+          message.role === "assistant" &&
+          message.parts.some((part) => part.type === "text" && part.text === params.reply),
+      ),
+    5_000,
+    `reply ${params.reply}`,
+  )
 
 describe("interaction.respondInteraction", () => {
   it.scopedLive(
@@ -937,6 +1247,616 @@ describe("interaction.respondInteraction", () => {
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
+  )
+
+  it.live(
+    "two guarded calls in one step ask one at a time and each gets its own answer",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const EchoApprovalExtension: LoadedExtension = {
+            manifest: { id: ExtensionId.make("@test/echo-approval") },
+            scope: "builtin",
+            sourcePath: "test",
+            artifactIdentity: LoadedArtifactIdentity.make("@test/echo-approval@artifact-1"),
+            contributions: {
+              tools: [
+                tool({
+                  id: "echo_approval",
+                  description: "Ask approval and echo the question with its answer",
+                  params: Schema.Struct({ text: Schema.String }),
+                  output: Schema.Struct({ answer: Schema.String }),
+                  execute: Effect.fn("echo_approval")(function* (params) {
+                    const ctx = yield* ExtensionContext
+                    const decision = yield* ctx.Interaction.approve({ text: params.text })
+                    return { answer: `${params.text}=${String(decision.notes)}` }
+                  }),
+                }),
+              ],
+            },
+          }
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            multiToolCallStep(
+              { toolName: "echo_approval", input: { text: "FIRST" } },
+              { toolName: "echo_approval", input: { text: "SECOND" } },
+            ),
+            textStep("both answered"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [EchoApprovalExtension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const presentedFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filterMap((envelope) => {
+              if (envelope.event._tag === "InteractionPresented")
+                return Result.succeed(envelope.event)
+              return Result.failVoid
+            }),
+            Stream.take(2),
+            // Each dialog is answered only after it shows; the second waits for the first.
+            Stream.mapEffect((presented) =>
+              Effect.gen(function* () {
+                yield* waitFor(
+                  client.session.getSnapshot({ sessionId, branchId }),
+                  (current) => current.runtime._tag === "WaitingForInteraction",
+                  5_000,
+                  `parked on ${presented.text}`,
+                )
+                yield* client.interaction.respondInteraction({
+                  sessionId,
+                  branchId,
+                  requestId: presented.requestId,
+                  approved: true,
+                  notes: `answer-${presented.text}`,
+                })
+                return presented.text
+              }),
+            ),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "ask twice" })
+          const seen = Array.from(yield* Fiber.join(presentedFiber))
+          expect([...seen].sort()).toEqual(["FIRST", "SECOND"])
+
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some(
+                    (part) => part.type === "text" && part.text === "both answered",
+                  ),
+              ),
+            5_000,
+            "turn completes after both answers",
+          )
+          const results = snapshot.messages.flatMap((message) =>
+            message.parts.flatMap((part) => {
+              if (part.type === "tool-result") return [encodeJson(part.result)]
+              return []
+            }),
+          )
+          expect(results.some((result) => result.includes("FIRST=answer-FIRST"))).toBe(true)
+          expect(results.some((result) => result.includes("SECOND=answer-SECOND"))).toBe(true)
+          expect(results.some((result) => result.includes("Failed to persist"))).toBe(false)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "a call that skips approval when its step runs again does not hold the call queued behind it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const aPresented = yield* Deferred.make<void>()
+          const extension = orderedApprovalExtension((params, attempt) =>
+            Effect.gen(function* () {
+              if (params.label === "A" && attempt > 1) return "A=skipped"
+              if (params.label === "B" && attempt === 1) yield* Deferred.await(aPresented)
+              return yield* approveAs(params)
+            }),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            multiToolCallStep(
+              { toolName: "ordered_approval", input: { label: "A", text: "Deploy A?" } },
+              { toolName: "ordered_approval", input: { label: "B", text: "Deploy B?" } },
+            ),
+            textStep("both settled"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [extension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const answered = yield* answerInOrder({
+            client,
+            sessionId,
+            branchId,
+            answers: ["one", "two"],
+            presented: aPresented,
+          }).pipe(Effect.forkScoped)
+          yield* client.message.send({ sessionId, branchId, content: "ask twice" })
+          expect(Array.from(yield* Fiber.join(answered))).toEqual(["Deploy A?", "Deploy B?"])
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "both settled",
+          })
+          const results = toolResultTexts(snapshot.messages)
+          expect(results.some((result) => result.includes("A=skipped"))).toBe(true)
+          expect(results.some((result) => result.includes("B=two"))).toBe(true)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "two calls asking the same question each get their own answer when the second asks again first",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const aPresented = yield* Deferred.make<void>()
+          const bAskedAgain = yield* Deferred.make<void>()
+          const extension = orderedApprovalExtension((params, attempt) =>
+            Effect.gen(function* () {
+              if (params.label === "A" && attempt === 2) {
+                // B asks first when the step runs again.
+                yield* Deferred.await(bAskedAgain)
+                yield* Effect.yieldNow
+                yield* Effect.yieldNow
+              }
+              if (params.label === "B" && attempt === 1) yield* Deferred.await(aPresented)
+              if (params.label === "B" && attempt === 2)
+                yield* Deferred.completeWith(bAskedAgain, Effect.void)
+              return yield* approveAs(params)
+            }),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            multiToolCallStep(
+              { toolName: "ordered_approval", input: { label: "A", text: "Proceed?" } },
+              { toolName: "ordered_approval", input: { label: "B", text: "Proceed?" } },
+            ),
+            textStep("both answered"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [extension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const answered = yield* answerInOrder({
+            client,
+            sessionId,
+            branchId,
+            answers: ["one", "two"],
+            presented: aPresented,
+          }).pipe(Effect.forkScoped)
+          yield* client.message.send({ sessionId, branchId, content: "ask the same twice" })
+          yield* Fiber.join(answered)
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "both answered",
+          })
+          const results = toolResultTexts(snapshot.messages)
+          expect(results.some((result) => result.includes("A=one"))).toBe(true)
+          expect(results.some((result) => result.includes("B=two"))).toBe(true)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "a request its owner rejects leaves the open request answerable",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const aPresented = yield* Deferred.make<void>()
+          const extension = orderedApprovalExtension((params) =>
+            Effect.gen(function* () {
+              if (params.label === "A") return yield* approveAs(params)
+              yield* Deferred.await(aPresented)
+              return yield* approveThroughRejectingOwner(params)
+            }),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            multiToolCallStep(
+              { toolName: "ordered_approval", input: { label: "A", text: "Deploy?" } },
+              { toolName: "ordered_approval", input: { label: "C", text: "Also deploy?" } },
+            ),
+            textStep("native answered"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [extension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const answered = yield* answerInOrder({
+            client,
+            sessionId,
+            branchId,
+            answers: ["yes"],
+            presented: aPresented,
+          }).pipe(Effect.forkScoped)
+          yield* client.message.send({ sessionId, branchId, content: "ask natively and owned" })
+          expect(Array.from(yield* Fiber.join(answered))).toEqual(["Deploy?"])
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "native answered",
+          })
+          const results = toolResultTexts(snapshot.messages)
+          expect(results.some((result) => result.includes("A=yes"))).toBe(true)
+          expect(results.some((result) => result.includes("C=rejected"))).toBe(true)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.scopedLive(
+    "after a restart a request its owner rejects leaves the recovered request answerable",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
+        const dbPath = `${tempDir}/gent-owner.db`
+        const aPresented = yield* Deferred.make<void>()
+        const cAskedAgain = yield* Deferred.make<void>()
+        const extension = orderedApprovalExtension((params, attempt) =>
+          Effect.gen(function* () {
+            if (params.label === "A") {
+              // After the restart, C asks before A takes its answer.
+              if (attempt > 1) yield* Deferred.await(cAskedAgain)
+              return yield* approveAs(params)
+            }
+            if (attempt === 1) {
+              yield* Deferred.await(aPresented)
+              return yield* approveAs(params)
+            }
+            return yield* approveThroughRejectingOwner(params).pipe(
+              Effect.ensuring(Deferred.completeWith(cAskedAgain, Effect.void)),
+            )
+          }),
+        )
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          multiToolCallStep(
+            { toolName: "ordered_approval", input: { label: "A", text: "Deploy?" } },
+            { toolName: "ordered_approval", input: { label: "C", text: "Also deploy?" } },
+          ),
+        ])
+        const first = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: firstProvider.layer,
+                extensions: [extension],
+                durableApproval: true,
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const presentedFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.filterMap((envelope) => {
+                if (envelope.event._tag === "InteractionPresented")
+                  return Result.succeed(envelope.event)
+                return Result.failVoid
+              }),
+              Stream.take(1),
+              Stream.tap(() => Deferred.completeWith(aPresented, Effect.void)),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+            yield* client.message.send({ sessionId, branchId, content: "ask natively twice" })
+            const presented = Array.from(yield* Fiber.join(presentedFiber))
+            expect(presented.map((event) => event.text)).toEqual(["Deploy?"])
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (current) => current.runtime._tag === "WaitingForInteraction",
+              5_000,
+              "parked on the first request before restart",
+            )
+            const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+            return {
+              sessionId,
+              branchId,
+              requestId: presented[0]!.requestId,
+              lastEventId: snapshot.lastEventId ?? 0,
+            }
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+
+        const secondProvider = yield* LanguageModelLayers.sequence([
+          textStep("recovered request answered"),
+        ])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: secondProvider.layer,
+                extensions: [extension],
+                durableApproval: true,
+                storagePath: dbPath,
+              }),
+            )
+            const rehydrated = Array.from(
+              yield* client.session
+                .events({
+                  sessionId: first.sessionId,
+                  branchId: first.branchId,
+                  after: first.lastEventId,
+                })
+                .pipe(
+                  Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+                  Stream.take(1),
+                  Stream.runCollect,
+                ),
+            )
+            expect(rehydrated.length).toBe(1)
+            yield* client.interaction.respondInteraction({
+              sessionId: first.sessionId,
+              branchId: first.branchId,
+              requestId: first.requestId,
+              approved: true,
+              notes: "after restart",
+            })
+            const snapshot = yield* waitForReply({
+              client,
+              sessionId: first.sessionId,
+              branchId: first.branchId,
+              reply: "recovered request answered",
+            })
+            const results = toolResultTexts(snapshot.messages)
+            expect(results.some((result) => result.includes("A=after restart"))).toBe(true)
+            expect(results.some((result) => result.includes("C=rejected"))).toBe(true)
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+      }),
+    20_000,
+  )
+
+  it.live(
+    "calls queued behind an open request ask in the order they queued",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const aPresented = yield* Deferred.make<void>()
+          const cParked = yield* Deferred.make<void>()
+          const bAskedAgain = yield* Deferred.make<void>()
+          const extension = orderedApprovalExtension((params, attempt) =>
+            Effect.gen(function* () {
+              if (params.label === "C" && attempt === 1) {
+                yield* Deferred.await(aPresented)
+                return yield* approveAs(params).pipe(
+                  Effect.ensuring(Deferred.completeWith(cParked, Effect.void)),
+                )
+              }
+              if (params.label === "C" && attempt === 2) {
+                // B looks for its turn first when the step runs again.
+                yield* Deferred.await(bAskedAgain)
+                yield* Effect.yieldNow
+                yield* Effect.yieldNow
+              }
+              if (params.label === "B" && attempt === 1) yield* Deferred.await(cParked)
+              if (params.label === "B" && attempt === 2)
+                yield* Deferred.completeWith(bAskedAgain, Effect.void)
+              return yield* approveAs(params)
+            }),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            multiToolCallStep(
+              { toolName: "ordered_approval", input: { label: "A", text: "Deploy A?" } },
+              { toolName: "ordered_approval", input: { label: "B", text: "Deploy B?" } },
+              { toolName: "ordered_approval", input: { label: "C", text: "Deploy C?" } },
+            ),
+            textStep("all answered"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [extension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const answered = yield* answerInOrder({
+            client,
+            sessionId,
+            branchId,
+            answers: ["one", "two", "three"],
+            presented: aPresented,
+          }).pipe(Effect.forkScoped)
+          yield* client.message.send({ sessionId, branchId, content: "ask three times" })
+          expect(Array.from(yield* Fiber.join(answered))).toEqual([
+            "Deploy A?",
+            "Deploy C?",
+            "Deploy B?",
+          ])
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "all answered",
+          })
+          const results = toolResultTexts(snapshot.messages)
+          expect(results.some((result) => result.includes("A=one"))).toBe(true)
+          expect(results.some((result) => result.includes("C=two"))).toBe(true)
+          expect(results.some((result) => result.includes("B=three"))).toBe(true)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.scopedLive(
+    "an answer its call does not take is settled when the call ends",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
+        const dbPath = `${tempDir}/gent-untaken.db`
+        const presented = yield* Deferred.make<void>()
+        const extension = orderedApprovalExtension((params, attempt) => {
+          if (attempt > 1) return Effect.succeed(`${params.label}=skipped`)
+          return approveAs(params)
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("ordered_approval", { label: "A", text: "Deploy?" }),
+          textStep("skipped"),
+        ])
+        const session = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer,
+                extensions: [extension],
+                durableApproval: true,
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const answered = yield* answerInOrder({
+              client,
+              sessionId,
+              branchId,
+              answers: ["yes"],
+              presented,
+            }).pipe(Effect.forkScoped)
+            yield* client.message.send({ sessionId, branchId, content: "ask once" })
+            yield* Fiber.join(answered)
+            const snapshot = yield* waitForReply({ client, sessionId, branchId, reply: "skipped" })
+            expect(
+              toolResultTexts(snapshot.messages).some((result) => result.includes("A=skipped")),
+            ).toBe(true)
+            return { sessionId, branchId }
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+        const pending = yield* Effect.gen(function* () {
+          return yield* (yield* InteractionStorage).listPending(session)
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test reads the closed server's database.
+          Effect.provide(
+            SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
+              Layer.provide(BunPlatformLive),
+            ),
+          ),
+          Effect.provideService(CurrentWorkspaceId, currentTestWorkspaceId()),
+        )
+        expect(pending).toEqual([])
+      }),
+    12_000,
+  )
+
+  it.scopedLive(
+    "after a restart an answer goes to the call that asked, not to one asking the same question",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
+        const dbPath = `${tempDir}/gent-same-question.db`
+        const aPresented = yield* Deferred.make<void>()
+        const extension = orderedApprovalExtension((params, attempt) =>
+          Effect.gen(function* () {
+            // A no longer asks once its step runs again; B asks the same question.
+            if (params.label === "A" && attempt > 1) return "A=skipped"
+            if (params.label === "B" && attempt === 1) yield* Deferred.await(aPresented)
+            return yield* approveAs(params)
+          }),
+        )
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          multiToolCallStep(
+            { toolName: "ordered_approval", input: { label: "A", text: "Proceed?" } },
+            { toolName: "ordered_approval", input: { label: "B", text: "Proceed?" } },
+          ),
+        ])
+        const first = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: firstProvider.layer,
+                extensions: [extension],
+                durableApproval: true,
+                storagePath: dbPath,
+              }),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const presentedFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+              Stream.take(1),
+              Stream.tap(() => Deferred.completeWith(aPresented, Effect.void)),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+            yield* client.message.send({ sessionId, branchId, content: "ask the same twice" })
+            yield* Fiber.join(presentedFiber)
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (current) => current.runtime._tag === "WaitingForInteraction",
+              5_000,
+              "parked on the first request before restart",
+            )
+            const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+            return { sessionId, branchId, lastEventId: snapshot.lastEventId ?? 0 }
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep("both answered")])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              createE2ELayer({
+                ...e2ePreset,
+                providerLayer: secondProvider.layer,
+                extensions: [extension],
+                durableApproval: true,
+                storagePath: dbPath,
+              }),
+            )
+            const answered = yield* answerInOrder({
+              client,
+              sessionId: first.sessionId,
+              branchId: first.branchId,
+              answers: ["one", "two"],
+              presented: aPresented,
+              after: first.lastEventId,
+            }).pipe(Effect.forkScoped)
+            yield* Fiber.join(answered)
+            const snapshot = yield* waitForReply({
+              client,
+              sessionId: first.sessionId,
+              branchId: first.branchId,
+              reply: "both answered",
+            })
+            const results = toolResultTexts(snapshot.messages)
+            expect(results.some((result) => result.includes("A=skipped"))).toBe(true)
+            expect(results.some((result) => result.includes("B=two"))).toBe(true)
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+      }),
+    20_000,
   )
 })
 

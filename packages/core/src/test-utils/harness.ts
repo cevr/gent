@@ -144,10 +144,8 @@ export const testExtensionHostPlatform = (home: string = "/tmp"): ExtensionHostP
     hostname: "test-host",
     type: "Darwin",
   },
-  execPath: "/usr/bin/node",
   homeDirectory: home,
   randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
-  pathListSeparator: ":",
 })
 
 export const testExtensionFileLock = (): ExtensionFileLockServiceApi => ({

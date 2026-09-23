@@ -241,4 +241,63 @@ describe("runHeadless", () => {
       expect(rendered).toBe("[tool done: cell]\n  ✓ read 12 lines\nok")
     }),
   )
+
+  headlessTest("prints each operation a cell admitted once, when it ends", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-cell-ops")
+      const branchId = BranchId.make("branch-cell-ops")
+      const cell = ToolCallId.make("cell-call")
+      const read = ToolCallId.make("read-call")
+      const events = [
+        ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: cell,
+          toolName: "cell",
+          input: { code: "x" },
+        }),
+        ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: read,
+          toolName: "read",
+          input: { path: "a.txt" },
+          parentToolCallId: cell,
+        }),
+        ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: read,
+          toolName: "read",
+          output: "READ-BODY",
+          parentToolCallId: cell,
+        }),
+        ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: cell,
+          toolName: "cell",
+          output: encodeCellOutput({
+            display: "ok",
+            operations: [{ tool: "read", outcome: "succeeded", summary: "1 line" }],
+          }),
+        }),
+        TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
+      ].map((event, index) =>
+        EventEnvelope.make({ id: EventId.make(index + 1), event, createdAt: 0 }),
+      )
+      const client = createMockClient({
+        session: { events: () => Stream.concat(Stream.fromIterable(events), Stream.never) },
+        message: { send: () => Effect.void },
+      })
+      const { stdout: printed } = yield* captureStdout(
+        runHeadless(client, sessionId, branchId, "run a cell").pipe(Effect.timeout("2 seconds")),
+      )
+      // The op prints its terminal block once; no running line, and no receipt repeats it.
+      expect(printed.match(/read/g)).toHaveLength(1)
+      expect(printed).toContain("  [tool done: read]")
+      expect(printed).toContain("READ-BODY")
+      expect(printed).toContain("[tool done: cell]")
+    }),
+  )
 })

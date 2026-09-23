@@ -39,6 +39,7 @@ import {
   type ExtensionServiceError,
   headTailChars,
   latestAssistantText,
+  type Message,
   makeRunSpec,
   MessageId,
   request,
@@ -112,8 +113,13 @@ export const DelegateEntry = Schema.Struct({
    * still require the key, so it stays in the schema for files on both sides of that change.
    */
   private: Schema.Boolean,
-  /** The child's prompt reached its loop; a start that crashed before this is re-sent. */
+  /**
+   * The child's prompt reached its loop. The row is written false before the
+   * start is sent, so a start that crashed in between is re-sent.
+   */
   submitted: Schema.Boolean,
+  /** The run spec the start was admitted with; a re-sent start uses it again. */
+  runSpec: Schema.optionalKey(RunSpecSchema),
   completed: Schema.optionalKey(ChildOutcome),
   /** The parent has the completion: the message is on the parent branch, or the parent stopped the child. */
   delivered: Schema.Boolean,
@@ -212,6 +218,13 @@ const failureNames = (outcome: ChildOutcome): ReadonlyArray<string> => {
   return names
 }
 
+/** How a child's turn ended, in the words the parent model and the completion row both show. */
+export const childOutcomeWords = (outcome: ChildOutcome): string => {
+  const failures = failureNames(outcome)
+  if (failures.length === 0) return "completed"
+  return `ended (${failures.join(", ")})`
+}
+
 /** The child branch's messages, from the session detail. */
 const childMessages = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
   Effect.gen(function* () {
@@ -265,9 +278,7 @@ export const describeChildCompletion = (params: {
   readonly outcome: ChildOutcome
   readonly text: string
 }): string => {
-  const failures = failureNames(params.outcome)
-  let status = "completed"
-  if (failures.length > 0) status = `ended (${failures.join(", ")})`
+  const status = childOutcomeWords(params.outcome)
   const preview = headTailChars(params.text, maximumPreviewChars)
   return [
     `Child agent "${params.agentName}" ${status}. requestId ${params.requestId}; session ${params.sessionId}; branch ${params.branchId}.`,
@@ -276,6 +287,97 @@ export const describeChildCompletion = (params: {
     preview.text,
   ].join("\n")
 }
+
+/**
+ * The agent and status words `describeChildCompletion` wrote on the first
+ * line. Rows saved before the details carried an outcome read it here.
+ */
+export const readChildCompletionHeadline = (
+  text: string,
+): Option.Option<{ readonly agentName: string; readonly status: string }> =>
+  Option.fromNullishOr(
+    /^Child agent "([^"\n]*)" (completed|ended \([^)\n]+\))\. requestId /.exec(text),
+  ).pipe(
+    Option.flatMap(([, agentName, status]) =>
+      Option.all({
+        agentName: Option.fromNullishOr(agentName),
+        status: Option.fromNullishOr(status),
+      }),
+    ),
+  )
+
+export const CHILD_COMPLETION_TYPE = "child-completion"
+
+/** One call a child made, as its completion row draws it. */
+const ChildToolLine = Schema.Struct({
+  name: Schema.String,
+  summary: Schema.String,
+  status: Schema.Literals(["completed", "error", "incomplete"]),
+})
+type ChildToolLine = typeof ChildToolLine.Type
+
+/**
+ * `metadata.details` of a child-completion message. The row that draws it
+ * commits to scrollback once, after the child ends, so it carries everything
+ * the row shows. Only the three ids are required: older rows carry nothing
+ * else.
+ */
+export const ChildCompletionDetails = Schema.Struct({
+  requestId: RequestId,
+  sessionId: SessionId,
+  branchId: BranchId,
+  agentName: Schema.optionalKey(AgentName),
+  outcome: Schema.optionalKey(ChildOutcome),
+  usage: Schema.optionalKey(ChildUsage),
+  /** The child's last calls, oldest first. `toolCount` counts every call. */
+  tools: Schema.optionalKey(Schema.Array(ChildToolLine)),
+  toolCount: Schema.optionalKey(Schema.Finite),
+})
+
+/** The completion row shows the child's last calls; the child branch keeps them all. */
+const MAX_COMPLETION_TOOLS = 20
+
+/**
+ * The receipts a saved cell result carries under `operations`, read
+ * leniently. The cell extension writes them (`CellOperationReceipt`).
+ */
+const CellReceipts = Schema.Struct({
+  operations: Schema.Array(
+    Schema.Struct({
+      tool: Schema.String,
+      outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
+      summary: Schema.String,
+    }),
+  ),
+})
+const decodeCellReceipts = Schema.decodeUnknownOption(CellReceipts)
+
+const receiptStatus = (outcome: "succeeded" | "failed" | "incomplete"): ChildToolLine["status"] => {
+  if (outcome === "succeeded") return "completed"
+  if (outcome === "failed") return "error"
+  return "incomplete"
+}
+
+/** The calls a child made, from its saved tool results: a cell's receipts stand for the calls it admitted. */
+const childToolLines = (
+  messages: ReadonlyArray<{ readonly parts: ReadonlyArray<Message["parts"][number]> }>,
+): ReadonlyArray<ChildToolLine> =>
+  messages.flatMap((message) =>
+    message.parts.flatMap((part): ReadonlyArray<ChildToolLine> => {
+      if (part.type !== "tool-result") return []
+      const receipts = Option.filter(decodeCellReceipts(part.result), () => part.name === "cell")
+      if (Option.isSome(receipts)) {
+        return receipts.value.operations.map((receipt) => ({
+          name: receipt.tool,
+          summary: receipt.summary,
+          status: receiptStatus(receipt.outcome),
+        }))
+      }
+      let status: ChildToolLine["status"] = "completed"
+      if (part.isFailure) status = "error"
+      return [{ name: part.name, summary: "", status }]
+    }),
+  )
 
 /** An Option usage becomes a `usage` field, or nothing. */
 const usageField = (
@@ -311,7 +413,19 @@ const deliverCompletion = (
 ) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const text = latestAssistantText(yield* childMessages(entry))
+    const messages = yield* childMessages(entry)
+    const text = latestAssistantText(messages)
+    const tools = childToolLines(messages)
+    const details: typeof ChildCompletionDetails.Type = {
+      requestId: entry.requestId,
+      sessionId: entry.sessionId,
+      branchId: entry.branchId,
+      agentName: entry.agentName,
+      outcome,
+      ...usageField(usage),
+      tools: tools.slice(-MAX_COMPLETION_TOOLS),
+      toolCount: tools.length,
+    }
     yield* ctx.Session.send({
       delivery: "queue",
       ...parent,
@@ -326,14 +440,7 @@ const deliverCompletion = (
         outcome,
         text,
       }),
-      metadata: {
-        customType: "child-completion",
-        details: {
-          requestId: entry.requestId,
-          sessionId: entry.sessionId,
-          branchId: entry.branchId,
-        },
-      },
+      metadata: { customType: CHILD_COMPLETION_TYPE, details },
     })
     return settled(entry, outcome, usage, text)
   })
@@ -343,10 +450,18 @@ const CHILD_TASK_PREFIX = "Task from your parent session "
 /**
  * The child's first message names where the task came from. Without it a
  * child reads a bare instruction after its system prompt and can take its
- * own task for an injection.
+ * own task for an injection. It also says how a later turn reports: only the
+ * turn that takes the task returns as the completion, and a wake, a monitor
+ * or a goal starts turns nobody waits for. The first message stays in every
+ * later turn's context, whichever agent runs that turn.
  */
 export const childTaskText = (parentSessionId: SessionId, prompt: string): string =>
-  `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply returns to the parent as your completion; ask it with session.send if you are blocked.\n\n${prompt}`
+  [
+    `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply to this task returns to the parent as your completion; ask it with session.send if you are blocked.`,
+    `End this turn once the task is done or handed to a wake, a monitor or a goal; do not wait for them. A later turn's result reaches your parent only through session.send with to "parent", so send each one there.`,
+    "",
+    prompt,
+  ].join("\n")
 
 /** The task without its source line; a message that is not a child task is returned whole. */
 export const childTaskBody = (text: string): string =>
@@ -360,7 +475,7 @@ export const childTaskBody = (text: string): string =>
   )
 
 /** The child's prompt as its one durable turn. A repeat with the same id is a no-op at the loop. */
-const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
+const submitStart = (entry: DelegateEntry) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     yield* ctx.Session.send({
@@ -371,17 +486,32 @@ const submitStart = (entry: DelegateEntry, runSpec: Option.Option<RunSpec>) =>
       commandId: ActorCommandId.make(startMessageId(entry.requestId)),
       agentOverride: entry.agentName,
       interactive: false,
-      runSpec: childRunSpec(runSpec),
+      runSpec: childRunSpec(Option.fromUndefinedOr(entry.runSpec)),
       completion: "admission",
     })
+  })
+
+/**
+ * A child deleted outside the delegate (the agents pane) never reports, so
+ * its row settles as interrupted. The user removed it, so no message wakes
+ * the parent. Rows already settled are returned as they are.
+ */
+const settleIfGone = (entry: DelegateEntry) =>
+  Effect.gen(function* () {
+    if (entry.delivered || Predicate.isNotUndefined(entry.completed)) return entry
+    const ctx = yield* ExtensionContext
+    const child = yield* ctx.Session.getSession(entry.sessionId)
+    if (Predicate.isNotUndefined(child)) return entry
+    return settled(entry, { interrupted: true }, Option.none(), "")
   })
 
 /**
  * Bring the current branch's registry up to date without a hook: a start
  * whose prompt never reached the child is re-sent, a finished child whose
  * completion never landed (the process died between the receipt and the
- * hook) is delivered now, and a private row is removed with its session,
- * never delivered. Called from the parent's turn and its listing tools.
+ * hook) is delivered now, a deleted child settles as interrupted, and a
+ * private row is removed with its session, never delivered. Called from the
+ * parent's turn and its listing tools.
  */
 const reconcile = Effect.fn("Delegate.reconcile")(function* () {
   const ctx = yield* ExtensionContext
@@ -397,8 +527,13 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
           continue
         }
         if (entry.delivered) continue
+        const current = yield* settleIfGone(entry)
+        if (current.delivered) {
+          next = replaceEntry(next, current)
+          continue
+        }
         if (!entry.submitted) {
-          yield* submitStart(entry, Option.none())
+          yield* submitStart(entry)
           next = replaceEntry(next, { ...entry, submitted: true })
           continue
         }
@@ -494,9 +629,15 @@ interface AdmitParams {
   readonly runSpec?: RunSpec
 }
 
+const unfinished = (entries: ReadonlyArray<DelegateEntry>) =>
+  entries.filter((entry) => Predicate.isUndefined(entry.completed))
+
 /**
  * Admit one child under the current branch and send its prompt. The child
- * counts against the branch's cap and is listed for the parent's view.
+ * counts against the branch's cap and is listed for the parent's view. The
+ * row is written before the prompt is sent and marked submitted after, so a
+ * crash in between leaves a row that reconcile re-sends, never a running
+ * child nobody owns.
  */
 const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
   const ctx = yield* ExtensionContext
@@ -517,8 +658,12 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           }
           return { next: entries, result: existing.value }
         }
-        const pending = entries.filter((entry) => Predicate.isUndefined(entry.completed))
-        if (pending.length >= MAX_PENDING_CHILDREN) {
+        // At the cap, a child deleted since the last reconcile frees its slot.
+        let current = entries
+        if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
+          current = yield* Effect.forEach(current, settleIfGone)
+        }
+        if (unfinished(current).length >= MAX_PENDING_CHILDREN) {
           return yield* new DelegateError({
             message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished children`,
           })
@@ -541,26 +686,32 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           agentName: DELEGATE_AGENT_NAME,
           prompt: params.prompt,
           ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
+          runSpec: makeRunSpec({
+            ...params.runSpec,
+            ...Record.filter({ parentToolCallId: params.toolCallId }, Predicate.isNotUndefined),
+          }),
           private: false,
           submitted: false,
           delivered: false,
         }
-        yield* submitStart(
-          entry,
-          Option.some(
-            makeRunSpec({
-              ...params.runSpec,
-              ...Record.filter({ parentToolCallId: params.toolCallId }, Predicate.isNotUndefined),
-            }),
-          ),
-        )
-        const started = { ...entry, submitted: true }
-        return { next: [...entries, started], result: started }
+        return { next: [...current, entry], result: entry }
       }),
     )
     .pipe(asDelegateError("Child start failed"))
+  if (!admitted.submitted) {
+    yield* submitStart(admitted).pipe(asDelegateError("Child start failed"))
+    // Only the flag changes: a hook may have settled the row since it was written.
+    yield* registry
+      .update((entries) =>
+        entries.map((row) => {
+          if (row.requestId !== admitted.requestId) return row
+          return { ...row, submitted: true }
+        }),
+      )
+      .pipe(asDelegateError("Child start failed"))
+  }
   yield* ctx.State.changed().pipe(Effect.ignore)
-  return admitted
+  return { ...admitted, submitted: true }
 })
 
 // ── stopping ────────────────────────────────────────────────────────────────
@@ -649,8 +800,9 @@ const onParentTurnAfter = Effect.fn("Delegate.parentTurnAfter")(function* (input
 }) {
   if (!input.interrupted) return
   const ctx = yield* ExtensionContext
+  // An unsubmitted row settles too, so reconcile never sends a start the user interrupted.
   const running = (yield* registry.at(input.branchId).read()).filter(
-    (row) => !row.delivered && row.submitted && Predicate.isUndefined(row.completed),
+    (row) => !row.delivered && Predicate.isUndefined(row.completed),
   )
   if (running.length === 0) return
   yield* Effect.forEach(running, stopChild, { discard: true })

@@ -165,20 +165,20 @@ Special prefixes at input start trigger different modes:
 Every builtin without its own view lives in `src/extensions/builtins.tsx`; a
 builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 
-| Extension ID                              | Where                    | What                                    |
-| ----------------------------------------- | ------------------------ | --------------------------------------- |
-| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers   |
-| `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup          |
-| `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup     |
-| `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command                 |
-| `@gent/goal`                              | `builtins.tsx`           | Goal label, goal continuation row       |
-| `@gent/session-tools`                     | `builtins.tsx`           | Sender row for `session.send`           |
-| `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter                 |
-| `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane (the session browser), tray |
-| `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                        |
-| `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child run tree    |
-| `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                          |
-| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row         |
+| Extension ID                              | Where                    | What                                       |
+| ----------------------------------------- | ------------------------ | ------------------------------------------ |
+| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers      |
+| `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup             |
+| `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup        |
+| `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command                    |
+| `@gent/goal`                              | `builtins.tsx`           | Goal label, goal continuation row          |
+| `@gent/session-tools`                     | `builtins.tsx`           | Sender row for `session.send`              |
+| `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter                    |
+| `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane (the session browser), tray    |
+| `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                           |
+| `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child-completion row |
+| `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                             |
+| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row            |
 
 Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions
 
@@ -190,9 +190,9 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `lifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
 - Widgets are zero-prop components that read through `ClientContext`, never the host's Solid contexts (`useClient()`, `useExtensionUI()`). Host chrome that reads them (the connection and queue widgets) renders from `app.tsx`
 - Extensions have no overlays. A pane is a `below-input` widget that renders while `shell.pane.isOpen(id)` is true. The extension opens and closes it by name with `shell.pane.open(id)` and `shell.pane.close(id)` (agents, thread, btw). The session view owns the one pane slot: it is the session overlay, shared with the model, reasoning and branch pickers, so at most one pane is open. Opening a pane replaces the open one. `close(id)` of a pane that is no longer open does nothing. A pane does not hold the composer. A pane that takes typed text reads keys through `useScopedKeyboard`, as the agents filter and the btw ask line do: an `<input>` would take the terminal's focus from the composer, and the composer would not get it back.
-- The TUI host (`src/` outside `extensions/`) never imports `@gent/extensions`; the `gent/core-entry-boundary` oxlint rule enforces it. One extension's view is a client extension that reads its server state through `ClientContext.transport`. `transport.sessionEvents(key)` reads another branch's events, as the delegate row does for each child
+- The TUI host (`src/` outside `extensions/`) never imports `@gent/extensions`; the `gent/core-entry-boundary` oxlint rule enforces it. One extension's view is a client extension that reads its server state through `ClientContext.transport`
 - `useExtensionUI()` provides the resolved contributions (tool renderers excepted: `useToolRenderers()`), the load `failures`, and `clientRuntime`; widgets read the session from `transport.currentSession()`
-- **Tool renderers**: `rendererContribution(toolNames, component)` keys a renderer on a real tool id. The model sees only `cell`, so the cell renderer hands each live op to the renderer registered for the op's tool (`RegisteredToolCall` in `tool-renderers.tsx`, the one lookup the transcript also uses). An op draws collapsed, as a sub-row with its own header: a cell that reads thirty files must not draw thirty file bodies. `ToolFrameBody` hides the header of one frame only; a frame nested in its body draws its header again. An op with no renderer keeps its one-line receipt. A saved cell result carries receipts only, so ops draw as lines after a reload. The host provides the map through `ToolRenderersProvider`. The "tool renderer reach" test in `loader-boundary.test.ts` fails on a renderer name that no shipped extension registers as a tool
+- **Tool renderers**: `rendererContribution(toolNames, component)` keys a renderer on a real tool id. The model sees only `cell`, so the cell renderer hands each live op to the renderer registered for the op's tool (`RegisteredToolCall` in `tool-renderers.tsx`, the one lookup the transcript also uses). An op draws collapsed, as a sub-row with its own header: a cell that reads thirty files must not draw thirty file bodies. `ToolFrameBody` hides the header of one frame only; a frame nested in its body draws its header again. An op with no renderer keeps its one-line receipt. After a reload the session snapshot projects each cell's ops from the branch's stored tool events (`ToolInteraction.operations`), keyed by the cell's message and call id. A projected op carries only what its collapsed row draws: the tool, the status, the scalar input fields and the summary, each cut to the summary bound, and no output. It draws through its renderer again, without the output excerpt. A forked branch copies messages, not events, so there the saved result's receipts draw as lines. The host provides the map through `ToolRenderersProvider`. The "tool renderer reach" test in `loader-boundary.test.ts` fails on a renderer name that no shipped extension registers as a tool
 - A setup that returns a key outside the contribution buckets fails to load with `unknown contribution "<key>"`
 - **Message rows**: `messageRendererContribution(customType, component)` draws the user-role messages whose `metadata.customType` matches exactly. The component composes `UserRow` or `CollapsedRow` from `src/ui.tsx`. `message-list.tsx` names only the runtime's own kinds (`context-window`, `model-change`), and full detail draws every message as the plain row
 - Status labels (`statusLabelContribution`) draw on the composer's one status row, after the host's labels and before the right-anchored context gauge and cost, ordered by `priority`. The row has no placement: a label that needs its own place is a widget

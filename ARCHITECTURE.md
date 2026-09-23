@@ -182,7 +182,7 @@ commands      queries/events
 
 Process topology is secondary. Default CLI topology is not.
 
-Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })`. SQLite-backed local clients use one host-local server lock at `~/.gent/server.lock`; workspace routing is carried by the `x-gent-workspace-id` RPC header. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for shared local server, `Gent.client({ url })` for remote.
+Default `gent` resolves a shared server via `Gent.server({ cwd, state: Gent.state.sqlite() })`. SQLite-backed local clients share one server per database, decided by the lock files beside `data.db` (see Shared Server Discovery); workspace routing is carried by the `x-gent-workspace-id` RPC header. Topology derives from configuration: `Gent.state.memory()` for in-process owned, `Gent.state.sqlite()` for shared local server, `Gent.client({ url })` for remote.
 
 ## Transport Boundary
 
@@ -220,7 +220,7 @@ The app surface is split by concern:
 
 `SessionEvents` and `SessionSubscriptions` are inlined into `server/server.ts` — they are not separate services.
 
-`AppServicesLive` is assembled inline at the top of `packages/core/src/server/server-root.ts` (private to the file — `buildServerRoot` is the only consumer).
+The app services are assembled inline in `buildServerRoot` in `packages/core/src/server/server-root.ts`, from `createDependencies`; no separate app-services layer exists.
 
 `packages/core/src/server/server.ts` owns startup wiring:
 
@@ -253,7 +253,7 @@ The production server uses one live profile owner:
 
 - `runtime/extension-host.ts` owns entries by workspace and canonical cwd. Each
   entry is built once: declarations load, every extension's process resources
-  build into a child of the server scope, and `buildProfileCatalog` stages the
+  build into a child of the server scope, and `buildSessionProfile` stages the
   catalog from that context. An extension whose process resource fails to build
   is reported as failed at the `startup` phase; the rest of the profile stays
   live. There is no reconciler, publication, or admission lease. Test roots
@@ -476,7 +476,9 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   view is delegate-owned state end to end.
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
-  root depth; a parent at the depth limit cannot spawn.
+  root depth; a parent at the depth limit cannot spawn. Only spawn edges count:
+  a handoff (`continueThread`) keeps its parent's thread, is not admitted, and
+  keeps its parent's depth.
 - Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, prompt addendum) win over both. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
 - `/btw` (`@gent/btw`) forks the branch: `btw.fork` creates a child session with `historyBranchId` set to this branch, so the fork starts from this branch's context window and runs as the session's own agent with its tools — a parallel session, not a side channel. Nothing it does lands on the branch it forked from. The pane asks it through `btw.ask` and reads it through `btw.progress` (turns after the fork point plus the reply streaming now, folded from the fork's event stream by a process resource); `^o` opens the fork as the shell's session, which is `switchSession`, because the fork already is one. The open fork per branch is process state; the fork itself is durable and listed with every other child session.
 - Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` prompt section, and `turnAfter` on an answered turn clears those that fired before it started, so a failed or interrupted turn keeps them; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back on the branch's next turn (the `turnProjection` hook re-arms them; past-due alarms fire at once). The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from the `wake.pending` request with their cadence and `(notify)` when the fire starts no turn; the model reads the same entries with the `wake.list` tool, in ISO times like the `wake` and `monitor` results (a tool and a request cannot share an id inside one extension). The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
@@ -545,6 +547,7 @@ Key properties:
 
 - **No Deferred, no blocked fiber.** `WaitingForInteraction` is a cold state — no background turn work. The machine is checkpointed and survives restarts.
 - **Crash-safe resume.** `rehydrate()` rebuilds the in-memory context lookup and re-publishes the event. If the process dies before wake, `listPending()` in `InteractionStorage` provides the pending requests for recovery.
+- **An answer goes to its owner.** The owner of a request is the tool call that asked and the index of that ask in the call's run; the row stores both (`owner_tool_call_id`, `owner_occurrence`, nullable for older rows). A branch shows one request at a time. Other owners queue in the order they asked, and a call that asks the same question never takes another call's answer. An answer whose owner ends its run without taking it is settled as abandoned, so the next owner asks. A dispatching tool's inner call (a cell) resumes by its request id and is refused, not queued, while another request is open.
 - **Exact replay.** Resume uses the saved assistant message, call ID, input, and
   binding. Completed sibling results are reused with their structured values.
   Only unfinished calls execute again. A pending call can repeat work before its
@@ -823,7 +826,7 @@ with its saved input and identity, then stores the original result. It never
 evaluates outer cell source or restores the worker stack. Concurrent or repeated
 resume attempts cannot execute the same waiting operation twice. Initial model
 dispatch does not select this host yet. Saved turn recovery does.
-`CellToolOperationStorage.listForCell` provides the durable recovery input for
+`CellToolOperationStorage.listForToolCall` provides the durable recovery input for
 that integration. It checks workspace, session, branch, and the admitted outer
 call. It returns all operation receipts without granting another execution.
 The branch phase is held in memory; queue storage persists the in-flight item,
@@ -876,7 +879,12 @@ Production rule:
 
 ## Shared Server Discovery
 
-`packages/sdk/src/server.ts` owns shared-server discovery. It stores one host-local identity record at `~/.gent/server.lock`, not one registry file per workspace or database. Clients only attach after probing `/_gent/identity` and matching the full server identity tuple, so stale pidfiles and PID reuse do not signal unrelated processes.
+`packages/sdk/src/server.ts` owns shared-server discovery. Two files sit beside `data.db` in the data directory (`GENT_DATA_DIR`, else `~/.gent`):
+
+- `server.lock.db` is the kernel lock. The owning server holds an exclusive SQLite lock on it (`BEGIN EXCLUSIVE`, `busy_timeout` 0) for the life of its scope. The OS releases it when the process exits. A server is alive exactly when this lock cannot be taken, so a crash, a reboot, or a reused pid cannot leave a live-looking lock, and two concurrent starts give one owner: the other waits for the owner's entry and attaches.
+- `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. An entry whose endpoint confirms the tuple counts as alive even when the kernel lock is free (a server from before the kernel lock), and a start probes it after it takes the lock, before it replaces the entry. `gent server stop` sends SIGTERM only after the same probe; `--all` removes an entry whose kernel lock is free and whose endpoint does not answer, and holds the kernel lock through that removal so a new owner's entry is never deleted.
+
+A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it.
 
 `packages/sdk/src/server.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
 
@@ -917,7 +925,7 @@ Extension shape lives in:
 
 - `packages/core/src/extensions/api.ts` — public authoring surface (`defineExtension` + smart-constructor re-exports)
 - `packages/core/src/domain/extension.ts` — `ExtensionContributions` typed-bucket carrier (core primitives only)
-- `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
+- `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetupServices`)
 - `apps/tui/src/extensions/client-facets.ts` — TUI-owned client facet model
 - `packages/core/src/runtime/extension-host.ts` — server registry
 - `packages/extensions/src/` — shipped extension implementations
@@ -981,19 +989,16 @@ host-owned design. It should expose:
 Everything else is builtin/internal:
 
 - raw runtime host context and hook plumbing (`ExtensionHostContext`,
-  `ToolExecuteInput`, `ProjectionTurnContext`, permission/context message
-  internals);
+  permission/context message internals);
 - storage, event publisher, event store, session mutation services, and
   interaction pending readers;
-- runtime/platform services and helpers (`GentPlatform`, `ToolRunner`,
-  `runProcess`);
+- runtime/platform services (`GentPlatform`, `ToolRunner`);
 - agent loop/session runtime internals and process runners that are only host
   implementation details;
 - raw event/message domain internals that are not part of the serialized
   authoring contract;
 - the extension registry's driver maps and provider auth persistence machinery;
-- test-only helpers such as `getToolEffect`, raw metadata tags, and fixture
-  constructors.
+- test-only helpers such as raw metadata tags and fixture constructors.
 
 Rules:
 
@@ -1111,16 +1116,15 @@ tests/
 
 One test file per source file. No god tests. Names match source owners.
 
-`packages/e2e/tests/` separates fast in-process contracts from slow end-to-end:
+`packages/e2e/tests/` holds only the slow end-to-end suite; in-process contract tests live in each package's `test` task:
 
-- `test` — direct-transport contract tests (in-process, no subprocess)
 - `test:e2e` — PTY TUI tests and focused server-process lifecycle coverage
 
 ### Important files
 
 - `packages/core/src/test-utils/index.ts` — `SequenceRecorder` and the
   recording layers; `baseLocalLayer`, a production-root preset over
-  `makeServerRootLayer` with in-memory SQLite, storage-backed events, debug
+  `buildServerRoot` with in-memory SQLite, storage-backed events, debug
   providers, and test service overrides; `createE2ELayer`, a preset that keeps
   real `ToolRunner.Live`, extension setup/resource startup, event publishing,
   and interaction recovery while expressing test
@@ -1136,7 +1140,7 @@ One test file per source file. No god tests. Names match source owners.
 
 `@gent/interaction-tools` — `ask_user` and `prompt` tools.
 
-The TUI renders interactions from the typed event feed (`InteractionPresented` etc.) routed by `metadata.type`. Pending interaction storage remains the durable source of truth for crash-safe resume.
+The TUI renders interactions from the typed event feed (`InteractionPresented` etc.) routed by `metadata.type`. Pending interaction storage remains the durable source of truth for crash-safe resume. A branch has at most one open request. A second guarded call in the same step parks on the open one; when the step runs again, it waits until the first call takes its answer (matched by the encoded request), then asks its own question.
 
 ## Workflow Results
 
@@ -1179,7 +1183,7 @@ This doc describes the architecture we want to keep, not the migration history w
 
 ## Bundled guidance
 
-Skills are discovered once per process resource. Turn prompts list each skill’s server file path and local/global scope. The model reads these files through the existing read tool or cell runtime. There are no skill search/load model tools. Typed skill RPCs still serve TUI discovery and content access; `$skill`, `$skill:local`, and `$skill:global` retain local-first or explicit-scope selection.
+Skills are discovered once per branch resource; an unreadable entry or dangling link in a skills directory is skipped with a warning. Frontmatter is YAML; a missing `name` falls back to the file name. Turn prompts list each skill’s server file path and local/global scope. The model reads these files through the existing read tool or cell runtime. There are no skill search/load model tools. Typed skill RPCs still serve TUI discovery and content access; `$skill`, `$skill:local`, and `$skill:global` retain local-first or explicit-scope selection.
 
 Principles ship as an ordinary `principles` skill with Markdown reference files. The skills resource materializes the embedded bundle in a content-addressed directory under `~/.cache/gent/skills/`. It publishes the complete directory by rename, so concurrent profiles do not expose partial files. The separate cell process reads real paths. User global skills override bundled defaults; project skills retain local-first selection. There is no separate principles tool or principle-content registry.
 

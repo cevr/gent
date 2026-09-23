@@ -21,7 +21,7 @@ import {
   copyMessageToBranch,
   projectMessagesWithToolInteractions,
   Session,
-  toolCallDurations,
+  toolCallReceipts,
 } from "../domain/message.js"
 import {
   BranchStorage,
@@ -112,7 +112,7 @@ import { CurrentWorkspaceId, workspaceIdForCwd, WorkspaceRpcMiddleware } from ".
 import {
   Auth,
   AuthApi,
-  AuthGuard,
+  listAuthProviders,
   ModelRegistry,
   ModelResolver,
   modelCatalog,
@@ -128,14 +128,10 @@ import {
   SessionProfileCache,
 } from "../runtime/extension-host.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
+import { type AgentName, DEFAULT_AGENT_NAME } from "../domain/agent.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
-import {
-  type ApprovalDecision,
-  decodeInteractionDecision,
-  decodeInteractionParams,
-  InteractionRequestMismatchError,
-} from "../domain/interaction.js"
+import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { omitUndefined } from "../domain/guards.js"
 import { SingleRunner } from "effect/unstable/cluster"
 import {
@@ -524,9 +520,13 @@ const makeSessionMutationsService: Effect.Effect<
         message: `Parent session not found: ${parentSessionId}`,
       })
     }
-    yield* admitChildSessionDepth(parentSessionId).pipe(
-      Effect.provideService(RelationshipStorage, relationshipStorage),
-    )
+    // A handoff continues the parent's thread at the parent's spawn depth;
+    // only a spawn adds a level.
+    if (input.continueThread !== true) {
+      yield* admitChildSessionDepth(parentSessionId).pipe(
+        Effect.provideService(RelationshipStorage, relationshipStorage),
+      )
+    }
     if (!Predicate.isUndefined(input.parentBranchId)) {
       const parentBranch = yield* branchStorage.getBranch(input.parentBranchId)
       if (Predicate.isUndefined(parentBranch) || parentBranch.sessionId !== parentSessionId) {
@@ -685,7 +685,9 @@ const makeSessionMutationsService: Effect.Effect<
           createdAt: yield* DateTime.nowAsDate,
         })
         yield* branchStorage.createBranch(branch)
-        for (const message of messages.slice(0, targetIndex + 1)) {
+        // A fork point inside a tool step would copy a call without its
+        // result, and the new branch could never project a turn.
+        for (const message of settledMessages(messages.slice(0, targetIndex + 1))) {
           yield* messageStorage.createMessage(
             copyMessageToBranch(message, {
               id: MessageId.make(yield* platform.randomId),
@@ -890,7 +892,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
         branchId: input.branchId,
       })
       return {
-        projectedMessages: projectMessagesWithToolInteractions(messages, toolCallDurations(events)),
+        projectedMessages: projectMessagesWithToolInteractions(messages, toolCallReceipts(events)),
         lastEventId,
         // The same read answers the HUD totals: one branch log, folded once.
         metrics: foldSessionMetrics(events),
@@ -1051,7 +1053,6 @@ const RpcHandlers = GentRpcs.toLayer(
     const configService = yield* ConfigService
     const sessionRuntime = yield* SessionRuntime
     const authStore = yield* Auth
-    const authGuard = yield* AuthGuard
     const providerAuth = yield* ProviderAuth
     const extensionRegistry = yield* ExtensionRegistry
     const sessionStorage = yield* SessionStorage
@@ -1285,17 +1286,46 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {
-          if (!Predicate.isUndefined(sessionId)) {
-            const session = yield* sessionStorage.getSession(SessionId.make(sessionId))
-            if (Predicate.isUndefined(session)) {
-              return yield* new NotFoundError({
-                message: "Session not found",
-              })
-            }
-          }
-          return yield* authGuard
-            .listProviders({ agentName })
-            .pipe(Effect.mapError((error) => authPersistenceError("read", "*", error)))
+          const session = yield* Option.match(Option.fromUndefinedOr(sessionId), {
+            onNone: () => Effect.succeedNone,
+            onSome: (id) =>
+              sessionStorage.getSession(SessionId.make(id)).pipe(
+                Effect.flatMap((found) => {
+                  if (Predicate.isUndefined(found)) {
+                    return Effect.fail(new NotFoundError({ message: "Session not found" }))
+                  }
+                  return Effect.succeedSome(found)
+                }),
+              ),
+          })
+          // The models a turn in this session would run: the session's
+          // registry and config, then its model override, as the turn does.
+          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
+          const config = yield* configService.get(
+            Option.getOrUndefined(
+              Option.flatMap(session, (found) => Option.fromUndefinedOr(found.cwd)),
+            ),
+          )
+          const agents = [...registry.getResolved().agents.values()]
+          const modelFor = (name: AgentName) =>
+            resolveSessionSettings(
+              Option.map(
+                Option.fromUndefinedOr(agents.find((entry) => entry.name === name)),
+                (definition) =>
+                  applyAgentOverrides(
+                    definition,
+                    Option.fromUndefinedOr(config.agents?.[definition.name]),
+                  ),
+              ),
+              Option.getOrElse(session, () => ({})),
+            ).modelId
+          const modelIds = [modelFor(DEFAULT_AGENT_NAME)]
+          if (!Predicate.isUndefined(agentName)) modelIds.push(modelFor(agentName))
+          return yield* listAuthProviders(modelIds).pipe(
+            Effect.provideService(ExtensionRegistry, registry),
+            Effect.provideService(Auth, authStore),
+            Effect.mapError((error) => authPersistenceError("read", "*", error)),
+          )
         }),
 
       "auth.setKey": ({ provider, key }: SetAuthKeyInput) =>
@@ -1609,7 +1639,6 @@ export const createDependencies = (config: DependenciesConfig) => {
     config.overrides?.modelRegistryLayer ??
     Layer.provide(ModelRegistry.Live, Layer.mergeAll(extensionRegistryLive, authLive))
   const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
-  const authGuardLive = Layer.provide(AuthGuard.Live, authDeps)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
 
@@ -1628,7 +1657,6 @@ export const createDependencies = (config: DependenciesConfig) => {
       clusterRunnerLive,
       eventServicesLive,
       authLive,
-      authGuardLive,
       providerAuthLive,
       configServiceLive,
       modelRegistryLive,
@@ -1671,24 +1699,10 @@ export const createDependencies = (config: DependenciesConfig) => {
 
           let recovered = 0
           for (const record of pending) {
-            const params = yield* decodeInteractionParams(record.paramsJson).pipe(Effect.option)
-            if (Option.isNone(params)) continue
-            let decision = Option.none<ApprovalDecision>()
-            if (!Predicate.isUndefined(record.decisionJson)) {
-              decision = yield* decodeInteractionDecision(record.decisionJson).pipe(Effect.option)
-            }
-            yield* approvalService
-              .rehydrate(
-                record.requestId,
-                params.value,
-                {
-                  sessionId: record.sessionId,
-                  branchId: record.branchId,
-                },
-                Option.getOrUndefined(decision),
-              )
-              .pipe(Effect.catchEager(() => Effect.void))
-            if (Option.isSome(decision)) {
+            // A row that no longer decodes stays in storage and is skipped.
+            const answered = yield* approvalService.rehydrate(record).pipe(Effect.option)
+            if (Option.isNone(answered)) continue
+            if (answered.value) {
               yield* sessionRuntime
                 .respondInteraction({
                   sessionId: record.sessionId,

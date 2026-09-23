@@ -1000,6 +1000,9 @@ const InteractionRequestRow = Schema.Struct({
   branch_id: BranchId,
   params_json: Schema.String,
   decision_json: Schema.NullOr(Schema.String),
+  // Null on rows stored before owners were recorded (migration 021).
+  owner_tool_call_id: Schema.NullOr(Schema.String),
+  owner_occurrence: Schema.NullOr(Schema.Int),
   // Read raw status string off the wire; the transform coerces
   // unknown values back to "pending".
   status: Schema.String,
@@ -1024,6 +1027,11 @@ const rowToRecord = (row: InteractionRequestRow): InteractionRequestRecordEncode
   if (!Predicate.isNull(row.decision_json)) {
     Object.assign(record, { decisionJson: row.decision_json })
   }
+  if (!Predicate.isNull(row.owner_tool_call_id) && !Predicate.isNull(row.owner_occurrence)) {
+    Object.assign(record, {
+      owner: { toolCallId: row.owner_tool_call_id, occurrence: row.owner_occurrence },
+    })
+  }
   return record
 }
 
@@ -1033,6 +1041,8 @@ const recordToRow = (record: InteractionRequestRecordEncoded): InteractionReques
   branch_id: BranchId.make(record.branchId),
   params_json: record.paramsJson,
   decision_json: toSqlNull(record.decisionJson),
+  owner_tool_call_id: toSqlNull(record.owner?.toolCallId),
+  owner_occurrence: toSqlNull(record.owner?.occurrence),
   status: record.status,
   created_at: record.createdAt,
 })
@@ -1102,7 +1112,9 @@ export class InteractionStorage extends Context.Service<
                 message: `Interaction session/branch not found in workspace: ${record.sessionId}/${record.branchId}`,
               })
             }
-            yield* sql`INSERT INTO interaction_requests (request_id, session_id, branch_id, params_json, decision_json, status, created_at) VALUES (${record.requestId}, ${record.sessionId}, ${record.branchId}, ${record.paramsJson}, ${toSqlNull(record.decisionJson)}, ${record.status}, ${record.createdAt})`
+            const ownerCallId = toSqlNull(record.owner?.toolCallId)
+            const ownerOccurrence = toSqlNull(record.owner?.occurrence)
+            yield* sql`INSERT INTO interaction_requests (request_id, session_id, branch_id, params_json, decision_json, status, created_at, owner_tool_call_id, owner_occurrence) VALUES (${record.requestId}, ${record.sessionId}, ${record.branchId}, ${record.paramsJson}, ${toSqlNull(record.decisionJson)}, ${record.status}, ${record.createdAt}, ${ownerCallId}, ${ownerOccurrence})`
             return record
           },
           Effect.mapError(storageError("Failed to persist interaction request")),
@@ -1136,7 +1148,7 @@ export class InteractionStorage extends Context.Service<
             const workspaceId = yield* CurrentWorkspaceId
             const rows = yield* Option.match(Option.fromUndefinedOr(scope), {
               onNone:
-                () => sql<InteractionRequestRow>`SELECT ir.request_id, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.status, ir.created_at
+                () => sql<InteractionRequestRow>`SELECT ir.request_id, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.owner_tool_call_id, ir.owner_occurrence, ir.status, ir.created_at
                 FROM interaction_requests ir
                 JOIN sessions s ON s.id = ir.session_id
                 WHERE ir.status = 'pending'
@@ -1144,7 +1156,7 @@ export class InteractionStorage extends Context.Service<
                 ORDER BY ir.created_at ASC`,
               onSome: (
                 scope,
-              ) => sql<InteractionRequestRow>`SELECT ir.request_id, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.status, ir.created_at
+              ) => sql<InteractionRequestRow>`SELECT ir.request_id, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.owner_tool_call_id, ir.owner_occurrence, ir.status, ir.created_at
                 FROM interaction_requests ir
                 JOIN sessions s ON s.id = ir.session_id
                 WHERE ir.status = 'pending'

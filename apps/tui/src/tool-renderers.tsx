@@ -6,6 +6,7 @@ import { buildSyntaxStyle, useTheme } from "./theme"
 import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
 import { formatHeadTail, headTail } from "@gent/core/protocol"
 import {
+  CellOperationReceipts,
   decodeToolOutput,
   decodeToolOutputOption,
   describeCellCode,
@@ -32,7 +33,11 @@ export interface ToolCall {
   summary: string | undefined
   // eslint-disable-next-line effect/noNullish -- Renderer payloads preserve omitted tool fields from the event stream.
   output: string | undefined
-  /** Inner calls a cell admitted. Live feed only; saved results carry receipts. */
+  /**
+   * Inner calls a cell admitted, from the live feed or, after a reload, from
+   * the branch's stored tool receipts. Absent on a fork, whose saved result's
+   * receipts are the fallback.
+   */
   operations?: ToolCall[]
   /** Envelope time of the started receipt. Live feed only. */
   startedAt?: number
@@ -330,12 +335,6 @@ function BashToolRenderer(props: ToolRendererProps) {
  * Expanded: code, receipts, full display, bindings, and failure detail
  */
 
-const OperationReceipt = Schema.Struct({
-  tool: Schema.String,
-  outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
-  summary: Schema.String,
-})
-
 /** Success and failure results share one lenient shape; every field is optional. */
 const CellOutputSchema = Schema.Struct({
   _tag: Schema.optional(Schema.String),
@@ -378,22 +377,17 @@ function CellToolRenderer(props: ToolRendererProps) {
     return first
   })
 
-  // Live operations are the calls the cell admitted, with their input and output;
-  // a saved result carries only receipts.
+  // Operations are the calls the cell admitted, with their input and output,
+  // from the live feed or the snapshot. The saved result's receipts are the
+  // fallback where the branch has no events for them (a fork).
   const liveOperations = createMemo((): ReadonlyArray<ToolCall> =>
     Option.getOrElse(Option.fromNullishOr(props.toolCall.operations), () => []),
   )
   const receipts = createMemo((): ReadonlyArray<OperationLine> =>
-    Option.match(
-      decodeToolOutputOption(
-        Schema.Struct({ operations: Schema.optional(Schema.Array(OperationReceipt)) }),
-        props.toolCall.output,
-      ),
-      {
-        onNone: () => [],
-        onSome: (value) => value.operations ?? [],
-      },
-    ),
+    Option.match(decodeToolOutputOption(CellOperationReceipts, props.toolCall.output), {
+      onNone: () => [],
+      onSome: (value) => value.operations ?? [],
+    }),
   )
 
   const failure = createMemo(() =>
@@ -1012,11 +1006,8 @@ function GrepToolRenderer(props: ToolRendererProps) {
 const ReadSessionOutputSchema = Schema.Struct({
   sessionId: Schema.optional(Schema.String),
   content: Schema.optional(Schema.String),
-  extracted: Schema.optional(Schema.Boolean),
-  goal: Schema.optional(Schema.String),
   messageCount: Schema.optional(Schema.Finite),
   branchCount: Schema.optional(Schema.Finite),
-  error: Schema.optional(Schema.String),
 })
 
 function getInputField(input: ToolInput, key: string): Option.Option<string> {
@@ -1033,30 +1024,22 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
   const subtitle = () => {
     const sid = getInputField(props.toolCall.input, "sessionId")
     if (Option.isNone(sid)) return Option.getOrUndefined(Option.none<string>())
-    const goal = getInputField(props.toolCall.input, "goal")
-    if (Option.isSome(goal)) return `${sid.value.slice(0, 8)}… — ${goal.value.slice(0, 40)}`
     return sid.value.slice(0, 8) + "…"
   }
 
   const summary = (): Option.Option<string> => {
     const o = output()
     if (Option.isNone(o)) return Option.none()
-    if (o.value.extracted) {
-      const goal = Option.getOrElse(
-        Option.map(Option.fromNullishOr(o.value.goal), (value) => value.slice(0, 50)),
-        () => "?",
-      )
-      return Option.some(`Extracted for: ${goal}`)
-    }
-    const messageCount = Option.fromNullishOr(o.value.messageCount)
-    if (Option.isSome(messageCount)) {
-      return Option.some(`${messageCount.value} messages, ${o.value.branchCount} branches`)
-    }
-    return Option.none()
+    const branches = Option.fromNullishOr(o.value.branchCount).pipe(
+      Option.map((count) => `, ${count} branches`),
+      Option.getOrElse(() => ""),
+    )
+    return Option.fromNullishOr(o.value.messageCount).pipe(
+      Option.map((count) => `${count} messages${branches}`),
+    )
   }
 
   const content = () => Option.flatMap(output(), (value) => Option.fromNullishOr(value.content))
-  const error = () => Option.flatMap(output(), (value) => Option.fromNullishOr(value.error))
   const renderContent = (value: string): string => {
     if (value.length > 500) return value.slice(0, 500) + "…"
     return value
@@ -1087,12 +1070,6 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
             {Option.match(content(), { onNone: () => "", onSome: renderContent })}
           </text>
         </box>
-      </Show>
-
-      <Show when={Option.getOrUndefined(error())}>
-        <text style={{ fg: theme.error }}>
-          <span>✕</span> {Option.getOrElse(error(), () => "")}
-        </text>
       </Show>
     </ToolFrame>
   )

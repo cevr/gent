@@ -12,6 +12,7 @@ import {
   Schedule,
   Schema,
   type Scope,
+  Semaphore,
   Stream,
 } from "effect"
 import { KeyValueStore } from "effect/unstable/persistence"
@@ -23,8 +24,6 @@ import {
   parseModelId,
   parseModelProvider,
   ProviderId,
-  resolveAgentModel,
-  resolveDefaultAgentModel,
 } from "../domain/agent.js"
 import { SessionId, ToolCallId } from "../domain/ids.js"
 import { ExtensionRegistry, listModelCatalog } from "./extension-host.js"
@@ -37,6 +36,7 @@ import {
   type ProviderAuthInfo,
   type ProviderHints,
   type RetryPolicy,
+  type StoredOAuthCredentials,
 } from "../domain/driver.js"
 import { GentPlatform } from "./gent-platform.js"
 import { LanguageModel } from "effect/unstable/ai"
@@ -143,12 +143,6 @@ export const ListAuthProvidersPayload = Schema.Struct({
 })
 export type ListAuthProvidersPayload = typeof ListAuthProvidersPayload.Type
 
-/** Internal query passed from the RPC handler into `AuthGuard`. */
-const AuthProviderQuery = Schema.Struct({
-  agentName: Schema.optional(AgentName),
-})
-type AuthProviderQuery = typeof AuthProviderQuery.Type
-
 // ── Auth service ────────────────────────────────────────────────────────
 
 export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
@@ -156,11 +150,62 @@ export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
-export interface AuthService {
+interface AuthStoreAccess {
   // oxlint-disable-next-line effect/noNullish -- Auth lookup uses undefined when a provider has no stored credentials.
   readonly get: (provider: string) => Effect.Effect<AuthInfo | undefined, AuthError>
   readonly set: (provider: string, info: AuthInfo) => Effect.Effect<void, AuthError>
   readonly remove: (provider: string) => Effect.Effect<void, AuthError>
+}
+
+export interface AuthService extends AuthStoreAccess {
+  /**
+   * Read, then maybe write, one provider's credential. `f` receives what the
+   * store holds now and returns a result plus the credential to write (none
+   * leaves the store as it is). `set`, `remove` and `update` for one
+   * provider run one at a time, so a sign-in and a token refresh in any
+   * profile never interleave.
+   */
+  readonly update: <A, E>(
+    provider: string,
+    f: (
+      current: Option.Option<AuthInfo>,
+    ) => Effect.Effect<readonly [A, Option.Option<AuthInfo>], E>,
+  ) => Effect.Effect<A, E | AuthError>
+}
+
+/**
+ * One owner for a credential store: every write for one provider takes that
+ * provider's lock. All profiles of a process share the store, and each
+ * profile's drivers hold their own caches, so the store is the only place
+ * where their writes can be ordered.
+ */
+export const serializeAuthStore = (store: AuthStoreAccess): AuthService => {
+  const locks = new Map<string, Semaphore.Semaphore>()
+  const exclusive =
+    (provider: string) =>
+    <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+      Effect.suspend(() => {
+        let lock = locks.get(provider)
+        if (Predicate.isUndefined(lock)) {
+          lock = Semaphore.makeUnsafe(1)
+          locks.set(provider, lock)
+        }
+        return lock.withPermits(1)(effect)
+      })
+  return {
+    get: store.get,
+    set: (provider, info) => exclusive(provider)(store.set(provider, info)),
+    remove: (provider) => exclusive(provider)(store.remove(provider)),
+    update: (provider, f) =>
+      exclusive(provider)(
+        Effect.gen(function* () {
+          const current = Option.fromUndefinedOr(yield* store.get(provider))
+          const [result, next] = yield* f(current)
+          if (Option.isSome(next)) yield* store.set(provider, next.value)
+          return result
+        }),
+      ),
+  }
 }
 
 export class Auth extends Context.Service<Auth, AuthService>()(
@@ -202,7 +247,7 @@ export class Auth extends Context.Service<Auth, AuthService>()(
             Effect.as(undefined),
           )
 
-        return Auth.of({
+        return serializeAuthStore({
           get: (provider) =>
             store.get(provider).pipe(
               Effect.map(Option.getOrUndefined),
@@ -223,8 +268,8 @@ export class Auth extends Context.Service<Auth, AuthService>()(
   static Test = (initial: Record<string, AuthInfo> = {}): Layer.Layer<Auth> =>
     Layer.sync(Auth)(() => {
       const map = new Map(Object.entries(initial))
-      return Auth.of({
-        get: (provider) => Effect.succeed(map.get(provider)),
+      return serializeAuthStore({
+        get: (provider) => Effect.sync(() => map.get(provider)),
         set: (provider, info) =>
           Effect.sync(() => {
             map.set(provider, info)
@@ -239,95 +284,39 @@ export class Auth extends Context.Service<Auth, AuthService>()(
 
 // ── Auth guard ──────────────────────────────────────────────────────────
 
-interface AuthGuardService {
-  readonly listProviders: (
-    query?: AuthProviderQuery,
-  ) => Effect.Effect<readonly AuthProviderInfo[], AuthError>
-}
-
-export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
-  "@gent/core/src/runtime/provider/AuthGuard",
+/**
+ * Every registered model driver with its stored auth. A driver is `required`
+ * when one of `modelIds` routes to it; the caller resolves those models for
+ * the session it asks about (its registry, config, and model override).
+ */
+export const listAuthProviders = Effect.fn("AuthGuard.listProviders")(function* (
+  modelIds: ReadonlyArray<ModelId>,
 ) {
-  // ↑ co-located with `Auth`; the deterministic-keys rule allows the
-  //   secondary tag to keep `<file>/<ClassName>`.
-
-  /**
-   * Live `AuthGuard`. The guard's logic is inseparable from the auth model,
-   * so it lives beside it.
-   *
-   * Composes auth info (`Auth.get`) with registry-derived metadata
-   * (the resolved model drivers) and per-session routing
-   * (`resolveDefaultAgentModel` + resolved extension agents) to compute
-   * which providers are required *and* present.
-   */
-  static Live: Layer.Layer<AuthGuard, never, Auth | ExtensionRegistry> = Layer.effect(
-    AuthGuard,
-    Effect.gen(function* () {
-      const auth = yield* Auth
-      const extensionRegistry = yield* ExtensionRegistry
-      const registeredProviders = [...extensionRegistry.getResolved().modelDrivers.values()]
-      const registeredIds = new Set(registeredProviders.map((p) => p.id))
-
-      const requiredProviders = (query: AuthProviderQuery = {}): ProviderId[] => {
-        const agents = [...extensionRegistry.getResolved().agents.values()]
-        const providers: ProviderId[] = []
-        const seen = new Set<string>()
-        const modelIds: ModelId[] = Option.toArray(resolveDefaultAgentModel(agents))
-
-        if (!Predicate.isUndefined(query.agentName)) {
-          const selectedAgent = agents.find((agent) => agent.name === query.agentName)
-          if (!Predicate.isUndefined(selectedAgent)) {
-            if (!Predicate.isUndefined(selectedAgent.model)) {
-              modelIds.push(resolveAgentModel(selectedAgent))
-            }
-          }
-        }
-
-        for (const modelId of modelIds) {
-          const provider = parseModelProvider(modelId)
-          if (
-            Option.isSome(provider) &&
-            registeredIds.has(provider.value) &&
-            !seen.has(provider.value)
-          ) {
-            providers.push(provider.value)
-            seen.add(provider.value)
-          }
-        }
-
-        return providers
-      }
-
-      const listProviders = Effect.fn("AuthGuard.listProviders")(function* (
-        query: AuthProviderQuery = {},
-      ) {
-        const requiredSet = new Set(requiredProviders(query))
-        const providers: AuthProviderInfo[] = []
-
-        for (const provider of registeredProviders) {
-          const storedInfo = yield* auth.get(provider.id)
-          const required = requiredSet.has(ProviderId.make(provider.id))
-
-          if (!Predicate.isUndefined(storedInfo)) {
-            providers.push({
-              provider: ProviderId.make(provider.id),
-              hasKey: true,
-              source: "stored",
-              authType: storedInfo.type,
-              required,
-            })
-            continue
-          }
-          providers.push({ provider: ProviderId.make(provider.id), hasKey: false, required })
-        }
-
-        return providers
-      })
-
-      return AuthGuard.of({ listProviders })
-    }),
-  )
-}
+  const auth = yield* Auth
+  const registry = yield* ExtensionRegistry
+  const required = new Set<string>()
+  for (const modelId of modelIds) {
+    const provider = parseModelProvider(modelId)
+    if (Option.isSome(provider)) required.add(provider.value)
+  }
+  const providers: AuthProviderInfo[] = []
+  for (const driver of registry.getResolved().modelDrivers.values()) {
+    const provider = ProviderId.make(driver.id)
+    const storedInfo = yield* auth.get(driver.id)
+    if (Predicate.isUndefined(storedInfo)) {
+      providers.push({ provider, hasKey: false, required: required.has(driver.id) })
+      continue
+    }
+    providers.push({
+      provider,
+      hasKey: true,
+      source: "stored",
+      authType: storedInfo.type,
+      required: required.has(driver.id),
+    })
+  }
+  return providers
+})
 
 // ── provider-auth ───────────────────────────────────────────────────────────
 
@@ -357,8 +346,9 @@ const persistAuthTo =
     )
 
 /**
- * A stored credential as a driver sees it. An OAuth credential carries a
- * `persist` that writes a refreshed token back to the store.
+ * A stored credential as a driver sees it. An OAuth credential carries an
+ * `update` that reads and writes the stored credential under the store's
+ * per-provider lock.
  */
 const toProviderAuthInfo = (
   authStore: AuthService,
@@ -372,8 +362,40 @@ const toProviderAuthInfo = (
     refresh: info.refresh,
     expires: info.expires,
     accountId: info.accountId,
-    persist: (updated) => persistAuthTo(authStore, providerId)({ type: "oauth", ...updated }),
+    update: <A, E>(
+      f: (
+        stored: Option.Option<StoredOAuthCredentials>,
+      ) => Effect.Effect<readonly [A, Option.Option<StoredOAuthCredentials>], E>,
+    ) =>
+      authStore
+        .update(providerId, (current) =>
+          Effect.map(
+            f(Option.flatMap(current, storedOAuthFields)),
+            (pair): readonly [A, Option.Option<AuthInfo>] => [
+              pair[0],
+              Option.map(pair[1], (fields) => authValue({ type: "oauth", ...fields })),
+            ],
+          ),
+        )
+        .pipe(
+          Effect.catchIf(Schema.is(AuthError), (cause) =>
+            Effect.fail(
+              new ProviderAuthError({
+                message: `Failed to persist auth for provider "${providerId}"`,
+                cause,
+              }),
+            ),
+          ),
+        ),
   }
+}
+
+/** The OAuth fields of a stored credential; none for an API key. */
+const storedOAuthFields = (stored: AuthInfo): Option.Option<StoredOAuthCredentials> => {
+  if (stored.type !== "oauth") return Option.none()
+  const fields = { access: stored.access, refresh: stored.refresh, expires: stored.expires }
+  if (Predicate.isUndefined(stored.accountId)) return Option.some(fields)
+  return Option.some({ ...fields, accountId: stored.accountId })
 }
 
 interface ProviderAuthService {

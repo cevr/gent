@@ -2,6 +2,7 @@ import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
   Context,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -26,10 +27,11 @@ import {
   Auth,
   AuthApi,
   AuthError,
-  AuthGuard,
+  listAuthProviders,
   AuthInfo,
   AuthMethod,
   type AuthService,
+  serializeAuthStore,
   ListAuthProvidersPayload,
   ModelResolver,
   ProviderAuth,
@@ -44,14 +46,7 @@ import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
 import { test as bunTest } from "bun:test"
 import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
-import {
-  AgentDefinition,
-  AgentName,
-  DEFAULT_AGENT_NAME,
-  ModelId,
-  ProviderId,
-  Model,
-} from "../../src/domain/agent"
+import { DEFAULT_AGENT_NAME, ModelId, ProviderId, Model } from "../../src/domain/agent"
 import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
 import { GentPlatform } from "../../src/runtime/gent-platform"
@@ -241,20 +236,24 @@ const unusedResolution = (): Effect.Effect<ProviderResolution> =>
 
 const authLayer = Layer.succeed(
   Auth,
-  Auth.of({
-    get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
-    set: () => Effect.void,
-    remove: () => Effect.void,
-  }),
+  Auth.of(
+    serializeAuthStore({
+      get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
+      set: () => Effect.void,
+      remove: () => Effect.void,
+    }),
+  ),
 )
 
 const failingReadAuthLayer = Layer.succeed(
   Auth,
-  Auth.of({
-    get: () => Effect.fail(new AuthError({ message: "read failed" })),
-    set: () => Effect.void,
-    remove: () => Effect.void,
-  }),
+  Auth.of(
+    serializeAuthStore({
+      get: () => Effect.fail(new AuthError({ message: "read failed" })),
+      set: () => Effect.void,
+      remove: () => Effect.void,
+    }),
+  ),
 )
 
 const catalogModel = (id: string, releaseDate?: string): Model => {
@@ -386,16 +385,18 @@ describe("model catalog resolution", () => {
     Effect.gen(function* () {
       const oauthLayer = Layer.succeed(
         Auth,
-        Auth.of({
-          get: (providerId) => {
-            if (providerId !== "openai") {
-              return Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>()))
-            }
-            return Effect.succeed(AuthInfo.cases.Api.make({ type: "api", key: "sk-openai" }))
-          },
-          set: () => Effect.void,
-          remove: () => Effect.void,
-        }),
+        Auth.of(
+          serializeAuthStore({
+            get: (providerId) => {
+              if (providerId !== "openai") {
+                return Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>()))
+              }
+              return Effect.succeed(AuthInfo.cases.Api.make({ type: "api", key: "sk-openai" }))
+            },
+            set: () => Effect.void,
+            remove: () => Effect.void,
+          }),
+        ),
       )
       const seen: Array<string> = []
       const registry = yield* loadRegistryWithDrivers(
@@ -579,6 +580,59 @@ describe("Auth", () => {
         expect(yield* auth.get("does-not-exist")).toBeUndefined()
       }).pipe(Effect.provide(Auth.Test())),
     )
+
+    it.live("an update in flight holds back a set for the same provider", () =>
+      Effect.gen(function* () {
+        const auth = yield* Auth
+        const oauth = (refresh: string) =>
+          AuthInfo.cases.Oauth.make({ type: "oauth", access: "a", refresh, expires: 0 })
+        const storedRefresh = auth.get("openai").pipe(
+          Effect.map((info) =>
+            Option.fromUndefinedOr(info).pipe(
+              Option.flatMap((stored) => {
+                if (stored.type !== "oauth") return Option.none<string>()
+                return Option.some(stored.refresh)
+              }),
+            ),
+          ),
+        )
+        const entered = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const updating = yield* auth
+          .update("openai", () =>
+            Effect.gen(function* () {
+              yield* Deferred.completeWith(entered, Effect.void)
+              yield* Deferred.await(release)
+              const written: readonly [boolean, Option.Option<AuthInfo>] = [
+                true,
+                Option.some(oauth("from-update")),
+              ]
+              return written
+            }),
+          )
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(entered)
+        const setting = yield* auth.set("openai", oauth("from-set")).pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+        expect(yield* storedRefresh).toEqual(Option.some("seed"))
+        yield* Deferred.completeWith(release, Effect.void)
+        yield* Fiber.join(updating)
+        yield* Fiber.join(setting)
+        expect(yield* storedRefresh).toEqual(Option.some("from-set"))
+      }).pipe(
+        Effect.timeout("4 seconds"),
+        Effect.provide(
+          Auth.Test({
+            openai: AuthInfo.cases.Oauth.make({
+              type: "oauth",
+              access: "a",
+              refresh: "seed",
+              expires: 0,
+            }),
+          }),
+        ),
+      ),
+    )
   })
 
   describe("Auth.Live", () => {
@@ -634,7 +688,7 @@ describe("Auth", () => {
 // ── ../domain/auth-guard.test ───────────────────────────────────────────────
 
 /**
- * AuthGuard tests
+ * listAuthProviders tests
  */
 
 const stubModel = AiModel.make(
@@ -650,118 +704,58 @@ const testProviders: ModelDriverContribution[] = [
   { id: "mistral", name: "Mistral", resolveModel: () => Effect.succeed(stubModel) },
 ]
 
-const testAgents = [
-  AgentDefinition.make({
-    name: DEFAULT_AGENT_NAME,
-    model: ModelId.make("anthropic/claude-opus-4-6"),
-  }),
-]
+const testRegistryLayer = ExtensionRegistry.fromResolved(
+  resolveExtensions([
+    {
+      manifest: { id: ExtensionId.make("test-providers") },
+      scope: "builtin",
+      sourcePath: "test",
+      contributions: { modelDrivers: testProviders },
+    } satisfies LoadedExtension,
+  ]),
+)
 
-const testResolved = resolveExtensions([
-  {
-    manifest: { id: ExtensionId.make("test-providers") },
-    scope: "builtin",
-    sourcePath: "test",
-    contributions: {
-      modelDrivers: testProviders,
-      agents: testAgents,
-    },
-  } satisfies LoadedExtension,
-])
-const testRegistryLayer = ExtensionRegistry.fromResolved(testResolved)
-
-const helperResolved = resolveExtensions([
-  {
-    manifest: { id: ExtensionId.make("test-providers") },
-    scope: "builtin",
-    sourcePath: "test",
-    contributions: {
-      modelDrivers: testProviders,
-      agents: [
-        ...testAgents,
-        AgentDefinition.make({
-          name: AgentName.make("helper:google"),
-          model: ModelId.make("google/gemini-2.5-flash"),
-        }),
-      ],
-    },
-  } satisfies LoadedExtension,
-])
-const helperAgentRegistryLayer = ExtensionRegistry.fromResolved(helperResolved)
-
-describe("AuthGuard", () => {
+describe("listAuthProviders", () => {
   const apiInfo = (key: string): AuthInfo => AuthApi.make({ type: "api", key })
+  const list = (seed: Record<string, AuthInfo>, modelIds: ReadonlyArray<ModelId>) =>
+    listAuthProviders(modelIds).pipe(
+      Effect.provide(Layer.merge(Auth.Test(seed), testRegistryLayer)),
+    )
+  const opus = ModelId.make("anthropic/claude-opus-4-6")
 
-  const guardLayerWithSeed = (
-    seed: Record<string, AuthInfo>,
-    registryLayer: Layer.Layer<ExtensionRegistry>,
-  ) => AuthGuard.Live.pipe(Layer.provide(Auth.Test(seed)), Layer.provide(registryLayer))
-
-  it.live("only the main agent's model provider is marked required", () => {
-    const layer = guardLayerWithSeed({}, testRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders()
+  it.live("only the providers of the given models are marked required", () =>
+    Effect.gen(function* () {
+      const result = yield* list({}, [opus, ModelId.make("google/gemini-2.5-flash")])
       expect(result.filter((p) => p.required).map((p) => p.provider)).toEqual([
         ProviderId.make("anthropic"),
+        ProviderId.make("google"),
       ])
-    }).pipe(Effect.provide(layer))
-  })
+    }),
+  )
 
-  it.live("a required provider without a stored key reports hasKey false", () => {
-    const layer = guardLayerWithSeed({}, testRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders()
+  it.live("a required provider without a stored key reports hasKey false", () =>
+    Effect.gen(function* () {
+      const result = yield* list({}, [opus])
       expect(result.filter((p) => p.required && !p.hasKey).map((p) => p.provider)).toEqual([
         ProviderId.make("anthropic"),
       ])
-    }).pipe(Effect.provide(layer))
-  })
+    }),
+  )
 
-  it.live("a required provider with a stored key reports hasKey true", () => {
-    const layer = guardLayerWithSeed({ anthropic: apiInfo("sk-anthropic") }, testRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders()
+  it.live("a required provider with a stored key reports hasKey true", () =>
+    Effect.gen(function* () {
+      const result = yield* list({ anthropic: apiInfo("sk-anthropic") }, [opus])
       expect(result.filter((p) => p.required && !p.hasKey)).toEqual([])
-    }).pipe(Effect.provide(layer))
-  })
+    }),
+  )
 
-  it.live("listProviders reports per-provider hasKey via Auth.get", () => {
-    const layer = guardLayerWithSeed({ anthropic: apiInfo("sk-test") }, testRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders()
-      const anthropic = result.find((p) => p.provider === "anthropic")
-      const openai = result.find((p) => p.provider === "openai")
-      expect(anthropic?.hasKey).toBe(true)
-      expect(openai?.hasKey).toBe(false)
-    }).pipe(Effect.provide(layer))
-  })
-
-  it.live("unselected helper agents do not widen required providers beyond main", () => {
-    const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders()
-      expect(result.filter((p) => p.required).map((p) => p.provider)).toEqual([
-        ProviderId.make("anthropic"),
-      ])
-    }).pipe(Effect.provide(layer))
-  })
-
-  it.live("selected agent with a different provider widens required providers", () => {
-    const layer = guardLayerWithSeed({}, helperAgentRegistryLayer)
-    return Effect.gen(function* () {
-      const guard = yield* AuthGuard
-      const result = yield* guard.listProviders({ agentName: AgentName.make("helper:google") })
-      const required = result.filter((p) => p.required).map((p) => p.provider)
-      expect(required).toContain(ProviderId.make("anthropic"))
-      expect(required).toContain(ProviderId.make("google"))
-      expect(required).not.toContain(ProviderId.make("openai"))
-    }).pipe(Effect.provide(layer))
-  })
+  it.live("every registered provider reports its own hasKey", () =>
+    Effect.gen(function* () {
+      const result = yield* list({ anthropic: apiInfo("sk-test") }, [opus])
+      expect(result.find((p) => p.provider === "anthropic")?.hasKey).toBe(true)
+      expect(result.find((p) => p.provider === "openai")?.hasKey).toBe(false)
+    }),
+  )
 })
 
 describe("ListAuthProvidersPayload schema", () => {
@@ -857,11 +851,13 @@ const testResolvedProviderAuth = resolveExtensions([
 const testRegistry = ExtensionRegistry.fromResolved(testResolvedProviderAuth)
 const failingAuthStoreLayer = Layer.succeed(
   Auth,
-  Auth.of({
-    get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
-    set: () => Effect.fail(new AuthError({ message: "write failed" })),
-    remove: () => Effect.void,
-  } satisfies AuthService),
+  Auth.of(
+    serializeAuthStore({
+      get: () => Effect.succeed(Option.getOrUndefined(Option.none<AuthInfo>())),
+      set: () => Effect.fail(new AuthError({ message: "write failed" })),
+      remove: () => Effect.void,
+    }),
+  ),
 )
 describe("ProviderAuth", () => {
   it.live("extension authorize + callback stores credentials", () =>
@@ -966,11 +962,11 @@ describe("ProviderAuth", () => {
 
 // oxlint-disable-next-line effect/noNullish -- AuthService uses undefined to represent missing credentials.
 const missingAuthInfo: AuthInfo | undefined = undefined
-const testAuthStorage: AuthService = {
+const testAuthStorage: AuthService = serializeAuthStore({
   get: () => Effect.succeed(missingAuthInfo),
   set: () => Effect.void,
   remove: () => Effect.void,
-}
+})
 /** Create a fake upstream model with a stub LanguageModel layer */
 const fakeResolution = (): ProviderResolution =>
   AiModel.make("test", "model", Layer.succeed(LanguageModel.LanguageModel, failingLanguageModel))

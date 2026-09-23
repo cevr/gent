@@ -30,7 +30,7 @@ import {
   ToolCallId,
   projectMessagesWithToolInteractions,
 } from "@gent/core/protocol"
-import { type SessionMessageDetails, sessionMessageText } from "@gent/extensions/client.js"
+import { type SessionMessageDetails, sessionMessageText } from "@gent/extensions/client"
 import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
@@ -1462,6 +1462,46 @@ describe("compact file tool bodies", () => {
       expect(frame).toContain("more lines")
       expect(frame).not.toContain("old-line-5")
       expect(frame).not.toContain("new-line-5")
+    }),
+  )
+})
+
+describe("read_session row", () => {
+  it.live("draws the counts the result carries", () =>
+    Effect.gen(function* () {
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        sessionId: "session-read-1234",
+        content: "READ-SESSION-TREE",
+        messageCount: 4,
+        branchCount: 2,
+      })
+      const items: SessionItem[] = [
+        assistantToolMessage("assistant-read-session", {
+          id: "call-read-session",
+          toolName: "read_session",
+          status: "completed",
+          input: { sessionId: "session-read-1234" },
+          summary: absent,
+          output,
+        }),
+      ]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={items}
+              disclosure="full"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 100, height: 40 },
+        ),
+      )
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (text) => text.includes("4 messages"), "read_session row"),
+      )
+      expect(frame).toContain("✓ 4 messages, 2 branches")
     }),
   )
 })

@@ -9,6 +9,7 @@ import {
   Layer,
   Option,
   Path,
+  type PlatformError,
   Predicate,
   Result,
   Schema,
@@ -92,6 +93,7 @@ import {
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { GentPlatform } from "./gent-platform.js"
 import {
+  type ConfigLoadError,
   ConfigService,
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
@@ -916,10 +918,8 @@ export const makeExtensionHostPlatform: Effect.Effect<ExtensionHostPlatform, nev
     const platform = yield* GentPlatform
     return {
       osInfo: yield* platform.osInfo,
-      execPath: yield* platform.execPath,
       homeDirectory: yield* platform.homeDirectory,
       randomId: platform.randomId,
-      pathListSeparator: yield* platform.pathListSeparator,
     }
   })
 
@@ -938,41 +938,66 @@ const isExtensionFile = (entry: string): boolean =>
     return entry.endsWith(ext)
   })
 
-/** Discover extension files from a directory. Returns file paths sorted by name. */
-const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (dir: string) {
+/**
+ * Discover extension files from a directory, sorted by name. An entry that
+ * cannot be read (a dangling symlink, a permission error) is a `load` failure
+ * for that path alone; its siblings are still discovered.
+ */
+const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
+  dir: string,
+  scope: ExtensionScope,
+) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-
-  const exists = yield* fs.exists(dir)
-  if (!exists) return []
-
-  const entries = yield* fs.readDirectory(dir)
   const paths: string[] = []
+  const failed: FailedExtension[] = []
+  const fail = (sourcePath: string, error: PlatformError.PlatformError) =>
+    Effect.gen(function* () {
+      const message = `Failed to read ${sourcePath}: ${error.message}`
+      failed.push(importFailure(path, sourcePath, scope, message))
+      yield* Effect.logWarning("extension.discover.failed").pipe(
+        Effect.annotateLogs({ path: sourcePath, scope, error: message }),
+      )
+    })
 
-  for (const entry of entries) {
+  const listed = yield* Effect.result(
+    Effect.gen(function* () {
+      if (!(yield* fs.exists(dir))) return []
+      return yield* fs.readDirectory(dir)
+    }),
+  )
+  if (Result.isFailure(listed)) {
+    yield* fail(dir, listed.failure)
+    return { paths, failed }
+  }
+
+  for (const entry of listed.success) {
     // Skip test directories, hidden files, and TUI extension files
     if (entry.startsWith(".") || entry.startsWith("_") || entry === "__tests__") continue
     if (isClientFile(entry)) continue
 
     const filePath = path.join(dir, entry)
-    const stat = yield* fs.stat(filePath)
-
-    if (stat.type === "File" && isExtensionFile(entry)) {
-      paths.push(filePath)
-    } else if (stat.type === "Directory") {
-      // Check for index.ts/index.js in subdirectory
-      for (const indexName of ["index.ts", "index.js", "index.mjs"]) {
-        const indexPath = path.join(filePath, indexName)
-        const indexExists = yield* fs.exists(indexPath)
-        if (indexExists) {
-          paths.push(indexPath)
-          break
+    const found = yield* Effect.result(
+      Effect.gen(function* () {
+        const stat = yield* fs.stat(filePath)
+        if (stat.type === "File" && isExtensionFile(entry)) return Option.some(filePath)
+        if (stat.type !== "Directory") return Option.none<string>()
+        // A directory extension is its index.ts/index.js/index.mjs.
+        for (const indexName of ["index.ts", "index.js", "index.mjs"]) {
+          const indexPath = path.join(filePath, indexName)
+          if (yield* fs.exists(indexPath)) return Option.some(indexPath)
         }
-      }
+        return Option.none<string>()
+      }),
+    )
+    if (Result.isFailure(found)) {
+      yield* fail(filePath, found.failure)
+      continue
     }
+    if (Option.isSome(found.success)) paths.push(found.success.value)
   }
 
-  return paths.sort()
+  return { paths: paths.sort(), failed }
 })
 
 // Loading — import extension files via Bun native import()
@@ -1089,18 +1114,39 @@ const importFailure = (
   return { manifest: { id: ExtensionId.make(name) }, scope, sourcePath, phase: "load", error }
 }
 
+/**
+ * A config file that did not load, as a `load` failure the extension health
+ * view shows. Its settings are ignored until the file loads again.
+ */
+const configLoadFailure = (
+  path: Path.Path,
+  home: string,
+  error: ConfigLoadError,
+): FailedExtension => {
+  let scope: ExtensionScope = "project"
+  if (error.path === path.join(home, ConfigService.CONFIG_RELATIVE)) scope = "user"
+  return importFailure(
+    path,
+    error.path,
+    scope,
+    `Config did not load; its settings are ignored until it is fixed: ${error.message}`,
+  )
+}
+
 /** Discover and load extensions from all configured directories. Per-file isolation — one broken file does not suppress siblings. */
 export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (opts: {
   readonly userDir: string // ~/.gent/extensions
   readonly projectDir: string // .gent/extensions
 }) {
   const path = yield* Path.Path
-  const userPaths = yield* discoverDir(opts.userDir)
-  const projectPaths = yield* discoverDir(opts.projectDir)
+  const user = yield* discoverDir(opts.userDir, "user")
+  const project = yield* discoverDir(opts.projectDir, "project")
+  const userPaths = user.paths
+  const projectPaths = project.paths
   const projectTrusted = yield* isProjectExtensionDirectoryTrusted(opts)
 
   const loaded: DiscoveredExtension[] = []
-  const failed: FailedExtension[] = []
+  const failed: FailedExtension[] = [...user.failed]
 
   /** Load one scope's files; a broken file is skipped, its siblings still load. */
   const loadScope = Effect.fn("ExtensionLoader.loadScope")(function* (
@@ -1125,6 +1171,7 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
 
   // The trust check guards the whole project scope, so it sits ahead of the loop.
   if (projectTrusted) {
+    failed.push(...project.failed)
     yield* loadScope(projectPaths, "project")
   } else {
     const error =
@@ -1745,9 +1792,9 @@ export class SessionProfileCache extends Context.Service<
           Effect.gen(function* () {
             const profileScope = yield* Scope.fork(serverScope)
             return yield* Effect.gen(function* () {
-              const userConfig = yield* configService.getFresh(cwd)
+              const fresh = yield* configService.getFresh(cwd)
               const declarations = yield* loadRuntimeProfileDeclarations(
-                effectiveInputs(inputsFor(cwd), userConfig),
+                effectiveInputs(inputsFor(cwd), fresh.config),
               ).pipe(Effect.provideContext(platformServicesContext))
               const started = yield* startProcessResources(
                 declarations.extensionDeclarations.active,
@@ -1755,6 +1802,9 @@ export class SessionProfileCache extends Context.Service<
                 profileScope,
               )
               const resolved = resolveExtensions(started.active, [
+                ...fresh.failures.map((failure) =>
+                  configLoadFailure(pathSvc, config.home, failure),
+                ),
                 ...declarations.extensionDeclarations.failed,
                 ...started.failed,
               ])
@@ -1942,7 +1992,9 @@ export class ApprovalService extends Context.Service<ApprovalService, ApprovalSe
         pendingRequestId: () =>
           Effect.sync(() => Option.getOrUndefined(Option.none<InteractionRequestId>())),
         storeResolution: () => Effect.void,
-        rehydrate: () => Effect.void,
+        rehydrate: () => Effect.succeed(false),
+        beginStep: () => Effect.void,
+        ownCall: () => (self) => self,
       }),
     )
   }

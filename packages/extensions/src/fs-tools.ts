@@ -1,4 +1,5 @@
 import {
+  Array as Arr,
   Context,
   Effect,
   FileSystem,
@@ -12,7 +13,7 @@ import {
   TxRef,
 } from "effect"
 import picomatch from "picomatch"
-import { type FileItem, FileFinder as NativeFileFinder } from "@ff-labs/fff-bun"
+import { FileFinder as NativeFileFinder } from "@ff-labs/fff-bun"
 import {
   defineExtension,
   defineResource,
@@ -26,7 +27,7 @@ import {
 /**
  * Indexed file discovery for the grep tool.
  *
- * Native-first (`@ff-labs/fff-bun`, per-cwd cached finders) with a
+ * Native-first (`@ff-labs/fff-bun`, one cached finder per search root) with a
  * `.gitignore`-aware FileSystem walk as the per-call fallback. The layer
  * always succeeds: a missing native module or a per-call native failure
  * degrades to the walk.
@@ -34,10 +35,8 @@ import {
 
 interface IndexedFile {
   readonly path: string
+  /** Path relative to the listed `cwd`. */
   readonly relativePath: string
-  readonly fileName: string
-  readonly size: number
-  readonly modifiedMs: number
 }
 
 export class FileIndexError extends Schema.TaggedError<FileIndexError>()("FileIndexError", {
@@ -47,8 +46,13 @@ export class FileIndexError extends Schema.TaggedError<FileIndexError>()("FileIn
 }) {}
 
 interface FileIndexService {
-  /** List all indexed files for a directory. */
+  /**
+   * List the files under `cwd`. `root` is the search root that owns the
+   * cached index (the session cwd, or `cwd` itself); it is `cwd` or an
+   * ancestor of it, so every listing under one root shares one index.
+   */
   readonly listFiles: (params: {
+    readonly root: string
     readonly cwd: string
   }) => Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError>
 }
@@ -62,6 +66,9 @@ export class FileIndex extends Context.Service<FileIndex, FileIndexService>()(
 type PathMatcher = (path: string) => boolean
 
 type GitignoreCacheRef = TxRef.TxRef<HashMap.HashMap<string, ReadonlyArray<PathMatcher>>>
+
+/** The walk stops with an error past this many files; the caller narrows `path`. */
+const FALLBACK_MAX_FILES = 100_000
 
 const parseGitignorePatterns = (content: string): PathMatcher[] => {
   const patterns: PathMatcher[] = []
@@ -123,11 +130,18 @@ const makeFallbackService: Effect.Effect<
       const ignorePatterns = yield* loadGitignore(cwd)
 
       const files: IndexedFile[] = []
+      // Real paths of the directories already walked: a directory link back
+      // into the tree is skipped instead of walked forever.
+      const visited = new Set<string>()
       const scanDir: (
         absoluteDir: string,
         relativeDir: string,
       ) => Effect.Effect<void, FileIndexError> = (absoluteDir, relativeDir) =>
         Effect.gen(function* () {
+          const realDir = yield* fs.realPath(absoluteDir).pipe(Effect.option)
+          if (Option.isNone(realDir) || visited.has(realDir.value)) return
+          visited.add(realDir.value)
+
           const entries = yield* fs
             .readDirectory(absoluteDir)
             .pipe(
@@ -138,6 +152,7 @@ const makeFallbackService: Effect.Effect<
             )
 
           for (const entry of entries) {
+            if (entry === ".git") continue
             let relativePath = relativeDir
             if (relativeDir.length === 0) {
               relativePath = entry
@@ -157,16 +172,13 @@ const makeFallbackService: Effect.Effect<
 
             if (info.value.type !== "File") continue
 
-            files.push({
-              path: absPath,
-              relativePath,
-              fileName: path.basename(relativePath),
-              size: Number(info.value.size),
-              modifiedMs: Option.match(info.value.mtime, {
-                onNone: () => 0,
-                onSome: (d) => d.getTime(),
-              }),
-            })
+            if (files.length >= FALLBACK_MAX_FILES) {
+              return yield* new FileIndexError({
+                message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
+                cwd,
+              })
+            }
+            files.push({ path: absPath, relativePath })
           }
         })
 
@@ -181,7 +193,7 @@ const makeFallbackService: Effect.Effect<
         Effect.catchEager((e) =>
           Effect.fail(
             new FileIndexError({
-              message: `fallback scan failed: ${e}`,
+              message: `fallback scan failed: ${e.message}`,
               cwd: params.cwd,
               cause: e,
             }),
@@ -197,14 +209,23 @@ export const FallbackFileIndexLive: Layer.Layer<
   FileSystem.FileSystem | Path.Path
 > = Layer.effect(FileIndex, makeFallbackService)
 
-// ── Native: fff-bun finders, one per cwd ──
+// ── Native: fff-bun finders, one per search root ──
 
 interface FinderEntry {
   finder: NativeFileFinder
   scanned: boolean
+  /** Listings that hold the finder; an evicted finder is destroyed at zero. */
+  users: number
+  evicted: boolean
 }
 
 const SCAN_TIMEOUT_MS = 5000
+
+/**
+ * Each finder holds a watcher; past this many roots the least recently used
+ * finder is destroyed.
+ */
+const MAX_FINDERS = 4
 
 // The fff-bun library exposes a synchronous `waitForScan(timeoutMs)` that
 // blocks until the indexer signals completion (or the timeout elapses).
@@ -218,57 +239,83 @@ const makeNativeService = (
 ): Effect.Effect<FileIndexService, never, Path.Path | Scope.Scope> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
+    // Insertion order is recency order: a hit is re-inserted at the end.
     const finders = new Map<string, FinderEntry>()
     const frecencyDbPath = path.join(dbDir, "frecency.mdb")
     const historyDbPath = path.join(dbDir, "history.mdb")
 
+    // Cleanup is best effort. The native module can throw during teardown.
+    const destroy = (entry: FinderEntry) => Result.try(() => entry.finder.destroy())
+
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
-        for (const [, entry] of finders) {
-          // Cleanup is best effort. The native module can throw during teardown.
-          Result.try(() => entry.finder.destroy())
-        }
+        for (const [, entry] of finders) evict(entry)
         finders.clear()
       }),
     )
 
-    const toIndexedFile = (basePath: string, item: FileItem): IndexedFile => ({
-      path: path.join(basePath, item.relativePath),
-      relativePath: item.relativePath,
-      fileName: item.fileName,
-      size: item.size,
-      modifiedMs: item.modified * 1000,
-    })
+    const evict = (entry: FinderEntry) => {
+      entry.evicted = true
+      if (entry.users === 0) destroy(entry)
+    }
 
-    const getOrCreate = (cwd: string): Option.Option<FinderEntry> => {
-      const existing = Option.fromUndefinedOr(finders.get(cwd))
-      if (Option.isSome(existing)) return existing
+    const getOrCreate = (root: string): Option.Option<FinderEntry> => {
+      const existing = Option.fromUndefinedOr(finders.get(root))
+      if (Option.isSome(existing)) {
+        finders.delete(root)
+        finders.set(root, existing.value)
+        return existing
+      }
 
       const result = NativeFileFinder.create({
-        basePath: cwd,
+        basePath: root,
         frecencyDbPath,
         historyDbPath,
         aiMode: true,
+        // The index only lists paths; grep reads the contents itself.
+        disableContentIndexing: true,
+        disableMmapCache: true,
       })
 
       if (!result.ok) return Option.none()
 
-      const entry: FinderEntry = { finder: result.value, scanned: false }
-      finders.set(cwd, entry)
+      const entry: FinderEntry = { finder: result.value, scanned: false, users: 0, evicted: false }
+      finders.set(root, entry)
+      for (const [key, oldest] of finders) {
+        if (finders.size <= MAX_FINDERS) break
+        finders.delete(key)
+        evict(oldest)
+      }
       return Option.some(entry)
     }
+
+    /** Hold a root's finder for one listing; eviction waits for the release. */
+    const acquireFinder = (params: { readonly root: string; readonly cwd: string }) =>
+      Effect.acquireRelease(
+        Effect.suspend(() =>
+          Option.match(getOrCreate(params.root), {
+            onNone: () =>
+              Effect.fail(
+                new FileIndexError({ message: "failed to create finder", cwd: params.cwd }),
+              ),
+            onSome: (entry) =>
+              Effect.sync(() => {
+                entry.users++
+                return entry
+              }),
+          }),
+        ),
+        (entry) =>
+          Effect.sync(() => {
+            entry.users--
+            if (entry.evicted && entry.users === 0) destroy(entry)
+          }),
+      )
 
     return {
       listFiles: (params) =>
         Effect.gen(function* () {
-          const entry = getOrCreate(params.cwd)
-          if (Option.isNone(entry)) {
-            return yield* new FileIndexError({
-              message: "failed to create finder",
-              cwd: params.cwd,
-            })
-          }
-          const finderEntry = entry.value
+          const finderEntry = yield* acquireFinder(params)
 
           if (!finderEntry.scanned) {
             const completed = yield* waitForScan(finderEntry.finder)
@@ -281,10 +328,15 @@ const makeNativeService = (
             finderEntry.scanned = true
           }
 
+          // Items are relative to the root; keep those under `cwd` and
+          // rebase them onto it.
+          const subtree = path.relative(params.root, params.cwd)
+          let prefix = ""
+          if (subtree.length > 0) prefix = `${subtree}/`
           const pageSize = 200
           const allFiles: IndexedFile[] = []
           let pageIndex = 0
-          let totalFiles = 0
+          let seen = 0
 
           while (true) {
             const result = finderEntry.finder.fileSearch("", { pageSize, pageIndex })
@@ -295,17 +347,19 @@ const makeNativeService = (
               })
             }
 
-            totalFiles = result.value.totalFiles
             for (const item of result.value.items) {
-              allFiles.push(toIndexedFile(params.cwd, item))
+              if (!item.relativePath.startsWith(prefix)) continue
+              const relativePath = item.relativePath.slice(prefix.length)
+              allFiles.push({ path: path.join(params.cwd, relativePath), relativePath })
             }
+            seen += result.value.items.length
 
-            if (allFiles.length >= totalFiles || result.value.items.length < pageSize) break
+            if (seen >= result.value.totalFiles || result.value.items.length < pageSize) break
             pageIndex++
           }
 
           return allFiles
-        }),
+        }).pipe(Effect.scoped),
     }
   })
 
@@ -589,7 +643,7 @@ export const EditParams = Schema.Struct({
   path: Schema.String.annotate({
     description: "Absolute path to file to edit",
   }),
-  oldString: Schema.String.annotate({
+  oldString: Schema.String.check(Schema.isMinLength(1)).annotate({
     description: "Exact string to replace",
   }),
   newString: Schema.String.annotate({
@@ -660,10 +714,28 @@ export function normalizeWhitespace(s: string): string {
 
 type MatchStrategy = "exact" | "unescaped" | "normalized"
 
+interface MatchRange {
+  readonly start: number
+  readonly end: number
+}
+
 interface MatchResult {
   strategy: MatchStrategy
-  searchStr: string
+  /** Offset of the first match. */
   index: number
+  /** Every non-overlapping match, in file order. */
+  ranges: ReadonlyArray<MatchRange>
+}
+
+const literalRanges = (content: string, search: string): MatchRange[] => {
+  const ranges: MatchRange[] = []
+  if (search.length === 0) return ranges
+  let from = content.indexOf(search)
+  while (from !== -1) {
+    ranges.push({ start: from, end: from + search.length })
+    from = content.indexOf(search, from + search.length)
+  }
+  return ranges
 }
 
 const findNormalizedMatch = (content: string, search: string): Option.Option<MatchResult> => {
@@ -673,38 +745,63 @@ const findNormalizedMatch = (content: string, search: string): Option.Option<Mat
   if (!normalizedContent.includes(normalizedSearch)) return Option.none()
 
   const lines = content.split("\n")
-  const searchLines = normalizedSearch.split("\n")
-  for (let index = 0; index < lines.length; index++) {
-    const slice = lines.slice(index, index + searchLines.length)
-    if (slice.length !== searchLines.length) continue
-    const matchString = slice.join("\n")
-    if (normalizeWhitespace(matchString) !== normalizedSearch) continue
-    const realIndex = content.indexOf(matchString)
-    if (realIndex !== -1) {
-      return Option.some({ strategy: "normalized", searchStr: matchString, index: realIndex })
-    }
+  const lineStarts: number[] = []
+  let offset = 0
+  for (const line of lines) {
+    lineStarts.push(offset)
+    offset += line.length + 1
   }
-  return Option.none()
+  const searchLines = normalizedSearch.split("\n")
+  const ranges: MatchRange[] = []
+  for (let index = 0; index + searchLines.length <= lines.length; index++) {
+    const matchString = lines.slice(index, index + searchLines.length).join("\n")
+    if (normalizeWhitespace(matchString) !== normalizedSearch) continue
+    const start = lineStarts[index] ?? 0
+    ranges.push({ start, end: start + matchString.length })
+    index += searchLines.length - 1
+  }
+  const strategy: MatchStrategy = "normalized"
+  return Option.map(Arr.head(ranges), (first) => ({ strategy, index: first.start, ranges }))
+}
+
+const literalMatch = (
+  strategy: MatchStrategy,
+  content: string,
+  search: string,
+): Option.Option<MatchResult> => {
+  const ranges = literalRanges(content, search)
+  return Option.map(Arr.head(ranges), (first) => ({ strategy, index: first.start, ranges }))
 }
 
 export function findMatch(content: string, oldString: string): Option.Option<MatchResult> {
   // Tier 1: exact
-  const exactIdx = content.indexOf(oldString)
-  if (exactIdx !== -1) {
-    return Option.some({ strategy: "exact", searchStr: oldString, index: exactIdx })
-  }
+  const exact = literalMatch("exact", content, oldString)
+  if (Option.isSome(exact)) return exact
 
   // Tier 2: unescape literal \n, \t, \\ in oldString
   const unescaped = unescapeStr(oldString)
   if (unescaped !== oldString) {
-    const unescIdx = content.indexOf(unescaped)
-    if (unescIdx !== -1) {
-      return Option.some({ strategy: "unescaped", searchStr: unescaped, index: unescIdx })
-    }
+    const unescapedMatch = literalMatch("unescaped", content, unescaped)
+    if (Option.isSome(unescapedMatch)) return unescapedMatch
   }
 
   // Tier 3: normalize whitespace + unicode in both
   return findNormalizedMatch(content, unescaped)
+}
+
+/** Splice `replacement` over each range. The replacement is literal text. */
+const spliceRanges = (
+  content: string,
+  ranges: ReadonlyArray<MatchRange>,
+  replacement: string,
+): string => {
+  let result = ""
+  let cursor = 0
+  for (const range of ranges) {
+    result += content.slice(cursor, range.start) + replacement
+    cursor = range.end
+  }
+  return result + content.slice(cursor)
 }
 
 // Edit Tool
@@ -757,9 +854,8 @@ export const EditTool = tool({
           })
         }
 
-        // Use the resolved search string for occurrence counting
-        const searchStr = match.value.searchStr
-        const occurrences = content.split(searchStr).length - 1
+        const ranges = match.value.ranges
+        const occurrences = ranges.length
 
         if (occurrences > 1 && !replaceAll) {
           return yield* new EditError({
@@ -768,12 +864,10 @@ export const EditTool = tool({
           })
         }
 
-        let newContent = content.replace(searchStr, params.newString)
-        let replacements = 1
-        if (replaceAll) {
-          newContent = content.split(searchStr).join(params.newString)
-          replacements = occurrences
-        }
+        let replaced: ReadonlyArray<MatchRange> = ranges.slice(0, 1)
+        if (replaceAll) replaced = ranges
+        const newContent = spliceRanges(content, replaced, params.newString)
+        const replacements = replaced.length
 
         yield* fs.writeFileString(filePath, newContent).pipe(
           Effect.mapError(
@@ -896,6 +990,7 @@ export const GrepTool = tool({
         }),
     })
 
+    let truncated = false
     const matches: Array<{
       file: string
       line: number
@@ -911,9 +1006,13 @@ export const GrepTool = tool({
         const content = contentResult.value
         const lines = content.split("\n")
 
-        for (let i = 0; i < lines.length && matches.length < limit; i++) {
+        for (let i = 0; i < lines.length && !truncated; i++) {
           const line = Option.fromNullishOr(lines[i])
           if (Option.isSome(line) && regex.test(line.value)) {
+            if (matches.length >= limit) {
+              truncated = true
+              break
+            }
             const match: (typeof matches)[0] = {
               file: filePath,
               line: i + 1,
@@ -946,7 +1045,11 @@ export const GrepTool = tool({
       yield* searchFile(basePath)
     } else {
       const index = yield* FileIndex
-      const allFiles = yield* index.listFiles({ cwd: basePath }).pipe(
+      // A target inside the session cwd shares the session's index.
+      const fromCwd = path.relative(ctx.cwd, basePath)
+      let root = basePath
+      if (!fromCwd.startsWith("..") && !path.isAbsolute(fromCwd)) root = ctx.cwd
+      const allFiles = yield* index.listFiles({ root, cwd: basePath }).pipe(
         Effect.mapError(
           (cause) =>
             new GrepError({
@@ -970,7 +1073,7 @@ export const GrepTool = tool({
       })
 
       for (const file of allFiles) {
-        if (matches.length >= limit) break
+        if (truncated) break
         if (!matchesGlob(file.relativePath)) continue
         yield* searchFile(file.path)
       }
@@ -978,7 +1081,7 @@ export const GrepTool = tool({
 
     return {
       matches,
-      truncated: matches.length >= limit,
+      truncated,
     }
   }),
 })

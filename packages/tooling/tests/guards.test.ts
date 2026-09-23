@@ -2234,18 +2234,14 @@ describe("package entry points", () => {
               private: true,
               exports: {
                 ".": "./src/index.ts",
-                "./index.js": "./src/index.ts",
                 "./client": "./src/client.ts",
-                "./client.js": "./src/client.ts",
               },
             },
           ],
         ],
         {
           "@gent/extensions": ["./packages/extensions/src/index.ts"],
-          "@gent/extensions/index.js": ["./packages/extensions/src/index.ts"],
           "@gent/extensions/client": ["./packages/extensions/src/client.ts"],
-          "@gent/extensions/client.js": ["./packages/extensions/src/client.ts"],
         },
       ),
     ).toEqual([])
@@ -2272,8 +2268,7 @@ describe("package entry points", () => {
       },
       {
         path: 'packages/extensions/package.json exports["./todo-storage"]',
-        message:
-          "@gent/extensions may only expose its supported entry points: ., ./index.js, ./client, ./client.js",
+        message: "@gent/extensions may only expose its supported entry points: ., ./client",
       },
       {
         path: 'tsconfig.json compilerOptions.paths["@gent/extensions/todo-storage"]',

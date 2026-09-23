@@ -1754,6 +1754,16 @@ describe("useSessionFeed", () => {
             durationMs: 0,
           }),
         ]
+        // The snapshot projects a cell's operations from the branch's stored receipts.
+        const savedOperation: NonNullable<ToolInteraction["operations"]>[number] = {
+          id: ToolCallId.make("saved-read-op"),
+          toolName: "read",
+          status: "completed",
+          input: { path: "a.md" },
+          summary: "3 lines",
+          output: "one",
+          durationMs: 30,
+        }
         let snapshot = snapshotFor(sessionId, branchId)
         if (saved) {
           const messages = [
@@ -1772,6 +1782,7 @@ describe("useSessionFeed", () => {
                   summary: "done",
                   output: "result",
                   durationMs: 1_200,
+                  operations: [savedOperation],
                 }),
               )
             return projectMessage(
@@ -1860,6 +1871,10 @@ describe("useSessionFeed", () => {
               expect(messages[0]?.toolCalls?.[0]?.status).toBe("completed")
               // A saved interaction keeps the duration the snapshot projected from receipts.
               expect(messages[0]?.toolCalls?.[0]?.durationMs).toBe(1_200)
+              if (saved) {
+                // After a reload the cell draws its operations, not only its receipts.
+                expect(messages[0]?.toolCalls?.[0]?.operations).toEqual([savedOperation])
+              }
               expect(messages[1]?.toolCalls).toBeUndefined()
               expect(messages[2]?.toolCalls).toBeUndefined()
             }),

@@ -18,7 +18,7 @@ import {
   projectMessagesWithToolInteractions,
   projectResponsePartsToMessageParts,
   SteerCommand,
-  toolCallDurations,
+  toolCallReceipts,
 } from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
 import { Option, Schema } from "effect"
@@ -330,7 +330,8 @@ describe("message part projection", () => {
         }),
       ),
     ]
-    const durations = toolCallDurations(events)
+    const receipts = toolCallReceipts(events)
+    const durations = receipts.durations
     expect(durations.get(done)).toBe(1_250)
     expect(durations.get(failed)).toBe(12)
     expect(durations.has(open)).toBe(false)
@@ -350,9 +351,261 @@ describe("message part projection", () => {
         makeMessage("a", "assistant", [call(done), call(open)]),
         makeMessage("t", "tool", [result(done)]),
       ],
-      durations,
+      receipts,
     )
     expect(projected[0]?.toolInteractions.map((entry) => entry.durationMs)).toEqual([1_250, absent])
+  })
+
+  test("a cell's operations come back from their stored receipts", () => {
+    const sessionId = SessionId.make("session-projection")
+    const branchId = BranchId.make("branch-projection")
+    const cell = ToolCallId.make("tc-cell")
+    const read = ToolCallId.make("tc-read")
+    const lost = ToolCallId.make("tc-lost")
+    const forked = ToolCallId.make("tc-forked")
+    const noText = Option.getOrUndefined(Option.none<string>())
+    const envelope = (id: number, createdAt: number, event: AgentEvent) =>
+      EventEnvelope.make({ id: EventId.make(id), createdAt, event })
+    const events = [
+      envelope(
+        1,
+        1_000,
+        AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: cell,
+          toolName: "cell",
+        }),
+      ),
+      envelope(
+        2,
+        1_010,
+        AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: read,
+          toolName: "read",
+          input: { path: "a.md" },
+          parentToolCallId: cell,
+        }),
+      ),
+      envelope(
+        3,
+        1_040,
+        AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: read,
+          toolName: "read",
+          summary: "3 lines",
+          output: "one\ntwo\nthree",
+          parentToolCallId: cell,
+        }),
+      ),
+      // A crash left this operation with no terminal receipt.
+      envelope(
+        4,
+        1_050,
+        AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: lost,
+          toolName: "bash",
+          input: { command: "ls" },
+          parentToolCallId: cell,
+        }),
+      ),
+      envelope(
+        5,
+        1_100,
+        AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: cell,
+          toolName: "cell",
+        }),
+      ),
+    ]
+    const call = (id: ToolCallId) =>
+      Prompt.toolCallPart({ id, name: "cell", params: { code: "1" }, providerExecuted: false })
+    const result = (id: ToolCallId) =>
+      Prompt.toolResultPart({
+        id,
+        name: "cell",
+        isFailure: false,
+        providerExecuted: false,
+        result: 1,
+      })
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("a", "assistant", [call(cell), call(forked)]),
+        makeMessage("t", "tool", [result(cell), result(forked)]),
+      ],
+      toolCallReceipts(events),
+    )
+    const [cellInteraction, forkedInteraction] = projected[0]?.toolInteractions ?? []
+    expect(cellInteraction?.operations).toEqual([
+      {
+        id: read,
+        toolName: "read",
+        status: "completed",
+        input: { path: "a.md" },
+        summary: "3 lines",
+        // A snapshot carries what the collapsed op row draws, never the full output.
+        output: noText,
+        durationMs: 30,
+      },
+      // The cell settled, so an operation that never ended is not running.
+      {
+        id: lost,
+        toolName: "bash",
+        status: "error",
+        input: { command: "ls" },
+        summary: noText,
+        output: noText,
+        durationMs: absent,
+      },
+    ])
+    // A forked branch copies messages, not events: the saved receipts stay the fallback.
+    expect(forkedInteraction?.operations).toBeUndefined()
+    // Operations are not top-level calls.
+    expect(projected[0]?.toolInteractions.map((entry) => entry.id)).toEqual([cell, forked])
+  })
+
+  test("two steps that reuse a cell call id each show only their own operations", () => {
+    const sessionId = SessionId.make("session-projection")
+    const branchId = BranchId.make("branch-projection")
+    // Providers can reuse a call id across steps; storage keys a cell by its message too.
+    const cell = ToolCallId.make("tc-reused")
+    const op = ToolCallId.make("tc-op-reused")
+    const envelope = (id: number, event: AgentEvent) =>
+      EventEnvelope.make({ id: EventId.make(id), createdAt: id * 10, event })
+    const step = (first: number, message: string, toolName: string) => {
+      const assistantMessageId = MessageId.make(message)
+      return [
+        envelope(
+          first,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: cell,
+            toolName: "cell",
+            assistantMessageId,
+          }),
+        ),
+        envelope(
+          first + 1,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: op,
+            toolName,
+            input: {},
+            parentToolCallId: cell,
+            assistantMessageId,
+          }),
+        ),
+        envelope(
+          first + 2,
+          AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: op,
+            toolName,
+            summary: `${toolName} done`,
+            parentToolCallId: cell,
+            assistantMessageId,
+          }),
+        ),
+        envelope(
+          first + 3,
+          AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: cell,
+            toolName: "cell",
+            assistantMessageId,
+          }),
+        ),
+      ]
+    }
+    const call = Prompt.toolCallPart({
+      id: cell,
+      name: "cell",
+      params: { code: "1" },
+      providerExecuted: false,
+    })
+    const result = Prompt.toolResultPart({
+      id: cell,
+      name: "cell",
+      isFailure: false,
+      providerExecuted: false,
+      result: 1,
+    })
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("step-1", "assistant", [call]),
+        makeMessage("step-1-tools", "tool", [result]),
+        makeMessage("step-2", "assistant", [call]),
+        makeMessage("step-2-tools", "tool", [result]),
+      ],
+      toolCallReceipts([...step(1, "step-1", "read"), ...step(5, "step-2", "bash")]),
+    )
+    const opsOf = (index: number) =>
+      projected[index]?.toolInteractions[0]?.operations?.map((entry) => [
+        entry.toolName,
+        entry.summary,
+      ])
+    expect(opsOf(0)).toEqual([["read", "read done"]])
+    expect(opsOf(2)).toEqual([["bash", "bash done"]])
+  })
+
+  test("an operation with a large input and output projects a bounded row", () => {
+    const sessionId = SessionId.make("session-projection")
+    const branchId = BranchId.make("branch-projection")
+    const cell = ToolCallId.make("tc-cell-large")
+    const write = ToolCallId.make("tc-write-large")
+    const large = "x".repeat(50_000)
+    const events = [
+      EventEnvelope.make({
+        id: EventId.make(1),
+        createdAt: 0,
+        event: AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId: write,
+          toolName: "write",
+          input: { path: "big.txt", content: large, nested: { content: large } },
+          parentToolCallId: cell,
+        }),
+      }),
+      EventEnvelope.make({
+        id: EventId.make(2),
+        createdAt: 5,
+        event: AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId: write,
+          toolName: "write",
+          summary: large,
+          output: large,
+          parentToolCallId: cell,
+        }),
+      }),
+    ]
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("a", "assistant", [
+          Prompt.toolCallPart({ id: cell, name: "cell", params: {}, providerExecuted: false }),
+        ]),
+      ],
+      toolCallReceipts(events),
+    )
+    const [operation] = projected[0]?.toolInteractions[0]?.operations ?? []
+    expect(operation?.output).toBeUndefined()
+    // The row keeps the fields a header reads, each cut to the receipt bound.
+    expect(operation?.input).toEqual({ path: "big.txt", content: `${"x".repeat(100)}...` })
+    expect(operation?.summary).toBe(`${"x".repeat(100)}...`)
   })
 
   test("projects Gent transcript parts without exposing persisted field names", () => {

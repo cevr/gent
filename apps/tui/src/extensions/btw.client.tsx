@@ -2,7 +2,7 @@
 import { Effect, Option } from "effect"
 import { createSignal, For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
-import { BTW_EXTENSION_ID, BtwRpc, type ForkViewType } from "@gent/extensions/client.js"
+import { BTW_EXTENSION_ID, BtwRpc, type ForkViewType } from "@gent/extensions/client"
 import {
   clientCommandContribution,
   clientContributions,
