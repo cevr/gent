@@ -15,7 +15,6 @@ import {
   Predicate,
   Record,
   Runtime,
-  Schema,
   Scope,
 } from "effect"
 import {
@@ -26,7 +25,7 @@ import {
   shutdownLog,
 } from "./client"
 import { LinkOpener, OsService } from "./os"
-import { AgentName as AgentNameSchema, type AgentName, type ProviderId } from "@gent/core/protocol"
+import { AgentName, type ProviderId } from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
@@ -178,7 +177,7 @@ const gentFlags = {
   ),
   agent: Flag.string("agent").pipe(
     Flag.withAlias("a"),
-    Flag.withDescription("Agent to use for headless mode (default: main)"),
+    Flag.withDescription("Agent for the new headless session (-H only; default: main)"),
     Flag.optional,
   ),
 }
@@ -214,6 +213,16 @@ const runGent = ({
   readonly agent: Option.Option<string>
 }) =>
   Effect.gen(function* () {
+    // The server checks the name against its roster when the session starts.
+    const requestedAgent = Option.map(agent, (name) => AgentName.make(name))
+    // The TUI starts sessions from the composer, which names no agent, so a
+    // flag it cannot honour fails here instead of being dropped.
+    if (Option.isSome(requestedAgent) && !headless) {
+      return yield* new CliStartupError({
+        message: "--agent applies to headless mode; add -H with a prompt",
+      })
+    }
+
     const cwd = process.cwd()
     const home = yield* readHome
     const scope = yield* Effect.scope
@@ -255,14 +264,6 @@ const runGent = ({
       mock,
       authDirectory: authDirectoryOpt,
     })
-    const requestedAgent = Option.match(agent, {
-      onNone: () => Option.none<AgentName>(),
-      onSome: (value) => {
-        if (!Schema.is(AgentNameSchema)(value)) return Option.none<AgentName>()
-        return Option.some(value)
-      },
-    })
-
     if (headless) {
       // The agent is a session property: the flag shapes a new session only.
       if (Option.isSome(requestedAgent) && Option.isSome(session)) {

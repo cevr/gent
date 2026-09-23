@@ -99,4 +99,17 @@ describe("headless CLI", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     20000,
   )
+
+  it.scopedLive(
+    "--agent without -H is refused, not dropped",
+    () =>
+      Effect.gen(function* () {
+        const { exitCode, stderr } = yield* runGent(["--agent", "main"])
+        expect(exitCode).toBe(1)
+        expect(stderr).toBe(
+          "CliStartupError: --agent applies to headless mode; add -H with a prompt\n",
+        )
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
 })
