@@ -5059,6 +5059,58 @@ describe("model context directives from a cell", () => {
     20000,
   )
 
+  it.scopedLive(
+    "a handoff summary names the cell bindings the kept turn still uses",
+    () =>
+      Effect.gen(function* () {
+        // A failed summary call degrades to no handoff, so an assertion thrown
+        // inside the model would be swallowed; the request is kept and read after.
+        const summaryPrompts: Array<string> = []
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          toolCallStep("cell", { code: "const rows = [1, 2, 3]; 'bound'" }),
+          textStep("rows bound"),
+          toolCallStep("cell", { code: "await context.compact(); rows.length" }),
+          {
+            ...textStep("summary of older history"),
+            assertOptions: (options) => {
+              summaryPrompts.push(
+                Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(options.prompt),
+              )
+            },
+          },
+          textStep("after compaction"),
+        ])
+        const fixture = defineExtension({
+          id: "retained-bindings-fixture",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+            yield* host.register("tool", CellTool)
+          }),
+        })
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          providerLayer,
+          agents: [],
+          extensionInputs: [
+            CompactionExtension,
+            {
+              ...fixture,
+              artifactIdentity: LoadedArtifactIdentity.make("retained-bindings-source"),
+            },
+          ],
+          branchTools: CellBranchTools,
+        })
+        yield* client.message.send({ sessionId, branchId, content: "bind the rows" })
+        yield* waitFor(client.message.list({ branchId }), hasReply("rows bound"))
+        yield* client.message.send({ sessionId, branchId, content: "compact, then count rows" })
+        yield* waitFor(client.message.list({ branchId }), hasReply("after compaction"))
+        yield* controls.assertDone
+        expect(summaryPrompts).toHaveLength(1)
+        expect(summaryPrompts[0]).toContain("Names retained on this branch: rows")
+      }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
+    20000,
+  )
+
   for (const directive of ["newWindow", "compact"]) {
     it.scopedLive(
       `an interrupted cell does not apply context.${directive}() to the next turn`,
