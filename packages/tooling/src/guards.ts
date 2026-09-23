@@ -2807,12 +2807,9 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
     mustBePrivate: false,
     entryPoints: [
       "./extensions/api",
-      "./extensions/api.js",
       "./extensions/branch-tools",
-      "./extensions/branch-tools.js",
       "./host",
       "./protocol",
-      "./protocol.js",
       "./test-utils",
     ],
   },

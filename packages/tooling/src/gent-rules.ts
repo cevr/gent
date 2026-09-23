@@ -153,8 +153,8 @@ const isExtensionFilename = (filename: string): boolean => {
 /** Core source, and the harness inside it, as seen in a resolved absolute path. */
 const CORE_SOURCE_PATH = /\/packages\/core\/src\//
 const TEST_UTILS_PATH = /\/packages\/core\/src\/test-utils\//
-const AUTHORING_ENTRY = /^@gent\/core\/extensions\/(?:api|branch-tools)(?:\.js)?$/
-const PROTOCOL_ENTRY = /^@gent\/core\/protocol(?:\.js)?$/
+const AUTHORING_ENTRY = /^@gent\/core\/extensions\/(?:api|branch-tools)$/
+const PROTOCOL_ENTRY = /^@gent\/core\/protocol$/
 const TEST_UTILS_ENTRY = /^@gent\/core\/test-utils(?:\/|$)/
 const EXTENSIONS_PACKAGE = /^@gent\/extensions(?:\/|$)/
 /** The TUI host's own Solid contexts: the client provider and the extension host. */

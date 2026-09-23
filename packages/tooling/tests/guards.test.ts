@@ -2208,10 +2208,8 @@ describe("package entry points", () => {
             {
               exports: {
                 "./extensions/api": "./src/extensions/api.ts",
-                "./extensions/api.js": "./src/extensions/api.ts",
                 "./host": "./src/host.ts",
                 "./protocol": "./src/protocol.ts",
-                "./protocol.js": "./src/protocol.ts",
                 "./test-utils": "./src/test-utils/index.ts",
               },
             },
@@ -2219,9 +2217,7 @@ describe("package entry points", () => {
         ],
         {
           "@gent/core/extensions/api": ["./packages/core/src/extensions/api.ts"],
-          "@gent/core/extensions/api.js": ["./packages/core/src/extensions/api.ts"],
           "@gent/core/protocol": ["./packages/core/src/protocol.ts"],
-          "@gent/core/protocol.js": ["./packages/core/src/protocol.ts"],
           "@gent/core/host": ["./packages/core/src/host.ts"],
           "@gent/core/test-utils": ["./packages/core/src/test-utils/index.ts"],
         },
