@@ -3009,6 +3009,68 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+  const reviewerAgent = AgentName.make("reviewer")
+  const reviewerExtension: LoadedExtension = {
+    manifest: { id: ExtensionId.make("@test/reviewer-agent") },
+    scope: "project",
+    sourcePath: "test",
+    contributions: { agents: [AgentDefinition.make({ name: reviewerAgent })] },
+  }
+  /** A profile cache where `cwd` has the reviewer agent and any other cwd has no agents. */
+  const reviewerProfiles = (cwd: string) =>
+    Effect.gen(function* () {
+      const withReviewer = yield* makeProfile(cwd, [reviewerExtension])
+      const empty = yield* makeProfile(cwd, [])
+      const layer = Layer.succeed(
+        SessionProfileCache,
+        SessionProfileCache.of({
+          resolve: (resolvedCwd) => {
+            if (resolvedCwd === cwd) return Effect.succeed(withReviewer)
+            return Effect.succeed(empty)
+          },
+        }),
+      )
+      return { layer }
+    })
+
+  it.live("a handoff to a project without the parent's agent fails before it is stored", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const projectCwd = "/tmp/gent-handoff-agent-project"
+        const otherCwd = "/tmp/gent-handoff-agent-other"
+        const profiles = yield* reviewerProfiles(projectCwd)
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const { client } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensions: [],
+          sessionProfileCacheLayer: profiles.layer,
+          cwd: projectCwd,
+        })
+        const parent = yield* client.session.create({
+          cwd: projectCwd,
+          admission: { agent: reviewerAgent },
+        })
+        const handoff = { parentSessionId: parent.sessionId, parentBranchId: parent.branchId }
+        const before = yield* client.session.list()
+        const error = yield* client.session
+          .create({ cwd: otherCwd, ...handoff, continueThread: true })
+          .pipe(Effect.flip)
+        expect(error._tag).toBe("NotFoundError")
+        expect(error.message).toBe("Unknown agent: reviewer")
+        expect(yield* client.session.list()).toHaveLength(before.length)
+        // The same project still has the agent, so the handoff inherits it.
+        const same = yield* client.session.create({
+          cwd: projectCwd,
+          ...handoff,
+          continueThread: true,
+        })
+        const stored = yield* client.session.get({ sessionId: same.sessionId })
+        expect(stored?.admission?.agent).toBe(reviewerAgent)
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
   it.live("RPC request provides profile resource services to public capabilities", () =>
     Effect.gen(function* () {
       const profileCwd = "/tmp/gent-extension-request-profile-service"

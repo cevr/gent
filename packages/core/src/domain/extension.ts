@@ -12,7 +12,13 @@ import {
   TxRef,
   TxSemaphore,
 } from "effect"
-import { type AgentDefinition, type AgentName, type SessionDepthLimitError } from "./agent.js"
+import {
+  type AgentDefinition,
+  type AgentName,
+  type ModelId,
+  type ReasoningEffort,
+  type SessionDepthLimitError,
+} from "./agent.js"
 import {
   getToolId,
   getToolMetadata,
@@ -739,6 +745,9 @@ export interface ExtensionSessionService {
     readonly historyBranchId?: BranchId
     /** What every turn of the new session runs as: agent, run overrides, interactive. */
     readonly admission?: SessionAdmission
+    /** The session's own model and reasoning; they win over the agent's, as a `/model` choice does. */
+    readonly modelId?: ModelId
+    readonly reasoningLevel?: ReasoningEffort
     readonly requestId?: RequestId
   }) => Effect.Effect<
     { readonly sessionId: SessionId; readonly branchId: BranchId },

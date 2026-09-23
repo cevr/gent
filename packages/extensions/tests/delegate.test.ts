@@ -19,6 +19,7 @@ import {
   describeChildCompletion,
   readChildCompletionHeadline,
   StartChild,
+  startTurnMessages,
 } from "../src/delegate.js"
 import { DEFAULT_AGENT_NAME, RequestId } from "@gent/core/extensions/api"
 import {
@@ -37,7 +38,14 @@ import {
   RuntimeEnvironment,
   UserConfig,
 } from "@gent/core/test-utils"
-import { BranchId, ModelId, SessionId, SteerCommand, ToolCallId } from "@gent/core/protocol"
+import {
+  BranchId,
+  MessageId,
+  ModelId,
+  SessionId,
+  SteerCommand,
+  ToolCallId,
+} from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import type * as Prompt from "effect/unstable/ai/Prompt"
@@ -396,20 +404,21 @@ describe("a child's completion", () => {
     12_000,
   )
 
-  it.live("a child cannot delegate further", () =>
+  it.live("a child cannot delegate further, and gets no tool that waits on the user", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const childTools = yield* Deferred.make<ReadonlyArray<string>>()
+        const parentTools = yield* Deferred.make<ReadonlyArray<string>>()
         const providerLayer = LanguageModelLayers.testStream((options) => {
           const texts = promptTexts(options.prompt)
+          const names = options.tools.map((tool) => tool.name)
           if (texts[0]?.endsWith(childTask) === true) {
-            return Deferred.succeed(
-              childTools,
-              options.tools.map((tool) => tool.name),
-            ).pipe(Effect.as(reply("could not delegate")))
+            return Deferred.succeed(childTools, names).pipe(Effect.as(reply("could not delegate")))
           }
           if (!promptToolCallIds(options.prompt).includes("start-1")) {
-            return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            return Deferred.succeed(parentTools, names).pipe(
+              Effect.as(toolStep("delegate.start", { todo: childTask }, "start-1")),
+            )
           }
           return Effect.succeed(reply("done"))
         })
@@ -418,6 +427,10 @@ describe("a child's completion", () => {
         const tools = yield* Deferred.await(childTools)
         expect(tools).toContain("bash")
         expect(tools.filter((name) => name.startsWith("delegate."))).toEqual([])
+        // Nobody answers a non-interactive child: a confirm or a handoff would park it for good.
+        const waitsOnUser = ["ask_user", "prompt", "handoff"]
+        expect(tools.filter((name) => waitsOnUser.includes(name))).toEqual([])
+        expect(yield* Deferred.await(parentTools)).toEqual(expect.arrayContaining(waitsOnUser))
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
@@ -492,6 +505,20 @@ describe("the completion headline", () => {
     expect(Option.getOrThrow(headlineOf({ interrupted: true, streamFailed: true })).status).toBe(
       "ended (interrupted, model stream failed)",
     )
+  })
+
+  test("the child's task names its reply as the result and keeps session.send for later turns", () => {
+    const [source, later, blank, task] = childTaskText(SessionId.make("parent-1"), "do it").split(
+      "\n",
+    )
+    expect(source).toContain("Your final reply in this turn is your result")
+    expect(source).toContain("do not also send it with session.send")
+    expect(later).toContain(
+      'A later turn started by one of them returns nothing by itself: send that turn\'s result with session.send to "parent"',
+    )
+    expect(later).not.toContain("send each one")
+    expect(blank).toBe("")
+    expect(task).toBe("do it")
   })
 
   test("text that is not an envelope reads as nothing", () => {
@@ -740,7 +767,6 @@ describe("a start nobody waits for", () => {
               agentName: DELEGATE_AGENT_NAME,
               prompt: childTask,
               toolCallId: ToolCallId.make("written-ahead"),
-              runSpec,
               private: false,
               submitted: false,
               delivered: false,
@@ -861,6 +887,15 @@ describe("a start nobody waits for", () => {
       ),
     12_000,
   )
+
+  test("a registry row that still carries its run spec decodes", () => {
+    // Rows kept the start's run spec, with its parent tool call, until nothing read it.
+    const row = Schema.decodeSync(registryCodec)(
+      `[{"requestId":"start-1","sessionId":"child","branchId":"child-branch","agentName":"${DELEGATE_AGENT_NAME}","prompt":"task","toolCallId":"start-1","runSpec":{"overrides":{"maxModelAttempts":32},"parentToolCallId":"start-1"},"private":false,"submitted":true,"delivered":true}]`,
+    )
+    expect(row[0]?.requestId).toBe(RequestId.make("start-1"))
+    expect(row[0]?.submitted).toBe(true)
+  })
 
   test("a registry row an older binary wrote, private and claimed, still decodes", () => {
     // The bytes an older binary wrote: a private extraction child its waiter still claimed.
@@ -1813,7 +1848,7 @@ describe("a child's later turn", () => {
                 return Effect.succeed(reply("armed a wake for CI"))
               }
               // The wake's turn: a model that follows its task sends the result upward.
-              const told = texts[0].includes("reaches your parent only through session.send")
+              const told = texts[0].includes("A later turn started by one of them returns nothing")
               if (told && !ids.includes("send-later")) {
                 return Effect.succeed(
                   toolStep("session.send", { to: "parent", message: laterResult }, "send-later"),
@@ -1858,4 +1893,160 @@ describe("a child's later turn", () => {
       ),
     10_000,
   )
+})
+
+// ── delegate/start-turn ─────────────────────────────────────────────────────
+
+/**
+ * The loop writes user-role lines inside a turn: a continuation after an
+ * empty or cut-off step, the max-steps instruction before the last step, a
+ * model-change notice, and a mid-turn compaction marker. None opens a turn,
+ * so the completion reads past them to the child's real answer.
+ */
+
+/** A parent that starts one child with `overrides`, and a child scripted step by step. */
+const scriptedChild = (
+  childStep: (call: number) => ReturnType<typeof reply>,
+  overrides: Record<string, unknown> = {},
+) => {
+  let parentCalls = 0
+  let childCalls = 0
+  return LanguageModelLayers.testStream((options) => {
+    const texts = promptTexts(options.prompt)
+    if (texts[0]?.endsWith(childTask) === true) {
+      childCalls += 1
+      return Effect.succeed(childStep(childCalls))
+    }
+    parentCalls += 1
+    if (parentCalls === 1) {
+      return Effect.succeed(toolStep("delegate.start", { todo: childTask, overrides }, "start-1"))
+    }
+    return Effect.succeed(reply("ack"))
+  })
+}
+
+const completionText = (harness: Harness) =>
+  afterCompletion(harness).pipe(
+    Effect.map((snapshot) => {
+      const [completion] = completionMessages(snapshot.messages)
+      return { text: messageTexts([completion!]).join(""), details: completion?.metadata?.details }
+    }),
+  )
+
+describe("a child's start turn with runtime lines", () => {
+  it.live(
+    "an empty first step and its continuation still return the child's answer",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* harnessWithHome(
+            scriptedChild((call) => {
+              if (call === 1) return Stream.make(finishPart({ finishReason: "stop" }))
+              return reply("CHILD-FINAL-ANSWER")
+            }),
+          )
+          yield* sendPrompt(harness, "delegate this task")
+          const { text } = yield* completionText(harness)
+          expect(text).toContain(`Child agent "${DELEGATE_AGENT_NAME}" completed.`)
+          expect(text).toContain("CHILD-FINAL-ANSWER")
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "a step cut off at the output limit returns the continued text",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* harnessWithHome(
+            scriptedChild((call) => {
+              if (call === 1) {
+                return Stream.fromIterable([
+                  textDeltaPart("PART-ONE"),
+                  finishPart({ finishReason: "length" }),
+                ])
+              }
+              return reply("PART-TWO")
+            }),
+          )
+          yield* sendPrompt(harness, "delegate this task")
+          const { text } = yield* completionText(harness)
+          expect(text).toContain("PART-TWO")
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "the max-steps instruction before the last step keeps that step's answer and calls",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* harnessWithHome(
+            scriptedChild(
+              (call) => {
+                if (call === 1) {
+                  return toolStep("read", { path: "/tmp/no-such-file-for-a-child" }, "child-read")
+                }
+                return reply("ANSWER-AT-BUDGET")
+              },
+              { maxSteps: 2 },
+            ),
+          )
+          yield* sendPrompt(harness, "delegate this task")
+          const { text, details } = yield* completionText(harness)
+          expect(text).toContain("ANSWER-AT-BUDGET")
+          expect(details).toMatchObject({ toolCount: 1 })
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+})
+
+describe("the start turn's messages", () => {
+  const line = (id: string, role: "user" | "assistant", metadata?: Record<string, unknown>) => ({
+    id: MessageId.make(id),
+    role,
+    ...Record.filter({ metadata }, Predicate.isNotUndefined),
+  })
+  const startId = MessageId.make("delegate-start:start-1")
+  const ids = (messages: ReadonlyArray<{ readonly id: string }>) => messages.map((m) => m.id)
+
+  test.each(["continuation", "context-window", "max-steps", "model-change", "steering"])(
+    "a %s line inside the turn does not end it",
+    (customType) => {
+      const messages = [
+        line("seed", "assistant"),
+        line(startId, "user"),
+        line("a1", "assistant"),
+        line("runtime", "user", { customType }),
+        line("a2", "assistant"),
+      ]
+      expect(ids(startTurnMessages(messages, startId))).toEqual([startId, "a1", "runtime", "a2"])
+    },
+  )
+
+  test("a message joined into the running turn does not end it", () => {
+    const messages = [
+      line(startId, "user"),
+      line("steer", "user", { customType: "session-message", joinedTurn: true }),
+      line("a1", "assistant"),
+    ]
+    expect(ids(startTurnMessages(messages, startId))).toEqual([startId, "steer", "a1"])
+  })
+
+  test("a message that opens a later turn ends it", () => {
+    const messages = [
+      line(startId, "user"),
+      line("a1", "assistant"),
+      line("wake", "user", { customType: "wake" }),
+      line("a2", "assistant"),
+    ]
+    expect(ids(startTurnMessages(messages, startId))).toEqual([startId, "a1"])
+  })
+
+  test("a branch without the start message has no start turn", () => {
+    expect(startTurnMessages([line("a1", "assistant")], startId)).toEqual([])
+  })
 })
