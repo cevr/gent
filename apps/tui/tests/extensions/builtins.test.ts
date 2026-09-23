@@ -39,6 +39,7 @@ import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import {
   makeClientTestTransport,
   makePaneSlot,
+  makePromiseHold,
   provideClientServices,
   runClientExtensionSetupWithRuntime,
 } from "../extension-test-harness-boundary"
@@ -615,6 +616,77 @@ describe("files popup finder", () => {
       // Three directories, three finders; only the last one is still alive.
       expect(counts).toEqual({ created: 3, destroyed: 2 })
     }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // A key is still waiting on its finder's scan when a key in another
+  // directory destroys that finder. fff answers the destroyed finder with an
+  // error, and the first key ranks its own listing instead: its files, and no
+  // failure for the reader.
+  filesTest("a key whose finder is destroyed mid-ranking falls back to its listing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const first = yield* fs.makeTempDirectoryScoped()
+      const second = yield* fs.makeTempDirectoryScoped()
+      for (const dir of [first, second]) {
+        yield* fs.writeFileString(path.join(dir, "note.md"), "note")
+      }
+      // The first finder's scan waits on this hold.
+      const scan = yield* makePromiseHold
+      let destroyedWhileWaiting = false
+      const original = FileFinder.create.bind(FileFinder)
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          let created = 0
+          FileFinder.create = (options) => {
+            const made = original(options)
+            if (!made.ok || created++ > 0) return made
+            const finder = made.value
+            const waitForScan = finder.waitForScan.bind(finder)
+            finder.waitForScan = (timeoutMs) => scan.hold(() => waitForScan(timeoutMs))
+            const destroy = finder.destroy.bind(finder)
+            finder.destroy = () => {
+              destroyedWhileWaiting = true
+              destroy()
+            }
+            return made
+          }
+        }),
+        () =>
+          Effect.sync(() => {
+            FileFinder.create = original
+          }),
+      )
+      let cwd = first
+      const ranked = yield* provideClientServices(
+        Effect.gen(function* () {
+          const contributions = yield* builtinFiles.setup
+          const source = Option.getOrThrow(Option.fromUndefinedOr(contributions.autocomplete?.[0]))
+          const items = (filter: string) => {
+            const result = source.items(filter)
+            if (Effect.isEffect(result)) return Effect.orDie(result)
+            return Effect.succeed(result)
+          }
+          const waiting = yield* Effect.forkChild(items("note"))
+          // The first key holds its finder and waits on the gated scan.
+          yield* scan.started
+          cwd = second
+          yield* items("note")
+          // The second key destroyed the first finder before its scan ended.
+          const destroyedFirst = destroyedWhileWaiting
+          yield* scan.release
+          return { destroyedFirst, items: yield* Fiber.join(waiting) }
+        }),
+        {
+          workspace: { cwd: home, home, sessionCwd: Effect.sync(() => cwd) },
+          currentSession: () => Option.some(session),
+          requestEffect: () => Effect.succeed(["note.md"]),
+        },
+      )
+      expect(ranked.destroyedFirst).toBe(true)
+      expect(ranked.items.map((item) => item.id)).toEqual(["note.md"])
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   // The session is rooted outside the launch directory, and fff resolves a
