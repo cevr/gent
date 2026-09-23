@@ -3879,6 +3879,23 @@ describe("addressed session verbs via RPC", () => {
         return { refused: Exit.isFailure(result) }
       }),
     }),
+    SteerWithQueueField: request({
+      id: "steer-with-queue-field",
+      input: Target,
+      output: Schema.Struct({ refused: Schema.Boolean }),
+      execute: Effect.fn("SteerWithQueueField.execute")(function* (target) {
+        const ctx = yield* ExtensionContext
+        // A spread skips the literal's excess-property check, as untyped code does.
+        const queueOnly = { sourceId: "wrong-mode" }
+        const result = yield* ctx.Session.send({
+          delivery: "steer",
+          ...target,
+          content: "carries a queue field",
+          ...queueOnly,
+        }).pipe(Effect.exit)
+        return { refused: Exit.isFailure(result) }
+      }),
+    }),
     SteerInto: request({
       id: "steer-into",
       input: Target,
@@ -4000,6 +4017,8 @@ describe("addressed session verbs via RPC", () => {
 
         const self = yield* call(harness, Verbs.SendToSelf, {})
         expect(self.refused).toBe(true)
+        const mixed = yield* call(harness, Verbs.SteerWithQueueField, child)
+        expect(mixed.refused).toBe(true)
 
         // Let the follow-up turn end, so the steered message wakes an idle child.
         yield* waitFor(
