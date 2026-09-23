@@ -536,28 +536,49 @@ without durable identity can resume in the same loaded generation, but not after
 an unsupported restart or replacement.
 
 ```text
-tool calls ctx.Interaction.approve({ text, metadata? })
-  → ApprovalService.present() checks for stored resolution (cold resume)
-    → if found: returns { approved, notes?, editedContent? }
+native call: tool calls ctx.Interaction.approve({ text, metadata? })
+  → ApprovalService.present() checks for a stored answer (cold resume)
+    → if found: takes it, returns { approved, notes?, editedContent? }
     → if not: persists to InteractionStorage, publishes InteractionPresented
       → InteractionPendingError thrown
         → machine parks in WaitingForInteraction (cold, no turn fiber)
 
+inner call of a cell (owned ask, `ctx.owned` set)
+  → waits for the slot while the open request's owner still runs
+    (refused when that owner parked: it would never free the slot)
+  → persists through InteractionOwnership (operation → Waiting), publishes
+    InteractionPresented
+  → waits in place for the answer; the turn stays Running, siblings run on
+  → answer: InteractionOwnership.take (operation → Started), request settles,
+    the cell code gets the answer and continues
+
 client responds via respondInteraction RPC
   → storeResolution(requestId, { approved, notes?, editedContent? })
-    → machine receives InteractionResponded
+    → first answer wins: storage keeps it with one conditional UPDATE and
+      memory keeps the same rule; the same answer again changes nothing, a
+      different one fails with InteractionDecisionConflictError
+    → parked native call: machine receives InteractionResponded
       → WaitingForInteraction → ExecutingTools
-        → tool re-runs, calls ctx.Interaction.approve(), finds stored resolution
-          → continues normally
+        → tool re-runs, calls ctx.Interaction.approve(), takes the answer
+    → owned call waiting in place: takes the answer at once
+
+cancel while an owned call waits: the cell cancels, its call ends, the turn
+  ends and dismisses the dialog (InteractionResolved dismissed: true)
+loop close (server stop) while an owned call waits: the turn is interrupted,
+  then BranchToolWork.stop ends the cell and records nothing, as a crash
+  would; after a restart the request is rehydrated, the turn resumes on it
+  (cell recovery suspends), and an answer runs the waiting operation once;
+  the cell then reports its worker state as lost
 ```
 
 **Event-driven UI.** The `@gent/interaction-tools` extension emits typed interaction events (`InteractionPresented` and friends on the session stream) and the client renders those directly. There is no `extensionSnapshots` cache and no projection mirror; source of truth is the storage row plus the durable interaction events (`derive-do-not-create-states`).
 
 Key properties:
 
-- **No Deferred, no blocked fiber.** `WaitingForInteraction` is a cold state — no background turn work. The machine is checkpointed and survives restarts.
+- **No blocked fiber for a native call.** `WaitingForInteraction` is a cold state — no background turn work. The machine is checkpointed and survives restarts. Only an owned call (a cell's inner call) waits in place, because its dispatcher cannot replay its source.
+- **The first answer wins.** Two replies can both pass the pending check; `InteractionStorage.decide` stores only when the row has no answer, and `storeResolution` keeps the same rule in memory. A retried reply with the same answer succeeds and publishes nothing; a different one fails with `InteractionDecisionConflictError`, so a late approval cannot flip a decline.
 - **Crash-safe resume.** `rehydrate()` rebuilds the in-memory context lookup and re-publishes the event. If the process dies before wake, `listOpen()` in `InteractionStorage` provides the open requests for recovery: pending ones, and `taken` ones whose call still keeps the answer.
-- **An answer goes to its owner.** The owner of a request is the tool call that asked and the index of that ask in the call's run; the row stores both (`owner_tool_call_id`, `owner_occurrence`, nullable for older rows). A branch shows one request at a time. Other owners queue in the order they asked, and a call that asks the same question never takes another call's answer. An answer whose owner ends its run without taking it is settled as abandoned, so the next owner asks. A dispatching tool's inner call (a cell) resumes by its request id and is refused, not queued, while another request is open. An answer matches its question as well as its owner; a changed question asks again, for a dispatching owner too. A call keeps the answers it took (row status `taken`) until it ends, so a call that asks twice takes both, also across a restart. Only a tool call the loop runs can ask natively; an ask with no call and no dispatching owner is refused.
+- **An answer goes to its owner.** The owner of a request is the tool call that asked and the index of that ask in the call's run; the row stores both (`owner_tool_call_id`, `owner_occurrence`, nullable for older rows). A branch shows one request at a time. Other owners queue in the order they asked, and a call that asks the same question never takes another call's answer. An answer whose owner ends its run without taking it is settled as abandoned, so the next owner asks. A dispatching tool's inner call (a cell) waits for the slot while the open request's owner still runs, and is refused when that owner parked; after a crash it resumes by its request id. An answer matches its question as well as its owner; a changed question asks again, for a dispatching owner too. A call keeps the answers it took (row status `taken`) until it ends, so a call that asks twice takes both, also across a restart. Only a tool call the loop runs can ask natively; an ask with no call and no dispatching owner is refused.
 - **A request lives no longer than its turn.** A turn that ends without parking settles its open request and its kept answers, and publishes `InteractionResolved` with `dismissed: true` for a dialog nobody answered. A cancel sets the turn's interrupt latch even while the loop is parked, and an answer that arrived while a sibling call still ran resumes the turn as soon as it parks.
 - **Exact replay.** Resume uses the saved assistant message, call ID, input, and
   binding. Completed sibling results are reused with their structured values.
