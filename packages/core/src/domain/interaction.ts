@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Option, Predicate, Ref, Schema } from "effect"
+import { Clock, Context, Deferred, Effect, Option, Predicate, Ref, Schema } from "effect"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import { EventStoreError } from "./event.js"
 import { BranchId, InteractionRequestId, SessionId } from "./ids.js"
@@ -17,7 +17,8 @@ import { BranchId, InteractionRequestId, SessionId } from "./ids.js"
  * keyed by requestId. The loop leaves WaitingForInteraction and runs the step
  * again — the tool re-calls approve(), finds the stored resolution, and continues.
  *
- * No Deferred, no blocked fiber. Interactions survive server restarts.
+ * No fiber blocks on a human. Interactions survive server restarts. A branch has
+ * one open request at a time; see `presentNative`.
  */
 
 // ============================================================================
@@ -163,10 +164,19 @@ interface InteractionServiceConfig {
   readonly storage: InteractionStorageConfig
 }
 
+/** The one request a branch is waiting on. */
+interface PendingInteraction {
+  readonly requestId: InteractionRequestId
+  /** The encoded request; only a call asking the same thing takes its answer. */
+  readonly paramsJson: string
+  /** Completes when the answer is taken, so a call waiting behind it can ask next. */
+  readonly taken: Deferred.Deferred<void>
+}
+
 interface InteractionState {
   readonly storedResolutions: ReadonlyMap<InteractionRequestId, ApprovalDecision>
-  /** Reverse lookup: sessionId:branchId → requestId (at most one pending per session+branch) */
-  readonly pendingByContext: ReadonlyMap<string, InteractionRequestId>
+  /** sessionId:branchId → the request that branch waits on (at most one; storage enforces it) */
+  readonly pendingByContext: ReadonlyMap<string, PendingInteraction>
 }
 
 export const makeInteractionService = (
@@ -185,39 +195,118 @@ export const makeInteractionService = (
         storedResolutions: new Map(current.storedResolutions).set(requestId, decision),
       }))
 
-    const takeStoredResolution = (ctxKey: string, selected?: Option.Option<InteractionRequestId>) =>
-      Ref.modify(state, (current) => {
-        const requestId = Option.getOrUndefined(
-          Option.getOrElse(Option.fromUndefinedOr(selected), () =>
-            Option.fromUndefinedOr(current.pendingByContext.get(ctxKey)),
-          ),
-        )
-        if (Predicate.isUndefined(requestId)) return [Option.none(), current]
-
-        const decision = current.storedResolutions.get(requestId)
-        if (Predicate.isUndefined(decision)) return [Option.none(), current]
-
-        const storedResolutions = new Map(current.storedResolutions)
-        storedResolutions.delete(requestId)
-        const pendingByContext = new Map(current.pendingByContext)
-        if (pendingByContext.get(ctxKey) === requestId) pendingByContext.delete(ctxKey)
-
-        return [
-          Option.some({ requestId, decision }),
-          {
-            storedResolutions,
-            pendingByContext,
-          },
-        ]
-      })
-
-    const setPending = (ctxKey: string, requestId: InteractionRequestId) =>
+    const setPending = (ctxKey: string, pending: PendingInteraction) =>
       Ref.update(state, (current) => ({
         ...current,
-        pendingByContext: new Map(current.pendingByContext).set(ctxKey, requestId),
+        pendingByContext: new Map(current.pendingByContext).set(ctxKey, pending),
       }))
 
+    /** Drop a settled or abandoned request and wake the calls waiting behind it. */
+    const release = (ctxKey: string, requestId: InteractionRequestId) =>
+      Effect.gen(function* () {
+        const released = yield* Ref.modify(state, (current) => {
+          const storedResolutions = new Map(current.storedResolutions)
+          storedResolutions.delete(requestId)
+          const pendingByContext = new Map(current.pendingByContext)
+          const entry = Option.fromUndefinedOr(pendingByContext.get(ctxKey)).pipe(
+            Option.filter((pending) => pending.requestId === requestId),
+          )
+          if (Option.isSome(entry)) pendingByContext.delete(ctxKey)
+          return [entry, { storedResolutions, pendingByContext }]
+        })
+        if (Option.isSome(released)) yield* Deferred.completeWith(released.value.taken, Effect.void)
+      })
+
     const contextKey = (sessionId: SessionId, branchId: BranchId) => `${sessionId}:${branchId}`
+
+    /** Persist and publish a fresh request that this call now owns, then park. */
+    const ask = Effect.fn("InteractionService.ask")(function* (
+      params: ApprovalRequest,
+      paramsJson: string,
+      requestId: InteractionRequestId,
+      ctx: { sessionId: SessionId; branchId: BranchId },
+    ) {
+      const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
+      // Persist to storage before publishing event (crash-safe)
+      yield* config.storage
+        .persist({
+          requestId,
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          paramsJson,
+          status: "pending",
+          createdAt: yield* Clock.currentTimeMillis,
+        })
+        .pipe(Effect.onError(() => release(ctxKey, requestId)))
+      yield* config.onPresent(requestId, params, ctx)
+      // Signal the machine to park in WaitingForInteraction.
+      return yield* new InteractionPendingError({
+        requestId,
+        sessionId: ctx.sessionId,
+        branchId: ctx.branchId,
+      })
+    })
+
+    /**
+     * A direct tool call. One request per branch is open at a time: a second
+     * call in the same step parks on the open one, and when the step runs
+     * again after the answer, it waits until the first call takes that
+     * answer, then asks its own question.
+     */
+    const presentNative = Effect.fn("InteractionService.presentNative")(function* (
+      params: ApprovalRequest,
+      ctx: { sessionId: SessionId; branchId: BranchId },
+    ) {
+      const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
+      const paramsJson = yield* encodeInteractionParams(params)
+      const requestId = InteractionRequestId.make(yield* platform.randomId)
+      const taken = yield* Deferred.make<void>()
+      // `None` means the open request's answer belongs to another call: wait
+      // for that call to take it, then decide again.
+      type Next = Effect.Effect<
+        Option.Option<ApprovalDecision>,
+        EventStoreError | InteractionPendingError
+      >
+      while (true) {
+        const next = yield* Ref.modify(state, (current): [Next, InteractionState] => {
+          const entry = current.pendingByContext.get(ctxKey)
+          if (Predicate.isUndefined(entry)) {
+            const pendingByContext = new Map(current.pendingByContext).set(ctxKey, {
+              requestId,
+              paramsJson,
+              taken,
+            })
+            return [ask(params, paramsJson, requestId, ctx), { ...current, pendingByContext }]
+          }
+          const decision = current.storedResolutions.get(entry.requestId)
+          if (Predicate.isUndefined(decision)) {
+            // Park on the open request; this call asks after it is answered.
+            const parked = new InteractionPendingError({
+              requestId: entry.requestId,
+              sessionId: ctx.sessionId,
+              branchId: ctx.branchId,
+            })
+            return [Effect.fail(parked), current]
+          }
+          if (entry.paramsJson !== paramsJson) {
+            return [Effect.as(Deferred.await(entry.taken), Option.none()), current]
+          }
+          const storedResolutions = new Map(current.storedResolutions)
+          storedResolutions.delete(entry.requestId)
+          const pendingByContext = new Map(current.pendingByContext)
+          pendingByContext.delete(ctxKey)
+          const take = config.storage
+            .resolve(entry.requestId)
+            .pipe(
+              Effect.andThen(Deferred.completeWith(entry.taken, Effect.void)),
+              Effect.as(Option.some(decision)),
+            )
+          return [take, { storedResolutions, pendingByContext }]
+        })
+        const decided = yield* next
+        if (Option.isSome(decided)) return decided.value
+      }
+    })
 
     return {
       storeResolution: (requestId, decision) =>
@@ -231,50 +320,38 @@ export const makeInteractionService = (
         params: ApprovalRequest,
         ctx: Parameters<InteractionService["present"]>[1],
       ) {
-        // Check for a stored resolution (cold interaction resumption).
-        // The tool re-calls present() after the machine resumes. The resolution
-        // was stored by requestId via storeResolution(). We find the requestId
-        // through the context reverse lookup.
+        if (Predicate.isUndefined(ctx.resumeRequestId)) return yield* presentNative(params, ctx)
+        // An owning call names the request it resumes, or starts a fresh one.
         const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
-        const stored = yield* takeStoredResolution(ctxKey, ctx.resumeRequestId)
-        if (Option.isSome(stored)) {
-          yield* config.storage.resolve(stored.value.requestId)
-          return stored.value.decision
+        const selected = ctx.resumeRequestId
+        if (Option.isSome(selected)) {
+          const decision = (yield* Ref.get(state)).storedResolutions.get(selected.value)
+          if (Predicate.isUndefined(decision)) {
+            return yield* new EventStoreError({
+              message: "Selected interaction decision is unavailable",
+            })
+          }
+          yield* release(ctxKey, selected.value)
+          yield* config.storage.resolve(selected.value)
+          return decision
         }
-        if (Option.isSome(Option.fromUndefinedOr(ctx.resumeRequestId).pipe(Option.flatten))) {
-          return yield* new EventStoreError({
-            message: "Selected interaction decision is unavailable",
-          })
-        }
-
-        const requestId = InteractionRequestId.make(yield* platform.randomId)
-
-        // Persist to storage before publishing event (crash-safe)
         const paramsJson = yield* encodeInteractionParams(params)
-        yield* config.storage.persist({
-          requestId,
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          paramsJson,
-          status: "pending",
-          createdAt: yield* Clock.currentTimeMillis,
-        })
-        yield* setPending(ctxKey, requestId)
-
-        yield* config.onPresent(requestId, params, ctx)
-
-        // Signal the machine to park in WaitingForInteraction.
-        return yield* new InteractionPendingError({
-          requestId,
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-        })
+        const requestId = InteractionRequestId.make(yield* platform.randomId)
+        yield* setPending(ctxKey, { requestId, paramsJson, taken: yield* Deferred.make<void>() })
+        return yield* ask(params, paramsJson, requestId, ctx)
       }),
 
       pendingRequestId: (ctx) =>
         Ref.get(state).pipe(
           Effect.map((current) =>
-            current.pendingByContext.get(contextKey(ctx.sessionId, ctx.branchId)),
+            Option.getOrUndefined(
+              Option.map(
+                Option.fromUndefinedOr(
+                  current.pendingByContext.get(contextKey(ctx.sessionId, ctx.branchId)),
+                ),
+                (pending) => pending.requestId,
+              ),
+            ),
           ),
         ),
 
@@ -287,7 +364,8 @@ export const makeInteractionService = (
         // Rebuild the context reverse lookup so post-restart present() can find
         // the stored resolution by sessionId:branchId → requestId.
         const ctxKey = contextKey(ctx.sessionId, ctx.branchId)
-        yield* setPending(ctxKey, requestId)
+        const paramsJson = yield* encodeInteractionParams(params)
+        yield* setPending(ctxKey, { requestId, paramsJson, taken: yield* Deferred.make<void>() })
         if (!Predicate.isUndefined(decision)) {
           yield* setResolution(requestId, decision)
           return

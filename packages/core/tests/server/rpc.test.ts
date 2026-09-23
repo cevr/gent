@@ -10,6 +10,7 @@ import {
   MutableRef,
   Option,
   Predicate,
+  Result,
   Schema,
   Scope,
   Stream,
@@ -36,6 +37,7 @@ import { finishPart, textDeltaPart, Auth, AuthError, AuthMethod } from "../../sr
 import {
   LanguageModelLayers,
   makeTempDirectoryScoped,
+  multiToolCallStep,
   textStep,
   toolCallStep,
   waitFor,
@@ -1080,6 +1082,109 @@ describe("interaction.respondInteraction", () => {
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
+  )
+
+  it.live(
+    "two guarded calls in one step ask one at a time and each gets its own answer",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const EchoApprovalExtension: LoadedExtension = {
+            manifest: { id: ExtensionId.make("@test/echo-approval") },
+            scope: "builtin",
+            sourcePath: "test",
+            artifactIdentity: LoadedArtifactIdentity.make("@test/echo-approval@artifact-1"),
+            contributions: {
+              tools: [
+                tool({
+                  id: "echo_approval",
+                  description: "Ask approval and echo the question with its answer",
+                  params: Schema.Struct({ text: Schema.String }),
+                  output: Schema.Struct({ answer: Schema.String }),
+                  execute: Effect.fn("echo_approval")(function* (params) {
+                    const ctx = yield* ExtensionContext
+                    const decision = yield* ctx.Interaction.approve({ text: params.text })
+                    return { answer: `${params.text}=${String(decision.notes)}` }
+                  }),
+                }),
+              ],
+            },
+          }
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            multiToolCallStep(
+              { toolName: "echo_approval", input: { text: "FIRST" } },
+              { toolName: "echo_approval", input: { text: "SECOND" } },
+            ),
+            textStep("both answered"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [EchoApprovalExtension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const presentedFiber = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filterMap((envelope) => {
+              if (envelope.event._tag === "InteractionPresented")
+                return Result.succeed(envelope.event)
+              return Result.failVoid
+            }),
+            Stream.take(2),
+            // Each dialog is answered only after it shows; the second waits for the first.
+            Stream.mapEffect((presented) =>
+              Effect.gen(function* () {
+                yield* waitFor(
+                  client.session.getSnapshot({ sessionId, branchId }),
+                  (current) => current.runtime._tag === "WaitingForInteraction",
+                  5_000,
+                  `parked on ${presented.text}`,
+                )
+                yield* client.interaction.respondInteraction({
+                  sessionId,
+                  branchId,
+                  requestId: presented.requestId,
+                  approved: true,
+                  notes: `answer-${presented.text}`,
+                })
+                return presented.text
+              }),
+            ),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "ask twice" })
+          const seen = Array.from(yield* Fiber.join(presentedFiber))
+          expect([...seen].sort()).toEqual(["FIRST", "SECOND"])
+
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some(
+                    (part) => part.type === "text" && part.text === "both answered",
+                  ),
+              ),
+            5_000,
+            "turn completes after both answers",
+          )
+          const results = snapshot.messages.flatMap((message) =>
+            message.parts.flatMap((part) => {
+              if (part.type === "tool-result") return [encodeJson(part.result)]
+              return []
+            }),
+          )
+          expect(results.some((result) => result.includes("FIRST=answer-FIRST"))).toBe(true)
+          expect(results.some((result) => result.includes("SECOND=answer-SECOND"))).toBe(true)
+          expect(results.some((result) => result.includes("Failed to persist"))).toBe(false)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
   )
 })
 

@@ -1132,7 +1132,7 @@ One test file per source file. No god tests. Names match source owners.
 
 `@gent/interaction-tools` — `ask_user` and `prompt` tools.
 
-The TUI renders interactions from the typed event feed (`InteractionPresented` etc.) routed by `metadata.type`. Pending interaction storage remains the durable source of truth for crash-safe resume.
+The TUI renders interactions from the typed event feed (`InteractionPresented` etc.) routed by `metadata.type`. Pending interaction storage remains the durable source of truth for crash-safe resume. A branch has at most one open request. A second guarded call in the same step parks on the open one; when the step runs again, it waits until the first call takes its answer (matched by the encoded request), then asks its own question.
 
 ## Workflow Results
 
