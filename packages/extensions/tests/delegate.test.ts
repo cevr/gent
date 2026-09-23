@@ -651,7 +651,13 @@ describe("starts over the pending cap", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          // The parent's follow-up turn and the four admitted children all
+          // draw from the gated steps, in whatever order they reach the model.
+          // They stay closed until both rejections are on the branch: a child
+          // that finished between two admissions would free its slot, and the
+          // sixth start would be admitted.
+          const followUps = 16
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
             multiToolCallStep(
               startCall("Reply with the single word one"),
               startCall("Reply with the single word two"),
@@ -660,9 +666,7 @@ describe("starts over the pending cap", () => {
               startCall("Reply with the single word five"),
               startCall("Reply with the single word six"),
             ),
-            // The parent's follow-up turn and the four admitted children all
-            // draw from this one queue, in whatever order they reach the model.
-            ...Array.from({ length: 16 }, () => textStep("ack")),
+            ...Array.from({ length: followUps }, () => ({ ...textStep("ack"), gated: true })),
           ])
           const harness = yield* harnessWithHome(providerLayer)
           const { client, sessionId, branchId } = harness
@@ -678,6 +682,11 @@ describe("starts over the pending cap", () => {
             "the capped starts returned as tool results",
           )
           expect(cappedResults(afterAdmission.messages)).toHaveLength(2)
+          yield* Effect.forEach(
+            Array.from({ length: followUps }, (_, index) => index + 1),
+            controls.emitAll,
+            { discard: true },
+          )
 
           // The four admitted children still deliver; the cap rejected the
           // extras without disturbing them.
