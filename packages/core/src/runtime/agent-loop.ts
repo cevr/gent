@@ -57,6 +57,7 @@ import {
   SessionOperationStorage,
   type SessionStorage,
   ToolCallBindingStorage,
+  type TurnRecord,
   TurnRecordStorage,
 } from "../storage/storage.js"
 import {
@@ -90,7 +91,7 @@ import {
   type WaitingForInteractionState,
 } from "../domain/agent-loop.js"
 import { type AgentEvent, ErrorOccurred, EventPublisher } from "../domain/event.js"
-import { causeChainMessage } from "../domain/guards.js"
+import { causeChainMessage, omitUndefined } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
   type AgentLoopTurnProfile,
@@ -1193,8 +1194,11 @@ type AgentLoopBehavior = {
    * withdraw or read the queue asks the inbox itself.
    */
   inbox: LoopInbox
-  /** The newest user message whose turn never completed; what a reopened loop resumes. */
-  incompleteUserTurn: Effect.Effect<Option.Option<Message>>
+  /**
+   * The newest user message whose turn never completed, with what admitted
+   * it; what a reopened loop resumes.
+   */
+  incompleteUserTurn: Effect.Effect<Option.Option<QueuedTurnItem>>
   /** Whether this session has ever written to the branch; a cold loop with history wakes. */
   hasPriorHistory: Effect.Effect<boolean>
   /**
@@ -1310,7 +1314,7 @@ const makeAgentLoopBehavior = (
     const extensionRegistry = yield* ExtensionRegistry
     const eventPublisher = yield* EventPublisher
     yield* ToolCallBindingStorage
-    yield* TurnRecordStorage
+    const turnRecords = yield* TurnRecordStorage
     yield* ToolRunner
     const followUp = yield* AgentLoopFollowUp
     const messageStorage = yield* MessageStorage
@@ -1537,7 +1541,36 @@ const makeAgentLoopBehavior = (
         }
         return []
       })
-      return Option.fromUndefinedOr(incomplete.at(-1))
+      const message = incomplete.at(-1)
+      if (Predicate.isUndefined(message)) return Option.none<QueuedTurnItem>()
+      // The turn resumes under the admission that started it. A turn cut
+      // before it settled still has it in the queue's in-flight slot; one
+      // that settled has it in its record.
+      const inFlight = (yield* inbox.read).queue.inFlight
+      if (Predicate.isNotUndefined(inFlight) && inFlight.message.id === message.id) {
+        return Option.some(inFlight)
+      }
+      const record = yield* turnRecords.get({ sessionId, branchId, messageId: message.id }).pipe(
+        Effect.asSome,
+        Effect.catchEager((error) =>
+          Effect.logWarning("agent-loop.recovery-read-failed").pipe(
+            Effect.annotateLogs({ read: "turn record", sessionId, branchId, error: String(error) }),
+            Effect.as(Option.none<TurnRecord>()),
+          ),
+        ),
+      )
+      return Option.some<QueuedTurnItem>({
+        message,
+        ...Option.match(record, {
+          onNone: () => ({}),
+          onSome: (value) =>
+            omitUndefined({
+              agentOverride: value.agentOverride,
+              runSpec: value.runSpec,
+              interactive: value.interactive,
+            }),
+        }),
+      })
     })
 
     return {
@@ -2139,10 +2172,10 @@ const buildAgentLoopActorHandlers = (config: {
           Effect.andThen(handle.inbox.writeInitialQueue),
           Effect.andThen(
             Effect.gen(function* () {
-              const incompleteMessage = yield* handle.incompleteUserTurn
-              if (Option.isSome(incompleteMessage)) {
+              const incompleteTurn = yield* handle.incompleteUserTurn
+              if (Option.isSome(incompleteTurn)) {
                 yield* handle
-                  .startTurn({ message: incompleteMessage.value })
+                  .startTurn(incompleteTurn.value)
                   .pipe(
                     Effect.catchEager((error) =>
                       closeBehaviorWithHeldStartupPermit(handle).pipe(
@@ -2381,11 +2414,16 @@ const buildAgentLoopActorHandlers = (config: {
             // A reply to a loop that lost its turn (a restart mid-interaction)
             // resumes that turn instead; the interaction is answered inside it.
             if (phase._tag !== "Idle") return
-            const message = yield* handle.incompleteUserTurn
-            if (Option.isNone(message)) return
+            const incomplete = yield* handle.incompleteUserTurn
+            if (Option.isNone(incomplete)) return
             const baseline = yield* waitBaseline(handle)
-            yield* handle.startTurn({ message: message.value }).pipe(orCleanup(handle))
-            yield* awaitTurnCompletion(handle, baseline, message.value.id, orCleanup(handle))
+            yield* handle.startTurn(incomplete.value).pipe(orCleanup(handle))
+            yield* awaitTurnCompletion(
+              handle,
+              baseline,
+              incomplete.value.message.id,
+              orCleanup(handle),
+            )
           }).pipe(provideActorWorkspace),
       ),
       DrainQueue: Effect.fn("AgentLoop.DrainQueue")(

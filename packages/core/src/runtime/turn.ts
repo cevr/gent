@@ -1742,6 +1742,22 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           )
       })
 
+    /**
+     * Keep what admitted the turn beside its position. A plain turn has
+     * nothing to keep and writes no row here.
+     */
+    const recordTurnAdmission = Effect.fn("AgentLoop.recordTurnAdmission")(function* (
+      state: RunningState,
+    ) {
+      const admission = omitUndefined({
+        agentOverride: state.agentOverride,
+        runSpec: state.runSpec,
+        interactive: state.interactive,
+      })
+      if (Object.keys(admission).length === 0) return
+      yield* updateTurnRecord(state.message.id, () => admission)
+    })
+
     /** The step opened: its assistant message committed, its calls are pending. */
     const openTurnStep = Effect.fn("AgentLoop.openTurnStep")(function* (params: {
       readonly messageId: RunningState["message"]["id"]
@@ -2789,6 +2805,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       return yield* Effect.gen(function* () {
         yield* persistMessageReceived({ message: state.message })
+        // The queue forgets the admission once it settles; the record keeps
+        // it, so a restart resumes this turn under the same agent and run.
+        yield* recordTurnAdmission(state)
         yield* scope.inbox.settle(state.message.id)
 
         const resumed = yield* resumeTurn({

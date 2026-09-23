@@ -30,7 +30,7 @@ const tableNames = Effect.gen(function* () {
 /** A feature that owns one table, standing in for any real one. */
 const widgetTools: BranchToolFeature<never> = {
   migrations: {
-    "021_widgets": Effect.gen(function* () {
+    "090_widgets": Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
       yield* sql`CREATE TABLE widget_slots (id TEXT PRIMARY KEY)`
     }),

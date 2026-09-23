@@ -32,6 +32,8 @@ import {
   validateToolBindingIdentity,
 } from "../domain/capability.js"
 import { storageError, StorageError, storageErrorExcept } from "../domain/errors.js"
+import { AgentName, RunSpecSchema } from "../domain/agent.js"
+import { omitUndefined } from "../domain/guards.js"
 import { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
 import {
   branchFromRow,
@@ -1704,6 +1706,20 @@ export const PendingToolCall = Schema.Struct({
 })
 export type PendingToolCall = typeof PendingToolCall.Type
 
+/**
+ * What admitted the turn: the agent, the run's overrides, and whether anyone
+ * can answer a question. The queue holds these only until the turn starts, so
+ * the record keeps them for a restart that resumes the turn. Every field is
+ * optional: a plain turn stores none, and a row written before this existed
+ * reads as a plain turn.
+ */
+const TurnAdmission = Schema.Struct({
+  agentOverride: Schema.optional(AgentName),
+  runSpec: Schema.optional(RunSpecSchema),
+  interactive: Schema.optional(Schema.Boolean),
+})
+type TurnAdmission = typeof TurnAdmission.Type
+
 export const TurnRecord = Schema.Struct({
   /** The last step whose assistant and tool messages committed. 0 before step 1. */
   step: Schema.Natural,
@@ -1711,6 +1727,7 @@ export const TurnRecord = Schema.Struct({
   continuations: Schema.Natural,
   /** Tool calls the current step issued and has not settled. */
   pendingToolCalls: Schema.Array(PendingToolCall),
+  ...TurnAdmission.fields,
 })
 export type TurnRecord = typeof TurnRecord.Type
 
@@ -1730,10 +1747,24 @@ const TurnRecordRow = Schema.Struct({
   step: Schema.Finite,
   continuations: Schema.Finite,
   pending_tool_calls_json: Schema.String,
+  admission_json: Schema.NullOr(Schema.String),
 })
 
 const decodePending = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(PendingToolCall)))
 const encodePending = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(PendingToolCall)))
+const decodeAdmission = Schema.decodeEffect(Schema.fromJsonString(TurnAdmission))
+const encodeAdmission = Schema.encodeEffect(Schema.fromJsonString(TurnAdmission))
+
+/** The admission fields a record carries; none for a plain turn. */
+const admissionOf = (record: TurnAdmission): Option.Option<TurnAdmission> => {
+  const admission = omitUndefined({
+    agentOverride: record.agentOverride,
+    runSpec: record.runSpec,
+    interactive: record.interactive,
+  })
+  if (Object.keys(admission).length === 0) return Option.none()
+  return Option.some(admission)
+}
 
 interface TurnRecordStorageService {
   /** The turn's position, or the empty record when the turn has no row yet. */
@@ -1755,7 +1786,7 @@ export class TurnRecordStorage extends Context.Service<
         return yield* Effect.gen(function* () {
           const workspaceId = yield* CurrentWorkspaceId
           const rows = yield* sql<typeof TurnRecordRow.Type>`
-            SELECT t.step, t.continuations, t.pending_tool_calls_json
+            SELECT t.step, t.continuations, t.pending_tool_calls_json, t.admission_json
             FROM turn_records t
             JOIN sessions s ON s.id = t.session_id
             WHERE t.session_id = ${key.sessionId}
@@ -1768,10 +1799,15 @@ export class TurnRecordStorage extends Context.Service<
           if (Predicate.isUndefined(row)) return emptyTurnRecord
           const decoded = yield* Schema.decodeEffect(TurnRecordRow)(row)
           const pendingToolCalls = yield* decodePending(decoded.pending_tool_calls_json)
+          let admission: TurnAdmission = {}
+          if (!Predicate.isNull(decoded.admission_json)) {
+            admission = yield* decodeAdmission(decoded.admission_json)
+          }
           return {
             step: Math.max(0, Math.trunc(decoded.step)),
             continuations: Math.max(0, Math.trunc(decoded.continuations)),
             pendingToolCalls,
+            ...admission,
           } satisfies TurnRecord
         }).pipe(Effect.mapError(storageError("Failed to read the turn record")))
       })
@@ -1782,6 +1818,11 @@ export class TurnRecordStorage extends Context.Service<
       ) {
         return yield* Effect.gen(function* () {
           const pendingJson = yield* encodePending(record.pendingToolCalls)
+          const admission = admissionOf(record)
+          let admissionJson = Option.none<string>()
+          if (Option.isSome(admission)) {
+            admissionJson = Option.some(yield* encodeAdmission(admission.value))
+          }
           const updatedAt = (yield* DateTime.nowAsDate).getTime()
           yield* sql`
             INSERT INTO turn_records (
@@ -1791,6 +1832,7 @@ export class TurnRecordStorage extends Context.Service<
               step,
               continuations,
               pending_tool_calls_json,
+              admission_json,
               updated_at
             ) VALUES (
               ${key.sessionId},
@@ -1799,12 +1841,14 @@ export class TurnRecordStorage extends Context.Service<
               ${record.step},
               ${record.continuations},
               ${pendingJson},
+              ${toSqlNull(Option.getOrUndefined(admissionJson))},
               ${updatedAt}
             )
             ON CONFLICT (session_id, branch_id, message_id) DO UPDATE SET
               step = excluded.step,
               continuations = excluded.continuations,
               pending_tool_calls_json = excluded.pending_tool_calls_json,
+              admission_json = excluded.admission_json,
               updated_at = excluded.updated_at
           `
         }).pipe(Effect.mapError(storageError("Failed to write the turn record")))
@@ -1816,14 +1860,17 @@ export class TurnRecordStorage extends Context.Service<
 }
 
 /** The record a step boundary writes once its messages have committed. */
-export const turnRecordAtStep = (params: {
-  readonly step: number
-  readonly continuations: number
-  readonly pendingToolCalls: ReadonlyArray<PendingToolCall>
-}): TurnRecord => ({
+export const turnRecordAtStep = (
+  params: TurnAdmission & {
+    readonly step: number
+    readonly continuations: number
+    readonly pendingToolCalls: ReadonlyArray<PendingToolCall>
+  },
+): TurnRecord => ({
   step: Math.max(0, Math.trunc(params.step)),
   continuations: Math.max(0, Math.trunc(params.continuations)),
   pendingToolCalls: params.pendingToolCalls,
+  ...Option.getOrElse(admissionOf(params), (): TurnAdmission => ({})),
 })
 
 // ── sqlite-storage ──────────────────────────────────────────────────────────

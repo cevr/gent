@@ -2711,6 +2711,127 @@ const openingTurnMessageId = (messages: ReadonlyArray<{ readonly id: string }>) 
 
 describe("turn record", () => {
   it.scopedLive(
+    "a child-shaped turn recovered after a restart keeps its agent, denied tools and run spec",
+    () =>
+      Effect.gen(function* () {
+        resetProbe()
+        const tempDir = yield* makeTempDirectoryScoped("gent-turn-admission-")
+        const dbPath = `${tempDir}/gent.db`
+        const sessionId = SessionId.make("admission-recovery-session")
+        const branchId = BranchId.make("admission-recovery-branch")
+        const addendum = "CHILD-ADDENDUM-SURVIVES-RESTART"
+        const runSpec = makeRunSpec({
+          overrides: { deniedTools: ["resume_probe"], systemPromptAddendum: addendum },
+        })
+        type SeenRequest = { readonly tools: ReadonlyArray<string>; readonly prompt: string }
+        const seenRequest = (options: LanguageModel.ProviderOptions): SeenRequest => ({
+          tools: options.tools.map((entry) => entry.name),
+          prompt: options.prompt.content
+            .flatMap((message) => {
+              if (message.role === "system") return [message.content]
+              return message.content.flatMap((part) => {
+                if (part.type === "text") return [part.text]
+                return []
+              })
+            })
+            .join("\n"),
+        })
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            agents: [...testAgents, helperAgent],
+            providerLayer,
+            extensions: [ResumeProbeExtension],
+            storagePath: dbPath,
+          })
+
+        // First process: the child turn is admitted and its first model call
+        // hangs. The process dies there, before the turn completes.
+        const firstRequests = yield* Ref.make<ReadonlyArray<SeenRequest>>([])
+        const firstCalled = yield* Deferred.make<void>()
+        const firstProvider = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            yield* Ref.update(firstRequests, (seen) => [...seen, seenRequest(options)])
+            yield* Deferred.succeed(firstCalled, void 0)
+            return Stream.never
+          }),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* submitAgentLoop(
+              agentLoop,
+              makeMessage(sessionId, branchId, "child task before restart"),
+              { agentOverride: helperAgent.name, runSpec, interactive: false },
+            )
+            yield* Deferred.await(firstCalled)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(layerFor(firstProvider)), Effect.timeout("10 seconds")),
+        )
+
+        // Second process: opening the branch resumes the cut turn. It must run
+        // under the same admission, not as the default agent.
+        const secondRequests = yield* Ref.make<ReadonlyArray<SeenRequest>>([])
+        const secondProvider = LanguageModelLayers.testStream((options) =>
+          Ref.update(secondRequests, (seen) => [...seen, seenRequest(options)]).pipe(
+            Effect.as(
+              Stream.fromIterable([
+                textDeltaPart("resumed child answer"),
+                finishPart({ finishReason: "stop" }),
+              ] satisfies LanguageModelStreamPart[]),
+            ),
+          ),
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const agentLoop = yield* makeAgentLoopService
+            yield* agentLoop.getState({ sessionId, branchId })
+            yield* waitForOption(
+              () =>
+                Ref.get(secondRequests).pipe(
+                  Effect.map((seen) => Option.liftPredicate(seen, (all) => all.length > 0)),
+                ),
+              "the recovered turn called the model",
+            )
+            // The agent picks the model: the child's agent, not the default one.
+            const eventStorage = yield* EventStorage
+            const streamModel = yield* waitForOption(
+              () =>
+                eventStorage
+                  .listEvents({ sessionId, branchId })
+                  .pipe(
+                    Effect.map((envelopes) =>
+                      Option.fromUndefinedOr(
+                        envelopes
+                          .map(({ event }) => event)
+                          .find(
+                            (event) =>
+                              event._tag === "StreamEnded" && Predicate.isNotUndefined(event.model),
+                          ),
+                      ),
+                    ),
+                  ),
+              "the recovered step ended",
+            )
+            expect(streamModel._tag === "StreamEnded" && streamModel.model).toBe(helperAgent.model)
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(layerFor(secondProvider)), Effect.timeout("10 seconds")),
+        )
+
+        const [before] = yield* Ref.get(firstRequests)
+        const [after] = yield* Ref.get(secondRequests)
+        // The first process ran the child as admitted: the control case.
+        expect(before?.tools).not.toContain("resume_probe")
+        expect(before?.prompt).toContain(addendum)
+        // The recovered turn keeps the child's run spec: the denied tool stays
+        // denied, and the child's prompt addendum is still there.
+        expect(after?.tools).not.toContain("resume_probe")
+        expect(after?.prompt).toContain(addendum)
+      }),
+    40_000,
+  )
+
+  it.scopedLive(
     "records the completed step for a turn that answered after a tool call",
     () =>
       Effect.gen(function* () {
