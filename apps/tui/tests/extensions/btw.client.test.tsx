@@ -125,6 +125,59 @@ describe("fork pane", () => {
       }),
   )
 
+  // A question belongs to the session it was asked in. When a read is out,
+  // the read that sends the question runs after it, and a switch in between
+  // makes that read the new session's; the question still goes to its own.
+  it.scopedLive("a question asked before a switch goes to the session it was asked in", () =>
+    Effect.gen(function* () {
+      const first = { sessionId: SessionId.make("s1"), branchId: BranchId.make("s1-branch") }
+      const second = { sessionId: SessionId.make("s2"), branchId: BranchId.make("s2-branch") }
+      const [current, setCurrent] = createSignal(first)
+      const hold = yield* Deferred.make<void>()
+      const sent = yield* Deferred.make<string>()
+      const record = (session: { readonly sessionId: string }) =>
+        Deferred.succeed(sent, session.sessionId).pipe(Effect.asVoid)
+      const controller = yield* provideClientServices(
+        makeForkPane({
+          fork: (_question, session) => record(session),
+          ask: (_question, session) => record(session),
+          // The first read (the pane following its session) stays out.
+          progress: () => Deferred.await(hold).pipe(Effect.as(Option.none())),
+        }),
+        { currentSession: () => Option.some(current()) },
+      )
+      controller.ask("why?")
+      setCurrent(second)
+      yield* Deferred.succeed(hold, void 0)
+      expect(yield* Deferred.await(sent).pipe(Effect.timeout("5 seconds"))).toBe("s1")
+    }),
+  )
+
+  // Two asks before the first goes out: the second is refused with a notice
+  // instead of replacing the first, and nothing is dropped silently.
+  it.scopedLive("an ask while another waits or the fork replies is refused out loud", () =>
+    Effect.gen(function* () {
+      const queue = makeCastQueue()
+      const server = makeServer()
+      const notices: Array<string> = []
+      const controller = yield* provideClientServices(makeForkPane(server.actions), {
+        ...onSession,
+        shell: { cast: queue.cast, notify: (message) => notices.push(message) },
+      })
+      yield* queue.drain
+      controller.ask("first?")
+      controller.ask("second?")
+      yield* queue.drain
+      expect(server.forked).toEqual(["first?"])
+      expect(notices).toHaveLength(1)
+      // The fork is replying now: a question for it is refused the same way.
+      controller.ask("third?")
+      yield* queue.drain
+      expect(server.asked).toEqual([])
+      expect(notices).toHaveLength(2)
+    }),
+  )
+
   it.scopedLive("keys typed into the docked pane fill its ask line and enter sends them", () =>
     Effect.gen(function* () {
       const queue = makeCastQueue()

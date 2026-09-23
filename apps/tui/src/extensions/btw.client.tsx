@@ -58,20 +58,30 @@ interface ForkPaneActions {
 
 interface Outgoing {
   readonly question: string
+  /** The session the question was asked in; it goes there even after a switch. */
+  readonly session: ActiveExtensionSession
   readonly send: (
     session: ActiveExtensionSession,
   ) => Effect.Effect<void, { readonly message: string }>
 }
 
+const sameSession = (left: ActiveExtensionSession, right: ActiveExtensionSession) =>
+  left.sessionId === right.sessionId && left.branchId === right.branchId
+
+/** What the reader sees when an ask cannot go out now. */
+const BUSY_NOTICE = "btw: the fork is still answering; ask again when it is done"
+
 /**
  * The fork's view is a session query: it follows the shell, so a reply for a
  * session the shell left never becomes the fork of the one it is on. A
- * question rides the next read, which sends it and then reads the fork.
+ * question rides the next read, which sends it to the session it was asked in
+ * and then reads the fork of the session in view.
  */
 export const makeForkPane = (
   actions: ForkPaneActions,
 ): Effect.Effect<ForkPaneController, never, ClientContext> =>
   Effect.gen(function* () {
+    const { transport, shell } = yield* ClientContext
     let outgoing = Option.none<Outgoing>()
     const [asked, setAsked] = createSignal(Option.none<string>())
     const view = yield* sessionQuery({
@@ -80,10 +90,16 @@ export const makeForkPane = (
       fetch: (session) => {
         const sending = outgoing
         outgoing = Option.none()
-        setAsked(Option.map(sending, (entry) => entry.question))
+        // The pane shows a question as pending only under its own session.
+        setAsked(
+          Option.map(
+            Option.filter(sending, (entry) => sameSession(entry.session, session)),
+            (entry) => entry.question,
+          ),
+        )
         const send = Option.match(sending, {
           onNone: () => Effect.void,
-          onSome: (entry) => entry.send(session),
+          onSome: (entry) => entry.send(entry.session),
         })
         return send.pipe(Effect.andThen(actions.progress(session)))
       },
@@ -94,13 +110,24 @@ export const makeForkPane = (
       const question = raw.trim()
       const fork = view.value()
       const replying = Option.exists(fork, (current) => current.replying)
-      if (Option.isSome(pending()) || replying) return
+      // One question at a time: a second one is refused out loud, never
+      // dropped and never written over the one still waiting to go.
+      if (Option.isSome(outgoing) || Option.isSome(pending()) || replying) {
+        if (question.length > 0) shell.notify(BUSY_NOTICE)
+        return
+      }
       if (question.length === 0 && Option.isSome(fork)) return
+      const session = transport.currentSession()
+      if (Option.isNone(session)) return
       const send = Option.match(fork, {
         onNone: () => actions.fork,
         onSome: () => actions.ask,
       })
-      outgoing = Option.some({ question, send: (session) => send(question, session) })
+      outgoing = Option.some({
+        question,
+        session: session.value,
+        send: (target) => send(question, target),
+      })
       view.refresh()
     }
     return { fork: view.value, pending, error: view.error, ask, refresh: view.refresh }
