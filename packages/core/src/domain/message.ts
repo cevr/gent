@@ -1235,15 +1235,17 @@ const planOutput = (output: string | undefined): OutputPlan => {
     )
     .map(([key, field]) => ({ key, field, cost: fieldCost(key, field, encodedTwice) }))
     .toSorted((a, b) => a.cost - b.cost)
-  // Cheapest first: when every field's need fits, each one's even share of
-  // what is left covers it, so the whole output stays whole.
+  // Cheapest value first: a field's share is its own reserve plus an even
+  // part of the spare. When every field's need fits, the spare left at field
+  // i is at least the sum of the remaining values, and those are sorted, so
+  // each even part covers its own value and the whole output stays whole.
   const cuttable = Object.entries(value)
     .flatMap(([key, field]): ReadonlyArray<CuttableField> => {
       if (Predicate.isString(field)) return [textField(key, field)]
       if (!Array.isArray(field)) return []
       return Option.toArray(Option.map(scalarItems(field), (items) => itemsField(key, items)))
     })
-    .toSorted((a, b) => a.need - b.need)
+    .toSorted((a, b) => a.need - a.emptyCost - (b.need - b.emptyCost))
   const sum = (costs: ReadonlyArray<number>) => costs.reduce((total, cost) => total + cost, 0)
   return {
     room:
@@ -1262,13 +1264,12 @@ const planOutput = (output: string | undefined): OutputPlan => {
       }
       const cuts: Array<OutputCut> = []
       for (const [index, entry] of cuttable.entries()) {
-        // This field's room returns to what is left. Its share: its key, its
-        // quotes or brackets, its comma, and room for the record of its cut.
+        // The spare is what is left beyond every field's reserve. This
+        // field's share: its reserve (its key, its quotes or brackets, its
+        // comma, and room for the record of its cut) and an even part of it.
+        const share = entry.emptyCost + Math.floor(left / (cuttable.length - index))
         left += entry.emptyCost
-        const fitted = Option.getOrElse(
-          entry.fit(Math.floor(left / (cuttable.length - index))),
-          () => entry.emptied,
-        )
+        const fitted = Option.getOrElse(entry.fit(share), () => entry.emptied)
         kept[entry.key] = fitted.value
         left -= fieldCost(entry.key, fitted.value, encodedTwice)
         if (Option.isSome(fitted.cut)) {
