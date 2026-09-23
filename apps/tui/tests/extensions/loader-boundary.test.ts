@@ -15,9 +15,9 @@ import {
   type ClientRuntime,
   type ClientRuntimeServices,
   ClientSetupError,
-  type ClientShellTransportDefinition,
-  ClientTransport,
-  type ClientTransportDefinition,
+  ClientContext,
+  type ClientShellTransport,
+  type ClientTransport,
   type ExtensionClientModule,
   interactionRendererContribution,
   type MessageRenderer,
@@ -527,7 +527,7 @@ export default {
 
 /**
  *  lock: autocomplete `items()` returning an Effect that yields
- * `ClientTransport` flows through a `ManagedRuntime` providing the transport
+ * `ClientContext` flows through a `ManagedRuntime` providing the context
  * layer, mirroring how `autocomplete-popup-boundary.ts` dispatches
  * Effect-typed results to the resource.
  *
@@ -556,7 +556,7 @@ const makeFakeTransport = (
     readonly requestReply?: unknown
     readonly requestEffect?: () => Effect.Effect<unknown, Error>
   } = {},
-): ClientShellTransportDefinition =>
+): ClientShellTransport =>
   makeClientTestTransport({
     currentSession:
       opts.currentSession ??
@@ -568,15 +568,15 @@ const makeFakeTransport = (
     requestEffect: opts.requestEffect,
     requestReply: opts.requestReply ?? [],
   })
-const makeTestRuntime = (transport: ClientShellTransportDefinition) =>
+const makeTestRuntime = (transport: ClientShellTransport) =>
   makeClientExtensionRuntime({ transport })
 /** The extension-side call: yield the transport, request against the active session. */
 const listThings = Effect.gen(function* () {
-  const transport = yield* ClientTransport
+  const { transport } = yield* ClientContext
   return yield* transport.request(ref(ListThingsRpc), {})
 })
-describe("autocomplete Effect items() through ClientTransport", () => {
-  it.live("Effect items yielding ClientTransport resolves via runtime.runPromise", () =>
+describe("autocomplete Effect items() through the client transport", () => {
+  it.live("Effect items yielding ClientContext resolves via runtime.runPromise", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport()
       const runtime = makeTestRuntime(transport)
@@ -585,7 +585,7 @@ describe("autocomplete Effect items() through ClientTransport", () => {
         title: "Test",
         items: (filter: string) =>
           Effect.gen(function* () {
-            const t = yield* ClientTransport
+            const { transport: t } = yield* ClientContext
             // Touch the transport so the test proves the service resolved.
             expect(Option.isSome(t.currentSession())).toBe(true)
             return [
@@ -687,17 +687,14 @@ describe("autocomplete Effect items() through ClientTransport", () => {
       yield* Effect.promise(() => runtime.dispose())
     }),
   )
-  it.live("makeClientTransportLayer constructs a Layer that provides ClientTransport", () =>
+  it.live("the context's transport facet carries no shell authority", () =>
     Effect.gen(function* () {
       const transport = makeFakeTransport()
       const runtime = makeTestRuntime(transport)
-      const resolved: ClientTransportDefinition = yield* Effect.promise(() =>
-        runRuntimeEffectBoundary<ClientTransportDefinition, never, ClientTransport>(
+      const resolved: ClientTransport = yield* Effect.promise(() =>
+        runRuntimeEffectBoundary<ClientTransport, never, ClientContext>(
           runtime,
-          Effect.gen(function* () {
-            yield* Effect.void
-            return yield* ClientTransport
-          }),
+          ClientContext.use((context) => Effect.succeed(context.transport)),
         ),
       )
       expect(resolved.currentSession()).toEqual(

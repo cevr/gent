@@ -3,18 +3,11 @@ import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   type AutocompleteContribution,
   type ClientActivitySnapshot,
-  type ClientLifecycleDefinition,
+  type ClientContextDeps,
   type ClientRuntime,
-  type ClientShellDefinition,
-  type ClientShellTransportDefinition,
-  type ClientWorkspaceDefinition,
   type InteractionRendererComponent,
+  makeClientContextLayer,
   type MessageRenderer,
-  makeClientActivityLayer,
-  makeClientLifecycleLayer,
-  makeClientShellLayer,
-  makeClientTransportLayer,
-  makeClientWorkspaceLayer,
 } from "./client-facets.js"
 import {
   type Accessor,
@@ -46,45 +39,12 @@ import { useClient } from "../client"
 
 /**
  * One client `ManagedRuntime` for every surface that loads client
- * extensions: the interactive shell and tests.
- *
- * A surface supplies the transport, the workspace, and the `cast` of its
- * connected runtime. Shell UI callbacks, the activity provider, and the
- * lifecycle cleanup registry default to no-ops so a test does not restate
- * them.
+ * extensions: the interactive shell and tests. It adds `ClientContext` to the
+ * platform services.
  */
-
-interface ClientRuntimeDeps {
-  readonly transport: ClientShellTransportDefinition
-  readonly workspace: ClientWorkspaceDefinition
-  /** `cast` is required; every UI callback defaults to a no-op. */
-  readonly shell: Pick<ClientShellDefinition, "cast"> & Partial<Omit<ClientShellDefinition, "cast">>
-  /** Current UI activity; absent when the surface has no activity to report. */
-  readonly activity?: () => ClientActivitySnapshot
-  /** Cleanup registry; absent when the surface disposes the runtime whole. */
-  readonly lifecycle?: Pick<ClientLifecycleDefinition, "addCleanup">
-}
-
-const noopShell: Omit<ClientShellDefinition, "cast"> = {
-  notify: () => {},
-  switchSession: () => {},
-}
-
-const noopLifecycle: Pick<ClientLifecycleDefinition, "addCleanup"> = { addCleanup: () => {} }
-
-export const makeClientRuntime = (deps: ClientRuntimeDeps): ClientRuntime =>
+export const makeClientRuntime = (deps: ClientContextDeps): ClientRuntime =>
   ManagedRuntime.make(
-    Layer.mergeAll(
-      BunFileSystem.layer,
-      makeClientActivityLayer(deps.activity),
-      BunServices.layer,
-      makeClientTransportLayer(deps.transport),
-      makeClientWorkspaceLayer(deps.workspace),
-      makeClientShellLayer({ ...noopShell, ...deps.shell }),
-      makeClientLifecycleLayer(
-        Option.getOrElse(Option.fromUndefinedOr(deps.lifecycle), () => noopLifecycle),
-      ),
-    ),
+    Layer.mergeAll(BunFileSystem.layer, BunServices.layer, makeClientContextLayer(deps)),
   )
 
 // ── extension UI provider ───────────────────────────────────────────────────
@@ -96,8 +56,8 @@ export const makeClientRuntime = (deps: ClientRuntimeDeps): ClientRuntime =>
  * scope precedence. Provides resolved contributions to descendants.
  *
  * Widgets that need server-side state read it through `sessionQuery` and
- * refresh on `ClientTransport.onSessionEvent` or
- * `ClientTransport.onExtensionStateChanged`; see the goal label in
+ * refresh on `transport.onSessionEvent` or
+ * `transport.onExtensionStateChanged`; see the goal label in
  * `builtins.tsx` and the wake tray in `wake.client.tsx`.
  */
 
@@ -124,7 +84,7 @@ interface ExtensionUIContextValue {
   readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
   /** Register dynamic autocomplete contributions (e.g. from session controller) */
   readonly setDynamicAutocomplete: (items: ReadonlyArray<AutocompleteContribution>) => void
-  /** ManagedRuntime providing FileSystem, Path, ClientTransport — used by
+  /** ManagedRuntime providing FileSystem, Path, ClientContext — used by
    *  Effect-typed contribution surfaces (autocomplete `items`, etc.). */
   readonly clientRuntime: ClientRuntime
 }
@@ -168,11 +128,8 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   }
 
   // Per-provider ManagedRuntime that augments the shared platform layer
-  // (FileSystem, Path) with the TUI client services Effect-typed
-  // extensions may yield: `ClientTransport` (typed RPC client + event
-  // subscriptions), `ClientWorkspace` (cwd/home), `ClientShell`
-  // (notify, session switch). `loadTuiExtensions` runs each setup on this
-  // runtime.
+  // (FileSystem, Path) with the `ClientContext` extensions yield.
+  // `loadTuiExtensions` runs each setup on this runtime.
   const clientRuntime: ClientRuntime = makeClientRuntime({
     transport: {
       client: client.client,
@@ -206,7 +163,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
   // Run widget-registered cleanups (Solid root disposers, pulse
   // unsubscribes) FIRST, then dispose the per-provider runtime so layer
   // finalizers run and any in-flight Effects are interrupted. Without
-  // this ordering, runtime disposal would yank `ClientTransport` out
+  // this ordering, runtime disposal would yank `ClientContext` out
   // from under widget cleanups that still need it.
   onCleanup(() => {
     for (const fn of cleanups) {

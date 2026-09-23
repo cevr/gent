@@ -999,11 +999,11 @@ Other notes:
 - Builtins live in `apps/tui/src/extensions/builtins.tsx`; a builtin with its own view keeps its own `apps/tui/src/extensions/*.client.tsx` file
 - Each follows `ExtensionClientModule` contract — same pipeline as user/project extensions
 - Loader (`apps/tui/src/extensions/loader-boundary.ts`) accepts `disabled` list to filter extensions by id before `setup` runs
-- One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientComposer | ClientLifecycle`. There is no imperative `ctx` argument, no sync `(ctx) => Array` arm, and no package wrapper around paired server/client modules. Shared server/client artifacts use `defineExtension({ client })`; TUI-only artifacts use `.client.{ts,tsx}` modules.
-- Widgets are transport-only: subscribe to `ClientTransport.onSessionEvent` for event-backed invalidation or `ClientTransport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `ClientTransport` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins.tsx` for the canonical pattern.
-- `ClientLifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and event unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
-- `ClientLifecycle.scoped` allocates Effect resources in the client-provider lifetime. The main TUI scope awaits provider disposal before process exit.
-- `ClientActivity` exposes a reactive view of the active UI session and its working, blocked, idle, or unavailable state. Headless clients do not provide an activity accessor.
+- One `setup` shape: Effect-typed `Effect<ClientContribution[], E, R>`. Setups yield from the per-provider `clientRuntime`, which provides `FileSystem | Path | ClientContext`. `ClientContext` is the client twin of `ExtensionContext`: one Tag with the `transport`, `shell`, `workspace`, `lifecycle`, and `activity` facets, which a setup yields (`const { transport, shell } = yield* ClientContext`) and never threads as a parameter. There is no imperative `ctx` argument, no sync `(ctx) => Array` arm, and no package wrapper around paired server/client modules. Shared server/client artifacts use `defineExtension({ client })`; TUI-only artifacts use `.client.{ts,tsx}` modules.
+- Widgets are transport-only: subscribe to `transport.onSessionEvent` for event-backed invalidation or `transport.onExtensionStateChanged` for explicit extension-state notifications, then call typed extension RPC via `transport.request` for current state. Each widget owns its own Solid signal, keyed on `(sessionId, branchId)` so a stale model from the prior session never renders. See `apps/tui/src/extensions/builtins.tsx` for the canonical pattern.
+- `lifecycle.addCleanup` registers Solid `createRoot(dispose)` disposers and event unsubscribes; the provider's `onCleanup` reaps them on unmount, so widget setups leave no detached roots behind.
+- `lifecycle.scoped` allocates Effect resources in the client-provider lifetime. The main TUI scope awaits provider disposal before process exit.
+- `activity` exposes a reactive view of the active UI session and its working, blocked, idle, or unavailable state. A surface with no activity to report reads `"unknown"`.
 - `@gent/herdr` is a built-in client extension. It reports that UI activity through Herdr's local socket when `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are present. It sends ordered reports with the session ID and releases its authority on exit. The shared server and child agents do not own this reporter.
 - `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, and `clientRuntime` for widgets that need imperative access from the render layer.
 - Widgets are zero-prop components that self-source from context hooks.
@@ -1021,7 +1021,7 @@ or ask/reply infrastructure inside extension authoring.
 **Event-backed client invalidation**:
 
 - Server event publishing appends and broadcasts committed `AgentEvent`s only; it does not synthesize extension invalidation events from registry metadata.
-- TUI widgets that derive state from events subscribe with `ClientTransport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/goal` is an event-backed widget.
+- TUI widgets that derive state from events subscribe with `transport.onSessionEvent` and refetch their typed extension RPC when relevant event tags arrive. `@gent/goal` is an event-backed widget.
 - `ExtensionStateChanged` remains available as an explicit, payload-free notification event for extensions that choose to publish it directly.
 
 ## Testing

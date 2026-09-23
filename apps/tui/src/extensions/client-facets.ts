@@ -40,17 +40,16 @@ import type { RGBA } from "@opentui/core"
  * The runtime accepts only the Effect setup shape.
  *
  * Solid integration: extensions return contributions; the TUI shell owns one
- * per-provider `ManagedRuntime` widened with the union of services any
- * Effect-typed setup may yield (e.g. `FileSystem | Path | ClientTransport`),
+ * per-provider `ManagedRuntime` that provides `FileSystem | Path | ClientContext`,
  * and runs each setup via `runtime.runPromise`. Async work inside
  * contributions (autocomplete `items`, etc.) is wired via the same runtime —
  * the seam is at the rendering edge, not in the Effect surface.
  *
  * Layering: `ClientDeps` is the TUI-local *floor* (`FileSystem | Path`).
- * The TUI shell augments its runtime with the client services below, and an
- * extension widens its `R` to the ones it yields. `ClientTransport` lives
- * here, not in `@gent/core`, because the SDK client types
- * (`GentNamespacedClient`, `GentRuntime`) live downstream of `@gent/core`.
+ * The TUI shell augments its runtime with `ClientContext`, and an extension
+ * that yields it widens its `R`. `ClientContext` lives here, not in
+ * `@gent/core`, because the SDK client types (`GentNamespacedClient`,
+ * `GentRuntime`) live downstream of `@gent/core`.
  */
 
 // ── Errors ────────────────────────────────────────────────────────────────
@@ -70,8 +69,8 @@ export class ClientSetupError extends Schema.TaggedError<ClientSetupError>()("Cl
  * The dependency channel a client extension's setup Effect MAY require.
  *
  * `ClientDeps` is the TUI-local floor: file system and path services. It is
- * a floor, not a ceiling: the TUI runtime adds the client services below, and
- * an extension that yields one of those declares a wider `R`.
+ * a floor, not a ceiling: the TUI runtime adds `ClientContext`, and an
+ * extension that yields it declares a wider `R`.
  */
 type ClientDeps = FileSystem.FileSystem | Path.Path
 
@@ -81,9 +80,8 @@ type ClientDeps = FileSystem.FileSystem | Path.Path
  * An Effect that returns a value, may fail with `ClientSetupError`, and may
  * read from any subset of services its runtime provides. `R` defaults to
  * `ClientDeps` — the floor — so a setup that only needs `FileSystem`/`Path`
- * compiles without ceremony. Extensions needing more (transport, theme,
- * shell-specific services) widen `R` themselves; the loader's runtime
- * provides whatever services the extension yields.
+ * compiles without ceremony. An extension that yields `ClientContext` widens
+ * `R` itself; the loader's runtime provides it.
  */
 export type ClientEffect<Value, Error = ClientSetupError, Services = ClientDeps> = Effect.Effect<
   Value,
@@ -105,20 +103,16 @@ export type ClientActivitySnapshot = typeof ClientActivitySnapshot.Type
  * Absence has one encoding: a surface with nothing to report reports
  * `"unknown"`. A reader never re-tests a decision the composition root made.
  */
-export class ClientActivity extends Context.Service<
-  ClientActivity,
-  { readonly snapshot: () => ClientActivitySnapshot }
->()("@gent/tui/src/extensions/client-facets/ClientActivity") {}
+interface ClientActivity {
+  readonly snapshot: () => ClientActivitySnapshot
+}
 
 const unknownActivity = (): ClientActivitySnapshot => ({ state: "unknown" })
-
-export const makeClientActivityLayer = (snapshot: () => ClientActivitySnapshot = unknownActivity) =>
-  Layer.succeed(ClientActivity, ClientActivity.of({ snapshot }))
 
 // ── transport facet ─────────────────────────────────────────────────────────
 
 /**
- * TUI-side `ClientTransport` — typed transport surface for client extensions.
+ * `ClientContext.transport` — the typed transport surface for client extensions.
  *
  * Core can't declare this with typed payloads because TUI extension transport
  * runs above the SDK. The TUI shell owns the raw SDK client/runtime and
@@ -128,11 +122,11 @@ export const makeClientActivityLayer = (snapshot: () => ClientActivitySnapshot =
  *
  *   ```ts
  *   import { Effect } from "effect"
- *   import { ClientTransport, defineClientExtension } from "./client-facets"
+ *   import { ClientContext, defineClientExtension } from "./client-facets"
  *
  *   export default defineClientExtension("@gent/x", {
  *     setup: Effect.gen(function* () {
- *       const transport = yield* ClientTransport
+ *       const { transport } = yield* ClientContext
  *       const result = yield* transport.request(ref(MyRpc.List), {})
  *       return clientContributions(...)
  *     }),
@@ -164,7 +158,7 @@ export interface ExtensionAgentDetail {
   readonly omittedMessages: number
 }
 
-export interface ClientTransportDefinition {
+export interface ClientTransport {
   /** Active (sessionId, branchId); `None` before a session is mounted. */
   readonly currentSession: () => Option.Option<ActiveExtensionSession>
   readonly request: <Input, Output>(
@@ -221,61 +215,43 @@ export interface ClientTransportDefinition {
   }) => Effect.Effect<void, ClientTransportRequestError>
 }
 
-export interface ClientShellTransportDefinition {
+/**
+ * What the shell hands the transport facet: the raw SDK client and runtime,
+ * which never reach an extension, plus the session accessors it passes through.
+ */
+export type ClientShellTransport = Pick<
+  ClientTransport,
+  "currentSession" | "onExtensionStateChanged" | "onSessionEvent"
+> & {
   readonly client: GentNamespacedClient
   readonly runtime: GentRuntime
-  /** Active (sessionId, branchId); `None` before a session is mounted. */
-  readonly currentSession: () => Option.Option<ActiveExtensionSession>
-  /** Subscribe to `ExtensionStateChanged` pulses from the active session.
-   *  Returns an unsubscribe function. Multiple subscribers receive each
-   *  pulse independently. Widgets use this to invalidate cached state
-   *  when their server-side extension publishes a state change. */
-  readonly onExtensionStateChanged: (
-    cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
-  ) => () => void
-  /** Subscribe to every event for the active session/branch. */
-  readonly onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
 }
 
-export class ClientTransport extends Context.Service<ClientTransport, ClientTransportDefinition>()(
-  "@gent/tui/src/extensions/client-facets/ClientTransport",
-) {}
-
-/**
- * Build a Layer providing `ClientTransport` from a connected `useClient()`
- * result. The input carries shell authority; the provided service does not.
- */
-export const makeClientTransportLayer = (
-  payload: ClientShellTransportDefinition,
-): Layer.Layer<ClientTransport> => {
-  const transport: ClientTransportDefinition = {
-    currentSession: payload.currentSession,
-    request: <Input, Output>(
-      ref: CapabilityRef<Input, Output>,
-      input: Input,
-      activeSession?: ActiveExtensionSession,
-    ) => requestExtensionAt(payload, ref, input, activeSession),
-    onExtensionStateChanged: payload.onExtensionStateChanged,
-    onSessionEvent: payload.onSessionEvent,
-    agentDetail: (key) => agentDetailAt(payload, key),
-    deleteSession: (sessionId) =>
-      shellRead(payload, "session.delete", (client) => client.session.delete({ sessionId })).pipe(
-        Effect.asVoid,
-      ),
-    threadSessions: (sessionId) =>
-      shellRead(payload, "session.thread", (client) => client.session.thread({ sessionId })),
-    listMessages: (branchId) =>
-      shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
-    driverList: shellRead(payload, "driver.list", (client) => client.driver.list()),
-    driverSet: (input) =>
-      shellRead(payload, "driver.set", (client) => client.driver.set(input)).pipe(Effect.asVoid),
-    driverClear: (input) =>
-      shellRead(payload, "driver.clear", (client) => client.driver.clear(input)).pipe(
-        Effect.asVoid,
-      ),
-  }
-  return Layer.succeed(ClientTransport, transport)
-}
+/** Seal the shell's authority behind the typed transport an extension sees. */
+const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
+  currentSession: payload.currentSession,
+  request: <Input, Output>(
+    ref: CapabilityRef<Input, Output>,
+    input: Input,
+    activeSession?: ActiveExtensionSession,
+  ) => requestExtensionAt(payload, ref, input, activeSession),
+  onExtensionStateChanged: payload.onExtensionStateChanged,
+  onSessionEvent: payload.onSessionEvent,
+  agentDetail: (key) => agentDetailAt(payload, key),
+  deleteSession: (sessionId) =>
+    shellRead(payload, "session.delete", (client) => client.session.delete({ sessionId })).pipe(
+      Effect.asVoid,
+    ),
+  threadSessions: (sessionId) =>
+    shellRead(payload, "session.thread", (client) => client.session.thread({ sessionId })),
+  listMessages: (branchId) =>
+    shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
+  driverList: shellRead(payload, "driver.list", (client) => client.driver.list()),
+  driverSet: (input) =>
+    shellRead(payload, "driver.set", (client) => client.driver.set(input)).pipe(Effect.asVoid),
+  driverClear: (input) =>
+    shellRead(payload, "driver.clear", (client) => client.driver.clear(input)).pipe(Effect.asVoid),
+})
 
 // ── request helper ────────────────────────────────────────────────────────
 
@@ -305,7 +281,7 @@ export class ClientTransportReplyDecodeError extends Schema.TaggedError<ClientTr
 ) {}
 
 const currentOrActiveSession = (
-  transport: ClientShellTransportDefinition,
+  transport: ClientShellTransport,
   activeSession?: ActiveExtensionSession,
 ): Effect.Effect<ActiveExtensionSession, NoActiveSessionError> => {
   const session = Option.orElse(Option.fromNullishOr(activeSession), transport.currentSession)
@@ -314,7 +290,7 @@ const currentOrActiveSession = (
 }
 
 const requestExtensionAt = <Input, Output>(
-  transport: ClientShellTransportDefinition,
+  transport: ClientShellTransport,
   ref: CapabilityRef<Input, Output>,
   input: Input,
   activeSession?: ActiveExtensionSession,
@@ -359,7 +335,7 @@ const requestExtensionAt = <Input, Output>(
 
 /** One shell RPC read, with its failure named by the RPC it came from. */
 const shellRead = <A>(
-  transport: ClientShellTransportDefinition,
+  transport: ClientShellTransport,
   tag: string,
   read: (client: GentNamespacedClient) => Effect.Effect<A, GentClientRpcError>,
 ): Effect.Effect<A, ClientTransportRequestError> =>
@@ -381,7 +357,7 @@ const shellRead = <A>(
  * no use for it, so the extension surface never sees it.
  */
 const agentDetailAt = (
-  transport: ClientShellTransportDefinition,
+  transport: ClientShellTransport,
   key: ActiveExtensionSession,
 ): Effect.Effect<ExtensionAgentDetail, ClientTransportRequestError> =>
   shellRead(transport, "session.getSnapshot", (client) =>
@@ -402,36 +378,12 @@ const agentDetailAt = (
 
 // ── workspace, shell and lifecycle facets ───────────────────────────────────
 
-/**
- * TUI client services — typed Effect services that compose into the
- * per-provider `ManagedRuntime`. Effect-typed extension setups yield
- * the services they need (`ClientWorkspace`, `ClientShell`,
- * `ClientTransport`).
- *
- * Why split: each service has a different lifetime/coupling profile.
- * `ClientWorkspace` is process-static (cwd/home don't change).
- * `ClientShell` captures session-bound callbacks. Splitting lets a setup
- * yield exactly what it depends on.
- */
-
-// ── ClientWorkspace ──────────────────────────────────────────────────────
-
-export interface ClientWorkspaceDefinition {
+interface ClientWorkspace {
   readonly cwd: string
   readonly home: string
 }
 
-export class ClientWorkspace extends Context.Service<ClientWorkspace, ClientWorkspaceDefinition>()(
-  "@gent/tui/src/extensions/client-facets/ClientWorkspace",
-) {}
-
-export const makeClientWorkspaceLayer = (
-  payload: ClientWorkspaceDefinition,
-): Layer.Layer<ClientWorkspace> => Layer.succeed(ClientWorkspace, payload)
-
-// ── ClientShell ──────────────────────────────────────────────────────────
-
-export interface ClientShellDefinition {
+export interface ClientShell {
   /**
    * Show a one-line status in the footer, where the session's own slash
    * commands report a usage hint or a failure. The next turn clears it.
@@ -453,16 +405,7 @@ export interface ClientShellDefinition {
   readonly cast: <A, E>(effect: Effect.Effect<A, E, never>) => void
 }
 
-export class ClientShell extends Context.Service<ClientShell, ClientShellDefinition>()(
-  "@gent/tui/src/extensions/client-facets/ClientShell",
-) {}
-
-export const makeClientShellLayer = (payload: ClientShellDefinition): Layer.Layer<ClientShell> =>
-  Layer.succeed(ClientShell, payload)
-
-// ── ClientLifecycle ──────────────────────────────────────────────────────
-
-export interface ClientLifecycleDefinition {
+interface ClientLifecycle {
   /** Allocate resources in the client provider lifetime, not the setup request. */
   readonly scoped: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
@@ -480,18 +423,62 @@ export interface ClientLifecycleDefinition {
   readonly addCleanup: (fn: () => void) => void
 }
 
-export class ClientLifecycle extends Context.Service<ClientLifecycle, ClientLifecycleDefinition>()(
-  "@gent/tui/src/extensions/client-facets/ClientLifecycle",
-) {}
+// ── client context ──────────────────────────────────────────────────────────
 
-export const makeClientLifecycleLayer = (
-  payload: Pick<ClientLifecycleDefinition, "addCleanup">,
-): Layer.Layer<ClientLifecycle> =>
+/**
+ * The one service a client extension yields, as `ExtensionContext` is on the
+ * server: `const { transport, shell } = yield* ClientContext`. Every surface
+ * that loads client extensions builds it with `makeClientContextLayer`.
+ */
+export class ClientContext extends Context.Service<
+  ClientContext,
+  {
+    readonly transport: ClientTransport
+    readonly shell: ClientShell
+    readonly workspace: ClientWorkspace
+    readonly lifecycle: ClientLifecycle
+    readonly activity: ClientActivity
+  }
+>()("@gent/tui/src/extensions/client-facets/ClientContext") {}
+
+/**
+ * What a surface supplies: the transport, the workspace, and the `cast` of its
+ * connected runtime. The other shell callbacks, the activity reader, and the
+ * cleanup registry default to no-ops, so a test does not restate them.
+ */
+export interface ClientContextDeps {
+  readonly transport: ClientShellTransport
+  readonly workspace: ClientWorkspace
+  readonly shell: Pick<ClientShell, "cast"> & Partial<Omit<ClientShell, "cast">>
+  /** Current UI activity; absent when the surface has no activity to report. */
+  readonly activity?: () => ClientActivitySnapshot
+  /** Cleanup registry; absent when the surface disposes the runtime whole. */
+  readonly lifecycle?: Pick<ClientLifecycle, "addCleanup">
+}
+
+const noopShell: Omit<ClientShell, "cast"> = { notify: () => {}, switchSession: () => {} }
+
+const noopLifecycle: Pick<ClientLifecycle, "addCleanup"> = { addCleanup: () => {} }
+
+/** `lifecycle.scoped` allocates in the scope that builds this layer: the client runtime's. */
+export const makeClientContextLayer = (deps: ClientContextDeps): Layer.Layer<ClientContext> =>
   Layer.effect(
-    ClientLifecycle,
+    ClientContext,
     Effect.gen(function* () {
       const scope = yield* Scope.Scope
-      return ClientLifecycle.of({ ...payload, scoped: (effect) => Scope.provide(scope)(effect) })
+      const lifecycle = Option.getOrElse(
+        Option.fromUndefinedOr(deps.lifecycle),
+        () => noopLifecycle,
+      )
+      return ClientContext.of({
+        transport: transportFacet(deps.transport),
+        shell: { ...noopShell, ...deps.shell },
+        workspace: deps.workspace,
+        lifecycle: { ...lifecycle, scoped: (effect) => Scope.provide(scope)(effect) },
+        activity: {
+          snapshot: Option.getOrElse(Option.fromUndefinedOr(deps.activity), () => unknownActivity),
+        },
+      })
     }),
   )
 
@@ -529,11 +516,9 @@ export const sessionQuery = <A>(opts: {
   readonly fetch: (
     session: ActiveExtensionSession,
   ) => Effect.Effect<A, { readonly message: string }>
-}): Effect.Effect<SessionQuery<A>, never, ClientTransport | ClientShell | ClientLifecycle> =>
+}): Effect.Effect<SessionQuery<A>, never, ClientContext> =>
   Effect.gen(function* () {
-    const transport = yield* ClientTransport
-    const shell = yield* ClientShell
-    const lifecycle = yield* ClientLifecycle
+    const { transport, shell, lifecycle } = yield* ClientContext
     return createRoot((dispose) => {
       lifecycle.addCleanup(dispose)
       type Keyed = { readonly session: ActiveExtensionSession; readonly value: A }
@@ -606,8 +591,7 @@ export const sessionQuery = <A>(opts: {
 // files from extension directories, imports them, runs each `setup` against
 // the per-provider `clientRuntime`, and resolves contributions with scope
 // precedence (project > user > builtin). Setups yield typed services from
-// the runtime (`ClientTransport`, `ClientShell`, `ClientWorkspace`,
-// `ClientLifecycle`, `FileSystem`, `Path`) — there is no
+// the runtime (`ClientContext`, `FileSystem`, `Path`) — there is no
 // `(ctx) => Array` arm and no imperative context bag.
 //
 // The `ClientContributions` bucket is the foundational data structure here.
@@ -650,13 +634,7 @@ export type MessageRenderer = (props: MessageRowProps) => JSX.Element
 export type WidgetComponent = () => JSX.Element
 export type InteractionRendererComponent = (props: InteractionRendererProps) => JSX.Element
 
-export type ClientRuntimeServices =
-  | ClientDeps
-  | ClientTransport
-  | ClientWorkspace
-  | ClientShell
-  | ClientLifecycle
-  | ClientActivity
+export type ClientRuntimeServices = ClientDeps | ClientContext
 
 export type ClientRuntime = ManagedRuntime.ManagedRuntime<ClientRuntimeServices, never>
 
@@ -729,7 +707,7 @@ export interface AutocompleteContribution {
    *  - Sync: returned array used directly.
    *  - Effect: run through the TUI shell's `clientRuntime`. R may be any
    *    subset of services the runtime provides (FileSystem | Path |
-   *    ClientTransport | ClientWorkspace | ...).
+   *    ClientContext).
    *  The popup wraps in `createResource` — undefined while loading, items
    *  when resolved. Async work goes through Effect so client extension code
    *  shares the TUI shell runtime and cancellation semantics. */
@@ -839,13 +817,9 @@ export const autocompleteContribution = (opts: AutocompleteContribution): Client
 /**
  * A client extension's setup is an Effect that yields its dependencies
  * from the per-provider TUI runtime — `ClientDeps` (FileSystem | Path) by
- * default, widened by every TUI service the extension yields
- * (`ClientWorkspace`, `ClientShell`, `ClientTransport`).
- *
- * The TUI shell publishes its typed `ClientTransport` tag at
- * `apps/tui/src/extensions/client-facets.ts`; an extension that needs
- * the transport yields it and the per-provider `ManagedRuntime` provides
- * it. Errors flow on the typed `ClientSetupError` channel.
+ * default, widened to `ClientContext` when the extension yields it; the
+ * per-provider `ManagedRuntime` provides it. Errors flow on the typed
+ * `ClientSetupError` channel.
  */
 type ExtensionClientSetup<Services extends ClientRuntimeServices = ClientDeps> = ClientEffect<
   ClientContributions,
@@ -856,8 +830,7 @@ type ExtensionClientSetup<Services extends ClientRuntimeServices = ClientDeps> =
 /** A TUI extension module — default export of *.client.{tsx,ts,js,mjs} files.
  *
  * `R` defaults to `ClientDeps` (FileSystem | Path). An extension that yields
- * additional services (e.g. a TUI-side `ClientTransport`) widens `R` and
- * relies on the loader's runtime to provide every service it requires.
+ * `ClientContext` widens `R` and relies on the loader's runtime to provide it.
  */
 export interface ExtensionClientModule<R extends ClientRuntimeServices = ClientDeps> {
   readonly id: string
@@ -871,9 +844,7 @@ export type AnyExtensionClientModule = ExtensionClientModule<ClientRuntimeServic
  * extensions and TUI client modules share an id by convention — the TUI
  * loader looks up the module by id when wiring contributions.
  *
- * The setup is an Effect. Read the typed transport via
- * `yield* ClientTransport` and the other services via `yield* ClientShell` /
- * `ClientWorkspace`.
+ * The setup is an Effect. Read the host facets via `yield* ClientContext`.
  */
 export function defineClientExtension<R extends ClientRuntimeServices = ClientDeps>(
   id: string,

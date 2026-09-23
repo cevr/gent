@@ -15,8 +15,7 @@ import { useTerminalDimensions } from "../terminal"
 import { CollapsedRow, useSpinnerClock } from "../ui"
 import {
   clientContributions,
-  ClientLifecycle,
-  ClientTransport,
+  ClientContext,
   defineClientExtension,
   messageRendererContribution,
   sessionQuery,
@@ -182,8 +181,7 @@ const REFRESH_EVENTS: ReadonlySet<string> = new Set([
 
 export default defineClientExtension(WAKE_EXTENSION_ID, {
   setup: Effect.gen(function* () {
-    const transport = yield* ClientTransport
-    const lifecycle = yield* ClientLifecycle
+    const { transport, lifecycle } = yield* ClientContext
 
     const pending = yield* sessionQuery({
       initial: Option.none<WakePendingType>(),

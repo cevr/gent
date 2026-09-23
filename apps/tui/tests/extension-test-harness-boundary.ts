@@ -6,8 +6,8 @@ import type {
   ClientContributions,
   ClientRuntime,
   ClientRuntimeServices,
-  ClientShellDefinition,
-  ClientShellTransportDefinition,
+  ClientShell,
+  ClientShellTransport,
 } from "../src/extensions/client-facets"
 import { makeClientRuntime } from "../src/extensions/host"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
@@ -17,9 +17,9 @@ export type ActiveClientSession = { readonly sessionId: SessionId; readonly bran
 export type ActiveClientSessionRef = { value: ActiveClientSession | undefined }
 
 export interface ClientExtensionHarnessOptions {
-  readonly transport?: ClientShellTransportDefinition
+  readonly transport?: ClientShellTransport
   /** Shell callbacks a test wants to observe; the rest stay no-ops. */
-  readonly shell?: Partial<ClientShellDefinition>
+  readonly shell?: Partial<ClientShell>
   readonly currentSession?: () => Option.Option<ActiveClientSession>
   readonly activeSession?: ActiveClientSessionRef
   readonly requestDeferred?: Deferred.Deferred<unknown, never>
@@ -42,7 +42,7 @@ export const makeActiveSessionRef = (value?: ActiveClientSession): ActiveClientS
 
 export const makeClientTestTransport = (
   opts: ClientExtensionHarnessOptions = {},
-): ClientShellTransportDefinition => {
+): ClientShellTransport => {
   const client = createMockClient({
     extension: {
       request: () => {

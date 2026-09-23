@@ -185,17 +185,17 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - Builtins are statically imported in `host.tsx` for Bun compiled binary compatibility
 - User/project extensions discovered via filesystem scan (`loader-boundary.ts`, Effect-typed)
 - `loader-boundary.ts` accepts `disabled` list — skips `setup` for disabled extensions
-- One setup shape: Effect-typed `Effect<Array, E, R>`. Setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientTransport | ClientWorkspace | ClientShell | ClientLifecycle`
-- **Transport-only widgets**: there is no in-process snapshot cache. A widget reads server state through `sessionQuery` (in `client-facets.ts`), which yields the client services, keys each reply on `(sessionId, branchId)` and drops a reply for a session the shell has left. `follow: true` reads again on every session move. The widget refreshes it on typed session events or `ClientTransport.onExtensionStateChanged` pulses. The goal label (`builtins.tsx`) and the wake tray (`wake.client.tsx`) are the canonical examples.
-- **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `ClientLifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
+- One setup shape: Effect-typed `Effect<Array, E, R>`. Setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientContext`. A setup yields the facets it needs: `const { transport, shell, lifecycle } = yield* ClientContext`. Never pass `ClientContext` or a facet as a parameter
+- **Transport-only widgets**: there is no in-process snapshot cache. A widget reads server state through `sessionQuery` (in `client-facets.ts`), which yields `ClientContext`, keys each reply on `(sessionId, branchId)` and drops a reply for a session the shell has left. `follow: true` reads again on every session move. The widget refreshes it on typed session events or `transport.onExtensionStateChanged` pulses. The goal label (`builtins.tsx`) and the wake tray (`wake.client.tsx`) are the canonical examples.
+- **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `lifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
 - Extensions have no overlays. A pane is a `below-input` widget that the extension opens and closes with its own signal (agents, thread, btw). A pane that takes typed text reads keys through `useScopedKeyboard`, as the agents filter and the btw ask line do: an `<input>` would take the terminal's focus from the composer, and the composer would not get it back.
-- `useExtensionUI()` provides the resolved contributions, the load `failures`, and `clientRuntime`; widgets read the session from `ClientTransport.currentSession()`
+- `useExtensionUI()` provides the resolved contributions, the load `failures`, and `clientRuntime`; widgets read the session from `transport.currentSession()`
 - **Message rows**: `messageRendererContribution(customType, component)` draws the user-role messages whose `metadata.customType` matches exactly. The component composes `UserRow` or `CollapsedRow` from `src/ui.tsx`. `message-list.tsx` names only the runtime's own kinds (`context-window`, `model-change`), and full detail draws every message as the plain row
 - Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`
 - `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups
-- `ClientWorkspace.cwd` / `ClientWorkspace.home` for workspace-relative operations
-- **`ClientActivity` has one encoding for absence**: `snapshot` is a plain reader, and a surface with nothing to report is given the default that returns `state: "unknown"` (a test takes it by omitting `activity`). Readers call `activity.snapshot()` and never re-test whether a provider exists — the composition root already decided. Do not reintroduce an `Option` around the reader alongside the default.
+- `workspace.cwd` / `workspace.home` for workspace-relative operations
+- **`activity` has one encoding for absence**: `snapshot` is a plain reader, and a surface with nothing to report is given the default that returns `state: "unknown"` (a test takes it by omitting `activity`). Readers call `activity.snapshot()` and never re-test whether a provider exists — the composition root already decided. Do not reintroduce an `Option` around the reader alongside the default.
 
 ## Key Files (Composer + Session)
 

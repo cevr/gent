@@ -890,7 +890,7 @@ interface ClientAgentValue {
   // eslint-disable-next-line effect/noNullish -- UI callers pass null to clear a local error.
   setError: (error: string | null) => void
   /**
-   * The last extension notice (`ClientShell.notify`). It sits beside the
+   * The last extension notice (`ClientContext.shell.notify`). It sits beside the
    * turn status, not in it: a notice leaves a running turn running and a
    * standing error standing. The next notice replaces it; a new turn or a
    * session change clears it.

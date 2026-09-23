@@ -16,14 +16,10 @@ import {
   type AnyExtensionClientModule,
   autocompleteContribution,
   borderLabelContribution,
-  ClientActivity,
   type ClientActivitySnapshot,
   clientCommandContribution,
   clientContributions,
-  ClientLifecycle,
-  ClientShell,
-  ClientTransport,
-  ClientWorkspace,
+  ClientContext,
   defineClientExtension,
   interactionRendererContribution,
   messageRendererContribution,
@@ -243,7 +239,7 @@ export const trackSelection = (cwd: string, query: string, filePath: string): vo
 /**
  * Files autocomplete (`@`) — Effect-typed setup.
  *
- * Yields `ClientWorkspace` for cwd/home and `FileSystem.FileSystem` for the
+ * Yields `ClientContext.workspace` for cwd/home and `FileSystem.FileSystem` for the
  * empty-filter top-level directory listing. Non-empty filter goes through
  * the FFF-backed `searchFiles` Effect; there is no glob fallback.
  *
@@ -266,7 +262,7 @@ const formatMatch = (f: { path: string; name: string }) => {
 
 const builtinFiles = defineClientExtension("@gent/files-ui", {
   setup: Effect.gen(function* () {
-    const workspace = yield* ClientWorkspace
+    const { workspace } = yield* ClientContext
     const fs = yield* FileSystem.FileSystem
     const dbDir = `${workspace.home}/.gent/fff`
     yield* Effect.ignore(fs.makeDirectory(dbDir, { recursive: true }))
@@ -472,9 +468,8 @@ export const builtinHerdr = defineClientExtension("@gent/herdr", {
   setup: Effect.gen(function* () {
     const target = yield* herdrEnvironment.pipe(Effect.orDie)
     if (Option.isNone(target)) return clientContributions()
-    const activity = yield* ClientActivity
+    const { activity, lifecycle } = yield* ClientContext
     const read = activity.snapshot
-    const lifecycle = yield* ClientLifecycle
     const reporter = yield* lifecycle.scoped(makeHerdrReporter(target.value))
     createRoot((dispose) => {
       createEffect(() => reporter.report(read()))
@@ -494,7 +489,7 @@ export const builtinHerdr = defineClientExtension("@gent/herdr", {
  *   - `/driver` (no args)             → usage hint
  *
  * Validation lives server-side: `driver.set` rejects unknown driver ids. The
- * usage hint and every failure go to the footer through `ClientShell.notify`;
+ * usage hint and every failure go to the footer through `shell.notify`;
  * a change that lands reports nothing.
  *
  * This contribution is delivered by a core builtin (not by the
@@ -511,8 +506,7 @@ const driverRef = (entry: { readonly _tag: string; readonly id: string }) => {
 
 export const builtinDriver = defineClientExtension("@gent/driver-ui", {
   setup: Effect.gen(function* () {
-    const shell = yield* ClientShell
-    const transport = yield* ClientTransport
+    const { shell, transport } = yield* ClientContext
     const notify = (message: string) => Effect.sync(() => shell.notify(message))
 
     const clearDriver = (agentName: AgentName) =>
@@ -569,8 +563,7 @@ export const builtinDriver = defineClientExtension("@gent/driver-ui", {
 
 const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
   setup: Effect.gen(function* () {
-    const transport = yield* ClientTransport
-    const lifecycle = yield* ClientLifecycle
+    const { transport, lifecycle } = yield* ClientContext
 
     const snapshot = yield* sessionQuery({
       initial: Option.none<GoalSnapshot>(),
@@ -782,7 +775,7 @@ const builtinConnection = defineClientExtension("@gent/connection", {
 
 const builtinSkills = defineClientExtension("@gent/skills-ui", {
   setup: Effect.gen(function* () {
-    const workspace = yield* ClientWorkspace
+    const { workspace } = yield* ClientContext
     // The store's reads and writes need `FileSystem` and `Path`. `onSelect`
     // is a plain sync callback from the composer with no Effect context of
     // its own, so the setup captures the services once and forks the write
@@ -803,7 +796,7 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
       // is cheap and picks written by another `gent` process are seen too.
       items: (filter: string) =>
         Effect.gen(function* () {
-          const transport = yield* ClientTransport
+          const { transport } = yield* ClientContext
           const skills = yield* transport.request(ref(SkillsRpc.ListSkills), {})
           const store = yield* readFrecencyStore(workspace.home)
           const lookup = frecencyLookup(

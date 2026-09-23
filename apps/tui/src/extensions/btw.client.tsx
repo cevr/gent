@@ -6,9 +6,7 @@ import { BTW_EXTENSION_ID, BtwRpc, type ForkViewType } from "@gent/extensions/cl
 import {
   clientCommandContribution,
   clientContributions,
-  ClientLifecycle,
-  ClientShell,
-  ClientTransport,
+  ClientContext,
   defineClientExtension,
   sessionQuery,
   type ActiveExtensionSession,
@@ -70,7 +68,7 @@ interface Outgoing {
  */
 export const makeForkPane = (
   actions: ForkPaneActions,
-): Effect.Effect<ForkPaneController, never, ClientTransport | ClientShell | ClientLifecycle> =>
+): Effect.Effect<ForkPaneController, never, ClientContext> =>
   Effect.gen(function* () {
     let outgoing = Option.none<Outgoing>()
     const [asked, setAsked] = createSignal(Option.none<string>())
@@ -238,9 +236,7 @@ export function ForkPane(props: {
 
 export default defineClientExtension(BTW_EXTENSION_ID, {
   setup: Effect.gen(function* () {
-    const transport = yield* ClientTransport
-    const shell = yield* ClientShell
-    const lifecycle = yield* ClientLifecycle
+    const { transport, shell, lifecycle } = yield* ClientContext
     const asMessage = <A, E>(effect: Effect.Effect<A, E, never>) =>
       effect.pipe(Effect.mapError((error) => ({ message: String(error) })))
     const controller = yield* makeForkPane({
