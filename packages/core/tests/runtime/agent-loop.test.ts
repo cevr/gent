@@ -3446,6 +3446,51 @@ describe("wake admission", () => {
     ),
   )
 
+  const fillFollowUpQueue = (inbox: {
+    readonly admit: (item: QueuedTurnItem) => Effect.Effect<unknown, AgentLoopError>
+  }) =>
+    Effect.forEach(
+      Array.from({ length: 10 }, (_, index) => index),
+      (index) => inbox.admit({ message: queuedMessage(`full-${index}`, `item ${index}`) }),
+      { discard: true },
+    )
+
+  it.effect("a full follow-up queue accepts a retry of a queued id in place", () =>
+    withInbox((inbox) =>
+      Effect.gen(function* () {
+        yield* fillFollowUpQueue(inbox)
+        yield* inbox.admit({ message: queuedMessage("full-4", "item 4 (retry)") })
+        const followUp = (yield* inbox.queue).followUp
+        expect(
+          followUp.map((item) => [String(item.message.id), messagePartsText(item.message.parts)]),
+        ).toEqual(
+          Array.from({ length: 10 }, (_, index) => [`full-${index}`, `item ${index}`]).with(4, [
+            "full-4",
+            "item 4 (retry)",
+          ]),
+        )
+      }),
+    ),
+  )
+
+  it.effect("a full follow-up queue rejects an eleventh distinct id", () =>
+    withInbox((inbox) =>
+      Effect.gen(function* () {
+        yield* fillFollowUpQueue(inbox)
+        const rejected = yield* inbox.admit({ message: queuedMessage("full-10", "item 10") }).pipe(
+          Effect.match({
+            onFailure: (error) => Option.some(error.message),
+            onSuccess: () => Option.none(),
+          }),
+        )
+        expect(rejected).toEqual(Option.some("Follow-up queue full (max 10)"))
+        expect((yield* inbox.queue).followUp.map((item) => String(item.message.id))).toEqual(
+          Array.from({ length: 10 }, (_, index) => `full-${index}`),
+        )
+      }),
+    ),
+  )
+
   test("a recovered queue with nothing in it never wakes", () => {
     expect(wantsWakeOnRecovery(emptyLoopQueueState())).toEqual(Option.none())
   })
@@ -5842,6 +5887,21 @@ describe("streaming", () => {
       )
     }),
   )
+  /** The last user message a model call answers. */
+  const lastUserPromptText = (prompt: Parameters<typeof Prompt.make>[0]): string => {
+    const userTexts = Prompt.make(prompt).content.flatMap((message) => {
+      if (message.role !== "user") return []
+      return [
+        message.content
+          .flatMap((part) => {
+            if (part.type !== "text") return []
+            return [part.text]
+          })
+          .join(""),
+      ]
+    })
+    return Option.getOrElse(Option.fromUndefinedOr(userTexts.at(-1)), () => "")
+  }
   const openQueuedFollowUps = (params: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -5914,18 +5974,7 @@ describe("streaming", () => {
       const promptTails: Array<string> = []
       const providerLayer = LanguageModelLayers.testStream((options) => {
         streamCalls += 1
-        const userTexts = Prompt.make(options.prompt).content.flatMap((message) => {
-          if (message.role !== "user") return []
-          return [
-            message.content
-              .flatMap((part) => {
-                if (part.type !== "text") return []
-                return [part.text]
-              })
-              .join(""),
-          ]
-        })
-        promptTails.push(Option.getOrElse(Option.fromUndefinedOr(userTexts.at(-1)), () => ""))
+        promptTails.push(lastUserPromptText(options.prompt))
         const parts = Stream.fromIterable([
           textDeltaPart("ok"),
           finishPart({ finishReason: "stop" }),
@@ -6044,7 +6093,7 @@ describe("streaming", () => {
   )
 
   it.live(
-    "a queued follow-up survives a restart during the turn before it",
+    "queued follow-ups survive a restart during the turn before them, in order",
     () =>
       Effect.gen(function* () {
         const sessionId = SessionId.make("queued-restart-session")
@@ -6052,6 +6101,7 @@ describe("streaming", () => {
         const a = makeMessage(sessionId, branchId, "a")
         const x = makeMessage(sessionId, branchId, "x")
         const y = makeMessage(sessionId, branchId, "y")
+        const z = makeMessage(sessionId, branchId, "z")
         const aStarted = yield* Deferred.make<void>()
         const aGate = yield* Deferred.make<void>()
         const xStarted = yield* Deferred.make<void>()
@@ -6074,7 +6124,12 @@ describe("streaming", () => {
           if (firstProcessCalls === 1) return held(aStarted, Deferred.await(aGate))
           return held(xStarted, Effect.never)
         })
-        const secondProvider = LanguageModelLayers.testStream(() => Effect.succeed(parts()))
+        // The last user message each call of the second process answers.
+        const secondPromptTails: Array<string> = []
+        const secondProvider = LanguageModelLayers.testStream((options) => {
+          secondPromptTails.push(lastUserPromptText(options.prompt))
+          return Effect.succeed(parts())
+        })
         yield* Effect.scoped(
           Effect.gen(function* () {
             // One database outlives both processes.
@@ -6113,6 +6168,7 @@ describe("streaming", () => {
                 yield* Deferred.await(aStarted)
                 yield* submitAgentLoop(agentLoop, x)
                 yield* submitAgentLoop(agentLoop, y)
+                yield* submitAgentLoop(agentLoop, z)
                 // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
                 yield* Deferred.succeed(aGate, undefined)
                 yield* Deferred.await(xStarted)
@@ -6124,10 +6180,10 @@ describe("streaming", () => {
               const messageStorage = yield* MessageStorage
               // The first command wakes the loop; recovery reads the stored queue.
               yield* agentLoop.getState({ sessionId, branchId })
-              const yRow = yield* waitForOption(
+              const zRow = yield* waitForOption(
                 () =>
                   messageStorage
-                    .getMessage(y.id)
+                    .getMessage(z.id)
                     .pipe(
                       Effect.map((row) =>
                         Option.filter(Option.fromUndefinedOr(row), (stored) =>
@@ -6135,14 +6191,16 @@ describe("streaming", () => {
                         ),
                       ),
                     ),
-                "the queued follow-up answered after the restart",
+                "the last queued follow-up answered after the restart",
               )
-              expect(messagePartsText(yRow.parts)).toBe("y")
+              expect(messagePartsText(zRow.parts)).toBe("z")
               yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
+              // Each waiting follow-up ran its own turn, in submission order.
+              expect(secondPromptTails).toEqual(["y", "z"])
               const texts = userTexts(
                 (yield* messageStorage.listMessages(branchId)).filter((row) => row.role === "user"),
               )
-              expect(texts.filter((text) => text.includes("y"))).toEqual(["y"])
+              expect(texts).toEqual(["a", "x", "y", "z"])
               // oxlint-disable-next-line effect/noInlineProvide -- Each scope is one process lifetime.
             }).pipe(Effect.provide(processLayer(secondProvider)))
           }).pipe(Effect.timeout("8 seconds")),

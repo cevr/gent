@@ -699,7 +699,13 @@ export const makeLoopInbox = (
       return yield* commitQueueTransaction<Option.Option<RunningState> | AgentLoopError>(
         "reserved or queued follow-up",
         (current) => {
-          if (current.queue.followUp.length >= FOLLOW_UP_QUEUE_MAX) {
+          // Build the next queue first: a retry of a queued id replaces in
+          // place, so only an admission that grows the queue past the cap fails.
+          const nextQueue = appendFollowUpQueueState(current.queue, item)
+          if (
+            nextQueue.followUp.length > current.queue.followUp.length &&
+            nextQueue.followUp.length > FOLLOW_UP_QUEUE_MAX
+          ) {
             return {
               value: new AgentLoopError({
                 message: `Follow-up queue full (max ${FOLLOW_UP_QUEUE_MAX})`,
@@ -709,7 +715,6 @@ export const makeLoopInbox = (
             }
           }
 
-          const nextQueue = appendFollowUpQueueState(current.queue, item)
           if (options.queueOnly) {
             return {
               value: Option.none(),
@@ -1690,10 +1695,11 @@ const turnFailureBaseline = (behavior: AgentLoopBehavior): Effect.Effect<number>
  * Wait until the loop has released `messageId`, started after `baseline`.
  *
  * It ends three ways, and all three end the wait: the loop lets the message
- * go (the turn ran, or a batch absorbed it), the turn fails, or persistence
- * fails. The last two fail the effect. Only a persistence failure breaks the
- * loop, so only that one runs `onPersistenceFailure`: after a turn failure the
- * worker has already moved on to the next queued turn.
+ * go (its own turn ran, or it left the queue unrun), the turn fails, or
+ * persistence fails. Follow-ups never merge, so no other message's turn
+ * releases this one. The last two fail the effect. Only a persistence failure
+ * breaks the loop, so only that one runs `onPersistenceFailure`: after a turn
+ * failure the worker has already moved on to the next queued turn.
  */
 const awaitTurnCompletion = (
   behavior: AgentLoopBehavior,
