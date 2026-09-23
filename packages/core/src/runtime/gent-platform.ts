@@ -8,6 +8,7 @@ import {
   Path,
   type PlatformError,
   Predicate,
+  Random,
   Ref,
   Schema,
   Stream,
@@ -161,11 +162,12 @@ interface RunProcessOptions {
   readonly stderr?: "pipe" | "ignore" | "inherit"
 }
 
+/** One streaming decoder across the chunks: a character split between two chunks decodes whole. */
 const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   const decoder = new TextDecoder()
   let out = ""
-  for (const chunk of chunks) out += decoder.decode(chunk)
-  return out
+  for (const chunk of chunks) out += decoder.decode(chunk, { stream: true })
+  return out + decoder.decode()
 }
 
 /**
@@ -308,17 +310,26 @@ export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
         ),
     }),
   )
-  yield* Effect.scoped(
-    Effect.gen(function* () {
-      const staging = yield* fs.makeTempFileScoped({
-        directory: pathService.dirname(target),
-        prefix: ".gent-write-",
-      })
-      // Set the mode before the content lands, so a secret is never readable
-      // under the default mode, even in the staged file.
-      if (Option.isSome(mode)) yield* fs.chmod(staging, mode.value)
-      yield* fs.writeFileString(staging, content)
-      yield* fs.rename(staging, target)
-    }),
+  // Staged as a sibling file, not in a temp directory: a crash that skips the
+  // cleanup leaves one hidden file beside the target, never a directory.
+  const suffix = (yield* Random.nextIntBetween(0, 0xffffffff)).toString(16)
+  const staging = pathService.join(
+    pathService.dirname(target),
+    `.${pathService.basename(target)}.gent-write-${suffix}`,
   )
+  yield* Effect.gen(function* () {
+    // `wx` never reuses an existing file. A mode is set before the content
+    // lands, so a secret is never readable under the default mode, even staged.
+    yield* fs.writeFileString(
+      staging,
+      "",
+      Option.match(mode, {
+        onNone: () => ({ flag: "wx" }),
+        onSome: () => ({ flag: "wx", mode: 0o600 }),
+      }),
+    )
+    if (Option.isSome(mode)) yield* fs.chmod(staging, mode.value)
+    yield* fs.writeFileString(staging, content)
+    yield* fs.rename(staging, target)
+  }).pipe(Effect.onError(() => fs.remove(staging).pipe(Effect.ignore)))
 })

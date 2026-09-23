@@ -1268,8 +1268,8 @@ const OPENAI_ACCEPTED_EFFORTS: ReadonlyArray<{
   readonly accepts: ReadonlyArray<OpenAiReasoningEffort>
 }> = [
   { pattern: /^gpt-5-pro(-|$)/, accepts: ["high"] },
-  // GPT-5.2 Pro and GPT-5.4 Pro.
-  { pattern: /-pro(-|$)/, accepts: ["medium", "high", "xhigh"] },
+  // GPT-5.2, 5.4 and 5.5 Pro. Anchored, so o1-pro and o3-pro fall to the o-series row.
+  { pattern: /^gpt-5\.\d+-pro(-|$)/, accepts: ["medium", "high", "xhigh"] },
   { pattern: /^gpt-6-astra(-|$)/, accepts: ["low", "medium", "high", "xhigh", "max"] },
   { pattern: /^gpt-5\.6(-|$)/, accepts: ["none", "low", "medium", "high", "xhigh", "max"] },
   { pattern: /codex-max|^gpt-5\.[2-9]-codex/, accepts: ["low", "medium", "high", "xhigh"] },

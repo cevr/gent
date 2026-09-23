@@ -623,6 +623,8 @@ const encodeCachedModels = Schema.encodeSync(CachedModelsJson)
 const ModelsDevCost = Schema.Struct({
   input: Schema.Finite,
   output: Schema.Finite,
+  cache_read: Schema.optional(Schema.Finite),
+  cache_write: Schema.optional(Schema.Finite),
 })
 const ModelsDevLimit = Schema.Struct({
   context: Schema.Finite,
@@ -632,17 +634,28 @@ const ModelsDevModel = Schema.Struct({
   cost: Schema.optional(ModelsDevCost),
   limit: Schema.optional(ModelsDevLimit),
   release_date: Schema.optional(Schema.String),
+  /** False for embedding, image and other models the agent loop cannot drive. */
+  tool_call: Schema.optional(Schema.Boolean),
 })
 type ModelsDevModel = typeof ModelsDevModel.Type
 const decodeModelsDevModel = Schema.decodeUnknownOption(ModelsDevModel)
 
 const parsePricing = (value: ModelsDevModel["cost"]): Option.Option<ModelPricing> =>
-  Option.fromUndefinedOr(value).pipe(Option.map(({ input, output }) => ({ input, output })))
+  Option.fromUndefinedOr(value).pipe(
+    Option.map((cost) => ({
+      input: cost.input,
+      output: cost.output,
+      ...omitUndefined({ cacheRead: cost.cache_read, cacheWrite: cost.cache_write }),
+    })),
+  )
 
 const parseContextLength = (value: ModelsDevModel["limit"]): Option.Option<number> =>
   Option.fromUndefinedOr(value).pipe(Option.map(({ context }) => context))
 
-/** The models.dev payload as gent's canonical `Model[]`; a malformed entry is dropped. */
+/**
+ * The models.dev payload as gent's canonical `Model[]`. A malformed entry is
+ * dropped, and so is a model without tool calling: every gent turn sends tools.
+ */
 const parseModelsDev = (data: Schema.Json): ReadonlyArray<Model> => {
   if (!isRecord(data)) return []
 
@@ -656,6 +669,7 @@ const parseModelsDev = (data: Schema.Json): ReadonlyArray<Model> => {
       const decoded = decodeModelsDevModel(rawModelValue)
       if (decoded._tag === "None") continue
       const modelValue = decoded.value
+      if (modelValue.tool_call === false) continue
       const name = Option.getOrElse(Option.fromUndefinedOr(modelValue.name), () => modelKey)
       const pricing = parsePricing(modelValue.cost)
       const contextLength = parseContextLength(modelValue.limit)

@@ -1,6 +1,7 @@
 import { test } from "bun:test"
 import {
   Cause,
+  Context,
   Deferred,
   Effect,
   FileSystem,
@@ -26,7 +27,13 @@ import {
   ExtensionHealthIssue,
   ExtensionHealthSnapshot,
 } from "../../src/server/rpc"
-import { BranchId, ExtensionId, MessageId, SessionId } from "../../src/domain/ids"
+import {
+  BranchId,
+  ExtensionId,
+  MessageId,
+  ProcessGenerationId,
+  SessionId,
+} from "../../src/domain/ids"
 import { describe, expect, it } from "effect-bun-test"
 import { StorageError } from "../../src/domain/errors.js"
 import {
@@ -53,7 +60,12 @@ import {
 } from "../../src/storage/storage"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { ConfigService, UserConfig } from "../../src/runtime/config"
-import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
+import {
+  ExtensionRegistry,
+  resolveExtensions,
+  SessionProfileCache,
+  type SessionProfile,
+} from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import { makeRequestDeduper, SessionRuntimeError } from "../../src/runtime/session"
 import {
@@ -2078,6 +2090,57 @@ describe("requestId idempotency", () => {
         // A fresh create is still checked.
         const error = yield* create(ExtensionRegistry.Test(), "req-fresh").pipe(Effect.flip)
         expect(error.message).toBe("Unknown agent: reviewer")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+
+  it.live("a create admits an agent its cwd's profile has and the launch registry lacks", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const reviewer = AgentName.make("reviewer")
+        const resolved = resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("@test/reviewer-agent") },
+            scope: "project",
+            sourcePath: "test",
+            contributions: { agents: [AgentDefinition.make({ name: reviewer })] },
+          },
+        ])
+        const layerContext = yield* Layer.build(ExtensionRegistry.fromResolved(resolved))
+        const profile: SessionProfile = {
+          cwd: "/tmp/profiled",
+          resolved,
+          layerContext,
+          registryService: Context.get(layerContext, ExtensionRegistry),
+          baseSections: [],
+          generationId: ProcessGenerationId.make("test"),
+        }
+        const profiles = Layer.succeed(
+          SessionProfileCache,
+          SessionProfileCache.of({ resolve: () => Effect.succeed(profile) }),
+        )
+        const deps = Layer.mergeAll(
+          SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(
+            Layer.provide(GentPlatform.Test()),
+          ),
+          sessionRuntimeLayer(),
+          EventStore.Memory,
+          EventPublisher.Test(),
+          AgentLoopSessionGovernance.Live,
+          LanguageModelLayers.debug(),
+          ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+          GentPlatform.Test(),
+          ExtensionRegistry.Test(),
+          profiles,
+        )
+        // The caller holds only SessionMutations: the check reads the cache
+        // the service captured, not one from the caller's context.
+        const create = (layer: typeof deps) =>
+          Effect.flatMap(SessionMutations, (mutations) =>
+            mutations.createSession({ cwd: "/tmp/profiled", admission: { agent: reviewer } }),
+          ).pipe(Effect.provide(Layer.provide(SessionMutationsLive, layer)))
+        const created = yield* create(deps)
+        expect(created.sessionId).toBeDefined()
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )

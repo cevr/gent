@@ -169,6 +169,19 @@ describe("runProcess", () => {
     processTestTimeout,
   )
   it.live(
+    "a character split across output chunks decodes whole",
+    () =>
+      Effect.gen(function* () {
+        // "é" is 0xC3 0xA9; the pause makes the two bytes arrive as two chunks.
+        const script =
+          "printf '\\303'; sleep 0.2; printf '\\251'; printf '\\303' 1>&2; sleep 0.2; printf '\\251' 1>&2"
+        const result = yield* provideBun(runProcess("/bin/sh", ["-c", script]))
+        expect(result.stdout).toBe("\u00E9")
+        expect(result.stderr).toBe("\u00E9")
+      }).pipe(withProcessTimeout),
+    processTestTimeout,
+  )
+  it.live(
     "respects cwd option",
     () =>
       Effect.gen(function* () {
@@ -268,6 +281,40 @@ describe("writeFileAtomic", () => {
       expect(yield* fs.readLink(link)).toBe("real.json")
       expect(yield* fs.readFileString(`${dir}/real.json`)).toBe("created")
     }),
+  )
+
+  // A crash skips every finalizer, so a staged directory would stay in the user's tree.
+  const renamed: Array<string> = []
+  /** The platform file system, recording each rename's source. */
+  const recordingFs = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (fs) =>
+      FileSystem.FileSystem.of({
+        ...fs,
+        rename: (from, to) => {
+          renamed.push(from)
+          return fs.rename(from, to)
+        },
+      }),
+    ),
+  )
+
+  atomicTest("stages a sibling file, never a directory, and removes it when the write fails", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      renamed.length = 0
+      yield* writeFileAtomic(`${dir}/state.json`, "saved")
+      // A directory cannot be replaced by a file, so this rename fails.
+      yield* fs.makeDirectory(`${dir}/busy/inner`, { recursive: true })
+      const failed = yield* writeFileAtomic(`${dir}/busy`, "x").pipe(Effect.flip)
+      expect(failed._tag).toBe("PlatformError")
+      // A crash skips every finalizer, so a staged directory would stay in the user's tree.
+      expect(renamed.map((from) => path.dirname(from))).toEqual([dir, dir])
+      expect((yield* fs.readDirectory(dir)).toSorted()).toEqual(["busy", "state.json"])
+      expect(yield* fs.readFileString(`${dir}/state.json`)).toBe("saved")
+    }).pipe(Effect.provide(recordingFs)),
   )
 
   const modeOf = (fs: FileSystem.FileSystem, file: string) =>

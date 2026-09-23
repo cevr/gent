@@ -615,6 +615,48 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    it.scopedLive("an unchanged config file is not read again", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
+        yield* fs.writeFileString(projectConfigPath, encodeJson({ disabledExtensions: ["x"] }))
+        const reads = yield* Ref.make<ReadonlyArray<string>>([])
+        const countingReads = Layer.effect(
+          FileSystem.FileSystem,
+          Effect.gen(function* () {
+            const realFs = yield* FileSystem.FileSystem
+            return FileSystem.makeNoop({
+              ...realFs,
+              readFileString: (target, encoding) =>
+                Ref.update(reads, (all) => [...all, target]).pipe(
+                  Effect.andThen(realFs.readFileString(target, encoding)),
+                ),
+            })
+          }),
+        ).pipe(Layer.provide(BunServices.layer))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          expect((yield* cfg.get()).disabledExtensions).toEqual(["x"])
+          const before = (yield* Ref.get(reads)).length
+          expect((yield* cfg.get()).disabledExtensions).toEqual(["x"])
+          expect((yield* cfg.get(cwd)).disabledExtensions).toEqual(["x"])
+          expect((yield* Ref.get(reads)).length).toBe(before)
+          // A changed file is read at once.
+          yield* fs.writeFileString(
+            projectConfigPath,
+            encodeJson({ disabledExtensions: ["y", "z"] }),
+          )
+          expect((yield* cfg.get()).disabledExtensions).toEqual(["y", "z"])
+          expect((yield* Ref.get(reads)).slice(before)).toEqual([projectConfigPath])
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home, countingReads)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.scopedLive("a launch project config that breaks drops its cached settings", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -767,6 +809,42 @@ describe("user configuration", () => {
             modelId: ModelId.make("openai/gpt-5.6-sol"),
           })
           expect(result.agents?.[AgentName.make("helper")]).toEqual({ reasoningEffort: "minimal" })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive("a hand edit reaches the next read without a restart", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        const project = yield* fs.makeTempDirectoryScoped()
+        const write = (root: string, agents: UserConfig["agents"]) =>
+          Effect.gen(function* () {
+            yield* fs.makeDirectory(path.join(root, ".gent"), { recursive: true })
+            yield* fs.writeFileString(
+              path.join(root, ".gent", "config.json"),
+              encodeJson({ agents }),
+            )
+          })
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+          Layer.provide(BunServices.layer),
+        )
+        const delegate = AgentName.make("delegate")
+        const main = AgentName.make("main")
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          expect((yield* cfg.get()).agents).toBeUndefined()
+          // The server is running when the files change, as in a live session.
+          yield* write(project, { [delegate]: { maxSteps: 3 } })
+          yield* write(home, { [main]: { reasoningEffort: "low" } })
+          for (const read of [cfg.get(), cfg.get(project)]) {
+            const agents = (yield* read).agents
+            expect(agents?.[delegate]).toEqual({ maxSteps: 3 })
+            expect(agents?.[main]).toEqual({ reasoningEffort: "low" })
+          }
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),

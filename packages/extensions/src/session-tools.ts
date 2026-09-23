@@ -276,7 +276,7 @@ export const sessionMessageBody = (from: SessionMessageSender, content: string):
   )
 }
 
-export const SendSessionTool = tool({
+const SendSessionTool = tool({
   id: "session.send",
   description:
     "Send a message to another session: `parent` for the one that started you, or a session id from delegate.list. A running session reads it at its next step; an idle one wakes to answer. Use it to ask your parent a question, hand a child a correction, or pass a sibling a fact.",

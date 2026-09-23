@@ -633,7 +633,8 @@ reshapes an agent per name (`modelId`, `reasoningEffort`, `contextLength`, tool 
 addendum); project entries shadow user entries and a run's `RunSpec.overrides`
 shadows both, so a workspace pins its orchestrator model under `main` and its
 children's model under `delegate`, and a `delegate.start` call can still pick a
-different model and effort for one child. The loop has no `cell` name rule
+different model and effort for one child. Each turn reads the config files as
+they are then, so an edit reaches the next turn without a restart. The loop has no `cell` name rule
 for selection or allow lists. The server root still composes the extension before
 the extension package builtins; its branch lifetime and worker build still belong
 to core. Test presets that exercise host tools directly omit it.
@@ -916,7 +917,7 @@ Explicit platform/runtime seams:
 
 ### FileIndex (fs-tools)
 
-Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, cached finders per search root under `~/.gent/fff`) and a `.gitignore`-aware `FileSystem` walk. The walk applies every `.gitignore` from the search root down, with negation. It is the per-call fallback, and it lists an explicitly named gitignored target, so such a target never creates a finder or evicts the root finder. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept, and there is no `ExtensionContext.Files` facet: tools yield `FileSystem` and `Path`.
+Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, cached finders per search root under `~/.gent/fff`) and a per-call fallback. Inside a git work tree the fallback runs `git ls-files --cached --others --exclude-standard`, so every git exclude source applies. Elsewhere it walks the `FileSystem` and reads each `.gitignore` from the search root down by gitignore(5); a test checks that matcher against real git. The matcher walk also lists an explicitly named gitignored target, so such a target never creates a finder or evicts the root finder. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept, and there is no `ExtensionContext.Files` facet: tools yield `FileSystem` and `Path`.
 
 App entrypoints bind concrete Bun/OS behavior:
 

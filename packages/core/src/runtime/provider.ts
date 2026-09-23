@@ -12,7 +12,7 @@ import {
   Random,
   Schedule,
   Schema,
-  type Scope,
+  Scope,
   Semaphore,
   Stream,
 } from "effect"
@@ -330,7 +330,13 @@ const fileProviderLock =
         ),
       ),
     )
-    return Effect.scoped(Effect.andThen(held, effect))
+    // The held lock lives in a private scope, so `effect` never runs inside
+    // it: a scope of the caller's stays the caller's, whatever `effect` needs.
+    return Effect.acquireUseRelease(
+      Scope.make(),
+      (lockScope) => held.pipe(Scope.provide(lockScope), Effect.andThen(effect)),
+      (lockScope, exit) => Scope.close(lockScope, exit),
+    )
   }
 
 export class Auth extends Context.Service<Auth, AuthService>()(
