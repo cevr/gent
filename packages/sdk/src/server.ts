@@ -207,10 +207,6 @@ export class BuildFingerprint extends Context.Service<BuildFingerprint, BuildFin
       return BuildFingerprint.of({ current })
     }),
   )
-
-  /** Deterministic test layer. */
-  static Test = (fingerprint = "test-fingerprint"): Layer.Layer<BuildFingerprint> =>
-    Layer.succeed(BuildFingerprint, BuildFingerprint.of({ current: Effect.succeed(fingerprint) }))
 }
 
 // ── server-lock ─────────────────────────────────────────────────────────────

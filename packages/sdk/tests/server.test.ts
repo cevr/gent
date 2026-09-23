@@ -128,21 +128,6 @@ describe("BuildFingerprint", () => {
         expect(result.fp1).toMatch(/^bin-/)
       }),
   )
-
-  it.live("Test layer returns deterministic fingerprint", () =>
-    Effect.gen(function* () {
-      const bf = yield* BuildFingerprint
-      expect(yield* bf.current).toBe("test-fingerprint")
-    }).pipe(Effect.provide(BuildFingerprint.Test())),
-  )
-
-  it.live("Test layer with override returns custom fingerprint", () =>
-    Effect.gen(function* () {
-      const bf = yield* BuildFingerprint
-      const fp = yield* bf.current
-      expect(fp).toBe("custom-fp")
-    }).pipe(Effect.provide(BuildFingerprint.Test("custom-fp"))),
-  )
 })
 
 // ── launch config ───────────────────────────────────────────────────────────
