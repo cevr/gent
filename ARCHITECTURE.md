@@ -78,11 +78,20 @@ updates this list in the same commit.
     `packages/extensions/src/cell.ts`.
 14. **A child's completion arrives as a user message, never a tool result.**
     Receipt: `packages/extensions/src/delegate.ts`.
-15. **Platform edges stay explicit.** File, process, lock, and network access
-    go through `GentPlatform` facets; the TUI session controller owns screen
-    state, views render and dispatch; app-specific UI facets live at the app
-    edge. Receipts: `packages/core/src/runtime/gent-platform.ts`,
-    `apps/tui/src/session.tsx`, `apps/tui/src/app.tsx`.
+15. **Platform edges stay explicit.** Extensions reach files, paths,
+    processes, and ids through the Effect platform services
+    (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`) and resolve
+    relative paths against `ctx.cwd`; `runProcess` is the one command helper.
+    No `ExtensionContext` facet duplicates an Effect platform service; the
+    facets are host authority only (`Session`, `Agent`, `Interaction`,
+    `FileLock`, `State`). An atomic write has one owner, `writeFileAtomic` in
+    `packages/extensions/src/fs-tools.ts`. Host facts core cannot get from
+    Effect (OS info, executable path, home directory) stay on `GentPlatform`.
+    The TUI session controller owns screen state, views render and dispatch;
+    app-specific UI facets live at the app edge. Receipts:
+    `packages/core/src/runtime/gent-platform.ts`,
+    `packages/core/src/domain/extension.ts`, `apps/tui/src/session.tsx`,
+    `apps/tui/src/app.tsx`.
 16. **RPC is the application transport.** No parallel REST surface. Receipt:
     `apps/server/src/`.
 
@@ -822,7 +831,7 @@ Explicit platform/runtime seams:
 
 ### FileIndex (fs-tools)
 
-Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, per-cwd cached finders under `~/.gent/fff`) and a `.gitignore`-aware `FileSystem` walk as the per-call fallback. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept and `ExtensionContext.Files` has no `listFiles`.
+Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag, a native-first adapter (`@ff-labs/fff-bun`, per-cwd cached finders under `~/.gent/fff`) and a `.gitignore`-aware `FileSystem` walk as the per-call fallback. The extension registers it as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept, and there is no `ExtensionContext.Files` facet: tools yield `FileSystem` and `Path`.
 
 App entrypoints bind concrete Bun/OS behavior:
 
@@ -927,9 +936,10 @@ host-owned design. It should expose:
 - stable ids and author-facing schemas: `ExtensionId`,
   `ToolCallId`, output/message projection
   helpers that are safe to serialize across the extension boundary;
-- host facts: `ExtensionHost.host` and `ExtensionHost.Process`, a small public view over
-  host-owned platform facts such as OS info, executable path, home directory,
-  command candidates, and loopback port probes;
+- host facts: `ExtensionHost.host`, a small public view over host-owned
+  platform facts such as OS info, executable path, and home directory;
+- `runProcess` / `ProcessError`: the one command helper over the Effect
+  `ChildProcessSpawner`;
 - author-facing errors: capability, provider-auth, agent-run, and typed
   transition errors that extension code can intentionally return or inspect.
 
@@ -966,12 +976,12 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `agent`, `modelDriver`, `externalDriver`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `host`, `Process`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. The loader (`runtime/extension-host.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
+One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `agent`, `modelDriver`, `externalDriver`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `host`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. The loader (`runtime/extension-host.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/extension.ts`) is the compiled record consumed by the registry, hook compiler, and profile build; adding a new kind means adding a registration domain and a record field, not a new union arm. Each extension's process resources build once into their own child of the profile scope, which owns acquisition and release.
 
 - **Resource** — `defineResource({ id, scope, layer })`. Start work runs in the layer build and disposal is a finalizer in it. Long-lived state has a stable identity and explicit `scope`; resources build in extension resolution order. `scope` is `"process"` (built once per profile, released when the profile scope closes) or `"branch"` (built per branch loop, released when the loop closes). Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/extension.ts` and `buildResourceLayer` in `runtime/extension-host.ts`.
-- **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability.ts`; `runtime/extension-host.ts` compiles the model, RPC, and slash registries.
+- **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Agent`, `Interaction`, `FileLock`, `State`); files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`); extension-private authority comes from extension-owned Effect service Tags. The `FileLock` / `State` facets wrap the host-internal `FileLockService` and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability.ts`; `runtime/extension-host.ts` compiles the model, RPC, and slash registries.
 - **Addressed session verbs** — `ExtensionContext.Session` reaches other branches through the same verbs the server uses: `create` (durable-once by `requestId`, optional `historyBranchId` copies the visible rows in, depth admitted by the host), `send` (one user message with a `delivery` mode: `"turn"` starts a turn on another branch with the loop `completion` modes, and the own branch refuses it and points at `"queue"`; `"queue"` is a follow-up keyed by `sourceId`; `"steer"` joins the running turn as an `Interject`), `stop` (writes a `Cancel` steer; `Interrupt` has no writer and only decodes), `events` (replay, then the `StreamSynchronized` marker, then live), `delete` (cascade), and `dequeueFollowUp`. `send` and `stop` are a facade over the unchanged actor operations `SubmitDurable`, `QueueFollowUp`, and `Steer`; the raw `SteerCommand` stays on the RPC contract, not in the extension API. The bodies live in the `agent-loop.client` section of `packages/core/src/domain/agent-loop.ts`; `SessionRuntime` and the loop's `sessionControl` both call them, so the facade and the RPC path cannot drift. The verbs are uniform: no extension, shipped or not, holds a grant another lacks. `AgentDefinition.maxModelAttempts` (and the RunSpec override) is the generic per-turn model-attempt budget, reserved durably per turn message id.
 - **Hooks** — `host.on("systemPrompt" | "turnProjection" | "turnAfter", handler)` registers the three runtime hooks; each kind is typed by `ExtensionHookSignatures`. Hooks, tools, and requests all cross one membrane: `provideExtensionLeaf(frame)` in `runtime/extension-host.ts` reads the run's `CurrentExtensionHostContext` and provides `ExtensionContext`; the turn projection is an input to `resolveTurnProjection`. Hook handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. `turnAfter` carries the turn's token usage. See `packages/core/src/domain/extension.ts` and `runtime/extension-host.ts`.
 - **Driver** — the `modelDriver` and `externalDriver` domains take `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth and list their own catalog (`listModels(auth)`; core concatenates every driver's list and fetches nothing — the shipped drivers read models.dev through the catalog section of `packages/extensions/src/providers.ts`, cached on disk for a day); external drivers stream Effect AI response parts from process-owned executors. See `packages/core/src/domain/driver.ts` and `runtime/extension-host.ts`.

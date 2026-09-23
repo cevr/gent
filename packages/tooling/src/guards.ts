@@ -1343,8 +1343,7 @@ const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
   },
   {
     pattern: /\bfrom\s+["']bun["']/,
-    message:
-      "Direct `bun` package imports are adapter-only; use ExtensionContext.Process or Effect platform services",
+    message: "Direct `bun` package imports are adapter-only; use Effect platform services",
   },
   {
     // Cover every acquisition form for the crypto specifier:
@@ -1660,6 +1659,23 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     scope: "shipped-and-tests",
     message:
       "the process-runner service is removed; call runProcess from runtime/gent-platform.ts and take ChildProcessSpawner in the requirement union",
+  },
+  {
+    on: "line",
+    match: new RegExp(
+      `${
+        identifiers(
+          "ExtensionFilesService",
+          "ExtensionProcessService",
+          "makeFileWriter",
+          "testExtensionFiles",
+          "testExtensionProcess",
+        ).source
+      }|\\bctx\\.(?:Files|Process)\\b`,
+    ),
+    scope: "shipped-and-tests",
+    message:
+      "the Files and Process facets are removed; yield FileSystem, Path and ChildProcessSpawner, call runProcess, and write atomically with writeFileAtomic in packages/extensions/src/fs-tools.ts",
   },
   {
     on: "line",

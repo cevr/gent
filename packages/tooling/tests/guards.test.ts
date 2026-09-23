@@ -484,7 +484,7 @@ const SEAMS_FILE = "packages/core/src/domain/extension.ts"
 const facetsSource = `export interface ExtensionContextService {
   readonly extensionId: ExtensionId
   readonly cwd: string
-  readonly Files: ExtensionFilesService
+  readonly State: ExtensionStateService
   readonly Telepathy: ExtensionTelepathyService
 }
 `
@@ -497,14 +497,14 @@ describe("unadapted seam guard", () => {
     const seams = adaptedSeamsIn(
       "packages/extensions/src/notes/index.ts",
       `const ctx = yield* ExtensionContext
-       yield* ctx.Files.read("notes.md")
+       yield* ctx.State.publish("notes")
        defineResource({ id: "notes", scope: "process", layer })`,
     )
-    expect([...seams].sort()).toEqual(["Files", "process"])
+    expect([...seams].sort()).toEqual(["State", "process"])
   })
 
   test("a facet nothing reaches is reported", () => {
-    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, facetsSource]]), new Set(["Files"]))
+    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, facetsSource]]), new Set(["State"]))
     expect(findings).toHaveLength(1)
     expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
     expect(findings[0]?.line).toBe(5)
@@ -515,7 +515,7 @@ describe("unadapted seam guard", () => {
     // reaches through. Reporting them would make the guard unusable.
     const findings = findUnadaptedSeams(
       new Map([[SEAMS_FILE, facetsSource]]),
-      new Set(["Files", "Telepathy"]),
+      new Set(["State", "Telepathy"]),
     )
     expect(findings).toHaveLength(0)
   })
@@ -550,7 +550,7 @@ describe("unadapted seam guard", () => {
     const source = `${facetsSource}
 const extensionServicesFromHostContext = (ctx: ExtensionContextService) =>
   Effect.succeed({
-    Files: ctx.Files,
+    State: ctx.State,
     Telepathy: ctx.Telepathy,
   })
 export const requireTelepathy = Effect.gen(function* () {
@@ -559,7 +559,7 @@ export const requireTelepathy = Effect.gen(function* () {
 })`
     const adapted = adaptedSeamsIn(SEAMS_FILE, source)
     expect(adapted.size).toBe(0)
-    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), new Set(["Files"]))
+    const findings = findUnadaptedSeams(new Map([[SEAMS_FILE, source]]), new Set(["State"]))
     expect(findings).toHaveLength(1)
     expect(findings[0]?.message).toContain('extension context facet "Telepathy"')
   })
@@ -1354,8 +1354,7 @@ describe("platform duplication guards", () => {
       {
         file: "packages/extensions/src/skills/skills.ts",
         line: 1,
-        message:
-          "Direct `bun` package imports are adapter-only; use ExtensionContext.Process or Effect platform services",
+        message: "Direct `bun` package imports are adapter-only; use Effect platform services",
       },
     ])
 
@@ -1368,8 +1367,7 @@ describe("platform duplication guards", () => {
       {
         file: "packages/core/src/runtime/example.ts",
         line: 1,
-        message:
-          "Direct `bun` package imports are adapter-only; use ExtensionContext.Process or Effect platform services",
+        message: "Direct `bun` package imports are adapter-only; use Effect platform services",
       },
     ])
 
@@ -1815,6 +1813,13 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
   ["packages/sdk/src/x.ts", "const host = WORKER_HOST", "WORKER_HOST"],
   ["packages/sdk/src/x.ts", "type S = WorkerLifecycleState", "WorkerLifecycleState"],
   ["packages/extensions/src/x.ts", "defineExtension({ id: 'x', reactions: {} })", "reactions:"],
+  ["packages/extensions/src/x.ts", "yield* ctx.Files.read(path)", "ctx.Files"],
+  ["packages/extensions/src/x.ts", "yield* ctx.Process.run('git', [])", "ctx.Process"],
+  ["packages/core/src/domain/x.ts", "type F = ExtensionFilesService", "ExtensionFilesService"],
+  ["packages/core/src/domain/x.ts", "type P = ExtensionProcessService", "ExtensionProcessService"],
+  ["packages/core/src/domain/x.ts", "const w = makeFileWriter(fs)", "makeFileWriter"],
+  ["packages/core/tests/x.test.ts", "const f = testExtensionFiles()", "testExtensionFiles"],
+  ["packages/core/tests/x.test.ts", "const p = testExtensionProcess()", "testExtensionProcess"],
 ]
 
 const RETIRED_PATHS: ReadonlyArray<string> = [
@@ -1859,7 +1864,7 @@ describe("retired surface guard", () => {
     expect(rowsHit.size).toBe(RETIRED_SURFACES.length)
   })
 
-  test("a test file is reported only for the process-runner row", () => {
+  test("a test file is reported only for the shipped-and-tests rows", () => {
     expect(
       findRetiredSurfaces(
         "packages/core/tests/runtime/session.test.ts",
