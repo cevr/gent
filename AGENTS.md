@@ -41,8 +41,7 @@ bun run --cwd apps/tui dev sessions
 - **Schema.Class JSON roundtrip** - `JSON.parse` returns plain objects. Use `Schema.decodeUnknownSync` to reconstruct instances.
 - **Effect diagnostics** - Effect compiler suggestions are not TypeScript errors. Still fix them.
 - **Bun peer deps** - Bun resolves to minimum version; can cause version mismatches with @effect packages.
-- **@effect/platform imports** - Some types not re-exported from main. Use `import type { PlatformError } from "@effect/platform/Error"`.
-- **No `any` casts** - ESLint enforces. Causes type drift bugs. Import the owning type instead of redeclaring it.
+- **No `any` casts** - oxlint enforces. Causes type drift bugs. Import the owning type instead of redeclaring it.
 - **Package boundary imports** - Use `@gent/core/extensions/api` for extension authoring. Use `@gent/core/protocol` for shared client schemas, projections, and RPC types. Use `@gent/core/host` for what a host composes (platform, config loader, storage, auth, workspace headers, server root, the scripted model). Use `@gent/core/test-utils` in tests only; product code never imports it. Each entry re-exports only names with a real consumer; a `host` name needs a product caller, so a name only tests read belongs in `test-utils`. A test outside core arranges host state through `test-utils` operations (`captureTurnTools`, `runtimeHostContext`, `plantToolCallBinding`, `plantInFlightTurn`, `recordInteractionDecision`, `storedEvents`, `staticToolBinding`), never through core's own Tags, and never imports `packages/core/src/` by relative path. Core implementation tests import their owning `packages/core/src/` modules by relative path. Files inside `packages/core/src/` also use relative imports.
 - **Extension authority** - Extension leaves receive input/event params only. Use `const ctx = yield* ExtensionContext` for host facades (`Session`, `Interaction`, `FileLock`, `State`) and extension-owned service Tags for private state. Files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`), with `runProcess` for commands, `path.resolve(ctx.cwd, p)` for relative paths, and `writeFileAtomic` (`packages/extensions/src/fs-tools.ts`) for atomic writes; no facet duplicates an Effect platform service. Shipped extensions never import core internals such as `FileLockService` or `ExtensionStatePublisher` — yield the matching `ExtensionContext` facet instead. Every facade verb is uniform: any extension that can yield `ExtensionContext` gets it, including the addressed `Session` verbs (`create`, `send` with its `delivery` mode `turn`/`queue`/`steer`, `stop`, `events`, `delete`, `dequeueFollowUp`). Do not add ctx parameters, read/write/capability grants, or privileged builtin registries; a shipped extension is never more privileged than a user extension (the `gent/core-entry-boundary` oxlint rule in `lint/gent-rules.ts` enforces the import side).
 - **No self-imports** - Inside `packages/core/src/`, always use relative imports. Never `@gent/core/*`.
@@ -85,7 +84,6 @@ Use `effect` skill. Key patterns:
 packages/core/src/       # Everything non-UI
   domain/                # Schemas + services (ids, message, event, tool, agent, etc.)
   storage/               # SQLite service assembler, schema, migrations, focused sub-tag impls
-  providers/             # AI SDK adapters
   runtime/               # SessionRuntime, AgentLoop internals, profiles, context-estimation, retry
   extensions/            # Public extension API surface and branch-tool entry points
   server/                # transport contract, commands, queries, handlers, startup wiring
@@ -132,7 +130,7 @@ New extension tests should include at least one RPC acceptance test via `createR
 const { layer: providerLayer, controls } =
   yield * LanguageModelLayers.sequence([toolCallStep("echo", { text: "hello" }), textStep("Done.")])
 
-// Full in-process stack (AppServicesLive + real event store + real storage)
+// Full in-process stack (real services, event store, and storage)
 import { baseLocalLayer } from "@gent/core/test-utils"
 const layer = baseLocalLayer()
 
