@@ -2778,14 +2778,12 @@ export function createSessionController(props: {
     const session = Option.fromNullishOr(client.session())
     const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))
     if (client.isLoading() || client.isReconnecting()) return { sessionId, state: "unknown" }
-    if (
-      isBlockingAuthGate(authGateState()) ||
-      composerState()._tag === "interaction" ||
-      client.isError()
-    ) {
+    if (isBlockingAuthGate(authGateState()) || composerState()._tag === "interaction") {
       return { sessionId, state: "blocked" }
     }
+    // A turn that runs is working, whatever error shows beside it.
     if (client.isStreaming()) return { sessionId, state: "working" }
+    if (client.isError()) return { sessionId, state: "blocked" }
     return { sessionId, state: "idle" }
   })
 

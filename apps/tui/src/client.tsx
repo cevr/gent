@@ -176,17 +176,15 @@ export const clientTraceLogger = makeClientTraceLogger(CLIENT_LOG_DIR, CLIENT_LO
 
 // ── agent state ─────────────────────────────────────────────────────────────
 
-export const AgentStatus = Schema.Union([
-  Schema.TaggedStruct("Idle", {}),
-  Schema.TaggedStruct("Streaming", {}),
-  Schema.TaggedStruct("Error", { error: Schema.String }),
-]).pipe(Schema.toTaggedUnion("_tag"))
-
-export type AgentStatus = Schema.Schema.Type<typeof AgentStatus>
-
 interface AgentState {
   agent: Option.Option<AgentName>
-  status: AgentStatus
+  /**
+   * Whether a turn runs. Only the runtime stream, the lifecycle events and the
+   * snapshot write it; an error on screen never does.
+   */
+  running: boolean
+  /** The error on screen. A turn start clears it. */
+  error: Option.Option<string>
   cost: number
   /**
    * What the next turn would use, resolved by the server from session
@@ -370,26 +368,33 @@ const createClientEventHub = (log: ClientLog) => {
 // ── client provider ─────────────────────────────────────────────────────────
 
 interface AgentLifecycleUpdate {
-  readonly status?: AgentStatus
+  /** Whether a turn runs after the event; none when the event does not say. */
+  readonly running: Option.Option<boolean>
+  /** The error the event shows. It leaves the turn as it is. */
+  readonly error: Option.Option<string>
 }
+
+const lifecycleUpdate = (update: Partial<AgentLifecycleUpdate>): AgentLifecycleUpdate => ({
+  running: Option.none(),
+  error: Option.none(),
+  ...update,
+})
 
 export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate => {
   switch (event._tag) {
     case "StreamStarted":
-      return { status: AgentStatus.cases.Streaming.make({}) }
+      return lifecycleUpdate({ running: Option.some(true) })
     case "TurnCompleted":
-      return { status: AgentStatus.cases.Idle.make({}) }
+      return lifecycleUpdate({ running: Option.some(false) })
     case "ErrorOccurred":
-      // A notice leaves the turn running.
-      if (event.notice === true) return {}
-      return { status: AgentStatus.cases.Error.make({ error: event.error }) }
+      // A notice is not an error on screen.
+      if (event.notice === true) return lifecycleUpdate({})
+      return lifecycleUpdate({ error: Option.some(event.error) })
     case "MessageReceived":
-      if (event.message.role === "user") {
-        return { status: AgentStatus.cases.Streaming.make({}) }
-      }
-      return {}
+      if (event.message.role === "user") return lifecycleUpdate({ running: Option.some(true) })
+      return lifecycleUpdate({})
     default:
-      return {}
+      return lifecycleUpdate({})
   }
 }
 
@@ -543,7 +548,6 @@ interface ClientAgentValue {
   // Agent state (derived from events)
   // eslint-disable-next-line effect/noNullish -- UI agent accessors expose absence before hydration.
   agent: () => AgentName | undefined
-  agentStatus: () => AgentStatus
   cost: () => number
   /** The model the next turn would use: session setting, else the server-resolved default. */
   model: () => string
@@ -552,6 +556,7 @@ interface ClientAgentValue {
   /** The reasoning level config/agent would apply without a session override. */
   resolvedReasoningLevel: () => Option.Option<ReasoningEffort>
   // Derived accessors
+  /** Whether a turn runs; an error on screen does not change it. */
   isStreaming: () => boolean
   isError: () => boolean
   // eslint-disable-next-line effect/noNullish -- UI agent accessors expose null outside the error state.
@@ -563,9 +568,8 @@ interface ClientAgentValue {
   /** The models a registered driver can run, in registry order; empty until both load. */
   models: () => readonly Model[]
 
-  // Agent state setters (for local errors only)
-  // eslint-disable-next-line effect/noNullish -- UI callers pass null to clear a local error.
-  setError: (error: string | null) => void
+  /** Show a local error. It leaves the turn as it is; the next turn start clears it. */
+  setError: (error: string) => void
   /**
    * An error that belongs to one session, such as a send it refused. The
    * session in view shows it now; another session keeps it until the reader
@@ -789,7 +793,7 @@ export function ClientProvider(props: ClientProviderProps) {
               if (version !== modelCatalogLoadVersion) return
               const error = formatError(err)
               log.error("model.list.failed", { error })
-              setAgentStore({ status: AgentStatus.cases.Error.make({ error }) })
+              setAgentStore({ error: Option.some(error) })
             }),
           ),
         ),
@@ -800,7 +804,8 @@ export function ClientProvider(props: ClientProviderProps) {
   // Agent state (derived from events)
   const [agentStore, setAgentStore] = createStore<AgentState>({
     agent: initialAgent,
-    status: AgentStatus.cases.Idle.make({}),
+    running: false,
+    error: Option.none(),
     cost: 0,
     resolvedModelId: Option.none(),
     resolvedReasoningLevel: Option.none(),
@@ -826,17 +831,22 @@ export function ClientProvider(props: ClientProviderProps) {
   const [extensionHealth, setExtensionHealth] =
     createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
 
-  // The error each session last showed, until a later status replaces it. A
-  // snapshot writes the status, so every snapshot shows the held error again:
-  // the one the reader returns to, the one just switched to, and a feed that
-  // hydrates again after a reconnect.
+  // The error each session last showed, until a later error or a turn start
+  // replaces it. A snapshot writes the error on screen, so every snapshot shows
+  // the held error again: the one the reader returns to, the one just switched
+  // to, and a feed that hydrates again after a reconnect.
   const heldErrors = new Map<string, string>()
   const identityKey = (identity: SessionIdentity) =>
     `${identity.sessionId}\u0000${identity.branchId}`
-  /** Write the status of the session in view; it replaces that session's held error. */
-  const showStatus = (status: AgentStatus): void => {
+  /** Write the error on screen for the session in view; it replaces that session's held error. */
+  const showError = (error: Option.Option<string>): void => {
     Option.map(sessionOption(), (current) => heldErrors.delete(identityKey(current)))
-    setAgentStore({ status })
+    setAgentStore({ error })
+  }
+  /** Write whether a turn runs. A turn start clears the error on screen. */
+  const setRunning = (running: boolean): void => {
+    if (running && !agentStore.running) showError(Option.none())
+    setAgentStore({ running })
   }
 
   /**
@@ -855,7 +865,8 @@ export function ClientProvider(props: ClientProviderProps) {
   }): void => {
     setAgentStore({
       agent: input.agent,
-      status: AgentStatus.cases.Idle.make({}),
+      running: false,
+      error: Option.none(),
       cost: 0,
       resolvedModelId: Option.none(),
       resolvedReasoningLevel: Option.none(),
@@ -947,11 +958,7 @@ export function ClientProvider(props: ClientProviderProps) {
     if (Option.isNone(current)) return
     if (current.value.sessionId !== input.sessionId || current.value.branchId !== input.branchId)
       return
-    if (input.runtime._tag === "Idle") {
-      if (agentStore.status._tag === "Streaming") showStatus(AgentStatus.cases.Idle.make({}))
-    } else {
-      showStatus(AgentStatus.cases.Streaming.make({}))
-    }
+    setRunning(input.runtime._tag !== "Idle")
   }
 
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
@@ -991,21 +998,15 @@ export function ClientProvider(props: ClientProviderProps) {
     if (sessionChanged) {
       dispatchSession(SessionStateEvent.cases.Activated.make({ session: nextSession }))
     }
-    const rt = snapshot.runtime
-    let status: AgentStatus = AgentStatus.cases.Streaming.make({})
-    if (rt._tag === "Idle") status = AgentStatus.cases.Idle.make({})
     setAgentStore({
       agent: Option.some(snapshot.agent),
-      status,
+      running: snapshot.runtime._tag !== "Idle",
+      error: Option.fromUndefinedOr(heldErrors.get(identityKey(snapshot))),
       cost: snapshot.metrics.costUsd,
       resolvedModelId: Option.some(snapshot.resolvedModelId),
       resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
     })
     setSessionMetrics(metricsOf(snapshot))
-    const held = Option.fromUndefinedOr(heldErrors.get(identityKey(snapshot)))
-    if (Option.isSome(held)) {
-      setAgentStore({ status: AgentStatus.cases.Error.make({ error: held.value }) })
-    }
   }
 
   const refreshSessionMetrics = (): void => {
@@ -1039,8 +1040,8 @@ export function ClientProvider(props: ClientProviderProps) {
 
   const applyAgentLifecycleEvent = (event: EventEnvelope["event"]): void => {
     const lifecycle = reduceAgentLifecycle(event)
-    const status = Option.fromNullishOr(lifecycle.status)
-    if (Option.isSome(status)) showStatus(status.value)
+    Option.map(lifecycle.running, setRunning)
+    if (Option.isSome(lifecycle.error)) showError(lifecycle.error)
     // A user message starts the next turn; the notice from before it is spent.
     if (event._tag === "MessageReceived" && event.message.role === "user") {
       setNoticeState(Option.none())
@@ -1157,7 +1158,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.sync(() => {
             log.error("createSession.failed", { error: String(err) })
             dispatchSession(SessionStateEvent.cases.CreateFailed.make({}))
-            showStatus(AgentStatus.cases.Error.make({ error: formatError(err) }))
+            showError(Option.some(formatError(err)))
           }),
         ),
       ),
@@ -1335,18 +1336,13 @@ export function ClientProvider(props: ClientProviderProps) {
             requestId,
           })
         }).pipe(
-          Effect.tapError((err) =>
-            Effect.sync(() =>
-              showStatus(AgentStatus.cases.Error.make({ error: formatError(err) })),
-            ),
-          ),
+          Effect.tapError((err) => Effect.sync(() => showError(Option.some(formatError(err))))),
         ),
       )
     },
   }
   const agentValue: ClientAgentValue = {
     agent: () => Option.getOrUndefined(agentStore.agent),
-    agentStatus: () => agentStore.status,
     cost: () => agentStore.cost,
     model: () => {
       // The session setting applies before the snapshot refresh lands; the
@@ -1372,12 +1368,9 @@ export function ClientProvider(props: ClientProviderProps) {
       ),
     resolvedReasoningLevel: () => agentStore.resolvedReasoningLevel,
     // Derived accessors
-    isStreaming: () => agentStore.status._tag === "Streaming",
-    isError: () => agentStore.status._tag === "Error",
-    error: () => {
-      if (agentStore.status._tag === "Error") return agentStore.status.error
-      return Option.getOrNull(Option.none<string>())
-    },
+    isStreaming: () => agentStore.running,
+    isError: () => Option.isSome(agentStore.error),
+    error: () => Option.getOrNull(agentStore.error),
     sessionMetrics,
     modelInfo: () => modelStore.modelsById[agentValue.model()],
     models: () =>
@@ -1392,14 +1385,7 @@ export function ClientProvider(props: ClientProviderProps) {
       }
       heldErrors.set(identityKey(target), error)
     },
-    setError: (error) => {
-      const nextError = Option.fromNullishOr(error)
-      if (Option.isSome(nextError)) {
-        showStatus(AgentStatus.cases.Error.make({ error: nextError.value }))
-        return
-      }
-      showStatus(AgentStatus.cases.Idle.make({}))
-    },
+    setError: (error) => showError(Option.some(error)),
     notice,
     setNotice: (message) => setNoticeState(Option.some(message)),
     surfaceError: (effect) =>
