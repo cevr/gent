@@ -392,6 +392,14 @@ const decideAfterTurn = (
   updatedAt: number,
 ): TurnDecision => {
   const charged = chargeTurn(goal, input, updatedAt)
+  // A spent budget wins over every other reason to stop. Only an ordinary
+  // turn end queues the budget prompt; an interrupt or a failure wakes nothing.
+  if (Option.contains(remainingTokens(charged), 0)) {
+    return {
+      next: { ...charged, status: "budget_limited" },
+      report: !input.interrupted && !input.streamFailed,
+    }
+  }
   // A turn that died on a broken stream must not drive the goal on: another
   // prompt would spend the goal against an answer that never arrived. It
   // pauses, and the person decides whether to resume.
@@ -401,13 +409,8 @@ const decideAfterTurn = (
       report: true,
     }
   }
-  const exhausted = Option.contains(remainingTokens(charged), 0)
   // The person stopped the turn: nothing wakes the branch again.
-  if (input.interrupted) {
-    if (exhausted) return { next: { ...charged, status: "budget_limited" }, report: false }
-    return { next: charged, report: false }
-  }
-  if (exhausted) return { next: { ...charged, status: "budget_limited" }, report: true }
+  if (input.interrupted) return { next: charged, report: false }
   // With a budget and a partial count, the remaining budget is unknown.
   // Continuing could overspend it, so the goal waits for the person.
   if (!input.usage.complete && Predicate.isNotUndefined(charged.tokenBudget)) {

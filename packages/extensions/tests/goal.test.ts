@@ -364,6 +364,89 @@ describe("goal stream failure", () => {
   )
 })
 
+describe("goal stream failure on a spent budget", () => {
+  it.scopedLive(
+    "a failed turn that spends the budget reads as budget-limited, not paused",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        // Step one reports usage past the budget and is cut off, so the loop
+        // continues the turn; every later step breaks after partial output.
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            const call = yield* Ref.updateAndGet(calls, (n) => n + 1)
+            if (call === 1) {
+              return Stream.fromIterable([
+                textDeltaPart("part one"),
+                finishPart({
+                  finishReason: "length",
+                  usage: { inputTokens: 30, outputTokens: 12 },
+                }),
+              ])
+            }
+            return Stream.concat(
+              Stream.fromIterable([textDeltaPart(`part ${call}`)]),
+              Stream.fail(
+                AiError.make({
+                  module: "Test",
+                  method: "streamText",
+                  reason: new AiError.UnknownError({ description: "connection reset" }),
+                }),
+              ),
+            )
+          }),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        const readGoal = () =>
+          client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: GOAL_EXTENSION_ID,
+              capabilityId: "goal.get",
+              input: {},
+            })
+            .pipe(
+              Effect.map((snapshot) =>
+                Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
+              ),
+            )
+        yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: GOAL_EXTENSION_ID,
+          capabilityId: "goal-command",
+          input: "--budget 10 Write the pelican poem",
+        })
+        const settled = yield* waitFor(
+          readGoal(),
+          (goal) =>
+            Option.exists(goal, (value) => value.status !== "active" && value.tokensUsed > 0),
+          10_000,
+          "the failed turn settles the goal",
+        )
+        expect(Option.map(settled, (goal) => goal.status)).toEqual(Option.some("budget_limited"))
+        expect(Option.map(settled, (goal) => goal.tokensUsed)).toEqual(Option.some(42))
+        // A failed turn wakes nothing: only the first continuation exists.
+        yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) => current.runtime._tag === "Idle",
+          5_000,
+          "the branch is idle",
+        )
+        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        const goalMessages = snapshot.messages.filter(
+          (message) => message.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE,
+        )
+        expect(goalMessages.length).toBe(1)
+      }).pipe(Effect.timeout("14 seconds")),
+    18_000,
+  )
+})
+
 // ── goal/goal-partial-usage.test ────────────────────────────────────────────
 
 /**
