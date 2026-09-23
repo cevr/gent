@@ -1460,7 +1460,7 @@ describe("the git processes behind a listing", () => {
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 
-  it.scopedLive("a git that never answers times out, and the walk lists", () =>
+  it.scopedLive("a git that never answers times out, and the search asks for a narrower path", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
@@ -1471,6 +1471,7 @@ describe("the git processes behind a listing", () => {
 
       const listing = yield* Effect.forkChild(
         listed(tmpDir).pipe(
+          Effect.flip,
           // oxlint-disable-next-line effect/noInlineProvide -- The fake git signals through a pipe this test creates.
           Effect.provide(layerWithSpawner(hung)),
         ),
@@ -1478,7 +1479,9 @@ describe("the git processes behind a listing", () => {
       // Reading the pipe returns once git runs, so its timeout is already armed.
       yield* fs.readFileString(`${signals}/started`)
       yield* TestClock.adjust("1 minute")
-      expect(yield* Fiber.join(listing)).toEqual(["a.ts"])
+      // A timed-out git may be a huge work tree: the .gitignore walk would
+      // miss info/exclude and the global excludes there.
+      expect((yield* Fiber.join(listing)).message).toContain("search a narrower path")
     }).pipe(
       // The test clock runs the listing; the live clock bounds the test.
       Effect.provide(Layer.merge(BunServices.layer, TestClock.layer())),

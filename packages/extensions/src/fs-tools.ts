@@ -356,7 +356,7 @@ const GIT_ENV = {
   GIT_COMMON_DIR: unset,
 }
 
-/** A git that does not answer within this long is treated as absent: the walk lists. */
+/** A git that does not answer within this long fails the listing. */
 const GIT_TIMEOUT = Duration.seconds(10)
 
 interface GitNames {
@@ -374,7 +374,7 @@ const SKIP_WORKTREE_TAG = "S".charCodeAt(0)
  * `FALLBACK_MAX_FILES` names on disk the process is stopped and the listing
  * fails, so a huge tree never lands in memory whole. A name that is not
  * valid UTF-8 cannot be opened through a string path; it is counted. `None`
- * when git fails or times out.
+ * when git fails; a git that does not answer in time fails the listing.
  */
 const gitLsFiles = (
   cwd: string,
@@ -430,7 +430,21 @@ const gitLsFiles = (
     Effect.scoped,
     Effect.catchTag("PlatformError", () => Effect.succeedNone),
     Effect.timeoutOption(GIT_TIMEOUT),
-    Effect.map(Option.flatten),
+    Effect.flatMap(
+      Option.match({
+        // A git that does not answer is a huge tree more often than a broken
+        // one, and the .gitignore walk misses info/exclude and the global
+        // excludes there.
+        onNone: () =>
+          Effect.fail(
+            new FileListingError({
+              message: `git did not list ${cwd} within ${Duration.format(GIT_TIMEOUT)}; search a narrower path`,
+              cwd,
+            }),
+          ),
+        onSome: Effect.succeed,
+      }),
+    ),
   )
 
 const listGitFiles: (
