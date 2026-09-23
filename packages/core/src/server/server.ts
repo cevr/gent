@@ -124,6 +124,7 @@ import { ProviderAuthError } from "../domain/driver.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
 import {
   ApprovalService,
+  configHealthStatuses,
   ExtensionRegistry,
   type ExtensionRegistryService,
   type ModelCatalogFailure,
@@ -1177,7 +1178,8 @@ const RpcHandlers = GentRpcs.toLayer(
     // RpcHandlers layer. RpcGroup.toLayer erases handler-residual R, so Tags only
     // yielded inside returned handler Effects would otherwise become deferred
     // request-time defects instead of layer-build failures.
-    yield* RuntimeEnvironment
+    const runtimeEnvironment = yield* RuntimeEnvironment
+    const pathService = yield* Path.Path
 
     // `message.send` has no durable operation row; the runtime keys its actor
     // command on `requestId`. This cache collapses concurrent same-requestId
@@ -1212,15 +1214,25 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.orElseSucceed(() => Option.none()),
       )
 
+    /** The stored cwd of a session; none without a session or a stored cwd. */
+    const sessionCwd = (sessionId: Option.Option<string>): Effect.Effect<Option.Option<string>> =>
+      Option.match(sessionId, {
+        onNone: () => Effect.succeedNone,
+        onSome: (id) =>
+          loadSession(id).pipe(
+            Effect.map((session) =>
+              Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd)),
+            ),
+          ),
+      })
+
     const resolveSessionRegistry = (
       sessionId: Option.Option<string>,
     ): Effect.Effect<ExtensionRegistryService> =>
-      Effect.gen(function* () {
-        if (Option.isNone(sessionId)) return yield* resolveRegistryForCwd(Option.none())
-        const session = yield* loadSession(sessionId.value)
-        const cwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
-        return yield* resolveRegistryForCwd(cwd)
-      }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry))
+      sessionCwd(sessionId).pipe(
+        Effect.flatMap(resolveRegistryForCwd),
+        Effect.provideService(ExtensionRegistry, extensionRegistry),
+      )
 
     return {
       // ----------------------------------------------------------------------
@@ -1470,8 +1482,20 @@ const RpcHandlers = GentRpcs.toLayer(
       // ----------------------------------------------------------------------
       "extension.listStatus": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
-          const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
+          const cwd = yield* sessionCwd(Option.fromUndefinedOr(sessionId))
+          const registry = yield* resolveRegistryForCwd(cwd).pipe(
+            Effect.provideService(ExtensionRegistry, extensionRegistry),
+          )
           const resolved = registry.getResolved()
+          // Config files are read on each call, so a fixed file clears here
+          // without a restart.
+          const configStatuses = yield* configHealthStatuses(
+            Option.getOrElse(cwd, () => runtimeEnvironment.cwd),
+          ).pipe(
+            Effect.provideService(ConfigService, configService),
+            Effect.provideService(Path.Path, pathService),
+            Effect.provideService(RuntimeEnvironment, runtimeEnvironment),
+          )
           // Health reads what the last catalog run recorded. Only a profile
           // whose catalog never ran is listed here, once.
           const recorded = yield* catalogRecord.lastFailures(resolved)
@@ -1486,7 +1510,7 @@ const RpcHandlers = GentRpcs.toLayer(
               ),
           })
           return buildExtensionHealthSnapshot(
-            resolved.extensionStatuses,
+            [...resolved.extensionStatuses, ...configStatuses],
             catalogFailuresByExtension(resolved, failures),
           )
         }),

@@ -414,7 +414,7 @@ describe("model catalog resolution", () => {
             resolveModel: unusedResolution,
             listModels: (auth) =>
               Effect.sync(() => {
-                if (auth?.type === "api") seen.push(`openai:${auth.key}`)
+                if (auth?._tag === "Api") seen.push(`openai:${auth.key}`)
                 return [catalogModel("openai/gpt-5.4")]
               }),
           },
@@ -712,9 +712,8 @@ describe("Auth", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const dir = yield* fs.makeTempDirectoryScoped()
-        // Write a malformed entry directly. `KeyValueStore.layerFileSystem`
-        // URL-encodes the key into the file basename — `openai` is safe
-        // and round-trips as `openai` with no escaping.
+        // Write a malformed entry directly. The store URL-encodes the key
+        // into the file basename; `openai` has nothing to escape.
         yield* fs.writeFileString(`${dir}/openai`, "not-json-at-all")
 
         const result = yield* Effect.gen(function* () {
@@ -778,6 +777,111 @@ describe("Auth", () => {
         yield* Fiber.join(firstUpdate)
         // Both increments land: neither update read the value the other replaced.
         expect(counter(Option.fromUndefinedOr(yield* first.get("openai")))).toBe(2)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    // A write that truncates the file in place shows a reader in another
+    // process an empty file for a moment. A reader that opened the file
+    // before the write sees the same inode: it must still read the whole
+    // credential it opened, never a truncated or mixed one.
+    it.scopedLive("a write from another store never truncates the file a reader has open", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const writer = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const reader = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        yield* writer.set("openai", AuthInfo.cases.Api.make({ type: "api", key: "sk-old" }))
+        const opened = yield* fs.open(`${dir}/openai`, { flag: "r" })
+        yield* writer.set("openai", AuthInfo.cases.Api.make({ type: "api", key: "sk-new" }))
+        const buffer = new Uint8Array(4096)
+        const size = yield* opened.read(buffer)
+        const seen = new TextDecoder().decode(buffer.subarray(0, Number(size)))
+        expect(seen).toContain('"sk-old"')
+        const read = yield* reader.get("openai")
+        expect(read).toEqual(AuthInfo.cases.Api.make({ type: "api", key: "sk-new" }))
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    it.scopedLive(
+      "a corrupt read waits for the writer holding the lock, then reads its value",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* fs.makeTempDirectoryScoped()
+          const holder = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          const reader = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+          yield* holder.set("openai", AuthInfo.cases.Api.make({ type: "api", key: "sk-old" }))
+          const inside = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          // The holder stands for an older binary that writes in place: while
+          // it holds the lock, the file is empty.
+          const updating = yield* holder
+            .update("openai", () =>
+              Effect.gen(function* () {
+                yield* fs.writeFileString(`${dir}/openai`, "")
+                yield* Deferred.completeWith(inside, Effect.void)
+                yield* Deferred.await(release)
+                return [
+                  "written",
+                  Option.some(AuthInfo.cases.Api.make({ type: "api", key: "sk-written" })),
+                ] satisfies readonly [string, Option.Option<AuthInfo>]
+              }),
+            )
+            .pipe(Effect.forkScoped)
+          yield* Deferred.await(inside)
+          const reading = yield* reader.get("openai").pipe(Effect.forkScoped)
+          yield* Effect.yieldNow
+          yield* Deferred.completeWith(release, Effect.void)
+          yield* Fiber.join(updating)
+          const read = yield* Fiber.join(reading)
+          expect(read).toEqual(AuthInfo.cases.Api.make({ type: "api", key: "sk-written" }))
+          expect(yield* fs.exists(`${dir}/openai`)).toBe(true)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
+    )
+
+    // A cancel of a turn waiting on another process's refresh must end the
+    // wait, not sit out the holder's refresh or the whole 30 s poll.
+    it.scopedLive("a wait for a lock another store holds ends when it is interrupted", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const holder = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const waiter = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        const inside = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const holding = yield* holder
+          .update("openai", () =>
+            Effect.gen(function* () {
+              yield* Deferred.completeWith(inside, Effect.void)
+              yield* Deferred.await(release)
+              return ["held", Option.none()] satisfies readonly [string, Option.Option<AuthInfo>]
+            }),
+          )
+          .pipe(Effect.forkScoped)
+        yield* Deferred.await(inside)
+        const waiting = yield* waiter
+          .update("openai", () =>
+            Effect.succeed(["waited", Option.none()] satisfies readonly [
+              string,
+              Option.Option<AuthInfo>,
+            ]),
+          )
+          .pipe(Effect.timeout("300 millis"), Effect.exit, Effect.forkScoped)
+        // The holder is still inside: only an interruptible wait ends here.
+        const ended = yield* Fiber.await(waiting).pipe(Effect.timeoutOption("3 seconds"))
+        yield* Deferred.completeWith(release, Effect.void)
+        yield* Fiber.join(holding)
+        expect(Option.isSome(ended)).toBe(true)
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+    )
+
+    it.scopedLive("stores a credential readable only by its owner", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const auth = Context.get(yield* Layer.build(Auth.Live(dir)), Auth)
+        yield* auth.set("openai", AuthInfo.cases.Api.make({ type: "api", key: "sk-secret" }))
+        expect(((yield* fs.stat(`${dir}/openai`)).mode & 0o777).toString(8)).toBe("600")
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("5 seconds")),
     )
   })

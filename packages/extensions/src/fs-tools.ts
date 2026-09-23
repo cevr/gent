@@ -611,7 +611,7 @@ const WriteParams = Schema.Struct({
   atomic: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
-        "Write a sibling temporary file, then rename it over the path. Use for saved results. Replaces a symlink itself; does not change the symlink target. Creates a new file inode with temporary-file permissions. Default false keeps normal write behavior.",
+        "Write a temporary file beside the target, then rename it over the target. Use for saved results. Follows a symlink like a normal write: the file it names is replaced and the link stays. Keeps the file's permissions. Default false keeps normal write behavior.",
     }),
   ),
   path: Schema.String.annotate({

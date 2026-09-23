@@ -240,19 +240,83 @@ describe("runProcess", () => {
 describe("writeFileAtomic", () => {
   const atomicTest = it.scopedLive.layer(BunServices.layer)
 
-  atomicTest("replaces a symlink entry and leaves its target untouched", () =>
+  atomicTest("follows a symlink: the target gets the content and the link stays", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const dir = yield* fs.makeTempDirectoryScoped()
-      const target = `${dir}/target.json`
+      const dotfiles = yield* fs.makeTempDirectoryScoped()
+      const target = `${dotfiles}/target.json`
       const link = `${dir}/state.json`
       yield* fs.writeFileString(target, "target content")
       yield* fs.symlink(target, link)
       yield* writeFileAtomic(link, "replaced")
-      expect(yield* fs.readFileString(target)).toBe("target content")
-      expect(yield* fs.readFileString(link)).toBe("replaced")
-      expect((yield* fs.readLink(link).pipe(Effect.result))._tag).toBe("Failure")
-      expect((yield* fs.readDirectory(dir)).sort()).toEqual(["state.json", "target.json"])
+      expect(yield* fs.readLink(link)).toBe(target)
+      expect(yield* fs.readFileString(target)).toBe("replaced")
+      // The staged file lands beside the target; nothing is left behind.
+      expect(yield* fs.readDirectory(dir)).toEqual(["state.json"])
+      expect(yield* fs.readDirectory(dotfiles)).toEqual(["target.json"])
+    }),
+  )
+
+  atomicTest("a relative dangling symlink creates the file it names", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const link = `${dir}/state.json`
+      yield* fs.symlink("real.json", link)
+      yield* writeFileAtomic(link, "created")
+      expect(yield* fs.readLink(link)).toBe("real.json")
+      expect(yield* fs.readFileString(`${dir}/real.json`)).toBe("created")
+    }),
+  )
+
+  const modeOf = (fs: FileSystem.FileSystem, file: string) =>
+    fs.stat(file).pipe(Effect.map((info) => info.mode & 0o777))
+
+  atomicTest("keeps the mode of an executable file", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const script = `${dir}/run.sh`
+      yield* fs.writeFileString(script, "#!/bin/sh\necho old\n")
+      yield* fs.chmod(script, 0o755)
+      yield* writeFileAtomic(script, "#!/bin/sh\necho new\n")
+      expect(yield* modeOf(fs, script)).toBe(0o755)
+      expect(yield* fs.readFileString(script)).toBe("#!/bin/sh\necho new\n")
+    }),
+  )
+
+  atomicTest("keeps a private file private", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const secret = `${dir}/secret.json`
+      yield* fs.writeFileString(secret, "{}")
+      yield* fs.chmod(secret, 0o600)
+      yield* writeFileAtomic(secret, '{"key":"x"}')
+      expect(yield* modeOf(fs, secret)).toBe(0o600)
+    }),
+  )
+
+  atomicTest("a new file takes the mode the caller passes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const secret = `${dir}/new.json`
+      yield* writeFileAtomic(secret, "{}", { mode: 0o600 })
+      expect(yield* modeOf(fs, secret)).toBe(0o600)
+    }),
+  )
+
+  atomicTest("a new file without a mode gets the default file mode", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const plain = `${dir}/plain.json`
+      const reference = `${dir}/reference.json`
+      yield* fs.writeFileString(reference, "")
+      yield* writeFileAtomic(plain, "{}")
+      expect(yield* modeOf(fs, plain)).toBe(yield* modeOf(fs, reference))
     }),
   )
 })

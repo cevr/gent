@@ -11,6 +11,7 @@ import {
   Layer,
   MutableRef,
   Option,
+  Path,
   Predicate,
   Result,
   Schema,
@@ -75,6 +76,7 @@ import {
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
+import type { ExtensionHealthSnapshot } from "../../src/server/rpc.js"
 import {
   defineResource,
   ExtensionLoadError,
@@ -106,7 +108,7 @@ import { CurrentInteractionOwner, encodeInteractionDecision } from "../../src/do
 import { EventStoreError } from "../../src/domain/event"
 import { MinimumLogLevel } from "effect/References"
 import { type Message, messageSingleText } from "../../src/domain/message"
-import { ConfigService } from "../../src/runtime/config"
+import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
 // ── rpc-contract.test ───────────────────────────────────────────────────────
@@ -3359,6 +3361,46 @@ describe("extension command RPCs", () => {
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
+  )
+  it.live("a broken config names its file in health and clears once the file is fixed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const project = yield* fs.makeTempDirectoryScoped()
+      const projectConfig = path.join(project, ".gent", "config.json")
+      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+      // A trailing comma: not JSON.
+      yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"], }')
+      const configIssues = (status: ExtensionHealthSnapshot) => {
+        if (status._tag !== "Degraded") return []
+        return status.degradedExtensions
+          .filter((extension) => extension.sourcePath === projectConfig)
+          .flatMap((extension) => extension.issues)
+      }
+      yield* Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          configServiceLayer: ConfigService.Live.pipe(
+            Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
+            Layer.provide(BunPlatformLive),
+          ),
+          // This test is about the failure report, so the load must survive it.
+          allowFailedExtensions: true,
+          cwd: project,
+        })
+        const broken = configIssues(yield* client.extension.listStatus({ sessionId }))
+        expect(broken).toHaveLength(1)
+        expect(broken[0]).toMatchObject({ _tag: "ActivationFailed", phase: "load" })
+        expect(broken[0]?.error).toContain(projectConfig)
+
+        // Fixed on disk, same server: the next read has no config issue.
+        yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"] }')
+        expect(configIssues(yield* client.extension.listStatus({ sessionId }))).toEqual([])
+      }).pipe(Effect.timeout("4 seconds"))
+    }).pipe(Effect.scoped, Effect.provide(BunPlatformLive)),
   )
   it.live("a failing driver catalog leaves model.list working and shows in extension health", () =>
     Effect.gen(function* () {

@@ -16,7 +16,6 @@ import {
   Semaphore,
   Stream,
 } from "effect"
-import { KeyValueStore } from "effect/unstable/persistence"
 import { Database } from "bun:sqlite"
 import {
   AgentName,
@@ -39,12 +38,12 @@ import {
   DEFAULT_RETRY_POLICY,
   type PersistAuth,
   ProviderAuthError,
-  type ProviderAuthInfo,
+  ProviderAuthInfo,
   type ProviderHints,
   type RetryPolicy,
   type StoredOAuthCredentials,
 } from "../domain/driver.js"
-import { GentPlatform } from "./gent-platform.js"
+import { GentPlatform, writeFileAtomic } from "./gent-platform.js"
 import { LanguageModel } from "effect/unstable/ai"
 import { ProviderError } from "../domain/errors.js"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -59,14 +58,9 @@ import type * as AiToolkit from "effect/unstable/ai/Toolkit"
 /**
  * Every auth concept gent uses: the auth method, the store, its persistence,
  * and the guard.
- * Persistence is delegated to `KeyValueStore.layerFileSystem(...)` +
- * `toSchemaStore`: the directory inherits whatever protection the user's home
- * directory already has, which matches how every other gent state file
- * (`~/.gent/data.db`, journals, etc.) is stored.
- *
- * Each provider's auth blob is one URL-encoded file under the configured
- * directory (default `~/.gent/auth/`). The schema is `Auth.Info`, a
- * tagged enum with `Api | Oauth` variants.
+ * Each provider's auth blob is one URL-encoded JSON file under the configured
+ * directory (default `~/.gent/auth/`), mode 0600, replaced atomically. The
+ * schema is `Auth.Info`, a tagged enum with `Api | Oauth` variants.
  */
 
 // ── Driver-facing wire types ────────────────────────────────────────────
@@ -157,14 +151,26 @@ export class AuthError extends Schema.TaggedError<AuthError>()("AuthError", {
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
+/** A stored entry that does not decode: a corrupt file, or one an older writer tore. */
+class AuthEntryInvalid extends Schema.TaggedError<AuthEntryInvalid>()("AuthEntryInvalid", {
+  cause: Schema.Defect(),
+}) {}
+
+/** The raw store under `serializeAuthStore`; it neither locks nor discards. */
 interface AuthStoreAccess {
-  // oxlint-disable-next-line effect/noNullish -- Auth lookup uses undefined when a provider has no stored credentials.
-  readonly get: (provider: string) => Effect.Effect<AuthInfo | undefined, AuthError>
+  readonly get: (
+    provider: string,
+    // oxlint-disable-next-line effect/noNullish -- Auth lookup uses undefined when a provider has no stored credentials.
+  ) => Effect.Effect<AuthInfo | undefined, AuthError | AuthEntryInvalid>
   readonly set: (provider: string, info: AuthInfo) => Effect.Effect<void, AuthError>
   readonly remove: (provider: string) => Effect.Effect<void, AuthError>
 }
 
-export interface AuthService extends AuthStoreAccess {
+export interface AuthService {
+  // oxlint-disable-next-line effect/noNullish -- Auth lookup uses undefined when a provider has no stored credentials.
+  readonly get: (provider: string) => Effect.Effect<AuthInfo | undefined, AuthError>
+  readonly set: (provider: string, info: AuthInfo) => Effect.Effect<void, AuthError>
+  readonly remove: (provider: string) => Effect.Effect<void, AuthError>
   /**
    * Read, then maybe write, one provider's credential. `f` receives what the
    * store holds now and returns a result plus the credential to write (none
@@ -193,6 +199,10 @@ type ProviderLock = (
  * gent process on the machine (a gamut run, a rift binary, a second data
  * directory); `crossProcess` orders those, inside the in-process lock so one
  * fiber per process waits on it.
+ *
+ * A read runs without the lock. An entry that does not decode is read again
+ * under the lock and removed only if it still does not decode, so a write in
+ * flight in another process is never taken for corruption.
  */
 export const serializeAuthStore = (
   store: AuthStoreAccess,
@@ -210,14 +220,36 @@ export const serializeAuthStore = (
         }
         return crossProcess(provider)(effect).pipe(lock.withPermits(1))
       })
+  // Runs under the provider's lock only: no writer can be mid-write here.
+  const getOrDiscard = (provider: string) =>
+    store.get(provider).pipe(
+      Effect.catchTag("AuthEntryInvalid", (invalid) =>
+        Effect.logWarning("discarded invalid auth info").pipe(
+          Effect.annotateLogs({ provider, cause: String(invalid.cause) }),
+          Effect.andThen(store.remove(provider)),
+          Effect.catchTag("AuthError", (deleteCause) =>
+            Effect.logWarning("failed to discard invalid auth info").pipe(
+              Effect.annotateLogs({ provider, deleteCause: String(deleteCause) }),
+            ),
+          ),
+          // oxlint-disable-next-line effect/noNullish -- Invalid stored credentials are discarded as an absent auth record.
+          Effect.as(undefined),
+        ),
+      ),
+    )
   return {
-    get: store.get,
+    get: (provider) =>
+      store
+        .get(provider)
+        .pipe(
+          Effect.catchTag("AuthEntryInvalid", () => exclusive(provider)(getOrDiscard(provider))),
+        ),
     set: (provider, info) => exclusive(provider)(store.set(provider, info)),
     remove: (provider) => exclusive(provider)(store.remove(provider)),
     update: (provider, f) =>
       exclusive(provider)(
         Effect.gen(function* () {
-          const current = Option.fromUndefinedOr(yield* store.get(provider))
+          const current = Option.fromUndefinedOr(yield* getOrDiscard(provider))
           const [result, next] = yield* f(current)
           if (Option.isSome(next)) yield* store.set(provider, next.value)
           return result
@@ -270,15 +302,23 @@ const fileProviderLock =
       Effect.sync(() => {
         db.close()
       })
-    const acquire = fs.makeDirectory(lockDirectory, { recursive: true }).pipe(
-      Effect.mapError(lockError),
-      Effect.andThen(open),
-      Effect.flatMap((db) =>
-        take(db).pipe(
-          Effect.onError(() => close(db)),
-          Effect.as(db),
+    // One open-and-take attempt is the uninterruptible acquire; the poll
+    // between attempts is not, so a cancel ends the wait at once. Only a
+    // held lock outlives an interrupt, and its release always runs.
+    const attempt = Effect.acquireRelease(
+      fs.makeDirectory(lockDirectory, { recursive: true }).pipe(
+        Effect.mapError(lockError),
+        Effect.andThen(open),
+        Effect.flatMap((db) =>
+          take(db).pipe(
+            Effect.onError(() => close(db)),
+            Effect.as(db),
+          ),
         ),
       ),
+      close,
+    )
+    const held = attempt.pipe(
       Effect.retry({
         while: (error) => error._tag === "AuthLockBusy",
         schedule: Schedule.spaced(AUTH_LOCK_POLL),
@@ -290,7 +330,7 @@ const fileProviderLock =
         ),
       ),
     )
-    return Effect.acquireUseRelease(acquire, () => effect, close)
+    return Effect.scoped(Effect.andThen(held, effect))
   }
 
 export class Auth extends Context.Service<Auth, AuthService>()(
@@ -305,55 +345,55 @@ export class Auth extends Context.Service<Auth, AuthService>()(
     Layer.effect(
       Auth,
       Effect.gen(function* () {
-        const kv = yield* KeyValueStore.KeyValueStore
-        const store = KeyValueStore.toSchemaStore(kv, AuthInfo)
-
-        const wrap = (message: string) => (cause: unknown) => new AuthError({ message, cause })
-
-        const discardInvalid = (
-          provider: string,
-          cause: unknown,
-          // oxlint-disable-next-line effect/noNullish -- Invalid stored credentials are discarded as an absent auth record.
-        ): Effect.Effect<AuthInfo | undefined> =>
-          Effect.logWarning("discarded invalid auth info").pipe(
-            Effect.annotateLogs({ provider, cause: String(cause) }),
-            Effect.andThen(
-              kv
-                .remove(provider)
-                .pipe(
-                  Effect.catch((deleteCause: KeyValueStore.KeyValueStoreError) =>
-                    Effect.logWarning("failed to discard invalid auth info").pipe(
-                      Effect.annotateLogs({ provider, deleteCause: String(deleteCause) }),
-                    ),
-                  ),
-                ),
-            ),
-            // oxlint-disable-next-line effect/noNullish -- Invalid stored credentials are discarded as an absent auth record.
-            Effect.as(undefined),
-          )
-
         const fs = yield* FileSystem.FileSystem
         const pathService = yield* Path.Path
+        const codec = Schema.fromJsonString(Schema.toCodecJson(AuthInfo))
+        const decode = Schema.decodeEffect(codec)
+        const encode = Schema.encodeEffect(codec)
+        const wrap = (message: string) => (cause: unknown) => new AuthError({ message, cause })
+        const fileOf = (provider: string) =>
+          pathService.join(directory, encodeURIComponent(provider))
         // A dot directory inside the store: no provider id starts with a dot,
         // so it never reads as a credential, and it goes with the store.
         const lockDirectory = pathService.join(directory, ".locks")
         return serializeAuthStore(
           {
             get: (provider) =>
-              store.get(provider).pipe(
-                Effect.map(Option.getOrUndefined),
-                Effect.catchTag("SchemaError", (e) => discardInvalid(provider, e)),
-                Effect.mapError(wrap("Failed to read auth info")),
-              ),
+              Effect.gen(function* () {
+                const text = yield* fs.readFileString(fileOf(provider)).pipe(
+                  Effect.asSome,
+                  Effect.catchIf(
+                    (error) => error.reason._tag === "NotFound",
+                    () => Effect.succeedNone,
+                  ),
+                  Effect.mapError(wrap("Failed to read auth info")),
+                )
+                // oxlint-disable-next-line effect/noNullish -- Auth lookup uses undefined when a provider has no stored credentials.
+                if (Option.isNone(text)) return undefined
+                return yield* decode(text.value).pipe(
+                  Effect.mapError((cause) => new AuthEntryInvalid({ cause })),
+                )
+              }),
+            // A staged file renamed over the entry: a reader in another
+            // process sees the old credential or the new one, never an
+            // empty file.
             set: (provider, info) =>
-              store.set(provider, info).pipe(Effect.mapError(wrap("Failed to persist auth info"))),
+              encode(info).pipe(
+                Effect.tap(() => fs.makeDirectory(directory, { recursive: true })),
+                Effect.flatMap((text) => writeFileAtomic(fileOf(provider), text, { mode: 0o600 })),
+                Effect.mapError(wrap("Failed to persist auth info")),
+                Effect.provideService(FileSystem.FileSystem, fs),
+                Effect.provideService(Path.Path, pathService),
+              ),
             remove: (provider) =>
-              kv.remove(provider).pipe(Effect.mapError(wrap("Failed to remove auth info"))),
+              fs
+                .remove(fileOf(provider), { force: true })
+                .pipe(Effect.mapError(wrap("Failed to remove auth info"))),
           },
           fileProviderLock(lockDirectory, pathService, fs),
         )
       }),
-    ).pipe(Layer.provide(Layer.orDie(KeyValueStore.layerFileSystem(directory))))
+    )
 
   /**
    * In-memory test layer. Optionally seeded with a starting record.
@@ -465,13 +505,8 @@ const toProviderAuthInfo = (
   providerId: string,
   info: AuthInfo,
 ): ProviderAuthInfo => {
-  if (info.type === "api") return { type: "api", key: info.key }
-  return {
-    type: "oauth",
-    access: info.access,
-    refresh: info.refresh,
-    expires: info.expires,
-    accountId: info.accountId,
+  if (info.type === "api") return ProviderAuthInfo.cases.Api.make({ key: info.key })
+  return ProviderAuthInfo.cases.Oauth.make({
     update: <A, E>(
       f: (
         stored: Option.Option<StoredOAuthCredentials>,
@@ -497,7 +532,7 @@ const toProviderAuthInfo = (
             ),
           ),
         ),
-  }
+  })
 }
 
 /** The OAuth fields of a stored credential; none for an API key. */

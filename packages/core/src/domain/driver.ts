@@ -85,32 +85,34 @@ export interface ProviderHints {
   readonly cacheKey?: string
 }
 
-/** Auth info passed to `resolveModel` — mirrors `AuthStore` entries. */
-export interface ProviderAuthInfo {
-  readonly type: string
-  readonly key?: string
-  /** OAuth access token. */
-  readonly access?: string
-  /** OAuth refresh token. */
-  readonly refresh?: string
-  /** OAuth expiry timestamp (ms). */
-  readonly expires?: number
-  /** OAuth account ID. */
-  readonly accountId?: string
-  /**
-   * Read, then maybe write, the stored OAuth credential (token refresh
-   * path). `f` receives the OAuth credential the store holds now (none when
-   * it holds none) and returns a result plus the credential to write (none
-   * leaves the store as it is). The store runs each provider's writes one
-   * at a time, and every profile of the process shares the store, so a
-   * sign-in, a key change and each profile's refresh never interleave.
-   */
-  readonly update?: <A, E>(
-    f: (
-      stored: Option.Option<StoredOAuthCredentials>,
-    ) => Effect.Effect<readonly [A, Option.Option<StoredOAuthCredentials>], E>,
-  ) => Effect.Effect<A, E | ProviderAuthError>
-}
+/**
+ * Read, then maybe write, the stored OAuth credential (token refresh path).
+ * `f` receives the OAuth credential the store holds now (none when it holds
+ * none) and returns a result plus the credential to write (none leaves the
+ * store as it is). The store runs each provider's writes one at a time, and
+ * every profile of the process shares the store, so a sign-in, a key change
+ * and each profile's refresh never interleave.
+ */
+export type UpdateStoredOAuth = <A, E>(
+  f: (
+    stored: Option.Option<StoredOAuthCredentials>,
+  ) => Effect.Effect<readonly [A, Option.Option<StoredOAuthCredentials>], E>,
+) => Effect.Effect<A, E | ProviderAuthError>
+
+const UpdateStoredOAuth = Schema.declare<UpdateStoredOAuth>((value): value is UpdateStoredOAuth =>
+  Predicate.isFunction(value),
+)
+
+/**
+ * The stored credential a driver receives in `resolveModel` and
+ * `listModels`. An OAuth sign-in carries no token copy: the store is the
+ * one source, read and written through `update`.
+ */
+export const ProviderAuthInfo = Schema.TaggedUnion({
+  Api: { key: Schema.String },
+  Oauth: { update: UpdateStoredOAuth },
+})
+export type ProviderAuthInfo = Schema.Schema.Type<typeof ProviderAuthInfo>
 
 /** The OAuth fields of a stored credential. */
 export interface StoredOAuthCredentials {
