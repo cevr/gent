@@ -565,7 +565,9 @@ rule. A top-level or handoff session's user watches every turn there, so its
 wake, monitor, delegate-completion and slash-command turns ask. In a spawned
 session, only a turn a client opened asks (a user who prompts or steers the
 child); a turn its parent's `delegate.start` or `session.send`, a wake or a
-monitor opened declines. The origin is trusted: the server stamps
+monitor opened declines. `btw` opens each fork turn with `Session.send`, so a
+fork turn declines too: the `/btw` pane shows the fork's reply, not its
+approvals. The origin is trusted: the server stamps
 `metadata.fromClient` on every message a client sends (`message.send`, a
 session's initial prompt, a `steer.command` interjection) over whatever the
 client set, and removes a client-supplied `extensionId`; an extension's
@@ -974,9 +976,9 @@ Explicit platform/runtime seams:
 - tracer/logger services
 - file system / path / OS services
 
-### FileIndex (fs-tools)
+### File listing (fs-tools)
 
-Indexed file discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds the `FileIndex` Tag and one listing rule: an ignore authority decides which files grep may read. Inside a git work tree the authority is git: `git ls-files -z -t --cached --others --exclude-standard` below the search path, so every git exclude source applies; a sparse checkout's skip-worktree entries are dropped before the 100,000-file bound, and a name that is not valid UTF-8 is counted in grep's `unreadable` field. Outside a work tree a `FileSystem` walk reads each `.gitignore` from the search root down by gitignore(5); a test checks that matcher against real git. An ignored target named explicitly (`dist/`) is walked from its own root. No listing follows a symbolic link. grep skips binary files (a NUL byte in the first 8 KB) and cuts a line over 500 characters around the match. The extension registers the index as a process-scoped resource; `GrepTool` yields the Tag directly. Core has no file-index concept, and there is no `ExtensionContext.Files` facet: tools yield `FileSystem` and `Path`.
+File discovery is owned by the `@gent/fs-tools` extension, not core. `packages/extensions/src/fs-tools.ts` holds one stateless `listFiles` function over the platform services and one listing rule: an ignore authority decides which files grep may read. Inside a git work tree the authority is git: `git ls-files -z -t --cached --others --exclude-standard` below the search path, so every git exclude source applies; a sparse checkout's skip-worktree entries are dropped before the 100,000-file bound, and a name that is not valid UTF-8 is counted in grep's `unreadable` field. A git that does not answer within 10 seconds fails the search and asks for a narrower path; the walk does not stand in for it, because it misses `info/exclude` and the global excludes. A tracked path under a directory that is now a symbolic link is not listed. Outside a work tree a `FileSystem` walk reads each `.gitignore` from the search root down by gitignore(5); a test checks that matcher against real git. An ignored target named explicitly (`dist/`) is walked from its own root. No listing follows a symbolic link. grep reads 16 files at a time and reports matches in path order; it decodes a UTF-16 file by its byte order mark, skips binary files (a NUL byte in the first 8 KB), skips and counts files over 10 MB in `oversized`, and cuts a line over 500 characters around the match without splitting a surrogate pair. The listing holds no state, so there is no Tag and no resource. The TUI's `@` popup reads the same listing through the read request `FilesRpc.List` (paths relative to the session cwd, sorted), so a user can name exactly the files the model can search; the popup ranks them with the shared autocomplete matcher and the shared frecency store under the `@` prefix. Core has no file-index concept, and there is no `ExtensionContext.Files` facet: tools yield `FileSystem` and `Path`.
 
 App entrypoints bind concrete Bun/OS behavior:
 

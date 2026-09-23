@@ -2192,6 +2192,8 @@ const buildAgentLoopActorHandlers = (config: {
     ) {
       yield* markWrite
       const item = yield* buildFollowUpItem(input)
+      // A settled message id is not a new turn: a replayed follow-up is a no-op.
+      if (yield* turnAlreadyCompleted(item.message.id)) return
       yield* admitWithOrigin(item, Option.fromUndefinedOr(input.clientRequest), (admitted) =>
         handle.inbox.admit(admitted, { queueOnly: true }),
       )
@@ -2209,6 +2211,8 @@ const buildAgentLoopActorHandlers = (config: {
     ) {
       const wasAlreadyWarm = yield* markWrite
       const built = yield* buildFollowUpItem(input)
+      // A settled message id is not a new turn: a replayed follow-up is a no-op.
+      if (yield* turnAlreadyCompleted(built.message.id)) return
       const { result: reserved, item } = yield* admitWithOrigin(
         built,
         Option.fromUndefinedOr(input.clientRequest),

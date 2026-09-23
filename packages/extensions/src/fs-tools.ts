@@ -1,10 +1,8 @@
 import {
   Array as Arr,
-  Context,
   Duration,
   Effect,
   FileSystem,
-  Layer,
   Option,
   Path,
   Result,
@@ -14,9 +12,11 @@ import {
 import picomatch from "picomatch"
 import {
   defineExtension,
-  defineResource,
+  defineRequests,
   ExtensionContext,
+  ExtensionId,
   ExtensionHost,
+  request,
   runProcess,
   splitLines,
   tool,
@@ -24,47 +24,32 @@ import {
 } from "@gent/core/extensions/api"
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 
-// ── file index ──────────────────────────────────────────────────────────────
+// ── file listing ─────────────────────────────────────────────────────────────
 
 /**
- * Indexed file discovery for the grep tool.
+ * File discovery for the grep tool.
  *
  * Git decides which files are listed inside a work tree, and a
  * `.gitignore`-aware FileSystem walk decides outside one.
  */
 
-interface IndexedFile {
+interface ListedFile {
   readonly path: string
   /** Path relative to the listed `cwd`. */
   readonly relativePath: string
 }
 
 interface Listing {
-  readonly files: ReadonlyArray<IndexedFile>
+  readonly files: ReadonlyArray<ListedFile>
   /** Names grep cannot open: git listed them, but they are not valid UTF-8. */
   readonly unreadable: number
 }
 
-class FileIndexError extends Schema.TaggedError<FileIndexError>()("FileIndexError", {
+class FileListingError extends Schema.TaggedError<FileListingError>()("FileListingError", {
   message: Schema.String,
   cwd: Schema.String,
   cause: Schema.optional(Schema.Unknown),
 }) {}
-
-interface FileIndexService {
-  /**
-   * List the files under `cwd`. `root` is the session cwd or `cwd` itself;
-   * outside a work tree the walk reads the `.gitignore` files from `root` down.
-   */
-  readonly listFiles: (params: {
-    readonly root: string
-    readonly cwd: string
-  }) => Effect.Effect<Listing, FileIndexError>
-}
-
-class FileIndex extends Context.Service<FileIndex, FileIndexService>()(
-  "@gent/extensions/src/fs-tools/FileIndex",
-) {}
 
 // ── Fallback: FileSystem walk with .gitignore filtering ──
 
@@ -263,7 +248,10 @@ const entryKind = (
  * from its own root, as ripgrep searches a named path: the rules inside it
  * still apply.
  */
-const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSystem | Path.Path> =
+const walkFiles = (params: {
+  readonly root: string
+  readonly cwd: string
+}): Effect.Effect<Listing, FileListingError, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
@@ -274,98 +262,78 @@ const makeMatcherWalk: Effect.Effect<FileIndexService, never, FileSystem.FileSys
         Effect.orElseSucceed((): Array<IgnoreRule> => []),
       )
 
-    const scanAllFiles = (params: {
-      readonly root: string
-      readonly cwd: string
-    }): Effect.Effect<Listing, FileIndexError> =>
-      Effect.gen(function* () {
-        const { cwd } = params
-        let root = params.root
-        let fromRoot = path.relative(root, cwd)
-        if (fromRoot.startsWith("..") || path.isAbsolute(fromRoot)) {
-          root = cwd
+    {
+      const { cwd } = params
+      let root = params.root
+      let fromRoot = path.relative(root, cwd)
+      if (fromRoot.startsWith("..") || path.isAbsolute(fromRoot)) {
+        root = cwd
+        fromRoot = ""
+      }
+      let rules = yield* loadRules(root, "")
+      let base = ""
+      for (const part of fromRoot.split(path.sep).filter((segment) => segment.length > 0)) {
+        base = joinRelative(base, part)
+        if (isGitignored(base, true, rules)) {
           fromRoot = ""
+          rules = yield* loadRules(cwd, "")
+          break
         }
-        let rules = yield* loadRules(root, "")
-        let base = ""
-        for (const part of fromRoot.split(path.sep).filter((segment) => segment.length > 0)) {
-          base = joinRelative(base, part)
-          if (isGitignored(base, true, rules)) {
-            fromRoot = ""
-            rules = yield* loadRules(cwd, "")
-            break
+        rules = [...rules, ...(yield* loadRules(path.join(root, base), base))]
+      }
+
+      const files: ListedFile[] = []
+      const scanDir: (
+        absoluteDir: string,
+        relativeDir: string,
+        inherited: ReadonlyArray<IgnoreRule>,
+      ) => Effect.Effect<void, FileListingError> = (absoluteDir, relativeDir, inherited) =>
+        Effect.gen(function* () {
+          let dirRules = inherited
+          if (relativeDir.length > 0) {
+            const dirBase = joinRelative(fromRoot, relativeDir)
+            dirRules = [...inherited, ...(yield* loadRules(absoluteDir, dirBase))]
           }
-          rules = [...rules, ...(yield* loadRules(path.join(root, base), base))]
-        }
 
-        const files: IndexedFile[] = []
-        const scanDir: (
-          absoluteDir: string,
-          relativeDir: string,
-          inherited: ReadonlyArray<IgnoreRule>,
-        ) => Effect.Effect<void, FileIndexError> = (absoluteDir, relativeDir, inherited) =>
-          Effect.gen(function* () {
-            let dirRules = inherited
-            if (relativeDir.length > 0) {
-              const dirBase = joinRelative(fromRoot, relativeDir)
-              dirRules = [...inherited, ...(yield* loadRules(absoluteDir, dirBase))]
+          const entries = yield* fs
+            .readDirectory(absoluteDir)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new FileListingError({ message: `directory scan failed: ${cause.message}`, cwd }),
+              ),
+            )
+
+          for (const entry of entries) {
+            if (entry === ".git") continue
+            const relativePath = joinRelative(relativeDir, entry)
+            const absPath = path.join(absoluteDir, entry)
+            const kind = yield* entryKind(absPath).pipe(
+              Effect.provideService(FileSystem.FileSystem, fs),
+            )
+            if (kind === "skip") continue
+            const isDirectory = kind === "directory"
+            if (isGitignored(joinRelative(fromRoot, relativePath), isDirectory, dirRules)) continue
+
+            if (isDirectory) {
+              yield* scanDir(absPath, relativePath, dirRules)
+              continue
             }
 
-            const entries = yield* fs
-              .readDirectory(absoluteDir)
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new FileIndexError({ message: `directory scan failed: ${cause.message}`, cwd }),
-                ),
-              )
-
-            for (const entry of entries) {
-              if (entry === ".git") continue
-              const relativePath = joinRelative(relativeDir, entry)
-              const absPath = path.join(absoluteDir, entry)
-              const kind = yield* entryKind(absPath).pipe(
-                Effect.provideService(FileSystem.FileSystem, fs),
-              )
-              if (kind === "skip") continue
-              const isDirectory = kind === "directory"
-              if (isGitignored(joinRelative(fromRoot, relativePath), isDirectory, dirRules))
-                continue
-
-              if (isDirectory) {
-                yield* scanDir(absPath, relativePath, dirRules)
-                continue
-              }
-
-              if (files.length >= FALLBACK_MAX_FILES) {
-                return yield* new FileIndexError({
-                  message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
-                  cwd,
-                })
-              }
-              files.push({ path: absPath, relativePath })
+            if (files.length >= FALLBACK_MAX_FILES) {
+              return yield* new FileListingError({
+                message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
+                cwd,
+              })
             }
-          })
+            files.push({ path: absPath, relativePath })
+          }
+        })
 
-        yield* scanDir(cwd, "", rules)
+      yield* scanDir(cwd, "", rules)
 
-        // A directory entry is a decoded string: the walk never holds an unreadable name.
-        return { files, unreadable: 0 }
-      })
-
-    return {
-      listFiles: (params) =>
-        scanAllFiles(params).pipe(
-          Effect.catchEager((e) =>
-            Effect.fail(
-              new FileIndexError({
-                message: `fallback scan failed: ${e.message}`,
-                cwd: params.cwd,
-                cause: e,
-              }),
-            ),
-          ),
-        ),
+      // A directory entry is a decoded string: the walk never holds an unreadable name.
+      return { files, unreadable: 0 }
     }
   })
 
@@ -391,7 +359,7 @@ const GIT_ENV = {
   GIT_COMMON_DIR: unset,
 }
 
-/** A git that does not answer within this long is treated as absent: the walk lists. */
+/** A git that does not answer within this long fails the listing. */
 const GIT_TIMEOUT = Duration.seconds(10)
 
 interface GitNames {
@@ -409,13 +377,13 @@ const SKIP_WORKTREE_TAG = "S".charCodeAt(0)
  * `FALLBACK_MAX_FILES` names on disk the process is stopped and the listing
  * fails, so a huge tree never lands in memory whole. A name that is not
  * valid UTF-8 cannot be opened through a string path; it is counted. `None`
- * when git fails or times out.
+ * when git fails; a git that does not answer in time fails the listing.
  */
 const gitLsFiles = (
   cwd: string,
 ): Effect.Effect<
   Option.Option<GitNames>,
-  FileIndexError,
+  FileListingError,
   ChildProcessSpawner.ChildProcessSpawner
 > =>
   Effect.gen(function* () {
@@ -440,7 +408,7 @@ const gitLsFiles = (
       }),
     )
     if (onDisk > FALLBACK_MAX_FILES) {
-      return yield* new FileIndexError({
+      return yield* new FileListingError({
         message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
         cwd,
       })
@@ -465,21 +433,50 @@ const gitLsFiles = (
     Effect.scoped,
     Effect.catchTag("PlatformError", () => Effect.succeedNone),
     Effect.timeoutOption(GIT_TIMEOUT),
-    Effect.map(Option.flatten),
+    Effect.flatMap(
+      Option.match({
+        // A git that does not answer is a huge tree more often than a broken
+        // one, and the .gitignore walk misses info/exclude and the global
+        // excludes there.
+        onNone: () =>
+          Effect.fail(
+            new FileListingError({
+              message: `git did not list ${cwd} within ${Duration.format(GIT_TIMEOUT)}; search a narrower path`,
+              cwd,
+            }),
+          ),
+        onSome: Effect.succeed,
+      }),
+    ),
   )
 
 const listGitFiles: (
   cwd: string,
 ) => Effect.Effect<
   Option.Option<Listing>,
-  FileIndexError,
+  FileListingError,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> = Effect.fn("FileIndex.listGitFiles")(function* (cwd: string) {
+> = Effect.fn("FsTools.listGitFiles")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const listed = yield* gitLsFiles(cwd)
   if (Option.isNone(listed)) return Option.none()
   let unreadable = listed.value.unreadable
+  // Git lists index paths: a tracked `sub/a.ts` stays listed after `sub`
+  // becomes a symbolic link, and a read would follow it out of the tree.
+  // Each directory is checked once.
+  const linkedDirectories = new Map<string, boolean>()
+  const underLink: (relativeDirectory: string) => Effect.Effect<boolean> = (relativeDirectory) =>
+    Effect.gen(function* () {
+      if (relativeDirectory === "." || relativeDirectory.length === 0) return false
+      const known = Option.fromUndefinedOr(linkedDirectories.get(relativeDirectory))
+      if (Option.isSome(known)) return known.value
+      const linked =
+        (yield* underLink(path.dirname(relativeDirectory))) ||
+        Option.isSome(yield* fs.readLink(path.join(cwd, relativeDirectory)).pipe(Effect.option))
+      linkedDirectories.set(relativeDirectory, linked)
+      return linked
+    })
   // A deleted tracked file and a symbolic link are listed too; a directory
   // is a nested repository (`vendor/lib/`) or a submodule's gitlink.
   const nested = yield* Effect.forEach(
@@ -487,6 +484,7 @@ const listGitFiles: (
     Effect.fnUntraced(function* (entry) {
       const relativePath = entry.replace(/\/$/, "")
       const absolutePath = path.join(cwd, relativePath)
+      if (yield* underLink(path.dirname(relativePath))) return []
       const kind = yield* entryKind(absolutePath)
       if (kind === "skip") return []
       if (kind === "file") return [{ path: absolutePath, relativePath }]
@@ -507,7 +505,7 @@ const listGitFiles: (
   )
   const files = nested.flat()
   if (files.length > FALLBACK_MAX_FILES) {
-    return yield* new FileIndexError({
+    return yield* new FileListingError({
       message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
       cwd,
     })
@@ -543,36 +541,22 @@ const gitIgnoresDirectory = (
  * a session started in one) is walked from its own root, as ripgrep searches
  * a named path: git would list none of its untracked files.
  */
-export const FileIndexLive: Layer.Layer<
-  FileIndex,
-  never,
+const listFiles: (params: {
+  readonly root: string
+  readonly cwd: string
+}) => Effect.Effect<
+  Listing,
+  FileListingError,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> = Layer.effect(
-  FileIndex,
-  Effect.gen(function* () {
-    const walk = yield* makeMatcherWalk
-    const platform = yield* Effect.context<
-      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-    >()
-
-    const listFiles = Effect.fn("FileIndex.listFiles")(function* (params: {
-      readonly root: string
-      readonly cwd: string
-    }) {
-      const ignored = yield* gitIgnoresDirectory(params.cwd)
-      if (Option.getOrElse(ignored, () => false)) {
-        return yield* walk.listFiles({ root: params.cwd, cwd: params.cwd })
-      }
-      const gitFiles = yield* listGitFiles(params.cwd)
-      if (Option.isSome(gitFiles)) return gitFiles.value
-      return yield* walk.listFiles(params)
-    })
-
-    return FileIndex.of({
-      listFiles: (params) => listFiles(params).pipe(Effect.provideContext(platform)),
-    })
-  }),
-)
+> = Effect.fn("FsTools.listFiles")(function* (params) {
+  const ignored = yield* gitIgnoresDirectory(params.cwd)
+  if (Option.getOrElse(ignored, () => false)) {
+    return yield* walkFiles({ root: params.cwd, cwd: params.cwd })
+  }
+  const gitFiles = yield* listGitFiles(params.cwd)
+  if (Option.isSome(gitFiles)) return gitFiles.value
+  return yield* walkFiles(params)
+})
 
 // ── read ────────────────────────────────────────────────────────────────────
 
@@ -1163,13 +1147,49 @@ const GrepResult = Schema.Struct({
   truncated: Schema.Boolean,
   /** Files grep could not open: git listed them, but their names are not valid UTF-8. */
   unreadable: Schema.optional(Schema.Finite),
+  /** Files grep skipped because they are larger than the size cap. */
+  oversized: Schema.optional(Schema.Finite),
 })
 
 /** ripgrep's rule: a NUL byte in a file's first 8 KB marks it binary, and grep skips it. */
 const BINARY_PROBE_BYTES = 8192
 
+/** A file larger than this is skipped and counted: it is a log or a bundle, not source. */
+const MAX_SEARCH_FILE_BYTES = 10 * 1024 * 1024
+
+/** Files read at once. Results keep the listing order. */
+const SEARCH_CONCURRENCY = 16
+
+/** Files started per round: a search stops within one round of reaching its limit. */
+const SEARCH_ROUND = 64
+
+type GrepMatch = typeof GrepMatch.Type
+
+/**
+ * The text of a file, or `None` for a binary one. A UTF-16 file starts with a
+ * byte order mark and holds NUL bytes, so it is decoded before the NUL probe,
+ * as ripgrep transcodes it.
+ */
+const fileText = (bytes: Uint8Array): Option.Option<string> => {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return Option.some(new TextDecoder("utf-16le").decode(bytes))
+  }
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return Option.some(new TextDecoder("utf-16be").decode(bytes))
+  }
+  if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return Option.none()
+  return Option.some(new TextDecoder().decode(bytes))
+}
+
 /** A match or context line longer than this is cut to this many characters. */
 const MAX_LINE_LENGTH = 500
+
+/** True when a cut at `index` falls between the two halves of a surrogate pair. */
+const splitsSurrogatePair = (text: string, index: number): boolean => {
+  const before = text.charCodeAt(index - 1)
+  const after = text.charCodeAt(index)
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff
+}
 
 /**
  * Cut a long line to `MAX_LINE_LENGTH` characters from shortly before `at`,
@@ -1178,13 +1198,108 @@ const MAX_LINE_LENGTH = 500
  */
 const clipLine = (line: string, at: number): string => {
   if (line.length <= MAX_LINE_LENGTH) return line
-  const start = Math.max(0, Math.min(at - MAX_LINE_LENGTH / 5, line.length - MAX_LINE_LENGTH))
-  const end = start + MAX_LINE_LENGTH
+  const from = Math.max(0, Math.min(at - MAX_LINE_LENGTH / 5, line.length - MAX_LINE_LENGTH))
+  // Both ends move inward off a surrogate pair: a lone half is not valid text,
+  // and the API refuses a request that holds one.
+  const start = from + Number(splitsSurrogatePair(line, from))
+  const end = from + MAX_LINE_LENGTH - Number(splitsSurrogatePair(line, from + MAX_LINE_LENGTH))
   let clipped = line.slice(start, end)
   if (start > 0) clipped = `[${start} chars cut] ${clipped}`
   if (end < line.length) clipped = `${clipped} [${line.length - end} chars cut]`
   return clipped
 }
+
+/** What one grep looks for. */
+interface Search {
+  readonly regex: RegExp
+  readonly limit: number
+  readonly contextLines: number
+}
+
+/**
+ * One file's matches in line order, at most `limit + 1` of them: one past the
+ * limit is enough to know the search was cut.
+ */
+const searchFile = (
+  filePath: string,
+  search: Search,
+): Effect.Effect<
+  { readonly matches: ReadonlyArray<GrepMatch>; readonly oversized: boolean },
+  never,
+  FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const none = { matches: [], oversized: false }
+    const info = yield* fs.stat(filePath).pipe(Effect.option)
+    if (Option.isNone(info)) return none
+    if (info.value.size > BigInt(MAX_SEARCH_FILE_BYTES)) return { matches: [], oversized: true }
+    const bytes = yield* fs.readFile(filePath).pipe(Effect.option)
+    const text = Option.flatMap(bytes, fileText)
+    if (Option.isNone(text)) return none
+
+    const lines = text.value.split("\n")
+    const contextOf = (from: number, to: number) =>
+      lines.slice(from, to).map((line) => clipLine(line, 0))
+    const found: Array<GrepMatch> = []
+    for (const [i, line] of lines.entries()) {
+      if (found.length > search.limit) break
+      const hit = Option.fromNullishOr(search.regex.exec(line))
+      if (Option.isNone(hit)) continue
+      let match: GrepMatch = {
+        file: filePath,
+        line: i + 1,
+        content: clipLine(line, hit.value.index),
+      }
+      if (search.contextLines > 0) {
+        match = {
+          ...match,
+          context: {
+            before: contextOf(Math.max(0, i - search.contextLines), i),
+            after: contextOf(i + 1, i + 1 + search.contextLines),
+          },
+        }
+      }
+      found.push(match)
+    }
+    return { matches: found, oversized: false }
+  })
+
+/**
+ * Search `files` in order, `SEARCH_CONCURRENCY` at a time, a round of
+ * `SEARCH_ROUND` files after another, until the limit is passed.
+ */
+const searchFiles = (
+  files: ReadonlyArray<string>,
+  search: Search,
+): Effect.Effect<
+  {
+    readonly matches: ReadonlyArray<GrepMatch>
+    readonly truncated: boolean
+    readonly oversized: number
+  },
+  never,
+  FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const matches: Array<GrepMatch> = []
+    let oversized = 0
+    for (let from = 0; from < files.length; from += SEARCH_ROUND) {
+      const results = yield* Effect.forEach(
+        files.slice(from, from + SEARCH_ROUND),
+        (file) => searchFile(file, search),
+        { concurrency: SEARCH_CONCURRENCY },
+      )
+      for (const result of results) {
+        if (result.oversized) oversized++
+        matches.push(...result.matches)
+        if (matches.length > search.limit) {
+          return { matches: matches.slice(0, search.limit), truncated: true, oversized }
+        }
+      }
+    }
+    return { matches, truncated: false, oversized }
+  })
 
 // Grep Tool
 
@@ -1192,7 +1307,7 @@ export const GrepTool = tool({
   id: "grep",
   readonly: true,
   description:
-    "Search file contents with regex. Returns matching lines. Skips binary files; a line over 500 characters is cut around the match.",
+    "Search file contents with regex. Returns matching lines in path order. Skips binary files and files over 10 MB; a line over 500 characters is cut around the match.",
   promptSnippet: "Search file contents with regex",
   params: GrepParams,
   output: GrepResult,
@@ -1226,50 +1341,6 @@ export const GrepTool = tool({
         }),
     })
 
-    let truncated = false
-    let unreadable = 0
-    const matches: Array<{
-      file: string
-      line: number
-      content: string
-      context?: { before: string[]; after: string[] }
-    }> = []
-
-    const searchFile = (filePath: string): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const bytes = yield* fs.readFile(filePath).pipe(Effect.option)
-        if (Option.isNone(bytes)) return
-        if (bytes.value.subarray(0, BINARY_PROBE_BYTES).includes(0)) return
-
-        const lines = new TextDecoder().decode(bytes.value).split("\n")
-        const contextOf = (from: number, to: number) =>
-          lines.slice(from, to).map((line) => clipLine(line, 0))
-
-        for (const [i, line] of lines.entries()) {
-          if (truncated) break
-          const found = Option.fromNullishOr(regex.exec(line))
-          if (Option.isNone(found)) continue
-          if (matches.length >= limit) {
-            truncated = true
-            break
-          }
-          const match: (typeof matches)[0] = {
-            file: filePath,
-            line: i + 1,
-            content: clipLine(line, found.value.index),
-          }
-
-          if (contextLines > 0) {
-            match.context = {
-              before: contextOf(Math.max(0, i - contextLines), i),
-              after: contextOf(i + 1, i + 1 + contextLines),
-            }
-          }
-
-          matches.push(match)
-        }
-      })
-
     const baseStat = yield* fs.stat(basePath).pipe(Effect.option)
     if (Option.isNone(baseStat)) {
       return yield* new GrepError({
@@ -1278,19 +1349,18 @@ export const GrepTool = tool({
       })
     }
 
-    if (baseStat.value.type === "File") {
-      yield* searchFile(basePath)
-    } else {
-      const index = yield* FileIndex
-      // A target inside the session cwd shares the session's index.
+    let files: ReadonlyArray<string> = [basePath]
+    let unreadable = 0
+    if (baseStat.value.type !== "File") {
+      // A target inside the session cwd reads the session's ignore rules from its root.
       const fromCwd = path.relative(ctx.cwd, basePath)
       let root = basePath
       if (!fromCwd.startsWith("..") && !path.isAbsolute(fromCwd)) root = ctx.cwd
-      const listing = yield* index.listFiles({ root, cwd: basePath }).pipe(
+      const listing = yield* listFiles({ root, cwd: basePath }).pipe(
         Effect.mapError(
           (cause) =>
             new GrepError({
-              message: `File index failed: ${cause.message}`,
+              message: `File listing failed: ${cause.message}`,
               pattern: params.pattern,
               cause,
             }),
@@ -1308,34 +1378,57 @@ export const GrepTool = tool({
             cause: e,
           }),
       })
-
       unreadable = listing.unreadable
-      for (const file of listing.files) {
-        if (truncated) break
-        if (!matchesGlob(file.relativePath)) continue
-        yield* searchFile(file.path)
-      }
+      // Sorted by path, so the same search gives the same matches in the same order.
+      files = listing.files
+        .filter((file) => matchesGlob(file.relativePath))
+        .map((file) => file.path)
+        .toSorted()
     }
 
-    if (unreadable === 0) return { matches, truncated }
-    return { matches, truncated, unreadable }
+    const { matches, truncated, oversized } = yield* searchFiles(files, {
+      regex,
+      limit,
+      contextLines,
+    })
+    let result: typeof GrepResult.Type = { matches, truncated }
+    if (unreadable > 0) result = { ...result, unreadable }
+    if (oversized > 0) result = { ...result, oversized }
+    return result
+  }),
+})
+
+// ── protocol ────────────────────────────────────────────────────────────────
+
+const FS_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/fs-tools")
+
+/**
+ * The client's file picker reads the same listing grep reads, so the files a
+ * user can name with `@` are the files the model can search: git's listing
+ * inside a work tree, the `.gitignore` walk outside one.
+ */
+export const FilesRpc = defineRequests(FS_TOOLS_EXTENSION_ID, {
+  List: request({
+    id: "files-list",
+    description: "List the session's files, relative to its cwd, sorted",
+    readonly: true,
+    input: Schema.Struct({}),
+    output: Schema.Array(Schema.String),
+    execute: Effect.fn("FilesRpc.List")(function* () {
+      const ctx = yield* ExtensionContext
+      const listing = yield* listFiles({ root: ctx.cwd, cwd: ctx.cwd })
+      return listing.files.map((file) => file.relativePath).toSorted()
+    }),
   }),
 })
 
 // ── extension ───────────────────────────────────────────────────────────────
 
 export const FsToolsExtension = defineExtension({
-  id: "@gent/fs-tools",
+  id: FS_TOOLS_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", ReadTool, WriteTool, EditTool, GrepTool)
-    yield* host.register(
-      "resource",
-      defineResource({
-        id: "@gent/fs-tools/file-index",
-        scope: "process",
-        layer: FileIndexLive,
-      }),
-    )
+    yield* host.register("request", FilesRpc.List)
   }),
 })

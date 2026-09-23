@@ -324,6 +324,31 @@ describe("expandFileRefs", () => {
     }),
   )
 
+  fileRefsTest("leaves a binary file as a reference", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* makeFixture
+      yield* fs.writeFile(`${testDir}/tool.bin`, new Uint8Array([0x7f, 0x45, 0x00, 0x01, 0x41]))
+      const text = "run @tool.bin"
+      expect(yield* expandFileRefs(text, testDir)).toBe(text)
+    }),
+  )
+
+  fileRefsTest("cuts a large file at the shell-mode cap and says so", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* makeFixture
+      const lines = Array.from({ length: 5000 }, (_, i) => `row ${i + 1}`)
+      yield* fs.writeFileString(`${testDir}/big.log`, lines.join("\n"))
+      const result = yield* expandFileRefs("see @big.log", testDir)
+      expect(result).toContain("row 2000\n")
+      expect(result).not.toContain("row 2001")
+      expect(result).toContain(
+        "[big.log cut at 2000 lines of 5000; read the rest with the read tool]",
+      )
+    }),
+  )
+
   fileRefsTest("keeps every dollar pattern in the file text as written", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

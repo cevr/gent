@@ -1,3 +1,5 @@
+// childTaskText has no product reader here: it writes the text childTaskBody
+// reads, so a client test builds a real child task with it, not a copy.
 export {
   CHILD_COMPLETION_TYPE,
   ChildCompletionDetails,
@@ -8,6 +10,7 @@ export {
   readChildCompletionHeadline,
 } from "./delegate.js"
 export { SkillsRpc } from "./skills.js"
+export { FilesRpc } from "./fs-tools.js"
 export {
   GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,

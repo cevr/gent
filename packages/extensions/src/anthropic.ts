@@ -61,13 +61,25 @@ import {
   FetchHttpClient,
   Headers,
   HttpClient,
-  type HttpClientRequest,
+  HttpClientRequest,
   type HttpClientResponse,
 } from "effect/unstable/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
 import type { HttpClientError } from "effect/unstable/http/HttpClientError"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { type AiError, Model as AiModel } from "effect/unstable/ai"
+
+// Test seam: only tests read these exports. The model table and its lookups
+// (MODEL_CONFIG, getModelOverride, supports1mContext, getModelBetas,
+// BetaExclusions), the billing header (SYSTEM_IDENTITY_PREFIX,
+// extractFirstUserMessageText, computeCch, computeVersionSuffix,
+// buildBillingHeaderValue), the wire transforms (repairToolPairs,
+// transformPayload, transformResponseContent, transformStreamEvent,
+// isLongContextError) and the credential parsers (ClaudeCredentials,
+// updateCredentialBlob, parseOAuthResponse) are pure functions with unit tests.
+// AnthropicKeychainEnv, AnthropicPlatform, AnthropicCredentialIO,
+// makeAnthropicCredentialCache and buildAnthropicModelDriver let a test run the
+// keychain, the credential cache and the driver against fake I/O.
 
 // ── model config ────────────────────────────────────────────────────────────
 
@@ -1168,8 +1180,6 @@ const MessageStreamEventSchema = Schema.Union([
   Generated.BetaErrorResponse,
 ])
 const decodeMessageStreamEvent = Schema.decodeUnknownSync(MessageStreamEventSchema)
-const decodeMessagePayload = Schema.decodeUnknownSync(Generated.BetaCreateMessageParams)
-const encodeMessagePayload = Schema.encodeUnknownSync(Generated.BetaCreateMessageParams)
 
 // ── Payload Transforms (outgoing) ──
 
@@ -1680,8 +1690,6 @@ export const transformStreamEvent = (
 
 // ── Layer ──
 
-type CreateMessageOptions = Parameters<AnthropicClient.Service["createMessage"]>[0]
-
 type CreateMessageReply = Effect.Success<ReturnType<AnthropicClient.Service["createMessage"]>>
 type CreateMessageStreamReply = Effect.Success<
   ReturnType<AnthropicClient.Service["createMessageStream"]>
@@ -1699,42 +1707,53 @@ interface ClientPath<R> {
   ) => Effect.Effect<CreateMessageStreamReply, AiError.AiError>
 }
 
+/** The SDK client layer of one auth path, given the body rewrite to install as its innermost transform. */
+type SdkClientLayer = (
+  rewriteBody: (client: HttpClient.HttpClient) => HttpClient.HttpClient,
+) => Layer.Layer<AnthropicClient.AnthropicClient, never, HttpClient.HttpClient>
+
+const decodeJsonBody = Schema.decodeUnknownOption(Schema.fromJsonString(JsonRecordSchema))
+
 /**
- * Wraps an AnthropicClient so every request carries the model's request plan
- * (effort and thinking), then the auth path's own rewrite. Both auth paths
- * build their client through this one layer. The rewritten payload is
- * decoded once against the request schema, which is the type the SDK client
- * takes.
+ * Builds the AnthropicClient for one auth path. The request plan (effort and
+ * thinking) and the path's payload rewrite are applied to the JSON body of
+ * every outgoing request, so both `createMessage` and `createMessageStream`
+ * send exactly what the plan says. The body is not decoded against the SDK's
+ * request schema: that schema lags the API (it has no `thinking.display` and
+ * no `xhigh`) and a decode would drop or reject what the API accepts. The
+ * path's reply mapping wraps the SDK service.
  */
-const requestPlanClientLayer = <R>(
+const anthropicClientLayer = <R>(
   plan: AnthropicRequestPlan,
   path: ClientPath<R>,
-): Layer.Layer<AnthropicClient.AnthropicClient, never, AnthropicClient.AnthropicClient | R> =>
-  Layer.effect(
-    AnthropicClient.AnthropicClient,
+  sdkLayer: SdkClientLayer,
+): Layer.Layer<AnthropicClient.AnthropicClient, never, HttpClient.HttpClient | R> =>
+  Layer.unwrap(
     Effect.gen(function* () {
-      const inner = yield* AnthropicClient.AnthropicClient
       const pathContext = yield* Effect.context<R>()
-      const prepare = <Options extends { readonly payload: CreateMessageOptions["payload"] }>(
-        options: Options,
-      ) =>
-        Schema.decodeEffect(JsonRecordSchema)(options.payload).pipe(
-          Effect.orDie,
-          Effect.flatMap((payload) => path.payload(applyRequestPlan(payload, plan))),
-          Effect.provideContext(pathContext),
-          Effect.map((payload) => ({
-            ...options,
-            payload: encodeMessagePayload(decodeMessagePayload(payload)),
-          })),
-        )
-      return AnthropicClient.AnthropicClient.of({
-        client: inner.client,
-        streamRequest: inner.streamRequest,
-        createMessage: (options) =>
-          path.message(Effect.flatMap(prepare(options), inner.createMessage)),
-        createMessageStream: (options) =>
-          path.stream(Effect.flatMap(prepare(options), inner.createMessageStream)),
-      })
+      const rewriteBody = HttpClient.mapRequestEffect(
+        (request: HttpClientRequest.HttpClientRequest) =>
+          Option.match(Option.flatMap(requestBodyText(request), decodeJsonBody), {
+            onNone: () => Effect.succeed(request),
+            onSome: (payload) =>
+              path.payload(applyRequestPlan(payload, plan)).pipe(
+                Effect.provideContext(pathContext),
+                Effect.map((body) => HttpClientRequest.bodyJsonUnsafe(request, body)),
+              ),
+          }),
+      )
+      const replies = Layer.effect(
+        AnthropicClient.AnthropicClient,
+        Effect.gen(function* () {
+          const inner = yield* AnthropicClient.AnthropicClient
+          return AnthropicClient.AnthropicClient.of({
+            ...inner,
+            createMessage: (request) => path.message(inner.createMessage(request)),
+            createMessageStream: (request) => path.stream(inner.createMessageStream(request)),
+          })
+        }),
+      )
+      return replies.pipe(Layer.provide(sdkLayer(rewriteBody)))
     }),
   )
 
@@ -2035,20 +2054,6 @@ type AnthropicEffort = typeof AnthropicEffort.Type
 const ANTHROPIC_EFFORT_ORDER = AnthropicEffort.literals
 
 /**
- * The effort levels the request schema of the installed `@effect/ai-anthropic`
- * accepts (`BetaEffortLevel`, verified against 4.0.0-rc.112): every level but
- * `xhigh`, which sends `high` until that schema widens.
- */
-const WIRE_EFFORT = {
-  low: "low",
-  medium: "medium",
-  high: "high",
-  xhigh: "high",
-  max: "max",
-} satisfies Record<AnthropicEffort, "low" | "medium" | "high" | "max">
-type WireEffort = (typeof WIRE_EFFORT)[AnthropicEffort]
-
-/**
  * How a family thinks when a request does not say. From the model table at
  * platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting
  * (read 2026-09-23):
@@ -2123,11 +2128,11 @@ const HINT_EFFORT = new Map<string, AnthropicEffort>([
 
 /**
  * What one model's requests carry for a reasoning hint. Both auth paths apply
- * it to the payload in `requestPlanClientLayer`: the SDK config type cannot
- * name effort `max`, and effort and thinking are decided together.
+ * it to the request body in `anthropicClientLayer`: the SDK config type cannot
+ * name effort `xhigh` or `max`, and effort and thinking are decided together.
  */
 interface AnthropicRequestPlan {
-  readonly effort: Option.Option<WireEffort>
+  readonly effort: Option.Option<AnthropicEffort>
   readonly thinking: Option.Option<"adaptive" | "disabled">
   /** False where a `temperature` would get HTTP 400. */
   readonly temperature: boolean
@@ -2159,7 +2164,16 @@ const anthropicRequestPlan = (
   const family = ANTHROPIC_FAMILIES.find((entry) => entry.pattern.test(lower))
   if (Predicate.isUndefined(family)) return PLAIN_REQUEST
   if (Predicate.isUndefined(hint)) {
-    return { ...PLAIN_REQUEST, temperature: !family.fixedSampling }
+    // A family that thinks by default is sent `adaptive`, its own default,
+    // so that the thinking display below applies to it.
+    return {
+      effort: Option.none(),
+      thinking: Option.map(
+        Option.filter(family.thinking, (value) => value !== "Off"),
+        () => "adaptive",
+      ),
+      temperature: !family.fixedSampling,
+    }
   }
   if (hint === "none") {
     const thinkingDefault = Option.getOrUndefined(family.thinking)
@@ -2169,7 +2183,7 @@ const anthropicRequestPlan = (
     if (thinkingDefault === "AlwaysOn") {
       const lowest = Option.fromUndefinedOr(family.accepts[0])
       return {
-        effort: Option.map(lowest, (effort) => WIRE_EFFORT[effort]),
+        effort: lowest,
         thinking: Option.none(),
         temperature: false,
       }
@@ -2178,7 +2192,6 @@ const anthropicRequestPlan = (
   }
   const effort = Option.fromUndefinedOr(HINT_EFFORT.get(hint)).pipe(
     Option.flatMap((level) => effortAtOrAbove(ANTHROPIC_EFFORT_ORDER, family.accepts, level)),
-    Option.map((level) => WIRE_EFFORT[level]),
   )
   const thinking: AnthropicRequestPlan["thinking"] = Option.map(family.thinking, () => "adaptive")
   // Before the 4.7 families, `temperature` conflicts only with thinking on.
@@ -2216,11 +2229,26 @@ const anthropicRequest = (
   return { config, plan }
 }
 
+/**
+ * The thinking object for each plan value. Adaptive thinking asks for `display:
+ * "summarized"`: platform.claude.com/docs/en/build-with-claude/thinking
+ * (read 2026-09-23) says `"omitted"` "is the default on Claude Fable 5.1,
+ * Claude Mythos 5.1, Claude Fable 5, Claude Mythos 5, Claude Opus 5.5, Claude
+ * Opus 5, Claude Sonnet 5, Claude Opus 4.8, Claude Opus 4.7", which streams
+ * thinking blocks with empty text, and that "`display` works in both modes".
+ * `"summarized"` is already the default on the 4.6 models, so it changes
+ * nothing there. `display` "is invalid with `thinking.type: "disabled"`".
+ */
+const THINKING_CONFIG = {
+  adaptive: { type: "adaptive", display: "summarized" },
+  disabled: { type: "disabled" },
+} satisfies Record<"adaptive" | "disabled", JsonRecord>
+
 /** The payload with the plan's effort and thinking; any `output_config` the SDK set is kept. */
 const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): JsonRecord => {
   let result = payload
   if (Option.isSome(plan.thinking)) {
-    result = { ...result, thinking: { type: plan.thinking.value } }
+    result = { ...result, thinking: THINKING_CONFIG[plan.thinking.value] }
   }
   if (Option.isSome(plan.effort)) {
     const current = result["output_config"]
@@ -2240,10 +2268,9 @@ const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): Json
  * are not on the hook for.
  */
 const makeApiKeyAnthropicLayer = (modelName: string, request: AnthropicRequest, apiKey: string) => {
-  const clientLayer = requestPlanClientLayer(request.plan, apiKeyClientPath).pipe(
-    Layer.provide(AnthropicClient.layer({ apiKey: Redacted.make(apiKey) })),
-    Layer.provide(FetchHttpClient.layer),
-  )
+  const clientLayer = anthropicClientLayer(request.plan, apiKeyClientPath, (rewriteBody) =>
+    AnthropicClient.layer({ apiKey: Redacted.make(apiKey), transformClient: rewriteBody }),
+  ).pipe(Layer.provide(FetchHttpClient.layer))
   return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
     Layer.provide(clientLayer),
   )
@@ -2271,12 +2298,14 @@ const makeOauthAnthropicLayer = (
   betaExclusions: Ref.Ref<BetaExclusions>,
   platform: AnthropicPlatformApi,
 ) => {
-  const clientLayer = AnthropicClient.layer({
-    transformClient: buildKeychainTransformClient(creds, betaExclusions, platform.env),
-  }).pipe(Layer.provide(FetchHttpClient.layer))
-
-  const wrappedClient = requestPlanClientLayer(request.plan, claudeCodeClientPath(creds)).pipe(
-    Layer.provide(clientLayer),
+  const keychain = buildKeychainTransformClient(creds, betaExclusions, platform.env)
+  const wrappedClient = anthropicClientLayer(
+    request.plan,
+    claudeCodeClientPath(creds),
+    (rewriteBody) =>
+      AnthropicClient.layer({ transformClient: (client) => keychain(rewriteBody(client)) }),
+  ).pipe(
+    Layer.provide(FetchHttpClient.layer),
     Layer.provide(BunCrypto.layer),
     Layer.provide(Layer.succeed(AnthropicPlatform, platform)),
   )

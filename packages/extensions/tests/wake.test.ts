@@ -340,6 +340,75 @@ describe("wake", () => {
   )
 
   it.live(
+    "an alarm that fired but was not forgotten before a restart does not wake twice",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* makeTempDirectoryScoped("wake-refire-")
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            textStep("hello again"),
+            textStep("checked the build as the alarm asked"),
+            textStep("still here"),
+            textStep("checked the build twice"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
+          })
+          const fs = yield* FileSystem.FileSystem
+          const file = `${home}/.gent/wakes/${branchId}.json`
+          const leftOver = encodeAlarms([
+            { _tag: "alarm", wakeId: "left-over", dueAt: 1_000, note: "check the build" },
+          ])
+          yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
+          yield* fs.writeFileString(file, leftOver)
+          yield* client.message.send({ sessionId, branchId, content: "I'm back" })
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              answered(current.messages, "checked the build as the alarm asked"),
+            8_000,
+            "the stored alarm fired and was answered",
+          )
+          // A shutdown between the wake and the forget leaves the fired row on disk.
+          yield* fs.writeFileString(file, leftOver)
+          yield* client.message.send({ sessionId, branchId, content: "still there?" })
+          yield* waitFor(
+            fs.readFileString(file),
+            (text) => text === "[]",
+            8_000,
+            "the re-armed alarm fired again and forgot its row",
+          )
+          const settled = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" && answered(current.messages, "still here"),
+            8_000,
+            "the second turn settled",
+          )
+          // A replayed wake would run its settled message again, after this turn.
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" && current.runtime.queue.followUp.length === 0,
+            8_000,
+            "the queue drained",
+          )
+          // One model call per turn: the first ask, the wake, the second ask.
+          expect(yield* controls.callCount).toBe(3)
+          const wakes = settled.messages.filter(
+            (message) =>
+              message.role === "user" && message.metadata?.customType === WAKE_MESSAGE_TYPE,
+          )
+          expect(wakes.length).toBe(1)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      ),
+    25_000,
+  )
+
+  it.live(
     "a monitor polls its command until it succeeds, then wakes with the output",
     () =>
       Effect.scoped(
@@ -1005,10 +1074,10 @@ describe("wake store", () => {
         expect(file).toContain(repeat.wakeId)
         expect(file).toContain(`"dueAt":3000`)
         // Re-armed, the one-shot fires and is the only row that leaves.
-        const armed = yield* rearmPendingAlarms().pipe(
+        yield* rearmPendingAlarms().pipe(
           Effect.provideService(ExtensionContext, testLeafContext(ctx)),
         )
-        expect(armed).toBe(2)
+        expect([...(yield* alarms.pending)].sort()).toEqual([once.wakeId, repeat.wakeId].sort())
         yield* TestClock.adjust("4 seconds")
         yield* eventually(firedCount, (count) => count === 3, "the one-shot and the repeat fired")
         yield* settled(alarms.pending, Option.some(once.wakeId))
@@ -1037,9 +1106,9 @@ describe("wake store", () => {
           { _tag: "alarm", wakeId: "later", dueAt: 4_000_000_000_000, note: "tomorrow" },
         ]),
       )
-      const armed = yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
-      expect(armed).toBe(2)
+      yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
       const alarms = yield* WakeAlarms
+      expect([...(yield* alarms.pending)].sort()).toEqual(["later", "past"])
       // TestClock starts at epoch 0, so the stored dueAt of 1_000 is one second out.
       yield* TestClock.adjust("1 second")
       yield* Deferred.await(fired)
@@ -1047,9 +1116,9 @@ describe("wake store", () => {
       expect((yield* Ref.get(queued))[0]).toContain("CI should be done")
       expect(yield* readFile(home)).not.toContain("past")
       expect(yield* readFile(home)).toContain("later")
-      const again = yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
-      expect(again).toBe(0)
+      yield* rearmPendingAlarms().pipe(Effect.provideService(ExtensionContext, ctx))
       expect(yield* alarms.pending).toEqual(["later"])
+      expect(yield* Ref.get(queued)).toHaveLength(1)
     }).pipe(
       Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
       Effect.timeout("8 seconds"),
@@ -1110,7 +1179,8 @@ describe("wake store", () => {
         Effect.provideService(ExtensionContext, ctx),
         Effect.provideService(FileSystem.FileSystem, gatedFileSystem),
       )
-      expect(yield* rearm).toBe(1)
+      yield* rearm
+      expect(yield* alarms.pending).toEqual(["once"])
       yield* TestClock.adjust("1 second")
       yield* Deferred.await(firing)
       // A turn's re-arm reads the file while the alarm is still firing.
@@ -1188,8 +1258,7 @@ describe("wake store", () => {
             },
           ]),
         )
-        const armed = yield* rearm
-        expect(armed).toBe(2)
+        yield* rearm
         const alarms = yield* WakeAlarms
         expect([...(yield* alarms.pending)].sort()).toEqual(["approved", "old-safe"])
         yield* eventually(

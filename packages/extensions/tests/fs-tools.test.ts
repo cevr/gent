@@ -1,13 +1,28 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path } from "effect"
+import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { EditTool, FileIndexLive, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
-import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
-import { runProcess } from "@gent/core/extensions/api"
+import {
+  EditTool,
+  FilesRpc,
+  FsToolsExtension,
+  GrepTool,
+  ReadTool,
+  WriteTool,
+} from "../src/fs-tools.js"
+import {
+  createRpcHarness,
+  LanguageModelLayers,
+  RuntimeEnvironment,
+  runToolWithCtx,
+  testToolContext,
+  textStep,
+} from "@gent/core/test-utils"
+import { ref, runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
+import { e2ePreset } from "./helpers/test-preset"
 
 // ── read tool ───────────────────────────────────────────────────────────────
 
@@ -626,7 +641,7 @@ describe("EditTool execution", () => {
 
 // ── grep tool ───────────────────────────────────────────────────────────────
 
-const IndexLayer = Layer.merge(BunServices.layer, Layer.provide(FileIndexLive, BunServices.layer))
+const IndexLayer = BunServices.layer
 const ctxGrep = testToolContext()
 
 /**
@@ -813,6 +828,91 @@ describe("GrepTool", () => {
       )
       expect(match?.context?.before).toEqual([`${"c".repeat(500)} [2500 chars cut]`])
       expect(match?.context?.after).toEqual(["short"])
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  it.scopedLive("a UTF-16 file with a byte order mark is searched, not skipped as binary", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const text = "first\nthe needle here\n"
+      const littleEndian = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")])
+      const bigEndian = Buffer.from(littleEndian).swap16()
+      yield* fs.writeFile(`${tmpDir}/le.txt`, littleEndian)
+      yield* fs.writeFile(`${tmpDir}/be.txt`, bigEndian)
+
+      const result = yield* runToolWithCtx(GrepTool, { pattern: "needle", path: tmpDir }, ctxGrep)
+      expect(
+        result.matches.map((match) => [
+          match.file.slice(tmpDir.length + 1),
+          match.line,
+          match.content,
+        ]),
+      ).toEqual([
+        ["be.txt", 2, "the needle here"],
+        ["le.txt", 2, "the needle here"],
+      ])
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  it.scopedLive("results keep listing order and the limit across many files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const names = Array.from({ length: 300 }, (_, i) => `f${String(i).padStart(3, "0")}.txt`)
+      for (const name of names) yield* fs.writeFileString(`${tmpDir}/${name}`, "hit\nhit\n")
+
+      const all = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "hit", path: tmpDir, limit: 1000 },
+        ctxGrep,
+      )
+      const files = all.matches.map((match) => match.file.slice(tmpDir.length + 1))
+      expect(files).toEqual(names.flatMap((name) => [name, name]))
+      expect(all.truncated).toBe(false)
+
+      const cut = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "hit", path: tmpDir, limit: 5 },
+        ctxGrep,
+      )
+      expect(cut.matches.map((match) => [match.file.slice(tmpDir.length + 1), match.line])).toEqual(
+        all.matches.slice(0, 5).map((match) => [match.file.slice(tmpDir.length + 1), match.line]),
+      )
+      expect(cut.truncated).toBe(true)
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  it.scopedLive("a file over the size cap is skipped and counted", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/big.log`, `needle\n${"x".repeat(11 * 1024 * 1024)}`)
+      yield* fs.writeFileString(`${tmpDir}/small.txt`, "needle\n")
+
+      const result = yield* runToolWithCtx(GrepTool, { pattern: "needle", path: tmpDir }, ctxGrep)
+      expect(result.matches.map((match) => match.file.slice(tmpDir.length + 1))).toEqual([
+        "small.txt",
+      ])
+      expect(result.oversized).toBe(1)
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  it.scopedLive("a cut never splits a surrogate pair", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      // The match sits past the cut, and an emoji straddles each cut end.
+      const long = `${"a".repeat(499)}😀${"b".repeat(99)}needle${"c".repeat(393)}😀${"d".repeat(900)}`
+      yield* fs.writeFileString(`${tmpDir}/emoji.txt`, long)
+
+      const result = yield* runToolWithCtx(GrepTool, { pattern: "needle", path: tmpDir }, ctxGrep)
+      const content = result.matches[0]?.content ?? ""
+      expect(content).toContain("needle")
+      expect(content.isWellFormed()).toBe(true)
+      expect(
+        content.replace(/^\[\d+ chars cut\] | \[\d+ chars cut\]$/g, "").length,
+      ).toBeLessThanOrEqual(500)
     }).pipe(Effect.provide(IndexLayer)),
   )
 
@@ -1303,6 +1403,24 @@ describe("symbolic links", () => {
   }
 })
 
+describe("a tracked path under a directory that is now a link", () => {
+  it.scopedLive("is not read through the link", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const repo = yield* fs.makeTempDirectoryScoped()
+      const outside = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", repo])
+      yield* writeTree(repo, ["sub/a.ts", "keep.ts"], {})
+      yield* runProcess("git", ["-C", repo, "add", "."])
+      yield* writeTree(outside, ["a.ts"], {})
+      yield* fs.remove(`${repo}/sub`, { recursive: true })
+      yield* fs.symlink(outside, `${repo}/sub`)
+
+      expect(yield* listed(repo)).toEqual(["keep.ts"])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+  )
+})
+
 /**
  * The index over a platform whose spawner rewrites each command first. It
  * stands in for what the index cannot choose: the environment gent inherits,
@@ -1321,8 +1439,7 @@ const layerWithSpawner = (
       })
     }),
   ).pipe(Layer.provide(BunServices.layer))
-  const platform = Layer.merge(BunServices.layer, spawner)
-  return Layer.merge(platform, Layer.provide(FileIndexLive, platform))
+  return Layer.merge(BunServices.layer, spawner)
 }
 
 /** gent started by a hook: its environment names another repository. */
@@ -1425,7 +1542,7 @@ describe("the git processes behind a listing", () => {
     }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
   )
 
-  it.scopedLive("a git that never answers times out, and the walk lists", () =>
+  it.scopedLive("a git that never answers times out, and the search asks for a narrower path", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const tmpDir = yield* fs.makeTempDirectoryScoped()
@@ -1436,6 +1553,7 @@ describe("the git processes behind a listing", () => {
 
       const listing = yield* Effect.forkChild(
         listed(tmpDir).pipe(
+          Effect.flip,
           // oxlint-disable-next-line effect/noInlineProvide -- The fake git signals through a pipe this test creates.
           Effect.provide(layerWithSpawner(hung)),
         ),
@@ -1443,7 +1561,9 @@ describe("the git processes behind a listing", () => {
       // Reading the pipe returns once git runs, so its timeout is already armed.
       yield* fs.readFileString(`${signals}/started`)
       yield* TestClock.adjust("1 minute")
-      expect(yield* Fiber.join(listing)).toEqual(["a.ts"])
+      // A timed-out git may be a huge work tree: the .gitignore walk would
+      // miss info/exclude and the global excludes there.
+      expect((yield* Fiber.join(listing)).message).toContain("search a narrower path")
     }).pipe(
       // The test clock runs the listing; the live clock bounds the test.
       Effect.provide(Layer.merge(BunServices.layer, TestClock.layer())),
@@ -1465,5 +1585,40 @@ describe("an ignored directory with tracked files", () => {
 
       expect(yield* listed(repo, `${repo}/dist`)).toEqual(["new.js", "pinned.js"])
     }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+  )
+})
+
+describe("the file listing request", () => {
+  it.scopedLive(
+    "lists the session's files as git lists them, relative and sorted",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* fs.makeTempDirectoryScoped()
+        yield* runProcess("git", ["init", "-q", repo])
+        yield* writeTree(repo, ["src/b.ts", "a.md", "dist/out.js", ".turbo/log.txt"], {
+          ".gitignore": "dist/\n.turbo/\n",
+        })
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          cwd: repo,
+          providerLayer,
+          extensionInputs: [FsToolsExtension],
+        })
+        const raw = yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: ref(FilesRpc.List).extensionId,
+          capabilityId: ref(FilesRpc.List).capabilityId,
+          input: {},
+        })
+        expect(yield* Schema.decodeUnknownEffect(Schema.Array(Schema.String))(raw)).toEqual([
+          ".gitignore",
+          "a.md",
+          "src/b.ts",
+        ])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
+    15_000,
   )
 })

@@ -111,6 +111,19 @@ describe("WebSearchTool", () => {
     }),
   )
 
+  for (const numResults of [0, -1, 2.5]) {
+    it.live(`refuses numResults ${numResults}: a result count is a positive whole number`, () =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(
+          Effect.suspend(() =>
+            runToolWithCtx(WebSearchTool, { query: "effect v4 release notes", numResults }, ctx),
+          ),
+        )
+        expect(exit._tag).toBe("Failure")
+      }).pipe(Effect.provide(clientLayer(() => jsonResponse(mcpHit("exa says hello"))))),
+    )
+  }
+
   it.live("SSE body returns the first data frame that carries content", () =>
     Effect.gen(function* () {
       const result = yield* search(

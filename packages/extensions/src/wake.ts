@@ -32,6 +32,12 @@ import {
 import { makeBranchStateStore } from "./branch-state-store.js"
 import { approveBashCommand, classifyBashCommand, runBashCommand } from "./exec-tools.js"
 
+// Test seam: only tests read these exports. WakeAlarms, WakeAlarmsService and
+// WakeAlarmsLive let a test hold and cancel timers; rearmPendingAlarms runs the
+// restart path directly. wakeMessage, monitorMessage, nextDueAt and dueAtOf are
+// pure functions with unit tests. WakeTool, MonitorTool and CancelTool are the
+// capabilities the cell signature tests render.
+
 // ── protocol ────────────────────────────────────────────────────────────────
 
 /**
@@ -142,9 +148,9 @@ class WakeError extends Schema.TaggedError<WakeError>()("WakeError", {
 export interface WakeAlarmsService {
   /**
    * Forks `work` into the branch scope under `wakeId`, so a closed branch
-   * cancels it. False when work for that id is already running.
+   * cancels it. Work already running under that id is left alone.
    */
-  readonly schedule: (wakeId: string, work: Effect.Effect<void>) => Effect.Effect<boolean>
+  readonly schedule: (wakeId: string, work: Effect.Effect<void>) => Effect.Effect<void>
   /** Interrupts the timer under `wakeId`; false when none is running. */
   readonly cancel: (wakeId: string) => Effect.Effect<boolean>
   /** Ids with a running timer. */
@@ -162,11 +168,7 @@ export const WakeAlarmsLive: Layer.Layer<WakeAlarms> = Layer.effect(
     // every timer, and a fired timer drops its own key.
     const running = yield* FiberMap.make<string, void>()
     const schedule: WakeAlarmsService["schedule"] = (wakeId, work) =>
-      Effect.gen(function* () {
-        if (yield* FiberMap.has(running, wakeId)) return false
-        yield* FiberMap.run(running, wakeId, work)
-        return true
-      })
+      FiberMap.run(running, wakeId, work, { onlyIfMissing: true }).pipe(Effect.asVoid)
     const cancel: WakeAlarmsService["cancel"] = (wakeId) =>
       Effect.gen(function* () {
         if (!(yield* FiberMap.has(running, wakeId))) return false
@@ -234,6 +236,17 @@ export const monitorMessage = (
 }
 
 /**
+ * The key of one fire, stable across a restart: an alarm fires once per due
+ * time (each repeat tick has its own), and a monitor fires once. A fire that
+ * queued its wake but did not forget its row before a shutdown fires again on
+ * re-arm, under the same key, and the queue drops the repeat.
+ */
+const fireKey = (entry: PendingWakeEntry): string => {
+  if (entry._tag === "alarm") return `wake:${entry.wakeId}:${entry.dueAt}`
+  return `wake:${entry.wakeId}:${entry.deadline}`
+}
+
+/**
  * What a fire leaves behind. In `wake` mode a user-role line is queued with
  * `wake: true`, which starts a turn on an idle loop. In `notify` mode a notice
  * is stored beside the pending entries and the tray is pulsed; no turn starts.
@@ -258,7 +271,7 @@ const queueWake = (
     }
     yield* ctx.Session.send({
       delivery: "queue",
-      sourceId: `wake:${entry.wakeId}:${details.firedAt}`,
+      sourceId: fireKey(entry),
       content,
       metadata: { customType: WAKE_MESSAGE_TYPE, extensionId: WAKE_EXTENSION_ID, details },
       wake: true,
@@ -490,10 +503,9 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: PendingWakeEntry) {
 export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
   const ctx = yield* ExtensionContext
   const now = yield* Clock.currentTimeMillis
-  const { armed, blocked } = yield* store.modify((current: ReadonlyArray<WakeEntry>) =>
+  const blocked = yield* store.modify((current: ReadonlyArray<WakeEntry>) =>
     Effect.gen(function* () {
       yield* Effect.logDebug("wake.rearm").pipe(Effect.annotateLogs({ pending: current.length }))
-      let armed = 0
       const notices: Array<WakeEntry> = []
       for (const entry of current) {
         if (entry._tag === "notice") continue
@@ -511,9 +523,9 @@ export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
             continue
           }
         }
-        if (yield* armEntry(entry)) armed += 1
+        yield* armEntry(entry)
       }
-      if (notices.length === 0) return { next: current, result: { armed, blocked: 0 } }
+      if (notices.length === 0) return { next: current, result: 0 }
       const blockedIds = new Set(notices.map((notice) => notice.wakeId))
       return {
         next: [
@@ -522,12 +534,11 @@ export const rearmPendingAlarms = Effect.fn("WakeTool.rearm")(function* () {
           ),
           ...notices,
         ],
-        result: { armed, blocked: notices.length },
+        result: notices.length,
       }
     }),
   )
   if (blocked > 0) yield* ctx.State.changed()
-  return armed
 })
 
 const storeAndArm = Effect.fn("WakeTool.storeAndArm")(function* (entry: PendingWakeEntry) {

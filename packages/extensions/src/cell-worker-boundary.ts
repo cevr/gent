@@ -255,17 +255,26 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     error: write,
     debug: write,
   }
-  // A failed host operation already carries the host's message. Its stack
-  // lists the worker's own frames (`/$bunfs/root/gent-cell` in the compiled
-  // binary), which say nothing about the cell's code, so only the message
-  // goes back.
+  // A stack lists the worker's own frames (`/$bunfs/root/gent-cell` in the
+  // compiled binary, effect internals for a tool lookup) and says nothing
+  // about the cell's code, so an error goes back as its name and message, with
+  // its cause one level deep. A failed host operation already carries the
+  // host's message.
+  const errorText = (cause: unknown): string => {
+    if (!Predicate.isError(cause)) return display(cause)
+    const head = `${cause.name}: ${cause.message}`
+    if (Predicate.isUndefined(cause.cause)) return head
+    let inner = display(cause.cause)
+    if (Predicate.isError(cause.cause)) inner = `${cause.cause.name}: ${cause.cause.message}`
+    return `${head}\ncaused by ${inner}`
+  }
   const failure = (phase: CellEvaluationError["phase"], cause: unknown) =>
     new CellEvaluationError({
       phase,
       message: Option.liftPredicate(cause, Schema.is(CellEvaluationError))
         .pipe(
           Option.match({
-            onNone: () => display(cause),
+            onNone: () => errorText(cause),
             onSome: (hostFailure) => hostFailure.message,
           }),
         )

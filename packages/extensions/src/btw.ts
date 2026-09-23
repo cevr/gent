@@ -11,6 +11,7 @@ import {
   Stream,
 } from "effect"
 import {
+  type AgentEvent,
   BranchId,
   defineExtension,
   defineRequests,
@@ -214,6 +215,29 @@ const checkQuestion = (raw: string) =>
     return question
   })
 
+/**
+ * The fork's live state after one of its events. A notice is an error the
+ * turn goes on past; the fork still replies, so it is not the fork's error.
+ */
+export const foldForkEvent = <Fork extends Pick<OpenFork, "partial" | "replying" | "error">>(
+  current: Fork,
+  event: AgentEvent,
+): Fork => {
+  switch (event._tag) {
+    case "StreamStarted":
+      return { ...current, replying: true, error: Option.none() }
+    case "StreamChunk":
+      return { ...current, partial: current.partial + event.chunk }
+    case "TurnCompleted":
+      return { ...current, partial: "", replying: false }
+    case "ErrorOccurred":
+      if (event.notice === true) return current
+      return { ...current, partial: "", replying: false, error: Option.some(event.error) }
+    default:
+      return current
+  }
+}
+
 // ── Requests ──
 
 /**
@@ -235,25 +259,7 @@ const followFork = (parentBranchId: string, fork: { sessionId: SessionId; branch
         })
         .pipe(Effect.andThen(pulse))
     yield* ctx.Session.events(fork).pipe(
-      Stream.runForEach((event) => {
-        switch (event._tag) {
-          case "StreamStarted":
-            return apply((current) => ({ ...current, replying: true, error: Option.none() }))
-          case "StreamChunk":
-            return apply((current) => ({ ...current, partial: current.partial + event.chunk }))
-          case "TurnCompleted":
-            return apply((current) => ({ ...current, partial: "", replying: false }))
-          case "ErrorOccurred":
-            return apply((current) => ({
-              ...current,
-              partial: "",
-              replying: false,
-              error: Option.some(event.error),
-            }))
-          default:
-            return Effect.void
-        }
-      }),
+      Stream.runForEach((event) => apply((current) => foldForkEvent(current, event))),
       Effect.catchCause((cause) =>
         Effect.logWarning("btw.follow.failed").pipe(
           Effect.annotateLogs({ sessionId: fork.sessionId, error: String(cause) }),

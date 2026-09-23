@@ -27,7 +27,13 @@ import {
 import { useTheme } from "./theme"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { textWidth } from "./text-width-adapter"
-import { expandFileRefs, truncate, useRequiredContext } from "./utils"
+import {
+  expandFileRefs,
+  INLINE_MAX_BYTES,
+  INLINE_MAX_LINES,
+  truncate,
+  useRequiredContext,
+} from "./utils"
 import {
   ChromePanel,
   PickerFrame,
@@ -64,15 +70,12 @@ import type { ActiveInteraction, ApprovalResult } from "@gent/core/protocol"
  * nothing the reader ran is lost to the cap.
  */
 
-const MAX_LINES = 2000
-const MAX_BYTES = 50 * 1024 // 50KB
-
 /** Spill files live beside the rest of the gent data, not in a temp directory. */
 export const shellOutputDirectory = (home: string = homedir()): string =>
   `${home}/.gent/shell-output`
 
 /**
- * Execute a shell command, capped at MAX_LINES lines and MAX_BYTES bytes.
+ * Execute a shell command, capped at INLINE_MAX_LINES lines and INLINE_MAX_BYTES bytes.
  * The caller sees `truncated` when the cap drops output, and `savedPath` names
  * the file holding the whole of it.
  */
@@ -83,7 +86,7 @@ export const executeShell = (command: string, cwd: string) =>
     if (stderr.length > 0) fullOutput = `${stdout}\n${stderr}`
 
     const lines = fullOutput.split("\n")
-    const needsTruncation = lines.length > MAX_LINES || fullOutput.length > MAX_BYTES
+    const needsTruncation = lines.length > INLINE_MAX_LINES || fullOutput.length > INLINE_MAX_BYTES
 
     if (!needsTruncation) {
       return { output: fullOutput.trim(), truncated: false, savedPath: Option.none<string>() }
@@ -92,11 +95,11 @@ export const executeShell = (command: string, cwd: string) =>
     const savedPath = yield* saveFullOutput(command, fullOutput)
 
     let truncated: string = fullOutput
-    if (lines.length > MAX_LINES) {
-      truncated = lines.slice(0, MAX_LINES).join("\n")
+    if (lines.length > INLINE_MAX_LINES) {
+      truncated = lines.slice(0, INLINE_MAX_LINES).join("\n")
     }
-    if (truncated.length > MAX_BYTES) {
-      truncated = truncated.slice(0, MAX_BYTES)
+    if (truncated.length > INLINE_MAX_BYTES) {
+      truncated = truncated.slice(0, INLINE_MAX_BYTES)
     }
 
     return {

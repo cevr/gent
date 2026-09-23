@@ -50,9 +50,9 @@ export const MAX_ENTRIES = 200
 /**
  * One row's pick history: how many times, and when it was last chosen.
  *
- * The filter that produced the pick is deliberately *not* stored. FFF keys its
- * own frecency by `(query, path)`, which answers "for this exact query, this
- * pick" — but it means `t`, `te` and `tes` are three unrelated keys, and a
+ * The filter that produced the pick is deliberately *not* stored. Keying
+ * frecency by `(query, id)` answers "for this exact query, this pick" — but
+ * it means `t`, `te` and `tes` are three unrelated keys, and a
  * reader must re-teach every prefix of a name separately. The tie this fixes
  * appears at one and two characters, where per-query keying has learned
  * nothing yet. Keying by id alone means one pick of `test` lifts `test` for
@@ -360,9 +360,8 @@ export const recordFrecencyPick = (
  * the ghost line offers.
  *
  * Three prefixes feed the popup and they did not agree on what "best match"
- * meant. `@` files were already ranked — FFF scores them by fuzzy distance,
- * filename hits and frecency — while `/` commands and `$` skills were merely
- * filtered by `String.includes` and left in registration order. That is why
+ * meant. `/` commands and `$` skills were merely filtered by
+ * `String.includes` and left in registration order. That is why
  * `/ag` listed `/fork` first: "Fork from Mess**ag**e" contains the filter, and
  * it registers before `/agents`. A reader who typed the first two letters of
  * the command they wanted got a different command under the cursor.
@@ -387,10 +386,8 @@ export const recordFrecencyPick = (
  * been chosen before earns a bounded bonus on top of its match score. Bounded
  * is the operative word: see {@link FRECENCY_MAX}.
  *
- * `@` is deliberately not routed through this. FFF ranks files better than a
- * string matcher can, because it knows which files this reader actually opens
- * — it already keeps its own frecency, and a second layer on top would fight
- * it rather than help.
+ * All three prefixes route through this: `/` commands, `$` skills and `@`
+ * files, each with its own frecency prefix.
  *
  * @module
  */

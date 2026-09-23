@@ -12,6 +12,10 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 
+// Test seam: only tests read these exports. renderMessageParts and
+// renderSessionTree are pure with unit tests; ReadSessionTool is the capability
+// the cell signature tests render.
+
 // ── read-session ────────────────────────────────────────────────────────────
 
 // Read Session Error

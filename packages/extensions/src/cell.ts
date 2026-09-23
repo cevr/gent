@@ -1838,16 +1838,26 @@ export const cellToolResultValue = Effect.fn("CellToolCall.resultValue")(functio
     ),
   )
   if (result.isFailure) {
-    const message = yield* Schema.encodeEffect(JsonText)(value).pipe(
-      Effect.mapError(
-        (cause) =>
-          new CellEvaluationError({ phase: "execute", message: String(cause), output: "" }),
-      ),
-    )
+    const message = yield* Option.match(decodeErrorOnly(value), {
+      onSome: ({ error }) => Effect.succeed(error),
+      onNone: () =>
+        Schema.encodeEffect(JsonText)(value).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CellEvaluationError({ phase: "execute", message: String(cause), output: "" }),
+          ),
+        ),
+    })
     return yield* new CellEvaluationError({ phase: "execute", message, output: "" })
   }
   return value
 })
+
+/** A failure that is only `{ error }` throws that text; any other value throws as JSON. */
+const decodeErrorOnly = (value: Schema.Json) =>
+  Schema.decodeUnknownOption(Schema.Struct({ error: Schema.String }))(value, {
+    onExcessProperty: "error",
+  })
 
 // ── tool host ───────────────────────────────────────────────────────────────
 
@@ -2849,50 +2859,135 @@ const renderLiterals = (values: ReadonlyArray<SchemaValue>) => {
   return union(values.map(literalType))
 }
 
-/** A type past its limit keeps only its outer shape. */
-const boundedType = (rendered: string, limit: number) => {
-  if (rendered.length <= limit) return rendered
-  if (rendered.endsWith("[]")) return "object[]"
-  return "object"
+/**
+ * The definitions a schema's local `#/$defs/X` references name, and the ones
+ * being rendered now: a reference back into one of them is a cycle.
+ */
+interface SchemaScope {
+  readonly defs: JsonSchema.JsonSchema
+  readonly visiting: ReadonlySet<string>
+}
+
+const rootScope = (schema: JsonSchema.JsonSchema): SchemaScope => {
+  const defs = schema["$defs"]
+  if (isSchemaNode(defs)) return { defs, visiting: new Set() }
+  return { defs: {}, visiting: new Set() }
+}
+
+const LOCAL_REF = "#/$defs/"
+
+/** The node a local reference names, with its name marked as visiting; none for a cycle or a foreign ref. */
+const resolveRef = (
+  ref: string,
+  scope: SchemaScope,
+): Option.Option<readonly [JsonSchema.JsonSchema, SchemaScope]> => {
+  if (!ref.startsWith(LOCAL_REF)) return Option.none()
+  const name = ref.slice(LOCAL_REF.length)
+  const target = scope.defs[name]
+  if (scope.visiting.has(name) || !isSchemaNode(target)) return Option.none()
+  return Option.some([target, { defs: scope.defs, visiting: new Set([...scope.visiting, name]) }])
 }
 
 /**
  * Whether a call with no argument is valid: the host sends `{}` for it, so the
  * schema must accept an empty object. A schema with no constraint accepts it;
- * a number, a literal, a reference, or an object with required keys does not.
+ * a number, a literal, or an object with required keys does not.
  */
-const acceptsEmptyInput = (schema: JsonSchema.JsonSchema): boolean => {
+const acceptsEmptyInput = (schema: JsonSchema.JsonSchema, scope: SchemaScope): boolean => {
   const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
-  if (alternatives.length > 0) return alternatives.some(acceptsEmptyInput)
-  if ("const" in schema || "enum" in schema || "$ref" in schema) return false
+  if (alternatives.length > 0)
+    return alternatives.some((member) => acceptsEmptyInput(member, scope))
+  const ref = schema["$ref"]
+  if (Predicate.isString(ref)) {
+    return Option.match(resolveRef(ref, scope), {
+      onNone: () => false,
+      onSome: ([target, inner]) => acceptsEmptyInput(target, inner),
+    })
+  }
+  if ("const" in schema || "enum" in schema) return false
   const types = strings([schema["type"]].flat())
   if (types.length === 0) return true
   return types.includes("object") && strings(schema["required"]).length === 0
 }
 
 /**
- * One TypeScript-like type for a JSON Schema node. Objects past the first level
- * inline only while short; references and anything unrecognized fall back to
- * `object` or `unknown`.
+ * The outer shape of a type too long to render whole: each union member keeps
+ * its kind, an array keeps its items' kind, and an object becomes `object`.
  */
-const renderSchemaType = (schema: JsonSchema.JsonSchema, depth: number): string => {
+const outerType = (schema: JsonSchema.JsonSchema, scope: SchemaScope): string => {
+  if ("const" in schema) return literalType(schema["const"])
+  if (Array.isArray(schema["enum"])) return union(schema["enum"].map(literalType))
+  const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
+  if (alternatives.length > 0) return union(alternatives.map((member) => outerType(member, scope)))
+  const ref = schema["$ref"]
+  if (Predicate.isString(ref)) {
+    return Option.match(resolveRef(ref, scope), {
+      onNone: () => "object",
+      onSome: ([target, inner]) => outerType(target, inner),
+    })
+  }
+  const types = strings([schema["type"]].flat())
+  if (types.length === 0) {
+    if (isSchemaNode(schema["properties"])) return "object"
+    return "unknown"
+  }
+  return union(types.map((type) => outerTypeName(schema, type, scope)))
+}
+
+const outerTypeName = (schema: JsonSchema.JsonSchema, type: string, scope: SchemaScope) => {
+  if (type === "object") return "object"
+  if (type !== "array") return renderTypeName({}, type, 0, scope)
+  const items = schema["items"]
+  if (!isSchemaNode(items)) return "unknown[]"
+  return `${parenthesize(outerType(items, scope))}[]`
+}
+
+/** A schema's type, or its outer shape when the whole type is past `limit`. */
+const boundedSchemaType = (schema: JsonSchema.JsonSchema, limit: number) => {
+  const scope = rootScope(schema)
+  const rendered = renderSchemaType(schema, 0, scope)
+  if (rendered.length <= limit) return rendered
+  return outerType(schema, scope)
+}
+
+/**
+ * One TypeScript-like type for a JSON Schema node. Objects past the first level
+ * inline only while short; a local reference renders its definition, a cycle or
+ * a foreign reference renders `object`, and anything unrecognized `unknown`.
+ */
+const renderSchemaType = (
+  schema: JsonSchema.JsonSchema,
+  depth: number,
+  scope: SchemaScope,
+): string => {
   if ("const" in schema) return encodeJson(schema["const"])
   if (Array.isArray(schema["enum"])) return renderLiterals(schema["enum"])
   const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
   if (alternatives.length > 0) {
-    return union(alternatives.map((member) => renderSchemaType(member, depth)))
+    return union(alternatives.map((member) => renderSchemaType(member, depth, scope)))
   }
-  if (Predicate.isString(schema["$ref"])) return "object"
+  const ref = schema["$ref"]
+  if (Predicate.isString(ref)) {
+    return Option.match(resolveRef(ref, scope), {
+      onNone: () => "object",
+      onSome: ([target, inner]) => renderSchemaType(target, depth, inner),
+    })
+  }
   const declared = schema["type"]
   const types = strings([declared].flat())
   if (types.length === 0) {
-    if (isSchemaNode(schema["properties"])) return renderObjectType(schema, depth)
+    if (isSchemaNode(schema["properties"])) return renderObjectType(schema, depth, scope)
     return "unknown"
   }
-  return union(types.map((type) => renderTypeName(schema, type, depth)))
+  return union(types.map((type) => renderTypeName(schema, type, depth, scope)))
 }
 
-const renderTypeName = (schema: JsonSchema.JsonSchema, type: string, depth: number): string => {
+const renderTypeName = (
+  schema: JsonSchema.JsonSchema,
+  type: string,
+  depth: number,
+  scope: SchemaScope,
+): string => {
   switch (type) {
     case "string":
     case "boolean":
@@ -2904,33 +2999,51 @@ const renderTypeName = (schema: JsonSchema.JsonSchema, type: string, depth: numb
     case "array": {
       const items = schema["items"]
       if (!isSchemaNode(items)) return "unknown[]"
-      return `${parenthesize(renderSchemaType(items, depth))}[]`
+      return `${parenthesize(renderSchemaType(items, depth, scope))}[]`
     }
     case "object":
-      return renderObjectType(schema, depth)
+      return renderObjectType(schema, depth, scope)
     default:
       return "unknown"
   }
 }
 
 /** An optional key drops `null` from its union: omission already says "no value". */
-const renderField = (name: string, schema: SchemaValue, required: boolean, depth: number) => {
+const renderField = (
+  name: string,
+  schema: SchemaValue,
+  required: boolean,
+  depth: number,
+  scope: SchemaScope,
+) => {
   if (!isSchemaNode(schema)) return `${propertyKey(name)}?: unknown`
-  const rendered = renderSchemaType(schema, depth)
+  const rendered = renderSchemaType(schema, depth, scope)
   if (required) return `${propertyKey(name)}: ${rendered}`
   const present = rendered.split(" | ").filter((member) => member !== "null")
   if (present.length === 0) return `${propertyKey(name)}?: ${rendered}`
   return `${propertyKey(name)}?: ${present.join(" | ")}`
 }
 
-const renderObjectType = (schema: JsonSchema.JsonSchema, depth: number): string => {
+/** An object with no named keys and a value schema is a record. */
+const renderRecordType = (values: JsonSchema.JsonSchema, depth: number, scope: SchemaScope) => {
+  if (depth >= 2) return "object"
+  return `Record<string, ${renderSchemaType(values, depth + 1, scope)}>`
+}
+
+const renderObjectType = (
+  schema: JsonSchema.JsonSchema,
+  depth: number,
+  scope: SchemaScope,
+): string => {
   const properties = schema["properties"]
   const empty = !isSchemaNode(properties) || Object.keys(properties).length === 0
+  const values = schema["additionalProperties"]
+  if (empty && isSchemaNode(values)) return renderRecordType(values, depth, scope)
   if (empty && depth === 0) return "{}"
   if (empty || !isSchemaNode(properties) || depth >= 2) return "object"
   const required = new Set(strings(schema["required"]))
   const fields = Object.entries(properties).map(([name, value]) =>
-    renderField(name, value, required.has(name), depth + 1),
+    renderField(name, value, required.has(name), depth + 1, scope),
   )
   const rendered = `{ ${fields.join("; ")} }`
   if (depth > 0 && rendered.length > INLINE_OBJECT_LIMIT) return "object"
@@ -2963,10 +3076,10 @@ export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(
   if (Schema.isSchema(output)) {
     result = yield* jsonSchemaOf(() => AiTool.getJsonSchemaFromSchema(output))
   }
-  const inputType = boundedType(renderSchemaType(parameters, 0), SIGNATURE_TYPE_LIMIT)
+  const inputType = boundedSchemaType(parameters, SIGNATURE_TYPE_LIMIT)
   let input = `input: ${inputType}`
-  if (acceptsEmptyInput(parameters)) input = `input?: ${inputType}`
-  const resultType = boundedType(renderSchemaType(result, 0), SIGNATURE_TYPE_LIMIT)
+  if (acceptsEmptyInput(parameters, rootScope(parameters))) input = `input?: ${inputType}`
+  const resultType = boundedSchemaType(result, SIGNATURE_TYPE_LIMIT)
   const signature = `${toolPath(getToolId(tool))}(${input}): Promise<${resultType}>`
   const summary = firstLine(getToolPrompt(tool).promptSnippet ?? tool.description)
   if (summary.length === 0) return `- ${signature}`
