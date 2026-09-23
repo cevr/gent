@@ -892,6 +892,40 @@ describe("file encodings", () => {
     )
   }
 
+  // A lone surrogate has no UTF-8 bytes, and in a UTF-16 file it makes the
+  // next read lossy: write and edit refuse it and leave the file alone.
+  encodingTest("write and edit refuse text with a lone surrogate", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const newPath = `${dir}/new.txt`
+      const created = yield* runToolWithCtx(
+        WriteTool,
+        { path: newPath, content: "x\uD800y" },
+        stubCtx,
+      ).pipe(Effect.flip)
+      expect(created.message).toContain("lone surrogate")
+      expect(yield* fs.exists(newPath)).toBe(false)
+
+      const utf16Path = `${dir}/utf16.txt`
+      const before = utf16File("hello\n", "le")
+      yield* fs.writeFile(utf16Path, before)
+      const written = yield* runToolWithCtx(
+        WriteTool,
+        { path: utf16Path, content: "x\uDC00y" },
+        stubCtx,
+      ).pipe(Effect.flip)
+      expect(written.message).toContain("lone surrogate")
+      const edited = yield* runToolWithCtx(
+        EditTool,
+        { path: utf16Path, oldString: "hello", newString: "x\uD800" },
+        stubCtx,
+      ).pipe(Effect.flip)
+      expect(edited.message).toContain("lone surrogate")
+      expect(Buffer.from(yield* fs.readFile(utf16Path)).equals(before)).toBe(true)
+    }),
+  )
+
   encodingTest("read refuses a binary file", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

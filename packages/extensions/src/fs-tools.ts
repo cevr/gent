@@ -624,6 +624,10 @@ const decodeText = (bytes: Uint8Array): Option.Option<Omit<FileText, "lossy">> =
 const lossyWriteMessage = (verb: string, file: FileText) =>
   `Cannot ${verb} this file: it holds bytes that are not valid ${file.encoding}, and writing the text back would replace them with U+FFFD. Convert the file to valid ${file.encoding} first.`
 
+/** Why text with half a UTF-16 pair is not written: no encoding stores it as text. */
+const loneSurrogateMessage = (verb: string) =>
+  `Cannot ${verb} this file: the new text holds a lone surrogate (half of a UTF-16 pair), which UTF-8 cannot store and a UTF-16 file cannot read back. Send whole characters.`
+
 /** UTF-16 code units in the given byte order, after the byte order mark. */
 const encodeUtf16 = (text: string, littleEndian: boolean): Uint8Array => {
   const bytes = new Uint8Array(2 + text.length * 2)
@@ -845,6 +849,9 @@ export const WriteTool = tool({
     const path = yield* Path.Path
 
     const filePath = path.resolve(ctx.cwd, params.path)
+    if (!params.content.isWellFormed()) {
+      return yield* new WriteError({ message: loneSurrogateMessage("write"), path: filePath })
+    }
     const write = (bytes: Uint8Array) =>
       Effect.gen(function* () {
         if (params.atomic === true) return yield* writeFileAtomic(filePath, bytes)
@@ -1243,6 +1250,9 @@ export const EditTool = tool({
         let replaced: ReadonlyArray<MatchRange> = ranges.slice(0, 1)
         if (replaceAll) replaced = ranges
         const newContent = spliceRanges(content, replaced, params.newString)
+        if (!newContent.isWellFormed()) {
+          return yield* new EditError({ message: loneSurrogateMessage("edit"), path: filePath })
+        }
         const replacements = replaced.length
 
         // The file keeps the encoding and byte order mark it was read in.
