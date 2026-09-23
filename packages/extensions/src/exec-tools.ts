@@ -1303,6 +1303,9 @@ const destructiveWhen = (condition: boolean, reason: string): Option.Option<Bash
   return Option.none()
 }
 
+/** `git stash` actions that only read. */
+const STASH_READS = new Set(["list", "show", "create"])
+
 /** The risk of each git subcommand that can lose work or reach a remote. */
 const GIT_SUBCOMMAND_RISKS = {
   push: (args: ReadonlyArray<string>): Option.Option<BashRisk> => {
@@ -1337,7 +1340,7 @@ const GIT_SUBCOMMAND_RISKS = {
   // Paths do not: a tree-ish plus a path, `--ours`/`--theirs`, a merge
   // checkout, or a force. `-B` resets an existing branch. One bare word stays
   // safe: the classifier cannot tell a path from a branch without the file
-  // system.
+  // system. `git checkout -` switches back to the previous branch.
   checkout: (args: ReadonlyArray<string>) => {
     const parsed = parseArguments(args, {
       short: "bB",
@@ -1346,7 +1349,6 @@ const GIT_SUBCOMMAND_RISKS = {
     return destructiveWhen(
       parsed.pathspecs.length > 0 ||
         parsed.operands.includes(".") ||
-        args[0] === "-" ||
         parsed.operands.length >= 2 ||
         hasShort(parsed, "f", "p", "m", "B") ||
         hasLong(
@@ -1384,24 +1386,29 @@ const GIT_SUBCOMMAND_RISKS = {
       "git branch -D/-M/-C/--force (can drop or overwrite a branch)",
     )
   },
+  // Delegate children share one working tree. A stash takes a sibling's
+  // uncommitted edits out of it, and a pop or apply writes them back over
+  // work done since. Only the reads stay safe.
   stash: (args: ReadonlyArray<string>) => {
-    const action = parseArguments(args, { short: "m", long: ["message"] }).operands[0] ?? ""
-    return destructiveWhen(action === "drop" || action === "clear", `git stash ${action}`)
+    const action = parseArguments(args, { short: "m", long: ["message"] }).operands[0] ?? "push"
+    return destructiveWhen(
+      !STASH_READS.has(action),
+      `git stash ${action} (changes the working tree other agents share)`,
+    )
+  },
+  // `git rm` keeps what is committed; a force also drops uncommitted edits.
+  rm: (args: ReadonlyArray<string>) => {
+    const parsed = parseArguments(args)
+    return destructiveWhen(
+      (hasShort(parsed, "f") || hasLong(parsed, "force")) && !hasLong(parsed, "cached"),
+      "git rm --force (drops uncommitted changes)",
+    )
   },
   worktree: (args: ReadonlyArray<string>) => {
     const parsed = parseArguments(args)
     return destructiveWhen(
       parsed.operands[0] === "remove" && (hasShort(parsed, "f") || hasLong(parsed, "force")),
       "git worktree remove --force (discards the worktree's changes)",
-    )
-  },
-  add: (args: ReadonlyArray<string>) => {
-    const parsed = parseArguments(args)
-    return destructiveWhen(
-      hasShort(parsed, "A") ||
-        hasLong(parsed, "all") ||
-        [...parsed.operands, ...parsed.pathspecs].includes("."),
-      "git add everything (stages files other agents may own)",
     )
   },
 }

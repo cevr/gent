@@ -351,8 +351,7 @@ describe("classifyBashCommand", () => {
       "git -C repo clean -fdx",
       "git --no-pager checkout -- file.ts",
       "git -C repo restore --staged a.ts",
-      "git -C repo add -A",
-      "git add .",
+      "git -C repo stash",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -366,8 +365,18 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand("git add src/file.ts").level).toBe("safe")
   })
 
-  test("git rm --cached keeps the files", () => {
-    for (const command of ["git rm -r --cached dist", "git rm -r --cached ."]) {
+  test("staging and switching back keep every change", () => {
+    for (const command of [
+      "git add .",
+      "git add -A",
+      "git add --all",
+      "git -C repo add -A",
+      "git diff --name-only | xargs git add",
+      "git checkout -",
+      "git checkout -q -",
+      "git rm -r --cached dist",
+      "git rm -r --cached .",
+    ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
   })
@@ -403,6 +412,7 @@ describe("classifyBashCommand", () => {
       "git branch -f main HEAD~3",
       "git stash drop",
       "git stash clear",
+      "git rm -f src/a.ts",
       "git checkout HEAD src/a.ts",
       "git checkout HEAD~1 src/a.ts src/b.ts",
       "git checkout --theirs src/a.ts",
@@ -426,9 +436,9 @@ describe("classifyBashCommand", () => {
       "git switch -c feature",
       "git branch -d feature",
       "git branch feature",
-      "git stash",
-      "git stash pop",
       "git stash list",
+      "git stash show -p",
+      "git stash show stash@{1}",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -436,7 +446,7 @@ describe("classifyBashCommand", () => {
 
   test("a redirection joined to a word does not hide a flag", () => {
     expect(classifyBashCommand("git reset --hard>/dev/null").level).toBe("destructive")
-    expect(classifyBashCommand("git add --all>/dev/null").level).toBe("destructive")
+    expect(classifyBashCommand("git clean -fd>/dev/null").level).toBe("destructive")
     expect(classifyBashCommand("git push -f>/dev/null").level).toBe("destructive")
     expect(classifyBashCommand("git push -f</dev/null").level).toBe("destructive")
   })
@@ -537,7 +547,6 @@ describe("classifyBashCommand", () => {
       "git push --forc origin main",
       "git push --force-w=main origin main",
       "git branch --for main HEAD~1",
-      "git add --al",
       'git reset $"--hard"',
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
@@ -571,7 +580,7 @@ describe("classifyBashCommand", () => {
       "git clean --dry-run -fd",
       "git checkout main --",
       "git worktree remove ../wt",
-      "git stash push -m drop",
+      "git stash list -n drop",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -657,6 +666,22 @@ describe("classifyBashCommand", () => {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     expect(classifyBashCommand("echo 'git status' | xargs -I{} sh -c '{}'").level).toBe("safe")
+  })
+
+  // Delegate children share one working tree: a stash hides or rewrites a sibling's edits.
+  test("a git stash that moves changes in the shared working tree asks", () => {
+    for (const command of [
+      "git stash",
+      "git stash -u",
+      "git stash push -m wip",
+      "git stash pop",
+      "git stash apply stash@{0}",
+      "git stash drop",
+      "git stash branch tmp",
+      "git stash && bun run typecheck; git stash pop",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
   })
 
   test("an escaped quote in ANSI-C quoting does not hide a later command", () => {
