@@ -1220,7 +1220,18 @@ function ContributeSlashEnter() {
     {
       prefix: "@",
       title: "Files",
-      items: () => [{ id: "notes.ts", label: "notes.ts" }],
+      items: (filter: string) => {
+        if (filter.startsWith("src/")) return [{ id: "src/main.ts", label: "main.ts" }]
+        return [
+          { id: "notes.ts", label: "notes.ts" },
+          { id: "src/", label: "src/" },
+        ].filter((item) => item.id.includes(filter))
+      },
+      // As the files extension does: a directory keeps completing.
+      formatInsertion: (id: string) => {
+        if (id.endsWith("/")) return `@${id}`
+        return `@${id} `
+      },
     },
   ])
   return <box />
@@ -1416,6 +1427,16 @@ describe("Composer slash Enter", () => {
       // The `@` path inserts and waits — it never dispatches a command.
       expect(dispatched).toEqual([])
       expect(renderFrame(setup)).toContain("@notes.ts")
+    }),
+  )
+
+  it.live("a directory row completes into the directory and keeps the popup open", () =>
+    Effect.gen(function* () {
+      const dispatched: Array<Dispatched> = []
+      const setup = yield* typeThenEnter(dispatched, "@src", "src/")
+      yield* waitForFrame(setup, (frame) => frame.includes("main.ts"), "directory rows")
+      expect(renderFrame(setup)).toContain("@src/")
+      expect(dispatched).toEqual([])
     }),
   )
 

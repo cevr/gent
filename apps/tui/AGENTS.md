@@ -164,7 +164,11 @@ Special prefixes at input start trigger different modes:
 
 ### File References
 
-`@path/to/file.ts#10-20` expands to code block with lines 10-20 on submit.
+`@path/to/file.ts#10-20` expands to code block with lines 10-20 on submit,
+resolved against the session's cwd. A path with whitespace or `#` is written
+quoted, `@"my notes.md"#10-20`, and the popup inserts it that way. Punctuation
+after a bare reference (`see @a.ts, then`) stays in the sentence. A file is cut
+at 2000 lines or 50 KB of UTF-8, counted by the core line rule.
 
 ### Slash Commands
 

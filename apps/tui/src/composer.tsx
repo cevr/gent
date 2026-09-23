@@ -660,7 +660,17 @@ function useComposerController(): ComposerController {
     const nextValue = beforeTrigger + insertion
     inputRef.value.replaceText(nextValue)
     inputRef.value.cursorOffset = nextValue.length
-    sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text: nextValue }))
+    // An insertion that ends without a space is not finished (`@src/`): the
+    // popup reopens on it instead of closing.
+    if (insertion.endsWith(" ")) {
+      sc.onComposerInteraction(
+        ComposerInteractionEvent.cases.RestoreDraft.make({ text: nextValue }),
+      )
+    } else {
+      sc.onComposerInteraction(
+        ComposerInteractionEvent.cases.DraftChanged.make({ text: nextValue }),
+      )
+    }
     applyTokenHighlights()
     focusTextarea()
   }

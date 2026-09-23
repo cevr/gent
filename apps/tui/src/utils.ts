@@ -793,6 +793,18 @@ interface FileRefMatch {
 /** `@"quoted path"` or `@bare/path`, then an optional `#start-end` range. */
 const FILE_REF_PATTERN = /@(?:"([^"\n]+)"|([^\s#"]+))(?:#(\d+)(?:-(\d+))?)?/g
 
+/** Whether `path` can be written as a reference at all: a quote cannot. */
+export const isReferenceablePath = (path: string): boolean => !path.includes('"')
+
+/**
+ * How the composer writes a reference to `path`: bare when the pattern reads
+ * it back whole, quoted when it holds whitespace or `#`.
+ */
+export const formatFileRef = (path: string): string => {
+  if (/[\s#]/.test(path)) return `@"${path}"`
+  return `@${path}`
+}
+
 export function isAbsPath(path: string): boolean {
   return path.startsWith("/")
 }
