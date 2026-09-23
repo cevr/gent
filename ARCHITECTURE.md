@@ -216,7 +216,7 @@ The app surface is split by concern:
 
 `SessionEvents` and `SessionSubscriptions` are inlined into `server/server.ts` — they are not separate services.
 
-`AppServicesLive` is assembled inline at the top of `packages/core/src/server/server-root.ts` (private to the file — `buildServerRoot` is the only consumer).
+The app services are assembled inline in `buildServerRoot` in `packages/core/src/server/server-root.ts`, from `createDependencies`; no separate app-services layer exists.
 
 `packages/core/src/server/server.ts` owns startup wiring:
 
@@ -249,7 +249,7 @@ The production server uses one live profile owner:
 
 - `runtime/extension-host.ts` owns entries by workspace and canonical cwd. Each
   entry is built once: declarations load, every extension's process resources
-  build into a child of the server scope, and `buildProfileCatalog` stages the
+  build into a child of the server scope, and `buildSessionProfile` stages the
   catalog from that context. An extension whose process resource fails to build
   is reported as failed at the `startup` phase; the rest of the profile stays
   live. There is no reconciler, publication, or admission lease. Test roots
@@ -819,7 +819,7 @@ with its saved input and identity, then stores the original result. It never
 evaluates outer cell source or restores the worker stack. Concurrent or repeated
 resume attempts cannot execute the same waiting operation twice. Initial model
 dispatch does not select this host yet. Saved turn recovery does.
-`CellToolOperationStorage.listForCell` provides the durable recovery input for
+`CellToolOperationStorage.listForToolCall` provides the durable recovery input for
 that integration. It checks workspace, session, branch, and the admitted outer
 call. It returns all operation receipts without granting another execution.
 The branch phase is held in memory; queue storage persists the in-flight item,
@@ -918,7 +918,7 @@ Extension shape lives in:
 
 - `packages/core/src/extensions/api.ts` — public authoring surface (`defineExtension` + smart-constructor re-exports)
 - `packages/core/src/domain/extension.ts` — `ExtensionContributions` typed-bucket carrier (core primitives only)
-- `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetup`)
+- `packages/core/src/domain/extension.ts` — server contract (`GentExtension`, `ExtensionSetupServices`)
 - `apps/tui/src/extensions/client-facets.ts` — TUI-owned client facet model
 - `packages/core/src/runtime/extension-host.ts` — server registry
 - `packages/extensions/src/` — shipped extension implementations
@@ -982,19 +982,16 @@ host-owned design. It should expose:
 Everything else is builtin/internal:
 
 - raw runtime host context and hook plumbing (`ExtensionHostContext`,
-  `ToolExecuteInput`, `ProjectionTurnContext`, permission/context message
-  internals);
+  permission/context message internals);
 - storage, event publisher, event store, session mutation services, and
   interaction pending readers;
-- runtime/platform services and helpers (`GentPlatform`, `ToolRunner`,
-  `runProcess`);
+- runtime/platform services (`GentPlatform`, `ToolRunner`);
 - agent loop/session runtime internals and process runners that are only host
   implementation details;
 - raw event/message domain internals that are not part of the serialized
   authoring contract;
 - the extension registry's driver maps and provider auth persistence machinery;
-- test-only helpers such as `getToolEffect`, raw metadata tags, and fixture
-  constructors.
+- test-only helpers such as raw metadata tags and fixture constructors.
 
 Rules:
 
@@ -1110,16 +1107,15 @@ tests/
 
 One test file per source file. No god tests. Names match source owners.
 
-`packages/e2e/tests/` separates fast in-process contracts from slow end-to-end:
+`packages/e2e/tests/` holds only the slow end-to-end suite; in-process contract tests live in each package's `test` task:
 
-- `test` — direct-transport contract tests (in-process, no subprocess)
 - `test:e2e` — PTY TUI tests and focused server-process lifecycle coverage
 
 ### Important files
 
 - `packages/core/src/test-utils/index.ts` — `SequenceRecorder` and the
   recording layers; `baseLocalLayer`, a production-root preset over
-  `makeServerRootLayer` with in-memory SQLite, storage-backed events, debug
+  `buildServerRoot` with in-memory SQLite, storage-backed events, debug
   providers, and test service overrides; `createE2ELayer`, a preset that keeps
   real `ToolRunner.Live`, extension setup/resource startup, event publishing,
   and interaction recovery while expressing test
