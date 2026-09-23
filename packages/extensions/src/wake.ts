@@ -30,7 +30,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
-import { classifyBashCommand, runBashCommand } from "./exec-tools.js"
+import { approveBashCommand, classifyBashCommand, runBashCommand } from "./exec-tools.js"
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
@@ -760,21 +760,12 @@ export const MonitorTool = tool({
       return yield* new WakeError({ message: "command is empty" })
     }
     // The command runs on every check, so it passes the bash guardrail once, here.
-    const risk = classifyBashCommand(params.command)
-    if (risk.level !== "safe") {
-      const decision = yield* ctx.Interaction.approve({
-        text: `This monitor command is classified as ${risk.level}: ${risk.reason}\n\n\`${params.command}\`\n\nAllow it to run on every check?`,
-        metadata: { type: "bash-guardrail", level: risk.level },
-      })
-      if (!decision.approved) {
-        // A decline in a turn no user started says how to report it instead.
-        const notes = Option.match(Option.fromUndefinedOr(decision.notes), {
-          onNone: () => "",
-          onSome: (text) => `. ${text}`,
-        })
-        return yield* new WakeError({ message: `Command blocked: ${risk.reason}${notes}` })
-      }
-    }
+    const blocked = yield* approveBashCommand(
+      params.command,
+      "This monitor command",
+      "Allow it to run on every check?",
+    )
+    if (Option.isSome(blocked)) return yield* new WakeError({ message: blocked.value })
     const deadline = now + timeoutSeconds * 1000
     // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.monitor.make({
