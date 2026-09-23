@@ -14,6 +14,7 @@ import {
 import {
   ConnectionState,
   emptyQueueSnapshot,
+  Gent,
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
   type GentRuntime,
@@ -2034,4 +2035,49 @@ describe("uiModel schema validation", () => {
     const result = decode(nullValue)
     expect(result._tag).toBe("None")
   })
+})
+
+// ── debug-playground.test ───────────────────────────────────────────────────
+
+describe("debug playground", () => {
+  it.live(
+    "the session view renders the seeded transcript with the shipped tool ids",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* Gent.server({
+            cwd: "/tmp",
+            debug: true,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+          })
+          const { client, runtime } = yield* Gent.client(server, { cwd: "/tmp" })
+          const [session] = yield* client.session.list()
+          const initialSession = yield* Effect.fromNullishOr(session)
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(() => <App missingAuthProviders={[]} />, {
+              client,
+              runtime,
+              initialSession,
+              cwd: "/tmp",
+              width: 120,
+              height: 40,
+            }),
+          )
+          const frame = yield* Effect.promise(() =>
+            waitForRenderedFrame(
+              setup,
+              (text) => text.includes("Review the TUI renderer cleanup"),
+              "seeded transcript",
+              5_000,
+            ),
+          )
+          setup.renderer.destroy()
+          expect(frame).toContain("✓ 5 tool calls · 1 read · 1 grep · 1 bash · 1 edit · 1 write")
+          expect(frame).toContain("✓ 3 tool calls · 2 delegate.start · 1 read_session")
+          expect(frame).toContain("Audit lines up")
+        }).pipe(Effect.timeout("15 seconds")),
+      ),
+    20_000,
+  )
 })

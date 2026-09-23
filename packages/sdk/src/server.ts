@@ -454,7 +454,7 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
     role: "assistant",
     parts: [
       Prompt.reasoningPart({
-        text: "Need tool chrome parity, queue semantics, and todo widget behavior.",
+        text: "Need tool chrome parity, queue semantics, and child agent rows.",
       }),
       makeText("Inspected the relevant files and compared the renderer chrome paths."),
       makeToolCall({
@@ -466,11 +466,6 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
         id: asToolCallId("dbg-grep"),
         name: "grep",
         params: { pattern: "ToolFrame", path: `${cwd}/apps/tui/src` },
-      }),
-      makeToolCall({
-        id: asToolCallId("dbg-glob"),
-        name: "glob",
-        params: { pattern: "**/*.tsx", path: `${cwd}/apps/tui/src` },
       }),
       makeToolCall({
         id: asToolCallId("dbg-bash"),
@@ -489,7 +484,10 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
       makeToolCall({
         id: asToolCallId("dbg-write"),
         name: "write",
-        params: { path: `${cwd}/packages/sdk/src/server.ts` },
+        params: {
+          path: `${cwd}/packages/sdk/src/server.ts`,
+          content: "export const debugScenario = true\n",
+        },
       }),
     ],
     createdAt: nowPlus(-47_000),
@@ -518,14 +516,6 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
         ],
         truncated: false,
       }),
-      makeJsonResult(asToolCallId("dbg-glob"), "glob", {
-        files: [
-          "apps/tui/src/app.tsx",
-          "apps/tui/src/routes/session.tsx",
-          "apps/tui/src/components/message-list.tsx",
-        ],
-        truncated: false,
-      }),
       makeJsonResult(asToolCallId("dbg-bash"), "bash", {
         stdout: "$ turbo run typecheck\nTodos: 4 successful, 4 total",
         stderr: "",
@@ -533,8 +523,7 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
       }),
       makeJsonResult(asToolCallId("dbg-edit"), "edit", {
         path: `${cwd}/apps/tui/src/components/message-list.tsx`,
-        oldString: "<text>[ x ] tool_call</text>",
-        newString: "<ToolFrame />",
+        replacements: 1,
       }),
       makeJsonResult(asToolCallId("dbg-write"), "write", {
         path: `${cwd}/packages/sdk/src/server.ts`,
@@ -592,19 +581,14 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
     parts: [
       makeText("Pulled adjacent context and kicked off review helpers."),
       makeToolCall({
-        id: asToolCallId("dbg-delegate"),
-        name: "delegate",
-        params: { todos: [{ todo: "Inspect the TUI tool chrome" }] },
-      }),
-      makeToolCall({
         id: asToolCallId("dbg-explore"),
-        name: "delegate",
+        name: "delegate.start",
         params: { todo: "Where is the double-border coming from?" },
       }),
       makeToolCall({
         id: asToolCallId("dbg-review"),
-        name: "delegate",
-        params: { todo: "Sanity-check the debug session bootstrap." },
+        name: "delegate.start",
+        params: { todo: "Sanity-check the debug session bootstrap.", context: "fork" },
       }),
       makeToolCall({
         id: asToolCallId("dbg-read-session"),
@@ -621,14 +605,15 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
     branchId,
     role: "tool",
     parts: [
-      makeJsonResult(asToolCallId("dbg-delegate"), "delegate", {
-        output: "Explorer agreed the duplicate chrome was stale message-list markup.",
+      makeJsonResult(asToolCallId("dbg-explore"), "delegate.start", {
+        requestId: "dbg-explore",
+        sessionId: "019debug1-explore",
+        branchId: "019debug1-explore-branch",
       }),
-      makeJsonResult(asToolCallId("dbg-explore"), "delegate", {
-        output: "The second border was rendered by the message list, not the tool renderer.",
-      }),
-      makeJsonResult(asToolCallId("dbg-review"), "delegate", {
-        output: "Move debug boot into core-side scenario code and keep the shell thin.",
+      makeJsonResult(asToolCallId("dbg-review"), "delegate.start", {
+        requestId: "dbg-review",
+        sessionId: "019debug1-review",
+        branchId: "019debug1-review-branch",
       }),
       makeJsonResult(asToolCallId("dbg-read-session"), "read_session", {
         sessionId: "019debug1-session",

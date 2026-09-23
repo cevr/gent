@@ -548,26 +548,22 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("grep", {})).toBe("")
   })
 
-  test("glob: pattern and path", () => {
-    expect(toolArgSummary("glob", { pattern: "*.ts", path: "/src" })).toBe("*.ts in /src")
-    expect(toolArgSummary("glob", { pattern: "*.tsx" })).toBe("*.tsx in .")
-    expect(toolArgSummary("glob", {})).toBe("")
+  test("delegate.start: todo", () => {
+    expect(toolArgSummary("delegate.start", { todo: "find the bug" })).toBe("find the bug")
+    expect(toolArgSummary("delegate.start", {})).toBe("")
   })
 
-  test("delegate: todo", () => {
-    expect(toolArgSummary("delegate", { todo: "find the bug" })).toBe("find the bug")
-    expect(toolArgSummary("delegate", {})).toBe("")
-  })
-
-  test("delegate: truncates long todo text within its 40-column budget", () => {
+  test("delegate.start: truncates long todo text within its 40-column budget", () => {
     const longTodo = "a".repeat(60)
-    const result = toolArgSummary("delegate", { todo: longTodo })
+    const result = toolArgSummary("delegate.start", { todo: longTodo })
     expect(result).toBe(`${"a".repeat(39)}…`)
     expect(Bun.stringWidth(result)).toBe(40)
   })
 
-  test("read_session: goal", () => {
-    expect(toolArgSummary("read_session", { goal: "find the fix" })).toBe("find the fix")
+  test("read_session: session id", () => {
+    expect(toolArgSummary("read_session", { sessionId: "019debug1-session" })).toBe(
+      "019debug1-session",
+    )
   })
 
   test("handoff: reason", () => {
@@ -578,7 +574,6 @@ describe("toolArgSummary", () => {
 
   test("degrades gracefully on bad input types", () => {
     expect(toolArgSummary("grep", { pattern: "ok", path: {} })).toBe("/ok/ in .")
-    expect(toolArgSummary("glob", { pattern: "*.ts", path: 123 })).toBe("*.ts in .")
     expect(
       toolArgSummary("read", { file_path: "/tmp/f.ts", offset: "bad", limit: nullValue }),
     ).toBe("/tmp/f.ts")
@@ -706,29 +701,19 @@ describe("formatToolInput", () => {
     expect(result.endsWith("app.tsx")).toBe(true)
   })
 
-  test("formats glob pattern and path", () => {
-    const result = formatToolInput("glob", { pattern: "*.ts", path: "/foo/bar" })
-    expect(result).toBe("*.ts in /foo/bar")
-  })
-
   test("formats grep pattern and path", () => {
     const result = formatToolInput("grep", { pattern: "TODO", path: "/src" })
     expect(result).toBe("/TODO/ in /src")
   })
 
-  test("glob uses cwd fallback when no path", () => {
-    const result = formatToolInput("glob", { pattern: "*.ts" }, "/custom/cwd")
-    expect(result).toContain("*.ts in")
-    expect(result).toContain("cwd")
-  })
-
   test("grep uses cwd fallback when no path", () => {
-    const result = formatToolInput("grep", { pattern: "error" }, "/my/project")
-    expect(result).toContain("/error/ in")
+    expect(formatToolInput("grep", { pattern: "error" }, "/my/project")).toBe(
+      "/error/ in /my/project",
+    )
   })
 
-  test("returns empty for glob without pattern", () => {
-    expect(formatToolInput("glob", { path: "/foo" })).toBe("")
+  test("returns empty for grep without pattern", () => {
+    expect(formatToolInput("grep", { path: "/foo" })).toBe("")
   })
 
   test("returns empty for unknown tools", () => {
@@ -746,11 +731,11 @@ describe("formatToolInput", () => {
   test("handles wrong property types", () => {
     expect(formatToolInput("bash", { command: 123 })).toBe("")
     expect(formatToolInput("read", { path: nullValue })).toBe("")
-    expect(formatToolInput("glob", { pattern: {}, path: "/foo" })).toBe("")
+    expect(formatToolInput("grep", { pattern: {}, path: "/foo" })).toBe("")
   })
 
-  test("formats delegate with correct fields", () => {
-    expect(formatToolInput("delegate", { todo: "find the bug" })).toBe("find the bug")
+  test("formats delegate.start with its todo", () => {
+    expect(formatToolInput("delegate.start", { todo: "find the bug" })).toBe("find the bug")
   })
 
   test("read supports file_path field", () => {

@@ -1,5 +1,11 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Exit, Option, Predicate, Random, Schema, Scope, Stream } from "effect"
+import { Effect, Exit, Layer, Option, Predicate, Random, Schema, Scope, Stream } from "effect"
+import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
+import { getToolId } from "@gent/core/extensions/api"
+import { BuiltinExtensions } from "@gent/extensions"
+import { setupExtension } from "@gent/core-internal/runtime/extension-host"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
+import { narrowR } from "../../core/tests/helpers/effect"
 import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Gent, makeNamespacedClient } from "../src/client"
@@ -273,6 +279,79 @@ describe("Gent.server options", () => {
           )
           expect(stopped._tag).toBe("None")
         }),
+      ),
+    30_000,
+  )
+})
+
+interface SeededCall {
+  readonly name: string
+  readonly params: unknown
+}
+
+/**
+ * The seeded calls no shipped tool accepts: an unknown tool id, or params the
+ * tool's own schema rejects. Tools come from the builtin extensions' setup.
+ */
+const rejectedCalls = (calls: ReadonlyArray<SeededCall>) =>
+  narrowR(
+    Effect.gen(function* () {
+      const tools = new Map<string, Schema.Constraint>()
+      for (const extension of BuiltinExtensions) {
+        const loaded = yield* setupExtension(
+          { extension, scope: "builtin", sourcePath: "builtin" },
+          "/tmp",
+          "/tmp",
+        )
+        for (const tool of loaded.contributions.tools ?? []) {
+          tools.set(getToolId(tool), tool.parametersSchema)
+        }
+      }
+      const rejected: string[] = []
+      for (const call of calls) {
+        const schema = tools.get(call.name)
+        if (Predicate.isUndefined(schema)) {
+          rejected.push(`${call.name}: no shipped tool has this id`)
+          continue
+        }
+        // The seeded tools' params are plain structs: their type side is their JSON.
+        if (!Schema.is(schema)(call.params)) rejected.push(`${call.name}: params do not fit`)
+      }
+      return rejected
+    }),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        BunServices.layer,
+        BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+        GentPlatform.Test(),
+      ),
+    ),
+  )
+
+describe("Gent.server debug playground", () => {
+  it.live(
+    "seeds only calls to shipped tools, with params those tools accept",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDirectoryScoped("gent-debug-seed-")
+          const server = yield* Gent.server({
+            cwd,
+            debug: true,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+          })
+          const { client } = yield* Gent.client(server, { cwd })
+          const [session] = yield* client.session.list()
+          const branchId = yield* Effect.fromNullishOr(session?.activeBranchId)
+          const messages = yield* client.message.list({ branchId })
+          const calls = messages.flatMap((message) =>
+            message.parts.filter((part) => part.type === "tool-call"),
+          )
+          expect(calls.length).toBeGreaterThan(0)
+          expect(yield* rejectedCalls(calls)).toEqual([])
+        }).pipe(Effect.timeout("20 seconds")),
       ),
     30_000,
   )
