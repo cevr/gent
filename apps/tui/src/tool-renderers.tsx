@@ -4,7 +4,13 @@ import { Match, Option, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
 import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
-import { formatHeadTail, headTail, type OutputCut, splitLines } from "@gent/core/protocol"
+import {
+  formatHeadTail,
+  headTail,
+  lineCount,
+  type OutputCut,
+  splitLines,
+} from "@gent/core/protocol"
 import {
   type ActivityOperation,
   CellOperationReceipts,
@@ -130,10 +136,8 @@ interface DiffLineCount {
 }
 
 export function countDiffLines(oldStr: string, newStr: string): DiffLineCount {
-  let oldLines = 0
-  if (oldStr.length > 0) oldLines = oldStr.split("\n").length
-  let newLines = 0
-  if (newStr.length > 0) newLines = newStr.split("\n").length
+  const oldLines = lineCount(oldStr)
+  const newLines = lineCount(newStr)
   if (newLines > oldLines) {
     return { added: newLines - oldLines, removed: 0 }
   } else if (oldLines > newLines) {
@@ -198,7 +202,7 @@ export function GenericToolRenderer(props: ToolRendererProps) {
   const remainingLines = () => {
     const output = outputText() ?? ""
     const summary = summaryText() ?? ""
-    return Math.max(0, output.split("\n").length - summary.split("\n").length)
+    return Math.max(0, lineCount(output) - lineCount(summary))
   }
 
   const hasOutput = () => summaryText() || outputText()

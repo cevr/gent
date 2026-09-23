@@ -75,6 +75,11 @@ describe("countDiffLines", () => {
     expect(countDiffLines("", "")).toEqual({ added: 0, removed: 0 })
   })
 
+  test("a final newline ends the last line, it does not start one", () => {
+    expect(countDiffLines("a\nb\n", "")).toEqual({ added: 0, removed: 2 })
+    expect(countDiffLines("", "a\nb\nc\n")).toEqual({ added: 3, removed: 0 })
+  })
+
   test("handles identical strings", () => {
     const str = "line1\nline2"
     const result = countDiffLines(str, str)

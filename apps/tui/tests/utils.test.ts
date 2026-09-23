@@ -572,6 +572,15 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("write", {})).toBe("")
   })
 
+  test("write: a final newline ends the last line, it does not start one", () => {
+    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "a\nb\n" })).toBe(
+      "/tmp/foo.ts (2 lines)",
+    )
+    expect(toolArgSummary("write", { file_path: "/tmp/foo.ts", content: "single\n" })).toBe(
+      "/tmp/foo.ts",
+    )
+  })
+
   test("edit: shortened path", () => {
     expect(toolArgSummary("edit", { file_path: `${HOME}/src/app.ts` }, { home: HOME })).toBe(
       "~/src/app.ts",

@@ -2,7 +2,7 @@ import { Effect, FileSystem, Match, Option, Path, Predicate, Random, Schema } fr
 import { type Context, useContext } from "solid-js"
 import { textWidth } from "./text-width-adapter"
 import type { GentClientRpcError } from "@gent/sdk"
-import { GentConnectionError, GentRpcError } from "@gent/core/protocol"
+import { GentConnectionError, GentRpcError, lineCount } from "@gent/core/protocol"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import type { ToolCall } from "./tool-renderers"
 
@@ -315,9 +315,7 @@ function summarizeWrite(args: Schema.JsonObject, options?: ToolArgSummaryOptions
   const rawPath = getPathArg(args)
   if (rawPath.length === 0) return ""
 
-  const content = getStringArg(args, "content")
-  let lines = 0
-  if (content.length > 0) lines = content.split("\n").length
+  const lines = lineCount(getStringArg(args, "content"))
   let text = shortenPath(rawPath, Option.getOrUndefined(optionsHome(options)))
   if (lines > 1) text += ` (${lines} lines)`
   return text
