@@ -1522,6 +1522,8 @@ interface Invocation {
   readonly words: ReadonlyArray<ShellWord>
   /** The `NAME=value` words before it: its environment. */
   readonly assignments: ReadonlyArray<ShellWord>
+  /** Reached through `xargs`, `parallel` or `find -exec`: a `{}` in its words stands for input. */
+  readonly fed: boolean
 }
 
 /** The commands `words` runs: the first after env assignments, and each command a run of its path starts. */
@@ -1529,16 +1531,20 @@ const collectInvocations = (
   segment: ShellSegment,
   words: ReadonlyArray<ShellWord>,
   into: Array<Invocation>,
+  fed = false,
 ): void => {
   let start = words.findIndex((word) => !ASSIGNMENT.test(word.text))
   if (start === -1) start = words.length
   const command = words.slice(start)
   const assignments = words.slice(0, start)
   if (command.length === 0 && assignments.length === 0) return
-  into.push({ segment, words: command, assignments })
+  into.push({ segment, words: command, assignments, fed })
   const resolved = resolveCommand(command)
   for (const run of resolved.spec.runs) {
-    for (const wrapped of runCommands(resolved, run)) collectInvocations(segment, wrapped, into)
+    const feeds = fed || run._tag === "Stdin" || run._tag === "FindExec"
+    for (const wrapped of runCommands(resolved, run)) {
+      collectInvocations(segment, wrapped, into, feeds)
+    }
   }
 }
 
@@ -1676,10 +1682,10 @@ const SHELL_OPTIONS: ValueOptions = {
  * A shell: the argument after its options with `-c`; its stdin with `-s` or
  * with no argument; else a script file, which is not read: its content is
  * not in the command. A script that is not a literal (`sh -c '{}'` under
- * xargs, `sh -c "$CMD"`) takes the input as the script, as a pipe into a
+ * xargs or `find -exec`, `sh -c "$CMD"`) takes the input as the script, as a pipe into a
  * shell does.
  */
-const shellRuns = ({ segment, words }: Invocation): SegmentRuns => {
+const shellRuns = ({ segment, words, fed }: Invocation): SegmentRuns => {
   const parsed = parseWords(words, SHELL_OPTIONS, "leading")
   let end = 1 + parsed.end
   // `-` ends the options as `--` does.
@@ -1689,7 +1695,10 @@ const shellRuns = ({ segment, words }: Invocation): SegmentRuns => {
     if (hasShort(parsed, "s") || Option.isNone(operand)) return segmentInputs(segment)
     return scriptFileRuns(segment, operand)
   }
-  const literal = Option.filter(operand, (word) => !word.dynamic && !word.text.includes("{}"))
+  const literal = Option.filter(
+    operand,
+    (word) => !word.dynamic && !(fed && word.text.includes("{}")),
+  )
   if (Option.isSome(literal)) return scriptRuns([literal.value])
   const inputs = segmentInputs(segment)
   let unreadable = inputs.unreadable
@@ -1723,9 +1732,9 @@ const joinedRuns = (name: string, script: ReadonlyArray<ShellWord>): SegmentRuns
  * `xargs` and `parallel` run their command with the input words appended, or
  * put into `{}`; `parallel ::: a b` also runs each word after `:::` when it
  * has no command, and `parallel` with no command runs each input line. Bare
- * `xargs` runs `echo`. The wrapped command is classified with its input when
- * it is a git command the guard checks. A shell under the wrapper reads its
- * input through `shellRuns`.
+ * `xargs` runs `echo`. A wrapped command the guard checks is classified with
+ * its input when the input can be read; git asks when it cannot. A shell
+ * under the wrapper reads its input through `shellRuns`.
  */
 const inputWrapperRuns = (
   { segment }: Invocation,
@@ -1746,10 +1755,12 @@ const inputWrapperRuns = (
     const inputs = segmentInputs(segment)
     return { scripts: [...listed, ...inputs.scripts], unreadable: inputs.unreadable }
   }
-  if (commandName(commandTexts[0] ?? "") !== "git") return NO_RUNS
   if (resolveCommand(command).spec.risks.length === 0) return NO_RUNS
   let inputs = segmentInputs(segment)
   if (listed.length > 0) inputs = scriptRuns(listed)
+  const read = inputs.scripts.length > 0 && inputs.unreadable.length === 0
+  // Only git asks when its input cannot be read: `find … | xargs rm` stays quiet.
+  if (!read && commandName(commandTexts[0] ?? "") !== "git") return NO_RUNS
   if (inputs.scripts.length === 0 && inputs.unreadable.length === 0) {
     return unreadableRun(`the input of \`${name}\``)
   }
@@ -1771,21 +1782,40 @@ const SHELL_VARIABLES = new Set([
 /** Builtins whose `NAME=value` arguments set variables. */
 const DECLARATION_COMMANDS = new Set(["export", "declare", "typeset", "local", "readonly"])
 
-/** `GIT_SSH_COMMAND=… git fetch`, `export EDITOR=…`: a value a later command runs as a script. */
+/**
+ * `GIT_SSH_COMMAND=… git fetch`, `export EDITOR=…`: a value a later command
+ * runs as a script. Git also reads config from `GIT_CONFIG_KEY_<n>` and
+ * `GIT_CONFIG_VALUE_<n>` pairs, and from the `'key=value'` or
+ * `'key'='value'` entries of `GIT_CONFIG_PARAMETERS`.
+ */
 const assignmentRuns = ({ words, assignments }: Invocation): SegmentRuns => {
   let candidates = assignments
   if (DECLARATION_COMMANDS.has(commandName(words[0]?.text ?? ""))) {
     candidates = [...assignments, ...words.slice(1)]
   }
-  return scriptRuns(
-    candidates.flatMap((word) => {
-      const assignment = Option.fromNullishOr(ASSIGNMENT.exec(word.text))
-      const named = Option.filter(assignment, (match) =>
-        SHELL_VARIABLES.has(match[0].replace(/\+?=$/, "")),
-      )
-      return Option.toArray(Option.map(named, (match) => wordFrom(word, match[0].length)))
-    }),
+  const assigned = candidates.flatMap((word) =>
+    Option.toArray(Option.fromNullishOr(ASSIGNMENT.exec(word.text))).map(
+      (match): readonly [string, ShellWord] => [
+        match[0].replace(/\+?=$/, ""),
+        wordFrom(word, match[0].length),
+      ],
+    ),
   )
+  const values = new Map(assigned)
+  const runs: Array<SegmentRuns> = []
+  for (const [name, value] of assigned) {
+    if (SHELL_VARIABLES.has(name)) runs.push(scriptRuns([value]))
+    const configured = Option.fromNullishOr(/^GIT_CONFIG_KEY_(\d+)$/.exec(name)).pipe(
+      Option.flatMap((match) => Option.fromUndefinedOr(values.get(`GIT_CONFIG_VALUE_${match[1]}`))),
+      Option.flatMap((word) => configScript(value.text, word)),
+    )
+    runs.push(scriptRuns(Option.toArray(configured)))
+    if (name !== "GIT_CONFIG_PARAMETERS") continue
+    for (const entry of value.text.replaceAll("'='", "=").matchAll(/'([^']*)'/g)) {
+      runs.push(configDefinitionRuns(derivedWord(entry[1] ?? "", value.dynamic)))
+    }
+  }
+  return mergeRuns(runs)
 }
 
 /** Git global options whose value is the next word. */
@@ -2025,14 +2055,14 @@ const killsHard = (args: ReadonlyArray<string>) =>
     return signals.some((signal) => KILL_SIGNALS.has(signal))
   })
 
-const SQL_DESTRUCTIVE = /\b(drop|truncate)\s+table\b/i
+const SQL_DESTRUCTIVE = /\b(drop|truncate)\s+(table|database|schema)\b/i
 
-/** A SQL client that drops or truncates a table, in its arguments or its input. */
+/** A SQL client that drops or truncates a table, database or schema, in its arguments or its input. */
 const sqlRisk: CommandRisk = ({ texts, invocation }) => {
   const input = segmentInputs(invocation.segment).scripts.map((word) => word.text)
   const statement = Option.fromNullishOr(SQL_DESTRUCTIVE.exec([...texts, ...input].join(" ")))
   return Option.flatMap(statement, (match) =>
-    destructive(`${(match[1] ?? "").toUpperCase()} TABLE`),
+    destructive(`${(match[1] ?? "").toUpperCase()} ${(match[2] ?? "").toUpperCase()}`),
   )
 }
 
@@ -2093,6 +2123,12 @@ const each = (paths: ReadonlyArray<string>, value: CommandSpec) =>
   Object.fromEntries(paths.map((path) => [path, value]))
 
 const PUBLISH = risky(external("publishes a package"))
+
+/** `gh` groups whose `delete` removes something on the remote. */
+const GH_DELETES = [
+  ...["repo", "release", "gist", "issue", "label", "secret", "variable", "run", "cache"],
+  ...["ssh-key", "gpg-key", "codespace", "project"],
+]
 const PUBLISH_OPTIONS = "tag access registry otp"
 
 /** `git commit` options whose value is the next word. */
@@ -2184,6 +2220,7 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       [Run.cases.FindExec.make({ actions: ["-exec", "-execdir", "-ok", "-okdir"] })],
       ({ texts }) => destructiveWhen(texts.includes("-delete"), "find -delete"),
     ),
+    fd: spec({}, [Run.cases.FindExec.make({ actions: ["-x", "-X", "--exec", "--exec-batch"] })]),
     eval: spec({}, [joined()]),
     ssh: spec(options("bcDEeFIiJLlmOopQRSWwB"), [joined(1)]),
     watch: spec(options("n", "interval"), [joined()]),
@@ -2198,7 +2235,13 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       ...spec(options("pZ", "package manifest-path registry token config index color")),
       toolchain: true,
     },
-    ...each(["pnpm exec", "npm exec", "yarn exec"], runner()),
+    ...each(["pnpm exec", "yarn exec"], runner()),
+    // `npx -c '<script>'` runs a shell script.
+    ...each(
+      ["npm exec", "npm x", "npx"],
+      spec(options("pc", "package call"), [command(), optionScript("c", ["call"])]),
+    ),
+    ...each(["bunx", "bun x"], runner(options("p", "package"))),
     ...each(
       ["pnpm publish", "npm publish", "yarn publish", "yarn npm publish", "bun publish"],
       PUBLISH,
@@ -2206,6 +2249,21 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     "cargo publish": PUBLISH,
     "yarn workspace": runner({}, { positionals: 1, head: "yarn" }),
     "twine upload": risky(external("twine upload")),
+    ...each(
+      GH_DELETES.map((group) => `gh ${group} delete`),
+      risky(({ resolved }) => destructive(`${resolved.path} (deletes on the remote)`)),
+    ),
+    "gh api": spec(
+      options("XHfFpt", "method header field raw-field preview template jq input hostname cache"),
+      [],
+      ({ texts, parsed }) =>
+        destructiveWhen(
+          optionValues(parsed, "X", ["method"]).some(
+            (value) => valueText(texts, value).toUpperCase() === "DELETE",
+          ),
+          "gh api DELETE",
+        ),
+    ),
     docker: spec(options("Hcl", "host context config log-level tlscacert tlscert tlskey")),
     ...each(["docker push", "docker image push"], risky(external("docker push"))),
     uv: spec(options("", "directory project")),

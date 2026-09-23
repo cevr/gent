@@ -1215,6 +1215,80 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand("echo 'rm -rf x' | xargs -I{} {}").level).toBe("destructive")
     expect(classifyBashCommand("echo 'rm -rf x' | parallel").level).toBe("destructive")
   })
+
+  test("{} in a shell script is a placeholder only under xargs, parallel or find -exec", () => {
+    for (const command of [`bash -c 'node -e "console.log({})"'`, "sh -c 'echo {} && ls'"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of [
+      "find . -name x -exec sh -c '{}' \\;",
+      "xargs -I{} sudo sh -c '{}' < list.txt",
+      "parallel sh -c '{}' ::: a",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("readable xargs input is classified as arguments of any checked command", () => {
+    for (const command of [
+      "echo -rf x | xargs rm",
+      "xargs rm <<< '-rf x'",
+      "echo x -9 | xargs kill",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    expect(classifyBashCommand("echo .env | xargs rm").level).toBe("sensitive")
+    for (const command of [
+      "find . -name '*.tmp' | xargs rm",
+      "echo a b | xargs rm",
+      "echo 123 | xargs kill",
+      "echo a | xargs wc -l",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("package runners, fd -x, SQL drops, gh deletes and git config from the environment are read", () => {
+    for (const command of [
+      "npm x -- rm -rf x",
+      "npx rm -rf x",
+      "npx -c 'rm -rf x'",
+      "npm exec --call 'git reset --hard'",
+      "bunx --bun rm -rf x",
+      "bun x rm -rf x",
+      "fd -x rm -rf",
+      "fd . x --exec rm -rf",
+      "fd -e tmp -X rm -rf",
+      "psql -c 'DROP DATABASE app'",
+      "psql -c 'drop schema app cascade'",
+      "echo 'DROP DATABASE app' | psql",
+      "gh repo delete o/r --yes",
+      "gh release delete v1 --yes",
+      "gh api -X DELETE repos/o/r",
+      "gh api --method=delete repos/o/r",
+      "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0='rm -rf x' git log",
+      "export GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0='rm -rf x'",
+      `GIT_CONFIG_PARAMETERS="'core.pager=rm -rf x'" git log`,
+      `GIT_CONFIG_PARAMETERS="'alias.z'='!rm -rf x'" git z`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "npx prettier --write .",
+      "bun x tsc --noEmit",
+      "bunx tsc",
+      "fd -e ts -x wc -l",
+      "gh api repos/o/r",
+      "gh api -X GET repos/o/r",
+      "gh pr view 1",
+      "gh repo view",
+      "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=cat git log",
+      `GIT_CONFIG_PARAMETERS="'color.ui=always'" git log`,
+      "psql -c 'select 1'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
 })
 
 // ── bash execution ──────────────────────────────────────────────────────────
