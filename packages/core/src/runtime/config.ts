@@ -597,18 +597,30 @@ const TrustConfig = Schema.fromJsonString(
   Schema.Struct({ trustedProjects: UserConfig.fields.trustedProjects }),
 )
 
+/** Whether `trustedProjects` names the canonical root that owns this project extension directory. */
+export const isProjectRootTrusted = Effect.fn("ExtensionLoader.projectRootTrust")(function* (
+  trustedProjects: ReadonlyArray<string>,
+  projectDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  return yield* fs.realPath(path.resolve(projectDir, "../..")).pipe(
+    Effect.map((projectRoot) => trustedProjects.includes(projectRoot)),
+    Effect.orElseSucceed(() => false),
+  )
+})
+
 /** Only user configuration can authorize project module execution. */
 export const isProjectExtensionDirectoryTrusted = Effect.fn("ExtensionLoader.projectTrust")(
   function* (directories: { readonly userDir: string; readonly projectDir: string }) {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    return yield* Effect.gen(function* () {
-      const configPath = path.resolve(directories.userDir, "../config.json")
-      const config = yield* fs
-        .readFileString(configPath)
-        .pipe(Effect.flatMap(Schema.decodeEffect(TrustConfig)))
-      const projectRoot = yield* fs.realPath(path.resolve(directories.projectDir, "../.."))
-      return (config.trustedProjects ?? []).includes(projectRoot)
-    }).pipe(Effect.orElseSucceed(() => false))
+    const configPath = path.resolve(directories.userDir, "../config.json")
+    const trustedProjects = yield* fs.readFileString(configPath).pipe(
+      Effect.flatMap(Schema.decodeEffect(TrustConfig)),
+      Effect.map((config) => config.trustedProjects ?? []),
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    )
+    return yield* isProjectRootTrusted(trustedProjects, directories.projectDir)
   },
 )

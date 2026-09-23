@@ -100,6 +100,7 @@ import {
   type FreshConfig,
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
+  isProjectRootTrusted,
   RuntimeEnvironment,
   type UserConfig,
 } from "./config.js"
@@ -1080,47 +1081,62 @@ interface ExtensionDirectories {
 }
 
 /**
- * One read of the extension directories. A profile is keyed on it
- * (`extensionScanStamp`) and loaded from it, so its key names exactly the
- * file versions it loaded.
+ * One read of the extension directories and of the project's trust. A
+ * profile is keyed on it (`extensionScanStamp`) and loaded from it, so its
+ * key names exactly the file versions and the trust it loaded with.
  */
 interface ExtensionScan {
   readonly dirs: ExtensionDirectories
   readonly user: DirScan
   readonly project: DirScan
+  /** Whether the user config trusts the project root, so its scope may load. */
+  readonly projectTrusted: boolean
 }
 
 const scanExtensionDirectories = Effect.fn("ExtensionLoader.scanExtensionDirectories")(function* (
   dirs: ExtensionDirectories,
+  projectTrusted: boolean,
 ) {
   const scan: ExtensionScan = {
     dirs,
     user: yield* scanDir(dirs.userDir),
     project: yield* scanDir(dirs.projectDir),
+    projectTrusted,
   }
   return scan
 })
 
-/** The extension directories a profile for these inputs reads, read once. */
-export const scanRuntimeProfileExtensions = (inputs: {
-  readonly cwd: string
-  readonly home: string
-}): Effect.Effect<ExtensionScan, never, FileSystem.FileSystem | Path.Path> =>
+/**
+ * The extension directories a profile for these inputs reads, read once.
+ * Trust comes from the fresh config the caller already read, so a grant or a
+ * revoke reaches the next resolve.
+ */
+export const scanRuntimeProfileExtensions = (
+  inputs: { readonly cwd: string; readonly home: string },
+  trustedProjects: ReadonlyArray<string>,
+): Effect.Effect<ExtensionScan, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
-    return yield* scanExtensionDirectories(extensionDirectories(path, inputs))
+    const dirs = extensionDirectories(path, inputs)
+    return yield* scanExtensionDirectories(
+      dirs,
+      yield* isProjectRootTrusted(trustedProjects, dirs.projectDir),
+    )
   })
 
 /**
- * The extension files a scan found, each with its version, and the paths
- * that failed to read. A profile is keyed on it, so an added, removed, fixed
- * or edited extension file reaches the next resolve.
+ * The extension files a scan found, each with its version, the paths that
+ * failed to read, and the project's trust. A profile is keyed on it, so an
+ * added, removed, fixed or edited extension file, and a trust grant or
+ * revoke, reaches the next resolve.
  */
-const extensionScanStamp = (scan: ExtensionScan): ReadonlyArray<string> =>
-  [scan.user, scan.project].flatMap(({ paths, unreadable }) => [
+const extensionScanStamp = (scan: ExtensionScan): ReadonlyArray<string> => [
+  ...[scan.user, scan.project].flatMap(({ paths, unreadable }) => [
     ...paths.map((file) => `${file.path}@${file.version}`),
     ...unreadable.map((entry) => `!${entry.path}`),
-  ])
+  ]),
+  `?trusted=${String(scan.projectTrusted)}`,
+]
 
 /** The user and project extension directories a profile discovers. */
 const extensionDirectories = (
@@ -1295,7 +1311,9 @@ export const configHealthStatuses = Effect.fn("ExtensionHealth.configHealthStatu
 export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (
   dirs: ExtensionDirectories,
 ) {
-  return yield* loadExtensionScan(yield* scanExtensionDirectories(dirs))
+  return yield* loadExtensionScan(
+    yield* scanExtensionDirectories(dirs, yield* isProjectExtensionDirectoryTrusted(dirs)),
+  )
 })
 
 /** Load the extensions one scan found; see `discoverExtensions`. */
@@ -1307,7 +1325,7 @@ const loadExtensionScan = Effect.fn("ExtensionLoader.loadExtensionScan")(functio
   const project = yield* discoverDir(scan.project, "project")
   const userPaths = user.paths
   const projectPaths = project.paths
-  const projectTrusted = yield* isProjectExtensionDirectoryTrusted(scan.dirs)
+  const projectTrusted = scan.projectTrusted
 
   const loaded: DiscoveredExtension[] = []
   const failed: FailedExtension[] = [...user.failed]
@@ -2234,9 +2252,10 @@ export class SessionProfileCache extends Context.Service<
                 // edit cannot put the older profile back.
                 const fresh = yield* restore(configService.getFresh(canonicalCwd))
                 const scan = yield* restore(
-                  scanRuntimeProfileExtensions(inputsFor(canonicalCwd)).pipe(
-                    Effect.provideContext(platformServicesContext),
-                  ),
+                  scanRuntimeProfileExtensions(
+                    inputsFor(canonicalCwd),
+                    fresh.config.trustedProjects ?? [],
+                  ).pipe(Effect.provideContext(platformServicesContext)),
                 )
                 const list = listKey(
                   place,

@@ -483,6 +483,56 @@ const markerExtension = (id: string, value: string, stop: Effect.Effect<void> = 
   })
 
 describe("session profile resolution", () => {
+  it.scopedLive("a trust grant and a trust revoke each reach the next resolve", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      // Under the repo, so the project module resolves `effect`.
+      const directory = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../../.."),
+        prefix: ".tmp-profile-trust-",
+      })
+      const home = path.join(directory, "home")
+      const project = path.join(directory, "project")
+      const userConfig = path.join(home, ".gent", "config.json")
+      yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+      yield* fs.makeDirectory(path.join(project, ".gent", "extensions"), { recursive: true })
+      const projectRoot = yield* fs.realPath(project)
+      yield* fs.writeFileString(
+        path.join(project, ".gent", "extensions", "entry.ts"),
+        `import { Effect } from "effect";
+export default { manifest: { id: "profile-trust" }, setup: Effect.void };`,
+      )
+      yield* fs.writeFileString(userConfig, "{}")
+      const activeIds = (profile: SessionProfile) =>
+        profile.resolved.extensions.map((extension) => String(extension.manifest.id))
+      const failedErrors = (profile: SessionProfile) =>
+        profile.resolved.failedExtensions.map((extension) => extension.error)
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const resolve = Effect.scoped(cache.resolve(project))
+        const untrusted = yield* resolve
+        expect(activeIds(untrusted)).not.toContain("profile-trust")
+        expect(failedErrors(untrusted).join("\n")).toContain("not trusted")
+
+        yield* fs.writeFileString(userConfig, encodeJson({ trustedProjects: [projectRoot] }))
+        const granted = yield* resolve
+        expect(activeIds(granted)).toContain("profile-trust")
+
+        yield* fs.writeFileString(userConfig, encodeJson({ trustedProjects: [] }))
+        const revoked = yield* resolve
+        expect(activeIds(revoked)).not.toContain("profile-trust")
+        expect(failedErrors(revoked).join("\n")).toContain("not trusted")
+      }).pipe(
+        Effect.provide(
+          makeCacheLayer({ cwd: project, home, extensions: [], allowFailedExtensions: true }),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   it.scopedLive("isolates profiles by workspace and reuses one per key", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -4943,7 +4993,7 @@ describe("live Profile", () => {
         }
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs),
+          yield* scanRuntimeProfileExtensions(inputs, []),
         )
         expect(events).toEqual([])
         expect(declarations.extensionDeclarations.failed).toContainEqual(
@@ -4993,7 +5043,7 @@ describe("live Profile", () => {
 
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs),
+          yield* scanRuntimeProfileExtensions(inputs, []),
         )
         expect(declarations.extensionDeclarations.failed).toEqual([
           expect.objectContaining({
@@ -5018,7 +5068,7 @@ describe("live Profile", () => {
         // A disabled id silences its file.
         const quiet = yield* loadRuntimeProfileDeclarations(
           { ...inputs, disabledExtensions: ["broken", "folder-broken", "local"] },
-          yield* scanRuntimeProfileExtensions(inputs),
+          yield* scanRuntimeProfileExtensions(inputs, []),
         )
         expect(quiet.extensionDeclarations.failed).toEqual([])
 
