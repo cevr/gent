@@ -1110,7 +1110,12 @@ fetched from npm. The bound specifiers are exact:
   and fails when the map differs, so a shipped extension never reads a module
   a user extension cannot. A user extension is as capable as a shipped one.
 - Client files only: `@gent/core/protocol`, `@gent/tui/extensions`,
-  `solid-js`, `solid-js/store` and `@opentui/solid`. Bun resolves a bare import
+  `@gent/extensions/client` (the shipped extensions' RPCs, ids and message
+  types), `solid-js`, `solid-js/store` and `@opentui/solid`. A test in
+  `apps/tui/tests/extensions/loader-boundary.test.ts` reads every `@gent/*`
+  specifier the shipped client files import and fails on one the loader does
+  not bind, so a shipped client never reads a module a user client cannot.
+  Bun resolves a bare import
   from a runtime plugin without the importer, so these are bound under a prefix
   drawn for each TUI load. The TUI loader compiles each `*.client.*` file with
   `Bun.build` and the OpenTUI Solid transform, and renames these imports to the

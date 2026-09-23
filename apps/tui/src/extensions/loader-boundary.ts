@@ -26,6 +26,7 @@ import {
 } from "@gent/core/host"
 import * as ProtocolEntry from "@gent/core/protocol"
 import * as ClientExtensionEntry from "@gent/tui/extensions"
+import * as ShippedExtensionsClientEntry from "@gent/extensions/client"
 import * as OpenTuiSolidEntry from "@opentui/solid"
 import * as SolidEntry from "solid-js"
 import * as SolidStoreEntry from "solid-js/store"
@@ -560,7 +561,9 @@ const setupExtension = (
 
 /**
  * The names a client extension file imports and a server extension file does
- * not: the client protocol entry, the client authoring entry, and Solid. The
+ * not: the client protocol entry, the client authoring entry, the shipped
+ * extensions' client entry (their RPCs, ids and message types), and Solid.
+ * A shipped client extension imports nothing a user one cannot. The
  * compiled binary has no node_modules, so a file outside the repository
  * reaches them only through these bindings, and it gets the TUI's own
  * instances: one Solid runtime, one ClientContext.
@@ -576,6 +579,7 @@ const clientOnlyModules: ReadonlyMap<string, RuntimeModuleSource> = new Map<
 >([
   ["@gent/core/protocol", () => ProtocolEntry],
   ["@gent/tui/extensions", () => ClientExtensionEntry],
+  ["@gent/extensions/client", () => ShippedExtensionsClientEntry],
   ["@opentui/solid", () => OpenTuiSolidEntry],
   ["solid-js", () => SolidEntry],
   ["solid-js/store", () => SolidStoreEntry],

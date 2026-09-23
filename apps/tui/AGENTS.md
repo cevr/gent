@@ -217,7 +217,10 @@ Client extensions author against one public entry, `@gent/tui/extensions`
 contribution constructors, `sessionQuery` and the rendering kit. A shipped
 client extension imports the TUI through that entry and nothing else, so a user
 `*.client.ts(x)` file reaches everything a shipped one does; a loader test
-fails on a shipped file that imports past it. Only the builtin roster in
+fails on a shipped file that imports past it. A shipped client reads the
+server extension it views through `@gent/extensions/client`, which the loader
+binds for a user file too; a second loader test fails on a `@gent/*` import in
+a shipped client that a user file cannot resolve. Only the builtin roster in
 `builtins.tsx` names its sibling `*.client` modules.
 
 Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions

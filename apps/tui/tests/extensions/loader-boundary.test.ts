@@ -64,6 +64,9 @@ import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import * as EffectEntry from "effect"
 import * as ProtocolEntry from "@gent/core/protocol"
 import * as ClientExtensionEntry from "@gent/tui/extensions"
+import * as ExtensionsClientEntry from "@gent/extensions/client"
+import * as AuthoringEntry from "@gent/core/extensions/api"
+import * as BranchToolsEntry from "@gent/core/extensions/branch-tools"
 import * as SolidEntry from "solid-js"
 import * as SolidStoreEntry from "solid-js/store"
 import * as OpenTuiSolidEntry from "@opentui/solid"
@@ -406,8 +409,11 @@ const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 /** Each specifier a client extension imports, with the module the TUI runs for it. */
 const clientEntries = {
   effect: EffectEntry,
+  "@gent/core/extensions/api": AuthoringEntry,
+  "@gent/core/extensions/branch-tools": BranchToolsEntry,
   "@gent/core/protocol": ProtocolEntry,
   "@gent/tui/extensions": ClientExtensionEntry,
+  "@gent/extensions/client": ExtensionsClientEntry,
   "solid-js": SolidEntry,
   "solid-js/store": SolidStoreEntry,
   "@opentui/solid": OpenTuiSolidEntry,
@@ -527,8 +533,11 @@ export const Label = (props: { readonly text: string }) => {
           path.join(userDir, "entries.client.tsx"),
           `
 import * as effect from "effect"
+import * as api from "@gent/core/extensions/api"
+import * as branchTools from "@gent/core/extensions/branch-tools"
 import * as protocol from "@gent/core/protocol"
 import * as tui from "@gent/tui/extensions"
+import * as shipped from "@gent/extensions/client"
 import * as solid from "solid-js"
 import * as solidStore from "solid-js/store"
 import * as openTuiSolid from "@opentui/solid"
@@ -538,8 +547,11 @@ import { Label } from "./_lib/label"
 
 const bound = {
   effect,
+  "@gent/core/extensions/api": api,
+  "@gent/core/extensions/branch-tools": branchTools,
   "@gent/core/protocol": protocol,
   "@gent/tui/extensions": tui,
+  "@gent/extensions/client": shipped,
   "solid-js": solid,
   "solid-js/store": solidStore,
   "@opentui/solid": openTuiSolid,
@@ -609,7 +621,39 @@ export default tui.defineClientExtension("@user/client-entries", {
         expect(yield* serverImport("solid.ts", "solid-js")).toContain(
           "Cannot find package 'solid-js'",
         )
+        expect(yield* serverImport("shipped.ts", "@gent/extensions/client")).toContain(
+          "Cannot find package '@gent/extensions'",
+        )
       }).pipe(Effect.timeout("20 seconds"), Effect.provide(BunServices.layer)),
+  )
+
+  // A shipped client extension is never more privileged than a user one: every
+  // gent entry a shipped client file imports is one the loader binds for a
+  // user file, and the probe above proves each binding.
+  it.scopedLive(
+    "every gent entry a shipped client extension imports is bound for a user file",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dir = path.resolve(import.meta.dir, "../../src/extensions")
+        const files = (yield* fs.readDirectory(dir)).filter(
+          (file) => /\.client\.tsx?$/.test(file) || /^builtins\.tsx?$/.test(file),
+        )
+        expect(files.length).toBeGreaterThan(5)
+        const imported = new Set<string>()
+        for (const file of files) {
+          const text = yield* fs.readFileString(path.join(dir, file))
+          for (const match of text.matchAll(/from\s+"(@gent\/[^"]+)"/g)) {
+            Option.map(Option.fromNullishOr(match[1]), (specifier) => imported.add(specifier))
+          }
+        }
+        expect(imported.has("@gent/extensions/client")).toBe(true)
+        const unbound = [...imported].filter(
+          (specifier) => !Object.hasOwn(clientEntries, specifier),
+        )
+        expect(unbound).toEqual([])
+      }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.live("Effect setup is run through the runtime; FileSystem is provided", () =>
