@@ -17,7 +17,7 @@ import {
   type Branch,
   type BranchTreeNode,
   buildLogPaths,
-  type ConnectionState,
+  ConnectionState,
   ensureLogDir,
   resolveLogDir,
   type ExtensionHealthSnapshot,
@@ -58,13 +58,7 @@ import {
 } from "solid-js"
 import { createStore } from "solid-js/store"
 import { omitUndefined } from "@gent/core/extensions/api"
-import {
-  formatConnectionIssue,
-  formatError,
-  randomId,
-  type UiError,
-  useRequiredContext,
-} from "./utils"
+import { formatError, randomId, type UiError, useRequiredContext } from "./utils"
 import { useWorkspace } from "./workspace"
 
 // ── client logging ──────────────────────────────────────────────────────────
@@ -411,8 +405,8 @@ export const reduceAgentLifecycle = (event: AgentEvent): AgentLifecycleUpdate =>
   }
 }
 
-const isReconnectingState = (state: ConnectionState): boolean =>
-  Predicate.isTagged("connecting")(state) || Predicate.isTagged("reconnecting")(state)
+/** Not connected yet, or not any more: both mean the next reply may not come. */
+const isReconnectingState = ConnectionState.isAnyOf(["Connecting", "Reconnecting"])
 
 /**
  * What this UI can ask a running loop to do.
@@ -491,6 +485,10 @@ export interface SessionIdentity {
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }
+
+/** One session and branch: the one comparison every identity check uses. */
+export const sameIdentity = (left: SessionIdentity, right: SessionIdentity): boolean =>
+  left.sessionId === right.sessionId && left.branchId === right.branchId
 
 interface ClientSessionValue {
   // Session state (union)
@@ -580,6 +578,12 @@ interface ClientAgentValue {
   // eslint-disable-next-line effect/noNullish -- UI callers pass null to clear a local error.
   setError: (error: string | null) => void
   /**
+   * An error that belongs to one session, such as a send it refused. The
+   * session in view shows it now; another session keeps it until the reader
+   * returns there, and the session in view shows nothing of it.
+   */
+  setErrorIn: (target: SessionIdentity, error: string) => void
+  /**
    * The last extension notice (`ClientContext.shell.notify`). It sits beside the
    * turn status, not in it: a notice leaves a running turn running and a
    * standing error standing. The next notice replaces it; a new turn or a
@@ -592,11 +596,16 @@ interface ClientAgentValue {
 }
 
 interface ClientActionValue {
-  // Session actions (fire-and-forget, update state internally)
-  /** Send to the session the content was drafted in, not whichever is active when it lands. */
-  sendMessage: (target: SessionIdentity, content: string) => void
-  // Steering (fire-and-forget)
-  steer: (target: SessionIdentity, command: SteerCommandInput) => void
+  /**
+   * Send to the session the content was drafted in, not whichever is active
+   * when it lands. A rejected send fails, so the caller can give the text back.
+   */
+  sendMessage: (target: SessionIdentity, content: string) => Effect.Effect<void, GentClientRpcError>
+  /** Steer the target's loop; a rejected command fails for the caller to report. */
+  steer: (
+    target: SessionIdentity,
+    command: SteerCommandInput,
+  ) => Effect.Effect<void, GentClientRpcError>
 }
 
 export type ClientContextValue = ClientTransportValue &
@@ -704,9 +713,7 @@ export function ClientProvider(props: ClientProviderProps) {
       })),
     Option.none<SessionIdentity>(),
     {
-      equals: Option.makeEquivalence<SessionIdentity>(
-        (left, right) => left.sessionId === right.sessionId && left.branchId === right.branchId,
-      ),
+      equals: Option.makeEquivalence<SessionIdentity>(sameIdentity),
     },
   )
   const activeSessionId = createMemo(
@@ -946,6 +953,12 @@ export function ClientProvider(props: ClientProviderProps) {
     }
   }
 
+  // Errors a session earned while another was in view, shown when its
+  // snapshot lands on return: the snapshot would otherwise overwrite them.
+  const heldErrors = new Map<string, string>()
+  const identityKey = (identity: SessionIdentity) =>
+    `${identity.sessionId}\u0000${identity.branchId}`
+
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
     const currentSession = sessionOption()
     if (Option.isSome(currentSession)) {
@@ -994,6 +1007,12 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
     })
     setSessionMetrics(metricsOf(snapshot))
+    const key = identityKey(snapshot)
+    const held = Option.fromUndefinedOr(heldErrors.get(key))
+    if (Option.isSome(held)) {
+      heldErrors.delete(key)
+      setAgentStore({ status: AgentStatus.cases.Error.make({ error: held.value }) })
+    }
   }
 
   const refreshSessionMetrics = (): void => {
@@ -1382,6 +1401,14 @@ export function ClientProvider(props: ClientProviderProps) {
       Object.values(modelStore.modelsById).filter((model) =>
         modelStore.driverIds.includes(model.provider),
       ),
+    setErrorIn: (target, error) => {
+      const inView = Option.exists(sessionOption(), (current) => sameIdentity(current, target))
+      if (inView) {
+        agentValue.setError(error)
+        return
+      }
+      heldErrors.set(identityKey(target), error)
+    },
     setError: (error) => {
       const nextError = Option.fromNullishOr(error)
       if (Option.isSome(nextError)) {
@@ -1400,43 +1427,26 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const actionValue: ClientActionValue = {
-    sendMessage: (s, content) => {
-      const sendMessageEffect = Effect.fn("TUI.sendMessage")(function* () {
-        const requestId = yield* randomId
-        yield* Effect.sync(() => {
-          log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
-        })
-        return yield* client.message.send({
-          sessionId: s.sessionId,
-          branchId: s.branchId,
-          content,
-          requestId,
-        })
+    sendMessage: Effect.fn("TUI.sendMessage")(function* (s, content) {
+      const requestId = yield* randomId
+      log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
+      yield* client.message.send({
+        sessionId: s.sessionId,
+        branchId: s.branchId,
+        content,
+        requestId,
       })
-      cast(
-        sendMessageEffect().pipe(
-          Effect.tapError((err) =>
-            Effect.sync(() => {
-              setConnectionIssue(formatConnectionIssue(err))
-            }),
-          ),
-        ),
-      )
-    },
-    steer: (s, command) => {
-      cast(
-        Effect.gen(function* () {
-          const requestId = yield* randomId
-          const fullCommand: SteerCommand = {
-            ...command,
-            sessionId: s.sessionId,
-            branchId: s.branchId,
-            requestId,
-          }
-          return yield* client.steer.command({ command: fullCommand })
-        }),
-      )
-    },
+    }),
+    steer: Effect.fn("TUI.steer")(function* (s, command) {
+      const requestId = yield* randomId
+      const fullCommand: SteerCommand = {
+        ...command,
+        sessionId: s.sessionId,
+        branchId: s.branchId,
+        requestId,
+      }
+      yield* client.steer.command({ command: fullCommand })
+    }),
   }
 
   // Built once, for the life of the provider. Every accessor on it reads a

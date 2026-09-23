@@ -4,6 +4,7 @@ import {
   Effect,
   FileSystem,
   Option,
+  Order,
   Path,
   Predicate,
   Random,
@@ -119,7 +120,8 @@ const discoverDir = (
       }
     }
 
-    return results.sort((a, b) => a.filePath.localeCompare(b.filePath))
+    // Code-unit order, not the locale's, as the server discovers.
+    return results.sort((a, b) => Order.String(a.filePath, b.filePath))
   })
 
 /** Discover TUI extension files from user and project directories. */
@@ -378,11 +380,12 @@ export const resolveTuiExtensions = (
   loadFailures: ReadonlyArray<ClientExtensionFailure> = [],
 ): ResolvedTuiExtensions => {
   const failures = [...loadFailures]
-  // Sort by scope precedence, then by id for deterministic same-scope order (matches server)
+  // Scope precedence, then id in code-unit order, as the server sorts: the
+  // order picks the winner of a same-scope collision.
   const sorted = [...extensions].sort((a, b) => {
     const scopeDiff = SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope]
     if (scopeDiff !== 0) return scopeDiff
-    return a.id.localeCompare(b.id)
+    return Order.String(a.id, b.id)
   })
   const collected = <A>(
     // eslint-disable-next-line effect/noNullish -- extension contribution buckets may be omitted.
@@ -664,6 +667,30 @@ const importExtension = (
   )
 
 /**
+ * The server's duplicate-id rule: every extension that shares its id with
+ * another in the same scope fails, so neither half of a duplicate loads.
+ */
+const rejectDuplicateIds = (extensions: ReadonlyArray<ImportedExtension>) => {
+  const keyOf = (ext: ImportedExtension) => `${ext.scope}:${ext.module.id}`
+  const counts = new Map<string, number>()
+  for (const ext of extensions) {
+    const key = keyOf(ext)
+    counts.set(key, Option.getOrElse(Option.fromUndefinedOr(counts.get(key)), () => 0) + 1)
+  }
+  const unique: Array<ImportedExtension> = []
+  const failures: Array<ClientExtensionFailure> = []
+  for (const ext of extensions) {
+    if (Option.getOrElse(Option.fromUndefinedOr(counts.get(keyOf(ext))), () => 0) > 1) {
+      failures.push({
+        id: ext.module.id,
+        reason: `Duplicate extension id "${ext.module.id}" in scope "${ext.scope}"`,
+      })
+    } else unique.push(ext)
+  }
+  return { unique, failures }
+}
+
+/**
  * Load all TUI extensions: discover files, import modules, run setups, resolve
  * with scope precedence.
  *
@@ -697,11 +724,13 @@ export const loadTuiExtensions = (opts: {
         filePath: `builtin:${module.id}`,
       }),
     )
-    const enabled = [...builtins, ...imported].filter((ext) => !disabled.has(ext.module.id))
-    const [setupFailures, loaded] = yield* Effect.partition(enabled, (ext) =>
+    const enabled = rejectDuplicateIds(
+      [...builtins, ...imported].filter((ext) => !disabled.has(ext.module.id)),
+    )
+    const [setupFailures, loaded] = yield* Effect.partition(enabled.unique, (ext) =>
       setupExtension(ext, timeout),
     )
-    return resolveTuiExtensions(loaded, [...importFailures, ...setupFailures])
+    return resolveTuiExtensions(loaded, [...importFailures, ...enabled.failures, ...setupFailures])
   })
 
 // ── extension context ───────────────────────────────────────────────────────

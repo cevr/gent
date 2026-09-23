@@ -8,11 +8,12 @@ import {
   Exit,
   Fiber,
   Option,
-  type Path,
+  Path,
   Queue,
   Schema,
 } from "effect"
 import {
+  type ActiveExtensionSession,
   type AnyExtensionClientModule,
   AskUserRenderer,
   autocompleteContribution,
@@ -36,7 +37,6 @@ import {
   sessionQuery,
   shortId,
   statusLabelContribution,
-  textWidth,
   truncate,
   truncatePath,
   UserRow,
@@ -219,8 +219,8 @@ export const rankListed = <E,>(
  * fff ranks them and keeps the pick history. Where fff cannot run, the shared
  * matcher ranks the listing instead.
  *
- * The list is read when the popup opens (an empty filter) and reused for each
- * keystroke after, so typing does not relist the tree. A path is written as
+ * The list is read once per open (`onOpen`), whatever filter the popup opens
+ * on, and reused for each keystroke after, so typing does not relist the tree. A path is written as
  * the composer reads it back (`formatFileRef`), and a directory row completes
  * to `@dir/` so the popup keeps going inside it.
  */
@@ -259,20 +259,54 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
   setup: Effect.gen(function* () {
     const { workspace, transport, lifecycle } = yield* ClientContext
     const dbDir = `${workspace.home}/.gent/fff`
-    const finders = new Map<string, FinderEntry>()
-    lifecycle.addCleanup(() => {
-      for (const entry of finders.values()) entry.finder.destroy()
-      finders.clear()
-    })
-    const finderFor = Effect.fn("FilesPopup.finderFor")(function* (cwd: string) {
-      const existing = Option.fromUndefinedOr(finders.get(cwd))
-      if (Option.isSome(existing)) return existing.value
-      const fs = yield* FileSystem.FileSystem
-      yield* Effect.ignore(fs.makeDirectory(dbDir, { recursive: true }))
-      const entry = yield* createFinder(cwd, dbDir)
-      finders.set(cwd, entry)
-      return entry
-    })
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    type FinderClaim = Deferred.Deferred<FinderEntry, FileFinderUnavailableError | FileFinderError>
+    // One finder per directory. A key claims the directory before its first
+    // wait, so keys typed while the first listing is out join that creation.
+    const finders = new Map<string, FinderClaim>()
+    // The finders fff created, by directory, destroyed with the client runtime.
+    const ready = new Map<string, FinderEntry>()
+    let closed = false
+    yield* lifecycle.scoped(
+      Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          closed = true
+          for (const entry of ready.values()) entry.finder.destroy()
+          ready.clear()
+          finders.clear()
+        }),
+      ),
+    )
+    const createClaimed = (cwd: string, claim: FinderClaim) =>
+      Effect.ignore(fs.makeDirectory(dbDir, { recursive: true })).pipe(
+        Effect.andThen(createFinder(cwd, dbDir)),
+        Effect.tap((entry) =>
+          Effect.sync(() => {
+            // A finder that lands after teardown has no owner left to destroy it.
+            if (closed) entry.finder.destroy()
+            else ready.set(cwd, entry)
+          }),
+        ),
+        Effect.exit,
+        Effect.tap((exit) =>
+          Effect.sync(() => {
+            // A failed creation lets the next key try again.
+            if (Exit.isFailure(exit) && finders.get(cwd) === claim) finders.delete(cwd)
+          }),
+        ),
+        Effect.flatMap((exit) => Deferred.done(claim, exit)),
+        // The claim always settles, or every key waiting on it would hang.
+        Effect.uninterruptible,
+      )
+    const finderFor = (cwd: string) =>
+      Effect.suspend(() => {
+        const existing = Option.fromUndefinedOr(finders.get(cwd))
+        if (Option.isSome(existing)) return Deferred.await(existing.value)
+        const claim: FinderClaim = Deferred.makeUnsafe()
+        finders.set(cwd, claim)
+        return createClaimed(cwd, claim).pipe(Effect.andThen(Deferred.await(claim)))
+      }).pipe(Effect.withSpan("FilesPopup.finderFor"))
     // The directory the last ranking used, for recording the pick against it.
     let rankedIn = Option.none<string>()
     // The listing and the read in flight each belong to one session. A key
@@ -284,27 +318,45 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
       readonly session: string
       readonly fiber: Fiber.Fiber<ReadonlyArray<string>>
     }>()
-    const sessionKey = () =>
-      Option.match(transport.currentSession(), {
-        onNone: () => "",
-        onSome: (current) => String(current.sessionId),
-      })
-    const fetchListing = (session: string) =>
-      transport.request(ref(FilesRpc.List), {}).pipe(
+    // Each open starts a new listing generation; a read from an earlier open
+    // never becomes the listing of this one.
+    let opened = 0
+    /**
+     * The session a key was typed in, read once per key. The listing request
+     * names it, so a switch while the key is being served cannot send the
+     * request for the session switched to.
+     */
+    interface Asker {
+      readonly key: string
+      readonly session: Option.Option<ActiveExtensionSession>
+    }
+    const askingSession = (): Asker => {
+      const session = transport.currentSession()
+      return {
+        key: Option.match(session, { onNone: () => "", onSome: (s) => String(s.sessionId) }),
+        session,
+      }
+    }
+    const fetchListing = ({ key: session, session: asked }: Asker, generation: number) =>
+      Option.match(asked, {
+        onNone: () => Effect.succeed<ReadonlyArray<string>>([]),
+        onSome: (active) => transport.request(ref(FilesRpc.List), {}, active),
+      }).pipe(
         Effect.map((paths) => paths.filter(isReferenceablePath)),
         // A failed listing offers nothing until the popup opens again.
         Effect.orElseSucceed((): ReadonlyArray<string> => []),
         Effect.tap((paths) =>
           Effect.sync(() => {
-            listing = Option.some({ session, paths })
+            if (generation === opened) listing = Option.some({ session, paths })
           }),
         ),
       )
-    const readListing = (session: string) =>
+    const readListing = (asker: Asker) =>
       Effect.gen(function* () {
+        const session = asker.key
         const inFlight = Option.filter(pending, (read) => read.session === session)
         if (Option.isSome(inFlight)) return yield* Fiber.join(inFlight.value.fiber)
-        const fiber = yield* lifecycle.scoped(Effect.forkScoped(fetchListing(session)))
+        const fiber = yield* lifecycle.scoped(Effect.forkScoped(fetchListing(asker, opened)))
         pending = Option.some({ session, fiber })
         return yield* Fiber.join(fiber).pipe(
           Effect.ensuring(
@@ -314,11 +366,11 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
           ),
         )
       })
-    const listingFor = (session: string) =>
+    const listingFor = (asker: Asker) =>
       Option.match(
-        Option.filter(listing, (known) => known.session === session),
+        Option.filter(listing, (known) => known.session === asker.key),
         {
-          onNone: () => readListing(session),
+          onNone: () => readListing(asker),
           onSome: (known) => Effect.succeed(known.paths),
         },
       )
@@ -334,15 +386,14 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
       title: "Files",
       items: (filter: string) =>
         Effect.gen(function* () {
-          const session = sessionKey()
+          const asker = askingSession()
           const cwd = yield* workspace.sessionCwd
+          const paths = yield* listingFor(asker)
           if (filter.length === 0) {
-            const paths = yield* readListing(session)
             // Opening the popup starts the scan, so the first typed key finds it ready.
             yield* lifecycle.scoped(Effect.forkScoped(Effect.ignore(finderFor(cwd))))
             return topLevel(paths).slice(0, MAX_RESULTS).map(formatMatch)
           }
-          const paths = yield* listingFor(session)
           const ranked = yield* finderFor(cwd).pipe(
             Effect.tap((entry) => entry.scanned),
             Effect.flatMap((entry) =>
@@ -367,15 +418,29 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
           )
           return ranked.map(formatMatch)
         }),
+      // The listing lives for one open: whatever filter the popup opens on,
+      // it ranks a list read since then.
+      onOpen: () => {
+        opened++
+        listing = Option.none()
+        pending = Option.none()
+      },
       formatInsertion: (id: string) => {
-        // A directory keeps completing inside itself; a file ends the reference.
-        if (id.endsWith("/")) return formatFileRef(id)
-        return `${formatFileRef(id)} `
+        // A file ends the reference. A directory keeps completing inside
+        // itself, so a quoted one leaves its quote open for the next segment.
+        if (!id.endsWith("/")) return `${formatFileRef(id)} `
+        const ref = formatFileRef(id)
+        if (ref.endsWith('"')) return ref.slice(0, -1)
+        return ref
       },
       onSelect: (id: string, filter: string) => {
         if (id.endsWith("/")) return
-        const entry = Option.flatMap(rankedIn, (cwd) => Option.fromUndefinedOr(finders.get(cwd)))
-        if (Option.isSome(entry)) entry.value.finder.trackQuery(filter, id)
+        if (Option.isNone(rankedIn)) return
+        const cwd = rankedIn.value
+        const entry = Option.fromUndefinedOr(ready.get(cwd))
+        // fff resolves a relative path against the process's directory, not
+        // the finder's, so the pick names the session's file absolutely.
+        if (Option.isSome(entry)) entry.value.finder.trackQuery(filter, path.resolve(cwd, id))
       },
     })
   }),
@@ -581,14 +646,11 @@ export const builtinDriver = defineClientExtension("@gent/driver-ui", {
         .driverClear({ agentName })
         .pipe(Effect.catch((error) => notify(`Failed to clear driver override: ${String(error)}`)))
 
+    // The server names an unknown driver id in its rejection.
     const setDriver = (agentName: AgentName, driverId: string) =>
-      Effect.gen(function* () {
-        const { drivers } = yield* transport.driverList
-        if (!drivers.some((driver) => driver.id === driverId)) {
-          return yield* notify(`Unknown driver "${driverId}".`)
-        }
-        yield* transport.driverSet({ agentName, driver: DriverRef.make({ id: driverId }) })
-      }).pipe(Effect.catch((error) => notify(`Failed to set driver: ${String(error)}`)))
+      transport
+        .driverSet({ agentName, driver: DriverRef.make({ id: driverId }) })
+        .pipe(Effect.catch((error) => notify(`Failed to set driver: ${String(error)}`)))
 
     const route = (args: string): Effect.Effect<void> => {
       const parts = args.trim().split(/\s+/)
@@ -675,19 +737,9 @@ const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDet
 /** The sender line fits the id: an auto-named child carries its whole task in the name. */
 const SENDER_NAME_MAX_COLUMNS = 32
 
-const graphemes = new Intl.Segmenter([], { granularity: "grapheme" })
-
-/** Cuts by terminal columns and whole graphemes, so a wide or combined character is never split. */
-const shortName = (name: string): string => {
-  const flat = name.replace(/\s+/g, " ").trim()
-  if (textWidth(flat) <= SENDER_NAME_MAX_COLUMNS) return flat
-  let kept = ""
-  for (const { segment } of graphemes.segment(flat)) {
-    if (textWidth(kept + segment) > SENDER_NAME_MAX_COLUMNS - 1) break
-    kept += segment
-  }
-  return `${kept.trimEnd()}…`
-}
+/** Collapses runs of whitespace, then cuts by terminal columns via `truncate`. */
+const shortName = (name: string): string =>
+  truncate(name.replace(/\s+/g, " ").trim(), SENDER_NAME_MAX_COLUMNS)
 
 /** Who wrote a sent message: the relation, the cut name, and the short session id. */
 const senderLine = ({ from }: SessionMessageDetails): string => {
@@ -755,15 +807,19 @@ const builtinInteractions = defineClientExtension("@gent/interaction-tools", {
 
 // ── builtin module registry ─────────────────────────────────────────────────
 
-const builtinSkills = defineClientExtension("@gent/skills-ui", {
+export const builtinSkills = defineClientExtension("@gent/skills-ui", {
   setup: Effect.gen(function* () {
-    const { workspace } = yield* ClientContext
+    const { workspace, lifecycle } = yield* ClientContext
     // The store's reads and writes need `FileSystem` and `Path`. `onSelect`
     // is a plain sync callback from the composer with no Effect context of
-    // its own, so the setup captures the services once and forks the write
-    // against them.
+    // its own, so the setup captures the services once. The write runs in the
+    // provider's scope and cannot be cut short, so closing the TUI waits for a
+    // pick made just before it instead of dropping it.
     const storeServices = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
-    const forkStoreWrite = Effect.runForkWith(storeServices)
+    const forkStoreWrite = (write: Effect.Effect<void, never, FileSystem.FileSystem | Path.Path>) =>
+      Effect.runForkWith(storeServices)(
+        lifecycle.scoped(Effect.forkScoped(write, { uninterruptible: true })),
+      )
     return autocompleteContribution({
       prefix: "$",
       title: "Skills",

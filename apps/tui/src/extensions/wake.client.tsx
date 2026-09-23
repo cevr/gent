@@ -194,6 +194,13 @@ export default defineClientExtension(WAKE_EXTENSION_ID, {
         if (REFRESH_EVENTS.has(envelope.event._tag)) pending.refresh()
       }),
     )
+    // The server pulses `@gent/wake` when an entry is added, fires or is
+    // cancelled, so the tray changes on the pulse, not the next poll.
+    lifecycle.addCleanup(
+      transport.onExtensionStateChanged((pulse) => {
+        if (pulse.extensionId === WAKE_EXTENSION_ID) pending.refresh()
+      }),
+    )
 
     const nowMillis = () => DateTime.toEpochMillis(DateTime.nowUnsafe())
 

@@ -26,6 +26,7 @@ import {
   formatToolInput,
   getString,
   isAbsPath,
+  parseBashOutput,
   plural,
   shortId,
   toolArgSummary,
@@ -450,36 +451,6 @@ function SummaryLine(props: { toolCall: ToolCall }) {
       {(summary) => <text style={{ fg: theme.textMuted }}>{summary()}</text>}
     </Show>
   )
-}
-
-interface BashOutput {
-  readonly stdout: string
-  readonly stderr: string
-  readonly exitCode: number
-  /**
-   * `blocked`: the guardrail asked and the user said no, so the command never
-   * ran. `background`: it runs on past the call. Neither has a real exit code.
-   */
-  readonly status: Option.Option<"blocked" | "background">
-}
-
-const BashOutputSchema = Schema.Struct({
-  stdout: Schema.optional(Schema.String),
-  stderr: Schema.optional(Schema.String),
-  exitCode: Schema.Finite,
-  status: Schema.optional(Schema.Literals(["blocked", "background"])),
-})
-
-/** The one bash result decoder: a row's header, its count and its body all read it. */
-export function parseBashOutput(
-  output: ToolRendererProps["toolCall"]["output"],
-): Option.Option<BashOutput> {
-  return Option.map(decodeToolOutputOption(BashOutputSchema, output), (decoded) => ({
-    stdout: decoded["stdout"] ?? "",
-    stderr: decoded["stderr"] ?? "",
-    exitCode: decoded["exitCode"],
-    status: Option.fromUndefinedOr(decoded["status"]),
-  }))
 }
 
 /**

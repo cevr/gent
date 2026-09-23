@@ -33,6 +33,7 @@ const BashOutputJson = Schema.fromJsonString(
     stdout: Schema.String,
     stderr: Schema.String,
     exitCode: Schema.Finite,
+    status: Schema.optional(Schema.Literals(["blocked", "background"])),
   }),
 )
 const encodeBashOutput = Schema.encodeSync(BashOutputJson)
@@ -542,6 +543,34 @@ describe("runHeadless", () => {
       expect(captured.stdout).toContain("line 19")
       expect(captured.stdout).toContain("[8 lines truncated]")
       expect(captured.stdout).not.toContain('"stdout"')
+    }),
+  )
+
+  // Headless declines a guarded command when no user is present. The tool
+  // reports it as blocked with exit code 1; the command never ran.
+  headlessTest("a declined bash command prints as declined, not as an exit code", () =>
+    Effect.sync(() => {
+      const rendered = renderHeadlessToolCall({
+        toolName: "bash",
+        status: "completed",
+        input: Option.some({ command: "echo guarded" }),
+        output: Option.some(
+          encodeBashOutput({ stdout: "", stderr: "", exitCode: 1, status: "blocked" }),
+        ),
+        summary: Option.none(),
+      })
+      expect(rendered).toContain("[tool declined: bash]")
+      expect(rendered).not.toContain("exit 1")
+      const background = renderHeadlessToolCall({
+        toolName: "bash",
+        status: "completed",
+        input: Option.some({ command: "sleep 100" }),
+        output: Option.some(
+          encodeBashOutput({ stdout: "", stderr: "", exitCode: 0, status: "background" }),
+        ),
+        summary: Option.none(),
+      })
+      expect(background).toContain("[tool done: bash in background]")
     }),
   )
 

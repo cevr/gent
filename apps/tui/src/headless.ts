@@ -22,6 +22,7 @@ import {
 import {
   CellOperationReceipts,
   formatGenericToolText,
+  parseBashOutput,
   toolArgSummary,
   type ToolInput,
 } from "./utils.js"
@@ -60,13 +61,9 @@ const parseJsonObject = (text: Option.Option<string>) =>
   text.pipe(Option.flatMap(Schema.decodeUnknownOption(JsonObject)))
 
 const decodeString = Schema.decodeUnknownOption(Schema.String)
-const decodeNumber = Schema.decodeUnknownOption(Schema.Finite)
 
 const getString = (record: Schema.JsonObject, key: string): string =>
   Option.getOrElse(decodeString(record[key]), () => "")
-
-const getNumber = (record: Schema.JsonObject, key: string): Option.Option<number> =>
-  decodeNumber(record[key])
 
 const renderGeneric: HeadlessToolRenderer = (toolCall) => {
   const summary = inputSummary(toolCall.toolName, toolCall.input)
@@ -93,21 +90,22 @@ const BashHeadlessToolRenderer: HeadlessToolRenderer = (toolCall) => {
     return Option.some("[tool: bash]")
   }
 
-  const parsed = parseJsonObject(toolCall.output)
+  const parsed = parseBashOutput(Option.getOrUndefined(toolCall.output))
   if (Option.isNone(parsed)) return renderGeneric(toolCall)
 
-  const stdout = getString(parsed.value, "stdout")
-  const stderr = getString(parsed.value, "stderr")
-  const exitCode = getNumber(parsed.value, "exitCode")
+  const { stdout, stderr, exitCode } = parsed.value
+  // A declined command never ran and a background one has not ended: the
+  // tool's own words, not an exit code it never had.
+  if (Option.contains(parsed.value.status, "blocked")) {
+    return Option.some("[tool declined: bash]")
+  }
+  let exit = ` exit ${exitCode}`
+  if (Option.contains(parsed.value.status, "background")) exit = " in background"
   let combined = stdout
   if (stderr.length > 0) combined = `${stdout}\n${stderr}`
   const lines = combined.split("\n").filter((line) => line.length > 0)
   let status = "done"
   if (toolCall.status === "error") status = "error"
-  const exit = Option.match(exitCode, {
-    onNone: () => "",
-    onSome: (value) => ` exit ${value}`,
-  })
   const renderedOutput = formatHeadTail(lines, 12)
 
   if (renderedOutput.length === 0) return Option.some(`[tool ${status}: bash${exit}]`)

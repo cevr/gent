@@ -8,6 +8,7 @@ import {
   formatPreviewFooter,
   formatRowCounts,
   getString,
+  parseBashOutput,
   plural,
   previewOutput,
   workingIconFrame,
@@ -42,7 +43,6 @@ import type { ScrollBoxRenderable, ScrollbackSurface, SyntaxStyle } from "@opent
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import {
   bashOutputRows,
-  parseBashOutput,
   cellOperations,
   GenericToolRenderer,
   RegisteredToolCall,

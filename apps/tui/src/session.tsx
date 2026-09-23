@@ -61,6 +61,7 @@ import type { RGBA } from "@opentui/core"
 import {
   type ClientContextValue,
   type ClientLog,
+  sameIdentity,
   type SessionIdentity,
   type SessionMetrics,
   shutdownLog,
@@ -77,6 +78,7 @@ import {
   transitionPromptSearch,
 } from "./pickers"
 import {
+  type GentClientRpcError,
   type MessageSegment,
   type ProjectedMessage,
   type QueueEntryInfo,
@@ -397,20 +399,20 @@ const deriveAutocomplete = (
   if (prefixes.length === 0) return Option.none()
 
   const escaped = prefixes.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-  const regex = new RegExp(`(?:^|[\\s])([${escaped.join("")}])([^\\s]*)$`)
+  // The filter is a bare run (`@src/a`) or an open quote to the end
+  // (`@"my dir/no`), which a quoted directory row leaves behind.
+  const regex = new RegExp(`(?:^|[\\s])([${escaped.join("")}])("[^"]*|[^\\s]*)$`)
   return Option.fromNullishOr(regex.exec(text)).pipe(
     Option.flatMap((match) =>
-      Option.all([
-        Option.fromNullishOr(match[0]),
-        Option.fromNullishOr(match[1]),
-        Option.fromNullishOr(match[2]),
-      ]),
+      Option.all([Option.fromNullishOr(match[1]), Option.fromNullishOr(match[2])]),
     ),
-    Option.flatMap(([fullMatch, prefix, filter]) => {
+    Option.flatMap(([prefix, typed]) => {
       if (prefix.length === 0) return Option.none()
-      let leadingWhitespaceLength = 0
-      if (fullMatch.startsWith(" ")) leadingWhitespaceLength = 1
-      const triggerPos = text.length - fullMatch.length + leadingWhitespaceLength
+      // The trigger ends the text, so it starts where the prefix and filter
+      // do. Any whitespace before it (a space, a newline, a tab) stays.
+      const triggerPos = text.length - prefix.length - typed.length
+      let filter = typed
+      if (typed.startsWith('"')) filter = typed.slice(1)
 
       if (prefix === "/" && triggerPos !== 0) return Option.none()
       return Option.some({ type: prefix, filter, triggerPos })
@@ -528,9 +530,89 @@ interface ComposerDrafts {
   readonly set: (branchId: BranchId, draft: ComposerDraft) => void
 }
 
+/** A submission its session refused. `order` is its place among the branch's sends. */
+interface RefusedSubmission {
+  readonly order: number
+  readonly text: string
+  readonly shell: boolean
+}
+
+/** The composer on screen for a branch: what it holds, and how to replace it. */
+interface ComposerLink {
+  readonly current: () => ComposerDraft
+  readonly apply: (draft: ComposerDraft) => void
+}
+
+/**
+ * Refused submissions go back to the draft of the branch they were sent from:
+ * into its composer when one is on screen, into its kept draft when not. None
+ * is lost, and several come back in the order they were sent, ahead of what
+ * the reader has typed since.
+ */
+interface ComposerRefusals {
+  /** The next submission's place in send order. */
+  readonly nextOrder: () => number
+  readonly link: (branchId: BranchId, link: ComposerLink) => () => void
+  readonly refuse: (branchId: BranchId, refused: RefusedSubmission) => void
+  /** A submit took the whole draft, refused texts included. */
+  readonly submitted: (branchId: BranchId) => void
+}
+
 interface ComposerMemory {
   readonly drafts: ComposerDrafts
+  readonly refusals: ComposerRefusals
   readonly history: PromptHistoryStore
+}
+
+/** The refused texts the draft starts with, as last written there. */
+interface RefusedBlock {
+  readonly entries: ReadonlyArray<RefusedSubmission>
+  readonly shown: string
+}
+
+const EMPTY_REFUSED_BLOCK: RefusedBlock = { entries: [], shown: "" }
+const REFUSED_SEPARATOR = "\n\n"
+
+/**
+ * Put a refused submission into a draft. While the draft still starts with
+ * the refused texts written there before, the new one joins them in send
+ * order; once the reader has edited them, it goes ahead of the whole draft.
+ * A draft of shell commands only stays in shell mode; a mixed one is a
+ * message, each command written with its `!`.
+ */
+interface RefusedMerge {
+  readonly draft: ComposerDraft
+  readonly block: RefusedBlock
+}
+
+export const mergeRefused = (
+  current: ComposerDraft,
+  block: RefusedBlock,
+  refused: RefusedSubmission,
+): RefusedMerge => {
+  // The block stands whole: the draft is it, or it and then a separator.
+  const kept =
+    block.shown.length > 0 &&
+    (current.draft === block.shown ||
+      current.draft.startsWith(`${block.shown}${REFUSED_SEPARATOR}`))
+  let entries: ReadonlyArray<RefusedSubmission> = [refused]
+  let typed = current.draft
+  if (kept) {
+    entries = [...block.entries, refused].toSorted((a, b) => a.order - b.order)
+    typed = current.draft.slice(block.shown.length + REFUSED_SEPARATOR.length)
+  }
+  const hasTyped = typed.trim().length > 0
+  const allShell = entries.every((entry) => entry.shell) && (!hasTyped || current.mode === "shell")
+  const render = (text: string, shell: boolean) => {
+    if (shell && !allShell) return `!${text}`
+    return text
+  }
+  const shown = entries.map((entry) => render(entry.text, entry.shell)).join(REFUSED_SEPARATOR)
+  let draft = shown
+  if (hasTyped) draft = `${shown}${REFUSED_SEPARATOR}${render(typed, current.mode === "shell")}`
+  let mode: ComposerDraft["mode"] = "editing"
+  if (allShell) mode = "shell"
+  return { draft: { draft, mode }, block: { entries, shown } }
 }
 
 const ComposerMemoryContext = createContext<ComposerMemory>()
@@ -547,7 +629,43 @@ export function ComposerMemoryProvider(props: ParentProps) {
       byBranch.set(branchId, draft)
     },
   }
-  const value: ComposerMemory = { drafts, history: makePromptHistoryStore() }
+  const links = new Map<BranchId, ComposerLink>()
+  const blocks = new Map<BranchId, RefusedBlock>()
+  let sent = 0
+  const refusals: ComposerRefusals = {
+    nextOrder: () => sent++,
+    link: (branchId, link) => {
+      links.set(branchId, link)
+      return () => {
+        if (links.get(branchId) === link) links.delete(branchId)
+      }
+    },
+    refuse: (branchId, refused) => {
+      const live = Option.fromUndefinedOr(links.get(branchId))
+      const current = Option.match(live, {
+        onSome: (link) => link.current(),
+        onNone: () =>
+          Option.getOrElse(drafts.get(branchId), (): ComposerDraft => ({
+            draft: "",
+            mode: "editing",
+          })),
+      })
+      const merged = mergeRefused(
+        current,
+        Option.getOrElse(Option.fromUndefinedOr(blocks.get(branchId)), () => EMPTY_REFUSED_BLOCK),
+        refused,
+      )
+      blocks.set(branchId, merged.block)
+      Option.match(live, {
+        onSome: (link) => link.apply(merged.draft),
+        onNone: () => drafts.set(branchId, merged.draft),
+      })
+    },
+    submitted: (branchId) => {
+      blocks.delete(branchId)
+    },
+  }
+  const value: ComposerMemory = { drafts, refusals, history: makePromptHistoryStore() }
   return (
     <ComposerMemoryContext.Provider value={value}>{props.children}</ComposerMemoryContext.Provider>
   )
@@ -555,6 +673,8 @@ export function ComposerMemoryProvider(props: ParentProps) {
 
 const useComposerMemory = () =>
   useRequiredContext(ComposerMemoryContext, "The composer requires ComposerMemoryProvider")
+
+export const useComposerRefusals = () => useComposerMemory().refusals
 
 const useComposerDrafts = () => useComposerMemory().drafts
 
@@ -2413,8 +2533,15 @@ export interface SessionController {
   phaseLabel: () => string
   elapsed: () => number
   onComposerInteraction: (event: ComposerInteractionEvent) => void
-  /** Send a submission to the session it was drafted in (`target`), never "the current one". */
-  onSubmit: (content: string, mode: "queue" | "interject", target: SessionIdentity) => void
+  /**
+   * Send a submission to the session it was drafted in (`target`), never "the
+   * current one". A rejected submission fails, and the composer gives it back.
+   */
+  onSubmit: (
+    content: string,
+    mode: "queue" | "interject",
+    target: SessionIdentity,
+  ) => Effect.Effect<void, GentClientRpcError>
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
   onRestoreQueue: () => void
   dispatchComposer: (event: ComposerEvent) => void
@@ -2902,23 +3029,25 @@ export function createSessionController(props: {
     )
   }
 
-  const onSubmit = (content: string, mode: "queue" | "interject", target: SessionIdentity) => {
+  const onSubmit = (
+    content: string,
+    mode: "queue" | "interject",
+    target: SessionIdentity,
+  ): Effect.Effect<void, GentClientRpcError> => {
     // Interjecting steers the stream in view, so it holds only while the
     // drafted-in session is still the one streaming; otherwise the message queues there.
-    const stillHere = Option.exists(
-      client.sessionIdentity(),
-      (current) => current.sessionId === target.sessionId && current.branchId === target.branchId,
+    const stillHere = Option.exists(client.sessionIdentity(), (current) =>
+      sameIdentity(current, target),
     )
     if (mode === "interject" && stillHere && client.isStreaming()) {
-      client.steer(target, SteerCommandInput.cases.Interject.make({ message: content }))
-      return
+      return client.steer(target, SteerCommandInput.cases.Interject.make({ message: content }))
     }
-    client.sendMessage(target, content)
+    return client.sendMessage(target, content)
   }
   /** Cancel the turn streaming in the session in view. */
   const cancelTurn = () => {
     Option.map(client.sessionIdentity(), (target) =>
-      client.steer(target, SteerCommandInput.cases.Cancel.make({})),
+      cast(client.steer(target, SteerCommandInput.cases.Cancel.make({})).pipe(client.surfaceError)),
     )
   }
 

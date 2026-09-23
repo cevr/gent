@@ -148,7 +148,7 @@ const gentFlags = {
     Flag.withDefault(false),
   ),
   isolate: Flag.boolean("isolate").pipe(
-    Flag.withDescription("Run with an in-process server (no shared server, no registry)"),
+    Flag.withDescription("Run with an in-process server (no data-directory server, no registry)"),
     Flag.withDefault(false),
   ),
   debug: Flag.boolean("debug").pipe(
@@ -231,6 +231,14 @@ const runGent = ({
       })
     }
 
+    // Marked before anything slow runs: a signal while the bundle resolves
+    // (it can start a server) still exits the way a headless run does.
+    if (headless) {
+      yield* Effect.sync(() => {
+        cliRun.headless = true
+      })
+    }
+
     const cwd = process.cwd()
     const home = yield* readHome
     const scope = yield* Effect.scope
@@ -273,9 +281,6 @@ const runGent = ({
       authDirectory: authDirectoryOpt,
     })
     if (headless) {
-      yield* Effect.sync(() => {
-        cliRun.headless = true
-      })
       // The agent is a session property: the flag shapes a new session only.
       if (Option.isSome(requestedAgent) && Option.isSome(session)) {
         return yield* new CliStartupError({

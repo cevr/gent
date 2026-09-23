@@ -14,7 +14,6 @@ import {
   type AgentName,
   type ApprovalResult,
   type BranchId,
-  type DriverListResult,
   type EventEnvelope,
   type ImagePartProjection,
   type Message,
@@ -33,11 +32,11 @@ import type { RGBA } from "@opentui/core"
 // ── effect boundary ─────────────────────────────────────────────────────────
 
 /**
- * ClientEffect — the Effect-typed authoring surface for TUI client extensions.
+ * The Effect-typed authoring surface for TUI client extensions.
  *
  * Extension setup reads dependencies from `ClientDeps` and returns
- * `ClientContributions` through an Effect, with errors surfaced
- * on the typed `ClientSetupError` channel.
+ * `ClientContributions` through an Effect. A setup that dies is recorded as
+ * that extension's load failure; the rest still load.
  *
  * The runtime accepts only the Effect setup shape.
  *
@@ -54,15 +53,6 @@ import type { RGBA } from "@opentui/core"
  * `GentRuntime`) live downstream of `@gent/core`.
  */
 
-// ── Errors ────────────────────────────────────────────────────────────────
-
-/** Failure surfaced from a client extension's `setup` Effect. */
-export class ClientSetupError extends Schema.TaggedError<ClientSetupError>()("ClientSetupError", {
-  extensionId: Schema.String,
-  message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
-
 // ── Dependencies ──────────────────────────────────────────────────────────
 
 /**
@@ -73,21 +63,6 @@ export class ClientSetupError extends Schema.TaggedError<ClientSetupError>()("Cl
  * extension that yields it declares a wider `R`.
  */
 type ClientDeps = FileSystem.FileSystem | Path.Path
-
-// ── ClientEffect ──────────────────────────────────────────────────────────
-
-/**
- * An Effect that returns a value, may fail with `ClientSetupError`, and may
- * read from any subset of services its runtime provides. `R` defaults to
- * `ClientDeps` — the floor — so a setup that only needs `FileSystem`/`Path`
- * compiles without ceremony. An extension that yields `ClientContext` widens
- * `R` itself; the loader's runtime provides it.
- */
-export type ClientEffect<Value, Error = ClientSetupError, Services = ClientDeps> = Effect.Effect<
-  Value,
-  Error,
-  Services
->
 
 // ── activity facet ──────────────────────────────────────────────────────────
 
@@ -143,7 +118,7 @@ export interface ExtensionAgentDetail {
  *
  *   ```ts
  *   import { Effect } from "effect"
- *   import { ClientContext, defineClientExtension } from "./client-facets"
+ *   import { ClientContext, defineClientExtension } from "@gent/tui/extensions"
  *
  *   export default defineClientExtension("@gent/x", {
  *     setup: Effect.gen(function* () {
@@ -201,8 +176,6 @@ export interface ClientTransport {
   readonly listMessages: (
     branchId: BranchId,
   ) => Effect.Effect<ReadonlyArray<Message>, ClientTransportRequestError>
-  /** Every registered driver plus the per-agent override map. */
-  readonly driverList: Effect.Effect<DriverListResult, ClientTransportRequestError>
   /** Route one agent to a driver; the server rejects unknown driver ids. */
   readonly driverSet: (input: {
     readonly agentName: AgentName
@@ -246,11 +219,6 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   listMessages: (branchId) =>
     shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
   // Drivers belong to the active session's profile: its project drivers count.
-  driverList: Effect.suspend(() =>
-    shellRead(payload, "driver.list", (client) =>
-      client.driver.list(activeSessionPayload(payload)),
-    ),
-  ),
   driverSet: (input) =>
     shellRead(payload, "driver.set", (client) =>
       client.driver.set({ ...input, ...activeSessionPayload(payload) }),
@@ -795,6 +763,12 @@ export interface AutocompleteContribution {
   readonly formatInsertion?: (id: string) => string
   /** Called after an item is selected. Use for side effects like frecency tracking. */
   readonly onSelect?: (id: string, filter: string) => void
+  /**
+   * Called each time the popup opens on this prefix, before its first
+   * `items`. A source that caches between keys drops the cache here, so the
+   * reader never ranks a list older than the popup, whatever filter it opens on.
+   */
+  readonly onOpen?: () => void
 }
 
 // ── Buckets ──
@@ -908,12 +882,13 @@ export const autocompleteContribution = (opts: AutocompleteContribution): Client
  * A client extension's setup is an Effect that yields its dependencies
  * from the per-provider TUI runtime — `ClientDeps` (FileSystem | Path) by
  * default, widened to `ClientContext` when the extension yields it; the
- * per-provider `ManagedRuntime` provides it. Errors flow on the typed
- * `ClientSetupError` channel.
+ * per-provider `ManagedRuntime` provides it. The setup handles its own
+ * failures; one that dies anyway is that extension's load failure, since the
+ * loader catches the whole cause and names it, and the rest still load.
  */
-type ExtensionClientSetup<Services extends ClientRuntimeServices = ClientDeps> = ClientEffect<
+type ExtensionClientSetup<Services extends ClientRuntimeServices = ClientDeps> = Effect.Effect<
   ClientContributions,
-  ClientSetupError,
+  never,
   Services
 >
 

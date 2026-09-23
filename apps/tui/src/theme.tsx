@@ -1,5 +1,5 @@
 import { RGBA, SyntaxStyle, type TerminalColors } from "@opentui/core"
-import { Config, Effect, Option, Predicate, Record } from "effect"
+import { Config, Effect, Fiber, Option, Predicate, Record } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { GentPlatform } from "@gent/core/host"
 import { createContext, createMemo, type JSX, onCleanup, onMount, untrack } from "solid-js"
@@ -529,22 +529,36 @@ export function ThemeProvider(props: ThemeProviderProps) {
 
   onMount(init)
 
+  // One palette read at a time: a new read (SIGUSR2) replaces the one in
+  // flight, and unmount stops it, so a late reply never writes the store.
+  let paletteRead = Option.none<Fiber.Fiber<void>>()
+  const stopPaletteRead = () => {
+    if (Option.isSome(paletteRead)) Effect.runFork(Fiber.interrupt(paletteRead.value))
+    paletteRead = Option.none()
+  }
+  onCleanup(stopPaletteRead)
+
+  const keepDefault = () => {
+    if (store.active === "system") setStore("active", "fx")
+  }
+
   function resolveSystemTheme() {
-    renderer
-      .getPalette({ size: 16 })
-      .then((colors) => {
-        const firstColor = Option.fromNullishOr(colors.palette[0])
-        if (Option.isNone(firstColor)) {
-          // Keep the default when the terminal does not report its palette.
-          if (store.active === "system") setStore("active", "fx")
-          return
-        }
-        setStore("themes", "system", generateSystemTheme(colors, store.mode))
-      })
-      .catch(() => {
-        // Keep the default when palette detection fails.
-        if (store.active === "system") setStore("active", "fx")
-      })
+    stopPaletteRead()
+    paletteRead = Option.some(
+      Effect.runFork(
+        Effect.tryPromise(() => renderer.getPalette({ size: 16 })).pipe(
+          Effect.match({
+            // Keep the default when palette detection fails.
+            onFailure: keepDefault,
+            onSuccess: (colors) => {
+              // Keep the default when the terminal does not report its palette.
+              if (Option.isNone(Option.fromNullishOr(colors.palette[0]))) return keepDefault()
+              setStore("themes", "system", generateSystemTheme(colors, store.mode))
+            },
+          }),
+        ),
+      ),
+    )
   }
 
   // Listen for SIGUSR2 to refresh palette

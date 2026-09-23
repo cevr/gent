@@ -24,6 +24,7 @@ import {
   transitionComposerInteraction,
   transitionSessionUi,
   writeEntries,
+  mergeRefused,
 } from "../src/session"
 import type { AutocompleteContribution } from "../src/extensions/client-facets"
 import {
@@ -44,6 +45,40 @@ const testContributions: AutocompleteContribution[] = [
   { prefix: "@", title: "Files", items: () => [] },
   { prefix: "/", title: "Commands", items: () => [] },
 ]
+
+describe("refused submissions", () => {
+  const empty = { entries: [], shown: "" }
+  const editing = (draft: string) =>
+    ({ draft, mode: "editing" }) satisfies Parameters<typeof mergeRefused>[0]
+
+  test("a refusal that lands after an earlier one's text was edited goes ahead of the whole draft", () => {
+    const first = mergeRefused(editing(""), empty, { order: 0, text: "one", shell: false })
+    const edited = mergeRefused(editing("one, edited"), first.block, {
+      order: 1,
+      text: "two",
+      shell: false,
+    })
+    expect(edited.draft).toEqual(editing("two\n\none, edited"))
+  })
+
+  test("refusals keep send order ahead of what the reader typed since", () => {
+    const second = mergeRefused(editing(""), empty, { order: 1, text: "two", shell: false })
+    const typed = `${second.draft.draft}\n\ntyped`
+    const first = mergeRefused(editing(typed), second.block, {
+      order: 0,
+      text: "one",
+      shell: false,
+    })
+    expect(first.draft).toEqual(editing("one\n\ntwo\n\ntyped"))
+  })
+
+  test("a refused command alone stays a command; beside a message it keeps its bang", () => {
+    const alone = mergeRefused(editing(""), empty, { order: 0, text: "ls", shell: true })
+    expect(alone.draft).toEqual({ draft: "ls", mode: "shell" })
+    const mixed = mergeRefused(editing("hello"), empty, { order: 1, text: "ls", shell: true })
+    expect(mixed.draft).toEqual(editing("!ls\n\nhello"))
+  })
+})
 
 describe("transitionComposerInteraction", () => {
   test("derives mention autocomplete from draft changes", () => {
@@ -85,6 +120,44 @@ describe("transitionComposerInteraction", () => {
       testContributions,
     )
     expect(next.autocomplete).toEqual(Option.some({ type: "$", filter: "eff", triggerPos: 4 }))
+  })
+
+  // The trigger sits after the separator, whatever whitespace it is, so a
+  // completion keeps the newline or tab in front of it.
+  test("a trigger after a newline or a tab keeps the separator before it", () => {
+    for (const text of ["line one\n@src", "line one\t@src"]) {
+      const next = transitionComposerInteraction(
+        ComposerInteractionState.initial(),
+        { _tag: "DraftChanged", text },
+        testContributions,
+      )
+      expect(next.autocomplete).toEqual(Option.some({ type: "@", filter: "src", triggerPos: 9 }))
+    }
+    const skill = transitionComposerInteraction(
+      ComposerInteractionState.initial(),
+      { _tag: "DraftChanged", text: "one\n$eff" },
+      testContributions,
+    )
+    expect(skill.autocomplete).toEqual(Option.some({ type: "$", filter: "eff", triggerPos: 4 }))
+  })
+
+  // A quoted directory row inserts `@"my dir/` with its quote still open, so
+  // the popup keeps going inside it; the filter is the text after the quote.
+  test("an open quote after a trigger is one filter, spaces included", () => {
+    const next = transitionComposerInteraction(
+      ComposerInteractionState.initial(),
+      { _tag: "DraftChanged", text: 'see @"my dir/no' },
+      testContributions,
+    )
+    expect(next.autocomplete).toEqual(
+      Option.some({ type: "@", filter: "my dir/no", triggerPos: 4 }),
+    )
+    const closed = transitionComposerInteraction(
+      ComposerInteractionState.initial(),
+      { _tag: "DraftChanged", text: 'see @"my notes.md" ' },
+      testContributions,
+    )
+    expect(Option.isNone(closed.autocomplete)).toBe(true)
   })
 
   test("does not detect unregistered prefix", () => {

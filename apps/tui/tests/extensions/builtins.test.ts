@@ -1,13 +1,16 @@
+import { FileFinder } from "@ff-labs/fff-bun"
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   builtinDriver,
   builtinHerdr,
   builtinFiles,
+  builtinSkills,
   FINDER_PAGE_BUDGET,
   getFileTag,
   makeHerdrReporter,
   rankListed,
 } from "../../src/extensions/builtins"
+import { readFrecencyStore } from "../../src/autocomplete"
 import { BunServices } from "@effect/platform-bun"
 import {
   ConfigProvider,
@@ -24,7 +27,6 @@ import {
   Scope,
 } from "effect"
 import { AgentName, BranchId, DriverRef, SessionId } from "@gent/core/protocol"
-import { testAgent } from "@gent/core/test-utils"
 import {
   type AutocompleteItem,
   type ClientActivitySnapshot,
@@ -136,6 +138,11 @@ const withFilesPopup = <A>(
       filter: string,
     ) => Effect.Effect<ReadonlyArray<AutocompleteItem>, never, ClientRuntimeServices>
     readonly insertion: (id: string) => string
+    readonly select: (id: string, filter: string) => void
+    /** What the popup does when it mounts. */
+    readonly open: () => void
+    /** The server's listing from now on. */
+    readonly relist: (next: ReadonlyArray<string>) => void
     readonly reads: () => number
   }) => Effect.Effect<A, never, ClientRuntimeServices>,
   options: {
@@ -156,6 +163,7 @@ const withFilesPopup = <A>(
       yield* fs.writeFileString(path.join(sessionCwd, file), file)
     }
     let reads = 0
+    let listed = paths
     return yield* provideClientServices(
       Effect.gen(function* () {
         const contributions = yield* builtinFiles.setup
@@ -167,7 +175,13 @@ const withFilesPopup = <A>(
         }
         const insertion = (id: string) =>
           Option.getOrThrow(Option.fromUndefinedOr(source.formatInsertion))(id)
-        return yield* body({ items, insertion, reads: () => reads })
+        const select = (id: string, filter: string) =>
+          Option.getOrThrow(Option.fromUndefinedOr(source.onSelect))(id, filter)
+        const open = () => Option.map(Option.fromUndefinedOr(source.onOpen), (onOpen) => onOpen())
+        const relist = (next: ReadonlyArray<string>) => {
+          listed = next
+        }
+        return yield* body({ items, insertion, select, open, relist, reads: () => reads })
       }).pipe(Effect.orDie),
       {
         // The session is rooted outside the launch directory: fff scans the session's.
@@ -176,7 +190,10 @@ const withFilesPopup = <A>(
         requestEffect: () =>
           Effect.sync(() => {
             reads++
-          }).pipe(Effect.andThen(options.gate ?? Effect.void), Effect.as(paths)),
+          }).pipe(
+            Effect.andThen(options.gate ?? Effect.void),
+            Effect.andThen(Effect.sync(() => listed)),
+          ),
       },
     )
   })
@@ -264,6 +281,80 @@ describe("files popup across sessions", () => {
   )
 })
 
+describe("files popup listing session", () => {
+  // The listing is asked for after the session's directory resolves. A switch
+  // in that window must not send the request for the session switched to and
+  // file its reply under the one that asked.
+  filesTest("a switch while the directory resolves leaves the listing with its session", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const a = {
+        key: { sessionId: SessionId.make("sess-a"), branchId: BranchId.make("branch-a") },
+        dir: yield* fs.makeTempDirectoryScoped(),
+        paths: ["alpha/only-a.ts"],
+      }
+      const b = {
+        key: { sessionId: SessionId.make("sess-b"), branchId: BranchId.make("branch-b") },
+        dir: yield* fs.makeTempDirectoryScoped(),
+        paths: ["beta/only-b.ts"],
+      }
+      for (const entry of [a, b]) {
+        for (const file of entry.paths) {
+          yield* fs.makeDirectory(path.dirname(path.join(entry.dir, file)), { recursive: true })
+          yield* fs.writeFileString(path.join(entry.dir, file), file)
+        }
+      }
+      const bySession = new Map([
+        [a.key.sessionId, a],
+        [b.key.sessionId, b],
+      ])
+      let current = a
+      let holdCwd = true
+      const cwdGate = yield* Deferred.make<void>()
+      yield* provideClientServices(
+        Effect.gen(function* () {
+          const contributions = yield* builtinFiles.setup
+          const source = Option.getOrThrow(Option.fromUndefinedOr(contributions.autocomplete?.[0]))
+          const ids = (filter: string) => {
+            const result = source.items(filter)
+            if (!Effect.isEffect(result)) return Effect.succeed(result.map((item) => item.id))
+            return Effect.orDie(result).pipe(Effect.map((shown) => shown.map((item) => item.id)))
+          }
+          const opened = yield* Effect.forkChild(ids(""))
+          yield* Effect.yieldNow
+          current = b
+          holdCwd = false
+          yield* Deferred.succeed(cwdGate, void 0)
+          yield* Fiber.join(opened)
+          current = a
+          expect(yield* ids("ts")).toEqual(["alpha/only-a.ts"])
+        }).pipe(Effect.orDie),
+        {
+          workspace: {
+            cwd: home,
+            home,
+            sessionCwd: Effect.suspend(() => {
+              const dir = current.dir
+              if (!holdCwd) return Effect.succeed(dir)
+              return Deferred.await(cwdGate).pipe(Effect.as(dir))
+            }),
+          },
+          currentSession: () => Option.some(current.key),
+          requestEffect: (request) =>
+            Effect.succeed(
+              Option.match(Option.fromUndefinedOr(bySession.get(request.sessionId)), {
+                onNone: () => [],
+                onSome: (entry) => entry.paths,
+              }),
+            ),
+        },
+      )
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
 describe("files popup page budget", () => {
   const page = (paths: ReadonlyArray<string>, totalMatched: number) => ({ paths, totalMatched })
   const unlistedPage = Array.from({ length: 200 }, (_, index) => `ignored/${index}.ts`)
@@ -329,6 +420,26 @@ describe("files popup", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  filesTest("reopening the popup mid-path offers a file listed since the last open", () =>
+    Effect.gen(function* () {
+      const shown = yield* withFilesPopup(
+        ["src/old.ts"],
+        (popup) =>
+          Effect.gen(function* () {
+            popup.open()
+            yield* popup.items("")
+            yield* popup.items("src/")
+            popup.relist(["src/old.ts", "src/new.ts"])
+            // The popup closed; the reader reopens it on a path already typed.
+            popup.open()
+            return yield* popup.items("src/")
+          }),
+        { unlisted: ["src/new.ts"] },
+      )
+      expect(shown.map((item) => item.id)).toContain("src/new.ts")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   filesTest("a file the listing leaves out is not offered", () =>
     Effect.gen(function* () {
       const shown = yield* withFilesPopup(["src/kept.ts"], (popup) => popup.items("ts"), {
@@ -346,24 +457,36 @@ describe("files popup", () => {
           popup.insertion("issue#12.md"),
           popup.insertion("src/a.ts"),
           popup.insertion("src/"),
+          popup.insertion("my dir/"),
         ]),
       )
-      expect(inserted).toEqual(['@"my notes.md" ', '@"issue#12.md" ', "@src/a.ts ", "@src/"])
+      // A quoted directory leaves its quote open, so the popup keeps going inside it.
+      expect(inserted).toEqual([
+        '@"my notes.md" ',
+        '@"issue#12.md" ',
+        "@src/a.ts ",
+        "@src/",
+        '@"my dir/',
+      ])
     }).pipe(Effect.timeout("10 seconds")),
   )
 
-  filesTest("typing after the popup opens reuses its listing", () =>
+  filesTest("keys typed inside one open reuse its listing; the next open reads again", () =>
     Effect.gen(function* () {
       const reads = yield* withFilesPopup(["src/a.ts", "src/b.ts"], (popup) =>
         Effect.gen(function* () {
+          popup.open()
           yield* popup.items("")
           yield* popup.items("s")
           yield* popup.items("sa")
           yield* popup.items("")
-          return popup.reads()
+          const inOneOpen = popup.reads()
+          popup.open()
+          yield* popup.items("")
+          return [inOneOpen, popup.reads()]
         }),
       )
-      expect(reads).toBe(2)
+      expect(reads).toEqual([1, 2])
     }).pipe(Effect.timeout("10 seconds")),
   )
 
@@ -394,6 +517,91 @@ describe("files popup", () => {
   )
 })
 
+/**
+ * Counts the fff finders the popup creates and destroys while `body` runs.
+ * fff's own constructor is wrapped, so the count is what reached fff.
+ */
+const countingFinders = <A, E, R>(body: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const counts = { created: 0, destroyed: 0 }
+    const original = FileFinder.create.bind(FileFinder)
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        FileFinder.create = (options) => {
+          const created = original(options)
+          if (!created.ok) return created
+          counts.created++
+          const finder = created.value
+          const destroy = finder.destroy.bind(finder)
+          finder.destroy = () => {
+            counts.destroyed++
+            destroy()
+          }
+          return created
+        }
+      }),
+      () =>
+        Effect.sync(() => {
+          FileFinder.create = original
+        }),
+    )
+    const result = yield* body
+    return { result, counts }
+  })
+
+describe("files popup finder", () => {
+  filesTest("keys typed during the first listing share one finder, destroyed at teardown", () =>
+    Effect.gen(function* () {
+      const open = yield* Deferred.make<void>()
+      // The popup's scope closes inside the count, so teardown is counted too.
+      const { counts } = yield* countingFinders(
+        Effect.scoped(
+          withFilesPopup(
+            ["src/a.ts", "src/b.ts"],
+            (popup) =>
+              Effect.gen(function* () {
+                const typed = yield* Effect.forkChild(
+                  Effect.all([popup.items(""), popup.items("s"), popup.items("a.ts")], {
+                    concurrency: "unbounded",
+                  }),
+                )
+                yield* Effect.yieldNow
+                yield* Deferred.succeed(open, void 0)
+                yield* Fiber.join(typed)
+                yield* popup.items("b")
+              }),
+            { gate: Deferred.await(open) },
+          ),
+        ),
+      )
+      expect(counts).toEqual({ created: 1, destroyed: 1 })
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // The session is rooted outside the launch directory, and fff resolves a
+  // relative pick against the process's directory. The pick names the
+  // session's file, so the next ranking puts it first.
+  filesTest("a pick in a session rooted elsewhere raises that file for the same query", () =>
+    Effect.gen(function* () {
+      const files = ["pick/zeta-note.md", "pick/alpha-note.md"]
+      const picked = yield* withFilesPopup(files, (popup) =>
+        Effect.gen(function* () {
+          yield* popup.items("")
+          const first = (yield* popup.items("note")).map((item) => item.id)
+          const other = Option.getOrThrow(
+            Option.fromUndefinedOr(first.find((id) => id !== first[0])),
+          )
+          for (let i = 0; i < 5; i++) popup.select(other, "note")
+          const second = (yield* popup.items("note")).map((item) => item.id)
+          return { first, other, second }
+        }),
+      )
+      expect(picked.first.length).toBe(2)
+      expect(picked.second[0]).toBe(picked.other)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
 /** A `ClientContext` layer over a test transport; `deps` replaces any default. */
 const contextLayer = (deps: Partial<ClientContextDeps> = {}) =>
   makeClientContextLayer({
@@ -406,7 +614,8 @@ const contextLayer = (deps: Partial<ClientContextDeps> = {}) =>
 // ── driver transport ────────────────────────────────────────────────────────
 
 /**
- * `/driver` routes through `transport.driverList/driverSet/driverClear`.
+ * `/driver` routes through `transport.driverSet/driverClear`; the server
+ * validates the driver id.
  *
  * The transport seals every shell RPC failure into a
  * `ClientTransportRequestError` that names the RPC and keeps the server's
@@ -421,12 +630,6 @@ class DriverRejected extends Schema.TaggedError<DriverRejected>()("DriverRejecte
 const absent = Option.getOrUndefined(Option.none())
 const agentName = AgentName.make("main")
 const session = { sessionId: SessionId.make("sess-1"), branchId: BranchId.make("branch-1") }
-
-const driverListReply = {
-  drivers: [{ _tag: "Model", id: "model:sonnet" }],
-  overrides: {},
-  agents: [testAgent],
-}
 
 /**
  * Run the `/driver` slash once. Resolves with the notices the shell received
@@ -489,7 +692,6 @@ describe("driver routing through the client transport", () => {
       const seen: Array<{ readonly agentName: string; readonly driverId: string }> = []
       const client = createMockClient({
         driver: {
-          list: () => Effect.succeed(driverListReply),
           set: (input: { agentName: AgentName; driver: { id: string } }) => {
             seen.push({ agentName: input.agentName, driverId: input.driver.id })
             return Deferred.succeed(settled, absent)
@@ -512,7 +714,6 @@ describe("driver routing through the client transport", () => {
     Effect.gen(function* () {
       const client = createMockClient({
         driver: {
-          list: () => Effect.succeed(driverListReply),
           set: () => Effect.fail(new DriverRejected({ driverId: "model:sonnet" })),
         },
       })
@@ -756,5 +957,30 @@ describe("Herdr integration", () => {
         expect(result).toBeDefined()
       }
     }).pipe(Effect.provide(contextLayer())),
+  )
+})
+
+describe("skills popup", () => {
+  filesTest("a pick made just before the TUI closes is on disk when it has closed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      yield* Effect.scoped(
+        provideClientServices(
+          Effect.gen(function* () {
+            const contributions = yield* builtinSkills.setup
+            const source = Option.getOrThrow(
+              Option.fromUndefinedOr(contributions.autocomplete?.[0]),
+            )
+            Option.getOrThrow(Option.fromUndefinedOr(source.onSelect))("triage", "tri")
+          }),
+          { workspace: { cwd: home, home } },
+        ),
+      )
+      const stored = yield* readFrecencyStore(home)
+      expect(
+        Option.match(stored, { onNone: () => [], onSome: (store) => Object.keys(store.entries) }),
+      ).toEqual(["$triage"])
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })

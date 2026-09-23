@@ -289,16 +289,16 @@ const createDb = (dbPath: string, ...statements: ReadonlyArray<string>) =>
   }).pipe(Effect.provide(BunSqliteClient.layer({ filename: dbPath })))
 
 describe("local health", () => {
-  test("a live shared server reports its pid, id, and url from the SDK lock record", () => {
+  test("a live server reports its pid, id, and url from the SDK lock record", () => {
     const server = inspectServer(ServerLockStatus.cases.Alive.make({ entry: lockEntry }))
     expect(server.status).toBe("alive")
-    expect(server.summary).toBe("Shared server alive: pid 4242, server-1, http://127.0.0.1:1/rpc")
+    expect(server.summary).toBe("Server alive: pid 4242, server-1, http://127.0.0.1:1/rpc")
   })
 
   test("a lock whose pid is gone reports a stale server", () => {
     const server = inspectServer(ServerLockStatus.cases.Stale.make({ entry: lockEntry }))
     expect(server.status).toBe("dead")
-    expect(server.summary).toBe("Shared server lock is stale: pid 4242, server-1")
+    expect(server.summary).toBe("Server lock is stale: pid 4242, server-1")
   })
 
   it.live("the doctor reports a lock holder that does not answer instead of waiting for it", () =>
@@ -311,8 +311,11 @@ describe("local health", () => {
     }),
   )
 
-  test("no lock reports no shared server", () => {
-    expect(inspectServer(absentServer)).toEqual({ status: "none", summary: "No shared server." })
+  test("no lock reports no server for the data directory", () => {
+    expect(inspectServer(absentServer)).toEqual({
+      status: "none",
+      summary: "No server for this data directory.",
+    })
   })
 
   it.scopedLive("reports incompatible storage tables without migration records", () =>
@@ -337,7 +340,7 @@ describe("local health", () => {
       expect(report).toContain("incompatible")
       expect(report).toContain("Migration table: missing")
       expect(report).toContain("Extensions:")
-      expect(report).toContain("No live shared server.")
+      expect(report).toContain("No live server for this data directory.")
     }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 
@@ -484,7 +487,7 @@ describe("local health", () => {
         )
         expect(refused._tag).toBe("CliStartupError")
         expect(reported.stderr).toBe(
-          "CliStartupError: shared server is running; stop it with `gent server stop` first\n",
+          "CliStartupError: a server is running for this data directory; stop it with `gent server stop` first\n",
         )
       }).pipe(
         Effect.provide(
