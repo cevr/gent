@@ -53,12 +53,8 @@ import type { PromptSection } from "../domain/capability.js"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "./agent-loop.js"
 import {
   AgentLoopError,
-  type DequeueFollowUpPayload,
-  dequeueFollowUpOn,
   entityIdOf,
   listWorkspaceLoops,
-  type QueueFollowUpPayload,
-  queueFollowUpOn,
   type SendUserMessagePayload,
   type SessionRuntimeState,
   steerLoop,
@@ -349,11 +345,6 @@ export interface SessionRuntimeService {
   readonly respondInteraction: (
     input: SessionRuntimeTarget & { readonly requestId: InteractionRequestId },
   ) => Effect.Effect<void, SessionRuntimeError>
-  readonly queueFollowUp: (input: QueueFollowUpPayload) => Effect.Effect<void, SessionRuntimeError>
-  /** True when the follow-up left the queue; false when it was absent or already running. */
-  readonly dequeueFollowUp: (
-    input: DequeueFollowUpPayload,
-  ) => Effect.Effect<boolean, SessionRuntimeError>
   readonly requestExtension: (
     input: ExtensionRequestPayload,
   ) => Effect.Effect<unknown, SessionRuntimeError>
@@ -526,17 +517,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     respondInteraction: (input) =>
       actorCommand("respondInteraction", input, (ref, { workspaceId }) =>
         ref.execute(AgentLoopActor.RespondInteraction.make({ ...input, workspaceId })),
-      ),
-
-    queueFollowUp: (input) =>
-      actorCommand("queueFollowUp", input, () =>
-        queueFollowUpOn(input).pipe(Effect.provideContext(loopClientServices)),
-      ),
-
-    dequeueFollowUp: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.andThen(dequeueFollowUpOn(input).pipe(Effect.provideContext(loopClientServices))),
-        Effect.catchCause((cause) => Effect.fail(wrapError("dequeueFollowUp failed", cause))),
       ),
 
     requestExtension: (input) =>

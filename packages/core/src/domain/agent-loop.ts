@@ -370,7 +370,7 @@ export const SendUserMessagePayload = Schema.Struct({
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
-export const QueueFollowUpPayload = Schema.Struct({
+const QueueFollowUpPayload = Schema.Struct({
   sourceId: FollowUpSourceIdSchema,
   sessionId: SessionId,
   branchId: BranchId,
@@ -379,14 +379,14 @@ export const QueueFollowUpPayload = Schema.Struct({
   /** Start a turn for the item even on a branch with no prior history. */
   wake: Schema.optional(Schema.Boolean),
 })
-export type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
+type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
 
-export const DequeueFollowUpPayload = Schema.Struct({
+const DequeueFollowUpPayload = Schema.Struct({
   sourceId: FollowUpSourceIdSchema,
   sessionId: SessionId,
   branchId: BranchId,
 })
-export type DequeueFollowUpPayload = typeof DequeueFollowUpPayload.Type
+type DequeueFollowUpPayload = typeof DequeueFollowUpPayload.Type
 
 const WorkspaceFields = {
   workspaceId: WorkspaceId,
