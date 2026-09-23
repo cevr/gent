@@ -207,7 +207,7 @@ describe("background shell through a cell", () => {
           })
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
             toolCallStep("cell", {
-              code: `await tools.call("bash", ${input})`,
+              code: `await tools.bash(${input})`,
             }),
             textStep("started"),
             textStep("received completion"),
@@ -262,7 +262,7 @@ describe("background shell through a cell", () => {
           run_in_background: true,
         })
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code: `await tools.call("bash", ${input})` }),
+          toolCallStep("cell", { code: `await tools.bash(${input})` }),
           textStep("started"),
           textStep("received completion"),
         ])

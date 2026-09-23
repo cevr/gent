@@ -613,10 +613,18 @@ loading. The process launcher uses this artifact as both its runtime
 and worker path. Turbo caches core's `dist` output and both TUI binaries. The
 TUI task hashes its build script. Run the root build for dependency ordering.
 This is a packaged worker, not a daemon or a new session owner.
-`GentPlatform.cellWorkerPath` selects the worker without opening it. The compiled
-host uses its sibling `gent-cell`. Source runs use core's `dist/gent-cell`, resolved
-from the platform module, not cwd or the Bun executable. Source runs need the core
-build first. The TUI build sets the compiled-host marker explicitly.
+The cell owns where its worker lives: `cellWorkerLaunch` in `cell.ts` selects it
+without opening it. The compiled host runs its sibling `gent-cell`. A source run
+executes this checkout's `src/cell-worker-boundary.ts` with the running Bun, so it
+never launches a stale built worker and needs no build first. The two are the
+`Compiled` and `Script` cases of `CellWorker`. A script worker starts with
+`--config=/dev/null --no-env-file`, the source-run match for the compiled
+worker's disabled bunfig and dotenv autoload, so a project preload or `.env`
+never runs inside the worker. The worker starts in its session's working
+directory: the loop resolves it once per branch with `sessionWorkingDirectory`
+(the stored session cwd, else the host's, the same rule as
+`ExtensionContext.cwd`) and gives it to the branch-tool layer as `cwd`. The TUI
+build sets the compiled-host marker `__GENT_COMPILED__` explicitly.
 The actor section of `runtime/agent-loop.ts` allocates a child of the actor scope for each loop rebuild.
 It publishes the loop handle before it transfers scope ownership. Failure or
 interruption during construction closes that child immediately.
@@ -715,23 +723,43 @@ set. Default cutover must retain a host binding set when the advertised model
 surface narrows to `cell`; it cannot reuse a cell-only advertised map for discovery.
 
 The catalog is instruction plus data, not a tool. When the surface narrows to
-`cell`, `buildTurnPromptSections` adds a `cell-catalog` section that lists every
-selected host tool with its prompt snippet or description; the section is
-rebuilt each turn, so live composition changes reach the model as ordinary
-instruction changes. `cell.ts` builds the data half
-from the same selected map: name, description, guidelines, and the actual Effect
-AI input schema, hashed over its encoding. `dispatchCell` hands it to the cell
-host; the kernel sends it inside `Evaluate` only when the hash differs
-from what the current worker holds, and clears that memory when a replacement
-worker starts, so the first cell on a new worker carries the full catalog. The
-worker keeps the catalog beside the namespace: `reset` clears bindings, not the
-catalog, and a snapshot never contains it. Inside the cell `tools.search(query,
-offset)` and `tools.describe(name)` are local synchronous reads over that data,
-20 names per page with a next offset; they record no operation receipt and grant
-no execution permission. The RPC lifetime test checks the search set and a host
-schema through the compiled worker, and that a later cell without a catalog
-still describes the tool. An agent-denied tool and the outer `cell` are absent
-from search.
+`cell`, the cell extension's `systemPrompt` hook adds a `## Host Tools` section
+with one signature line per selected host tool: its callable path, an input
+type and a result type rendered from the JSON Schema, and the first line of its
+prompt snippet or description (`- tools.delegate.cancel(input: { requestId:
+string }): Promise<object> // Cancel a running child ...`). Nested objects
+inline while short and otherwise render as `object`. The section is rebuilt
+each turn, so live composition changes reach the model as ordinary instruction
+changes. `cell.ts` builds the data half from the same selected map: name,
+description, guidelines, and the actual Effect AI input schema, hashed over its
+encoding. `dispatchCell` hands it to the cell host; the kernel sends it inside
+`Evaluate` only when the hash differs from what the current worker holds, and
+clears that memory when a replacement worker starts, so the first cell on a new
+worker carries the full catalog. The worker keeps the catalog beside the
+namespace: `reset` clears bindings, not the catalog, and a snapshot never
+contains it.
+
+Inside the cell `tools` is a namespace over that catalog: every selected id is
+a callable path, split on `.` (`delegate.start` is `tools.delegate.start(input)`,
+`must-not-run` is `tools["must-not-run"](input)`). Each node is a Proxy that
+reads the current catalog, so one node can be a tool and a namespace at once
+(`tools.wake(...)` and `tools.wake.cancel(...)`). A call sends the id itself as
+the host call name, so operation receipts and replay key on the tool id. An
+unknown path throws and names the three closest ids. A key JavaScript reads on
+its own or defines on a function (`then`, `toJSON`, `constructor`, `call`,
+`name`, ...; `reservedToolSegments` in `cell-protocol.ts`) keeps its JavaScript
+meaning and never names a tool, so `await`, `JSON.stringify`, and inspection
+never call one. `tools(id)` is the one lookup by string: a local synchronous
+read that returns the tool as a function carrying its catalog entry (`id`,
+`description`, `guidelines`, `parameters`). It reaches an id with a reserved
+segment, which the prompt renders as `tools("read.then")(input)`; it records
+no operation receipt and grants no execution permission. A call with no
+argument sends `{}`; the signature marks `input?` only when the schema accepts
+`{}`. Enums past eight literals and input types past 300 characters render as
+their outer shape. The RPC lifetime test
+checks the namespace keys and a host schema through the compiled worker, and
+that a later cell without a catalog still describes the tool. An agent-denied
+tool and the outer `cell` are absent from the namespace.
 
 Tool dispatch accepts separate outer and host binding maps. Normal turns supply
 the selected map for both. Recovery validates pending outer calls against their

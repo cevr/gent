@@ -2499,6 +2499,31 @@ interface ExistingSessionBranch {
   readonly branchId: BranchId
 }
 
+/** The session's stored cwd. A missing session or a storage failure reads as none. */
+const storedSessionCwd = (
+  sessionId: SessionId,
+): Effect.Effect<Option.Option<string>, never, SessionStorage> =>
+  Effect.gen(function* () {
+    const sessions = yield* SessionStorage
+    return yield* sessions.getSession(sessionId).pipe(
+      Effect.map((session) => Option.fromUndefinedOr(session?.cwd)),
+      Effect.orElseSucceed(() => Option.none<string>()),
+    )
+  })
+
+/**
+ * The session's working directory: its stored cwd, else the host's. The same
+ * rule gives `ExtensionContext.cwd`, so branch work runs where its tools do.
+ */
+export const sessionWorkingDirectory = (
+  sessionId: SessionId,
+): Effect.Effect<string, never, SessionStorage | RuntimeEnvironment> =>
+  Effect.gen(function* () {
+    const environment = yield* RuntimeEnvironment
+    const stored = yield* storedSessionCwd(sessionId)
+    return Option.getOrElse(stored, () => environment.cwd)
+  })
+
 /**
  * Resolve the turn profile for one branch: the stored session cwd selects a
  * profile from the cache; without a session or a cache, the launch registry
@@ -2512,13 +2537,9 @@ export const resolveTurnProfile = (params: {
   readonly defaults: TurnProfileDefaults
 }): Effect.Effect<AgentLoopTurnProfile, never, ExtensionRegistry | SessionStorage> =>
   Effect.gen(function* () {
-    const sessionStorage = yield* SessionStorage
     const launchRegistry = yield* ExtensionRegistry
     const hostProvider = params.hostProvider
-    const sessionCwd = yield* sessionStorage.getSession(params.sessionId).pipe(
-      Effect.map((session) => Option.fromUndefinedOr(session?.cwd)),
-      Effect.orElseSucceed(() => Option.none<string>()),
-    )
+    const sessionCwd = yield* storedSessionCwd(params.sessionId)
     const runInfo = {
       sessionId: params.sessionId,
       branchId: params.branchId,

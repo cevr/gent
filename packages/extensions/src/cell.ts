@@ -6,6 +6,7 @@ import {
   Exit,
   FileSystem,
   Hash,
+  type JsonSchema,
   Latch,
   Layer,
   Option,
@@ -103,6 +104,7 @@ import {
   maximumCellSourceLength,
   maximumPendingCellCalls,
   type SnapshotBinding,
+  toolPath,
 } from "./cell-protocol.js"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import * as AiTool from "effect/unstable/ai/Tool"
@@ -708,24 +710,43 @@ export class CellProcessError extends Schema.TaggedError<CellProcessError>()("Ce
 }) {}
 
 /**
- * The worker runs under a shell that points its stderr at its stdout, so all cell
- * output shares one pipe and arrives in write order. `$0` is the binary and `$1`
- * the worker path, so the worker sees the same argv it would without the shell.
+ * How a worker starts. `Compiled` is the `gent-cell` executable. `Script` is a
+ * worker source file that the Bun at `runtimePath` runs.
  */
-const cellOutputRedirect = 'exec "$0" "$1" 2>&1'
+export const CellWorker = Schema.TaggedUnion({
+  Compiled: { binaryPath: Schema.String },
+  Script: { runtimePath: Schema.String, scriptPath: Schema.String },
+})
+export type CellWorker = typeof CellWorker.Type
+
+/**
+ * A script worker starts with the controls the compiled worker is built with:
+ * no project `bunfig.toml` (so no project preload runs before the worker) and
+ * no `.env` files. `/dev/null` is an empty Bun config. A project `tsconfig.json`
+ * or `package.json` in the working directory does not reach a worker file
+ * outside that project.
+ */
+const scriptWorkerControls = ["--config=/dev/null", "--no-env-file"]
+
+/**
+ * The worker runs under a shell that points its stderr at its stdout, so all cell
+ * output shares one pipe and arrives in write order. The shell `exec`s its
+ * arguments unchanged, so the worker sees the argv it would see without the shell.
+ */
+const cellOutputRedirect = 'exec "$@" 2>&1'
 
 /** Launch diagnostics stay small; the tail carries whatever the worker said last. */
 const diagnosticsLimit = 8192
 const diagnosticsHeadLimit = 6144
 
 /** The caller owns an immutable trusted worker artifact and the returned process scope.
- * The worker runs with the host's working directory, environment, and OS permissions,
- * the same authority the bash tool already grants. Protocol frames use dedicated
+ * The worker runs in `cwd`, the session's working directory, with the host's
+ * environment and OS permissions, the same authority the bash tool already grants. Protocol frames use dedicated
  * descriptors so cell code that writes to stdout cannot corrupt them.
  */
 export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
-  readonly binaryPath: string
-  readonly workerPath: string
+  readonly worker: CellWorker
+  readonly cwd: string
   readonly readinessTimeoutMs?: number
 }) {
   const fs = yield* FileSystem.FileSystem
@@ -735,19 +756,29 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
   if (!Number.isSafeInteger(readinessTimeoutMs) || readinessTimeoutMs <= 0) {
     return yield* launchError("Cell readiness timeout must be a positive integer")
   }
-  const binaryPath = yield* fs.realPath(input.binaryPath).pipe(Effect.mapError(launchError))
-  const workerPath = yield* fs.realPath(input.workerPath).pipe(Effect.mapError(launchError))
-  for (const file of [binaryPath, workerPath]) {
-    const info = yield* fs.stat(file).pipe(Effect.mapError(launchError))
+  const launchFile = Effect.fn("CellProcess.launchFile")(function* (file: string) {
+    const resolved = yield* fs.realPath(file).pipe(Effect.mapError(launchError))
+    const info = yield* fs.stat(resolved).pipe(Effect.mapError(launchError))
     if (info.type !== "File") return yield* launchError("Cell launch requires regular files")
-  }
+    return resolved
+  })
+  const argv = yield* CellWorker.match(input.worker, {
+    Compiled: ({ binaryPath }) => launchFile(binaryPath).pipe(Effect.map((binary) => [binary])),
+    Script: ({ runtimePath, scriptPath }) =>
+      Effect.gen(function* () {
+        const runtime = yield* launchFile(runtimePath)
+        const script = yield* launchFile(scriptPath)
+        return [runtime, ...scriptWorkerControls, script]
+      }),
+  })
   // `exec` replaces the shell, so the worker keeps this pid and the redirect makes
   // its stderr the same pipe as its stdout. One descriptor means the kernel orders
   // every write, including those of a process the cell spawns with inherited stdio.
   const handle = yield* ChildProcess.make(
     "/bin/sh",
-    ["-c", cellOutputRedirect, binaryPath, workerPath],
+    ["-c", cellOutputRedirect, "gent-cell", ...argv],
     {
+      cwd: input.cwd,
       stdin: "ignore",
       stdout: "pipe",
       stderr: "ignore",
@@ -994,7 +1025,7 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
 export class CellOperationHost extends Context.Service<
   CellOperationHost,
   {
-    /** Selected host tools for `tools.search` and `tools.describe`. Absent leaves the worker's catalog unchanged. */
+    /** Selected host tools for the `tools` namespace. Absent leaves the worker's catalog unchanged. */
     readonly catalog?: CellCatalog
     readonly call: (
       request: Extract<CellResponse, { _tag: "HostCall" }>,
@@ -1031,8 +1062,8 @@ const KernelStatus = Schema.Literals(["ready", "lost", "closed"])
 
 /** One worker at a time. Only explicit reset can replace a failed worker. */
 export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
-  readonly binaryPath: string
-  readonly workerPath: string
+  readonly worker: CellWorker
+  readonly cwd: string
   readonly readinessTimeoutMs?: number
   readonly evaluationTimeoutMs?: number
   readonly maximumReplacements?: number
@@ -1925,8 +1956,34 @@ const makeCellToolHostWith = (
 
 // ── execution ───────────────────────────────────────────────────────────────
 
-/** The worker binary this build ships next to the executable. */
+/** The worker binary a compiled build ships next to its executable. */
 const CELL_WORKER_BINARY = "gent-cell"
+
+/** The compiled build defines this symbol; a source run leaves it undeclared. */
+declare const __GENT_COMPILED__: unknown
+
+const isCompiledBuild = Effect.try({
+  try: () => __GENT_COMPILED__ === true,
+  catch: () => false,
+}).pipe(Effect.orElseSucceed(() => false))
+
+/**
+ * Where the worker lives. A compiled build runs the `gent-cell` binary beside
+ * its executable. A source run executes this checkout's worker source with the
+ * running Bun, so it never launches a stale built worker.
+ */
+export const cellWorkerLaunch = Effect.gen(function* () {
+  const platform = yield* GentPlatform
+  const path = yield* Path.Path
+  const execPath = yield* platform.execPath
+  if (yield* isCompiledBuild) {
+    return CellWorker.cases.Compiled.make({
+      binaryPath: path.join(path.dirname(execPath), CELL_WORKER_BINARY),
+    })
+  }
+  const scriptPath = yield* path.fromFileUrl(new URL("./cell-worker-boundary.ts", import.meta.url))
+  return CellWorker.cases.Script.make({ runtimePath: execPath, scriptPath })
+})
 
 export class CellExecutionIncomplete extends Schema.TaggedError<CellExecutionIncomplete>()(
   "CellExecutionIncomplete",
@@ -1963,17 +2020,17 @@ interface CellExecutionService {
 export class CellExecution extends Context.Service<CellExecution, CellExecutionService>()(
   "@gent/extensions/src/cell/CellExecution",
 ) {
-  /** The cell names its own worker; the platform resolves where it lives. */
+  /** The cell owns its worker: `cellWorkerLaunch` says where it lives. */
   static Branch = (address: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
+    readonly cwd: string
     readonly turnInterruption: TurnInterruptionStatus
   }) =>
     Layer.unwrap(
       Effect.gen(function* () {
-        const platform = yield* GentPlatform
-        const binaryPath = yield* platform.siblingBinaryPath(CELL_WORKER_BINARY)
-        const live = CellExecution.Live({ ...address, binaryPath, workerPath: binaryPath })
+        const worker = yield* cellWorkerLaunch
+        const live = CellExecution.Live({ ...address, worker })
         // The loop cancels branch work through `BranchToolWork`; the cell's
         // own cancel is what that means here. The context ledger ships with the
         // cell too: the cell is what schedules directives into it.
@@ -2250,15 +2307,15 @@ export const CellTool = tool({
   output: Schema.Json,
   promptGuidelines: [
     "Top-level variables stay bound in later cells on this branch. The host saves them after each cell and restores them after a worker restart; a result then carries restored (names) and omitted (functions, class instances, cycles, oversized values).",
-    "Call host tools with await tools.call(name, input). Run independent calls concurrently with Promise.all; chain dependent calls with sequential awaits.",
+    "Call a host tool through its id path: await tools.read({ path }), await tools.delegate.start({ todo }). Run independent calls concurrently with Promise.all; chain dependent calls with sequential awaits.",
     "The cell is a full Bun process in the working directory with your user's privileges; nothing is sandboxed. Bun (Bun.file, Bun.write, Bun.$, Bun.spawn), bun:sqlite, fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory are all available. Use it directly to read, search, parse, and transform data.",
     "Network reads are plain fetch in the cell; parse HTML or JSON there. Past sessions live in ~/.gent/data.db (bun:sqlite; tables sessions, messages, message_chunks, content_chunks, events), so search them with SQL instead of a host tool.",
-    "Shell that changes state (git, installs, deletes, network writes) goes through tools.call('bash', { command }): it carries the approval guardrails and the session trailer. Bun.$ and Bun.spawn are for reading: builds, tests, queries, parsers. Use tools.call for host tools that own permissions, durable records, and child agents.",
+    "Shell that changes state (git, installs, deletes, network writes) goes through tools.bash({ command }): it carries the approval guardrails and the session trailer. Bun.$ and Bun.spawn are for reading: builds, tests, queries, parsers. Use host tools for work that needs permissions, durable records, and child agents.",
     "console output, process.stdout and process.stderr writes, and inherited output of spawned processes return with the cell result, before the value of the last expression. Output a spawned process writes after the cell ends is lost, so await the processes you start.",
     "The value of the last expression is the cell result; an undefined value shows nothing. Top-level await works; a top-level return does not.",
     "Return a summary, not the data. You see at most 8,000 characters of any tool result (head and tail); a larger result is spilled and its `read` field says how to page the rest with context.read. Slice arrays, count instead of listing, and keep the full value in a binding for the next cell.",
     "Bun.$`cmd`.text() returns stdout only, and Bun.$ pipes stderr away; test runners and many tools report on stderr. Use Bun.spawn with inherited stdio so the output returns with the cell, or .quiet() and read .stderr.",
-    "The host tools selected for this turn are listed in the Host Tools section. tools.search(query, offset) returns matching names and descriptions, 20 per page with a nextOffset. tools.describe(name) returns the input schema and guidelines. Both are local and synchronous; they do not grant permission to execute.",
+    "The Host Tools section lists every host tool selected for this turn with its signature. tools(id) returns the tool as a function carrying its full input schema (parameters) and guidelines; it is local and synchronous and does not grant permission to execute. Object.keys(tools) lists the top-level names.",
     "The whole session stays reachable from the cell. context.history({ offset, limit }) lists this branch's durable messages in order (id, role, chars, preview, kind), 50 per page with nextOffset. context.read(id, { offset, limit }) returns durable text by message id or tool call id, paged by character offset and limit (nextOffset continues); receipts in a cell result carry the ids of inner calls. context.status() reports what the model sees: tokens, limit, percent, omittedMessages, handoffMessageId. When the window overflows, the history before the current turn is handed off: one durable notice summarizes it and names the session, branch, and message-id range it replaced, so read it back with context.history and context.read instead of guessing. context.compact(instructions?) asks for that handoff before the next turn, focused on the instructions. context.newWindow() drops older history from the model view without a summary. All five are awaited host calls.",
     "Set reset: true to discard retained values and the saved namespace before running new code.",
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
@@ -2549,8 +2606,9 @@ export const CELL_EXTENSION_ID = ExtensionId.make("@gent/cell")
 /**
  * The default model execution surface. When this builtin is registered, a native
  * model turn advertises only `cell`; host tools stay callable inside the cell
- * through the turn's bound identities, and the kernel's local `tools.search` and
- * `tools.describe` read the catalog the host ships with each changed turn.
+ * as `tools.<id path>(input)` through the turn's bound identities. The kernel
+ * builds that namespace, and the local `tools(id)` lookup, from the catalog the
+ * host ships with each changed turn.
  * The extension owns the model selection and catalog through ordinary hooks.
  */
 export const CellExtension = defineExtension({
@@ -2571,7 +2629,7 @@ export const CellExtension = defineExtension({
       }),
     )
     yield* host.on("systemPrompt", (input) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (
           input.agent.driver?._tag === "External" ||
           input.tools?.length !== 1 ||
@@ -2579,15 +2637,14 @@ export const CellExtension = defineExtension({
         ) {
           return input.basePrompt
         }
-        const entries = (input.hostTools ?? [])
-          .filter((tool) => getToolId(tool) !== "cell")
-          .toSorted((left, right) => getToolId(left).localeCompare(getToolId(right)))
-          .map(
-            (tool) =>
-              `- **${getToolId(tool)}**${describeInputKeys(tool)}: ${getToolPrompt(tool).promptSnippet ?? tool.description}`,
-          )
+        const entries = yield* Effect.forEach(
+          (input.hostTools ?? [])
+            .filter((tool) => getToolId(tool) !== "cell")
+            .toSorted((left, right) => getToolId(left).localeCompare(getToolId(right))),
+          renderToolSignature,
+        )
         if (entries.length === 0) return `${input.basePrompt}\n\n${CELL_WORK}`
-        const catalog = `## Host Tools\n\nCallable inside \`cell\` with \`await tools.call(name, input)\`. \`tools.describe(name)\` returns the input schema.\n\n${entries.join("\n")}`
+        const catalog = `## Host Tools\n\nInside \`cell\`, each host tool id is a function path under \`tools\`: id \`a.b\` is \`await tools.a.b(input)\`. \`tools(id)\` returns the tool with its full input schema (\`parameters\`) and \`guidelines\`, and reaches an id with a JavaScript built-in segment such as \`then\` or \`name\`.\n\n${entries.join("\n")}`
         return `${input.basePrompt}\n\n${CELL_WORK}\n\n${catalog}`
       }),
     )
@@ -2605,19 +2662,188 @@ const CELL_WORK = `# Working in the cell
 
 - The cell is your persistent control environment. Keep intermediate values in named variables, inspect and transform outputs, and write small helpers. Use it for loops, parsing, and state; call host tools for effects.
 - You solve tasks by writing and running TypeScript in the cell, observing results, and iterating. Batch independent work inside one cell; iterate between cells.
-- Independent work goes to children: start each with tools.call('delegate.start', { todo }) from one cell, then end your turn. Each child's result arrives as a message that wakes you. Single reads, searches, and edits stay inline.
+- Independent work goes to children: start each with tools.delegate.start({ todo }) from one cell, then end your turn. Each child's result arrives as a message that wakes you. Single reads, searches, and edits stay inline.
 - Example: \`const run = await Bun.$\`bun test\`.quiet().nothrow(); const lines = (run.stdout.toString() + run.stderr.toString()).split("\\n"); const failing = lines.filter((l) => l.includes("(fail)")); ({ exit: run.exitCode, total: failing.length, sample: failing.slice(0, 5) })\` returns the outcome and a sample; lines stays bound for the next cell.
-- To find files, prefer tools.call('grep', ...) over a raw directory walk: it honours .gitignore and caches the listing.`
+- To find files, prefer tools.grep({ pattern }) over a raw directory walk: it honours .gitignore and caches the listing.`
 
-const describeInputKeys = (tool: ToolCapability): string => {
-  const ast = tool.parametersSchema.ast
-  if (ast._tag !== "Objects") return ""
-  const keys = ast.propertySignatures.map((signature) => {
-    const optional = Option.fromUndefinedOr(signature.type.context).pipe(
-      Option.exists((context) => context.isOptional),
-    )
-    if (optional) return `${String(signature.name)}?`
-    return String(signature.name)
-  })
-  return `(${keys.join(", ")})`
+// ── tool signatures ─────────────────────────────────────────────────────────
+
+/** Nested objects longer than this render as `object`; `tools(id).parameters` has the rest. */
+const INLINE_OBJECT_LIMIT = 80
+/** An input type longer than this renders as its outer shape, so no schema can flood the prompt. */
+const INPUT_TYPE_LIMIT = 300
+/** A result type longer than this renders as its outer shape. */
+const RESULT_TYPE_LIMIT = 100
+/** An enum with more literals than this renders as the literals' types. */
+const LITERAL_LIMIT = 8
+/** The description after a signature is cut here, as opencode codemode cuts it. */
+const DESCRIPTION_LIMIT = 120
+
+type SchemaValue = JsonSchema.JsonSchema[string]
+
+const isSchemaNode = (value: SchemaValue): value is JsonSchema.JsonSchema =>
+  Predicate.isObject(value) && !Array.isArray(value)
+
+const schemaNodes = (value: SchemaValue): ReadonlyArray<JsonSchema.JsonSchema> => {
+  if (!Array.isArray(value)) return []
+  return value.filter(isSchemaNode)
 }
+
+const strings = (value: SchemaValue): ReadonlyArray<string> => {
+  if (!Array.isArray(value)) return []
+  return value.filter(Predicate.isString)
+}
+
+const parenthesize = (rendered: string) => {
+  if (rendered.includes(" | ")) return `(${rendered})`
+  return rendered
+}
+
+const union = (members: ReadonlyArray<string>) => {
+  const distinct = [...new Set(members)]
+  if (distinct.includes("unknown")) return "unknown"
+  return distinct.join(" | ")
+}
+
+const propertyKey = (name: string) => {
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return name
+  return encodeJson(name)
+}
+
+const literalType = (value: SchemaValue) => {
+  if (Predicate.isString(value)) return "string"
+  if (Predicate.isNumber(value)) return "number"
+  if (Predicate.isBoolean(value)) return "boolean"
+  if (Predicate.isNull(value)) return "null"
+  return "unknown"
+}
+
+/** A short enum lists its literals; a long one names their types. */
+const renderLiterals = (values: ReadonlyArray<SchemaValue>) => {
+  if (values.length <= LITERAL_LIMIT) return union(values.map((value) => encodeJson(value)))
+  return union(values.map(literalType))
+}
+
+/** A type past its limit keeps only its outer shape. */
+const boundedType = (rendered: string, limit: number) => {
+  if (rendered.length <= limit) return rendered
+  if (rendered.endsWith("[]")) return "object[]"
+  return "object"
+}
+
+/**
+ * Whether a call with no argument is valid: the host sends `{}` for it, so the
+ * schema must accept an empty object. A schema with no constraint accepts it;
+ * a number, a literal, a reference, or an object with required keys does not.
+ */
+const acceptsEmptyInput = (schema: JsonSchema.JsonSchema): boolean => {
+  const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
+  if (alternatives.length > 0) return alternatives.some(acceptsEmptyInput)
+  if ("const" in schema || "enum" in schema || "$ref" in schema) return false
+  const types = strings([schema["type"]].flat())
+  if (types.length === 0) return true
+  return types.includes("object") && strings(schema["required"]).length === 0
+}
+
+/**
+ * One TypeScript-like type for a JSON Schema node. Objects past the first level
+ * inline only while short; references and anything unrecognized fall back to
+ * `object` or `unknown`.
+ */
+const renderSchemaType = (schema: JsonSchema.JsonSchema, depth: number): string => {
+  if ("const" in schema) return encodeJson(schema["const"])
+  if (Array.isArray(schema["enum"])) return renderLiterals(schema["enum"])
+  const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
+  if (alternatives.length > 0) {
+    return union(alternatives.map((member) => renderSchemaType(member, depth)))
+  }
+  if (Predicate.isString(schema["$ref"])) return "object"
+  const declared = schema["type"]
+  const types = strings([declared].flat())
+  if (types.length === 0) {
+    if (isSchemaNode(schema["properties"])) return renderObjectType(schema, depth)
+    return "unknown"
+  }
+  return union(types.map((type) => renderTypeName(schema, type, depth)))
+}
+
+const renderTypeName = (schema: JsonSchema.JsonSchema, type: string, depth: number): string => {
+  switch (type) {
+    case "string":
+    case "boolean":
+    case "null":
+      return type
+    case "number":
+    case "integer":
+      return "number"
+    case "array": {
+      const items = schema["items"]
+      if (!isSchemaNode(items)) return "unknown[]"
+      return `${parenthesize(renderSchemaType(items, depth))}[]`
+    }
+    case "object":
+      return renderObjectType(schema, depth)
+    default:
+      return "unknown"
+  }
+}
+
+/** An optional key drops `null` from its union: omission already says "no value". */
+const renderField = (name: string, schema: SchemaValue, required: boolean, depth: number) => {
+  if (!isSchemaNode(schema)) return `${propertyKey(name)}?: unknown`
+  const rendered = renderSchemaType(schema, depth)
+  if (required) return `${propertyKey(name)}: ${rendered}`
+  const present = rendered.split(" | ").filter((member) => member !== "null")
+  if (present.length === 0) return `${propertyKey(name)}?: ${rendered}`
+  return `${propertyKey(name)}?: ${present.join(" | ")}`
+}
+
+const renderObjectType = (schema: JsonSchema.JsonSchema, depth: number): string => {
+  const properties = schema["properties"]
+  const empty = !isSchemaNode(properties) || Object.keys(properties).length === 0
+  if (empty && depth === 0) return "{}"
+  if (empty || !isSchemaNode(properties) || depth >= 2) return "object"
+  const required = new Set(strings(schema["required"]))
+  const fields = Object.entries(properties).map(([name, value]) =>
+    renderField(name, value, required.has(name), depth + 1),
+  )
+  const rendered = `{ ${fields.join("; ")} }`
+  if (depth > 0 && rendered.length > INLINE_OBJECT_LIMIT) return "object"
+  return rendered
+}
+
+const firstLine = (text: string) => {
+  const line = (text.split("\n")[0] ?? "").trim()
+  if (line.length <= DESCRIPTION_LIMIT) return line
+  return `${line.slice(0, DESCRIPTION_LIMIT - 3)}...`
+}
+
+/** A schema the renderer cannot derive renders as `unknown` instead of failing the prompt. */
+const jsonSchemaOf = (derive: () => JsonSchema.JsonSchema) =>
+  Effect.try({ try: derive, catch: () => "underivable" }).pipe(
+    Effect.orElseSucceed((): JsonSchema.JsonSchema => ({})),
+  )
+
+/**
+ * One prompt line per host tool: the callable path with its input and result
+ * types, then the first line of its snippet or description.
+ * `- tools.wake.cancel(input?: { wakeId?: string }): Promise<{ cancelled: string[] }> // Cancel ...`
+ */
+export const renderToolSignature = Effect.fn("CellCatalog.renderToolSignature")(function* (
+  tool: ToolCapability,
+) {
+  const parameters = yield* jsonSchemaOf(() => AiTool.getJsonSchema(tool))
+  const output = tool.output
+  let result: JsonSchema.JsonSchema = {}
+  if (Schema.isSchema(output)) {
+    result = yield* jsonSchemaOf(() => AiTool.getJsonSchemaFromSchema(output))
+  }
+  const inputType = boundedType(renderSchemaType(parameters, 0), INPUT_TYPE_LIMIT)
+  let input = `input: ${inputType}`
+  if (acceptsEmptyInput(parameters)) input = `input?: ${inputType}`
+  const resultType = boundedType(renderSchemaType(result, 0), RESULT_TYPE_LIMIT)
+  const signature = `${toolPath(getToolId(tool))}(${input}): Promise<${resultType}>`
+  const summary = firstLine(getToolPrompt(tool).promptSnippet ?? tool.description)
+  if (summary.length === 0) return `- ${signature}`
+  return `- ${signature} // ${summary}`
+})

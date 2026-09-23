@@ -245,7 +245,7 @@ describe("InteractionToolsExtension via model turn", () => {
       Effect.gen(function* () {
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
           toolCallStep("cell", {
-            code: 'await tools.call("prompt", {mode:"present", title:"Notice", content:"INFORMATION-SHOWN"}); console.log("CELL-CONTINUED")',
+            code: 'await tools.prompt({mode:"present", title:"Notice", content:"INFORMATION-SHOWN"}); console.log("CELL-CONTINUED")',
           }),
           textStep("done"),
         ])

@@ -12,8 +12,9 @@ import {
 import { createRequire } from "node:module"
 import { inspect } from "node:util"
 import {
-  catalogPageSize,
   type CellCatalogEntry,
+  reservedToolSegments,
+  toolPath,
   CellEvaluation,
   CellEvaluationError,
   cellOutputBoundary,
@@ -37,6 +38,145 @@ import {
   snapshotReviverSource,
 } from "./cell-protocol.js"
 import { BunRuntime } from "@effect/platform-bun"
+
+// ── tool namespace ──────────────────────────────────────────────────────────
+
+/* oxlint-disable effect/noThrowStatement, effect/noNewError, effect/noUnknownParameters -- The namespace runs inside model code; a thrown Error is the cell's failure contract, and a Proxy trap receives any JavaScript value. */
+
+const editDistance = (left: string, right: string): number => {
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index)
+  for (let row = 1; row <= left.length; row++) {
+    const current = [row]
+    for (let column = 1; column <= right.length; column++) {
+      const substitution = Number(left[row - 1] !== right[column - 1])
+      current.push(
+        Math.min(
+          (previous[column] ?? 0) + 1,
+          (current[column - 1] ?? 0) + 1,
+          (previous[column - 1] ?? 0) + substitution,
+        ),
+      )
+    }
+    previous = current
+  }
+  return previous[right.length] ?? 0
+}
+
+/** The three selected ids nearest to what the cell asked for, by whole id or by the same depth. */
+const closeIds = (wanted: string, ids: ReadonlyArray<string>): string =>
+  ids
+    .map((id) => {
+      const depth = id.split(".").slice(0, wanted.split(".").length).join(".")
+      return { id, score: Math.min(editDistance(wanted, id), editDistance(wanted, depth)) }
+    })
+    .toSorted((left, right) => left.score - right.score || left.id.localeCompare(right.id))
+    .slice(0, 3)
+    .map((candidate) => candidate.id)
+    .join(", ")
+
+/** The id a child key names under `path`; the root has no prefix. */
+const childPath = (path: string, key: string) => [path, key].filter((part) => part !== "").join(".")
+
+/** Every node is callable and shows its id; the root shows `tools`. */
+const nodeTarget = (path: string) =>
+  Object.defineProperty(() => {}, "name", { value: path || "tools" })
+
+/** A namespace node: a callable path named by its id. */
+type ToolNode = ReturnType<typeof nodeTarget>
+
+interface ToolCatalogView {
+  readonly ids: () => ReadonlyArray<string>
+  readonly describe: (id: string) => Option.Option<CellCatalogEntry>
+  readonly call: (id: string, input: unknown) => Promise<Schema.Json>
+}
+
+/** A call with no argument sends an empty input, as `tools.delegate.list()` reads; `null` stays `null`. */
+const inputOrEmpty = (input: unknown) => {
+  if (Predicate.isUndefined(input)) return {}
+  return input
+}
+
+/** A reserved key keeps its JavaScript meaning; only the other string keys name tools. */
+const isToolKey = (key: string | symbol): key is string =>
+  Predicate.isString(key) && !reservedToolSegments.has(key)
+
+/**
+ * `tools` inside the cell: every selected host tool id is a callable path, so
+ * `delegate.start` is `tools.delegate.start(input)`. Each node is a Proxy that
+ * reads the current id set on access; a node can be a tool and a namespace at
+ * once (`tools.wake(input)` and `tools.wake.cancel(input)`). A call sends the
+ * id itself to the host, so operation records key on the tool id.
+ *
+ * A reserved key (`then`, `toJSON`, `constructor`, `call`, `name`, ...) is
+ * never a tool, so `await`, `JSON.stringify`, and inspection never call one.
+ * `tools(id)` is the one lookup by string: it returns the tool as a function
+ * that carries its catalog entry (`id`, `description`, `guidelines`,
+ * `parameters`), and reaches an id whose segment is reserved.
+ */
+const makeToolNamespace = (catalog: ToolCatalogView): ToolNode => {
+  const nodes = new Map<string, ToolNode>()
+  const isPrefix = (path: string) =>
+    catalog.ids().some((id) => id === path || id.startsWith(`${path}.`))
+  const children = (path: string) => {
+    const names = catalog
+      .ids()
+      .filter((id) => path === "" || id.startsWith(`${path}.`))
+      .map((id) => id.slice(path.length).replace(/^\./, "").split(".")[0] ?? "")
+      .filter(isToolKey)
+    return [...new Set(names)].toSorted()
+  }
+  const unknown = (path: string) =>
+    new Error(
+      `${toolPath(path)} is not a host tool selected for this turn. Close ids: ${closeIds(path, catalog.ids()) || "none"}`,
+    )
+  const lookup = (id: string) => {
+    const entry = Option.getOrThrowWith(catalog.describe(id), () => unknown(id))
+    return Object.assign((input?: unknown) => catalog.call(entry.name, input), {
+      id: entry.name,
+      description: entry.description,
+      guidelines: [...entry.guidelines],
+      parameters: entry.parameters,
+    })
+  }
+  const node = (path: string): ToolNode => {
+    const existing = nodes.get(path)
+    if (Predicate.isNotUndefined(existing)) return existing
+    const handler: ProxyHandler<ToolNode> = {
+      get: (target, key, receiver) => {
+        if (!isToolKey(key)) return Reflect.get(target, key, receiver)
+        if (isPrefix(childPath(path, key))) return node(childPath(path, key))
+        throw unknown(childPath(path, key))
+      },
+      has: (target, key) => {
+        if (!isToolKey(key)) return Reflect.has(target, key)
+        return isPrefix(childPath(path, key))
+      },
+      ownKeys: () => children(path),
+      getOwnPropertyDescriptor: (target, key) => {
+        if (isToolKey(key) && isPrefix(childPath(path, key))) {
+          const value = node(childPath(path, key))
+          return { value, enumerable: true, configurable: true, writable: false }
+        }
+        return Reflect.getOwnPropertyDescriptor(target, key)
+      },
+      apply: (_target, _this, args: ReadonlyArray<unknown>) => {
+        if (path === "") return lookup(String(args[0]))
+        if (catalog.ids().includes(path)) return catalog.call(path, args[0])
+        if (!isPrefix(path)) throw unknown(path)
+        const inside = catalog.ids().filter((id) => id.startsWith(`${path}.`))
+        throw new Error(
+          `${toolPath(path)} is a namespace, not a tool. Its tools: ${inside.join(", ")}`,
+        )
+      },
+    }
+    const created = new Proxy(nodeTarget(path), handler)
+    nodes.set(path, created)
+    return created
+  }
+  return node("")
+}
+
+/* oxlint-enable effect/noThrowStatement, effect/noNewError, effect/noUnknownParameters */
 
 // ── bun evaluator ───────────────────────────────────────────────────────────
 
@@ -118,45 +258,24 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       message: display(cause).slice(0, maximumCellDisplayLength),
       output: rendered(),
     })
-  // The catalog is data the host already validated. Search and describe never leave the worker.
+  // The catalog is data the host already validated. The namespace reads it on every access,
+  // so a changed catalog changes the callable paths without rebuilding anything.
   let catalog: ReadonlyArray<CellCatalogEntry> = []
-  const search = (query: string = "", offset: number = 0) => {
-    const needle = String(query).toLowerCase()
-    const matches = catalog.filter(
-      (entry) =>
-        entry.name.toLowerCase().includes(needle) ||
-        entry.description.toLowerCase().includes(needle),
-    )
-    const start = Math.max(0, Math.trunc(Number(offset)) || 0)
-    const page = matches.slice(start, start + catalogPageSize)
-    return {
-      tools: page.map((entry) => ({ name: entry.name, description: entry.description })),
-      total: matches.length,
-      nextOffset: start + page.length,
-    }
-  }
-  const describe = (name: string) => {
-    const entry = catalog.find((candidate) => candidate.name === String(name))
-    if (Predicate.isUndefined(entry)) {
-      // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- This runs inside model code in the VM realm; a thrown Error is the cell's failure contract, like any host call rejection.
-      throw new Error(`Tool ${String(name)} is not selected for this turn`)
-    }
-    return { ...entry, guidelines: [...entry.guidelines] }
-  }
-  const proxy = {
-    search,
-    describe,
-    call: (name: string, input: Schema.Json) =>
+  const toolsNamespace = makeToolNamespace({
+    ids: () => catalog.map((entry) => entry.name),
+    describe: (id) =>
+      Option.map(
+        Option.fromUndefinedOr(catalog.find((candidate) => candidate.name === id)),
+        (entry) => ({ ...entry, guidelines: [...entry.guidelines] }),
+      ),
+    call: (id, input) =>
       runPromise(
-        Effect.all([
-          Schema.decodeEffect(Schema.String)(name),
-          Schema.decodeEffect(Schema.Json)(input),
-        ]).pipe(
+        Schema.decodeUnknownEffect(Schema.Json)(inputOrEmpty(input)).pipe(
           Effect.mapError((cause) => failure("execute", cause)),
-          Effect.flatMap(([name, input]) => host.call(name, input)),
+          Effect.flatMap((decoded) => host.call(id, decoded)),
         ),
       ),
-  }
+  })
   // The context namespace is host-served: every method is one host call under `context.`.
   const contextCall = (operation: string, input: Schema.Json) =>
     runPromise(
@@ -178,7 +297,11 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     newWindow: () => contextCall("newWindow", {}),
   }
   const reserved = new Set(["tools", "context", "console", "require"])
-  Object.defineProperty(globalThis, "tools", { value: proxy, writable: true, configurable: true })
+  Object.defineProperty(globalThis, "tools", {
+    value: toolsNamespace,
+    writable: true,
+    configurable: true,
+  })
   Object.defineProperty(globalThis, "context", {
     value: context,
     writable: true,
@@ -248,7 +371,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
     })
   })
 
-  /** Replace the catalog that search and describe read. It is not part of the namespace. */
+  /** Replace the catalog the tools namespace reads. It is not part of the bindings. */
   const setCatalog = (tools: ReadonlyArray<CellCatalogEntry>) =>
     Effect.sync(() => {
       catalog = tools

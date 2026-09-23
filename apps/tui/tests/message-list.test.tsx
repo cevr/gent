@@ -532,7 +532,7 @@ const cellMessage = (id: string, display = "hello from a.txt"): ListMessage =>
     id,
     toolName: "cell",
     status: "completed",
-    input: { code: "const note = await tools.call('read', {path: 'a.txt'})\nnote.content" },
+    input: { code: "const note = await tools.read({path: 'a.txt'})\nnote.content" },
     summary: absent,
     output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
       display,
@@ -1158,7 +1158,7 @@ describe("FX transcript treatment", () => {
         id: "call-recovered",
         toolName: "cell",
         status: "error",
-        input: { code: "await tools.call('ask_user', {})" },
+        input: { code: "await tools.ask_user({})" },
         summary: absent,
         output: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({
           error: "The cell worker state was lost. Its source was not replayed.",

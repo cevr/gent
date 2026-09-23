@@ -1902,7 +1902,7 @@ describe("useSessionFeed", () => {
         branchId,
         toolCallId: cellId,
         toolName: "cell",
-        input: { code: "await tools.call('read', {path: 'a.txt'})" },
+        input: { code: "await tools.read({path: 'a.txt'})" },
       }),
     ),
     makeEnvelope(
