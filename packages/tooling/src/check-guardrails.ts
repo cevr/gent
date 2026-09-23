@@ -29,6 +29,7 @@ import {
   HOOK_FILE,
   isSteeringFile,
   OxlintConfigSchema,
+  PACKAGE_SURFACE_MANIFESTS,
   type PackageJson,
 } from "./guards"
 
@@ -111,11 +112,7 @@ const isSourceFile = (file: string): boolean => /\.[cm]?[jt]sx?$/.test(file)
 
 /** The findings that read the package manifests and the root tsconfig. */
 const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* () {
-  const packageJsonPaths = [
-    "packages/core/package.json",
-    "packages/extensions/package.json",
-    "packages/sdk/package.json",
-  ]
+  const packageJsonPaths = PACKAGE_SURFACE_MANIFESTS
   const [tsconfigJson, ...packageJsons] = yield* Effect.all(
     [readJsonFile("tsconfig.json"), ...packageJsonPaths.map(readJsonFile)],
     { concurrency: "unbounded" },

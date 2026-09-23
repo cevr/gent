@@ -1886,6 +1886,26 @@ export const plantedDeadSdkExport = "nothing imports this"
     )
   })
 
+  test("a TUI extension-entry name read only inside the TUI source is reported", () => {
+    const entry = "apps/tui/src/extensions.ts"
+    const findings = findingsFor([
+      {
+        file: entry,
+        text: `export { clientOnly } from "./extensions/host"\nexport { authored } from "./extensions/api"\n`,
+      },
+      {
+        file: "apps/tui/src/app.tsx",
+        text: `import { clientOnly } from "./extensions"\nuse(clientOnly)\n`,
+      },
+      {
+        file: "packages/extensions/src/client.ts",
+        text: `import { authored } from "@gent/tui/extensions"\nuse(authored)\n`,
+      },
+    ])
+    expect(findings).toMatchObject([{ file: entry, line: 1 }])
+    expect(findings[0]?.message).toContain("clientOnly")
+  })
+
   test("a comment inside a template interpolation does not keep a name alive", () => {
     const findings = findingsFor([
       { file: SDK_FILE, text: `export const vanished = 1\n` },
@@ -2348,6 +2368,27 @@ describe("package entry points", () => {
         },
       ),
     ).toEqual([])
+  })
+
+  test("the TUI exposes only its client-extension entry", () => {
+    const findings = packageSurface(
+      [
+        [
+          "apps/tui/package.json",
+          {
+            exports: { "./extensions": "./src/extensions.ts", "./client": "./src/client.tsx" },
+          },
+        ],
+      ],
+      {
+        "@gent/tui/extensions": ["./apps/tui/src/extensions.ts"],
+        "@gent/tui/client": ["./apps/tui/src/client.tsx"],
+      },
+    )
+    expect(findings.map(pathOf)).toEqual([
+      'apps/tui/package.json exports["./client"]',
+      'tsconfig.json compilerOptions.paths["@gent/tui/client"]',
+    ])
   })
 
   test("flags public internal core exports and tsconfig aliases", () => {

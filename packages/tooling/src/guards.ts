@@ -2256,8 +2256,18 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     specifier: Option.none(),
   },
   {
-    // The TUI is a leaf: nothing imports it, so every export it declares is
-    // read from inside `apps/tui` or by its tests, or by nothing at all.
+    // The TUI's one public entry: client extensions author against it, so a
+    // name there needs a reader outside the TUI's own source.
+    prefix: "apps/tui/src/extensions.ts",
+    outsideOf: ["apps/tui/src/"],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.some("@gent/tui/extensions"),
+  },
+  {
+    // Apart from that entry the TUI is a leaf: nothing imports it, so every
+    // export it declares is read from inside `apps/tui` or by its tests, or
+    // by nothing at all.
     prefix: "apps/tui/src/",
     outsideOf: [],
     testsCount: true,
@@ -2951,7 +2961,8 @@ interface PackageSurface {
  * clients, `host` serves the processes that compose a server, and
  * `test-utils` serves tests. `@gent/extensions` is the builtin composition
  * package and exposes only its root and `./client`; `@gent/sdk` exposes the
- * stable root client contract and nothing else.
+ * stable root client contract and nothing else. `@gent/tui` is the terminal
+ * app; its one entry, `./extensions`, is the client-extension authoring surface.
  */
 const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
   {
@@ -2978,7 +2989,18 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
     mustBePrivate: false,
     entryPoints: ["."],
   },
+  {
+    packageJson: "apps/tui/package.json",
+    alias: "@gent/tui",
+    mustBePrivate: false,
+    entryPoints: ["./extensions"],
+  },
 ]
+
+/** The manifests the package-surface check reads, one per surface. */
+export const PACKAGE_SURFACE_MANIFESTS: ReadonlyArray<string> = PACKAGE_SURFACES.map(
+  (surface) => surface.packageJson,
+)
 
 const allowedKeys = (surface: PackageSurface): ReadonlySet<string> => new Set(surface.entryPoints)
 
