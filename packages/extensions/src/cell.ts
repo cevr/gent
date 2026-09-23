@@ -710,11 +710,30 @@ export class CellProcessError extends Schema.TaggedError<CellProcessError>()("Ce
 }) {}
 
 /**
- * The worker runs under a shell that points its stderr at its stdout, so all cell
- * output shares one pipe and arrives in write order. `$0` is the binary and `$1`
- * the worker path, so the worker sees the same argv it would without the shell.
+ * How a worker starts. `Compiled` is the `gent-cell` executable. `Script` is a
+ * worker source file that the Bun at `runtimePath` runs.
  */
-const cellOutputRedirect = 'exec "$0" "$1" 2>&1'
+export const CellWorker = Schema.TaggedUnion({
+  Compiled: { binaryPath: Schema.String },
+  Script: { runtimePath: Schema.String, scriptPath: Schema.String },
+})
+export type CellWorker = typeof CellWorker.Type
+
+/**
+ * A script worker starts with the controls the compiled worker is built with:
+ * no project `bunfig.toml` (so no project preload runs before the worker) and
+ * no `.env` files. `/dev/null` is an empty Bun config. A project `tsconfig.json`
+ * or `package.json` in the working directory does not reach a worker file
+ * outside that project.
+ */
+const scriptWorkerControls = ["--config=/dev/null", "--no-env-file"]
+
+/**
+ * The worker runs under a shell that points its stderr at its stdout, so all cell
+ * output shares one pipe and arrives in write order. The shell `exec`s its
+ * arguments unchanged, so the worker sees the argv it would see without the shell.
+ */
+const cellOutputRedirect = 'exec "$@" 2>&1'
 
 /** Launch diagnostics stay small; the tail carries whatever the worker said last. */
 const diagnosticsLimit = 8192
@@ -726,8 +745,7 @@ const diagnosticsHeadLimit = 6144
  * descriptors so cell code that writes to stdout cannot corrupt them.
  */
 export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
-  readonly binaryPath: string
-  readonly workerPath: string
+  readonly worker: CellWorker
   readonly readinessTimeoutMs?: number
 }) {
   const fs = yield* FileSystem.FileSystem
@@ -737,18 +755,27 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
   if (!Number.isSafeInteger(readinessTimeoutMs) || readinessTimeoutMs <= 0) {
     return yield* launchError("Cell readiness timeout must be a positive integer")
   }
-  const binaryPath = yield* fs.realPath(input.binaryPath).pipe(Effect.mapError(launchError))
-  const workerPath = yield* fs.realPath(input.workerPath).pipe(Effect.mapError(launchError))
-  for (const file of [binaryPath, workerPath]) {
-    const info = yield* fs.stat(file).pipe(Effect.mapError(launchError))
+  const launchFile = Effect.fn("CellProcess.launchFile")(function* (file: string) {
+    const resolved = yield* fs.realPath(file).pipe(Effect.mapError(launchError))
+    const info = yield* fs.stat(resolved).pipe(Effect.mapError(launchError))
     if (info.type !== "File") return yield* launchError("Cell launch requires regular files")
-  }
+    return resolved
+  })
+  const argv = yield* CellWorker.match(input.worker, {
+    Compiled: ({ binaryPath }) => launchFile(binaryPath).pipe(Effect.map((binary) => [binary])),
+    Script: ({ runtimePath, scriptPath }) =>
+      Effect.gen(function* () {
+        const runtime = yield* launchFile(runtimePath)
+        const script = yield* launchFile(scriptPath)
+        return [runtime, ...scriptWorkerControls, script]
+      }),
+  })
   // `exec` replaces the shell, so the worker keeps this pid and the redirect makes
   // its stderr the same pipe as its stdout. One descriptor means the kernel orders
   // every write, including those of a process the cell spawns with inherited stdio.
   const handle = yield* ChildProcess.make(
     "/bin/sh",
-    ["-c", cellOutputRedirect, binaryPath, workerPath],
+    ["-c", cellOutputRedirect, "gent-cell", ...argv],
     {
       stdin: "ignore",
       stdout: "pipe",
@@ -1033,8 +1060,7 @@ const KernelStatus = Schema.Literals(["ready", "lost", "closed"])
 
 /** One worker at a time. Only explicit reset can replace a failed worker. */
 export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
-  readonly binaryPath: string
-  readonly workerPath: string
+  readonly worker: CellWorker
   readonly readinessTimeoutMs?: number
   readonly evaluationTimeoutMs?: number
   readonly maximumReplacements?: number
@@ -1948,11 +1974,12 @@ export const cellWorkerLaunch = Effect.gen(function* () {
   const path = yield* Path.Path
   const execPath = yield* platform.execPath
   if (yield* isCompiledBuild) {
-    const binaryPath = path.join(path.dirname(execPath), CELL_WORKER_BINARY)
-    return { binaryPath, workerPath: binaryPath }
+    return CellWorker.cases.Compiled.make({
+      binaryPath: path.join(path.dirname(execPath), CELL_WORKER_BINARY),
+    })
   }
-  const workerPath = yield* path.fromFileUrl(new URL("./cell-worker-boundary.ts", import.meta.url))
-  return { binaryPath: execPath, workerPath }
+  const scriptPath = yield* path.fromFileUrl(new URL("./cell-worker-boundary.ts", import.meta.url))
+  return CellWorker.cases.Script.make({ runtimePath: execPath, scriptPath })
 })
 
 export class CellExecutionIncomplete extends Schema.TaggedError<CellExecutionIncomplete>()(
@@ -1999,7 +2026,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
     Layer.unwrap(
       Effect.gen(function* () {
         const worker = yield* cellWorkerLaunch
-        const live = CellExecution.Live({ ...address, ...worker })
+        const live = CellExecution.Live({ ...address, worker })
         // The loop cancels branch work through `BranchToolWork`; the cell's
         // own cancel is what that means here. The context ledger ships with the
         // cell too: the cell is what schedules directives into it.
