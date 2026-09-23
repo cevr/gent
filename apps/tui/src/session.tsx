@@ -400,17 +400,13 @@ const deriveAutocomplete = (
   const regex = new RegExp(`(?:^|[\\s])([${escaped.join("")}])([^\\s]*)$`)
   return Option.fromNullishOr(regex.exec(text)).pipe(
     Option.flatMap((match) =>
-      Option.all([
-        Option.fromNullishOr(match[0]),
-        Option.fromNullishOr(match[1]),
-        Option.fromNullishOr(match[2]),
-      ]),
+      Option.all([Option.fromNullishOr(match[1]), Option.fromNullishOr(match[2])]),
     ),
-    Option.flatMap(([fullMatch, prefix, filter]) => {
+    Option.flatMap(([prefix, filter]) => {
       if (prefix.length === 0) return Option.none()
-      let leadingWhitespaceLength = 0
-      if (fullMatch.startsWith(" ")) leadingWhitespaceLength = 1
-      const triggerPos = text.length - fullMatch.length + leadingWhitespaceLength
+      // The trigger ends the text, so it starts where the prefix and filter
+      // do. Any whitespace before it (a space, a newline, a tab) stays.
+      const triggerPos = text.length - prefix.length - filter.length
 
       if (prefix === "/" && triggerPos !== 0) return Option.none()
       return Option.some({ type: prefix, filter, triggerPos })

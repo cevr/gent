@@ -87,6 +87,25 @@ describe("transitionComposerInteraction", () => {
     expect(next.autocomplete).toEqual(Option.some({ type: "$", filter: "eff", triggerPos: 4 }))
   })
 
+  // The trigger sits after the separator, whatever whitespace it is, so a
+  // completion keeps the newline or tab in front of it.
+  test("a trigger after a newline or a tab keeps the separator before it", () => {
+    for (const text of ["line one\n@src", "line one\t@src"]) {
+      const next = transitionComposerInteraction(
+        ComposerInteractionState.initial(),
+        { _tag: "DraftChanged", text },
+        testContributions,
+      )
+      expect(next.autocomplete).toEqual(Option.some({ type: "@", filter: "src", triggerPos: 9 }))
+    }
+    const skill = transitionComposerInteraction(
+      ComposerInteractionState.initial(),
+      { _tag: "DraftChanged", text: "one\n$eff" },
+      testContributions,
+    )
+    expect(skill.autocomplete).toEqual(Option.some({ type: "$", filter: "eff", triggerPos: 4 }))
+  })
+
   test("does not detect unregistered prefix", () => {
     const next = transitionComposerInteraction(
       ComposerInteractionState.initial(),
