@@ -92,6 +92,7 @@ import * as ExtensionApi from "@gent/core/extensions/api"
 import {
   CapabilityError,
   ExtensionContext,
+  type ExtensionContextService,
   ExtensionHost,
   request,
   tool,
@@ -965,6 +966,146 @@ const waitForReply = (params: {
     `reply ${params.reply}`,
   )
 
+// ── turn-origin fixtures ────────────────────────────────────────────────────
+
+const originProbeId = ExtensionId.make("@test/interaction-origin")
+
+/** A nudge lands on its own run's branch unless it names another. */
+const NudgeInput = Schema.Struct({
+  label: Schema.String,
+  sessionId: Schema.optional(SessionId),
+  branchId: Schema.optional(BranchId),
+})
+
+/**
+ * An extension whose `nudge` request queues a waking message, the way a wake,
+ * a monitor, a child's completion and every workflow slash command reach a
+ * branch. The message claims the client origin, which only the server grants.
+ * `arm` keeps the context of the request that ran it, so a later call can
+ * send through it after that request ended. `handoff_probe` is an
+ * interactive tool, like `handoff`: a turn no user watches does not see it.
+ */
+const makeOriginProbe = () => {
+  const armed = MutableRef.make(Option.none<ExtensionContextService>())
+  const nudgeWith = (ctx: ExtensionContextService, input: typeof NudgeInput.Type) =>
+    ctx.Session.send({
+      delivery: "queue",
+      sourceId: `nudge:${input.label}`,
+      content: input.label,
+      metadata: { fromClient: true },
+      wake: true,
+      sessionId: input.sessionId,
+      branchId: input.branchId,
+    })
+  const extension: LoadedExtension = {
+    ...InteractionProbeExtension,
+    manifest: { id: originProbeId },
+    artifactIdentity: LoadedArtifactIdentity.make("@test/interaction-origin@artifact-1"),
+    contributions: {
+      tools: [
+        ...(InteractionProbeExtension.contributions.tools ?? []),
+        tool({
+          id: "handoff_probe",
+          interactive: true,
+          description: "Ask to hand off, like the handoff tool",
+          params: Schema.Struct({ text: Schema.String }),
+          output: Schema.Struct({ approved: Schema.Boolean }),
+          execute: Effect.fn("handoff_probe")(function* (params) {
+            const ctx = yield* ExtensionContext
+            const decision = yield* ctx.Interaction.approve({ text: params.text })
+            return { approved: decision.approved }
+          }),
+        }),
+      ],
+      requests: [
+        request({
+          id: "nudge",
+          input: NudgeInput,
+          output: Schema.Void,
+          execute: Effect.fn("nudge")(function* (input) {
+            yield* nudgeWith(yield* ExtensionContext, input)
+          }),
+        }),
+        request({
+          id: "arm",
+          input: Schema.Struct({}),
+          output: Schema.Void,
+          execute: Effect.fn("arm")(function* () {
+            MutableRef.set(armed, Option.some(yield* ExtensionContext))
+          }),
+        }),
+        request({
+          id: "fire",
+          input: NudgeInput,
+          output: Schema.Void,
+          execute: Effect.fn("fire")(function* (input) {
+            const ctx = MutableRef.get(armed)
+            if (Option.isNone(ctx)) return yield* Effect.die("fire before arm")
+            yield* nudgeWith(ctx.value, input)
+          }),
+        }),
+      ],
+    },
+  }
+  return extension
+}
+
+/** Client helpers over the origin probe. */
+const originClient = (client: GentNamespacedClient) => {
+  const call = (
+    capabilityId: "nudge" | "arm" | "fire",
+    at: { readonly sessionId: SessionId; readonly branchId: BranchId },
+    input: typeof NudgeInput.Type | Record<string, never>,
+  ) =>
+    client.extension.request({
+      sessionId: at.sessionId,
+      branchId: at.branchId,
+      extensionId: originProbeId,
+      capabilityId,
+      input,
+    })
+  /** Start `trigger`, answer the dialog it opens, and wait for `reply`. */
+  const approves = <E>(
+    target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+    trigger: Effect.Effect<unknown, E>,
+    question: string,
+    reply: string,
+  ) =>
+    Effect.gen(function* () {
+      const presented = yield* client.session.events(target).pipe(
+        Stream.filterMap((envelope) => {
+          if (envelope.event._tag === "InteractionPresented") return Result.succeed(envelope.event)
+          return Result.failVoid
+        }),
+        Stream.filter((event) => event.text === question),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      yield* trigger
+      const dialog = Array.from(yield* Fiber.join(presented))[0]
+      if (Predicate.isUndefined(dialog)) return yield* Effect.die("no dialog")
+      yield* client.interaction.respondInteraction({
+        ...target,
+        requestId: dialog.requestId,
+        approved: true,
+      })
+      yield* waitForReply({ client, ...target, reply })
+    })
+  /** Run `trigger` and wait until the branch replies `reply` with no dialog; returns its messages. */
+  const declines = <E>(
+    target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+    trigger: Effect.Effect<unknown, E>,
+    reply: string,
+  ) =>
+    Effect.gen(function* () {
+      yield* trigger
+      const snapshot = yield* waitForReply({ client, ...target, reply })
+      return snapshot.messages
+    })
+  return { call, approves, declines }
+}
+
 describe("interaction.respondInteraction", () => {
   it.scopedLive(
     "rehydrates one pending interaction after restart and accepts response before explicit actor wake",
@@ -1464,6 +1605,68 @@ describe("interaction.respondInteraction", () => {
             client.message.send({ ...child, content: "run the probe" }),
             "approve from the child's user?",
             "child user done",
+          )
+        }).pipe(Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live(
+    "a handoff session's extension and slash-command turns ask and keep interactive tools, and so do a second handoff's",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("handoff_probe", { text: "hand off again from the wake?" }),
+            textStep("handoff wake done"),
+            toolCallStep("handoff_probe", { text: "hand off again from the command?" }),
+            textStep("handoff command done"),
+            toolCallStep("approval_probe", { text: "approve in the second handoff?" }),
+            textStep("second handoff wake done"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [makeOriginProbe()],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const origin = originClient(client)
+          const top = yield* client.session.create({ cwd: "/tmp" })
+          const handoff = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: top.sessionId,
+            parentBranchId: top.branchId,
+            continueThread: true,
+          })
+          // A wake, a monitor or a child's completion reaches the handoff
+          // from outside any request a client made to it.
+          yield* origin.approves(
+            handoff,
+            origin.call("nudge", top, { label: "wake the handoff", ...handoff }),
+            "hand off again from the wake?",
+            "handoff wake done",
+          )
+          // A workflow slash command runs as a request on the handoff itself.
+          yield* origin.approves(
+            handoff,
+            origin.call("nudge", handoff, { label: "/handoff in the handoff" }),
+            "hand off again from the command?",
+            "handoff command done",
+          )
+          // A handoff of a handoff is still the user's own conversation.
+          const second = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: handoff.sessionId,
+            parentBranchId: handoff.branchId,
+            continueThread: true,
+          })
+          yield* origin.approves(
+            second,
+            origin.call("nudge", top, { label: "wake the second handoff", ...second }),
+            "approve in the second handoff?",
+            "second handoff wake done",
           )
         }).pipe(Effect.timeout("12 seconds")),
       ),

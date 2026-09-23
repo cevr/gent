@@ -2924,7 +2924,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (cancelled) yield* scope.turnInterruption.interrupt
 
       // Whether a user can answer comes from what opened the turn and
-      // whether its session has a parent (`turnCanAsk`).
+      // whether its session was spawned (`turnCanAsk`).
       const turnProfile = yield* scope.resolveTurnProfile({
         openedByClient: openedByClient(state.message),
       })

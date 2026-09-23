@@ -331,7 +331,7 @@ export class ExtensionLoadError extends Schema.TaggedError<ExtensionLoadError>(
 export interface SystemPromptInput {
   readonly basePrompt: string
   readonly agent: AgentDefinition
-  /** False when no user can answer in this turn: a child turn no client opened (`turnCanAsk`). */
+  /** False when no user can answer in this turn: a spawned session's turn no client opened (`turnCanAsk`). */
   readonly interactive?: boolean
   /**
    * Tools resolved for this turn, for a hook that renders them into the
@@ -687,7 +687,7 @@ export const mapExtensionServiceError = <A, E, R>(
  *
  * Every mode stamps the sending extension's id on the message's `metadata`,
  * over any the caller set, and removes the client origin only the server
- * stamps: a turn it opens in a child session has no user to ask
+ * stamps: a turn it opens in a spawned session has no user to ask
  * (`turnCanAsk`).
  */
 export const SessionSendParams = Schema.Union([

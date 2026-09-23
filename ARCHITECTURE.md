@@ -537,11 +537,15 @@ replay also requires a trusted, unchanged saved tool binding.
 
 Whether a turn can ask comes from its session and its origin, not from a
 stored flag (`turnCanAsk` in `domain/message.ts`): a turn can ask unless its
-session has a parent and no client opened it. A top-level session's user
-watches every turn there, so its wake, monitor and delegate-completion turns
-ask. In a child session, only a turn a client opened asks (a user who prompts
-or steers the child); a turn its parent's `delegate.start` or `session.send`,
-a wake or a monitor opened declines. The origin is trusted: the server stamps
+session was spawned and no client opened it. A spawned session
+(`isSpawnedSession`) has a parent and starts its own thread: a delegate child
+or a `/btw` fork. A handoff has a parent too, but it joins the parent's
+thread, so it is the user's own conversation; spawn depth counts the same
+rule. A top-level or handoff session's user watches every turn there, so its
+wake, monitor, delegate-completion and slash-command turns ask. In a spawned
+session, only a turn a client opened asks (a user who prompts or steers the
+child); a turn its parent's `delegate.start` or `session.send`, a wake or a
+monitor opened declines. The origin is trusted: the server stamps
 `metadata.fromClient` on every message a client sends (`message.send`, a
 session's initial prompt, a `steer.command` interjection) over whatever the
 client set, and removes a client-supplied `extensionId`; an extension's

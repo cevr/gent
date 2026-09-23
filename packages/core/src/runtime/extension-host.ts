@@ -134,6 +134,7 @@ import {
   type MessageMetadata,
   type Session,
   turnCanAsk,
+  isSpawnedSession,
 } from "../domain/message.js"
 import {
   AgentLoop as AgentLoopActor,
@@ -2678,9 +2679,7 @@ export const resolveTurnProfile = (params: {
     const session = yield* storedSession(params.sessionId)
     const sessionCwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
     const interactive = turnCanAsk({
-      sessionHasParent: Option.exists(session, (value) =>
-        Predicate.isNotUndefined(value.parentSessionId),
-      ),
+      sessionIsSpawned: Option.exists(session, isSpawnedSession),
       openedByClient: params.openedByClient,
     })
     const runInfo = {

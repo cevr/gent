@@ -264,18 +264,20 @@ export const clientMetadata = (metadata?: MessageMetadata): MessageMetadata => {
 }
 
 /**
- * Whether a turn can ask its user. A top-level session always has its user
- * watching, so its wake, monitor and child-completion turns ask too. A child
- * session's turn asks only when a client opened it: no one watches a turn its
- * parent, a wake or a monitor opened, so an approval there declines at once.
- * A child row stored before the client origin existed has no stamp, so it
- * declines. The answer comes from the turn's opening message and the stored
- * session, so it holds for the turn's whole life, a restart included.
+ * Whether a turn can ask its user. A session its user drives (a top-level
+ * session, or a handoff that continues its thread) always has its user
+ * watching, so its wake, monitor, child-completion and slash-command turns
+ * ask too. A spawned session's turn (`isSpawnedSession`) asks only when a
+ * client opened it: no one watches a turn its parent, a wake or a monitor
+ * opened, so an approval there declines at once. A spawned row stored before
+ * the client origin existed has no stamp, so it declines. The answer comes
+ * from the turn's opening message and the stored session, so it holds for
+ * the turn's whole life, a restart included.
  */
 export const turnCanAsk = (turn: {
-  readonly sessionHasParent: boolean
+  readonly sessionIsSpawned: boolean
   readonly openedByClient: boolean
-}): boolean => !turn.sessionHasParent || turn.openedByClient
+}): boolean => !turn.sessionIsSpawned || turn.openedByClient
 
 /** Whether a client sent the message that opens a turn (`clientMetadata`). */
 export const openedByClient = (opening: Message): boolean => opening.metadata?.fromClient === true
@@ -516,6 +518,22 @@ export class Session extends Schema.Class<Session>("Session")({
   createdAt: DateFromNumber,
   updatedAt: DateFromNumber,
 }) {}
+
+/** The thread a session belongs to: its stored thread, else its own. */
+export const sessionThread = (session: Pick<Session, "id" | "threadId">): SessionId =>
+  session.threadId ?? session.id
+
+/**
+ * A spawned session: one with a parent that starts its own thread (a
+ * delegate child, a `/btw` fork). A handoff also has a parent, but it joins
+ * the parent's thread, so it is the same user's conversation, not a spawn.
+ * One rule for spawn depth (`getSessionDepth`) and for who can answer in a
+ * session's turns (`turnCanAsk`).
+ */
+export const isSpawnedSession = (
+  session: Pick<Session, "id" | "threadId" | "parentSessionId">,
+): boolean =>
+  Predicate.isNotUndefined(session.parentSessionId) && sessionThread(session) === session.id
 
 // Branch
 

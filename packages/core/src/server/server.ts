@@ -24,6 +24,7 @@ import {
   type SessionAdmission,
   toolCallReceipts,
   clientMetadata,
+  sessionThread,
 } from "../domain/message.js"
 import {
   BranchStorage,
@@ -609,7 +610,7 @@ const makeSessionMutationsService: Effect.Effect<
       return { threadId: Option.none<SessionId>(), admission }
     }
     return {
-      threadId: Option.some(parent.threadId ?? parent.id),
+      threadId: Option.some(sessionThread(parent)),
       admission: admission ?? parent.admission,
     }
   })
