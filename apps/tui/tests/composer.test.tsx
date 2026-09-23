@@ -639,6 +639,82 @@ describe("Composer renderer", () => {
   )
 })
 
+// ── composer submit ─────────────────────────────────────────────────────────
+
+/**
+ * Submit takes the draft before any async work: a second Enter while a
+ * `!cmd` runs or `@file` refs expand finds an empty composer.
+ */
+
+const submitTest = it.scopedLive.layer(testLayer)
+
+describe("Composer submit", () => {
+  submitTest("a second Enter while !cmd runs neither runs it again nor sends twice", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      // The command waits for a gate file, so it is still running when the
+      // second Enter arrives. The finalizer opens the gate on every exit.
+      yield* Effect.addFinalizer(() => Effect.ignore(fs.writeFileString(`${dir}/go`, "")))
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+          {
+            cwd: dir,
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* Effect.promise(() =>
+        setup.mockInput.typeText("until [ -e go ]; do sleep 0.02; done; echo ran >> count"),
+      )
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* Effect.promise(() => setup.renderOnce())
+      // The draft left the composer when the command started.
+      expect(renderFrame(setup)).not.toContain("until")
+      setup.mockInput.pressEnter()
+      yield* fs.writeFileString(`${dir}/go`, "")
+      yield* waitForFrame(setup, () => submitted.length === 1, "submitted")
+      expect(submitted).toHaveLength(1)
+      expect(yield* fs.readFileString(`${dir}/count`)).toBe("ran\n")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  submitTest("a second Enter while @file refs expand does not send twice", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${dir}/notes.md`, "notes body")
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+          {
+            cwd: dir,
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("see @notes.md"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => submitted.length >= 1, "submitted")
+      // Both expansions would start together; a second send lands within this bound.
+      const second = yield* waitForFrame(
+        setup,
+        () => submitted.length >= 2,
+        "second send",
+        300,
+      ).pipe(Effect.option)
+      expect(Option.isNone(second)).toBe(true)
+      expect(submitted).toHaveLength(1)
+      expect(submitted[0]).toContain("notes body")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
 // ── autocomplete popup ──────────────────────────────────────────────────────
 
 /**

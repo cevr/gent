@@ -530,7 +530,6 @@ interface ComposerController {
 
 function useComposerController(): ComposerController {
   const sc = useSessionController()
-  const workspace = useWorkspace()
   const { theme } = useTheme()
   const command = useCommand()
   const client = useClient()
@@ -538,6 +537,7 @@ function useComposerController(): ComposerController {
   const env = useEnv()
   const { cast } = useRuntime()
   const history = usePromptHistory()
+  const workspace = useWorkspace()
   const paste = createPasteManager()
   const extensionUI = useExtensionUI()
 
@@ -712,7 +712,22 @@ function useComposerController(): ComposerController {
     applyTokenHighlights()
   }
 
+  /**
+   * Put a submit that failed back in the composer, unless the reader has
+   * started a new draft since. The submit took the draft when it began.
+   */
+  const restoreDraft = (text: string) => {
+    if (Option.isNone(inputRef) || inputRef.value.plainText.length > 0) return
+    inputRef.value.replaceText(text)
+    inputRef.value.cursorOffset = text.length
+    sc.onComposerInteraction(ComposerInteractionEvent.cases.RestoreDraft.make({ text }))
+  }
+
   const submitShellCommand = (text: string) => {
+    // The command leaves the composer before it runs, so a second Enter
+    // finds an empty draft instead of running it again.
+    sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
+    clearInput()
     cast(
       executeShell(text, workspace.cwd).pipe(
         Effect.map(({ output, truncated, savedPath }) => {
@@ -727,8 +742,6 @@ function useComposerController(): ComposerController {
         }),
         Effect.tap((userMessage) =>
           Effect.sync(() => {
-            sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
-            clearInput()
             sc.onSubmit(userMessage)
           }),
         ),
@@ -743,6 +756,10 @@ function useComposerController(): ComposerController {
               onSome: (value) => value.message,
             })
             client.setError(message)
+            if (Option.isSome(inputRef) && inputRef.value.plainText.length === 0) {
+              sc.onComposerInteraction(ComposerInteractionEvent.cases.EnterShell.make({}))
+              restoreDraft(text)
+            }
           }),
         ),
       ),
@@ -764,11 +781,13 @@ function useComposerController(): ComposerController {
   const submitMessage = (text: string, mode: "queue" | "interject") => {
     client.log.info("composer.submit.requested", { contentLength: text.length, mode })
     history.add(text)
+    // The message leaves the composer before its `@file` refs expand, so a
+    // second Enter finds an empty draft instead of sending it again.
+    clearInput()
     cast(
       expandFileRefs(text, workspace.cwd).pipe(
         Effect.tap((expanded) =>
           Effect.sync(() => {
-            clearInput()
             sc.onSubmit(expanded, mode)
           }),
         ),
