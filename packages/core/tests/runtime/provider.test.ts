@@ -461,7 +461,9 @@ describe("model catalog resolution", () => {
     }),
   )
 
-  it.scopedLive("an auth lookup that fails before a driver lists is reported, not listed", () =>
+  // An auth store that cannot be read is not one driver's catalog problem: the
+  // catalog and a turn's model lookup fail as auth errors, not as UnknownModel.
+  it.scopedLive("an auth store read failure fails the catalog and get as an auth error", () =>
     Effect.gen(function* () {
       let listed = false
       const registry = yield* loadRegistryWithDrivers(
@@ -473,19 +475,20 @@ describe("model catalog resolution", () => {
             listModels: () =>
               Effect.sync(() => {
                 listed = true
-                return []
+                return [catalogModel("auth-driver/one")]
               }),
           },
         ],
         failingReadAuthLayer,
       )
 
-      const catalog = yield* registry.catalog
+      const catalogError = yield* Effect.flip(registry.catalog)
+      const getError = yield* Effect.flip(registry.get("auth-driver/one"))
 
       expect(listed).toBe(false)
-      expect(catalog.models).toEqual([])
-      expect(catalog.failures.map((failure) => failure.driverId)).toEqual(["auth-driver"])
-      expect(catalog.failures[0]?.error).toContain('Failed to read auth for provider "auth-driver"')
+      expect(catalogError._tag).toBe("ProviderAuthError")
+      expect(catalogError.message).toContain('Failed to read auth for provider "auth-driver"')
+      expect(getError._tag).toBe("ProviderAuthError")
     }),
   )
 

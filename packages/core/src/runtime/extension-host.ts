@@ -861,7 +861,8 @@ interface ModelCatalog {
  * Concatenate every model driver's own catalog. Core fetches nothing itself.
  * A driver whose catalog fails (an error, a defect, or a list that does not
  * decode) is skipped and reported, so one unreachable driver never hides the
- * models of the others.
+ * models of the others. An auth store that cannot be read is not one driver's
+ * failure: it fails the whole catalog as a `ProviderAuthError`.
  */
 export const listModelCatalog = Effect.fn("ExtensionRegistry.listModelCatalog")(function* (
   modelDrivers: ReadonlyMap<string, ModelDriverContribution>,
@@ -875,11 +876,11 @@ export const listModelCatalog = Effect.fn("ExtensionRegistry.listModelCatalog")(
   for (const driver of modelDrivers.values()) {
     const listModels = driver.listModels
     if (Predicate.isUndefined(listModels)) continue
+    let auth = Option.none<ProviderAuthInfo>()
+    if (!Predicate.isUndefined(resolveAuth)) {
+      auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
+    }
     const driverCatalog = yield* Effect.gen(function* () {
-      let auth = Option.none<ProviderAuthInfo>()
-      if (!Predicate.isUndefined(resolveAuth)) {
-        auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
-      }
       const listed = yield* listModels(Option.getOrUndefined(auth))
       const decoded = decodeModelCatalog(listed)
       if (Option.isNone(decoded)) {

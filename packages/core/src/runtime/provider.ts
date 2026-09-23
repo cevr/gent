@@ -800,7 +800,9 @@ export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* ()
 
 /** One model of the caller's profile catalog: the turn's context limit and pricing. */
 interface ModelRegistryService {
-  readonly get: (modelId: string) => Effect.Effect<Option.Option<Model>, never, ExtensionRegistry>
+  readonly get: (
+    modelId: string,
+  ) => Effect.Effect<Option.Option<Model>, ProviderAuthError, ExtensionRegistry>
 }
 
 export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryService>()(
