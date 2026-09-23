@@ -1110,10 +1110,26 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
 /**
  * A quoted name is a read wherever it sits -- `Config.string("GENT_X")`, the
  * last argument of `Config.literals([...], "GENT_X")` on its own line,
- * `optionalEnv("GENT_X")` or `process.env["GENT_X"]` -- unless it is a record
- * key or the target of an assignment.
+ * `optionalEnv("GENT_X")`, `process.env["GENT_X"]` or either branch of a
+ * ternary -- unless it is a record key or the target of an assignment.
  */
-const QUOTED_NAME = /["'](GENT_[A-Z0-9_]+)["'](?!\s*:|\]\s*=(?!=))/g
+const QUOTED_NAME = /["'](GENT_[A-Z0-9_]+)["']/g
+
+/** A record key opens its line or follows `{` or `,`, and a `:` follows it. */
+const RECORD_KEY_BEFORE = /(?:^|[{,])\s*$/
+const RECORD_KEY_AFTER = /^\s*:/
+/** `env["GENT_X"] = v`. */
+const INDEX_ASSIGNMENT_AFTER = /^\]\s*=(?!=)/
+
+/** The quoted names `line` reads: every quoted name that is not a key or an assignment target. */
+const quotedReads = (line: string): ReadonlyArray<string> =>
+  [...line.matchAll(QUOTED_NAME)].flatMap((match) => {
+    const before = line.slice(0, match.index)
+    const after = line.slice(match.index + match[0].length)
+    if (RECORD_KEY_BEFORE.test(before) && RECORD_KEY_AFTER.test(after)) return []
+    if (INDEX_ASSIGNMENT_AFTER.test(after)) return []
+    return Option.toArray(Option.fromNullishOr(match[1]))
+  })
 
 /** A direct property read, `process.env.GENT_X` or `Bun.env.GENT_X`, that is not an assignment. */
 const DIRECT_READ = /\b(?:process|Bun)\.env\.(GENT_[A-Z0-9_]+)\b(?!\s*=(?!=))/g
@@ -1123,11 +1139,13 @@ const DIRECT_READ = /\b(?:process|Bun)\.env\.(GENT_[A-Z0-9_]+)\b(?!\s*=(?!=))/g
  * such as a message saying `GENT_X=1`, sets nothing:
  *
  * - a key of an env record: `env: { GENT_X: v }`, `const env = { "GENT_X": v }`,
- *   the shape a spawned process receives;
+ *   `const childEnv = { GENT_X: v }`, the shape a spawned process receives. A
+ *   record bound to any other name is not read as a writer, so its reader is
+ *   reported: the guard fails loud there, never open;
  * - an assignment: `process.env.GENT_X = v`, `Bun.env["GENT_X"] = v`;
  * - a shell prefix in a package script: `"dev": "GENT_X=1 bun run ..."`.
  */
-const ENV_RECORD_OPEN = /\benv\s*[:=]\s*\{/g
+const ENV_RECORD_OPEN = /\b(?:env|[a-z]\w*Env)\s*[:=]\s*\{/g
 const ENV_RECORD_KEY = /(?:^|[{,\s])["']?(GENT_[A-Z0-9_]+)["']?\s*:/g
 const ENV_ASSIGNMENT =
   /\b(?:process|Bun)\.env(?:\.(GENT_[A-Z0-9_]+)|\[["'](GENT_[A-Z0-9_]+)["']\])\s*=(?!=)/g
@@ -1194,10 +1212,7 @@ const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>) => {
     // A comment that shows `GENT_X=1` documents a variable; it sets nothing.
     const code = withoutComments(text)
     for (const [index, line] of code.split("\n").entries()) {
-      for (const name of [
-        ...namesMatching(line, QUOTED_NAME),
-        ...namesMatching(line, DIRECT_READ),
-      ]) {
+      for (const name of [...quotedReads(line), ...namesMatching(line, DIRECT_READ)]) {
         const found = readers.get(name) ?? []
         found.push({ file, line: index + 1 })
         readers.set(name, found)

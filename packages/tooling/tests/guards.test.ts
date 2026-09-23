@@ -29,6 +29,7 @@ import {
   type PackageJson,
   RETIRED_SURFACES,
 } from "../src/guards"
+import { scanTrackedTexts } from "../src/check-guardrails"
 import { Option } from "effect"
 
 // ── blanket eslint disable ──────────────────────────────────────────────────
@@ -998,6 +999,62 @@ describe("a read variable must have a writer", () => {
     ])
   })
 
+  test("a name picked by a ternary is a read, on either branch", () => {
+    // The `:` of a ternary is not a record key's colon.
+    const findings = findReadersWithoutWriters(
+      new Map([
+        [
+          "packages/sdk/src/reader.ts",
+          [
+            `const name = flag ? "GENT_T1" : "GENT_T2"`,
+            `const other = flag`,
+            `  ? "GENT_T3"`,
+            `  : "GENT_T4"`,
+          ].join("\n"),
+        ],
+      ]),
+      none,
+    )
+    expect(findings.map((finding) => [finding.line, finding.message.split("`")[1]])).toEqual([
+      [1, "GENT_T1"],
+      [1, "GENT_T2"],
+      [3, "GENT_T3"],
+      [4, "GENT_T4"],
+    ])
+  })
+
+  test("a record key is not a read, quoted or bare, inline or on its own line", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        [
+          "packages/sdk/src/spawn.ts",
+          [
+            `const env = { "GENT_K1": "1", 'GENT_K2': "2" }`,
+            `const e2 = {`,
+            `  "GENT_K3": v,`,
+            `}`,
+          ].join("\n"),
+        ],
+      ]),
+      none,
+    )
+    expect(findings).toEqual([])
+  })
+
+  test("an env record bound to a name ending in Env sets its keys", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        ["packages/sdk/src/reader.ts", `Config.string("GENT_CHILD_MODE")\n`],
+        [
+          "packages/sdk/src/spawn.ts",
+          `const childEnv = { GENT_CHILD_MODE: "1" }\nBun.spawn(["gent"], { env: childEnv })\n`,
+        ],
+      ]),
+      none,
+    )
+    expect(findings).toEqual([])
+  })
+
   test("an operator entry nothing reads, or that production sets, is reported", () => {
     const findings = findReadersWithoutWriters(
       new Map([
@@ -1013,6 +1070,36 @@ describe("a read variable must have a writer", () => {
       expect.stringContaining("`GENT_UNREAD` is allowed as operator-set, but nothing reads it"),
       expect.stringContaining("`GENT_SET_HERE` is allowed as operator-set, but the tree sets it"),
     ])
+  })
+})
+
+describe("the guard entry routes each tracked file to its finders", () => {
+  const gentNames = (files: ReadonlyArray<{ readonly file: string; readonly text: string }>) =>
+    scanTrackedTexts(files, [])
+      .findings.map((finding) => finding.message)
+      .filter((message) => message.includes("GENT_PROBE_SCRIPT"))
+
+  test("a package script sets the variable its prefix names", () => {
+    // The runner once read package.json and dropped it before the variable
+    // scan, so a script writer counted only when a test fed it to the finder.
+    expect(
+      gentNames([
+        { file: "packages/sdk/src/reader.ts", text: `Config.string("GENT_PROBE_SCRIPT")\n` },
+        {
+          file: "apps/tui/package.json",
+          text: `{ "scripts": { "dev": "GENT_PROBE_SCRIPT=1 bun run x" } }\n`,
+        },
+      ]),
+    ).toEqual([])
+  })
+
+  test("with no script to set it, the entry still reports the reader", () => {
+    expect(
+      gentNames([
+        { file: "packages/sdk/src/reader.ts", text: `Config.string("GENT_PROBE_SCRIPT")\n` },
+        { file: "apps/tui/package.json", text: `{ "scripts": { "dev": "bun run x" } }\n` },
+      ]),
+    ).toEqual([expect.stringContaining("is read but nothing in the tree sets it")])
   })
 })
 
