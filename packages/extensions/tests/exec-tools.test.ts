@@ -88,6 +88,10 @@ describe("splitCdCommand", () => {
     }
   })
 
+  test("cd - stays in the command for bash", () => {
+    expect(Option.isNone(splitCdCommand("cd - && ls"))).toBe(true)
+  })
+
   test("a single-quoted directory is literal and still splits", () => {
     expect(splitCdCommand("cd '$x' && ls")).toEqual(Option.some({ cwd: "$x", command: "ls" }))
   })
@@ -98,6 +102,18 @@ describe("injectGitTrailers", () => {
     const result = injectGitTrailers('git commit -m "fix bug"', SessionId.make("sess-123"))
     expect(result).toContain('--trailer "Session-Id: sess-123"')
     expect(result).toContain("git commit")
+  })
+
+  test("a commit after git global options gets the trailer", () => {
+    expect(injectGitTrailers("git -C sub commit -m a", SessionId.make("s1"))).toBe(
+      'git -C sub commit --trailer "Session-Id: s1" -m a',
+    )
+  })
+
+  test("every commit in a chained command gets the trailer", () => {
+    expect(injectGitTrailers("git commit -m a && git commit -m b", SessionId.make("s1"))).toBe(
+      'git commit --trailer "Session-Id: s1" -m a && git commit --trailer "Session-Id: s1" -m b',
+    )
   })
 
   test("git push → unchanged", () => {
@@ -199,7 +215,7 @@ describe("classifyBashCommand", () => {
       "git -c x=y reset --hard",
       "git -C repo clean -fdx",
       "git --no-pager checkout -- file.ts",
-      "git -C repo restore --staged a.ts",
+      "git -C repo restore --worktree a.ts",
       "git -C repo add -A",
       "git add .",
     ]) {
@@ -223,6 +239,75 @@ describe("classifyBashCommand", () => {
       "git push -u origin main",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("external")
+    }
+  })
+
+  test("a git command that discards uncommitted changes is destructive", () => {
+    for (const command of [
+      "git checkout .",
+      "git checkout -- src/a.ts",
+      "git checkout -f main",
+      "git checkout --force main",
+      "git checkout -p src/a.ts",
+      "git restore src/a.ts",
+      "git restore .",
+      "git restore --worktree .",
+      "git restore -W src/a.ts",
+      "git restore --staged --worktree src/a.ts",
+      "git restore -SW src/a.ts",
+      "git switch -f main",
+      "git switch --discard-changes main",
+      "git branch -D feature",
+      "git branch --delete --force feature",
+      "git branch -f main HEAD~3",
+      "git stash drop",
+      "git stash clear",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
+  test("a git command that keeps file content is safe", () => {
+    // `restore --staged` alone only unstages: the working-tree file keeps its edits.
+    for (const command of [
+      "git restore --staged src/a.ts",
+      "git restore -S src/a.ts",
+      "git checkout main",
+      "git checkout -b feature",
+      "git switch -c feature",
+      "git branch -d feature",
+      "git branch feature",
+      "git stash",
+      "git stash pop",
+      "git stash list",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("a redirection joined to a word does not hide a flag", () => {
+    expect(classifyBashCommand("git reset --hard>/dev/null").level).toBe("destructive")
+    expect(classifyBashCommand("git add --all>/dev/null").level).toBe("destructive")
+    expect(classifyBashCommand("git push -f>/dev/null").level).toBe("destructive")
+    expect(classifyBashCommand("git push -f</dev/null").level).toBe("destructive")
+  })
+
+  test("ANSI-C quoting and the attr-source option do not hide a git command", () => {
+    expect(classifyBashCommand("git reset $'--hard'").level).toBe("destructive")
+    expect(classifyBashCommand("git --attr-source HEAD reset --hard").level).toBe("destructive")
+  })
+
+  test("a push that deletes remote refs names the deletion", () => {
+    for (const command of [
+      "git push --delete origin feature",
+      "git push -d origin feature",
+      "git push origin :feature",
+      "git push --mirror",
+      "git push --prune origin",
+    ]) {
+      const risk = classifyBashCommand(command)
+      expect(risk.level, command).toBe("destructive")
+      expect(risk.reason, command).toContain("delete")
     }
   })
 
