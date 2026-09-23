@@ -37,6 +37,7 @@ import {
   ExtensionId,
   type ExtensionServiceError,
   headTailChars,
+  isRuntimeUserMessage,
   latestAssistantText,
   type Message,
   makeRunSpec,
@@ -223,44 +224,39 @@ export const childOutcomeWords = (outcome: ChildOutcome): string => {
   return `ended (${failures.join(", ")})`
 }
 
-/** The child branch's messages, from the session detail. */
 /**
- * The messages of the child's start turn. A forked child's branch begins
- * with a copy of the parent's window; those rows are the parent's reply and
- * calls, never the child's. A later turn (a wake, a queued message) that ran
- * before a recovered delivery is not the start turn either: the slice ends at
- * the next regular user message or the next message that began a turn.
+ * The messages of the child's start turn: the start message and every
+ * message up to the next one that opened a turn. A forked child's branch
+ * begins with a copy of the parent's window; those rows are the parent's,
+ * never the child's. The loop's own user-role lines inside the turn (a
+ * continuation, the max-steps instruction, a model-change notice, a
+ * compaction marker) and a message joined into the running turn open no
+ * turn, so the slice reads past them to the child's answer. A later turn (a
+ * wake, a queued message, an interjection that woke the child) opens with a
+ * user message of its own, and the slice ends there.
  */
+export const startTurnMessages = <
+  M extends { readonly id: MessageId } & Parameters<typeof isRuntimeUserMessage>[0],
+>(
+  messages: ReadonlyArray<M>,
+  startId: MessageId,
+): ReadonlyArray<M> => {
+  const start = messages.findIndex((message) => message.id === startId)
+  if (start === -1) return []
+  const end = messages
+    .slice(start + 1)
+    .findIndex((message) => message.role === "user" && !isRuntimeUserMessage(message))
+  if (end === -1) return messages.slice(start)
+  return messages.slice(start, start + 1 + end)
+}
+
+/** The child branch's start-turn messages, from the session detail. */
 const childMessages = (entry: DelegateEntry) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const startId = startMessageId(entry.requestId)
     const detail = yield* ctx.Session.getDetail(entry.sessionId)
     const branch = detail.branches.find((current) => current.branch.id === entry.branchId)
-    const messages = branch?.messages ?? []
-    const start = messages.findIndex((message) => message.id === startId)
-    if (start === -1) return []
-    const laterTurns = yield* ctx.Session.events({
-      sessionId: entry.sessionId,
-      branchId: entry.branchId,
-    }).pipe(
-      Stream.takeUntil(isSynchronized),
-      Stream.filter(isTurnCompleted),
-      Stream.map((event) => event.messageId),
-      Stream.filter(
-        (messageId): messageId is MessageId =>
-          Predicate.isNotUndefined(messageId) && messageId !== startId,
-      ),
-      Stream.runCollect,
-      Effect.map((ids) => new Set<MessageId>(ids)),
-    )
-    const after = messages.slice(start + 1)
-    const end = after.findIndex(
-      (message) =>
-        (message._tag === "regular" && message.role === "user") || laterTurns.has(message.id),
-    )
-    if (end === -1) return messages.slice(start)
-    return messages.slice(start, start + 1 + end)
+    return startTurnMessages(branch?.messages ?? [], startMessageId(entry.requestId))
   })
 
 const childName = (prompt: string) => `${DELEGATE_AGENT_NAME}: ${prompt.slice(0, 60)}`
