@@ -3,10 +3,8 @@ import {
   Context,
   DateTime,
   Effect,
-  FileSystem,
   Layer,
   Option,
-  Path,
   Predicate,
   PubSub,
   Random,
@@ -19,21 +17,16 @@ import {
   type ExtensionContextService,
   type ExtensionContributions,
   type ExtensionFileLockServiceApi,
-  type ExtensionFilesService,
   ExtensionHost,
   type ExtensionHostContext,
   type ExtensionHostPlatform,
-  ExtensionHostProcessError,
   type ExtensionInteractionService,
-  type ExtensionProcessService,
-  ExtensionServiceError,
   type ExtensionSessionService,
   type ExtensionSetupServices,
   type ExtensionStateFacet,
   type GentExtension,
   type LoadedExtension,
   makeCollectingExtensionHost,
-  makeFileWriter,
   provideExtensionServices,
   registerContributions,
 } from "../domain/extension.js"
@@ -97,7 +90,7 @@ const defaultInteraction = (): ExtensionInteractionService => ({
   present: () => die("Interaction.present"),
 })
 
-/** The one host platform stub: a darwin box whose `runProcess` is unavailable. */
+/** The one host platform stub: a darwin box. */
 export const testExtensionHostPlatform = (home: string = "/tmp"): ExtensionHostPlatform => ({
   osInfo: {
     platform: "darwin",
@@ -108,86 +101,8 @@ export const testExtensionHostPlatform = (home: string = "/tmp"): ExtensionHostP
   },
   execPath: "/usr/bin/node",
   homeDirectory: home,
-  parentEnv: {},
   randomId: Random.nextInt.pipe(Effect.map((value) => `test-${value}`)),
   pathListSeparator: ":",
-  runProcess: (command) =>
-    Effect.fail(
-      new ExtensionHostProcessError({
-        command,
-        message: "test host runProcess unavailable",
-      }),
-    ),
-})
-
-const filesError = (operation: string) => (cause: unknown) => {
-  let message = String(cause)
-  if (cause instanceof Error) message = cause.message
-  return new ExtensionServiceError({ service: "ExtensionFiles", operation, message, cause })
-}
-
-/**
- * The same `Path` service the production facet uses. The stub used to spell
- * posix rules out by hand, which resolved a relative path from `/` instead of
- * the process cwd and silently dropped a leading `..`; a test that passed
- * against those rules could still fail in production. Effect's own posix
- * implementation is a plain value, so the stub reads it once and shares it.
- */
-const testPath: Path.Path = Effect.runSync(
-  Effect.scoped(Layer.build(Path.layer).pipe(Effect.map((ctx) => Context.get(ctx, Path.Path)))),
-)
-
-/** Runs against the ambient file system, or reports its absence. */
-const onFileSystem = <A, E>(
-  operation: string,
-  use: (fs: FileSystem.FileSystem) => Effect.Effect<A, E>,
-): Effect.Effect<A, ExtensionServiceError> =>
-  Effect.serviceOption(FileSystem.FileSystem).pipe(
-    Effect.flatMap((service) =>
-      Option.match(service, {
-        onNone: () => Effect.fail(filesError(operation)("FileSystem service unavailable in test")),
-        onSome: (fs) => use(fs).pipe(Effect.mapError(filesError(operation))),
-      }),
-    ),
-  )
-
-export const testExtensionFiles = (): ExtensionFilesService => ({
-  read: (path) => onFileSystem("read", (fs) => fs.readFileString(path)),
-  write: (path, content, options) =>
-    onFileSystem("write", (fs) => makeFileWriter(fs, testPath.dirname)(path, content, options)),
-  exists: (path) => onFileSystem("exists", (fs) => fs.exists(path)),
-  stat: (path) =>
-    onFileSystem("stat", (fs) =>
-      fs.stat(path).pipe(
-        Effect.map((info) => ({
-          type: info.type,
-          size: info.size,
-          mtime: Option.getOrUndefined(info.mtime),
-        })),
-      ),
-    ),
-  makeDirectory: (path, options) =>
-    onFileSystem("makeDirectory", (fs) => fs.makeDirectory(path, options)),
-  resolve: (...paths) => testPath.resolve(...paths),
-  join: (...paths) => testPath.join(...paths),
-  dirname: (path) => testPath.dirname(path),
-})
-
-export const testExtensionProcess = (host: ExtensionHostPlatform): ExtensionProcessService => ({
-  randomId: host.randomId,
-  run: (command, args, options) =>
-    host.runProcess(command, args, options).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ExtensionServiceError({
-            service: "ExtensionProcess",
-            operation: "run",
-            message: cause.message,
-            cause,
-          }),
-      ),
-    ),
-  parentEnv: host.parentEnv,
 })
 
 export const testExtensionFileLock = (): ExtensionFileLockServiceApi => ({
@@ -209,10 +124,6 @@ export const testExtensionHostContext = (
   agentName: overrides.agentName,
   Session: { ...defaultSession(), ...overrides.Session },
   Interaction: { ...defaultInteraction(), ...overrides.Interaction },
-  Process:
-    overrides.Process ??
-    testExtensionProcess(overrides.host ?? testExtensionHostPlatform(overrides.home)),
-  Files: overrides.Files ?? testExtensionFiles(),
   FileLock: overrides.FileLock ?? testExtensionFileLock(),
   State: overrides.State ?? (() => testExtensionState()),
 })
@@ -288,8 +199,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
   }
   const resolvedSession = overrides?.Session ?? Session
   const resolvedInteraction = overrides?.Interaction ?? Interaction
-  const resolvedProcess = overrides?.Process ?? testExtensionProcess(host)
-  const resolvedFiles = overrides?.Files ?? testExtensionFiles()
   const resolvedFileLock = overrides?.FileLock ?? testExtensionFileLock()
   const resolvedState = overrides?.State ?? testExtensionState()
   const resolvedExtensionId = overrides?.extensionId ?? ExtensionId.make("test-extension")
@@ -304,8 +213,6 @@ export const testToolContext = (overrides?: TestToolContextOverrides): TestToolC
     host,
     Session: resolvedSession,
     Interaction: resolvedInteraction,
-    Process: resolvedProcess,
-    Files: resolvedFiles,
     FileLock: resolvedFileLock,
     ...overrides,
     State: () => resolvedState,

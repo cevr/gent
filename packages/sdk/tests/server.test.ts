@@ -49,7 +49,6 @@ const PlatformCompiledBin: Layer.Layer<GentPlatform> = Layer.effect(
       execPath: Effect.succeed(COMPILED_BIN_PATH),
       siblingBinaryPath: () => Effect.succeed("/tmp/gent-cell"),
       homeDirectory: Effect.succeed("/tmp"),
-      env: Effect.succeed({}),
       pathListSeparator: Effect.succeed(":"),
       signal: () => Effect.void,
       hash: (_alg, input) => {

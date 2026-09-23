@@ -10,7 +10,6 @@ import {
 import {
   createRpcHarness,
   runToolWithCtx,
-  testExtensionFiles,
   testToolContext,
 } from "@gent/core-internal/test-utils/index"
 import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
@@ -26,8 +25,7 @@ import {
   GoalTool,
   remainingTokens,
 } from "../src/goal.js"
-import { BunFileSystem } from "@effect/platform-bun"
-import { ExtensionServiceError, makeFileWriter } from "@gent/core-internal/domain/extension"
+import { BunServices } from "@effect/platform-bun"
 import * as AiError from "effect/unstable/ai/AiError"
 
 // ── goal/goal.test ──────────────────────────────────────────────────────────
@@ -210,7 +208,7 @@ describe("goal store", () => {
         yield* fs.readFileString(`${home}/.gent/goals/${branchId}.json`),
       )
       expect(Option.fromUndefinedOr(snapshot.goal?.status)).toEqual(Option.some("complete"))
-    }).pipe(Effect.provide(BunFileSystem.layer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("a write the disk rejects mid-flight leaves no staging file behind", () =>
@@ -236,38 +234,22 @@ describe("goal store", () => {
             ),
           ),
       }
-      const files = testExtensionFiles()
       const ctx = testToolContext({
         sessionId: SessionId.make("goal-session"),
         branchId,
         toolCallId: ToolCallId.make("tc-goal"),
         home,
-        Files: {
-          ...files,
-          write: (path, content, options) =>
-            makeFileWriter(filling, files.dirname)(path, content, options).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ExtensionServiceError({
-                    service: "ExtensionFiles",
-                    operation: "write",
-                    message: cause.message,
-                    cause,
-                  }),
-              ),
-            ),
-        },
         State: { changed: () => Effect.void },
       })
       const created = yield* runToolWithCtx(
         GoalTool,
         { action: "create", objective: "Write the pelican poem" },
         ctx,
-      ).pipe(Effect.exit)
+      ).pipe(Effect.provideService(FileSystem.FileSystem, filling), Effect.exit)
       expect(Exit.isFailure(created)).toBe(true)
       // The failed write leaves nothing: no target, no staging sibling.
       expect(yield* fs.readDirectory(`${home}/.gent/goals`)).toEqual([])
-    }).pipe(Effect.provide(BunFileSystem.layer)),
+    }).pipe(Effect.provide(BunServices.layer)),
   )
 })
 

@@ -1997,15 +1997,12 @@ describe("extension command RPCs", () => {
               output: Schema.Struct({
                 hasSessionMutations: Schema.Boolean,
                 hasAgentRun: Schema.Boolean,
-                extensionContextProcessAvailable: Schema.Boolean,
                 extensionContextFollowUpQueued: Schema.Boolean,
-                extensionContextParentEnvIsObject: Schema.Boolean,
               }),
               execute: () =>
                 narrowR(
                   Effect.gen(function* () {
                     const extensionCtx = yield* ExtensionContext
-                    const processExit = yield* Effect.exit(extensionCtx.Process.run("echo", ["hi"]))
                     const followUpExit = yield* Effect.exit(
                       extensionCtx.Session.send({
                         delivery: "queue",
@@ -2016,11 +2013,7 @@ describe("extension command RPCs", () => {
                     return {
                       hasSessionMutations: false,
                       hasAgentRun: false,
-                      extensionContextProcessAvailable: Exit.isSuccess(processExit),
                       extensionContextFollowUpQueued: Exit.isSuccess(followUpExit),
-                      extensionContextParentEnvIsObject: Predicate.isObjectOrArray(
-                        extensionCtx.Process.parentEnv,
-                      ),
                     }
                   }),
                 ),
@@ -2048,9 +2041,7 @@ describe("extension command RPCs", () => {
           expect(result).toEqual({
             hasSessionMutations: false,
             hasAgentRun: false,
-            extensionContextProcessAvailable: true,
             extensionContextFollowUpQueued: true,
-            extensionContextParentEnvIsObject: true,
           })
         }).pipe(Effect.timeout("4 seconds")),
       )

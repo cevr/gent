@@ -28,12 +28,7 @@ import {
 } from "./capability.js"
 import type { ExternalDriverContribution, ModelDriverContribution } from "./driver.js"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type {
-  GentPlatform,
-  GentPlatformOsInfo,
-  ProcessResult,
-  RunProcessOptions,
-} from "../runtime/gent-platform.js"
+import type { GentPlatform, GentPlatformOsInfo } from "../runtime/gent-platform.js"
 import {
   ActorCommandId,
   BranchId,
@@ -464,16 +459,6 @@ export interface TurnProjection {
 
 // Extension — the core primitive
 
-export class ExtensionHostProcessError extends Schema.TaggedError<ExtensionHostProcessError>()(
-  "ExtensionHostProcessError",
-  {
-    command: Schema.String,
-    message: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-    timedOut: Schema.optional(Schema.Boolean),
-  },
-) {}
-
 interface ExtensionHostFacts {
   readonly osInfo: GentPlatformOsInfo
   readonly execPath: string
@@ -481,15 +466,9 @@ interface ExtensionHostFacts {
   readonly pathListSeparator: string
 }
 
+/** Host facts plus the id source core's own facet verbs mint request ids from. */
 export interface ExtensionHostPlatform extends ExtensionHostFacts {
-  // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
-  readonly parentEnv: Record<string, string | undefined>
   readonly randomId: Effect.Effect<string>
-  readonly runProcess: (
-    command: string,
-    args: ReadonlyArray<string>,
-    options?: RunProcessOptions,
-  ) => Effect.Effect<ProcessResult, ExtensionHostProcessError>
 }
 
 /** Platform services the loader itself runs against. */
@@ -519,7 +498,7 @@ export interface GentExtension<R = ExtensionSetupServices> {
 /**
  * `ExtensionHost` — the one service an extension's `setup` yields.
  *
- * It carries the setup-time facts (cwd, home, host facts, process helpers)
+ * It carries the setup-time facts (cwd, home, host facts)
  * and the two registration primitives:
  *
  * - `register(domain, ...values)` adds typed leaves to one registration
@@ -563,11 +542,7 @@ type RegistrationValue<D extends RegistrationDomain> = ElementOf<
 export interface ExtensionHostService {
   readonly cwd: string
   readonly home: string
-  readonly host: Pick<
-    ExtensionHostPlatform,
-    "osInfo" | "execPath" | "homeDirectory" | "pathListSeparator"
-  >
-  readonly Process: Pick<ExtensionHostPlatform, "parentEnv" | "runProcess">
+  readonly host: ExtensionHostFacts
   /** Registers leaves in one typed domain. Order within a domain is kept. */
   readonly register: <D extends RegistrationDomain>(
     domain: D,
@@ -628,10 +603,6 @@ export const makeCollectingExtensionHost = (
       execPath: facts.host.execPath,
       homeDirectory: facts.host.homeDirectory,
       pathListSeparator: facts.host.pathListSeparator,
-    },
-    Process: {
-      parentEnv: facts.host.parentEnv,
-      runProcess: facts.host.runProcess,
     },
     register: (domain, ...values) =>
       Effect.sync(() => {
@@ -853,50 +824,6 @@ export interface ExtensionInteractionService {
   }) => Effect.Effect<void, ExtensionServiceError | InteractionPendingError>
 }
 
-export interface ExtensionProcessService {
-  readonly randomId: Effect.Effect<string>
-  readonly run: (
-    command: string,
-    args: ReadonlyArray<string>,
-    options?: RunProcessOptions,
-  ) => Effect.Effect<ProcessResult, ExtensionServiceError>
-  // oxlint-disable-next-line effect/noNullish -- Process environment maps preserve absent variables at the host boundary.
-  readonly parentEnv: Record<string, string | undefined>
-}
-
-interface ExtensionFileStat {
-  readonly type:
-    | "File"
-    | "Directory"
-    | "SymbolicLink"
-    | "BlockDevice"
-    | "CharacterDevice"
-    | "FIFO"
-    | "Socket"
-    | "Unknown"
-  readonly size: bigint
-  // oxlint-disable-next-line effect/noNullish -- File stat preserves the platform's absent modification time.
-  readonly mtime: Date | undefined
-}
-
-export interface ExtensionFilesService {
-  readonly read: (path: string) => Effect.Effect<string, ExtensionServiceError>
-  readonly write: (
-    path: string,
-    content: string,
-    options?: { readonly atomic?: boolean },
-  ) => Effect.Effect<void, ExtensionServiceError>
-  readonly exists: (path: string) => Effect.Effect<boolean, ExtensionServiceError>
-  readonly stat: (path: string) => Effect.Effect<ExtensionFileStat, ExtensionServiceError>
-  readonly makeDirectory: (
-    path: string,
-    options?: { readonly recursive?: boolean; readonly mode?: number },
-  ) => Effect.Effect<void, ExtensionServiceError>
-  readonly resolve: (...paths: ReadonlyArray<string>) => string
-  readonly join: (...paths: ReadonlyArray<string>) => string
-  readonly dirname: (path: string) => string
-}
-
 export interface ExtensionFileLockServiceApi {
   readonly withLock: <A, E, R>(
     path: string,
@@ -932,8 +859,6 @@ export interface ExtensionHostContext {
   readonly host: ExtensionHostPlatform
   readonly Session: ExtensionSessionService
   readonly Interaction: ExtensionInteractionService
-  readonly Process: ExtensionProcessService
-  readonly Files: ExtensionFilesService
   readonly FileLock: ExtensionFileLockServiceApi
   /** Reports under the leaf's extension id, which a run does not know. */
   readonly State: ExtensionStateFacet
@@ -950,8 +875,6 @@ export interface ExtensionContextService {
   readonly home: string
   readonly Session: ExtensionSessionService
   readonly Interaction: ExtensionInteractionService
-  readonly Process: ExtensionProcessService
-  readonly Files: ExtensionFilesService
   readonly FileLock: ExtensionFileLockServiceApi
   readonly State: ExtensionStateServiceApi
 }
@@ -986,8 +909,6 @@ const extensionServicesFromHostContext = (
       home: ctx.home,
       Session: ctx.Session,
       Interaction: ctx.Interaction,
-      Process: ctx.Process,
-      Files: ctx.Files,
       FileLock: ctx.FileLock,
       State: ctx.State(extensionIdOption),
     }),
@@ -1265,29 +1186,6 @@ export class FileLockService extends Context.Service<FileLockService, FileLockAp
     }),
   )
 }
-
-// ── file-writer ─────────────────────────────────────────────────────────────
-
-/** File facade wiring shared by production and tool test composition. */
-export const makeFileWriter = (fs: FileSystem.FileSystem, dirname: (path: string) => string) =>
-  Effect.fn("ExtensionFiles.write")(function* (
-    path: string,
-    content: string,
-    options?: { readonly atomic?: boolean },
-  ) {
-    if (options?.atomic !== true) return yield* fs.writeFileString(path, content)
-    // Replace the directory entry, including a symlink, without changing its target.
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const staging = yield* fs.makeTempFileScoped({
-          directory: dirname(path),
-          prefix: ".gent-write-",
-        })
-        yield* fs.writeFileString(staging, content)
-        yield* fs.rename(staging, path)
-      }),
-    )
-  })
 
 // ── session-mutations ───────────────────────────────────────────────────────
 

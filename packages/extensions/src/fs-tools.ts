@@ -388,11 +388,13 @@ export const ReadTool = tool({
   output: ReadResult,
   execute: Effect.fn("ReadTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
 
-    const filePath = ctx.Files.resolve(params.path)
+    const filePath = path.resolve(ctx.cwd, params.path)
 
     // Check if path is a directory
-    const stat = yield* ctx.Files.stat(filePath).pipe(
+    const stat = yield* fs.stat(filePath).pipe(
       Effect.mapError(
         (e) =>
           new ReadError({
@@ -410,7 +412,7 @@ export const ReadTool = tool({
       })
     }
 
-    const content = yield* ctx.Files.read(filePath).pipe(
+    const content = yield* fs.readFileString(filePath).pipe(
       Effect.mapError(
         (e) =>
           new ReadError({
@@ -451,6 +453,32 @@ export const ReadTool = tool({
       ...(truncated && { nextOffset: endIndex + 1 }),
     }
   }),
+})
+
+// ── atomic write ────────────────────────────────────────────────────────────
+
+/**
+ * Replaces `path` with `content` through a staged sibling. The text lands in a
+ * temporary file in the target directory, which is then renamed over the
+ * path, so a reader never sees a half-written file. A symlink at `path` is
+ * replaced as a directory entry; its target is left untouched.
+ */
+export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
+  path: string,
+  content: string,
+) {
+  const fs = yield* FileSystem.FileSystem
+  const pathService = yield* Path.Path
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const staging = yield* fs.makeTempFileScoped({
+        directory: pathService.dirname(path),
+        prefix: ".gent-write-",
+      })
+      yield* fs.writeFileString(staging, content)
+      yield* fs.rename(staging, path)
+    }),
+  )
 })
 
 // ── write ───────────────────────────────────────────────────────────────────
@@ -499,16 +527,22 @@ export const WriteTool = tool({
   output: WriteResult,
   execute: Effect.fn("WriteTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
 
-    const filePath = ctx.Files.resolve(params.path)
+    const filePath = path.resolve(ctx.cwd, params.path)
+    const write = Effect.gen(function* () {
+      if (params.atomic === true) return yield* writeFileAtomic(filePath, params.content)
+      return yield* fs.writeFileString(filePath, params.content)
+    })
 
     return yield* ctx.FileLock.withLock(
       filePath,
       Effect.gen(function* () {
-        const dir = ctx.Files.dirname(filePath)
+        const dir = path.dirname(filePath)
 
         // Ensure directory exists
-        yield* ctx.Files.makeDirectory(dir, { recursive: true }).pipe(
+        yield* fs.makeDirectory(dir, { recursive: true }).pipe(
           Effect.mapError(
             (e) =>
               new WriteError({
@@ -519,7 +553,7 @@ export const WriteTool = tool({
           ),
         )
 
-        yield* ctx.Files.write(filePath, params.content, { atomic: params.atomic }).pipe(
+        yield* write.pipe(
           Effect.mapError(
             (e) =>
               new WriteError({
@@ -686,8 +720,10 @@ export const EditTool = tool({
   output: EditResult,
   execute: Effect.fn("EditTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
 
-    const filePath = ctx.Files.resolve(params.path)
+    const filePath = path.resolve(ctx.cwd, params.path)
 
     // Redaction check
     const redaction = detectRedaction(params.oldString, params.newString)
@@ -698,7 +734,7 @@ export const EditTool = tool({
     return yield* ctx.FileLock.withLock(
       filePath,
       Effect.gen(function* () {
-        const content = yield* ctx.Files.read(filePath).pipe(
+        const content = yield* fs.readFileString(filePath).pipe(
           Effect.mapError(
             (e) =>
               new EditError({
@@ -739,7 +775,7 @@ export const EditTool = tool({
           replacements = occurrences
         }
 
-        yield* ctx.Files.write(filePath, newContent).pipe(
+        yield* fs.writeFileString(filePath, newContent).pipe(
           Effect.mapError(
             (e) =>
               new EditError({
@@ -834,11 +870,13 @@ export const GrepTool = tool({
   output: GrepResult,
   execute: Effect.fn("GrepTool.execute")(function* (params) {
     const ctx = yield* ExtensionContext
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
 
-    const path = Option.fromNullishOr(params.path)
+    const target = Option.fromNullishOr(params.path)
     let basePath = ctx.cwd
-    if (Option.isSome(path)) {
-      basePath = ctx.Files.resolve(path.value)
+    if (Option.isSome(target)) {
+      basePath = path.resolve(ctx.cwd, target.value)
     }
     const limit = params.limit ?? 100
     const contextLines = params.context ?? 0
@@ -866,7 +904,7 @@ export const GrepTool = tool({
 
     const searchFile = (filePath: string): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const contentResult = yield* ctx.Files.read(filePath).pipe(Effect.option)
+        const contentResult = yield* fs.readFileString(filePath).pipe(Effect.option)
         if (Option.isNone(contentResult)) return
 
         const content = contentResult.value
@@ -895,7 +933,7 @@ export const GrepTool = tool({
         }
       })
 
-    const baseStat = yield* ctx.Files.stat(basePath).pipe(Effect.option)
+    const baseStat = yield* fs.stat(basePath).pipe(Effect.option)
     if (Option.isNone(baseStat)) {
       return yield* new GrepError({
         message: `Path not found: ${basePath}`,

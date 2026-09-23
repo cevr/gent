@@ -1,6 +1,7 @@
 import {
   Clock,
   Context,
+  Crypto,
   DateTime,
   Effect,
   FileSystem,
@@ -1577,10 +1578,13 @@ const childProcessSpawnerLive = Layer.effect(
   Effect.service(ProcessSpawner.ChildProcessSpawner),
 )
 
+// The platform services extension leaves yield directly: files, paths,
+// processes, and ids. Re-provided here so every root must supply them.
 const platformServicesLive = Layer.provideMerge(
   Layer.mergeAll(
     Layer.effect(FileSystem.FileSystem, Effect.service(FileSystem.FileSystem)),
     Layer.effect(Path.Path, Effect.service(Path.Path)),
+    Layer.effect(Crypto.Crypto, Effect.service(Crypto.Crypto)),
     Layer.effect(GentPlatform, Effect.service(GentPlatform)),
   ),
   childProcessSpawnerLive,

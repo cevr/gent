@@ -313,8 +313,8 @@ describe("defineExtension", () => {
       expect("parentEnv" in captured.value.host).toBe(false)
       expect("signalPid" in captured.value.host).toBe(false)
       expect("runProcess" in captured.value.host).toBe(false)
-      expect(captured.value.Process.parentEnv).toBeDefined()
-      expect(captured.value.Process.runProcess).toBeDefined()
+      expect("randomId" in captured.value.host).toBe(false)
+      expect("Process" in captured.value).toBe(false)
     }))
 
   test("defineExtension result wires through ExtensionRegistry + explicit prompt slots", () =>

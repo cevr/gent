@@ -245,7 +245,7 @@ describe("tool execution", () => {
         branchId: Schema.String,
         toolCallId: Schema.String,
         hasInteraction: Schema.Boolean,
-        hasProcessRun: Schema.Boolean,
+        hasSessionSend: Schema.Boolean,
       })
       const ProbeTool = tool({
         id: "probe",
@@ -260,7 +260,7 @@ describe("tool execution", () => {
               branchId: ctx.branchId,
               toolCallId: ctx.toolCallId ?? "",
               hasInteraction: Predicate.isFunction(ctx.Interaction.approve),
-              hasProcessRun: Predicate.isFunction(ctx.Process.run),
+              hasSessionSend: Predicate.isFunction(ctx.Session.send),
             }
           }),
       })
@@ -304,7 +304,7 @@ describe("tool execution", () => {
         branchId: "b",
         toolCallId: "tc-probe",
         hasInteraction: true,
-        hasProcessRun: true,
+        hasSessionSend: true,
       })
     }))
   test("returns error result when tool fails", () =>
@@ -592,15 +592,12 @@ describe("tool execution", () => {
         params: Schema.Struct({}),
         output: Schema.Struct({
           sessionId: Schema.String,
-          parentEnvEmpty: Schema.Boolean,
-          processDenied: Schema.Boolean,
           followUpDenied: Schema.Boolean,
           interactionDenied: Schema.Boolean,
         }),
         execute: () =>
           Effect.gen(function* () {
             const ctx = yield* ExtensionContext
-            const processExit = yield* Effect.exit(ctx.Process.run("echo", ["hi"]))
             const followUpExit = yield* Effect.exit(
               ctx.Session.send({ delivery: "queue", sourceId: "read-tool", content: "nope" }),
             )
@@ -609,8 +606,6 @@ describe("tool execution", () => {
             )
             return {
               sessionId: ctx.sessionId,
-              parentEnvEmpty: Object.keys(ctx.Process.parentEnv).length === 0,
-              processDenied: Exit.isFailure(processExit),
               followUpDenied: Exit.isFailure(followUpExit),
               interactionDenied: Exit.isFailure(interactionExit),
             }
@@ -653,8 +648,6 @@ describe("tool execution", () => {
       expect(result.isFailure).toBe(false)
       expect(result.result).toEqual({
         sessionId: "session-read-extension-context",
-        parentEnvEmpty: true,
-        processDenied: true,
         followUpDenied: true,
         interactionDenied: true,
       })

@@ -28,8 +28,6 @@ import { causeMessage } from "../domain/guards.js"
  *   - `pid`              — current process id
  *   - `execPath`         — absolute path to the running executable
  *   - `homeDirectory`    — current user home directory
- *   - `env`              — snapshot of parent process environment for child
- *                          process launches that must inherit shell config
  *   - `pathListSeparator`— PATH-like list separator (`;` on Windows, `:`
  *                          elsewhere)
  *   - `signal(pid, sig)` — deliver a POSIX signal (or `0` for liveness probe)
@@ -96,8 +94,6 @@ interface GentPlatformApi {
    */
   readonly siblingBinaryPath: (name: string) => Effect.Effect<string>
   readonly homeDirectory: Effect.Effect<string>
-  // oxlint-disable-next-line effect/noNullish -- Platform environment snapshots preserve undefined for absent process variables.
-  readonly env: Effect.Effect<Record<string, string | undefined>>
   readonly pathListSeparator: Effect.Effect<string>
   readonly signal: (pid: number, signal: GentPlatformSignal) => Effect.Effect<void, SignalError>
   readonly hash: (algorithm: GentPlatformHashAlgorithm, input: Uint8Array | string) => string
@@ -133,7 +129,6 @@ export class GentPlatform extends Context.Service<GentPlatform, GentPlatformApi>
           execPath: Effect.succeed("/usr/bin/node"),
           siblingBinaryPath: (name) => Effect.succeed(`/usr/bin/${name}`),
           homeDirectory: Effect.succeed("/tmp"),
-          env: Effect.succeed({}),
           pathListSeparator: Effect.succeed(":"),
           signal: () => Effect.void,
           // Deterministic, content-derived stub: same input → same digest.
@@ -176,16 +171,18 @@ export class ProcessError extends Schema.TaggedError<ProcessError>()("ProcessErr
   timedOut: Schema.optional(Schema.Boolean),
 }) {}
 
-export interface ProcessResult {
+interface ProcessResult {
   readonly exitCode: number
   readonly stdout: string
   readonly stderr: string
 }
 
-export interface RunProcessOptions {
+interface RunProcessOptions {
   readonly cwd?: string
   // oxlint-disable-next-line effect/noNullish -- Child-process environments use undefined to remove inherited variables.
   readonly env?: Record<string, string | undefined>
+  /** Merge `env` over the inherited environment instead of replacing it. */
+  readonly extendEnv?: boolean
   readonly timeout?: Duration.Duration
   readonly stdin?: "pipe" | "ignore" | "inherit"
   readonly stdout?: "pipe" | "ignore" | "inherit"
@@ -219,6 +216,7 @@ export const runProcess = (
       const spawn = ChildProcess.make(command, [...args], {
         cwd: options.cwd,
         env: options.env,
+        extendEnv: options.extendEnv,
         stdin: options.stdin,
         stdout: stdoutMode,
         stderr: stderrMode,

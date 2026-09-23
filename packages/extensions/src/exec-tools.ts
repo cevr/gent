@@ -441,7 +441,7 @@ const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
  * Scope owns the spawn finalizer — closing the scope kills the process
  * group via SIGTERM with SIGKILL fallback after SIGKILL_DELAY_MS.
  */
-const runBashCommand = (command: string, cwd: Option.Option<string>) =>
+export const runBashCommand = (command: string, cwd: Option.Option<string>) =>
   Effect.gen(function* () {
     const handle = yield* ChildProcess.make("bash", ["-c", command], {
       cwd: Option.getOrUndefined(cwd),

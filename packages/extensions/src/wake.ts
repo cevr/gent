@@ -2,16 +2,21 @@ import {
   Cause,
   Clock,
   Context,
+  Crypto,
   DateTime,
   Duration,
   Effect,
   FiberMap,
+  type FileSystem,
   Layer,
   Match,
   Option,
+  type Path,
+  type PlatformError,
   Predicate,
   Schema,
 } from "effect"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
   defineExtension,
   defineRequests,
@@ -25,7 +30,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
-import { classifyBashCommand } from "./exec-tools.js"
+import { classifyBashCommand, runBashCommand } from "./exec-tools.js"
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
@@ -299,9 +304,18 @@ export const nextDueAt = (dueAt: number, everySeconds: number, now: number): num
   return dueAt + (missed + 1) * every
 }
 
+/** What a timer needs while it runs: the branch context, its file, and the monitor's shell. */
+type WakeWorkServices =
+  | ExtensionContext
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+
+type WakeWorkError = ExtensionServiceError | PlatformError.PlatformError | WakeError
+
 const alarmWork: (
   entry: Extract<WakeEntry, { readonly _tag: "alarm" }>,
-) => Effect.Effect<void, ExtensionServiceError | WakeError, ExtensionContext> = (entry) =>
+) => Effect.Effect<void, WakeWorkError, WakeWorkServices> = (entry) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis
     yield* Effect.logInfo("wake.armed").pipe(
@@ -333,9 +347,8 @@ const matches = (
 
 const monitorWork = (
   entry: Extract<WakeEntry, { readonly _tag: "monitor" }>,
-): Effect.Effect<void, ExtensionServiceError | WakeError, ExtensionContext> =>
+): Effect.Effect<void, WakeWorkError, WakeWorkServices> =>
   Effect.gen(function* () {
-    const ctx = yield* ExtensionContext
     yield* Effect.logInfo("wake.monitor.armed").pipe(
       Effect.annotateLogs({ wakeId: entry.wakeId, everySeconds: entry.everySeconds }),
     )
@@ -343,10 +356,9 @@ const monitorWork = (
     let lastOutput = ""
     for (;;) {
       checks += 1
-      const result = yield* ctx.Process.run("bash", ["-c", entry.command], {
-        cwd: entry.cwd,
-        stdin: "ignore",
-      }).pipe(
+      const result = yield* Effect.scoped(
+        runBashCommand(entry.command, Option.fromUndefinedOr(entry.cwd)),
+      ).pipe(
         Effect.catch((error) => Effect.succeed({ exitCode: 1, stdout: "", stderr: error.message })),
       )
       lastOutput = [result.stdout, result.stderr].filter((text) => text.length > 0).join("\n")
@@ -437,6 +449,10 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: WakeEntry) {
     }
   }
   const ctx = yield* ExtensionContext
+  // The timer outlives this call, so it keeps the services it runs against.
+  const platform = yield* Effect.context<
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  >()
   const alarms = yield* WakeAlarms
   const work = workFor(entry)
   // A notice the fire left under the same id stays; only the pending entry goes.
@@ -455,6 +471,7 @@ const armEntry = Effect.fn("WakeTool.arm")(function* (entry: WakeEntry) {
         )
       }),
       Effect.provideService(ExtensionContext, ctx),
+      Effect.provideContext(platform),
     ),
   )
 })
@@ -566,7 +583,6 @@ export const WakeTool = tool({
   params: WakeParams,
   output: WakeResult,
   execute: Effect.fn("WakeTool.execute")(function* (params: typeof WakeParams.Type) {
-    const ctx = yield* ExtensionContext
     const now = yield* Clock.currentTimeMillis
     const dueAt = yield* dueAtOf(params, now)
     const everySeconds = Option.fromUndefinedOr(params.everySeconds)
@@ -580,7 +596,7 @@ export const WakeTool = tool({
     }
     // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.alarm.make({
-      wakeId: yield* ctx.Process.randomId,
+      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7,
       dueAt,
       note: params.note,
       ...omitUndefined({ everySeconds: params.everySeconds, mode: params.mode }),
@@ -694,7 +710,7 @@ export const MonitorTool = tool({
     const deadline = now + timeoutSeconds * 1000
     // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.monitor.make({
-      wakeId: yield* ctx.Process.randomId,
+      wakeId: yield* (yield* Crypto.Crypto).randomUUIDv7,
       command: params.command,
       cwd: Option.getOrElse(Option.fromUndefinedOr(params.cwd), () => ctx.cwd),
       everySeconds,

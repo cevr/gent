@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, FileSystem, Path } from "effect"
 import {
   AgentDefinition,
   AgentName,
@@ -67,19 +67,20 @@ const SEPARATOR = "\n---\n"
  * empty. When no location has content, the Claude user file stands in.
  */
 const locations = Effect.fn("Agents.locations")(function* () {
-  const { Files, cwd, home } = yield* ExtensionContext
+  const { cwd, home } = yield* ExtensionContext
+  const path = yield* Path.Path
   return [
-    [Files.join(home, ".gent", "AGENTS.md"), Files.join(home, ".gent", "CLAUDE.md")],
-    [Files.join(cwd, "AGENTS.md"), Files.join(cwd, "CLAUDE.md")],
-    [Files.join(cwd, ".gent", "AGENTS.md"), Files.join(cwd, ".gent", "CLAUDE.md")],
+    [path.join(home, ".gent", "AGENTS.md"), path.join(home, ".gent", "CLAUDE.md")],
+    [path.join(cwd, "AGENTS.md"), path.join(cwd, "CLAUDE.md")],
+    [path.join(cwd, ".gent", "AGENTS.md"), path.join(cwd, ".gent", "CLAUDE.md")],
   ]
 })
 
 const readIfPresent = Effect.fn("Agents.readIfPresent")(function* (path: string) {
-  const { Files } = yield* ExtensionContext
+  const fs = yield* FileSystem.FileSystem
   return yield* Effect.gen(function* () {
-    if (!(yield* Files.exists(path))) return ""
-    return (yield* Files.read(path)).trim()
+    if (!(yield* fs.exists(path))) return ""
+    return (yield* fs.readFileString(path)).trim()
   }).pipe(Effect.catchEager(() => Effect.succeed("")))
 })
 
@@ -99,14 +100,15 @@ const readFirstNonEmpty = Effect.fn("Agents.readFirstNonEmpty")(function* (
  * running session; a file that cannot be read counts as absent.
  */
 export const readProjectInstructions = Effect.fn("Agents.readProjectInstructions")(function* () {
-  const { Files, home } = yield* ExtensionContext
+  const { home } = yield* ExtensionContext
+  const path = yield* Path.Path
   const contents: Array<string> = []
   for (const candidates of yield* locations()) {
     const content = yield* readFirstNonEmpty(candidates)
     if (content.length > 0) contents.push(content)
   }
   if (contents.length === 0) {
-    const fallback = yield* readIfPresent(Files.join(home, ".claude", "CLAUDE.md"))
+    const fallback = yield* readIfPresent(path.join(home, ".claude", "CLAUDE.md"))
     if (fallback.length > 0) contents.push(fallback)
   }
   return contents.join(SEPARATOR)

@@ -51,8 +51,6 @@ export const BunGentPlatformLive: Layer.Layer<GentPlatform> = Layer.succeed(
 
     homeDirectory: Effect.sync(() => os.homedir()),
 
-    env: Effect.sync(() => Bun.env),
-
     pathListSeparator: Effect.sync(() => {
       if (os.platform() === "win32") {
         return ";"

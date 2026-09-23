@@ -12,8 +12,9 @@
  * same operations to another branch's file, for a hook that runs on a child
  * and writes its parent's record.
  */
-import { Effect, Option, Schema } from "effect"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
 import { type BranchId, ExtensionContext } from "@gent/core/extensions/api"
+import { writeFileAtomic } from "./fs-tools.js"
 
 interface BranchStateStoreInput<A, E> {
   /** Span prefix, e.g. `GoalStore`. */
@@ -32,26 +33,27 @@ export const makeBranchStateStore = <A, E>(input: BranchStateStoreInput<A, E>) =
   const encode = Schema.encodeSync(input.codec)
 
   const bind = (branch: Option.Option<BranchId>) => {
-    const path = Effect.gen(function* () {
+    const location = Effect.gen(function* () {
       const ctx = yield* ExtensionContext
-      const directory = ctx.Files.join(ctx.home, ".gent", input.directory)
+      const path = yield* Path.Path
+      const directory = path.join(ctx.home, ".gent", input.directory)
       const branchId = Option.getOrElse(branch, () => ctx.branchId)
-      return { directory, file: ctx.Files.join(directory, `${branchId}.json`) }
+      return { directory, file: path.join(directory, `${branchId}.json`) }
     })
 
     const read = Effect.fn(`${input.name}.read`)(function* () {
-      const ctx = yield* ExtensionContext
-      const { file } = yield* path
-      if (!(yield* ctx.Files.exists(file))) return input.empty
-      const text = yield* ctx.Files.read(file)
+      const fs = yield* FileSystem.FileSystem
+      const { file } = yield* location
+      if (!(yield* fs.exists(file))) return input.empty
+      const text = yield* fs.readFileString(file)
       return yield* decode(text).pipe(Effect.mapError((cause) => input.invalid(file, cause)))
     })
 
     const write = Effect.fn(`${input.name}.write`)(function* (value: A) {
-      const ctx = yield* ExtensionContext
-      const { directory, file } = yield* path
-      yield* ctx.Files.makeDirectory(directory, { recursive: true })
-      yield* ctx.Files.write(file, encode(value), { atomic: true })
+      const fs = yield* FileSystem.FileSystem
+      const { directory, file } = yield* location
+      yield* fs.makeDirectory(directory, { recursive: true })
+      yield* writeFileAtomic(file, encode(value))
     })
 
     /**
@@ -63,7 +65,7 @@ export const makeBranchStateStore = <A, E>(input: BranchStateStoreInput<A, E>) =
     ) =>
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
-        const { file } = yield* path
+        const { file } = yield* location
         return yield* ctx.FileLock.withLock(
           file,
           Effect.gen(function* () {

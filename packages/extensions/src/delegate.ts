@@ -11,7 +11,16 @@
  * when the parent's turn is interrupted. The parent's next turn and every
  * `delegate.list` reconcile what a crash left.
  */
-import { Cause, Effect, Option, Predicate, Record, Schema, Stream } from "effect"
+import {
+  Cause,
+  Effect,
+  Option,
+  type PlatformError,
+  Predicate,
+  Record,
+  Schema,
+  Stream,
+} from "effect"
 import {
   ActorCommandId,
   AgentDefinition,
@@ -132,7 +141,7 @@ const replaceEntry = (entries: ReadonlyArray<DelegateEntry>, entry: DelegateEntr
 
 /** Every fault behind the facade is one caller-facing error. */
 const asDelegateError = (message: string) =>
-  Effect.mapError((cause: ExtensionServiceError | DelegateError) => {
+  Effect.mapError((cause: ExtensionServiceError | PlatformError.PlatformError | DelegateError) => {
     if (Schema.is(DelegateError)(cause)) return cause
     return new DelegateError({ message: `${message}: ${cause.message}`, cause })
   })
