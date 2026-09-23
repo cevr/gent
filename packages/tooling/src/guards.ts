@@ -1350,6 +1350,8 @@ const platformProviderRootFiles = new Set([
   "packages/core/src/server/server-root.ts",
   // The host entry is the door hosts take to the platform roots.
   "packages/core/src/host.ts",
+  // The test entry hands test roots the full Bun platform.
+  "packages/core/src/test-utils/index.ts",
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])
@@ -2273,10 +2275,12 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     enforced: true,
   },
   {
+    // A host export exists for the processes that compose a server; a name
+    // only tests read is harness setup and belongs behind a test-utils operation.
     prefix: "packages/core/src/host.ts",
     exempt: [],
     outsideOf: ["packages/core/src/"],
-    testsCount: true,
+    testsCount: false,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/host"),
     enforced: true,

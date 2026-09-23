@@ -16,7 +16,6 @@ import {
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { BunServices } from "@effect/platform-bun"
-import { RuntimeEnvironment } from "@gent/core/host"
 import {
   finishPart,
   LanguageModelLayers,
@@ -30,6 +29,7 @@ import {
   runToolWithCtx,
   testLeafContext,
   testToolContext,
+  RuntimeEnvironment,
 } from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
 import {

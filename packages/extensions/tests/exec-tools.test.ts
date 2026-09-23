@@ -43,10 +43,11 @@ import {
   runToolWithCtx,
   testToolContext,
   type TestToolContext,
+  SqliteStorage,
 } from "@gent/core/test-utils"
 import { shippedPreset } from "./helpers/test-preset.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { BunPlatformLive, SqliteStorage } from "@gent/core/host"
+import { BunPlatformLive } from "@gent/core/host"
 import { maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"

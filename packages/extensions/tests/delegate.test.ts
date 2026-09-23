@@ -12,7 +12,6 @@ import {
   Struct,
 } from "effect"
 import { BunFileSystem } from "@effect/platform-bun"
-import { ConfigService, RuntimeEnvironment, UserConfig } from "@gent/core/host"
 import { childTaskText, DELEGATE_AGENT_NAME, DelegateEntry, StartChild } from "../src/delegate.js"
 import { DEFAULT_AGENT_NAME, RequestId } from "@gent/core/extensions/api"
 import {
@@ -27,6 +26,9 @@ import {
   textStep,
   toolCallPart,
   waitFor,
+  ConfigService,
+  RuntimeEnvironment,
+  UserConfig,
 } from "@gent/core/test-utils"
 import { type BranchId, ToolCallId, ModelId, SteerCommand } from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset"

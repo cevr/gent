@@ -17,31 +17,20 @@ import {
   Stream,
 } from "effect"
 import { ChildProcess } from "effect/unstable/process"
+import { GentPlatform, BranchStorage, MessageStorage, SessionStorage } from "@gent/core/host"
 import {
-  GentPlatform,
-  RuntimeEnvironment,
-  BunGentPlatformLive,
-  AgentLoopQueueStorage,
-  BranchStorage,
-  EventStorage,
-  MessageStorage,
-  SessionStorage,
-  SqliteStorage,
-  ToolCallBindingStorage,
-  EventPublisherLive,
-  EventStore,
-  CurrentWorkspaceId,
-  WorkspaceId,
-} from "@gent/core/host"
-import {
-  SessionRuntime,
-  encodeInteractionDecision,
   type LoadedExtension,
+  captureTurnTools,
   createE2ELayer,
+  plantInFlightTurn,
+  plantToolCallBinding,
+  recordInteractionDecision,
+  runtimeHostContext,
+  staticToolBinding,
+  storedEvents,
   createRpcHarness,
   ensureStorageParents,
   runToolWithCtx,
-  testHostFacts,
   testToolContext,
   finishPart,
   LanguageModelLayers,
@@ -52,13 +41,14 @@ import {
   toolCallPart,
   toolCallStep,
   waitFor,
-  captureCurrentToolBinding,
   ApprovalService,
-  makeExtensionHostContextProvider,
-  SessionProfileCache,
-  ToolBindingSource,
-  ToolSchemaRevision,
-  ToolSourceRevision,
+  RuntimeEnvironment,
+  BunGentPlatformLive,
+  SqliteStorage,
+  EventPublisherLive,
+  EventStore,
+  CurrentWorkspaceId,
+  WorkspaceId,
 } from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
@@ -97,7 +87,6 @@ import {
 } from "@gent/core/extensions/api"
 import {
   InteractionRequestId,
-  ToolId,
   CurrentInteractionOwner,
   InteractionRequestRecord,
   InteractionStorage,
@@ -105,9 +94,7 @@ import {
   type ResolvedToolCapability,
   ToolRunner,
   ModelContextLedger,
-  runAgentLoopTurnProfile,
   StorageError,
-  ToolBindingIdentity,
   getToolMetadata,
 } from "@gent/core/extensions/branch-tools"
 import {
@@ -1708,30 +1695,11 @@ const prepareCell = Effect.gen(function* () {
 })
 
 const currentHostParams = Effect.gen(function* () {
-  const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
-  const hostProvider = yield* makeExtensionHostContextProvider({
-    host: testHostFacts().host,
-  })
-  const turnProfile = {
-    turnGenerationId: profile.generationId,
-    turnExtensionRegistry: profile.registryService,
-    turnBaseSections: profile.baseSections,
-    turnHostCtx: hostProvider.forRun(cellToolHost),
-  }
-  const toolBindings = yield* runAgentLoopTurnProfile(turnProfile)(
-    Effect.gen(function* () {
-      const bindings = new Map<string, ResolvedToolCapability>()
-      for (const name of profile.registryService.getResolved().modelCapabilities.keys()) {
-        const binding = yield* captureCurrentToolBinding(name)
-        if (Option.isSome(binding)) bindings.set(name, binding.value)
-      }
-      return bindings
-    }),
-  )
+  const turn = yield* captureTurnTools(cellToolHost)
   return {
     cell: cellToolHost,
-    profile: turnProfile,
-    toolBindings,
+    profile: turn.profile,
+    toolBindings: turn.toolBindings,
     ledger: yield* ModelContextLedger.make,
   }
 })
@@ -3093,18 +3061,8 @@ const delegateToolContext = Effect.fn("test.delegateToolContext")(function* (par
 }) {
   // Outside a loop the facade has no session control, so the cancellation the
   // tool steers would die. The runtime is the same door the loop opens.
-  const runtime = yield* SessionRuntime
-  const provider = yield* makeExtensionHostContextProvider({
-    host: testHostFacts().host,
-    sessionControl: {
-      queueFollowUp: (input) => runtime.queueFollowUp(input),
-      dequeueFollowUp: (input) => runtime.dequeueFollowUp(input),
-      send: (input) => runtime.sendUserMessage(input),
-      steer: (command) => runtime.steer(command),
-    },
-  })
   return {
-    ...provider.forRun({ ...parent, sessionCwd: "/tmp" }),
+    ...(yield* runtimeHostContext({ ...parent, sessionCwd: "/tmp" })),
     extensionId: ExtensionId.make("cell-recovery"),
     toolCallId: ToolCallId.make("delegate-cancel-call"),
   }
@@ -3292,9 +3250,10 @@ it.scopedLive(
           const cells = (yield* CellStorage).executions
           if (state !== "unadmitted" && state !== "revoked") yield* cells.claim(cell)
           if (state === "completed") yield* cells.complete(cell, savedResult)
-          const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
+          const turn = yield* captureTurnTools(cell)
+          const bindingOf = (name: string) => Option.fromUndefinedOr(turn.toolBindings.get(name))
           if (state === "unknown-child") {
-            const selected = yield* captureCurrentToolBinding("delegate.start")
+            const selected = bindingOf("delegate.start")
             const identity = Option.flatMap(selected, (entry) =>
               Option.fromUndefinedOr(entry.binding),
             )
@@ -3327,29 +3286,21 @@ it.scopedLive(
             ])
           }
           if (state === "unadmitted" || state === "revoked") {
-            const captured = yield* captureCurrentToolBinding("cell")
+            const captured = bindingOf("cell")
             const identity = Option.flatMap(captured, (entry) =>
               Option.fromUndefinedOr(entry.binding),
             )
             if (Option.isNone(identity)) return yield* Effect.die("Missing outer cell binding")
-            yield* (yield* ToolCallBindingStorage).save({ ...cell, binding: identity.value })
+            yield* plantToolCallBinding({ ...cell, binding: identity.value })
           }
           if (state === "waiting") {
-            const host = yield* makeExtensionHostContextProvider({
-              host: testHostFacts().host,
-            })
-            const selected = yield* captureCurrentToolBinding("approve")
+            const selected = bindingOf("approve")
             if (Option.isNone(selected)) return yield* Effect.die("Missing approval binding")
             const suspendedHost = yield* makeCellToolHost({
               cell,
               ledger: yield* ModelContextLedger.make,
               toolBindings: new Map([["approve", selected.value]]),
-              profile: {
-                turnGenerationId: profile.generationId,
-                turnExtensionRegistry: profile.registryService,
-                turnBaseSections: profile.baseSections,
-                turnHostCtx: host.forRun(cell),
-              },
+              profile: turn.profile,
             })
             const suspended = yield* suspendedHost
               .call(
@@ -3363,21 +3314,17 @@ it.scopedLive(
               .pipe(Effect.flip)
             expect(suspended._tag).toBe("CellToolCallSuspended")
           }
-          const binding = yield* captureCurrentToolBinding("sibling")
+          const binding = bindingOf("sibling")
           const identity = Option.flatMap(binding, (entry) => Option.fromUndefinedOr(entry.binding))
           if (Option.isNone(identity)) return yield* Effect.die("Missing sibling binding")
-          yield* (yield* ToolCallBindingStorage).save({
+          yield* plantToolCallBinding({
             sessionId,
             branchId,
             assistantMessageId,
             toolCallId: ToolCallId.make("native-sibling"),
             binding: identity.value,
           })
-          yield* (yield* AgentLoopQueueStorage).putQueueState(sessionId, branchId, {
-            steering: [],
-            followUp: [],
-            inFlight: { message: user },
-          })
+          yield* plantInFlightTurn({ sessionId, branchId, message: user })
         }).pipe(
           Effect.provideContext(context),
           Effect.provideService(CurrentWorkspaceId, workspaceId),
@@ -3720,14 +3667,13 @@ const cellOperationStorage = {
   toolCallId: ToolCallId.make("cell-outer-call"),
 }
 const key = { cell: cellOperationStorage, operationId: "1" }
-const binding = ToolBindingIdentity.make({
-  toolId: ToolId.make("write"),
-  extensionId: ExtensionId.make("files"),
-  source: ToolBindingSource.cases.Static.make({
-    sourceRevision: ToolSourceRevision.make("source-1"),
-  }),
-  schemaRevision: ToolSchemaRevision.make("schema-1"),
-})
+const bindingFields = {
+  toolId: "write",
+  extensionId: "files",
+  sourceRevision: "source-1",
+  schemaRevision: "schema-1",
+}
+const binding = staticToolBinding(bindingFields)
 const params = { ...key, binding, input: { path: "file.txt", content: "once" } }
 const requestId = InteractionRequestId.make("cell-request")
 const fixture = Effect.gen(function* () {
@@ -3789,10 +3735,7 @@ it.live("admits an operation once and preserves its original input, binding, and
         yield* storage
           .admit({
             ...params,
-            binding: ToolBindingIdentity.make({
-              ...binding,
-              schemaRevision: ToolSchemaRevision.make("schema-2"),
-            }),
+            binding: staticToolBinding({ ...bindingFields, schemaRevision: "schema-2" }),
           })
           .pipe(Effect.flip),
       ),
@@ -3835,7 +3778,6 @@ it.scopedLive(
       yield* (yield* CellStorage).executions.claim(cellOperationStorage)
       const storage = (yield* CellStorage).operations
       const approval = yield* ApprovalService
-      const events = yield* EventStorage
       const sql = yield* SqlClient.SqlClient
       yield* storage.admit(params)
       const peer = { ...key, operationId: "2" }
@@ -3858,7 +3800,7 @@ it.scopedLive(
       expect(blocked._tag).toBe("EventStoreError")
       expect((yield* storage.get(peer)).state._tag).toBe("Started")
       expect(
-        (yield* events.listEvents(cellOperationStorage)).filter(
+        (yield* storedEvents(cellOperationStorage)).filter(
           (event) => event.event._tag === "InteractionPresented",
         ),
       ).toHaveLength(1)
@@ -3968,10 +3910,7 @@ it.live(
             ),
         ),
       ).toBe(true)
-      yield* (yield* InteractionStorage).decide(
-        requestId,
-        yield* encodeInteractionDecision({ approved: true }),
-      )
+      yield* recordInteractionDecision(requestId, { approved: true })
       const resumed = yield* storage.resume(key, requestId)
       yield* storage.complete(
         key,
@@ -4027,7 +3966,7 @@ it.live("binds a decision to one waiting operation and grants one resume attempt
     )
     expect((yield* storage.get(key)).state._tag).toBe("Waiting")
     const decision = { approved: false, notes: "Do not write" }
-    yield* interactions.decide(requestId, yield* encodeInteractionDecision(decision))
+    yield* recordInteractionDecision(requestId, decision)
     const resumed = yield* storage.resume(key, requestId)
     expect(resumed.state).toEqual({ _tag: "Resuming", requestId, decision })
     expect(resumed.toolCallId).toBe(first.operation.toolCallId)
@@ -4089,8 +4028,7 @@ it.live("does not admit external work inside a caller transaction or after cell 
     ).toBe(true)
     expect((yield* storage.admit(params)).admitted).toBe(true)
     yield* storage.suspend(key, requestOperationStorage)
-    const interactions = yield* InteractionStorage
-    yield* interactions.decide(requestId, yield* encodeInteractionDecision({ approved: true }))
+    yield* recordInteractionDecision(requestId, { approved: true })
     expect(
       Schema.is(StorageError)(
         yield* storage.resume(key, requestId).pipe(sql.withTransaction, Effect.flip),
@@ -4139,10 +4077,7 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
           const storage = (yield* CellStorage).operations
           yield* storage.admit(params)
           yield* storage.suspend(key, requestOperationStorage)
-          yield* (yield* InteractionStorage).decide(
-            requestId,
-            yield* encodeInteractionDecision({ approved: true }),
-          )
+          yield* recordInteractionDecision(requestId, { approved: true })
         }).pipe(Effect.provideContext(context))
       }),
     )

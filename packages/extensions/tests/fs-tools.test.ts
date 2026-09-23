@@ -16,8 +16,7 @@ import {
   WriteTool,
   writeFileAtomic,
 } from "../src/fs-tools.js"
-import { RuntimeEnvironment } from "@gent/core/host"
-import { runToolWithCtx, testToolContext } from "@gent/core/test-utils"
+import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { narrowR } from "../../core/tests/helpers/effect"
 

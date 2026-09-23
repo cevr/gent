@@ -39,12 +39,6 @@ import {
   ToolInteraction,
   type SessionRuntimeState,
 } from "@gent/core/protocol"
-import {
-  EventStore,
-  type EventStoreService,
-  CurrentWorkspaceId,
-  WorkspaceId,
-} from "@gent/core/host"
 import { DelegateChild, DelegateRpc } from "@gent/extensions/client"
 import { ref, ExtensionId, RequestId } from "@gent/core/extensions/api"
 import {
@@ -64,7 +58,13 @@ import {
   useClient,
 } from "../src/client"
 import { emptyQueueSnapshot, Gent } from "@gent/sdk"
-import { baseLocalLayer } from "@gent/core/test-utils"
+import {
+  baseLocalLayer,
+  EventStore,
+  type EventStoreService,
+  CurrentWorkspaceId,
+  WorkspaceId,
+} from "@gent/core/test-utils"
 import { createMemo, createRoot, createSignal, onMount } from "solid-js"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
 import { runEffectBoundary, runRuntimeEffectBoundary } from "./run-effect-boundary"

@@ -30,19 +30,54 @@ import {
   provideExtensionServices,
   registerContributions,
 } from "../domain/extension.js"
-import { BranchId, ExtensionId, SessionId, ToolCallId } from "../domain/ids.js"
+import {
+  BranchId,
+  ExtensionId,
+  type InteractionRequestId,
+  type MessageId,
+  SessionId,
+  ToolCallId,
+  ToolId,
+} from "../domain/ids.js"
 import { type AgentDefinition } from "../domain/agent.js"
 import { Auth, ModelRegistry } from "../runtime/provider.js"
-import { getToolMetadata, type ToolCapability } from "../domain/capability.js"
+import {
+  getToolMetadata,
+  type ToolCapability,
+  ToolBindingIdentity,
+  ToolBindingSource,
+  ToolSchemaRevision,
+  ToolSourceRevision,
+} from "../domain/capability.js"
 import { defineExtension } from "../extensions/api.js"
-import { ApprovalService, type SessionProfileCache } from "../runtime/extension-host.js"
+import {
+  ApprovalService,
+  makeExtensionHostContextProvider,
+  SessionProfileCache,
+} from "../runtime/extension-host.js"
 import { ConfigService } from "../runtime/config.js"
-import { type BranchToolFeature, noBranchTools, ToolRunner } from "../runtime/tools.js"
+import {
+  type BranchToolFeature,
+  captureCurrentToolBinding,
+  noBranchTools,
+  type ResolvedToolCapability,
+  ToolRunner,
+} from "../runtime/tools.js"
+import { type AgentLoopTurnProfile, runAgentLoopTurnProfile } from "../runtime/turn.js"
+import { SessionRuntime } from "../runtime/session.js"
+import { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
 import { LanguageModelLayers } from "./language-model.js"
 import { StateLocation } from "../server/server.js"
-import { Branch, Session } from "../domain/message.js"
+import { Branch, type Message, Session } from "../domain/message.js"
 import type { StorageError } from "../domain/errors.js"
-import { BranchStorage, type InteractionStorage, SessionStorage } from "../storage/storage.js"
+import {
+  AgentLoopQueueStorage,
+  BranchStorage,
+  EventStorage,
+  InteractionStorage,
+  SessionStorage,
+  ToolCallBindingStorage,
+} from "../storage/storage.js"
 import {
   EventEnvelope,
   EventId,
@@ -445,7 +480,115 @@ export function ensureStorageParents(input: {
   })
 }
 
-// Extension tool test helpers
+// ── branch-tool-arrangement ─────────────────────────────────────────────────
+//
+// A branch tool outside core (the cell) is tested against the host it runs
+// in: a turn's profile and captured bindings, a leaf's host context, and the
+// durable rows a crash leaves behind. These operations build that state the
+// way the loop does, so such a test never reads core's own Tags.
+
+/** Where a turn or leaf runs: its session, its branch, and optionally its cwd. */
+interface HarnessRun {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly sessionCwd?: string
+}
+
+/**
+ * One turn's profile and every model tool binding it captures, as the loop
+ * builds them before it dispatches a tool.
+ */
+export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (run: HarnessRun) {
+  const profile = yield* (yield* SessionProfileCache).resolve(run.sessionCwd ?? "/tmp")
+  const hostProvider = yield* makeExtensionHostContextProvider({ host: testHostFacts().host })
+  const turnProfile: AgentLoopTurnProfile = {
+    turnGenerationId: profile.generationId,
+    turnExtensionRegistry: profile.registryService,
+    turnBaseSections: profile.baseSections,
+    turnHostCtx: hostProvider.forRun(run),
+  }
+  const toolBindings = yield* Effect.gen(function* () {
+    const bindings = new Map<string, ResolvedToolCapability>()
+    for (const name of profile.registryService.getResolved().modelCapabilities.keys()) {
+      const binding = yield* captureCurrentToolBinding(name)
+      if (Option.isSome(binding)) bindings.set(name, binding.value)
+    }
+    return bindings
+  }).pipe(runAgentLoopTurnProfile(turnProfile))
+  return { profile: turnProfile, toolBindings }
+})
+
+/**
+ * The host context a leaf sees on a branch whose session runtime is live: its
+ * session facade queues, sends, and steers through that runtime.
+ */
+export const runtimeHostContext = Effect.fn("test.runtimeHostContext")(function* (run: HarnessRun) {
+  const runtime = yield* SessionRuntime
+  const provider = yield* makeExtensionHostContextProvider({
+    host: testHostFacts().host,
+    sessionControl: {
+      queueFollowUp: (input) => runtime.queueFollowUp(input),
+      dequeueFollowUp: (input) => runtime.dequeueFollowUp(input),
+      send: (input) => runtime.sendUserMessage(input),
+      steer: (command) => runtime.steer(command),
+    },
+  })
+  return provider.forRun(run)
+})
+
+/** A build-owned binding identity: it replays across processes. */
+export const staticToolBinding = (input: {
+  readonly toolId: string
+  readonly extensionId: string
+  readonly sourceRevision: string
+  readonly schemaRevision: string
+}): ToolBindingIdentity =>
+  ToolBindingIdentity.make({
+    toolId: ToolId.make(input.toolId),
+    extensionId: ExtensionId.make(input.extensionId),
+    source: ToolBindingSource.cases.Static.make({
+      sourceRevision: ToolSourceRevision.make(input.sourceRevision),
+    }),
+    schemaRevision: ToolSchemaRevision.make(input.schemaRevision),
+  })
+
+/** Save the binding a tool call's receipt names, as a turn does before it runs the call. */
+export const plantToolCallBinding = Effect.fn("test.plantToolCallBinding")(function* (input: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly assistantMessageId: MessageId
+  readonly toolCallId: ToolCallId
+  readonly binding: ToolBindingIdentity
+}) {
+  return yield* (yield* ToolCallBindingStorage).save(input)
+})
+
+/** Leave a user turn in flight on a branch, as a crash before the turn completes does. */
+export const plantInFlightTurn = Effect.fn("test.plantInFlightTurn")(function* (input: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly message: Message
+}) {
+  yield* (yield* AgentLoopQueueStorage).putQueueState(input.sessionId, input.branchId, {
+    steering: [],
+    followUp: [],
+    inFlight: { message: input.message },
+  })
+})
+
+/** Write a decision to the durable interaction row only, as a reopened database sees it. */
+export const recordInteractionDecision = Effect.fn("test.recordInteractionDecision")(function* (
+  requestId: InteractionRequestId,
+  decision: ApprovalDecision,
+) {
+  const decisionJson = yield* encodeInteractionDecision(decision)
+  yield* (yield* InteractionStorage).decide(requestId, decisionJson)
+})
+
+/** The durable events one branch has published. */
+export const storedEvents = Effect.fn("test.storedEvents")(function* (run: HarnessRun) {
+  return yield* (yield* EventStorage).listEvents(run)
+})
 
 // ── e2e-layer ───────────────────────────────────────────────────────────────
 

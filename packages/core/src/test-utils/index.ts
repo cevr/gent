@@ -6,12 +6,19 @@
 export {
   baseLocalLayer,
   baseLocalLayerWithProvider,
+  captureTurnTools,
   collectTestContributions,
   createE2ELayer,
   createRpcHarness,
   type E2ELayerConfig,
   ensureStorageParents,
+  plantInFlightTurn,
+  plantToolCallBinding,
+  recordInteractionDecision,
+  runtimeHostContext,
   runToolWithCtx,
+  staticToolBinding,
+  storedEvents,
   testHostFacts,
   testLeafContext,
   testToolContext,
@@ -33,13 +40,10 @@ export {
   waitFor,
 } from "./language-model.js"
 export { finishPart, textDeltaPart, toolCallPart } from "../runtime/provider.js"
-export { ToolBindingSource, ToolSchemaRevision, ToolSourceRevision } from "../domain/capability.js"
 export { type LoadedExtension } from "../domain/extension.js"
-export { encodeInteractionDecision } from "../domain/interaction.js"
-export {
-  ApprovalService,
-  makeExtensionHostContextProvider,
-  SessionProfileCache,
-} from "../runtime/extension-host.js"
-export { SessionRuntime } from "../runtime/session.js"
-export { captureCurrentToolBinding } from "../runtime/tools.js"
+export { ApprovalService } from "../runtime/extension-host.js"
+export { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
+export { ConfigService, RuntimeEnvironment, UserConfig } from "../runtime/config.js"
+export { EventPublisherLive, EventStore, type EventStoreService } from "../domain/event.js"
+export { SqliteStorage } from "../storage/storage.js"
+export { CurrentWorkspaceId, WORKSPACE_ID_HEADER, WorkspaceId } from "../server/workspace-rpc.js"

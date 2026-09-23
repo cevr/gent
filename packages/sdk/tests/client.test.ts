@@ -3,13 +3,13 @@ import { Effect, Exit, Layer, Option, Predicate, Random, Schema, Scope, Stream }
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { getToolId } from "@gent/core/extensions/api"
 import { BuiltinExtensions } from "@gent/extensions"
-import { collectTestContributions, makeTempDirectoryScoped, waitFor } from "@gent/core/test-utils"
 import {
-  GentPlatform,
+  collectTestContributions,
+  makeTempDirectoryScoped,
+  waitFor,
   WORKSPACE_ID_HEADER,
-  workspaceHeadersForCwd,
-  workspaceIdForCwd,
-} from "@gent/core/host"
+} from "@gent/core/test-utils"
+import { GentPlatform, workspaceHeadersForCwd, workspaceIdForCwd } from "@gent/core/host"
 import { narrowR } from "../../core/tests/helpers/effect"
 import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
