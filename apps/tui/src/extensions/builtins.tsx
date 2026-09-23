@@ -1,17 +1,16 @@
 import {
+  type FileSystem,
   Clock,
   Config,
   Deferred,
   Effect,
   Exit,
   Fiber,
-  FileSystem,
   Option,
   type Path,
   Queue,
   Schema,
 } from "effect"
-import { FileFinder, type SearchResult } from "@ff-labs/fff-bun"
 import {
   type AnyExtensionClientModule,
   autocompleteContribution,
@@ -43,6 +42,7 @@ import {
   SESSION_TOOLS_EXTENSION_ID,
   SessionMessageDetails,
   sessionMessageBody,
+  FilesRpc,
   SkillsRpc,
 } from "@gent/extensions/client"
 import { BUILTIN_TOOL_RENDERERS } from "../tool-renderers"
@@ -96,207 +96,91 @@ export function getFileTag(path: string): string {
   return Option.getOrElse(extension, () => "")
 }
 
-// ── file finder ─────────────────────────────────────────────────────────────
-
-/**
- * FileFinder — Effect-typed wrapper around the @ff-labs/fff-bun native finder.
- *
- * Exposes Effect-typed `searchFiles` and `trackSelection` over a per-cwd
- * cached `FileFinder` instance. The caller resolves the db directory once and
- * passes it in, so "where is the FFF db" is decided at the one place that
- * knows the workspace home.
- *
- * FFF is the *only* file-search path — there is no runtime glob fallback. If
- * `FileFinder.isAvailable()` is false the search Effect fails with
- * `FileFinderUnavailableError` and the popup adapter normalizes to `[]`.
- *
- * Scan readiness: each finder kicks off `waitForScan` once on creation,
- * stored as an Effect. The native call is wrapped so
- * a throwing call resolves to a typed failure object instead of leaving
- * the promise unresolved. The search effect
- * awaits via `Effect.promise` + a typed error map; Effect interruption
- * cleanly abandons the wait without canceling the underlying scan (which
- * is fine — the finder stays valid for the next search).
- */
-
-// ── Errors ───────────────────────────────────────────────────────────────
-
-class FileFinderUnavailableError extends Schema.TaggedError<FileFinderUnavailableError>()(
-  "FileFinderUnavailableError",
-  {},
-) {}
-
-class FileFinderInitError extends Schema.TaggedError<FileFinderInitError>()("FileFinderInitError", {
-  reason: Schema.String,
-}) {}
-
-class FileFinderScanError extends Schema.TaggedError<FileFinderScanError>()("FileFinderScanError", {
-  reason: Schema.String,
-}) {}
-
-// ── Singleton cache ──────────────────────────────────────────────────────
-
-type ScanOutcome = { ok: true } | { ok: false; reason: string }
-
-interface FinderEntry {
-  readonly finder: FileFinder
-  /** Completes when the initial scan completes. Always succeeds; failure
-   *  modes are encoded in the returned value. */
-  readonly scanReady: Effect.Effect<ScanOutcome>
-}
-
-const finders = new Map<string, FinderEntry>()
-
-const ensureFinder = (
-  cwd: string,
-  dbDir: string,
-): Effect.Effect<FinderEntry, FileFinderUnavailableError | FileFinderInitError> =>
-  Effect.gen(function* () {
-    const existing = Option.fromNullishOr(finders.get(cwd))
-    if (Option.isSome(existing)) return existing.value
-
-    if (!FileFinder.isAvailable()) {
-      return yield* new FileFinderUnavailableError()
-    }
-
-    const result = FileFinder.create({
-      basePath: cwd,
-      frecencyDbPath: `${dbDir}/frecency.mdb`,
-      historyDbPath: `${dbDir}/history.mdb`,
-      aiMode: true,
-    })
-
-    if (!result.ok) {
-      return yield* new FileFinderInitError({ reason: String(result.error) })
-    }
-
-    const finder = result.value
-
-    // Yield one tick so finder.create returns synchronously to the first
-    // search call before the blocking scan begins.
-    const scanReady: Effect.Effect<ScanOutcome> = Effect.yieldNow.pipe(
-      Effect.andThen(
-        Effect.tryPromise({
-          try: () => finder.waitForScan(15_000),
-          catch: String,
-        }),
-      ),
-      Effect.match({
-        onFailure: (reason) => ({ ok: false, reason }) satisfies ScanOutcome,
-        onSuccess: (scan) => {
-          if (scan.ok) return { ok: true } satisfies ScanOutcome
-          return { ok: false, reason: "waitForScan returned !ok" } satisfies ScanOutcome
-        },
-      }),
-    )
-
-    const entry: FinderEntry = { finder, scanReady }
-    finders.set(cwd, entry)
-    return entry
-  })
-
-// ── Public API ───────────────────────────────────────────────────────────
-
-/**
- * Search for files matching `query` under `cwd`, keeping its frecency and
- * history databases in `dbDir`. Fails with a typed error if FFF is
- * unavailable, init failed, or the initial scan failed.
- */
-export const searchFiles = (
-  cwd: string,
-  dbDir: string,
-  query: string,
-  pageSize: number = 50,
-): Effect.Effect<
-  SearchResult,
-  FileFinderUnavailableError | FileFinderInitError | FileFinderScanError
-> =>
-  Effect.gen(function* () {
-    const entry = yield* ensureFinder(cwd, dbDir)
-    const outcome = yield* entry.scanReady
-    if (!outcome.ok) {
-      return yield* new FileFinderScanError({ reason: outcome.reason })
-    }
-    const result = entry.finder.fileSearch(query, { pageSize })
-    if (!result.ok) {
-      return yield* new FileFinderInitError({ reason: String(result.error) })
-    }
-    return result.value
-  })
-
-/** Track a selection for frecency learning. No-op if no finder for `cwd`. */
-const trackSelection = (cwd: string, query: string, filePath: string): void => {
-  const entry = Option.fromNullishOr(finders.get(cwd))
-  if (Option.isNone(entry)) return
-  entry.value.finder.trackQuery(query, filePath)
-}
-
 // ── files extension ─────────────────────────────────────────────────────────
 
 /**
- * Files autocomplete (`@`) — Effect-typed setup.
+ * Files autocomplete (`@`). The list comes from fs-tools' own listing through
+ * `FilesRpc.List`, so the files a user can name are the files the model can
+ * search: git's listing inside a work tree, the `.gitignore` walk outside one.
+ * The shared ranker scores the paths, and a pick is recorded in the shared
+ * frecency store under the `@` prefix, as `/` and `$` are.
  *
- * Yields `ClientContext.workspace` for cwd/home and `FileSystem.FileSystem` for the
- * empty-filter top-level directory listing. Non-empty filter goes through
- * the FFF-backed `searchFiles` Effect; there is no glob fallback.
- *
- * The FFF db directory is resolved once here, from the workspace home this
- * setup already yields, so the finder module never re-decides where it lives.
+ * The list is read when the popup opens (an empty filter) and reused for each
+ * keystroke after, so typing does not relist the tree.
  */
 
 const MAX_RESULTS = 50
 
-const formatMatch = (f: { path: string; name: string }) => {
-  const tag = getFileTag(f.path)
-  let label = f.name
-  if (tag.length > 0) label = `${tag} ${f.name}`
+const formatMatch = (path: string) => {
+  const name = path.split("/").pop() ?? path
+  const tag = getFileTag(path)
+  let label = name
+  if (tag.length > 0) label = `${tag} ${name}`
   return {
-    id: f.path,
+    id: path,
     label,
-    description: truncatePath(f.path, 40),
+    description: truncatePath(path, 40),
   }
 }
 
-const builtinFiles = defineClientExtension("@gent/files-ui", {
+/** The listing's top level: each first path segment once, a directory with its slash. */
+const topLevel = (paths: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const entries = new Set<string>()
+  for (const path of paths) {
+    const slash = path.indexOf("/")
+    let entry = path
+    if (slash !== -1) entry = path.slice(0, slash + 1)
+    entries.add(entry)
+  }
+  return [...entries].toSorted()
+}
+
+export const builtinFiles = defineClientExtension("@gent/files-ui", {
   setup: Effect.gen(function* () {
-    const { workspace } = yield* ClientContext
-    const fs = yield* FileSystem.FileSystem
-    const dbDir = `${workspace.home}/.gent/fff`
-    yield* Effect.ignore(fs.makeDirectory(dbDir, { recursive: true }))
+    const { workspace, transport } = yield* ClientContext
+    const storeServices = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
+    const forkStoreWrite = Effect.runForkWith(storeServices)
+    let listing = Option.none<ReadonlyArray<string>>()
+    const readListing = transport.request(ref(FilesRpc.List), {}).pipe(
+      Effect.tap((paths) =>
+        Effect.sync(() => {
+          listing = Option.some(paths)
+        }),
+      ),
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    )
     return autocompleteContribution({
       prefix: "@",
       title: "Files",
       items: (filter: string) =>
         Effect.gen(function* () {
-          const cwd = workspace.cwd
-
-          // Empty filter: list top-level directory entries via Effect FS.
-          // Drops gitignore filtering at the top level — FFF respects
-          // gitignore for the actual fuzzy search where it matters.
           if (filter.length === 0) {
-            const entries = yield* Effect.orElseSucceed(
-              fs.readDirectory(cwd),
-              (): ReadonlyArray<string> => [],
-            )
-            return entries
-              .filter((name: string) => !name.startsWith("."))
-              .slice()
-              .sort()
-              .slice(0, MAX_RESULTS)
-              .map((name: string) => formatMatch({ path: name, name }))
+            const paths = yield* readListing
+            return topLevel(paths).slice(0, MAX_RESULTS).map(formatMatch)
           }
-
-          // Non-empty filter: FFF Effect. Failures (FFF unavailable, init
-          // failure) are caught here so the popup adapter still shows []
-          // instead of swallowing the failure as opaque.
-          const fffResult = yield* Effect.option(searchFiles(cwd, dbDir, filter, MAX_RESULTS))
-          if (Option.isNone(fffResult)) return []
-          return fffResult.value.items.map((item: { relativePath: string; fileName: string }) =>
-            formatMatch({ path: item.relativePath, name: item.fileName }),
+          const paths = yield* Option.match(listing, {
+            onNone: () => readListing,
+            onSome: Effect.succeed,
+          })
+          const store = yield* readFrecencyStore(workspace.home)
+          const lookup = frecencyLookup(
+            Option.getOrElse(store, () => emptyFrecencyStore()),
+            yield* Clock.currentTimeMillis,
           )
+          return rankAutocompleteItems(
+            paths.map((path) => ({ id: path, label: path })),
+            filter,
+            { prefix: "@", frecency: lookup },
+          )
+            .slice(0, MAX_RESULTS)
+            .map((item) => formatMatch(item.id))
         }),
-      onSelect: (id: string, filter: string) => {
-        trackSelection(workspace.cwd, filter, id)
+      onSelect: (id: string) => {
+        forkStoreWrite(
+          Effect.flatMap(Clock.currentTimeMillis, (now) =>
+            recordFrecencyPick(workspace.home, "@", id, now),
+          ),
+        )
       },
     })
   }),

@@ -2,9 +2,9 @@ import { describe, expect, it, test } from "effect-bun-test"
 import {
   builtinDriver,
   builtinHerdr,
+  builtinFiles,
   getFileTag,
   makeHerdrReporter,
-  searchFiles,
 } from "../../src/extensions/builtins"
 import { BunServices } from "@effect/platform-bun"
 import {
@@ -23,7 +23,9 @@ import {
 import { AgentName, BranchId, DriverRef, SessionId } from "@gent/core/protocol"
 import { testAgent } from "@gent/core/test-utils"
 import {
+  type AutocompleteItem,
   type ClientActivitySnapshot,
+  type ClientRuntimeServices,
   ClientContext,
   type ClientContextDeps,
   makeClientContextLayer,
@@ -32,6 +34,7 @@ import { createMockClient, createMockRuntime } from "../render-harness-boundary"
 import {
   makeClientTestTransport,
   makePaneSlot,
+  provideClientServices,
   runClientExtensionSetupWithRuntime,
 } from "../extension-test-harness-boundary"
 import { createSignal } from "solid-js"
@@ -115,41 +118,91 @@ describe("getFileTag", () => {
   })
 })
 
-// ── file finder db dir ──────────────────────────────────────────────────────
+// ── files popup ─────────────────────────────────────────────────────────────
 
 /**
- * The finder keeps its frecency and history databases where the caller says.
- * A build that memoizes the directory on the first call reuses it for every
- * later workspace, so the second directory here is never written.
+ * The `@` popup lists what fs-tools lists (`FilesRpc.List`), ranks it with the
+ * shared matcher, and reads the listing once per open popup.
  */
-const finderTest = it.scopedLive.layer(BunServices.layer)
+const withFilesPopup = <A>(
+  paths: ReadonlyArray<string>,
+  home: string,
+  body: (popup: {
+    readonly items: (
+      filter: string,
+    ) => Effect.Effect<ReadonlyArray<AutocompleteItem>, never, ClientRuntimeServices>
+    readonly reads: () => number
+  }) => Effect.Effect<A, never, ClientRuntimeServices>,
+) => {
+  let reads = 0
+  return provideClientServices(
+    Effect.gen(function* () {
+      const contributions = yield* builtinFiles.setup
+      const source = Option.getOrThrow(Option.fromUndefinedOr(contributions.autocomplete?.[0]))
+      const items = (filter: string) => {
+        const result = source.items(filter)
+        if (Effect.isEffect(result)) return Effect.orDie(result)
+        return Effect.succeed(result)
+      }
+      return yield* body({ items, reads: () => reads })
+    }).pipe(Effect.orDie),
+    {
+      workspace: { cwd: "/tmp/test-cwd", home },
+      currentSession: () => Option.some(session),
+      requestEffect: () =>
+        Effect.sync(() => {
+          reads++
+          return paths
+        }),
+    },
+  )
+}
 
-describe("file finder db dir", () => {
-  finderTest("each search writes the db dir it was handed", () =>
+const filesTest = it.scopedLive.layer(BunServices.layer)
+
+describe("files popup", () => {
+  filesTest("an empty filter shows the listing's top level, directories with a slash", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
-      const first = yield* fs.makeTempDirectoryScoped()
-      const second = yield* fs.makeTempDirectoryScoped()
-      const cwd = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${cwd}/alpha.ts`, "export const a = 1\n")
+      const home = yield* fs.makeTempDirectoryScoped()
+      const shown = yield* withFilesPopup(
+        ["src/a.ts", "README.md", "src/b/c.ts", ".github/x.yml"],
+        home,
+        (popup) => popup.items(""),
+      )
+      expect(shown.map((item) => item.id)).toEqual([".github/", "README.md", "src/"])
+    }),
+  )
 
-      const firstDbDir = `${first}/.gent/fff`
-      const secondDbDir = `${second}/.gent/fff`
-      yield* fs.makeDirectory(firstDbDir, { recursive: true })
-      yield* fs.makeDirectory(secondDbDir, { recursive: true })
+  filesTest("a filter ranks the listed paths with the shared matcher", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const shown = yield* withFilesPopup(
+        ["docs/composer-notes.md", "apps/tui/src/composer.tsx", "packages/core/src/x.ts"],
+        home,
+        (popup) => popup.items("composer.tsx"),
+      )
+      expect(shown[0]?.id).toBe("apps/tui/src/composer.tsx")
+      expect(shown[0]?.label).toBe("[ts] composer.tsx")
+      expect(shown.map((item) => item.id)).not.toContain("packages/core/src/x.ts")
+    }),
+  )
 
-      // Distinct cwds: the finder cache is keyed by cwd, so each call builds
-      // its own finder and has to honour the db dir passed with it.
-      const secondCwd = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${secondCwd}/beta.ts`, "export const b = 2\n")
-
-      yield* Effect.option(searchFiles(cwd, firstDbDir, "alpha", 5))
-      yield* Effect.option(searchFiles(secondCwd, secondDbDir, "beta", 5))
-
-      const wrote = (dir: string) => Effect.map(fs.readDirectory(dir), (names) => names.length > 0)
-
-      expect(yield* Effect.orElseSucceed(wrote(firstDbDir), () => false)).toBe(true)
-      expect(yield* Effect.orElseSucceed(wrote(secondDbDir), () => false)).toBe(true)
+  filesTest("typing after the popup opens reuses its listing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const reads = yield* withFilesPopup(["src/a.ts", "src/b.ts"], home, (popup) =>
+        Effect.gen(function* () {
+          yield* popup.items("")
+          yield* popup.items("s")
+          yield* popup.items("sa")
+          yield* popup.items("")
+          return popup.reads()
+        }),
+      )
+      expect(reads).toBe(2)
     }),
   )
 })

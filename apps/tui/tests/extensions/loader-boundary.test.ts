@@ -769,8 +769,7 @@ describe("autocomplete Effect items() through the client transport", () => {
  * — those call the scorer directly and so cannot notice a caller that stopped
  * calling it.
  *
- * `@` is deliberately absent. FFF ranks files, and this change left that path
- * untouched.
+ * `@` files have their own tests in `builtins.test.ts`.
  */
 
 /**
@@ -935,8 +934,7 @@ describe("skills autocomplete contribution", () => {
  * something on disk. The read half: what is on disk has to change the order
  * the next popup returns.
  *
- * `@` is deliberately absent. FFF keeps its own frecency for files, and this
- * change left that path alone.
+ * `@` files have their own tests in `builtins.test.ts`.
  */
 
 const NOW = 1_800_000_000_000
