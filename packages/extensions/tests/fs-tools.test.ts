@@ -689,6 +689,36 @@ describe("file encodings", () => {
     }),
   )
 
+  const atomicModes: ReadonlyArray<[string, boolean]> = [
+    ["a write", false],
+    ["an atomic write", true],
+  ]
+  for (const [how, atomic] of atomicModes) {
+    encodingTest(`${how} over a file keeps its byte order mark and encoding`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const bomPath = `${dir}/bom.txt`
+        const bom = Buffer.from([0xef, 0xbb, 0xbf])
+        yield* fs.writeFile(bomPath, Buffer.concat([bom, Buffer.from("hi\n")]))
+        const written = yield* runToolWithCtx(
+          WriteTool,
+          { path: bomPath, content: "bye\n", atomic },
+          stubCtx,
+        )
+        const bomAfter = Buffer.from(yield* fs.readFile(bomPath))
+        expect(bomAfter.equals(Buffer.concat([bom, Buffer.from("bye\n")]))).toBe(true)
+        expect(written.bytesWritten).toBe(bomAfter.length)
+
+        const utf16Path = `${dir}/utf16.txt`
+        yield* fs.writeFile(utf16Path, utf16File("hi\n", "be"))
+        yield* runToolWithCtx(WriteTool, { path: utf16Path, content: "bye\n", atomic }, stubCtx)
+        const utf16After = Buffer.from(yield* fs.readFile(utf16Path))
+        expect(utf16After.equals(utf16File("bye\n", "be"))).toBe(true)
+      }),
+    )
+  }
+
   encodingTest("edit matches across lines in a CRLF file and writes CRLF line endings", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

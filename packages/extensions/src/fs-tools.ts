@@ -595,8 +595,8 @@ const decodeAfter = (label: string, bytes: Uint8Array, mark: ReadonlyArray<numbe
   new TextDecoder(label, { ignoreBOM: true }).decode(bytes.subarray(mark.length))
 
 /**
- * The text of a file, or `None` for a binary one. read, edit and grep all read
- * through this one decoder. A UTF-16 file starts with a byte order mark and
+ * The text of a file, or `None` for a binary one. read, write, edit and grep
+ * all read through `decodeText`; grep skips the lossy check. A UTF-16 file starts with a byte order mark and
  * holds NUL bytes, so it is decoded before the NUL probe, as ripgrep
  * transcodes it. The decoder replaces a bad sequence silently; encoding the
  * text again is the one check that the bytes and the text hold the same file.
@@ -604,7 +604,7 @@ const decodeAfter = (label: string, bytes: Uint8Array, mark: ReadonlyArray<numbe
 const decodeFileText = (bytes: Uint8Array): Option.Option<FileText> =>
   Option.map(decodeText(bytes), (decoded) => ({
     ...decoded,
-    lossy: !sameBytes(encodeFileText({ ...decoded, lossy: false }), bytes),
+    lossy: !Buffer.from(encodeFileText(decoded)).equals(bytes),
   }))
 
 const decodeText = (bytes: Uint8Array): Option.Option<Omit<FileText, "lossy">> => {
@@ -620,9 +620,6 @@ const decodeText = (bytes: Uint8Array): Option.Option<Omit<FileText, "lossy">> =
   }
   return Option.some({ encoding: "utf-8", text: decodeAfter("utf-8", bytes, []) })
 }
-
-const sameBytes = (left: Uint8Array, right: Uint8Array) =>
-  left.length === right.length && left.every((byte, index) => byte === right[index])
 
 /** Why a file that does not decode exactly is not rewritten. */
 const lossyWriteMessage = (verb: string, file: FileText) =>
@@ -640,12 +637,17 @@ const encodeUtf16 = (text: string, littleEndian: boolean): Uint8Array => {
 }
 
 /** The bytes of `file.text` in the encoding the file was read in, with its byte order mark. */
-const encodeFileText = (file: FileText): Uint8Array => {
+const encodeFileText = (file: Omit<FileText, "lossy">): Uint8Array => {
   switch (file.encoding) {
     case "utf-8":
       return new TextEncoder().encode(file.text)
-    case "utf-8-bom":
-      return new Uint8Array([...UTF8_BOM, ...new TextEncoder().encode(file.text)])
+    case "utf-8-bom": {
+      const body = new TextEncoder().encode(file.text)
+      const bytes = new Uint8Array(UTF8_BOM.length + body.length)
+      bytes.set(UTF8_BOM)
+      bytes.set(body, UTF8_BOM.length)
+      return bytes
+    }
     case "utf-16le":
       return encodeUtf16(file.text, true)
     case "utf-16be":
@@ -844,10 +846,11 @@ export const WriteTool = tool({
     const path = yield* Path.Path
 
     const filePath = path.resolve(ctx.cwd, params.path)
-    const write = Effect.gen(function* () {
-      if (params.atomic === true) return yield* writeFileAtomic(filePath, params.content)
-      return yield* fs.writeFileString(filePath, params.content)
-    })
+    const write = (bytes: Uint8Array) =>
+      Effect.gen(function* () {
+        if (params.atomic === true) return yield* writeFileAtomic(filePath, bytes)
+        return yield* fs.writeFile(filePath, bytes)
+      })
 
     return yield* ctx.FileLock.withLock(
       filePath,
@@ -877,7 +880,15 @@ export const WriteTool = tool({
           ),
         )
 
-        yield* write.pipe(
+        // An overwrite keeps the encoding and byte order mark the file was in; a new file is UTF-8.
+        const bytes = encodeFileText({
+          text: params.content,
+          encoding: Option.match(existingText, {
+            onNone: (): TextEncoding => "utf-8",
+            onSome: (file) => file.encoding,
+          }),
+        })
+        yield* write(bytes).pipe(
           Effect.mapError(
             (e) =>
               new WriteError({
@@ -890,7 +901,7 @@ export const WriteTool = tool({
 
         return {
           path: filePath,
-          bytesWritten: Buffer.byteLength(params.content, "utf-8"),
+          bytesWritten: bytes.length,
         }
       }),
     )
@@ -1519,7 +1530,8 @@ const searchFile = (
     if (Option.isNone(info)) return none
     if (info.value.size > BigInt(MAX_SEARCH_FILE_BYTES)) return { ...none, oversized: true }
     const bytes = yield* fs.readFile(filePath).pipe(Effect.option)
-    const decoded = Option.flatMap(bytes, decodeFileText)
+    // grep only reads: it skips the lossy check that guards a rewrite.
+    const decoded = Option.flatMap(bytes, decodeText)
     if (Option.isNone(decoded)) return none
 
     const text = decoded.value.text

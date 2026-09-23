@@ -262,8 +262,8 @@ export const runProcess = (
 // ── write-file-atomic ───────────────────────────────────────────────────────
 
 /**
- * Replaces the file at `path` with `content` through a staged sibling. The
- * text lands in a temporary file in the target directory, which is then
+ * Replaces the file at `path` with `content` through a staged sibling. A
+ * string is written as UTF-8; bytes are written as given. The content lands in a temporary file in the target directory, which is then
  * renamed over the file, so a reader (or a crash) never sees a half-written
  * file. The one atomic write: core's config and every extension use it.
  *
@@ -280,7 +280,7 @@ export const runProcess = (
  */
 export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
   path: string,
-  content: string,
+  content: string | Uint8Array,
   options?: { readonly mode?: number },
 ) {
   const fs = yield* FileSystem.FileSystem
@@ -351,7 +351,11 @@ export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
         yield* Effect.scoped(
           Effect.gen(function* () {
             const file = yield* fs.open(staging, { flag: "w" })
-            yield* file.writeAll(new TextEncoder().encode(content))
+            if (Predicate.isString(content)) {
+              yield* file.writeAll(new TextEncoder().encode(content))
+            } else {
+              yield* file.writeAll(content)
+            }
             yield* file.sync
           }),
         )
