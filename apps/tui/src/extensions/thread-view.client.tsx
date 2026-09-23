@@ -19,7 +19,7 @@ import {
   type SelectListRow,
   usePickerGeometry,
 } from "../ui"
-import { childTaskBody } from "@gent/extensions/client.js"
+import { childTaskBody } from "@gent/extensions/client"
 import { formatAge, plural, truncate } from "../utils"
 import { useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"

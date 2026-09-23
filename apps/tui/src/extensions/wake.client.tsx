@@ -9,7 +9,7 @@ import {
   type WakeEntryType,
   type WakePendingType,
   WakeRpc,
-} from "@gent/extensions/client.js"
+} from "@gent/extensions/client"
 import { useTheme } from "../theme"
 import { useTerminalDimensions } from "../terminal"
 import { CollapsedRow, useSpinnerClock } from "../ui"

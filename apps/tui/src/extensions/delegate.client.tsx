@@ -23,8 +23,8 @@ import type {
   ToolCallId,
 } from "@gent/core/protocol"
 import { omitUndefined, ref } from "@gent/core/extensions/api"
-import type { DelegateChild } from "@gent/extensions/client.js"
-import { DelegateRpc } from "@gent/extensions/client.js"
+import type { DelegateChild } from "@gent/extensions/client"
+import { DelegateRpc } from "@gent/extensions/client"
 import { useTheme } from "../theme"
 import { ToolFrame, useSpinnerClock } from "../ui"
 import { formatUsageStats, toolArgSummary, type ToolInput } from "../utils"
