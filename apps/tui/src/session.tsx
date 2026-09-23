@@ -77,6 +77,7 @@ import {
   transitionPromptSearch,
 } from "./pickers"
 import {
+  type GentClientRpcError,
   type MessageSegment,
   type ProjectedMessage,
   type QueueEntryInfo,
@@ -2409,8 +2410,15 @@ export interface SessionController {
   phaseLabel: () => string
   elapsed: () => number
   onComposerInteraction: (event: ComposerInteractionEvent) => void
-  /** Send a submission to the session it was drafted in (`target`), never "the current one". */
-  onSubmit: (content: string, mode: "queue" | "interject", target: SessionIdentity) => void
+  /**
+   * Send a submission to the session it was drafted in (`target`), never "the
+   * current one". A rejected submission fails, and the composer gives it back.
+   */
+  onSubmit: (
+    content: string,
+    mode: "queue" | "interject",
+    target: SessionIdentity,
+  ) => Effect.Effect<void, GentClientRpcError>
   onSlashCommand: (cmd: string, args: string) => Effect.Effect<void>
   onRestoreQueue: () => void
   dispatchComposer: (event: ComposerEvent) => void
@@ -2898,7 +2906,11 @@ export function createSessionController(props: {
     )
   }
 
-  const onSubmit = (content: string, mode: "queue" | "interject", target: SessionIdentity) => {
+  const onSubmit = (
+    content: string,
+    mode: "queue" | "interject",
+    target: SessionIdentity,
+  ): Effect.Effect<void, GentClientRpcError> => {
     // Interjecting steers the stream in view, so it holds only while the
     // drafted-in session is still the one streaming; otherwise the message queues there.
     const stillHere = Option.exists(
@@ -2906,15 +2918,14 @@ export function createSessionController(props: {
       (current) => current.sessionId === target.sessionId && current.branchId === target.branchId,
     )
     if (mode === "interject" && stillHere && client.isStreaming()) {
-      client.steer(target, SteerCommandInput.cases.Interject.make({ message: content }))
-      return
+      return client.steer(target, SteerCommandInput.cases.Interject.make({ message: content }))
     }
-    client.sendMessage(target, content)
+    return client.sendMessage(target, content)
   }
   /** Cancel the turn streaming in the session in view. */
   const cancelTurn = () => {
     Option.map(client.sessionIdentity(), (target) =>
-      client.steer(target, SteerCommandInput.cases.Cancel.make({})),
+      cast(client.steer(target, SteerCommandInput.cases.Cancel.make({})).pipe(client.surfaceError)),
     )
   }
 

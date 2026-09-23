@@ -58,13 +58,7 @@ import {
 } from "solid-js"
 import { createStore } from "solid-js/store"
 import { omitUndefined } from "@gent/core/extensions/api"
-import {
-  formatConnectionIssue,
-  formatError,
-  randomId,
-  type UiError,
-  useRequiredContext,
-} from "./utils"
+import { formatError, randomId, type UiError, useRequiredContext } from "./utils"
 import { useWorkspace } from "./workspace"
 
 // ── client logging ──────────────────────────────────────────────────────────
@@ -592,11 +586,16 @@ interface ClientAgentValue {
 }
 
 interface ClientActionValue {
-  // Session actions (fire-and-forget, update state internally)
-  /** Send to the session the content was drafted in, not whichever is active when it lands. */
-  sendMessage: (target: SessionIdentity, content: string) => void
-  // Steering (fire-and-forget)
-  steer: (target: SessionIdentity, command: SteerCommandInput) => void
+  /**
+   * Send to the session the content was drafted in, not whichever is active
+   * when it lands. A rejected send fails, so the caller can give the text back.
+   */
+  sendMessage: (target: SessionIdentity, content: string) => Effect.Effect<void, GentClientRpcError>
+  /** Steer the target's loop; a rejected command fails for the caller to report. */
+  steer: (
+    target: SessionIdentity,
+    command: SteerCommandInput,
+  ) => Effect.Effect<void, GentClientRpcError>
 }
 
 export type ClientContextValue = ClientTransportValue &
@@ -1400,43 +1399,26 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const actionValue: ClientActionValue = {
-    sendMessage: (s, content) => {
-      const sendMessageEffect = Effect.fn("TUI.sendMessage")(function* () {
-        const requestId = yield* randomId
-        yield* Effect.sync(() => {
-          log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
-        })
-        return yield* client.message.send({
-          sessionId: s.sessionId,
-          branchId: s.branchId,
-          content,
-          requestId,
-        })
+    sendMessage: Effect.fn("TUI.sendMessage")(function* (s, content) {
+      const requestId = yield* randomId
+      log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
+      yield* client.message.send({
+        sessionId: s.sessionId,
+        branchId: s.branchId,
+        content,
+        requestId,
       })
-      cast(
-        sendMessageEffect().pipe(
-          Effect.tapError((err) =>
-            Effect.sync(() => {
-              setConnectionIssue(formatConnectionIssue(err))
-            }),
-          ),
-        ),
-      )
-    },
-    steer: (s, command) => {
-      cast(
-        Effect.gen(function* () {
-          const requestId = yield* randomId
-          const fullCommand: SteerCommand = {
-            ...command,
-            sessionId: s.sessionId,
-            branchId: s.branchId,
-            requestId,
-          }
-          return yield* client.steer.command({ command: fullCommand })
-        }),
-      )
-    },
+    }),
+    steer: Effect.fn("TUI.steer")(function* (s, command) {
+      const requestId = yield* randomId
+      const fullCommand: SteerCommand = {
+        ...command,
+        sessionId: s.sessionId,
+        branchId: s.branchId,
+        requestId,
+      }
+      yield* client.steer.command({ command: fullCommand })
+    }),
   }
 
   // Built once, for the life of the provider. Every accessor on it reads a

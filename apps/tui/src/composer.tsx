@@ -772,11 +772,7 @@ function useComposerController(): ComposerController {
           })
           return userMessage
         }),
-        Effect.tap((userMessage) =>
-          Effect.sync(() => {
-            sc.onSubmit(userMessage, "queue", target)
-          }),
-        ),
+        Effect.flatMap((userMessage) => sc.onSubmit(userMessage, "queue", target)),
         Effect.catchEager((error) =>
           Effect.sync(() => {
             if (error._tag === "ProcessError") client.setError(`Shell: ${error.message}`)
@@ -816,11 +812,8 @@ function useComposerController(): ComposerController {
     cast(
       client.cwdOf(target.sessionId).pipe(
         Effect.flatMap((cwd) => expandFileRefs(text, cwd)),
-        Effect.tap((expanded) =>
-          Effect.sync(() => {
-            sc.onSubmit(expanded, mode, target)
-          }),
-        ),
+        // A send the server rejects comes back to the composer with the reason.
+        Effect.flatMap((expanded) => sc.onSubmit(expanded, mode, target)),
         Effect.catchEager((error) =>
           Effect.sync(() => {
             client.setError(formatError(error))
