@@ -49,18 +49,16 @@ export { type LoadedExtension } from "../domain/extension.js"
 export { ApprovalService } from "../runtime/extension-host.js"
 export { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 export { ConfigService, RuntimeEnvironment, UserConfig } from "../runtime/config.js"
-export { EventStore } from "../domain/event.js"
 export { toolCallReceipts } from "../domain/message.js"
 export { SqliteStorage } from "../storage/storage.js"
-export { CurrentWorkspaceId, WORKSPACE_ID_HEADER, WorkspaceId } from "../server/workspace-rpc.js"
+export { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
 // Protocol values only tests read: event and error fixtures, projections.
 export { type SessionRuntimeState } from "../domain/agent-loop.js"
 export { DriverError, DriverFailureId } from "../domain/driver.js"
-export { NotFoundError, ProviderError, StorageError } from "../domain/errors.js"
+export { NotFoundError, ProviderError } from "../domain/errors.js"
 export {
   ErrorOccurred,
   EventId,
-  EventStoreError,
   MessageReceived,
   StreamEnded,
   StreamStarted,
