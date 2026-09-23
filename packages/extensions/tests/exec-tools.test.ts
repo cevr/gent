@@ -110,6 +110,15 @@ describe("injectGitTrailers", () => {
     )
   })
 
+  test("a commit that passes its own trailer keeps it; the other commits get one", () => {
+    expect(
+      injectGitTrailers(
+        'git commit --trailer "X: 1" -m a && git commit -m b',
+        SessionId.make("s1"),
+      ),
+    ).toBe('git commit --trailer "X: 1" -m a && git commit --trailer "Session-Id: s1" -m b')
+  })
+
   test("every commit in a chained command gets the trailer", () => {
     expect(injectGitTrailers("git commit -m a && git commit -m b", SessionId.make("s1"))).toBe(
       'git commit --trailer "Session-Id: s1" -m a && git commit --trailer "Session-Id: s1" -m b',
@@ -215,7 +224,7 @@ describe("classifyBashCommand", () => {
       "git -c x=y reset --hard",
       "git -C repo clean -fdx",
       "git --no-pager checkout -- file.ts",
-      "git -C repo restore --worktree a.ts",
+      "git -C repo restore --staged a.ts",
       "git -C repo add -A",
       "git add .",
     ]) {
@@ -262,17 +271,25 @@ describe("classifyBashCommand", () => {
       "git branch -f main HEAD~3",
       "git stash drop",
       "git stash clear",
+      "git checkout HEAD src/a.ts",
+      "git checkout HEAD~1 src/a.ts src/b.ts",
+      "git checkout --theirs src/a.ts",
+      "git checkout --ours src/a.ts",
+      "git checkout -m main",
+      "git checkout --merge main",
+      "git restore --staged src/a.ts",
+      "git restore -S src/a.ts",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
   })
 
   test("a git command that keeps file content is safe", () => {
-    // `restore --staged` alone only unstages: the working-tree file keeps its edits.
     for (const command of [
-      "git restore --staged src/a.ts",
-      "git restore -S src/a.ts",
       "git checkout main",
+      "git checkout -b feature origin/main",
+      "git checkout main >/dev/null 2>&1",
+      "git checkout main 2>/dev/null",
       "git checkout -b feature",
       "git switch -c feature",
       "git branch -d feature",

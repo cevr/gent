@@ -343,13 +343,17 @@ function shellSegments(command: string): Array<Array<string>> {
   let words: Array<string> = []
   let word = ""
   let inWord = false
+  // The word after `>` or `<` is a redirection target, not an argument.
+  let redirectTarget = false
   const endWord = () => {
-    if (inWord) words.push(word)
+    if (inWord && redirectTarget) redirectTarget = false
+    else if (inWord) words.push(word)
     word = ""
     inWord = false
   }
   const endSegment = () => {
     endWord()
+    redirectTarget = false
     if (words.length > 0) segments.push(words)
     words = []
   }
@@ -370,12 +374,23 @@ function shellSegments(command: string): Array<Array<string>> {
       index++
       word += command.charAt(index)
       inWord = true
+    } else if (char === "&" && /[<>]/.test(command.charAt(index - 1))) {
+      // `>&1` duplicates a descriptor; the `&` is part of the redirection.
+      continue
     } else if (/[;&|\n()`]/.test(char)) {
       // Separators and subshell or substitution delimiters start a new
       // command: `$(git push -f)` and `(git push -f)` classify as commands.
       endSegment()
-    } else if (/[\s<>]/.test(char)) {
-      // A redirection ends the word: `--hard>/dev/null` is `--hard`.
+    } else if (char === "<" || char === ">") {
+      // A redirection ends the word: `--hard>/dev/null` is `--hard`. A
+      // descriptor number (`2>`) belongs to the redirection.
+      if (inWord && /^\d+$/.test(word)) {
+        word = ""
+        inWord = false
+      }
+      endWord()
+      redirectTarget = true
+    } else if (/\s/.test(char)) {
       endWord()
     } else {
       word += char
@@ -400,6 +415,20 @@ const GIT_OPTIONS_WITH_VALUE = new Set([
 
 const FORCE_PUSH_TOKEN = /^(-[a-zA-Z]*f[a-zA-Z]*|--force.*|\+.+)$/
 const DELETE_PUSH_TOKEN = /^(-[a-zA-Z]*d[a-zA-Z]*|--delete|--mirror|--prune|:.+)$/
+
+/** Checkout options whose value is the next word. */
+const CHECKOUT_OPTIONS_WITH_VALUE = new Set(["-b", "-B", "--orphan", "--conflict"])
+
+/** The words of a checkout that are not options or option values. */
+const checkoutPositionals = (args: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const positionals: Array<string> = []
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] ?? ""
+    if (CHECKOUT_OPTIONS_WITH_VALUE.has(arg)) index++
+    else if (!arg.startsWith("-")) positionals.push(arg)
+  }
+  return positionals
+}
 
 /** A short option cluster (`-fb`) or long option that holds `short` or equals one of `long`. */
 const hasOption = (args: ReadonlyArray<string>, short: string, ...long: ReadonlyArray<string>) =>
@@ -426,22 +455,24 @@ const GIT_SUBCOMMAND_RISKS = {
   reset: (args: ReadonlyArray<string>) =>
     destructiveWhen(args.includes("--hard"), "git reset --hard"),
   clean: () => destructive("git clean"),
+  // A branch switch (`git checkout main`, `-b feat origin/main`) keeps work.
+  // Paths do not: a tree-ish plus a path, `--ours`/`--theirs`, a merge
+  // checkout, or a force. One bare word stays safe: the classifier cannot
+  // tell a path from a branch without the file system.
   checkout: (args: ReadonlyArray<string>) =>
     destructiveWhen(
       args.includes("--") ||
         args.includes(".") ||
         args[0] === "-" ||
+        checkoutPositionals(args).length >= 2 ||
         hasOption(args, "f", "--force") ||
-        hasOption(args, "p", "--patch"),
+        hasOption(args, "p", "--patch") ||
+        hasOption(args, "m", "--merge", "--ours", "--theirs"),
       "git checkout that discards working-tree changes",
     ),
-  // `--staged` alone only unstages: the working-tree file keeps its edits.
-  // Every other form (the default, `--worktree`) overwrites the working tree.
-  restore: (args: ReadonlyArray<string>) =>
-    destructiveWhen(
-      !hasOption(args, "S", "--staged") || hasOption(args, "W", "--worktree"),
-      "git restore (discards working-tree changes)",
-    ),
+  // Every form can lose work: the default and `--worktree` overwrite the
+  // working tree, and `--staged` drops staged content the tree may not hold.
+  restore: () => destructive("git restore (can discard changes)"),
   switch: (args: ReadonlyArray<string>) =>
     destructiveWhen(
       hasOption(args, "f", "--force", "--discard-changes"),
@@ -622,11 +653,15 @@ export function splitCdCommand(cmd: string): Option.Option<{ cwd: string; comman
  * Inject --trailer on git commit commands for session traceability.
  */
 export function injectGitTrailers(cmd: string, sessionId: SessionId): string {
-  // `git -C dir commit` and `git -c k=v commit` are commits too; every one gets the trailer.
+  // `git -C dir commit` and `git -c k=v commit` are commits too. Each commit
+  // gets the trailer unless its own command already passes one.
   const gitCommit = /(\bgit(?:\s+-[cC]\s+\S+)*\s+commit)(?=\s|$)/g
-  if (!gitCommit.test(cmd)) return cmd
-  if (/--trailer/.test(cmd)) return cmd
-  return cmd.replace(gitCommit, (commit) => `${commit} --trailer "Session-Id: ${sessionId}"`)
+  return cmd.replace(gitCommit, (commit: string, _group: string, offset: number) => {
+    const rest = cmd.slice(offset + commit.length)
+    const ownArgs = rest.split(/&&|\|\||[;|\n]/)[0] ?? ""
+    if (/--trailer/.test(ownArgs)) return commit
+    return `${commit} --trailer "Session-Id: ${sessionId}"`
+  })
 }
 
 /**
