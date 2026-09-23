@@ -36,6 +36,11 @@ import {
 } from "@gent/core/extensions/api"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
+// Test seam: only tests read these exports. BackgroundBashStorage, its error,
+// BackgroundBashSupervisorLive and BackgroundBashLayer let a test inject a
+// storage fault. BashParams encodes a model's tool input. splitCdCommand,
+// stripBackground and injectGitTrailers are pure transforms with unit tests.
+
 // ── background bash storage ─────────────────────────────────────────────────
 
 export class BackgroundBashStorageError extends Schema.TaggedError<BackgroundBashStorageError>()(
