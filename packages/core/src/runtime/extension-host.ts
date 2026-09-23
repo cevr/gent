@@ -1897,13 +1897,16 @@ export class SessionProfileCache extends Context.Service<
         const entries = new Map<string, ProfileEntry>()
         const leases = new Map<string, number>()
         // One extension's process resources, shared by every profile that
-        // builds them over the same context (`startProcessResources`), and
+        // builds them over the same context (`startProcessResources`), with
         // the number of profiles that hold them.
         const sharedResources = new Map<
           string,
-          { readonly scope: Scope.Closeable; readonly context: Context.Context<unknown> }
+          {
+            readonly scope: Scope.Closeable
+            readonly context: Context.Context<unknown>
+            holders: number
+          }
         >()
-        const resourceHolders = new Map<string, number>()
         // A raw disabled list seen before, to the profile it resolved to.
         const aliases = new Map<string, string>()
         // The profile the place's config selects now. Only a superseded
@@ -1937,12 +1940,11 @@ export class SessionProfileCache extends Context.Service<
          */
         const dropResources = (keys: ReadonlyArray<string>): ReadonlyArray<Scope.Closeable> =>
           keys.toReversed().flatMap((key) => {
-            const holders = (resourceHolders.get(key) ?? 1) - 1
-            resourceHolders.set(key, holders)
             const shared = Option.fromNullishOr(sharedResources.get(key))
-            if (holders > 0 || Option.isNone(shared)) return []
+            if (Option.isNone(shared)) return []
+            shared.value.holders -= 1
+            if (shared.value.holders > 0) return []
             sharedResources.delete(key)
-            resourceHolders.delete(key)
             return [shared.value.scope]
           })
 
@@ -1991,7 +1993,7 @@ export class SessionProfileCache extends Context.Service<
               const key = [...chain, identity].join("\u0000")
               const shared = Option.fromNullishOr(sharedResources.get(key))
               if (Option.isSome(shared)) {
-                resourceHolders.set(key, (resourceHolders.get(key) ?? 0) + 1)
+                shared.value.holders += 1
                 held.push(key)
                 context = Context.merge(context, shared.value.context)
                 chain.push(identity)
@@ -2006,8 +2008,11 @@ export class SessionProfileCache extends Context.Service<
                 ),
               ).pipe(Effect.exit)
               if (Exit.isSuccess(built)) {
-                sharedResources.set(key, { scope: extensionScope, context: built.value })
-                resourceHolders.set(key, 1)
+                sharedResources.set(key, {
+                  scope: extensionScope,
+                  context: built.value,
+                  holders: 1,
+                })
                 held.push(key)
                 context = Context.merge(context, built.value)
                 chain.push(identity)
