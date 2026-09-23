@@ -1033,6 +1033,20 @@ const GITIGNORE_CASES = {
     files: ["a/b/c", "x/a/b/c"],
     ignores: { ".gitignore": "a/b/\n" },
   },
+  "escaped-bracket-bang": {
+    files: ["[!a]", "[^a]", "b"],
+    ignores: { ".gitignore": "\\[!a]\n" },
+  },
+  "trailing-backslash": { files: ["foo", "foo\\"], ignores: { ".gitignore": "foo\\\n" } },
+  "class-with-slash": { files: ["a/b", "axb", "a[/]b"], ignores: { ".gitignore": "a[/]b\n" } },
+  "negated-class-and-slash": { files: ["a/b", "acb"], ignores: { ".gitignore": "a[!x]b\n" } },
+  "leading-dot-slash": { files: ["a", "x/a"], ignores: { ".gitignore": "./a\n" } },
+  "question-mark-and-multibyte": {
+    files: ["caf\u00E9", "cafe", "caf\u00E9s"],
+    ignores: { ".gitignore": "caf?\ncaf??s\n" },
+  },
+  "unclosed-class": { files: ["a[b", "ab"], ignores: { ".gitignore": "a[b\n" } },
+  "literal-multibyte": { files: ["caf\u00E9", "cafe"], ignores: { ".gitignore": "caf\u00E9\n" } },
 } satisfies Record<
   string,
   { readonly files: ReadonlyArray<string>; readonly ignores: Record<string, string> }

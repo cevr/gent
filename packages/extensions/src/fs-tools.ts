@@ -89,13 +89,95 @@ interface IgnoreRule {
  */
 const GIT_GLOB_OPTIONS = { dot: true, nobrace: true, noextglob: true, nonegate: true }
 
+const neverMatches: PathMatcher = () => false
+
+/**
+ * Git's wildmatch compares bytes, so `?` matches one byte of a multibyte
+ * character. Patterns and paths are matched as one latin1 character per
+ * UTF-8 byte.
+ */
+const utf8Bytes = (text: string): string => Buffer.from(text, "utf8").toString("latin1")
+
+/**
+ * The end of the bracket class that opens at `start`, by wildmatch's rules:
+ * a `]` right after `[` or `[!` is a member, `\x` escapes, and `[:alpha:]`
+ * is one member. `None` when the class never closes.
+ */
+const classEnd = (pattern: string, start: number): Option.Option<number> => {
+  let index = start + 1
+  if (pattern[index] === "!" || pattern[index] === "^") index++
+  if (pattern[index] === "]") index++
+  while (index < pattern.length) {
+    const char = pattern[index]
+    if (char === "]") return Option.some(index)
+    if (char === "\\") index += 2
+    else if (pattern.startsWith("[:", index)) {
+      const close = pattern.indexOf(":]", index + 2)
+      if (close === -1) return Option.none()
+      index = close + 2
+    } else index++
+  }
+  return Option.none()
+}
+
+/**
+ * Rewrite one wildmatch pattern as picomatch source, or `None` when git can
+ * never match it: a pattern that ends in a lone backslash, one with a `.` or
+ * `..` segment (a listed path has none), a class that never closes, and a
+ * class whose only member is `/`. A class never matches `/`; a negated
+ * class is written `[^...]`; an escaped `\[!` stays literal; parentheses
+ * are literal.
+ */
+const toPicomatchSource = (pattern: string): Option.Option<string> => {
+  if (/(?:^|[^\\])(?:\\\\)*\\$/.test(pattern)) return Option.none()
+  if (pattern.split("/").some((segment) => segment === "." || segment === "..")) {
+    return Option.none()
+  }
+  let source = ""
+  let index = 0
+  while (index < pattern.length) {
+    const char = pattern.charAt(index)
+    if (char === "\\") {
+      source += pattern.slice(index, index + 2)
+      index += 2
+      continue
+    }
+    if (char === "(" || char === ")") {
+      source += `\\${char}`
+      index++
+      continue
+    }
+    if (char !== "[") {
+      source += char
+      index++
+      continue
+    }
+    const end = classEnd(pattern, index)
+    if (Option.isNone(end)) return Option.none()
+    let body = pattern.slice(index + 1, end.value)
+    const negated = body.startsWith("!") || body.startsWith("^")
+    if (negated) body = body.slice(1)
+    body = body.replaceAll(/\\?\//g, "")
+    if (body.length === 0 && !negated) return Option.none()
+    if (negated) source += `[^${body}/]`
+    else source += `[${body}]`
+    index = end.value + 1
+  }
+  return Option.some(source)
+}
+
 const compileGitGlob = (pattern: string): PathMatcher => {
-  const source = pattern.replaceAll("[!", "[^").replaceAll(/(?<!\\)[()]/g, (paren) => `\\${paren}`)
+  const rewritten = toPicomatchSource(pattern)
+  if (Option.isNone(rewritten)) return neverMatches
+  const source = utf8Bytes(rewritten.value)
   // A trailing `/**` matches everything inside, never the directory itself.
-  if (!source.endsWith("/**")) return picomatch(source, GIT_GLOB_OPTIONS)
+  if (!source.endsWith("/**")) {
+    const matches = picomatch(source, GIT_GLOB_OPTIONS)
+    return (path) => matches(utf8Bytes(path))
+  }
   const parent = picomatch(source.slice(0, -3), GIT_GLOB_OPTIONS)
   return (path) => {
-    const parts = path.split("/")
+    const parts = utf8Bytes(path).split("/")
     for (let depth = 1; depth < parts.length; depth++) {
       if (parent(parts.slice(0, depth).join("/"))) return true
     }
