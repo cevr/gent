@@ -2820,9 +2820,7 @@ export function createSessionController(props: {
 
   const onSubmit = (content: string, mode?: "queue" | "interject") => {
     if (mode === "interject" && client.isStreaming()) {
-      client.steer(
-        SteerCommandInput.cases.Interject.make({ message: content, agent: client.agent() }),
-      )
+      client.steer(SteerCommandInput.cases.Interject.make({ message: content }))
       return
     }
     client.sendMessage(content)

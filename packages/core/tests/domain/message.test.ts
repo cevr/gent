@@ -331,10 +331,6 @@ describe("message part projection", () => {
       ),
     ]
     const receipts = toolCallReceipts(events)
-    const durations = receipts.durations
-    expect(durations.get(done)).toBe(1_250)
-    expect(durations.get(failed)).toBe(12)
-    expect(durations.has(open)).toBe(false)
 
     const call = (id: ToolCallId) =>
       Prompt.toolCallPart({ id, name: "cell", params: { code: "1" }, providerExecuted: false })
@@ -348,12 +344,16 @@ describe("message part projection", () => {
       })
     const projected = projectMessagesWithToolInteractions(
       [
-        makeMessage("a", "assistant", [call(done), call(open)]),
-        makeMessage("t", "tool", [result(done)]),
+        makeMessage("a", "assistant", [call(done), call(failed), call(open)]),
+        makeMessage("t", "tool", [result(done), result(failed)]),
       ],
       receipts,
     )
-    expect(projected[0]?.toolInteractions.map((entry) => entry.durationMs)).toEqual([1_250, absent])
+    expect(projected[0]?.toolInteractions.map((entry) => entry.durationMs)).toEqual([
+      1_250,
+      12,
+      absent,
+    ])
   })
 
   test("a cell's operations come back from their stored receipts", () => {
@@ -558,6 +558,63 @@ describe("message part projection", () => {
       ])
     expect(opsOf(0)).toEqual([["read", "read done"]])
     expect(opsOf(2)).toEqual([["bash", "bash done"]])
+  })
+
+  test("two steps that reuse a call id each show their own duration", () => {
+    const sessionId = SessionId.make("session-projection")
+    const branchId = BranchId.make("branch-projection")
+    const reused = ToolCallId.make("call_0")
+    const run = (message: string, first: number, startedAt: number, endedAt: number) => {
+      const assistantMessageId = MessageId.make(message)
+      return [
+        EventEnvelope.make({
+          id: EventId.make(first),
+          createdAt: startedAt,
+          event: AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: reused,
+            toolName: "read",
+            assistantMessageId,
+          }),
+        }),
+        EventEnvelope.make({
+          id: EventId.make(first + 1),
+          createdAt: endedAt,
+          event: AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: reused,
+            toolName: "read",
+            assistantMessageId,
+          }),
+        }),
+      ]
+    }
+    const call = Prompt.toolCallPart({
+      id: reused,
+      name: "read",
+      params: {},
+      providerExecuted: false,
+    })
+    const result = Prompt.toolResultPart({
+      id: reused,
+      name: "read",
+      isFailure: false,
+      providerExecuted: false,
+      result: 1,
+    })
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("m1", "assistant", [call]),
+        makeMessage("m1-tools", "tool", [result]),
+        makeMessage("m2", "assistant", [call]),
+        makeMessage("m2-tools", "tool", [result]),
+      ],
+      toolCallReceipts([...run("m1", 1, 1_000, 6_000), ...run("m2", 3, 7_000, 7_010)]),
+    )
+    expect(projected[0]?.toolInteractions[0]?.durationMs).toBe(5_000)
+    expect(projected[2]?.toolInteractions[0]?.durationMs).toBe(10)
   })
 
   test("an operation with a large input and output projects a bounded row", () => {

@@ -2032,6 +2032,84 @@ describe("OpenAI cache routing", () => {
   )
 })
 
+describe("OpenAI reasoning hints", () => {
+  const sentEffort = (body: string): Option.Option<unknown> => {
+    const parsed = Schema.decodeOption(
+      Schema.fromJsonString(
+        Schema.Struct({
+          reasoning_effort: Schema.optional(Schema.String),
+          reasoning: Schema.optional(Schema.Struct({ effort: Schema.String })),
+        }),
+      ),
+    )(body)
+    return Option.flatMap(parsed, (value) =>
+      Option.orElse(Option.fromUndefinedOr(value.reasoning_effort), () =>
+        Option.fromUndefinedOr(value.reasoning?.effort),
+      ),
+    )
+  }
+  const effortsFor = (authInfo: ProviderAuthInfo, models: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+        makeDurableCell({
+          access: "hint-test-token",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        }),
+      )
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+      )
+      const fetchState = makeFakeFetchState()
+      for (const modelName of models) {
+        const model = yield* driver.resolveModel(modelName, authInfo, {
+          reasoning: "none",
+          maxTokens: 768,
+        })
+        yield* runOne(model, fetchState)
+      }
+      return fetchState.captured.map((request) =>
+        sentEffort(Option.getOrThrow(Option.fromUndefinedOr(request.body))),
+      )
+    })
+
+  it.live(
+    "a request for no reasoning names the lowest effort the model accepts, on both paths",
+    () =>
+      Effect.gen(function* () {
+        // Each floor is the model page's lowest `reasoning.effort` (developers.openai.com/api/docs/models).
+        const reasoningModels = [
+          "gpt-5.4",
+          "gpt-5.6-sol",
+          "gpt-5-mini",
+          "gpt-5.1-codex",
+          "gpt-6-astra",
+        ]
+        const lowest = [
+          Option.some("none"),
+          Option.some("none"),
+          Option.some("minimal"),
+          Option.some("low"),
+          Option.some("low"),
+        ]
+        expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), reasoningModels)).toEqual(lowest)
+        expect(yield* effortsFor(makeOAuthInfo(), reasoningModels)).toEqual(lowest)
+        // Pro tiers accept only "high", and only through an API key.
+        expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), ["gpt-5-pro"])).toEqual([
+          Option.some("high"),
+        ])
+        // A model without reasoning gets no effort at all.
+        expect(yield* effortsFor(makeApiAuthInfo("hint-test-key"), ["gpt-4.1"])).toEqual([
+          Option.none(),
+        ])
+      }),
+  )
+})
+
 describe("buildOpenAIModelDriver — OAuth callback state", () => {
   it.live("stale callback state fails instead of reporting success", () =>
     Effect.gen(function* () {

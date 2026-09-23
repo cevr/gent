@@ -268,6 +268,93 @@ describe("a child's completion", () => {
   )
 
   it.live(
+    "a child's later turns, from its own wake and from the parent's session.send, run as the delegate agent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const childModel = ModelId.make("test/child-model")
+          const childTools: Array<ReadonlyArray<string>> = []
+          let childId = ""
+          let parentCalls = 0
+          const lastText = (prompt: Prompt.Prompt) => promptTexts(prompt).at(-1) ?? ""
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              childTools.push(options.tools.map((entry) => entry.name))
+              if (!promptToolCallIds(options.prompt).includes("child-wake")) {
+                return Effect.succeed(
+                  toolStep("wake", { afterSeconds: 0.2, note: "CHILD-WAKE-NOTE" }, "child-wake"),
+                )
+              }
+              if (lastText(options.prompt).includes("PARENT-NOTE")) {
+                return Effect.succeed(reply("noted"))
+              }
+              if (lastText(options.prompt).includes("CHILD-WAKE-NOTE")) {
+                return Effect.succeed(reply("woke"))
+              }
+              return Effect.succeed(reply("pong"))
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            const asked = lastText(options.prompt) === "SEND-TO-CHILD"
+            if (asked && !promptToolCallIds(options.prompt).includes("parent-send")) {
+              return Effect.succeed(
+                toolStep("session.send", { to: childId, message: "PARENT-NOTE" }, "parent-send"),
+              )
+            }
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer, {
+            config: new UserConfig({
+              agents: { [DELEGATE_AGENT_NAME]: { modelId: childModel } },
+            }),
+          })
+          const { client } = harness
+          yield* sendPrompt(harness, "delegate this task")
+          yield* afterCompletion(harness)
+          const child = yield* childOf(harness)
+          childId = child.sessionId
+          const childAnswered = (text: string) =>
+            waitFor(
+              client.session.getSnapshot(child),
+              (current) =>
+                current.runtime._tag === "Idle" &&
+                current.messages.some(
+                  (message) =>
+                    message.role === "assistant" && messageTexts([message]).includes(text),
+                ),
+              8_000,
+              `the child answered ${text}`,
+            )
+          // The child's own alarm wakes it for a turn no one sent it.
+          yield* childAnswered("woke")
+          // The parent's message wakes the idle child for another.
+          yield* sendPrompt(harness, "SEND-TO-CHILD")
+          const snapshot = yield* childAnswered("noted")
+
+          const models = yield* client.session.events(child).pipe(
+            Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+            Stream.flatMap((envelope) => {
+              if (envelope.event._tag !== "StreamEnded") return Stream.empty
+              return Stream.make(envelope.event.model)
+            }),
+            Stream.runCollect,
+            Effect.map((found) => Array.from(found)),
+          )
+          // Four steps over three turns: the start (wake call, then pong), the wake, the send.
+          expect(models).toEqual([childModel, childModel, childModel, childModel])
+          expect(childTools).toHaveLength(4)
+          for (const tools of childTools) expect(tools).not.toContain("delegate.start")
+          expect(snapshot.agent).toBe(DELEGATE_AGENT_NAME)
+          expect(snapshot.resolvedModelId).toBe(childModel)
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    25_000,
+  )
+
+  it.live(
     "the completion message carries the row it draws: agent, outcome, usage, and the child's calls",
     () =>
       Effect.scoped(
@@ -577,7 +664,7 @@ describe("a start nobody waits for", () => {
   )
 
   it.live(
-    "a re-sent start keeps the run spec it was admitted with",
+    "a re-sent start runs under the run spec its child session was created with",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -588,12 +675,15 @@ describe("a start nobody waits for", () => {
           ])
           const harness = yield* harnessWithHome(providerLayer)
           const { client, sessionId, branchId } = harness
+          const runSpec = { overrides: { modelId: ModelId.make("test/override-model") } }
+          // The child session carries its admission from creation, as `admitChild` makes it.
           const child = yield* client.session.create({
             cwd: "/tmp",
             parentSessionId: sessionId,
             parentBranchId: branchId,
+            admission: { agent: DELEGATE_AGENT_NAME, interactive: false, runSpec },
           })
-          // The row is written before the start is sent, with the call's run spec.
+          // The row is written before the start is sent.
           yield* harness.writeRegistry(branchId, [
             {
               requestId: RequestId.make("written-ahead"),
@@ -602,7 +692,7 @@ describe("a start nobody waits for", () => {
               agentName: DELEGATE_AGENT_NAME,
               prompt: childTask,
               toolCallId: ToolCallId.make("written-ahead"),
-              runSpec: { overrides: { modelId: ModelId.make("test/override-model") } },
+              runSpec,
               private: false,
               submitted: false,
               delivered: false,

@@ -2264,6 +2264,7 @@ export const makeExtensionHostContextProvider = (
               parentSessionId: params.parentSessionId,
               parentBranchId: params.parentBranchId,
               historyBranchId: params.historyBranchId,
+              admission: params.admission,
               requestId: params.requestId,
             }),
           ).pipe(
@@ -2308,9 +2309,6 @@ export const makeExtensionHostContextProvider = (
                         branchId: turn.branchId,
                         content: turn.content,
                         commandId: turn.commandId,
-                        agentOverride: turn.agentOverride,
-                        interactive: turn.interactive,
-                        runSpec: turn.runSpec,
                         completion: turn.completion,
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))
@@ -2343,7 +2341,6 @@ export const makeExtensionHostContextProvider = (
                         requestId,
                         message: steered.content,
                         metadata: steered.metadata,
-                        agent: steered.agent,
                         wake: steered.wake,
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))

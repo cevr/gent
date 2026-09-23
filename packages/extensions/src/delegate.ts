@@ -266,13 +266,11 @@ const childMessages = (entry: DelegateEntry) =>
 const childName = (prompt: string) => `${DELEGATE_AGENT_NAME}: ${prompt.slice(0, 60)}`
 
 /** Children never spend the parent's patience on a broken model. */
-const childRunSpec = (runSpec: Option.Option<RunSpec>): RunSpec => {
-  const base = Option.getOrElse(runSpec, () => makeRunSpec({}))
-  return makeRunSpec({
+const childRunSpec = (base: RunSpec): RunSpec =>
+  makeRunSpec({
     ...base,
     overrides: { maxModelAttempts: CHILD_MAX_MODEL_ATTEMPTS, ...base.overrides },
   })
-}
 
 // ── completion delivery ─────────────────────────────────────────────────────
 
@@ -498,9 +496,6 @@ const submitStart = (entry: DelegateEntry) =>
       branchId: entry.branchId,
       content: childTaskText(ctx.sessionId, entry.prompt),
       commandId: ActorCommandId.make(startMessageId(entry.requestId)),
-      agentOverride: entry.agentName,
-      interactive: false,
-      runSpec: childRunSpec(Option.fromUndefinedOr(entry.runSpec)),
       completion: "admission",
     })
   })
@@ -682,10 +677,20 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
             message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished children`,
           })
         }
+        const runSpec = makeRunSpec({
+          ...params.runSpec,
+          ...Record.filter({ parentToolCallId: params.toolCallId }, Predicate.isNotUndefined),
+        })
+        // The child is its agent for every turn it runs, not only this one.
         const child = yield* ctx.Session.create({
           name: childName(params.prompt),
           parentSessionId: ctx.sessionId,
           parentBranchId: ctx.branchId,
+          admission: {
+            agent: DELEGATE_AGENT_NAME,
+            interactive: false,
+            runSpec: childRunSpec(runSpec),
+          },
           ...Record.filter(
             { requestId: params.requestId, historyBranchId: params.historyBranchId },
             Predicate.isNotUndefined,
@@ -700,10 +705,7 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           agentName: DELEGATE_AGENT_NAME,
           prompt: params.prompt,
           ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
-          runSpec: makeRunSpec({
-            ...params.runSpec,
-            ...Record.filter({ parentToolCallId: params.toolCallId }, Predicate.isNotUndefined),
-          }),
+          runSpec,
           private: false,
           submitted: false,
           delivered: false,

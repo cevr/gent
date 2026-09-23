@@ -348,8 +348,6 @@ Shape:
   the durable steering queue; a running turn delivers it at its next safe step
   boundary (tool results stored, no stream open) by persisting the interjection
   as a transcript message before the next model call, so the same turn continues.
-  Items with an agent override or run spec need their own turn profile and wait
-  for the turn boundary, where steering still precedes queued follow-ups.
 - Follow-up admission from inside a held side-mutation permit (a running turn, a
   tool invocation, an extension request) only appends to the durable queue. The
   turn starts from a wake that runs after the permit is released, or at the next
@@ -1048,10 +1046,17 @@ Other notes:
   fails that loop, not one extension. Release runs in reverse build order when the owning
   scope closes.
 - Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
-- Agent choice is turn-scoped: `QueuedTurnItem.agentOverride` names the agent
-  for one turn and nothing else. A branch holds no agent of its own, so there
-  is no steering command, loop state field, or durable event for switching one.
-- `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
+- The agent is a session property. `Session.admission` (agent, run spec,
+  interactive; `sessions.admission_json`, migration 023) is fixed at creation,
+  and every turn of the session runs under it: the first, a wake, a queued
+  follow-up, a steer that starts a turn, and a recovered turn after a restart.
+  `sessionAgentDefinition` (`runtime/turn.ts`) resolves it once for the turn,
+  the snapshot (`SessionSnapshot.agent`) and the auth check. No queue item,
+  steering command, turn record or loop state carries an agent. A handoff
+  (`continueThread`) keeps its parent's admission unless it names one.
+- Model precedence: the session's `/model` setting, then the admission's run
+  overrides, then config `agents[name]`, then the agent definition.
+- `createSession` accepts optional `initialPrompt` + `admission` for atomic create-and-send.
 
 ### EventPublisher
 

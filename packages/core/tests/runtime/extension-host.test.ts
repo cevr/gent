@@ -3659,60 +3659,60 @@ const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
     .filter((call) => call.service === "EventStore" && call.method === "append")
     .map((call) => Schema.decodeUnknownSync(AgentEvent)(call.args)._tag)
-describe("agent override behavior", () => {
-  it.scopedLive(
-    "sendUserMessage keeps agentOverride turn-scoped and does not switch the session agent",
-    () =>
-      Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          {
-            ...textStep("override reply"),
-            assertRequest: (request) => {
-              expect(request.model).toBe("test/override")
-            },
+describe("session agent", () => {
+  it.scopedLive("every turn of a session runs as the agent it was created with", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...textStep("first reply"),
+          assertRequest: (request) => {
+            expect(request.model).toBe("test/override")
           },
-          {
-            ...textStep("default reply"),
-            assertRequest: (request) => {
-              expect(request.model).toBe("test/default")
-            },
+        },
+        {
+          ...textStep("second reply"),
+          assertRequest: (request) => {
+            expect(request.model).toBe("test/override")
           },
+        },
+      ])
+      yield* Effect.gen(function* () {
+        const mutations = yield* SessionMutations
+        const sessionRuntime = yield* SessionRuntime
+        const messageStorage = yield* MessageStorage
+        const recorder = yield* SequenceRecorder
+        const session = yield* mutations.createSession({
+          name: "Session Agent Test",
+          admission: { agent: AgentName.make("memory:reflect") },
+        })
+        yield* sessionRuntime.sendUserMessage({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+          content: "first",
+        })
+        yield* sessionRuntime.sendUserMessage({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+          content: "second",
+        })
+        const messages = yield* waitFor(
+          messageStorage.listMessages(session.branchId),
+          (current) => current.filter((message) => message.role === "assistant").length === 2,
+          5000,
+          "two assistant replies",
+        )
+        const calls = yield* recorder.getCalls
+        expect(messages.map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+          "user",
+          "assistant",
         ])
-        yield* Effect.gen(function* () {
-          const mutations = yield* SessionMutations
-          const sessionRuntime = yield* SessionRuntime
-          const messageStorage = yield* MessageStorage
-          const recorder = yield* SequenceRecorder
-          const session = yield* mutations.createSession({ name: "Agent Override Test" })
-          yield* sessionRuntime.sendUserMessage({
-            sessionId: session.sessionId,
-            branchId: session.branchId,
-            content: "with override",
-            agentOverride: AgentName.make("memory:reflect"),
-          })
-          yield* sessionRuntime.sendUserMessage({
-            sessionId: session.sessionId,
-            branchId: session.branchId,
-            content: "without override",
-          })
-          const messages = yield* waitFor(
-            messageStorage.listMessages(session.branchId),
-            (current) => current.filter((message) => message.role === "assistant").length === 2,
-            5000,
-            "two assistant replies",
-          )
-          const calls = yield* recorder.getCalls
-          expect(messages.map((message) => message.role)).toEqual([
-            "user",
-            "assistant",
-            "user",
-            "assistant",
-          ])
-          expect(eventTags(calls)).not.toContain("AgentSwitched")
-          yield* controls.assertDone
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
-      }).pipe(Effect.provide(BunCrypto.layer)),
+        expect(eventTags(calls)).not.toContain("AgentSwitched")
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
+    }).pipe(Effect.provide(BunCrypto.layer)),
   )
   it.scopedLive("createSession skips dispatch when initialPrompt is missing or empty", () =>
     Effect.gen(function* () {
@@ -3763,6 +3763,7 @@ describe("addressed session verbs via RPC", () => {
           parentBranchId: ctx.branchId,
           historyBranchId: ctx.branchId,
           requestId: input.requestId,
+          admission: { interactive: false },
         })
         const detailBefore = yield* ctx.Session.getDetail(child.sessionId)
         const historyMessages =
@@ -3773,7 +3774,6 @@ describe("addressed session verbs via RPC", () => {
           ...child,
           content: input.prompt,
           commandId: ActorCommandId.make(`spawn:${input.requestId}`),
-          interactive: false,
         })
         // The durable history ends at the marker; a bounded read takes until it.
         const history = yield* ctx.Session.events(child).pipe(

@@ -50,7 +50,6 @@ import {
   ToolCallId,
   ToolId,
 } from "../../src/domain/ids"
-import { AgentName } from "../../src/domain/agent"
 import {
   ToolBindingIdentity,
   ToolBindingSource,
@@ -269,6 +268,7 @@ describe("Sessions", () => {
           "drop_message_search_index",
           "interaction_owner",
           "turn_record_admission",
+          "session_admission",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -302,6 +302,7 @@ describe("Sessions", () => {
           "drop_message_search_index",
           "interaction_owner",
           "turn_record_admission",
+          "session_admission",
         ])
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
@@ -1015,13 +1016,12 @@ describe("persisted loop queue format", () => {
       const loaded = yield* queues.getQueueState(sessionId, branchId)
       expect(loaded.steering).toHaveLength(1)
       expect(loaded.steering[0]?.wake).toBe(true)
-      expect(String(loaded.steering[0]?.agentOverride)).toBe("main")
       expect(loaded.steering[0]?.message._tag).toBe("interjection")
       expect(loaded.followUp).toHaveLength(1)
-      // `false` is the only value this field is read for; a dropped key would
-      // hand a child the interactive tools it was denied.
-      expect(loaded.followUp[0]?.interactive).toBe(false)
-      // A retired key (`keyed`) on an old row is ignored, not rejected.
+      // Retired keys on an old row are ignored, not rejected. The admission
+      // keys moved to the session in migration 023 (schema.test.ts).
+      expect(Object.keys(loaded.steering[0] ?? {})).not.toContain("agentOverride")
+      expect(Object.keys(loaded.followUp[0] ?? {})).not.toContain("interactive")
       expect(Object.keys(loaded.followUp[0] ?? {})).not.toContain("keyed")
       expect(String(loaded.inFlight?.message.id)).toBe("in-flight-1")
     }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
@@ -2553,26 +2553,20 @@ describe("TurnRecordStorage", () => {
     ),
   )
 
-  it.live("keeps what admitted a turn across later step writes", () =>
+  it.live("a row that still holds a turn admission reads as its position", () =>
     Effect.gen(function* () {
       const key = yield* makeFixtureTurnRecord("admission")
       const storage = yield* TurnRecordStorage
-      const admission = {
-        agentOverride: AgentName.make("helper"),
-        runSpec: { overrides: { deniedTools: ["delegate"], maxSteps: 4 } },
-        interactive: false,
-      }
-      yield* storage.put(
-        key,
-        turnRecordAtStep({ step: 0, continuations: 0, pendingToolCalls: [], ...admission }),
+      const sql = yield* SqlClient.SqlClient
+      // Written by the per-turn admission before migration 023 moved it to the session.
+      const admission = `{"agentOverride":"helper","runSpec":{"overrides":{"maxSteps":4}},"interactive":false}`
+      yield* sql`
+        INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
+        VALUES (${key.sessionId}, ${key.branchId}, ${key.messageId}, ${2}, ${0}, ${"[]"}, ${admission}, ${FIXED_NOW.getTime()})
+      `
+      expect(yield* storage.get(key)).toEqual(
+        turnRecordAtStep({ step: 2, continuations: 0, pendingToolCalls: [] }),
       )
-      const opened = yield* storage.get(key)
-      yield* storage.put(key, turnRecordAtStep({ ...opened, step: 2 }))
-      const loaded = yield* storage.get(key)
-      expect(loaded.step).toBe(2)
-      expect(loaded.agentOverride).toBe(admission.agentOverride)
-      expect(loaded.runSpec).toEqual(admission.runSpec)
-      expect(loaded.interactive).toBe(false)
     }).pipe(
       Effect.provideService(CurrentWorkspaceId, DefaultWorkspaceId),
       Effect.provide(storageLayer),
