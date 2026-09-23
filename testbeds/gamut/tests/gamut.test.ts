@@ -8,6 +8,8 @@ import {
   openTurnSessions,
   encodeState,
   parseCount,
+  parseUpArgs,
+  binaryProcessPattern,
   runRecord,
   paneIdFromSplit,
   presetConfigJson,
@@ -109,7 +111,7 @@ describe("gamut state file", () => {
   })
 
   test("a missing field is refused rather than read as undefined", () => {
-    expect(() => decodeState(`{"root":"/tmp/x"}`)).toThrow("work is not a string")
+    expect(() => decodeState(`{"root":"/tmp/x"}`)).toThrow('Missing key\n  at ["work"]')
   })
 })
 
@@ -200,18 +202,30 @@ describe("gamut failure line", () => {
     expect(failureText(reply, "")).toBe("no herdr server is running")
   })
   test("another command gives its last stderr line, then its last stdout line", () => {
-    expect(failureText("building\n", "warning\nerror: no such file\n\n")).toBe("error: no such file")
+    expect(failureText("building\n", "warning\nerror: no such file\n\n")).toBe(
+      "error: no such file",
+    )
     expect(failureText("only stdout\n", "")).toBe("only stdout")
     expect(failureText("", "")).toBe("no output")
   })
 })
 
 describe("gamut open turns", () => {
-  const withEvents = (rows: ReadonlyArray<readonly [string, string]>) => {
+  // A bare `MessageReceived` is a user message: the prompt, a wake, a child's completion.
+  const eventJson = (tag: string, role: string): string =>
+    tag === "MessageReceived" ? JSON.stringify({ _tag: tag, message: { role } }) : "{}"
+  const insert = (db: Database, session: string, tag: string, role = "user") =>
+    db.run("INSERT INTO events (session_id, event_tag, event_json) VALUES (?, ?, ?)", [
+      session,
+      tag,
+      eventJson(tag, role),
+    ])
+  const withEvents = (rows: ReadonlyArray<readonly [string, string, string?]>) => {
     const db = new Database(":memory:")
-    db.run("CREATE TABLE events (id INTEGER PRIMARY KEY, session_id TEXT, event_tag TEXT)")
-    for (const [session, tag] of rows)
-      db.run("INSERT INTO events (session_id, event_tag) VALUES (?, ?)", [session, tag])
+    db.run(
+      "CREATE TABLE events (id INTEGER PRIMARY KEY, session_id TEXT, event_tag TEXT, event_json TEXT)",
+    )
+    for (const [session, tag, role] of rows) insert(db, session, tag, role)
     return db
   }
   test("a child that received its task and has not finished is open", () => {
@@ -251,7 +265,7 @@ describe("gamut open turns", () => {
       ["s", "TurnCompleted"],
     ])
     expect(runRecord(db, 2)).toEqual({ started: false, open: [] })
-    db.run("INSERT INTO events (session_id, event_tag) VALUES ('s', 'MessageReceived')")
+    insert(db, "s", "MessageReceived")
     expect(runRecord(db, 2)).toEqual({ started: true, open: ["s"] })
   })
   test("the send mark is the newest event id, zero before any event", () => {
@@ -265,6 +279,24 @@ describe("gamut open turns", () => {
       ),
     ).toBe(2)
   })
+  // `/goal status` presents a note outside a turn: a hidden assistant message.
+  test("an assistant message stored after the last turn neither opens nor starts one", () => {
+    const db = withEvents([
+      ["parent", "MessageReceived"],
+      ["parent", "StreamStarted"],
+      ["parent", "MessageReceived", "assistant"],
+      ["parent", "TurnCompleted"],
+      ["parent", "MessageReceived", "assistant"],
+    ])
+    expect(runRecord(db, 4)).toEqual({ started: false, open: [] })
+  })
+  test("a stream that started after the send mark counts as a started turn", () => {
+    const db = withEvents([
+      ["s", "TurnCompleted"],
+      ["s", "StreamStarted"],
+    ])
+    expect(runRecord(db, 1)).toEqual({ started: true, open: ["s"] })
+  })
   test("a wake message after the last turn reopens the session", () => {
     const db = withEvents([
       ["parent", "MessageReceived"],
@@ -272,6 +304,48 @@ describe("gamut open turns", () => {
       ["parent", "MessageReceived"],
     ])
     expect(openTurnSessions(db)).toEqual(["parent"])
+  })
+})
+
+describe("gamut up arguments", () => {
+  test("reads the preset, the prompt after --prompt, and --no-build in any order", () => {
+    expect(parseUpArgs(["opus-luna"])).toEqual({
+      preset: "opus-luna",
+      prompt: undefined,
+      build: true,
+    })
+    expect(parseUpArgs(["--prompt", "fix it", "opus-luna", "--no-build"])).toEqual({
+      preset: "opus-luna",
+      prompt: "fix it",
+      build: false,
+    })
+  })
+  test("a prompt that names the preset is still the prompt", () => {
+    expect(parseUpArgs(["mixed", "--prompt", "mixed"])).toEqual({
+      preset: "mixed",
+      prompt: "mixed",
+      build: true,
+    })
+  })
+  test("--prompt with no value is refused, not replaced by the default prompt", () => {
+    expect(() => parseUpArgs(["mixed", "--prompt"])).toThrow("--prompt needs a value")
+    expect(() => parseUpArgs(["mixed", "--prompt", "--no-build"])).toThrow("--prompt needs a value")
+  })
+})
+
+describe("gamut process match", () => {
+  const binary = "/Users/me/.rifts/gent/x/apps/tui/bin/gent"
+  const matches = (commandLine: string) =>
+    new RegExp(binaryProcessPattern(binary)).test(commandLine)
+  test("matches the TUI however it was launched", () => {
+    expect(matches(binary)).toBe(true)
+    expect(matches(`${binary} -p 'fix the suite'`)).toBe(true)
+    expect(matches(`${binary} resume`)).toBe(true)
+  })
+  test("does not match the gent-cell sibling or another checkout's binary", () => {
+    expect(matches(`${binary}-cell`)).toBe(false)
+    expect(matches(binary.replace(".rifts", "Xrifts"))).toBe(false)
+    expect(matches(`/bin/sh -c ${binary}`)).toBe(false)
   })
 })
 
