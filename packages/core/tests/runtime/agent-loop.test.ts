@@ -2191,8 +2191,14 @@ const memoryQueueStorage = Layer.effect(
 )
 
 const makeHarness = (
-  initial: { state: LoopState; queue: LoopQueueState },
+  initial: {
+    state: LoopState
+    queue: LoopQueueState
+    turnFailure?: AgentLoopState["turnFailure"]
+  },
   options: {
+    /** Message ids whose turn fails, as a turn that fails its phase does. */
+    readonly failing?: ReadonlySet<string>
     readonly answered?: ReadonlySet<InteractionRequestId>
     readonly sessionAgent?: Effect.Effect<AgentName, AgentLoopError>
     readonly completeFailedTurn?: (state: RunningState) => Effect.Effect<void>
@@ -2201,8 +2207,15 @@ const makeHarness = (
   } = {},
 ) =>
   Effect.gen(function* () {
+    const initialLoop: AgentLoopState = buildInitialAgentLoopState({
+      state: initial.state,
+      queue: initial.queue,
+    })
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
-      buildInitialAgentLoopState({ state: initial.state, queue: initial.queue }),
+      Option.match(Option.fromUndefinedOr(initial.turnFailure), {
+        onNone: () => initialLoop,
+        onSome: (turnFailure) => ({ ...initialLoop, turnFailure }),
+      }),
     )
     const inbox = yield* makeLoopInbox({
       sessionId,
@@ -2236,8 +2249,19 @@ const makeHarness = (
       interruptToolWork: Effect.void,
       inbox,
       admissionGateRef: gateRef,
-      recordTurnFailure: (_cause, messageId) =>
-        Ref.update(failedTurns, (ids) => [...ids, String(messageId)]),
+      recordTurnFailure: (cause, messageId) =>
+        Ref.update(failedTurns, (ids) => [...ids, String(messageId)]).pipe(
+          Effect.andThen(
+            TxSubscriptionRef.update(loopRef, (s) => ({
+              ...s,
+              turnFailure: {
+                epoch: (s.turnFailure?.epoch ?? 0) + 1,
+                messageId,
+                error: Cause.squash(cause),
+              },
+            })),
+          ),
+        ),
       publishEvent: () => Effect.void,
       completeFailedTurn: options.completeFailedTurn ?? (() => Effect.void),
       interactionAnswered: (requestId) => Effect.succeed(answered.has(requestId)),
@@ -2247,9 +2271,13 @@ const makeHarness = (
           const interrupted = yield* turnInterruption.interrupted
           yield* Ref.update(interruptedTurns, (all) => [...all, interrupted])
           if (options.settles === true) yield* inbox.settle(state.message.id).pipe(Effect.orDie)
+          if (options.failing?.has(String(state.message.id)) === true) {
+            return yield* new AgentLoopError({ message: `turn failed: ${state.message.id}` })
+          }
           return TurnOutcome.cases.Done.make({})
         }),
       sessionAgent: options.sessionAgent ?? Effect.succeed(DEFAULT_AGENT_NAME),
+      loopScope: yield* Scope.make(),
     })
     const phase = inbox.phase
     const queue = TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue))
@@ -2361,7 +2389,7 @@ describe("a turn whose agent cannot be read", () => {
 })
 
 describe("a wake and a submit that race for an idle loop", () => {
-  it.live("the submit a wake beat to the start is queued and runs next", () =>
+  it.live("a wake waiting behind a reserved submit takes nothing, and both run once", () =>
     Effect.gen(function* () {
       const steered = queuedItem("steer-from-slash-command")
       const submitted = queuedItem("user-submit")
@@ -2372,55 +2400,26 @@ describe("a wake and a submit that race for an idle loop", () => {
       const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
       // An extension request holds the loop while it runs.
       yield* harness.sideMutationSemaphore.take(1)
-      // Its own-branch wake takes the item, then waits for the permit.
-      const wake = yield* Effect.forkChild(
-        Effect.gen(function* () {
-          const next = yield* harness.inbox.takeIfIdle
-          if (Option.isSome(next)) yield* harness.worker.startTurn(next.value)
-        }),
-      )
-      yield* harness.queue.pipe(
-        Effect.repeat({
-          until: (queue) => Predicate.isNotUndefined(queue.inFlight),
-          schedule: Schedule.spaced("1 millis"),
-        }),
-        Effect.timeout("2 seconds"),
-      )
-      // A user's Submit arrives in that window.
-      const reserved = yield* harness.inbox.admit(submitted, { queueOnly: false })
-      // The wake reserved the start when it took its item, so the submit queues.
-      expect(Option.isNone(reserved)).toBe(true)
+      // Its own-branch wake waits for the permit before it takes anything.
+      const wake = yield* Effect.forkChild(harness.worker.startNextIfIdle(), {
+        startImmediately: true,
+      })
+      // A user's Submit arrives in that window and reserves the idle loop.
       const submit = yield* Effect.forkChild(
-        Effect.gen(function* () {
-          if (Option.isSome(reserved)) yield* harness.worker.startTurn(submitted)
-        }),
+        harness.worker.admitAndStart(submitted, { queueOnly: false }),
+        { startImmediately: true },
       )
+      expect((yield* harness.loop).startingState?._tag).toBe("Running")
       yield* harness.sideMutationSemaphore.release(1)
       yield* Fiber.join(wake)
       yield* Fiber.join(submit)
       yield* Ref.get(harness.ranTurns).pipe(
         Effect.repeat({ until: (ids) => ids.length >= 2, schedule: Schedule.spaced("5 millis") }),
         Effect.timeout("1 second"),
-        Effect.ignore,
       )
-      expect(yield* Ref.get(harness.ranTurns)).toEqual(["steer-from-slash-command", "user-submit"])
+      // The wake refused past the reservation; the steering item runs next.
+      expect(yield* Ref.get(harness.ranTurns)).toEqual(["user-submit", "steer-from-slash-command"])
       yield* Fiber.interrupt(loop)
-    }),
-  )
-
-  it.effect("a start that finds the loop busy puts its item back in the queue", () =>
-    Effect.gen(function* () {
-      const running = queuedItem("running")
-      const late = queuedItem("late")
-      const harness = yield* makeHarness({
-        state: buildRunningState(running, { startedAtMs: 1 }),
-        queue: emptyLoopQueueState(),
-      })
-      yield* harness.worker.startTurn(late)
-      expect((yield* harness.queue).followUp.map((item) => String(item.message.id))).toEqual([
-        "late",
-      ])
-      expect((yield* harness.phase)._tag).toBe("Running")
     }),
   )
 })
@@ -2451,14 +2450,63 @@ describe("a start interrupted while it waits for the loop", () => {
         startImmediately: true,
       })
       yield* Fiber.interrupt(starter)
+      // The start took nothing yet: the take waits for the permit, too.
+      expect((yield* harness.loop).startingState).toBeUndefined()
+      // An admission in the meantime reserves the idle loop for itself.
+      const reserved = yield* Effect.forkChild(
+        harness.worker.admitAndStart(second, { queueOnly: false }),
+        { startImmediately: true },
+      )
+      yield* harness.sideMutationSemaphore.release(1)
+      yield* Fiber.join(reserved)
+
+      // Nothing starts a turn by hand: the interrupted start still runs.
+      expect(yield* runsOf(harness, 2)).toEqual(["submitted-second", "queued-first"])
+      expect((yield* harness.queue).followUp).toEqual([])
+      yield* Fiber.interrupt(loop)
+    }),
+  )
+
+  it.live("an interrupted caller's reserved start still runs, and keeps the failure mark", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("reserved-first")
+      const second = queuedItem("queued-second")
+      const harness = yield* makeHarness(
+        {
+          state: buildIdleState(),
+          queue: emptyLoopQueueState(),
+          // The branch already had three failed turns.
+          turnFailure: { epoch: 3, messageId: MessageId.make("earlier"), error: "boom" },
+        },
+        { settles: true, failing: new Set(["queued-second"]) },
+      )
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      // Something holds the loop, so the reserved start waits for it.
+      yield* harness.sideMutationSemaphore.take(1)
+      const caller = yield* Effect.forkChild(
+        harness.worker.admitAndStart(first, { queueOnly: false }),
+        { startImmediately: true },
+      )
+      // The reservation stands, so the next admission queues behind it.
+      const queued = yield* harness.worker.admitAndStart(second, { queueOnly: false })
+      expect(Option.isNone(queued)).toBe(true)
+      yield* Fiber.interrupt(caller)
+      // A waiter for the queued item recorded 3 as its baseline; the mark stays.
+      expect((yield* harness.loop).turnFailure?.epoch).toBe(3)
       yield* harness.sideMutationSemaphore.release(1)
 
-      const loopState = yield* harness.loop
-      expect(loopState.startingState).toBeUndefined()
-      yield* harness.worker.admitAndStart(second, { queueOnly: false })
-      yield* harness.worker.startNextIfIdle()
-      expect((yield* runsOf(harness, 2)).toSorted()).toEqual(["queued-first", "submitted-second"])
-      expect((yield* harness.queue).followUp).toEqual([])
+      // Nothing starts a turn by hand: the loop runs both, in order, once each.
+      expect(yield* runsOf(harness, 2)).toEqual(["reserved-first", "queued-second"])
+      const failed = yield* harness.loop.pipe(
+        Effect.repeat({
+          until: (s) => s.turnFailure?.epoch === 4,
+          schedule: Schedule.spaced("5 millis"),
+        }),
+        Effect.timeout("2 seconds"),
+      )
+      // The queued turn's failure is past the baseline, so its waiter fails.
+      expect(failed.turnFailure?.messageId).toBe(second.message.id)
+      expect(yield* Ref.get(harness.ranTurns)).toEqual(["reserved-first", "queued-second"])
       yield* Fiber.interrupt(loop)
     }),
   )
@@ -2479,12 +2527,12 @@ describe("a start interrupted while it waits for the loop", () => {
       )
       yield* Fiber.interrupt(starter)
       yield* harness.sideMutationSemaphore.release(1)
-
-      const loopState = yield* harness.loop
-      expect(loopState.startingState).toBeUndefined()
+      yield* runsOf(harness, 1)
+      expect((yield* harness.loop).startingState).toBeUndefined()
       yield* harness.worker.admitAndStart(second, { queueOnly: false })
-      yield* harness.worker.startNextIfIdle()
-      expect((yield* runsOf(harness, 2)).toSorted()).toEqual(["admitted-first", "submitted-second"])
+
+      // Nothing starts a turn by hand: the reserved start ran on its own.
+      expect(yield* runsOf(harness, 2)).toEqual(["admitted-first", "submitted-second"])
       expect((yield* harness.queue).followUp).toEqual([])
       yield* Fiber.interrupt(loop)
     }),
@@ -4452,6 +4500,100 @@ const requestExtensionViaActor = (input: {
       }),
     )
   })
+
+describe("a submit whose caller is interrupted before its turn starts", () => {
+  it.scopedLive("the turn runs on its own, and a waiting caller sees its own failure", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("interrupted-submit-session")
+      const branchId = BranchId.make("interrupted-submit-branch")
+      const earlier = makeMessage(sessionId, branchId, "earlier")
+      const interrupted = makeMessage(sessionId, branchId, "interrupted")
+      const waited = makeMessage(sessionId, branchId, "waited")
+      const failing = new Set<string>([earlier.id, waited.id])
+      let streamCalls = 0
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Effect.sync(() => {
+          streamCalls += 1
+          return Stream.fromIterable([
+            textDeltaPart("done"),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies LanguageModelStreamPart[])
+        }),
+      )
+      // A turn fails when its user line cannot be stored.
+      const eventStore = Layer.effect(
+        EventStore,
+        Effect.gen(function* () {
+          const memory = yield* EventStore
+          return EventStore.of({
+            ...memory,
+            append: (event: AgentEvent) => {
+              if (event._tag === "MessageReceived" && failing.has(event.message.id)) {
+                return Effect.fail(new EventStoreError({ message: "append failed" }))
+              }
+              return memory.append(event)
+            },
+          })
+        }),
+      ).pipe(Layer.provide(EventStore.Memory))
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const hold = request({
+        id: "hold-loop",
+        input: Schema.String,
+        output: Schema.String,
+        execute: (value: string) =>
+          Deferred.succeed(entered, void 0).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(value),
+          ),
+      })
+      const layer = actorTestRoot({
+        provider: providerLayer,
+        eventStore,
+        registry: ExtensionRegistry.fromResolved(makeTestExtensions([], [hold])),
+      })
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        // The branch already has one failed turn.
+        expect((yield* Effect.exit(runAgentLoop(agentLoop, earlier)))._tag).toBe("Failure")
+        // An extension request holds the idle loop.
+        const holding = yield* Effect.forkChild(
+          requestExtensionViaActor({
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("hold-loop"),
+            capabilityId: "hold-loop",
+            input: "held",
+          }),
+        )
+        yield* Deferred.await(entered)
+        // A Submit reserves the idle loop and waits for the permit.
+        const caller = yield* Effect.forkChild(submitAgentLoop(agentLoop, interrupted))
+        // A SubmitAndWait queues behind the reservation, with one failure as its baseline.
+        const waiter = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, waited)))
+        const queue = yield* waitForOption(
+          () =>
+            agentLoop
+              .getQueue({ sessionId, branchId })
+              .pipe(Effect.map(Option.liftPredicate((q) => q.followUp.length === 1))),
+          "waited message queued",
+        )
+        expect(queue.followUp.map((entry) => entry.id)).toEqual([waited.id])
+        yield* Fiber.interrupt(caller)
+        yield* Deferred.succeed(release, void 0)
+        yield* Fiber.join(holding)
+
+        // Nothing starts a turn by hand: the interrupted Submit's turn runs,
+        // then the queued one, whose failure its caller sees.
+        expect((yield* Fiber.join(waiter))._tag).toBe("Failure")
+        const messages = yield* (yield* MessageStorage).listMessages(branchId)
+        expect(messages.filter((message) => message.id === interrupted.id)).toHaveLength(1)
+        expect(streamCalls).toBe(1)
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
+    }),
+  )
+})
 
 describe("agent-loop actor commands", () => {
   it.scopedLive("side-mutation commands are serialized per session", () =>

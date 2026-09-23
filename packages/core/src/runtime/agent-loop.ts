@@ -226,8 +226,6 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * | ----------------------- | -------------------------------------------------------------------- |
  * | `admit`                 | Batching, the depth ceiling, the idle test, the start reservation     |
  * | `take` / `takeIfIdle`   | Steering-before-follow-up order, the in-flight slot, re-stamping      |
- * | `claimStart`            | Whose reservation a start spends; a lost start goes back in the queue |
- * | `releaseStart`          | That an unstarted reservation returns its item to the queue head      |
  * | `settle`                | Which message the in-flight slot named, and whether a row changed     |
  * | `steer`                 | Where a steering item goes, and the phase a caller must test to wake  |
  * | `deliverSteering`       | What a step may take, and the final-step hold                         |
@@ -601,19 +599,6 @@ export type LoopInbox = {
   readonly takeIfIdle: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
   /** Take the next item; the caller already owns the turn lane. */
   readonly take: Effect.Effect<Option.Option<QueuedTurnItem>, AgentLoopError>
-  /**
-   * True when the caller may start this item now: the loop is idle and holds
-   * no reservation, or holds this item's own. False puts the item back in the
-   * queue (a no-op when the loop already holds it), so a start that lost its
-   * race never drops what it carried.
-   */
-  readonly claimStart: (item: QueuedTurnItem) => Effect.Effect<boolean, AgentLoopError>
-  /**
-   * Give back the reservation `admit` made for an item whose start never ran:
-   * the item goes to the head of the follow-up queue, ahead of everything
-   * that queued behind the reservation. A no-op once a phase spent it.
-   */
-  readonly releaseStart: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
   /** True when this message was the in-flight admission and is now settled. */
   readonly settle: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
   /**
@@ -853,36 +838,6 @@ export const makeLoopInbox = (
       })
     })
 
-    const claimStart = Effect.fn("LoopInbox.claimStart")((item: QueuedTurnItem) =>
-      commitQueueTransaction("returned an unstarted turn", (s) => {
-        const reservedForItem =
-          Predicate.isUndefined(s.startingState) || phaseHolds(s.startingState, item.message.id)
-        if (s.state._tag === "Idle" && reservedForItem) {
-          return { value: true, next: s, persist: false }
-        }
-        if (turnAdmitted(s, item.message.id)) return { value: false, next: s, persist: false }
-        const queue = appendFollowUpQueueState(s.queue, item)
-        return { value: false, next: { ...s, queue }, persist: queue !== s.queue }
-      }),
-    )
-
-    const releaseStart = Effect.fn("LoopInbox.releaseStart")((item: QueuedTurnItem) =>
-      commitQueueTransaction("returned a reserved turn", (s) => {
-        const reserved =
-          Predicate.isNotUndefined(s.startingState) && phaseHolds(s.startingState, item.message.id)
-        if (s.state._tag !== "Idle" || !reserved) return { value: void 0, next: s, persist: false }
-        const followUp = [
-          item,
-          ...s.queue.followUp.filter((queued) => queued.message.id !== item.message.id),
-        ]
-        return {
-          value: void 0,
-          next: { state: s.state, queue: { ...s.queue, followUp } },
-          persist: true,
-        }
-      }),
-    )
-
     const settle = Effect.fn("LoopInbox.settle")((messageId: MessageId) =>
       commitQueueTransaction("cleared in-flight turn", (s) => {
         const queue = clearInFlightQueuedTurn(s.queue, messageId)
@@ -963,8 +918,6 @@ export const makeLoopInbox = (
       admit,
       takeIfIdle: takeFromState({ onlyIfIdle: true }),
       take: takeFromState({ onlyIfIdle: false }),
-      claimStart,
-      releaseStart,
       settle,
       steer,
       deliverSteering,
@@ -1001,6 +954,8 @@ type AgentLoopWorkerContext<E = never, R = never> = {
   readonly sessionAgent: Effect.Effect<AgentName, AgentLoopError | E, R>
   /** True when this request already has an answer waiting for its owner. */
   readonly interactionAnswered: (requestId: InteractionRequestId) => Effect.Effect<boolean>
+  /** The loop's own scope: a start runs here, so no caller's interrupt reaches it. */
+  readonly loopScope: Scope.Scope
 }
 
 /**
@@ -1241,45 +1196,88 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     yield* Effect.raceFirst(resume, resumedElsewhere)
   })
 
-  // A start holds a reservation from its claim until `advanceOrIdle` moves the
-  // phase. Only the permit wait before it can be interrupted, so an interrupt
-  // never leaves an Idle loop with a reservation nobody will spend.
-  const startTurn = Effect.fn("AgentLoop.startTurn")((item: QueuedTurnItem) =>
-    Effect.gen(function* () {
-      if (!(yield* scope.inbox.claimStart(item))) return
-      yield* scope.turnInterruption.beginTurn
-      yield* advanceOrIdle(Option.some(item))
-    }).pipe(Effect.uninterruptible, scope.sideMutationSemaphore.withPermits(1)),
-  )
+  /**
+   * Run a start as the loop's own fiber and wait for it.
+   *
+   * A start waits for the side-mutation permit, and its caller can be
+   * interrupted in that wait. The start is the loop's job, not the caller's:
+   * it runs in the loop scope, so an interrupted caller only stops waiting.
+   * The start still spends its reservation or takes the queued item, and
+   * only closing the loop stops it. The permit wait stays interruptible for
+   * that close; the move to the next phase does not.
+   */
+  const startInLoop = (
+    start: Effect.Effect<void, AgentLoopError>,
+  ): Effect.Effect<Fiber.Fiber<void, AgentLoopError>> =>
+    Effect.forkIn(
+      start.pipe(Effect.uninterruptible, scope.sideMutationSemaphore.withPermits(1)),
+      scope.loopScope,
+      { startImmediately: true },
+    )
 
-  /** Take the next queued item and start it, all under the permit: the take's reservation never outlives this region. */
+  /** Wait for a start; a start that the loop's close stopped fails its caller. */
+  const awaitStart = (fiber: Fiber.Fiber<void, AgentLoopError>) =>
+    Fiber.await(fiber).pipe(
+      Effect.flatMap((exit) => {
+        if (Exit.isSuccess(exit)) return Effect.void
+        if (Cause.hasInterruptsOnly(exit.cause)) {
+          return Effect.fail(
+            new AgentLoopError({
+              message: `Agent loop closed before its turn started: ${scope.sessionId}/${scope.branchId}`,
+            }),
+          )
+        }
+        return Effect.failCause(exit.cause)
+      }),
+    )
+
+  /** Take the next queued item and start it, both under the permit. */
   const startNextIfIdle = Effect.fn("AgentLoop.startNextIfIdle")(() =>
-    Effect.gen(function* () {
-      const next = yield* scope.inbox.takeIfIdle
-      if (Option.isNone(next)) return
-      yield* scope.turnInterruption.beginTurn
-      yield* advanceOrIdle(next)
-    }).pipe(Effect.uninterruptible, scope.sideMutationSemaphore.withPermits(1)),
+    startInLoop(
+      Effect.gen(function* () {
+        const next = yield* scope.inbox.takeIfIdle
+        if (Option.isNone(next)) return
+        yield* scope.turnInterruption.beginTurn
+        yield* advanceOrIdle(next)
+      }),
+    ).pipe(Effect.flatMap(awaitStart)),
   )
 
   /**
-   * Admit one item and start it when the admission reserved the start. The
-   * admission cannot wait for the permit (it must queue at once), so a start
-   * interrupted in that wait gives the reservation back (`releaseStart`).
+   * Admit one item and, when the admission reserved the start, start it. The
+   * admission and the fork of the start are one uninterruptible step, so a
+   * reservation always has a start that will spend it. Nothing else can spend
+   * it or move the phase first: every other start refuses past a reservation,
+   * and every other phase move needs a turn that is running or parked.
    */
-  const admitAndStart = Effect.fn("AgentLoop.admitAndStart")(
-    (item: QueuedTurnItem, options: { readonly queueOnly: boolean }) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const reserved = yield* scope.inbox.admit(item, options)
-          if (Option.isSome(reserved)) {
-            yield* restore(startTurn(item)).pipe(
-              Effect.onInterrupt(() => scope.inbox.releaseStart(item).pipe(Effect.orDie)),
-            )
-          }
-          return reserved
-        }),
-      ),
+  const admitAndStart = Effect.fn("AgentLoop.admitAndStart")(function* (
+    item: QueuedTurnItem,
+    options: { readonly queueOnly: boolean },
+  ) {
+    const admitted = yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const reserved = yield* scope.inbox.admit(item, options)
+        if (Option.isNone(reserved)) return { reserved, start: Option.none() }
+        const start = yield* startInLoop(
+          scope.turnInterruption.beginTurn.pipe(Effect.andThen(advanceOrIdle(Option.some(item)))),
+        )
+        return { reserved, start: Option.some(start) }
+      }),
+    )
+    if (Option.isSome(admitted.start)) yield* awaitStart(admitted.start.value)
+    return admitted.reserved
+  })
+
+  /**
+   * Start the turn a restart cut short. Only a loop that is opening calls
+   * this: no turn has run and no admission has reached it, so it is idle and
+   * holds no reservation. The item needs no admission either — it may still
+   * sit in the in-flight slot, and its turn clears that slot when it settles.
+   */
+  const startRecovered = Effect.fn("AgentLoop.startRecovered")((item: QueuedTurnItem) =>
+    startInLoop(
+      scope.turnInterruption.beginTurn.pipe(Effect.andThen(advanceOrIdle(Option.some(item)))),
+    ).pipe(Effect.flatMap(awaitStart)),
   )
 
   const respondInteraction = Effect.fn("AgentLoop.respondInteraction")(
@@ -1308,8 +1306,8 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
 
   return {
     turnWorkerLoop,
-    startTurn,
     startNextIfIdle,
+    startRecovered,
     admitAndStart,
     interruptActiveStream: interruptActiveStream(scope.activeStreamRef),
     interrupt,
@@ -1383,8 +1381,9 @@ type AgentLoopBehavior = {
    * first use from the session's profile.
    */
   branchContext: Effect.Effect<Context.Context<never>>
-  startTurn: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
-  /** Take the next queued item and start it in one permit region. */
+  /** Start the turn a restart cut short; only an opening loop calls it. */
+  startRecovered: (item: QueuedTurnItem) => Effect.Effect<void, AgentLoopError>
+  /** Take the next queued item and start it in one permit region, as the loop's own fiber. */
   startNextIfIdle: () => Effect.Effect<void, AgentLoopError>
   /** Admit one item and start it when the admission reserved the start. */
   admitAndStart: (
@@ -1733,6 +1732,7 @@ const makeAgentLoopBehavior = (
           () => keepAlive(false),
         ),
       sessionAgent: sessionAgentName(sessionId),
+      loopScope,
     })
 
     const turnWorkerFiber = yield* Ref.make(Option.none<Fiber.Fiber<void>>())
@@ -1851,7 +1851,7 @@ const makeAgentLoopBehavior = (
         ),
       resolveTurnProfile,
       branchContext,
-      startTurn: worker.startTurn,
+      startRecovered: worker.startRecovered,
       startNextIfIdle: worker.startNextIfIdle,
       admitAndStart: worker.admitAndStart,
       interrupt: worker.interrupt,
@@ -2473,7 +2473,7 @@ const buildAgentLoopActorHandlers = (config: {
               const incompleteTurn = yield* handle.incompleteUserTurn
               if (Option.isSome(incompleteTurn)) {
                 yield* handle
-                  .startTurn(incompleteTurn.value)
+                  .startRecovered(incompleteTurn.value)
                   .pipe(
                     Effect.catchEager((error) =>
                       closeBehaviorWithHeldStartupPermit(handle).pipe(
