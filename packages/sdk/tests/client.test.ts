@@ -13,7 +13,7 @@ import {
 import { GentPlatform, workspaceHeadersForCwd, workspaceIdForCwd } from "@gent/core/host"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Gent } from "../src/client"
-import type { Message as DomainMessage } from "../src/index"
+import type { Message as DomainMessage } from "@gent/core/protocol"
 import {
   BranchId,
   MessageId,

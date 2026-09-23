@@ -16,17 +16,20 @@ import {
   ClientProvider,
   type Session,
 } from "../src/client"
-import {
-  type Session as DomainSession,
-  type GentNamespacedClient,
-  type GentRuntime,
-  ConnectionState,
-  emptyQueueSnapshot,
-} from "@gent/sdk"
+import { type GentRuntime } from "@gent/sdk"
 import { ExtensionUIProvider } from "../src/extensions/host"
 import type { AnyExtensionClientModule } from "../src/extensions/client-facets"
 import { ComposerMemoryProvider, SessionShellProvider } from "../src/session"
-import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/protocol"
+import {
+  AgentName,
+  BranchId,
+  ModelId,
+  SessionId,
+  type Session as DomainSession,
+  type GentNamespacedClient,
+  ConnectionState,
+  emptyQueueSnapshot,
+} from "@gent/core/protocol"
 import { testAgent, type SessionRuntimeState } from "@gent/core/test-utils"
 
 const noop = () => {}

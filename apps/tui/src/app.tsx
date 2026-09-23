@@ -9,13 +9,11 @@ import {
   ReasoningEffort,
   type SessionAdmission,
   SessionId,
+  type GentClientRpcError,
+  type GentNamespacedClient,
+  type QueueEntryInfo,
+  type Session as DomainSession,
 } from "@gent/core/protocol"
-import type {
-  GentClientRpcError,
-  GentNamespacedClient,
-  QueueEntryInfo,
-  Session as DomainSession,
-} from "@gent/sdk"
 import { type Session as ClientSession, useClient } from "./client"
 import { formatDuration, randomId, truncate } from "./utils"
 import { createMemo, createSignal, ErrorBoundary, For, Show } from "solid-js"

@@ -23,10 +23,10 @@ import {
   ModelId,
   ProviderId,
   SessionId,
+  type Branch,
 } from "@gent/core/protocol"
 import { BranchPicker, modelRows, SettingsPicker } from "../src/pickers"
 import { ThreadPane, type ThreadWindow } from "../src/extensions/thread-view.client"
-import type { Branch } from "@gent/sdk"
 
 // ── select list ─────────────────────────────────────────────────────────────
 

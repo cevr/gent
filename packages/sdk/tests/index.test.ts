@@ -4,21 +4,13 @@ import * as RuntimePublicSdk from "../src/index"
 describe("SDK public surface", () => {
   test("exports only stable runtime values", () => {
     expect(Object.keys(RuntimePublicSdk).sort()).toEqual([
-      "Branch",
-      "ConnectionState",
       "Gent",
-      "GentConnectionError",
       "LaunchConfig",
-      "QueueEntryInfo",
-      "QueueSnapshot",
       "ServerLockEntry",
       "ServerLockStatus",
-      "Session",
-      "SessionSnapshot",
       "buildLogPaths",
       "classifyLogFile",
       "dataPaths",
-      "emptyQueueSnapshot",
       "ensureLogDir",
       "makeJsonFileLogger",
       "resolveLogDir",

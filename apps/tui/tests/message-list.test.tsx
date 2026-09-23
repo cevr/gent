@@ -18,7 +18,6 @@ import {
   transcriptFingerprint,
 } from "../src/message-list"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { type Message as DomainMessage } from "@gent/sdk"
 import {
   BranchId,
   dateFromMillis,
@@ -30,6 +29,7 @@ import {
   ToolCallId,
   AgentEvent,
   EventEnvelope,
+  type Message as DomainMessage,
 } from "@gent/core/protocol"
 import {
   toolCallReceipts,

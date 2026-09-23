@@ -20,8 +20,10 @@ import {
   type Session,
   type SessionSnapshot,
   SessionId,
+  type GentClientRpcError,
+  type GentNamespacedClient,
 } from "@gent/core/protocol"
-import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
+import type { GentRuntime } from "@gent/sdk"
 import { omitUndefined, type CapabilityRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal, on } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"

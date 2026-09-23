@@ -14,21 +14,11 @@ import {
   type Scope,
 } from "effect"
 import {
-  type Branch,
-  type BranchTreeNode,
   buildLogPaths,
-  type ConnectionState,
   ensureLogDir,
   resolveLogDir,
-  type ExtensionHealthSnapshot,
-  type GentClientRpcError,
-  type GentNamespacedClient,
   type GentRuntime,
   makeJsonFileLogger,
-  type Message,
-  type QueueSnapshot,
-  type SessionSnapshot,
-  type SteerCommand,
 } from "@gent/sdk"
 import {
   type AgentDefinition,
@@ -46,6 +36,16 @@ import {
   SessionId,
   DEFAULT_MODEL_ID,
   resolveAgentModel,
+  type Branch,
+  type BranchTreeNode,
+  type ConnectionState,
+  type ExtensionHealthSnapshot,
+  type GentClientRpcError,
+  type GentNamespacedClient,
+  type Message,
+  type QueueSnapshot,
+  type SessionSnapshot,
+  type SteerCommand,
 } from "@gent/core/protocol"
 import {
   createContext,

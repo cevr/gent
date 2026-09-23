@@ -22,7 +22,7 @@ import {
   shutdownLog,
 } from "./client"
 import { LinkOpener, OsService } from "./os"
-import { AgentName } from "@gent/core/protocol"
+import { AgentName, GentConnectionError } from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
@@ -40,7 +40,7 @@ import { detectColorScheme } from "./theme"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
 import { ExtensionUIProvider } from "./extensions/host"
 import { type ExitSignal, type HeadlessOptions, makeCliTeardown, runHeadless } from "./headless"
-import { GentConnectionError, type GentClientBundle } from "@gent/sdk"
+import { type GentClientBundle } from "@gent/sdk"
 import {
   CliStartupError,
   reportFailureOnStderr,

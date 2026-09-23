@@ -1,27 +1,3 @@
-// Shared transport contract
-export {
-  Branch,
-  ConnectionState,
-  GentConnectionError,
-  QueueEntryInfo,
-  QueueSnapshot,
-  Session,
-  SessionSnapshot,
-  emptyQueueSnapshot,
-} from "@gent/core/protocol"
-export type {
-  BranchTreeNode,
-  ExtensionHealthIssue,
-  ExtensionHealthSnapshot,
-  GentClientRpcError,
-  GentNamespacedClient,
-  Message,
-  MessageSegment,
-  ProjectedMessage,
-  SteerCommand,
-  ToolInteraction,
-} from "@gent/core/protocol"
-
 // Client constructors
 export { Gent, type GentClientBundle } from "./client.js"
 export type { GentRuntime } from "./runtime-boundary.js"

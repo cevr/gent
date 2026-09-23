@@ -15,7 +15,6 @@ import {
 import { useTheme } from "./theme"
 import { formatError, shortId, truncate } from "./utils"
 import { useClient, useRuntime } from "./client"
-import { type Branch, type BranchTreeNode } from "@gent/sdk"
 import {
   type BranchId,
   type Message,
@@ -25,6 +24,8 @@ import {
   type Model,
   ReasoningEffort,
   type SessionId,
+  type Branch,
+  type BranchTreeNode,
 } from "@gent/core/protocol"
 
 // ── prompt search state ─────────────────────────────────────────────────────

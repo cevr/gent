@@ -48,6 +48,11 @@ import {
   projectMessage,
   ReasoningEffort,
   type SessionId,
+  type MessageSegment,
+  type ProjectedMessage,
+  type QueueEntryInfo,
+  type QueueSnapshot,
+  type ToolInteraction,
 } from "@gent/core/protocol"
 import {
   formatConnectionIssue,
@@ -76,13 +81,6 @@ import {
   PromptSearchState as PromptSearchStateFactory,
   transitionPromptSearch,
 } from "./pickers"
-import {
-  type MessageSegment,
-  type ProjectedMessage,
-  type QueueEntryInfo,
-  type QueueSnapshot,
-  type ToolInteraction,
-} from "@gent/sdk"
 import { useEnv, useWorkspace } from "./workspace"
 import { writeFileAtomic } from "@gent/core/host"
 import {

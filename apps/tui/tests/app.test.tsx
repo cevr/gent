@@ -10,16 +10,13 @@ import {
   ProviderId,
   Session,
   SessionId,
-} from "@gent/core/protocol"
-import {
   ConnectionState,
   emptyQueueSnapshot,
-  Gent,
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
-  type GentRuntime,
   type QueueEntryInfo,
-} from "@gent/sdk"
+} from "@gent/core/protocol"
+import { Gent, type GentRuntime } from "@gent/sdk"
 import {
   App,
   AppBootstrapError,
