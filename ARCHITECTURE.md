@@ -806,11 +806,11 @@ operation recovery and never evaluate their source again.
 `ToolRunner.runBound`. It does not resolve a missing binding by name. The caller still owns the durable operation
 receipt. Execution returns the original tool result.
 A separate result conversion runs after persistence and maps failures to cell errors.
-`CellToolCallSuspended` instead carries the pending interaction and inner call
-identity out of evaluation. The kernel stops and discards the worker; it does
-not send that signal to cell JavaScript as a catchable error. Recorded execution
-preserves the suspension and leaves its outer claim incomplete. Durable inner
-operation resume uses the recorded host below; suspension never authorizes cell replay.
+An inner call never parks the turn: it waits for its answer in place. A call
+that parks anyway fails closed as a cell error. Only recovery suspends: an
+operation a lost worker left waiting, with no answer yet, parks the turn on its
+request. Durable inner operation resume uses the recorded host below; suspension
+never authorizes cell replay.
 
 The tool operation storage section of `cell.ts` records inner operations under an
 admitted outer cell in the same SQLite database. The operation's input, tool

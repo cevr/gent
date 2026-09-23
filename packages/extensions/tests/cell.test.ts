@@ -107,7 +107,6 @@ import {
   CellTool,
   CellWorker,
   cellWorkerLaunch,
-  CellToolCallSuspended,
   cellToolResultValue,
   dispatchCell,
   executeBoundCellTool,
@@ -402,119 +401,6 @@ describe("recorded cell execution", () => {
         expect(cleared.result).not.toHaveProperty("restored")
       }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
     15000,
-  )
-
-  it.scopedLive(
-    "restores the saved namespace in the cell after a suspended one without an explicit reset",
-    () =>
-      Effect.gen(function* () {
-        const worker = yield* buildCellWorker
-        const [keep, suspend, reuse] = yield* setupCalls([
-          "const kept = 7; kept",
-          "await tools.approve({})",
-          "kept + 1",
-        ])
-        if (!keep || !suspend || !reuse) return yield* Effect.die("Missing test cell")
-        const pending = new InteractionPendingError({
-          requestId: InteractionRequestId.make("cell-pending-sibling"),
-          sessionId,
-          branchId,
-        })
-        const host = CellOperationHost.of({
-          catalog: hostCatalog("approve"),
-          call: (request) =>
-            Effect.fail(
-              new CellToolCallSuspended({
-                operationId: request.operationId,
-                toolCallId: ToolCallId.make("cell-inner-sibling"),
-                pending,
-              }),
-            ),
-        })
-        const execution = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
-        const kept = yield* execution.run(keep).pipe(Effect.provideService(CellOperationHost, host))
-        expect(kept.result).toMatchObject({ display: "7" })
-        const suspended = yield* execution
-          .run(suspend)
-          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
-        expect(suspended._tag).toBe("CellToolCallSuspended")
-        // The suspended cell lost its worker; the next cell gets the last good namespace back.
-        const reused = yield* execution
-          .run(reuse)
-          .pipe(Effect.provideService(CellOperationHost, host))
-        expect(reused.isFailure).toBe(false)
-        expect(reused.result).toMatchObject({
-          display: "8",
-          restored: { restored: ["kept"], omitted: [] },
-        })
-      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
-    10000,
-  )
-
-  it.scopedLive(
-    "stops on host approval without exposing it to a cell catch block or replaying source",
-    () =>
-      Effect.gen(function* () {
-        const worker = yield* buildCellWorker
-        const [first, next] = yield* setupCalls([
-          "try { await tools.approve({}) } catch { await tools['must-not-run']({}) }",
-          "42",
-        ])
-        if (!first || !next) return yield* Effect.die("Missing test cell")
-        const calls = yield* Ref.make(0)
-        const pending = new InteractionPendingError({
-          requestId: InteractionRequestId.make("cell-pending"),
-          sessionId,
-          branchId,
-        })
-        const innerCallId = ToolCallId.make("cell-inner-call")
-        const host = CellOperationHost.of({
-          catalog: hostCatalog("approve", "must-not-run"),
-          call: (request) =>
-            Ref.update(calls, (count) => count + 1).pipe(
-              Effect.andThen(
-                Effect.fail(
-                  new CellToolCallSuspended({
-                    operationId: request.operationId,
-                    toolCallId: innerCallId,
-                    pending,
-                  }),
-                ),
-              ),
-            ),
-        })
-        const execution = Context.get(
-          yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
-          ),
-          CellExecution,
-        )
-        const suspended = yield* execution
-          .run(first)
-          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
-        expect(suspended).toMatchObject({
-          _tag: "CellToolCallSuspended",
-          toolCallId: innerCallId,
-          pending,
-        })
-        expect(yield* Ref.get(calls)).toBe(1)
-        yield* execution.reset
-        expect(
-          (yield* execution
-            .run(first)
-            .pipe(Effect.provideService(CellOperationHost, host), Effect.flip))._tag,
-        ).toBe("CellExecutionIncomplete")
-        expect(
-          (yield* execution.run(next).pipe(Effect.provideService(CellOperationHost, host))).result,
-        ).toMatchObject({ display: "42" })
-        expect(yield* Ref.get(calls)).toBe(1)
-      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
-    10000,
   )
 
   it.scopedLive(
@@ -1941,19 +1827,21 @@ it.scopedLive("uses the exact selected capability and still enforces the input s
   }),
 )
 
-it.scopedLive("preserves the pending request and host operation identity", () =>
+it.scopedLive("a call that parks instead of waiting for its answer fails closed", () =>
   Effect.gen(function* () {
-    const pending = new InteractionPendingError({
-      requestId: InteractionRequestId.make("cell-approval"),
-      sessionId: sessionIdToolCall,
-      branchId: branchIdToolCall,
-    })
     const selected = tool({
       id: "echo",
-      description: "Approval tool",
+      description: "Parks on an interaction",
       params: Schema.Struct({ text: Schema.String }),
       output: Schema.String,
-      execute: () => Effect.fail(pending),
+      execute: () =>
+        Effect.fail(
+          new InteractionPendingError({
+            requestId: InteractionRequestId.make("cell-approval"),
+            sessionId: sessionIdToolCall,
+            branchId: branchIdToolCall,
+          }),
+        ),
     })
     const dispatch = provideToolDispatch({
       extensions: [
@@ -1971,12 +1859,8 @@ it.scopedLive("preserves the pending request and host operation identity", () =>
       toolCallId,
       binding: Option.some({ extensionId, capability: selected }),
     }).pipe(dispatch, Effect.provideContext(yield* Layer.build(base)), Effect.flip)
-    expect(result).toMatchObject({
-      _tag: "CellToolCallSuspended",
-      operationId: requestToolCall.operationId,
-      toolCallId,
-      pending,
-    })
+    expect(result._tag).toBe("CellEvaluationError")
+    expect(result.message).toContain("cannot resume")
   }),
 )
 
