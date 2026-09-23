@@ -14,7 +14,7 @@ import {
 import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 import { usePickerGeometry } from "../../src/ui"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
-import { waitForRenderedFrame } from "../helpers-boundary"
+import { waitForFrame } from "../helpers-boundary"
 import { provideClientServices } from "../extension-test-harness-boundary"
 import { makeThreadController } from "../../src/extensions/thread-view.client"
 
@@ -237,7 +237,7 @@ describe("Agents pane navigation", () => {
       expect(selected).toEqual(Option.some(child))
 
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() => waitForRenderedFrame(setup, () => !open(), "agents pane closed"))
+      yield* waitForFrame(setup, () => !open(), "agents pane closed")
       expect(open()).toBe(false)
       expect(renderFrame(setup)).not.toContain("Agents")
     }),
@@ -492,7 +492,7 @@ describe("Agents pane reopen", () => {
 
       // The pane closes and its list unmounts.
       setOpen(false)
-      yield* Effect.promise(() => waitForRenderedFrame(setup, () => !open(), "agents pane closed"))
+      yield* waitForFrame(setup, () => !open(), "agents pane closed")
 
       // The loop keeps working while the pane is shut.
       setTurns(9)
@@ -546,9 +546,7 @@ describe("Agents pane framing", () => {
           { width: 80, height: 40 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("^t hide"), "agents pane"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("^t hide"), "agents pane")
       const lines = renderFrame(setup).split("\n")
 
       // Ruled top and bottom, never the rounded box a docked pane draws.
@@ -609,9 +607,7 @@ describe("Agents pane framing", () => {
           { width: 80, height: 40 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("WWW"), "wide row"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("WWW"), "wide row")
       const lines = renderFrame(setup).split("\n")
       const rule = Option.getOrThrow(
         Option.fromNullishOr(lines.find((line) => line.startsWith("────"))),
@@ -663,9 +659,7 @@ describe("Agents pane framing", () => {
           { width: 58, height: 24 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("New Chat"), "aged row"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("New Chat"), "aged row")
       const lines = renderFrame(setup).split("\n")
 
       // The age rides the row that names the agent, not a line by itself.
@@ -719,9 +713,7 @@ describe("Agents pane framing", () => {
           { width: 58, height: 24 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("LLL"), "long row"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("LLL"), "long row")
       const lines = renderFrame(setup).split("\n")
 
       // One line carries the label, and it carries the age too.
@@ -754,9 +746,7 @@ describe("Agents pane framing", () => {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <Probe />, { width: 58, height: 24 }),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("probe"), "probe"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("probe"), "probe")
       expect(seen[0]).toEqual({ rowPane: 55, section: 56 })
     }),
   )
@@ -788,9 +778,7 @@ describe("Agents pane framing", () => {
           { width: 80, height: 40 },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("listing failed"), "error row"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("listing failed"), "error row")
       const lines = renderFrame(setup).split("\n")
       const top = lines.findIndex((line) => line.startsWith("────"))
       const bottom = lines.findLastIndex((line) => line.startsWith("────"))
@@ -933,9 +921,7 @@ describe("Subagent tray", () => {
         )),
       )
 
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("working"), "tray"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("working"), "tray")
       const frame = renderFrame(setup)
       expect(frame).toContain("working · delegate: child-a task")
       expect(frame).not.toContain("child-b")
@@ -945,9 +931,7 @@ describe("Subagent tray", () => {
       expect(refreshes).toEqual([""])
 
       setOpen(true)
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => !renderFrame(setup).includes("working"), "tray hidden"),
-      )
+      yield* waitForFrame(setup, () => !renderFrame(setup).includes("working"), "tray hidden")
     }),
   )
 
@@ -981,9 +965,7 @@ describe("Subagent tray", () => {
           { width: 80, height: 10 },
         ),
       )
-      const frame = yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (next) => next.includes("working"), "wide tray"),
-      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("working"), "wide tray")
       // Padding counts display columns: each of these characters takes two.
       expect(frame).toContain("^t agents")
     }),

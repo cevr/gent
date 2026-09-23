@@ -23,7 +23,6 @@ import {
   Schema,
   Stream,
 } from "effect"
-import { narrowR } from "../helpers/effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
 import { Branch, dateFromMillis, type QueueSnapshot, Session } from "../../src/domain/message"
@@ -307,95 +306,93 @@ const makeInteractionProviderLayer = () => {
   })
 }
 describe("SessionRuntime", () => {
-  it.live("validates branch ownership and idle follow-up persistence", () =>
+  it.scopedLive("validates branch ownership and idle follow-up persistence", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const sendTarget = yield* createSessionBranchWithIds({
-            sessionId: SessionId.make("runtime-target-first"),
-            branchId: BranchId.make("runtime-target-first-branch"),
-          })
-          const sendForeign = yield* createSessionBranchWithIds({
-            sessionId: SessionId.make("runtime-target-second"),
-            branchId: BranchId.make("runtime-target-second-branch"),
-          })
-          const sendExit = yield* Effect.exit(
-            sessionRuntime.sendUserMessage({
-              sessionId: sendTarget.sessionId,
-              branchId: sendForeign.branchId,
-              content: "wrong branch",
-            }),
-          )
-          expect(sendExit._tag).toBe("Failure")
-          if (sendExit._tag === "Failure") {
-            expect(Cause.pretty(sendExit.cause)).toContain("Branch not found for session")
-          }
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const sendTarget = yield* createSessionBranchWithIds({
+          sessionId: SessionId.make("runtime-target-first"),
+          branchId: BranchId.make("runtime-target-first-branch"),
+        })
+        const sendForeign = yield* createSessionBranchWithIds({
+          sessionId: SessionId.make("runtime-target-second"),
+          branchId: BranchId.make("runtime-target-second-branch"),
+        })
+        const sendExit = yield* Effect.exit(
+          sessionRuntime.sendUserMessage({
+            sessionId: sendTarget.sessionId,
+            branchId: sendForeign.branchId,
+            content: "wrong branch",
+          }),
+        )
+        expect(sendExit._tag).toBe("Failure")
+        if (sendExit._tag === "Failure") {
+          expect(Cause.pretty(sendExit.cause)).toContain("Branch not found for session")
+        }
 
-          const queueTarget = yield* createSessionBranchWithIds({
-            sessionId: SessionId.make("runtime-queue-first"),
-            branchId: BranchId.make("runtime-queue-first-branch"),
-          })
-          const queueForeign = yield* createSessionBranchWithIds({
-            sessionId: SessionId.make("runtime-queue-second"),
-            branchId: BranchId.make("runtime-queue-second-branch"),
-          })
-          const queueExit = yield* Effect.exit(
-            sessionRuntime.queueFollowUp({
-              sourceId: "wrong-branch",
-              sessionId: queueTarget.sessionId,
-              branchId: queueForeign.branchId,
-              content: "wrong branch",
-            }),
-          )
-          expect(queueExit._tag).toBe("Failure")
-          if (queueExit._tag === "Failure") {
-            expect(Cause.pretty(queueExit.cause)).toContain("Branch not found for session")
-          }
-          const firstQueue = yield* sessionRuntime.getQueuedMessages(queueTarget)
-          const secondQueue = yield* sessionRuntime.getQueuedMessages(queueForeign)
-          expect(firstQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
-          expect(secondQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
+        const queueTarget = yield* createSessionBranchWithIds({
+          sessionId: SessionId.make("runtime-queue-first"),
+          branchId: BranchId.make("runtime-queue-first-branch"),
+        })
+        const queueForeign = yield* createSessionBranchWithIds({
+          sessionId: SessionId.make("runtime-queue-second"),
+          branchId: BranchId.make("runtime-queue-second-branch"),
+        })
+        const queueExit = yield* Effect.exit(
+          sessionRuntime.queueFollowUp({
+            sourceId: "wrong-branch",
+            sessionId: queueTarget.sessionId,
+            branchId: queueForeign.branchId,
+            content: "wrong branch",
+          }),
+        )
+        expect(queueExit._tag).toBe("Failure")
+        if (queueExit._tag === "Failure") {
+          expect(Cause.pretty(queueExit.cause)).toContain("Branch not found for session")
+        }
+        const firstQueue = yield* sessionRuntime.getQueuedMessages(queueTarget)
+        const secondQueue = yield* sessionRuntime.getQueuedMessages(queueForeign)
+        expect(firstQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
+        expect(secondQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
 
-          const target = yield* createSessionBranchWithIds({
-            sessionId: SessionId.make("runtime-queue-direct"),
-            branchId: BranchId.make("runtime-queue-direct-branch"),
-          })
-          yield* sessionRuntime.queueFollowUp({
-            ...target,
-            sourceId: "direct-follow-up",
+        const target = yield* createSessionBranchWithIds({
+          sessionId: SessionId.make("runtime-queue-direct"),
+          branchId: BranchId.make("runtime-queue-direct-branch"),
+        })
+        yield* sessionRuntime.queueFollowUp({
+          ...target,
+          sourceId: "direct-follow-up",
+          content: "direct follow-up",
+        })
+        yield* sessionRuntime.queueFollowUp({
+          ...target,
+          sourceId: "direct-follow-up",
+          content: "direct follow-up",
+        })
+        const queue = yield* sessionRuntime.getQueuedMessages(target)
+        expect(queue.steering).toEqual([])
+        expect(queue.followUp).toEqual([
+          expect.objectContaining({
+            _tag: "FollowUp",
+            id: expect.stringContaining(":direct-follow-up"),
             content: "direct follow-up",
-          })
-          yield* sessionRuntime.queueFollowUp({
-            ...target,
-            sourceId: "direct-follow-up",
-            content: "direct follow-up",
-          })
-          const queue = yield* sessionRuntime.getQueuedMessages(target)
-          expect(queue.steering).toEqual([])
-          expect(queue.followUp).toEqual([
-            expect.objectContaining({
-              _tag: "FollowUp",
-              id: expect.stringContaining(":direct-follow-up"),
-              content: "direct follow-up",
-            }),
-          ])
-          // The source id also names the item for removal; a second removal finds nothing.
-          expect(
-            yield* sessionRuntime.dequeueFollowUp({ ...target, sourceId: "direct-follow-up" }),
-          ).toBe(true)
-          expect((yield* sessionRuntime.getQueuedMessages(target)).followUp).toEqual([])
-          expect(
-            yield* sessionRuntime.dequeueFollowUp({ ...target, sourceId: "direct-follow-up" }),
-          ).toBe(false)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
+          }),
+        ])
+        // The source id also names the item for removal; a second removal finds nothing.
+        expect(
+          yield* sessionRuntime.dequeueFollowUp({ ...target, sourceId: "direct-follow-up" }),
+        ).toBe(true)
+        expect((yield* sessionRuntime.getQueuedMessages(target)).followUp).toEqual([])
+        expect(
+          yield* sessionRuntime.dequeueFollowUp({ ...target, sourceId: "direct-follow-up" }),
+        ).toBe(false)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
-  it.live("control-plane writes check session existence without resolving profiles", () =>
+  it.scopedLive("control-plane writes check session existence without resolving profiles", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
       const profileCacheLayer = Layer.succeed(
@@ -405,24 +402,22 @@ describe("SessionRuntime", () => {
         }),
       )
       const layer = makeRuntimeLayer(providerLayer, [], profileCacheLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const { sessionId, branchId } = yield* createCwdSessionBranch
-          yield* sessionRuntime.steer({
-            _tag: "Cancel",
-            sessionId,
-            branchId,
-            requestId: RequestId.make("req-cancel-profile-free"),
-          })
-          yield* sessionRuntime.respondInteraction({
-            sessionId,
-            branchId,
-            requestId: InteractionRequestId.make("req-not-waiting"),
-          })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const { sessionId, branchId } = yield* createCwdSessionBranch
+        yield* sessionRuntime.steer({
+          _tag: "Cancel",
+          sessionId,
+          branchId,
+          requestId: RequestId.make("req-cancel-profile-free"),
+        })
+        yield* sessionRuntime.respondInteraction({
+          sessionId,
+          branchId,
+          requestId: InteractionRequestId.make("req-not-waiting"),
+        })
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
   it.scopedLive("durable admission returns before model completion and retries enqueue once", () =>
@@ -432,83 +427,79 @@ describe("SessionRuntime", () => {
       ])
       const layer = makeRuntimeLayer(providerLayer)
       const context = yield* Layer.build(layer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const runtime = yield* SessionRuntime
-          const messages = yield* MessageStorage
-          const { sessionId, branchId } = yield* createSessionBranch
-          yield* runtime.sendUserMessage({
-            sessionId,
-            branchId,
-            content: "admitted work",
-            requestId: "durable-admission",
-            completion: "admission",
-          })
-          yield* controls.waitForCall(0)
-          yield* runtime.sendUserMessage({
-            sessionId,
-            branchId,
-            content: "admitted work",
-            requestId: "durable-admission",
-            completion: "admission",
-          })
-          expect(yield* controls.callCount).toBe(1)
-          const pending = yield* messages.listMessages(branchId)
-          expect(pending.filter((message) => message.role === "user")).toHaveLength(1)
-          yield* controls.emitAll(0)
-          const completed = yield* waitFor(messages.listMessages(branchId), (current) =>
-            current.some((message) =>
-              message.parts.some((part) => part.type === "text" && part.text === "child reply"),
-            ),
-          )
-          expect(completed.map((message) => message.role)).toEqual(["user", "assistant"])
-          expect(completed[0]?.id).toBe(MessageId.make("message:durable-admission"))
-          expect(yield* controls.callCount).toBe(1)
-        }).pipe(Effect.timeout("4 seconds"), Effect.provideContext(context)),
-      )
+      yield* Effect.gen(function* () {
+        const runtime = yield* SessionRuntime
+        const messages = yield* MessageStorage
+        const { sessionId, branchId } = yield* createSessionBranch
+        yield* runtime.sendUserMessage({
+          sessionId,
+          branchId,
+          content: "admitted work",
+          requestId: "durable-admission",
+          completion: "admission",
+        })
+        yield* controls.waitForCall(0)
+        yield* runtime.sendUserMessage({
+          sessionId,
+          branchId,
+          content: "admitted work",
+          requestId: "durable-admission",
+          completion: "admission",
+        })
+        expect(yield* controls.callCount).toBe(1)
+        const pending = yield* messages.listMessages(branchId)
+        expect(pending.filter((message) => message.role === "user")).toHaveLength(1)
+        yield* controls.emitAll(0)
+        const completed = yield* waitFor(messages.listMessages(branchId), (current) =>
+          current.some((message) =>
+            message.parts.some((part) => part.type === "text" && part.text === "child reply"),
+          ),
+        )
+        expect(completed.map((message) => message.role)).toEqual(["user", "assistant"])
+        expect(completed[0]?.id).toBe(MessageId.make("message:durable-admission"))
+        expect(yield* controls.callCount).toBe(1)
+      }).pipe(Effect.timeout("4 seconds"), Effect.provideContext(context))
     }),
   )
 
-  it.live("retried sendUserMessage requestId reuses the durable user message", () =>
+  it.scopedLive("retried sendUserMessage requestId reuses the durable user message", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         textStep("first reply"),
         textStep("duplicate reply"),
       ])
       const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const messageStorage = yield* MessageStorage
-          const { sessionId, branchId } = yield* createSessionBranch
-          yield* sessionRuntime.sendUserMessage({
-            sessionId,
-            branchId,
-            content: "first attempt",
-            requestId: "req-runtime-send-1",
-          })
-          yield* sessionRuntime.sendUserMessage({
-            sessionId,
-            branchId,
-            content: "retry should not create a new message",
-            requestId: "req-runtime-send-1",
-          })
-          const messages = yield* waitFor(
-            messageStorage.listMessages(branchId),
-            (current) => current.filter((message) => message.role === "assistant").length === 1,
-            5000,
-            "single assistant reply for retried send",
-          )
-          expect(messages.map((message) => message.role)).toEqual(["user", "assistant"])
-          expect(messages[0]?.id).toBe(MessageId.make("message:req-runtime-send-1"))
-          expect(messages[0]?.parts).toEqual([Prompt.textPart({ text: "first attempt" })])
-          expect(yield* controls.callCount).toBe(1)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const messageStorage = yield* MessageStorage
+        const { sessionId, branchId } = yield* createSessionBranch
+        yield* sessionRuntime.sendUserMessage({
+          sessionId,
+          branchId,
+          content: "first attempt",
+          requestId: "req-runtime-send-1",
+        })
+        yield* sessionRuntime.sendUserMessage({
+          sessionId,
+          branchId,
+          content: "retry should not create a new message",
+          requestId: "req-runtime-send-1",
+        })
+        const messages = yield* waitFor(
+          messageStorage.listMessages(branchId),
+          (current) => current.filter((message) => message.role === "assistant").length === 1,
+          5000,
+          "single assistant reply for retried send",
+        )
+        expect(messages.map((message) => message.role)).toEqual(["user", "assistant"])
+        expect(messages[0]?.id).toBe(MessageId.make("message:req-runtime-send-1"))
+        expect(messages[0]?.parts).toEqual([Prompt.textPart({ text: "first attempt" })])
+        expect(yield* controls.callCount).toBe(1)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
-  it.live("an interjection joins the running turn ahead of queued follow-ups", () =>
+  it.scopedLive("an interjection joins the running turn ahead of queued follow-ups", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
@@ -535,40 +526,38 @@ describe("SessionRuntime", () => {
         },
       ])
       const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const messageStorage = yield* MessageStorage
-          const { sessionId, branchId } = yield* createSessionBranch
-          yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
-          yield* controls.waitForCall(0)
-          yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "queued" })
-          yield* sessionRuntime.steer({
-            _tag: "Interject",
-            sessionId,
-            branchId,
-            requestId: RequestId.make("req-interject-queued"),
-            message: "steer now",
-          })
-          yield* controls.emitAll(0)
-          const messages = yield* waitFor(
-            messageStorage.listMessages(branchId),
-            (current) => current.filter((message) => message.role === "assistant").length === 3,
-            5000,
-            "interjected turn completion",
-          )
-          expect(
-            messages
-              .filter((message) => message.role === "assistant")
-              .map((message) => message.parts.find((part) => part.type === "text")?.text),
-          ).toEqual(["first reply", "steer reply", "queued reply"])
-          yield* controls.assertDone
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const messageStorage = yield* MessageStorage
+        const { sessionId, branchId } = yield* createSessionBranch
+        yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
+        yield* controls.waitForCall(0)
+        yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "queued" })
+        yield* sessionRuntime.steer({
+          _tag: "Interject",
+          sessionId,
+          branchId,
+          requestId: RequestId.make("req-interject-queued"),
+          message: "steer now",
+        })
+        yield* controls.emitAll(0)
+        const messages = yield* waitFor(
+          messageStorage.listMessages(branchId),
+          (current) => current.filter((message) => message.role === "assistant").length === 3,
+          5000,
+          "interjected turn completion",
+        )
+        expect(
+          messages
+            .filter((message) => message.role === "assistant")
+            .map((message) => message.parts.find((part) => part.type === "text")?.text),
+        ).toEqual(["first reply", "steer reply", "queued reply"])
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
-  it.live("sendUserMessage concurrent with turn completion runs the follow-up once", () =>
+  it.scopedLive("sendUserMessage concurrent with turn completion runs the follow-up once", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
@@ -586,35 +575,33 @@ describe("SessionRuntime", () => {
         },
       ])
       const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const messageStorage = yield* MessageStorage
-          const { sessionId, branchId } = yield* createSessionBranch
-          yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
-          yield* controls.waitForCall(0)
-          const emitFiber = yield* Effect.forkChild(controls.emitAll(0))
-          const followUpFiber = yield* Effect.forkChild(
-            sessionRuntime.sendUserMessage({ sessionId, branchId, content: "second" }),
-          )
-          yield* Fiber.join(emitFiber)
-          yield* Fiber.join(followUpFiber)
-          const messages = yield* waitFor(
-            messageStorage.listMessages(branchId),
-            (current) => current.filter((message) => message.role === "assistant").length === 2,
-            5000,
-            "concurrent follow-up completion",
-          )
-          expect(messages.filter((message) => message.role === "user")).toHaveLength(2)
-          expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
-          expect(yield* controls.callCount).toBe(2)
-          yield* controls.assertDone
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const messageStorage = yield* MessageStorage
+        const { sessionId, branchId } = yield* createSessionBranch
+        yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
+        yield* controls.waitForCall(0)
+        const emitFiber = yield* Effect.forkChild(controls.emitAll(0))
+        const followUpFiber = yield* Effect.forkChild(
+          sessionRuntime.sendUserMessage({ sessionId, branchId, content: "second" }),
+        )
+        yield* Fiber.join(emitFiber)
+        yield* Fiber.join(followUpFiber)
+        const messages = yield* waitFor(
+          messageStorage.listMessages(branchId),
+          (current) => current.filter((message) => message.role === "assistant").length === 2,
+          5000,
+          "concurrent follow-up completion",
+        )
+        expect(messages.filter((message) => message.role === "user")).toHaveLength(2)
+        expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
+        expect(yield* controls.callCount).toBe(2)
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
-  it.live("drainQueuedMessages atomically clears follow-ups during an active turn", () =>
+  it.scopedLive("drainQueuedMessages atomically clears follow-ups during an active turn", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
@@ -627,65 +614,64 @@ describe("SessionRuntime", () => {
         textStep("should not run"),
       ])
       const layer = makeRuntimeLayer(providerLayer)
-      yield* narrowR(
-        Effect.gen(function* () {
-          const sessionRuntime = yield* SessionRuntime
-          const messageStorage = yield* MessageStorage
-          const { sessionId, branchId } = yield* createSessionBranch
-          yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
-          yield* controls.waitForCall(0)
-          yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "drain me" })
-          const drained = yield* sessionRuntime.drainQueuedMessages({
-            sessionId,
-            branchId,
-            requestId: "req-drain-follow-up",
-          })
-          const retried = yield* sessionRuntime.drainQueuedMessages({
-            sessionId,
-            branchId,
-            requestId: "req-drain-follow-up",
-          })
-          expect(drained.followUp).toEqual([
-            expect.objectContaining({ _tag: "FollowUp", content: "drain me" }),
-          ])
-          expect(retried).toEqual(drained)
-          expect(yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).toEqual({
-            steering: [],
-            followUp: [],
-          } satisfies QueueSnapshot)
-          yield* controls.emitAll(0)
-          yield* waitFor(
-            Effect.gen(function* () {
-              const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
-              const state = yield* Stream.runHead(stream)
-              if (state._tag === "Some") {
-                return state.value
-              }
-              return Option.getOrUndefined(state)
-            }),
-            (state) => state?._tag === "Idle",
-            5000,
-            "idle after drained follow-up",
-          )
-          expect(yield* controls.callCount).toBe(1)
-          expect(
-            (yield* messageStorage.listMessages(branchId)).filter(
-              (message) => message.role === "user",
-            ),
-          ).toHaveLength(1)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-      )
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const messageStorage = yield* MessageStorage
+        const { sessionId, branchId } = yield* createSessionBranch
+        yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "first" })
+        yield* controls.waitForCall(0)
+        yield* sessionRuntime.sendUserMessage({ sessionId, branchId, content: "drain me" })
+        const drained = yield* sessionRuntime.drainQueuedMessages({
+          sessionId,
+          branchId,
+          requestId: "req-drain-follow-up",
+        })
+        const retried = yield* sessionRuntime.drainQueuedMessages({
+          sessionId,
+          branchId,
+          requestId: "req-drain-follow-up",
+        })
+        expect(drained.followUp).toEqual([
+          expect.objectContaining({ _tag: "FollowUp", content: "drain me" }),
+        ])
+        expect(retried).toEqual(drained)
+        expect(yield* sessionRuntime.getQueuedMessages({ sessionId, branchId })).toEqual({
+          steering: [],
+          followUp: [],
+        } satisfies QueueSnapshot)
+        yield* controls.emitAll(0)
+        yield* waitFor(
+          Effect.gen(function* () {
+            const stream = yield* sessionRuntime.watchState({ sessionId, branchId })
+            const state = yield* Stream.runHead(stream)
+            if (state._tag === "Some") {
+              return state.value
+            }
+            return Option.getOrUndefined(state)
+          }),
+          (state) => state?._tag === "Idle",
+          5000,
+          "idle after drained follow-up",
+        )
+        expect(yield* controls.callCount).toBe(1)
+        expect(
+          (yield* messageStorage.listMessages(branchId)).filter(
+            (message) => message.role === "user",
+          ),
+        ).toHaveLength(1)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
-  it.live("dispatch RespondInteraction resumes a waiting interaction through the live loop", () =>
-    Effect.gen(function* () {
-      const callCount = yield* Ref.make(0)
-      const resolution = yield* Deferred.make<void>()
-      const toolDef = makeInteractionTool(callCount, resolution)
-      const layer = makeLiveToolRuntimeLayer(makeInteractionProviderLayer(), [toolDef])
-      yield* narrowR(
-        Effect.gen(function* () {
+  it.scopedLive(
+    "dispatch RespondInteraction resumes a waiting interaction through the live loop",
+    () =>
+      Effect.gen(function* () {
+        const callCount = yield* Ref.make(0)
+        const resolution = yield* Deferred.make<void>()
+        const toolDef = makeInteractionTool(callCount, resolution)
+        const layer = makeLiveToolRuntimeLayer(makeInteractionProviderLayer(), [toolDef])
+        yield* Effect.gen(function* () {
           const sessionRuntime = yield* SessionRuntime
           const { sessionId, branchId } = yield* createSessionBranch
           yield* sessionRuntime.sendUserMessage({
@@ -728,9 +714,8 @@ describe("SessionRuntime", () => {
           expect(state?._tag).toBe("Idle")
           expect(Ref.getUnsafe(callCount)).toBe(2)
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer)),
-      )
-    }),
+        }).pipe(Effect.timeout("6 seconds"), Effect.provide(layer))
+      }),
   )
 })
 
@@ -795,46 +780,44 @@ describe("session metrics", () => {
         textStep("reply one"),
         textStep("reply two"),
       ])
-      const result = yield* narrowR(
-        Effect.gen(function* () {
-          const runtime = yield* SessionRuntime
-          const events = yield* EventStorage
-          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
-          yield* runtime.sendUserMessage({
-            sessionId,
-            branchId,
-            commandId: ActorCommandId.make("turn:first"),
-            content: "first",
-          })
-          yield* runtime.sendUserMessage({
-            sessionId,
-            branchId,
-            commandId: ActorCommandId.make("turn:second"),
-            content: "second",
-          })
-          const envelopes = yield* events.listEvents({ sessionId, branchId })
-          const streamEndeds = envelopes
-            .map((e) => e.event)
-            .filter(
-              (
-                e,
-              ): e is Extract<
-                typeof e,
-                {
-                  _tag: "StreamEnded"
-                }
-              > => e._tag === "StreamEnded",
-            )
-          const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
-          const receipts = envelopes
-            .map((e) => e.event)
-            .filter(
-              (e): e is Extract<typeof e, { _tag: "TurnCompleted" }> => e._tag === "TurnCompleted",
-            )
-          return { streamEndeds, metrics, receipts }
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
-      )
+      const result = yield* Effect.gen(function* () {
+        const runtime = yield* SessionRuntime
+        const events = yield* EventStorage
+        const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+        yield* runtime.sendUserMessage({
+          sessionId,
+          branchId,
+          commandId: ActorCommandId.make("turn:first"),
+          content: "first",
+        })
+        yield* runtime.sendUserMessage({
+          sessionId,
+          branchId,
+          commandId: ActorCommandId.make("turn:second"),
+          content: "second",
+        })
+        const envelopes = yield* events.listEvents({ sessionId, branchId })
+        const streamEndeds = envelopes
+          .map((e) => e.event)
+          .filter(
+            (
+              e,
+            ): e is Extract<
+              typeof e,
+              {
+                _tag: "StreamEnded"
+              }
+            > => e._tag === "StreamEnded",
+          )
+        const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+        const receipts = envelopes
+          .map((e) => e.event)
+          .filter(
+            (e): e is Extract<typeof e, { _tag: "TurnCompleted" }> => e._tag === "TurnCompleted",
+          )
+        return { streamEndeds, metrics, receipts }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
       expect(result.streamEndeds.length).toBeGreaterThanOrEqual(1)
       // Each turn receipt carries that turn's totals, summed over its steps.
       expect(result.receipts.map((receipt) => receipt.usage)).toEqual(
@@ -853,24 +836,22 @@ describe("session metrics", () => {
   it.live("a routed model is priced by the model the catalog knows it as", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
-      const streamEndeds = yield* narrowR(
-        Effect.gen(function* () {
-          const runtime = yield* SessionRuntime
-          const events = yield* EventStorage
-          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics(
-            AgentName.make("routed"),
-          )
-          yield* runtime.sendUserMessage({
-            sessionId,
-            branchId,
-            commandId: ActorCommandId.make("turn:routed"),
-            content: "routed",
-          })
-          const envelopes = yield* events.listEvents({ sessionId, branchId })
-          return envelopes.map((e) => e.event).filter((e) => e._tag === "StreamEnded")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
-      )
+      const streamEndeds = yield* Effect.gen(function* () {
+        const runtime = yield* SessionRuntime
+        const events = yield* EventStorage
+        const { sessionId, branchId } = yield* createSessionBranchSessionMetrics(
+          AgentName.make("routed"),
+        )
+        yield* runtime.sendUserMessage({
+          sessionId,
+          branchId,
+          commandId: ActorCommandId.make("turn:routed"),
+          content: "routed",
+        })
+        const envelopes = yield* events.listEvents({ sessionId, branchId })
+        return envelopes.map((e) => e.event).filter((e) => e._tag === "StreamEnded")
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
       expect(streamEndeds).toHaveLength(1)
       // The context window already reads `test/priced`; the price must too.
       expect(streamEndeds[0]?.costUsd).toBeGreaterThan(0)
@@ -883,26 +864,24 @@ describe("session metrics", () => {
           parts: [textDeltaPart("reply without usage"), finishPart({ finishReason: "stop" })],
         },
       ])
-      const result = yield* narrowR(
-        Effect.gen(function* () {
-          const runtime = yield* SessionRuntime
-          const events = yield* EventStorage
-          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
-          yield* runtime.sendUserMessage({
-            sessionId,
-            branchId,
-            commandId: ActorCommandId.make("turn:first"),
-            content: "first",
-          })
-          const envelopes = yield* events.listEvents({ sessionId, branchId })
-          return envelopes
-            .map((e) => e.event)
-            .filter(
-              (e): e is Extract<typeof e, { _tag: "TurnCompleted" }> => e._tag === "TurnCompleted",
-            )
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
-      )
+      const result = yield* Effect.gen(function* () {
+        const runtime = yield* SessionRuntime
+        const events = yield* EventStorage
+        const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+        yield* runtime.sendUserMessage({
+          sessionId,
+          branchId,
+          commandId: ActorCommandId.make("turn:first"),
+          content: "first",
+        })
+        const envelopes = yield* events.listEvents({ sessionId, branchId })
+        return envelopes
+          .map((e) => e.event)
+          .filter(
+            (e): e is Extract<typeof e, { _tag: "TurnCompleted" }> => e._tag === "TurnCompleted",
+          )
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
       expect(result).toHaveLength(1)
       expect(result[0]?.usage).toBeUndefined()
     }),
@@ -910,26 +889,24 @@ describe("session metrics", () => {
   it.live("a completed turn reports what the model saw as context metrics", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
-      const result = yield* narrowR(
-        Effect.gen(function* () {
-          const runtime = yield* SessionRuntime
-          const events = yield* EventStorage
-          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
-          yield* runtime.sendUserMessage({
-            sessionId,
-            branchId,
-            commandId: ActorCommandId.make("turn:one"),
-            content: "one",
-          })
-          const envelopes = yield* events.listEvents({ sessionId, branchId })
-          const projected = envelopes
-            .map((e) => e.event)
-            .filter((e) => e._tag === "ModelContextProjected")
-          const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
-          return { projected, metrics }
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
-      )
+      const result = yield* Effect.gen(function* () {
+        const runtime = yield* SessionRuntime
+        const events = yield* EventStorage
+        const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+        yield* runtime.sendUserMessage({
+          sessionId,
+          branchId,
+          commandId: ActorCommandId.make("turn:one"),
+          content: "one",
+        })
+        const envelopes = yield* events.listEvents({ sessionId, branchId })
+        const projected = envelopes
+          .map((e) => e.event)
+          .filter((e) => e._tag === "ModelContextProjected")
+        const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+        return { projected, metrics }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
       expect(result.projected).toHaveLength(1)
       const context = Option.getOrThrow(Option.fromUndefinedOr(result.metrics.context))
       expect(context.contextLimitTokens).toBe(TEST_MODEL_CONTEXT_LIMIT_TOKENS)
@@ -942,22 +919,20 @@ describe("session metrics", () => {
   it.live("metrics.costUsd does not drift when pricing changes after emission", () =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("reply")])
-      const result = yield* narrowR(
-        Effect.gen(function* () {
-          const runtime = yield* SessionRuntime
-          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
-          yield* runtime.sendUserMessage({
-            sessionId,
-            branchId,
-            commandId: ActorCommandId.make("turn:one"),
-            content: "one",
-          })
-          const first = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
-          const second = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
-          return { first, second }
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds")),
-      )
+      const result = yield* Effect.gen(function* () {
+        const runtime = yield* SessionRuntime
+        const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+        yield* runtime.sendUserMessage({
+          sessionId,
+          branchId,
+          commandId: ActorCommandId.make("turn:one"),
+          content: "one",
+        })
+        const first = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+        const second = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+        return { first, second }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayer(providerLayer)), Effect.timeout("4 seconds"))
       // Two reads over the same event log must return the same cost. The cost
       // is frozen on StreamEnded at emit time — changes to pricing or the
       // registry between snapshot reads cannot shift historical costs.
@@ -974,35 +949,33 @@ describe("session metrics", () => {
         provider: ProviderId.make("test"),
         contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
       })
-      const result = yield* narrowR(
-        Effect.gen(function* () {
-          const runtime = yield* SessionRuntime
-          const events = yield* EventStorage
-          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
-          yield* runtime.sendUserMessage({
-            sessionId,
-            branchId,
-            commandId: ActorCommandId.make("turn:one"),
-            content: "one",
-          })
-          const envelopes = yield* events.listEvents({ sessionId, branchId })
-          const streamEndeds = envelopes
-            .map((e) => e.event)
-            .filter(
-              (
-                e,
-              ): e is Extract<
-                typeof e,
-                {
-                  _tag: "StreamEnded"
-                }
-              > => e._tag === "StreamEnded",
-            )
-          const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
-          return { streamEndeds, metrics }
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeLayer(providerLayer, [unpriced])), Effect.timeout("4 seconds")),
-      )
+      const result = yield* Effect.gen(function* () {
+        const runtime = yield* SessionRuntime
+        const events = yield* EventStorage
+        const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+        yield* runtime.sendUserMessage({
+          sessionId,
+          branchId,
+          commandId: ActorCommandId.make("turn:one"),
+          content: "one",
+        })
+        const envelopes = yield* events.listEvents({ sessionId, branchId })
+        const streamEndeds = envelopes
+          .map((e) => e.event)
+          .filter(
+            (
+              e,
+            ): e is Extract<
+              typeof e,
+              {
+                _tag: "StreamEnded"
+              }
+            > => e._tag === "StreamEnded",
+          )
+        const metrics = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
+        return { streamEndeds, metrics }
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayer(providerLayer, [unpriced])), Effect.timeout("4 seconds"))
       for (const ev of result.streamEndeds) {
         expect(ev.costUsd).toBeUndefined()
       }

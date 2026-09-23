@@ -26,7 +26,7 @@ import {
 } from "../src/pickers"
 import type { Branch } from "@gent/sdk"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
-import { waitForRenderedFrame } from "./helpers-boundary"
+import { waitForFrame } from "./helpers-boundary"
 
 // ── components/pickers.test ─────────────────────────────────────────────────
 
@@ -77,9 +77,7 @@ describe("Message picker", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("U: first ask"), "open"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("U: first ask"), "open")
       expect(renderFrame(setup)).toContain("A: first reply")
 
       setup.mockInput.pressArrow("down")
@@ -103,11 +101,9 @@ describe("Message picker", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("only ask"), "open"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("only ask"), "open")
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() => waitForRenderedFrame(setup, () => !open(), "closed"))
+      yield* waitForFrame(setup, () => !open(), "closed")
       expect(renderFrame(setup)).not.toContain("Fork From Message")
     }),
   )
@@ -151,9 +147,7 @@ describe("Branch picker", () => {
           },
         ),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("main (4)"), "counts"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("main (4)"), "counts")
       expect(renderFrame(setup)).toContain("side-quest (2)")
       expect(renderFrame(setup)).toContain("Resume: Test Session")
     }),
@@ -178,12 +172,10 @@ describe("Branch picker", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("main"), "open"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("main"), "open")
       setup.mockInput.pressEscape()
       // The mock terminal holds an escape until the next frame.
-      yield* Effect.promise(() => waitForRenderedFrame(setup, () => closes > 0, "closed"))
+      yield* waitForFrame(setup, () => closes > 0, "closed")
       expect(closes).toBe(1)
     }),
   )
@@ -207,13 +199,11 @@ describe("Branch picker", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("side-quest"), "open"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("side-quest"), "open")
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() => waitForRenderedFrame(setup, () => selected.length > 0, "select"))
+      yield* waitForFrame(setup, () => selected.length > 0, "select")
       expect(selected).toEqual(["branch-side"])
     }),
   )
@@ -262,15 +252,11 @@ describe("Settings picker", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker")
       // Every row matches "a", so the list does not narrow; the cursor still
       // has to move to the top, the way a fresh query always does.
       setup.mockInput.pressKey("a")
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("› a"), "typed"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("› a"), "typed")
       setup.mockInput.pressEnter()
       expect(selected).toEqual(["a/one"])
     }),
@@ -293,17 +279,13 @@ describe("Settings picker", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker")
       expect(renderFrame(setup)).toContain("● Claude Opus 5")
       expect(renderFrame(setup)).toContain("  Claude Sonnet 5")
 
       setup.mockInput.pressKey("l")
       setup.mockInput.pressKey("u")
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Model · 1"), "filtered"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 1"), "filtered")
       expect(renderFrame(setup)).not.toContain("Claude Opus 5")
       setup.mockInput.pressEnter()
       expect(selected).toEqual(["openai/gpt-5.6-luna"])
@@ -327,9 +309,7 @@ describe("Settings picker", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Reasoning · 8"), "pane"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Reasoning · 8"), "pane")
       expect(renderFrame(setup)).toContain("agent or config default (max)")
       expect(renderFrame(setup)).toContain("● high")
       // The current row is preselected; the top row is `default`.
@@ -361,25 +341,17 @@ describe("Settings picker", () => {
           />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 3"), "picker")
 
       setup.mockInput.pressKey("l")
       setup.mockInput.pressKey("u")
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Model · 1"), "filtered"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Model · 1"), "filtered")
 
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => !renderFrame(setup).includes("Model ·"), "closed"),
-      )
+      yield* waitForFrame(setup, () => !renderFrame(setup).includes("Model ·"), "closed")
 
       setOpen(true)
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => renderFrame(setup).includes("Model ·"), "reopened"),
-      )
+      yield* waitForFrame(setup, () => renderFrame(setup).includes("Model ·"), "reopened")
       // Every row is back, so the empty input matches the list under it.
       expect(renderFrame(setup)).toContain("Model · 3")
       expect(renderFrame(setup)).toContain("Claude Opus 5")
@@ -414,13 +386,9 @@ describe("PromptSearchPalette renderer", () => {
       ]
       const events: Array<PromptSearchEvent> = []
       const setup = yield* openPalette(entries, (event) => events.push(event))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("add tests"), "open"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("add tests"), "open")
       setup.mockInput.pressKeys(["f", "i", "x"])
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => !frame.includes("add tests"), "narrowed"),
-      )
+      yield* waitForFrame(setup, (frame) => !frame.includes("add tests"), "narrowed")
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       const frame = renderFrame(setup)
@@ -443,13 +411,9 @@ describe("PromptSearchPalette renderer", () => {
       const setup = yield* openPalette(["first prompt", "second prompt"], (event) =>
         events.push(event),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("first prompt"), "open"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("first prompt"), "open")
       setup.mockInput.pressKeys(["z", "z", "z"])
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("No prompt matches"), "empty"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("No prompt matches"), "empty")
       expect(events.at(-1)).toEqual({ _tag: "Highlight", entry: Option.none() })
     }),
   )
@@ -458,9 +422,7 @@ describe("PromptSearchPalette renderer", () => {
     Effect.gen(function* () {
       const events: Array<PromptSearchEvent> = []
       const setup = yield* openPalette(["alpha", "beta", "gamma"], (event) => events.push(event))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("gamma"), "open"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("gamma"), "open")
       // The list sits on alpha, but nothing is reported until the reader acts.
       expect(events).toEqual([])
 
@@ -482,16 +444,12 @@ describe("PromptSearchPalette renderer", () => {
     Effect.gen(function* () {
       const events: Array<PromptSearchEvent> = []
       const setup = yield* openPalette([], (event) => events.push(event))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("No prompt matches"), "open"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("No prompt matches"), "open")
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       expect(events.at(-1)).toEqual({ _tag: "Accept" })
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, () => events.at(-1)?._tag === "Cancel", "cancelled"),
-      )
+      yield* waitForFrame(setup, () => events.at(-1)?._tag === "Cancel", "cancelled")
     }),
   )
 })

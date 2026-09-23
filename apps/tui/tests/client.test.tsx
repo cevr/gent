@@ -1,6 +1,4 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
 import {
   ErrorOccurred,
   EventId,
@@ -8,6 +6,11 @@ import {
   StreamEnded,
   StreamStarted,
   TurnCompleted,
+  type SessionRuntimeState,
+} from "@gent/core/test-utils"
+import { describe, expect, it, test } from "effect-bun-test"
+import { Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
+import {
   type ActiveInteraction,
   AgentEvent,
   AgentName,
@@ -24,7 +27,6 @@ import {
   ToolCallId,
   ToolInteraction,
   OutputCut,
-  type SessionRuntimeState,
 } from "@gent/core/protocol"
 import { ExtensionId } from "@gent/core/extensions/api"
 import {
@@ -41,7 +43,7 @@ import {
 import { emptyQueueSnapshot } from "@gent/sdk"
 import { createRoot, createSignal, onMount } from "solid-js"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
-import { inRuntime, waitForRenderedFrame } from "./helpers-boundary"
+import { inRuntime, waitForFrame, waitUntil } from "./helpers-boundary"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { useSessionFeed } from "../src/session"
@@ -546,36 +548,6 @@ const requireClientSessionState = (
   }
   return Effect.succeed(context.value)
 }
-const waitForState = (
-  setup: Awaited<ReturnType<typeof renderWithProviders>>,
-  read: () => SessionState,
-  predicate: (state: SessionState) => boolean,
-  remaining = 10,
-): Effect.Effect<SessionState, ClientSessionStateTestError> =>
-  Effect.gen(function* () {
-    yield* Effect.promise(() => setup.renderOnce())
-    const state = read()
-    if (predicate(state)) return state
-    if (remaining <= 1) {
-      return yield* new ClientSessionStateTestError({
-        message: `session state did not reach expected condition; got ${state.status}`,
-      })
-    }
-    return yield* waitForState(setup, read, predicate, remaining - 1)
-  })
-const waitForAgentError = (
-  setup: Awaited<ReturnType<typeof renderWithProviders>>,
-  read: () => Option.Option<string>,
-  remaining = 10,
-): Effect.Effect<string, ClientSessionStateTestError> =>
-  Effect.gen(function* () {
-    yield* Effect.promise(() => setup.renderOnce())
-    const error = read()
-    if (Option.isSome(error)) return error.value
-    if (remaining <= 1)
-      return yield* new ClientSessionStateTestError({ message: "agent error did not surface" })
-    return yield* waitForAgentError(setup, read, remaining - 1)
-  })
 describe("ClientProvider session lifecycle", () => {
   it.live("a new session carries the workspace cwd and becomes the active one", () =>
     Effect.gen(function* () {
@@ -602,12 +574,10 @@ describe("ClientProvider session lifecycle", () => {
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
       const active = ctx.value
       active.createSession()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          () => active.session()?.sessionId === createdSessionId,
-          "created session active",
-        ),
+      yield* waitForFrame(
+        setup,
+        () => active.session()?.sessionId === createdSessionId,
+        "created session active",
       )
       expect(createInputs).toHaveLength(1)
       const firstInput = Option.fromNullishOr(createInputs[0])
@@ -748,7 +718,8 @@ describe("ClientProvider session lifecycle", () => {
         }),
       )
       const client = yield* requireClientSessionState(ctx)
-      const error = yield* waitForAgentError(setup, () => Option.fromNullishOr(client.error()))
+      yield* waitForFrame(setup, () => Predicate.isNotNullish(client.error()), "agent error")
+      const error = client.error()
       expect(error).toBe("Driver openai: catalog filter failed")
     }),
   )
@@ -800,11 +771,15 @@ describe("ClientProvider session lifecycle", () => {
         "B",
         AgentName.make("deepwork"),
       )
-      const state = yield* waitForState(
+      yield* waitForFrame(
         setup,
-        () => client.sessionState(),
-        (current) => current.status === "active",
+        () => {
+          const current = client.sessionState()
+          return current.status === "active"
+        },
+        "session state",
       )
+      const state = client.sessionState()
       expect(state).toEqual({
         status: "active",
         session: {
@@ -852,11 +827,15 @@ describe("ClientProvider session lifecycle", () => {
           lastInputTokens: 0,
         },
       })
-      yield* waitForState(
+      yield* waitForFrame(
         setup,
-        () => client.sessionState(),
-        (state) =>
-          state.status === "active" && client.model() === "anthropic/claude-haiku-4-5-20251001",
+        () => {
+          const state = client.sessionState()
+          return (
+            state.status === "active" && client.model() === "anthropic/claude-haiku-4-5-20251001"
+          )
+        },
+        "session state",
       )
       expect(client.model()).toBe("anthropic/claude-haiku-4-5-20251001")
       // The footer names the session's agent, which the snapshot carries.
@@ -898,14 +877,19 @@ describe("ClientProvider session lifecycle", () => {
           lastInputTokens: 0,
         },
       })
-      const state = yield* waitForState(
+      yield* waitForFrame(
         setup,
-        () => client.sessionState(),
-        (current) =>
-          current.status === "active" &&
-          current.session.name === "Fresh" &&
-          current.session.reasoningLevel === "high",
+        () => {
+          const current = client.sessionState()
+          return (
+            current.status === "active" &&
+            current.session.name === "Fresh" &&
+            current.session.reasoningLevel === "high"
+          )
+        },
+        "session state",
       )
+      const state = client.sessionState()
       expect(state).toEqual({
         status: "active",
         session: {
@@ -959,11 +943,15 @@ describe("ClientProvider session lifecycle", () => {
           lastInputTokens: 456,
         },
       })
-      const state = yield* waitForState(
+      yield* waitForFrame(
         setup,
-        () => client.sessionState(),
-        (current) => current.status === "active",
+        () => {
+          const current = client.sessionState()
+          return current.status === "active"
+        },
+        "session state",
       )
+      const state = client.sessionState()
       expect(state).toEqual({
         status: "active",
         session: {
@@ -1021,12 +1009,17 @@ describe("ClientProvider session lifecycle", () => {
           lastInputTokens: 34,
         },
       })
-      const state = yield* waitForState(
+      yield* waitForFrame(
         setup,
-        () => client.sessionState(),
-        (current) =>
-          current.status === "active" && current.session.branchId === BranchId.make("branch-new"),
+        () => {
+          const current = client.sessionState()
+          return (
+            current.status === "active" && current.session.branchId === BranchId.make("branch-new")
+          )
+        },
+        "session state",
       )
+      const state = client.sessionState()
       expect(state).toEqual({
         status: "active",
         session: {
@@ -1076,11 +1069,15 @@ describe("ClientProvider session lifecycle", () => {
           lastInputTokens: 0,
         },
       })
-      yield* waitForState(
+      yield* waitForFrame(
         setup,
-        () => client.sessionState(),
-        (state) =>
-          state.status === "active" && client.model() === "anthropic/claude-haiku-4-5-20251001",
+        () => {
+          const state = client.sessionState()
+          return (
+            state.status === "active" && client.model() === "anthropic/claude-haiku-4-5-20251001"
+          )
+        },
+        "session state",
       )
       client.switchSession(
         SessionId.make("session-next"),
@@ -1096,26 +1093,6 @@ describe("ClientProvider session lifecycle", () => {
 // ── use-session-feed.test ───────────────────────────────────────────────────
 
 type FeedClient = Parameters<typeof useSessionFeed>[2]
-
-class FeedTestTimeoutError extends Schema.TaggedError<FeedTestTimeoutError>()(
-  "FeedTestTimeoutError",
-  { message: Schema.String },
-) {}
-
-const waitForFeed = (predicate: () => boolean): Effect.Effect<void, FeedTestTimeoutError> => {
-  let attempts = 20
-  const check: Effect.Effect<void, FeedTestTimeoutError> = Effect.gen(function* () {
-    if (predicate()) return
-    attempts -= 1
-    if (attempts <= 0) {
-      return yield* new FeedTestTimeoutError({ message: "condition did not settle" })
-    }
-    // gent/no-sleep: allow yield-then-retry primitive — Solid signal microtasks must drain between checks
-    yield* Effect.sleep("0 millis")
-    return yield* check
-  })
-  return check
-}
 
 const snapshotFor = (
   sessionId: SessionId,
@@ -1418,7 +1395,7 @@ describe("useSessionFeed", () => {
       })
 
       yield* Deferred.await(errorSeen)
-      yield* waitForFeed(
+      yield* waitUntil(
         () =>
           Option.isSome(feed) &&
           feed.value.messages().some((message) => message.role === "assistant") &&
@@ -1572,7 +1549,7 @@ describe("useSessionFeed", () => {
         return disposeRoot
       })
 
-      yield* waitForFeed(
+      yield* waitUntil(
         () =>
           Option.isSome(feed) &&
           feed.value.messages().some((message) => message.toolCalls?.[0]?.status === "completed"),
@@ -1673,7 +1650,7 @@ describe("useSessionFeed", () => {
           }),
         ),
       ])
-      yield* waitForFeed(() => Option.exists(cellOf(), (cell) => cell.status === "error")).pipe(
+      yield* waitUntil(() => Option.exists(cellOf(), (cell) => cell.status === "error")).pipe(
         Effect.andThen(
           Effect.sync(() => {
             const cell = Option.getOrUndefined(cellOf())
@@ -1745,7 +1722,7 @@ describe("useSessionFeed", () => {
           }),
         ),
       ])
-      yield* waitForFeed(() =>
+      yield* waitUntil(() =>
         Option.exists(cellOf(), (cell) => cell.operations?.[0]?.status === "completed"),
       ).pipe(
         Effect.andThen(
@@ -2005,7 +1982,7 @@ describe("useSessionFeed", () => {
           return disposeRoot
         })
 
-        yield* waitForFeed(
+        yield* waitUntil(
           () =>
             applied === events.length &&
             Option.isSome(feed) &&
@@ -2115,7 +2092,7 @@ describe("useSessionFeed", () => {
         return disposeRoot
       })
 
-      yield* waitForFeed(
+      yield* waitUntil(
         () =>
           applied === events.length &&
           Option.isSome(feed) &&
@@ -2201,7 +2178,7 @@ describe("useSessionFeed", () => {
         return disposeRoot
       })
 
-      yield* waitForFeed(
+      yield* waitUntil(
         () =>
           Option.isSome(feed) &&
           feed.value.messages().some((message) => message.content.includes("native response")),
@@ -2289,7 +2266,7 @@ describe("useSessionFeed", () => {
         return disposeRoot
       })
 
-      yield* waitForFeed(
+      yield* waitUntil(
         () =>
           Option.isSome(feed) &&
           feed.value.messages().some((message) => message.content.includes("native response")),
@@ -2379,7 +2356,7 @@ describe("useSessionFeed", () => {
         return disposeRoot
       })
 
-      yield* waitForFeed(
+      yield* waitUntil(
         () =>
           Option.isSome(feed) &&
           feed.value.items().some((item) => item._tag === "interruption") &&

@@ -7,7 +7,7 @@ import { BranchId, SessionId } from "@gent/core/extensions/api"
 import type { ForkViewType } from "@gent/extensions/client"
 import btwExtension, { ForkPane, makeForkPane } from "../../src/extensions/btw.client"
 import { createMockClient, renderFrame, renderWithProviders } from "../render-harness-boundary"
-import { waitForRenderedFrame } from "../helpers-boundary"
+import { waitForFrame } from "../helpers-boundary"
 import {
   makeClientExtensionRuntime,
   makeClientTestTransport,
@@ -92,9 +92,7 @@ describe("fork pane", () => {
         yield* queue.drain
         expect(server.forked).toEqual(["why?"])
         expect(Option.isNone(controller.pending())).toBe(true)
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(setup, (frame) => frame.includes("thinking"), "thinking"),
-        )
+        yield* waitForFrame(setup, (frame) => frame.includes("thinking"), "thinking")
         // A second ask while the fork replies is dropped on the client.
         controller.ask("too soon?")
         yield* queue.drain
@@ -103,9 +101,7 @@ describe("fork pane", () => {
         server.set(Option.some(view([{ question: "why?", answer: "because" }], false)))
         controller.refresh()
         yield* queue.drain
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(setup, (frame) => frame.includes("because"), "answer"),
-        )
+        yield* waitForFrame(setup, (frame) => frame.includes("because"), "answer")
         controller.ask("and?")
         yield* queue.drain
         expect(server.asked).toEqual(["and?"])
@@ -122,9 +118,7 @@ describe("fork pane", () => {
         )
         controller.refresh()
         yield* queue.drain
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(setup, (frame) => frame.includes("then that"), "second answer"),
-        )
+        yield* waitForFrame(setup, (frame) => frame.includes("then that"), "second answer")
         const frame = renderFrame(setup)
         expect(frame).toContain("btw: why?")
         expect(frame).toContain("^o open")
@@ -146,13 +140,9 @@ describe("fork pane", () => {
           <ForkPane open={true} onClose={() => {}} onOpen={() => {}} controller={controller} />
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("because"), "fork view"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
       yield* Effect.promise(() => setup.mockInput.typeText("and then?"))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("ask › and then?"), "draft"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ask › and then?"), "draft")
       setup.mockInput.pressEnter()
       yield* queue.drain
       expect(server.asked).toEqual(["and then?"])
@@ -178,13 +168,9 @@ describe("fork pane", () => {
           </box>
         )),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("because"), "fork view"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("because"), "fork view")
       yield* Effect.promise(() => setup.mockInput.pasteBracketedText("pasted\nquestion"))
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("ask › pasted question"), "draft"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ask › pasted question"), "draft")
       expect(Option.map(composer, (node) => node.plainText)).toEqual(Option.some(""))
       setup.mockInput.pressEnter()
       yield* queue.drain
@@ -211,9 +197,7 @@ describe("fork pane", () => {
       )
       controller.ask("why?")
       yield* queue.drain
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("model unavailable"), "error"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("model unavailable"), "error")
       expect(Option.isNone(controller.pending())).toBe(true)
       expect(Option.isNone(controller.fork())).toBe(true)
     }),
@@ -266,22 +250,16 @@ describe("fork pane across a session switch", () => {
 
         slash("why?")
         yield* Deferred.await(progressAsked).pipe(Effect.timeout("2 seconds"))
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(setup, (frame) => frame.includes("forking"), "question out"),
-        )
+        yield* waitForFrame(setup, (frame) => frame.includes("forking"), "question out")
         setCurrent(sessionB)
         yield* Deferred.succeed(progressA, true)
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(setup, (frame) => !frame.includes("forking"), "question settled"),
-        )
+        yield* waitForFrame(setup, (frame) => !frame.includes("forking"), "question settled")
 
         // B has no fork, so the next question must fork B, not ask A's fork.
         slash("and here?")
         const asksOfB = () =>
           sent.filter((entry) => entry.endsWith("@b") && entry !== "btw.progress@b")
-        yield* Effect.promise(() =>
-          waitForRenderedFrame(setup, () => asksOfB().length > 0, "question sent from B"),
-        )
+        yield* waitForFrame(setup, () => asksOfB().length > 0, "question sent from B")
         expect(asksOfB()).toEqual(["btw.fork@b"])
         yield* Effect.promise(() => runtime.dispose())
       }),

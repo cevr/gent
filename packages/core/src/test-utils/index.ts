@@ -52,3 +52,25 @@ export { EventPublisherLive, EventStore } from "../domain/event.js"
 export { toolCallReceipts } from "../domain/message.js"
 export { SqliteStorage } from "../storage/storage.js"
 export { CurrentWorkspaceId, WORKSPACE_ID_HEADER, WorkspaceId } from "../server/workspace-rpc.js"
+// Protocol values only tests read: event and error fixtures, projections.
+export { type SessionRuntimeState } from "../domain/agent-loop.js"
+export { DriverError, DriverFailureId } from "../domain/driver.js"
+export { NotFoundError, ProviderError, StorageError } from "../domain/errors.js"
+export {
+  ErrorOccurred,
+  EventId,
+  EventStoreError,
+  MessageReceived,
+  StreamEnded,
+  StreamStarted,
+  ToolCallStarted,
+  ToolCallSucceeded,
+  TurnCompleted,
+} from "../domain/event.js"
+export {
+  MessagePart,
+  projectMessagesWithToolInteractions,
+  toolResultMessageIdForTurn,
+} from "../domain/message.js"
+export { SessionRuntimeError } from "../runtime/session.js"
+export { ExtensionHealth } from "../server/rpc.js"

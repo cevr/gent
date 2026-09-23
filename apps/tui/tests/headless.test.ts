@@ -1,15 +1,7 @@
+import { EventId, ToolCallStarted, ToolCallSucceeded, TurnCompleted } from "@gent/core/test-utils"
 import { describe, it, expect } from "effect-bun-test"
 import { Cause, Effect, Option, Schema, Sink, Stdio, Stream } from "effect"
-import {
-  EventId,
-  ToolCallStarted,
-  ToolCallSucceeded,
-  TurnCompleted,
-  BranchId,
-  EventEnvelope,
-  SessionId,
-  ToolCallId,
-} from "@gent/core/protocol"
+import { BranchId, EventEnvelope, SessionId, ToolCallId } from "@gent/core/protocol"
 import { GentConnectionError } from "@gent/sdk"
 import { renderHeadlessToolCall, runHeadless } from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"

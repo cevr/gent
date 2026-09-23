@@ -26,14 +26,8 @@ import {
 import { ExtensionUIProvider } from "../src/extensions/host"
 import type { AnyExtensionClientModule } from "../src/extensions/client-facets"
 import { ComposerDraftsProvider, SessionShellProvider } from "../src/session"
-import {
-  type SessionRuntimeState,
-  AgentName,
-  BranchId,
-  ModelId,
-  SessionId,
-} from "@gent/core/protocol"
-import { testAgent } from "@gent/core/test-utils"
+import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/protocol"
+import { testAgent, type SessionRuntimeState } from "@gent/core/test-utils"
 
 const noop = () => {}
 const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }
