@@ -148,7 +148,7 @@ const gentFlags = {
     Flag.withDefault(false),
   ),
   isolate: Flag.boolean("isolate").pipe(
-    Flag.withDescription("Run with an in-process server (no shared server, no registry)"),
+    Flag.withDescription("Run with an in-process server (no data-directory server, no registry)"),
     Flag.withDefault(false),
   ),
   debug: Flag.boolean("debug").pipe(

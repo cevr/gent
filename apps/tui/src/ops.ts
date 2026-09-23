@@ -198,9 +198,10 @@ export const inspectLogs = (dir: string): Effect.Effect<LogHealth, never, FileSy
     }
   })
 
-/** The doctor's server line, from the SDK's reading of the lock. */
+/** The doctor's server line: the one server a data directory has, read from its kernel lock. */
 export const inspectServer = (status: ServerLockStatus): ServerHealth => {
-  if (status._tag === "None") return { status: "none", summary: "No shared server." }
+  if (status._tag === "None")
+    return { status: "none", summary: "No server for this data directory." }
   if (status._tag === "Unnamed") {
     return {
       status: "alive",
@@ -209,9 +210,9 @@ export const inspectServer = (status: ServerLockStatus): ServerHealth => {
   }
   const { pid, serverId, rpcUrl } = status.entry
   if (status._tag === "Alive") {
-    return { status: "alive", summary: `Shared server alive: pid ${pid}, ${serverId}, ${rpcUrl}` }
+    return { status: "alive", summary: `Server alive: pid ${pid}, ${serverId}, ${rpcUrl}` }
   }
-  return { status: "dead", summary: `Shared server lock is stale: pid ${pid}, ${serverId}` }
+  return { status: "dead", summary: `Server lock is stale: pid ${pid}, ${serverId}` }
 }
 
 const extensionHealthUnavailable = (summary: string): ExtensionDoctorHealth => ({
@@ -253,7 +254,7 @@ export const makeDoctorReport = (
   Effect.gen(function* () {
     const server = inspectServer(serverStatus)
     const defaultExtensions = () => {
-      let summary = "No live shared server."
+      let summary = "No live server for this data directory."
       if (server.status === "alive") summary = "Extension health was not queried."
       return extensionHealthUnavailable(summary)
     }
@@ -454,7 +455,7 @@ export const sessions = Command.make(
       Flag.optional,
     ),
     isolate: Flag.boolean("isolate").pipe(
-      Flag.withDescription("Run with an in-process server (no shared server, no registry)"),
+      Flag.withDescription("Run with an in-process server (no data-directory server, no registry)"),
       Flag.withDefault(false),
     ),
   },
@@ -543,7 +544,7 @@ const serverStatus = Command.make("status", {}, () =>
   Effect.gen(function* () {
     const status = yield* serverLock.status(yield* readHome)
     if (status._tag === "None") {
-      yield* Console.log("No shared server.")
+      yield* Console.log("No server for this data directory.")
       return
     }
     if (status._tag === "Unnamed") {
@@ -551,7 +552,7 @@ const serverStatus = Command.make("status", {}, () =>
       return
     }
 
-    yield* Console.log("Shared server:\n")
+    yield* Console.log("Server for this data directory:\n")
     let label = "alive"
     if (status._tag === "Stale") label = "dead"
     // Off a terminal (a pipe) the width is 0: keep the table.
@@ -574,18 +575,18 @@ const serverStop = Command.make(
       const result = yield* serverLock.stop(yield* readHome, { removeStale: all })
       const line = Match.value(result).pipe(
         Match.tagsExhaustive({
-          None: () => "No shared server.",
+          None: () => "No server for this data directory.",
           Unnamed: () =>
             "A process holds the server lock but names no PID to signal; nothing was stopped.",
-          NotRunning: () => "No live shared server to stop on this host.",
+          NotRunning: () => "No live server for this data directory on this host.",
           Removed: ({ entry }) =>
-            `Shared server ${entry.serverId} (PID ${entry.pid}) was not running; removed its lock entry.`,
+            `Server ${entry.serverId} (PID ${entry.pid}) was not running; removed its lock entry.`,
           NotOwned: ({ entry }) =>
             `Skipped PID ${entry.pid} (${entry.serverId}): identity probe failed`,
           Stopped: ({ entry }) =>
-            `Sent SIGTERM to PID ${entry.pid} (${entry.serverId})\n\nShared server stopped and cleaned up.`,
+            `Sent SIGTERM to PID ${entry.pid} (${entry.serverId})\n\nServer stopped and cleaned up.`,
           StillRunning: ({ entry }) =>
-            `Sent SIGTERM to PID ${entry.pid} (${entry.serverId})\n\nShared server is still running after SIGTERM.`,
+            `Sent SIGTERM to PID ${entry.pid} (${entry.serverId})\n\nServer is still running after SIGTERM.`,
         }),
       )
       yield* Console.log(line)
@@ -600,19 +601,20 @@ export const server = Command.make("server", {}, () =>
 const DOCTOR_QUERY_TIMEOUT = "5 seconds"
 
 /**
- * Ask the shared server for extension health. The doctor runs when something
+ * Ask the data directory's server for extension health. The doctor runs when something
  * is wrong, so it confirms the server's identity first and bounds the query:
  * a holder that does not answer is reported, not waited on.
  */
 export const readDoctorExtensionHealth = (
   status: ServerLockStatus,
 ): Effect.Effect<ExtensionDoctorHealth> => {
-  if (status._tag === "None") return Effect.succeed(extensionHealthUnavailable("No shared server."))
+  if (status._tag === "None")
+    return Effect.succeed(extensionHealthUnavailable("No server for this data directory."))
   if (status._tag === "Unnamed") {
-    return Effect.succeed(extensionHealthUnavailable("The shared server has not named itself yet."))
+    return Effect.succeed(extensionHealthUnavailable("The server has not named itself yet."))
   }
   if (status._tag === "Stale") {
-    return Effect.succeed(extensionHealthUnavailable("Shared server lock is stale."))
+    return Effect.succeed(extensionHealthUnavailable("Server lock is stale."))
   }
   const { entry } = status
   return Effect.gen(function* () {
@@ -666,7 +668,7 @@ export const refuseResetWhileServing = (
       )
     if (!serverHoldsLock(status)) return
     return yield* new CliStartupError({
-      message: "shared server is running; stop it with `gent server stop` first",
+      message: "a server is running for this data directory; stop it with `gent server stop` first",
     })
   })
 
