@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import {
+  emptyQueueSnapshot,
   ErrorOccurred,
   EventId,
   MessageReceived,
@@ -27,7 +28,6 @@ import {
   ToolCallId,
   ToolInteraction,
   OutputCut,
-  emptyQueueSnapshot,
 } from "@gent/core/protocol"
 import { ExtensionId } from "@gent/core/extensions/api"
 import {
