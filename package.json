@@ -57,7 +57,6 @@
     "@effect/sql-pg": "4.0.0-rc.112",
     "@effect/sql-sqlite-bun": "4.0.0-rc.112",
     "effect-encore": "^0.31.0",
-    "effect-machine": "0.27.0",
     "effect-wide-event": "0.3.0",
     "picomatch": "^4.0.7",
     "@types/picomatch": "^4.0.3",
