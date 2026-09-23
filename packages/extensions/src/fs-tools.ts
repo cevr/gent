@@ -1144,10 +1144,39 @@ const GrepResult = Schema.Struct({
   truncated: Schema.Boolean,
   /** Files grep could not open: git listed them, but their names are not valid UTF-8. */
   unreadable: Schema.optional(Schema.Finite),
+  /** Files grep skipped because they are larger than the size cap. */
+  oversized: Schema.optional(Schema.Finite),
 })
 
 /** ripgrep's rule: a NUL byte in a file's first 8 KB marks it binary, and grep skips it. */
 const BINARY_PROBE_BYTES = 8192
+
+/** A file larger than this is skipped and counted: it is a log or a bundle, not source. */
+const MAX_SEARCH_FILE_BYTES = 10 * 1024 * 1024
+
+/** Files read at once. Results keep the listing order. */
+const SEARCH_CONCURRENCY = 16
+
+/** Files started per round: a search stops within one round of reaching its limit. */
+const SEARCH_ROUND = 64
+
+type GrepMatch = typeof GrepMatch.Type
+
+/**
+ * The text of a file, or `None` for a binary one. A UTF-16 file starts with a
+ * byte order mark and holds NUL bytes, so it is decoded before the NUL probe,
+ * as ripgrep transcodes it.
+ */
+const fileText = (bytes: Uint8Array): Option.Option<string> => {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return Option.some(new TextDecoder("utf-16le").decode(bytes))
+  }
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return Option.some(new TextDecoder("utf-16be").decode(bytes))
+  }
+  if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return Option.none()
+  return Option.some(new TextDecoder().decode(bytes))
+}
 
 /** A match or context line longer than this is cut to this many characters. */
 const MAX_LINE_LENGTH = 500
@@ -1177,13 +1206,105 @@ const clipLine = (line: string, at: number): string => {
   return clipped
 }
 
+/** What one grep looks for. */
+interface Search {
+  readonly regex: RegExp
+  readonly limit: number
+  readonly contextLines: number
+}
+
+/**
+ * One file's matches in line order, at most `limit + 1` of them: one past the
+ * limit is enough to know the search was cut.
+ */
+const searchFile = (
+  filePath: string,
+  search: Search,
+): Effect.Effect<
+  { readonly matches: ReadonlyArray<GrepMatch>; readonly oversized: boolean },
+  never,
+  FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const none = { matches: [], oversized: false }
+    const info = yield* fs.stat(filePath).pipe(Effect.option)
+    if (Option.isNone(info)) return none
+    if (info.value.size > BigInt(MAX_SEARCH_FILE_BYTES)) return { matches: [], oversized: true }
+    const bytes = yield* fs.readFile(filePath).pipe(Effect.option)
+    const text = Option.flatMap(bytes, fileText)
+    if (Option.isNone(text)) return none
+
+    const lines = text.value.split("\n")
+    const contextOf = (from: number, to: number) =>
+      lines.slice(from, to).map((line) => clipLine(line, 0))
+    const found: Array<GrepMatch> = []
+    for (const [i, line] of lines.entries()) {
+      if (found.length > search.limit) break
+      const hit = Option.fromNullishOr(search.regex.exec(line))
+      if (Option.isNone(hit)) continue
+      let match: GrepMatch = {
+        file: filePath,
+        line: i + 1,
+        content: clipLine(line, hit.value.index),
+      }
+      if (search.contextLines > 0) {
+        match = {
+          ...match,
+          context: {
+            before: contextOf(Math.max(0, i - search.contextLines), i),
+            after: contextOf(i + 1, i + 1 + search.contextLines),
+          },
+        }
+      }
+      found.push(match)
+    }
+    return { matches: found, oversized: false }
+  })
+
+/**
+ * Search `files` in order, `SEARCH_CONCURRENCY` at a time, a round of
+ * `SEARCH_ROUND` files after another, until the limit is passed.
+ */
+const searchFiles = (
+  files: ReadonlyArray<string>,
+  search: Search,
+): Effect.Effect<
+  {
+    readonly matches: ReadonlyArray<GrepMatch>
+    readonly truncated: boolean
+    readonly oversized: number
+  },
+  never,
+  FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const matches: Array<GrepMatch> = []
+    let oversized = 0
+    for (let from = 0; from < files.length; from += SEARCH_ROUND) {
+      const results = yield* Effect.forEach(
+        files.slice(from, from + SEARCH_ROUND),
+        (file) => searchFile(file, search),
+        { concurrency: SEARCH_CONCURRENCY },
+      )
+      for (const result of results) {
+        if (result.oversized) oversized++
+        matches.push(...result.matches)
+        if (matches.length > search.limit) {
+          return { matches: matches.slice(0, search.limit), truncated: true, oversized }
+        }
+      }
+    }
+    return { matches, truncated: false, oversized }
+  })
+
 // Grep Tool
 
 export const GrepTool = tool({
   id: "grep",
   readonly: true,
   description:
-    "Search file contents with regex. Returns matching lines. Skips binary files; a line over 500 characters is cut around the match.",
+    "Search file contents with regex. Returns matching lines in path order. Skips binary files and files over 10 MB; a line over 500 characters is cut around the match.",
   promptSnippet: "Search file contents with regex",
   params: GrepParams,
   output: GrepResult,
@@ -1217,50 +1338,6 @@ export const GrepTool = tool({
         }),
     })
 
-    let truncated = false
-    let unreadable = 0
-    const matches: Array<{
-      file: string
-      line: number
-      content: string
-      context?: { before: string[]; after: string[] }
-    }> = []
-
-    const searchFile = (filePath: string): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const bytes = yield* fs.readFile(filePath).pipe(Effect.option)
-        if (Option.isNone(bytes)) return
-        if (bytes.value.subarray(0, BINARY_PROBE_BYTES).includes(0)) return
-
-        const lines = new TextDecoder().decode(bytes.value).split("\n")
-        const contextOf = (from: number, to: number) =>
-          lines.slice(from, to).map((line) => clipLine(line, 0))
-
-        for (const [i, line] of lines.entries()) {
-          if (truncated) break
-          const found = Option.fromNullishOr(regex.exec(line))
-          if (Option.isNone(found)) continue
-          if (matches.length >= limit) {
-            truncated = true
-            break
-          }
-          const match: (typeof matches)[0] = {
-            file: filePath,
-            line: i + 1,
-            content: clipLine(line, found.value.index),
-          }
-
-          if (contextLines > 0) {
-            match.context = {
-              before: contextOf(Math.max(0, i - contextLines), i),
-              after: contextOf(i + 1, i + 1 + contextLines),
-            }
-          }
-
-          matches.push(match)
-        }
-      })
-
     const baseStat = yield* fs.stat(basePath).pipe(Effect.option)
     if (Option.isNone(baseStat)) {
       return yield* new GrepError({
@@ -1269,9 +1346,9 @@ export const GrepTool = tool({
       })
     }
 
-    if (baseStat.value.type === "File") {
-      yield* searchFile(basePath)
-    } else {
+    let files: ReadonlyArray<string> = [basePath]
+    let unreadable = 0
+    if (baseStat.value.type !== "File") {
       // A target inside the session cwd reads the session's ignore rules from its root.
       const fromCwd = path.relative(ctx.cwd, basePath)
       let root = basePath
@@ -1298,17 +1375,23 @@ export const GrepTool = tool({
             cause: e,
           }),
       })
-
       unreadable = listing.unreadable
-      for (const file of listing.files) {
-        if (truncated) break
-        if (!matchesGlob(file.relativePath)) continue
-        yield* searchFile(file.path)
-      }
+      // Sorted by path, so the same search gives the same matches in the same order.
+      files = listing.files
+        .filter((file) => matchesGlob(file.relativePath))
+        .map((file) => file.path)
+        .toSorted()
     }
 
-    if (unreadable === 0) return { matches, truncated }
-    return { matches, truncated, unreadable }
+    const { matches, truncated, oversized } = yield* searchFiles(files, {
+      regex,
+      limit,
+      contextLines,
+    })
+    let result: typeof GrepResult.Type = { matches, truncated }
+    if (unreadable > 0) result = { ...result, unreadable }
+    if (oversized > 0) result = { ...result, oversized }
+    return result
   }),
 })
 

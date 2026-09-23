@@ -816,6 +816,73 @@ describe("GrepTool", () => {
     }).pipe(Effect.provide(IndexLayer)),
   )
 
+  it.scopedLive("a UTF-16 file with a byte order mark is searched, not skipped as binary", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const text = "first\nthe needle here\n"
+      const littleEndian = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")])
+      const bigEndian = Buffer.from(littleEndian).swap16()
+      yield* fs.writeFile(`${tmpDir}/le.txt`, littleEndian)
+      yield* fs.writeFile(`${tmpDir}/be.txt`, bigEndian)
+
+      const result = yield* runToolWithCtx(GrepTool, { pattern: "needle", path: tmpDir }, ctxGrep)
+      expect(
+        result.matches.map((match) => [
+          match.file.slice(tmpDir.length + 1),
+          match.line,
+          match.content,
+        ]),
+      ).toEqual([
+        ["be.txt", 2, "the needle here"],
+        ["le.txt", 2, "the needle here"],
+      ])
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  it.scopedLive("results keep listing order and the limit across many files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const names = Array.from({ length: 300 }, (_, i) => `f${String(i).padStart(3, "0")}.txt`)
+      for (const name of names) yield* fs.writeFileString(`${tmpDir}/${name}`, "hit\nhit\n")
+
+      const all = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "hit", path: tmpDir, limit: 1000 },
+        ctxGrep,
+      )
+      const files = all.matches.map((match) => match.file.slice(tmpDir.length + 1))
+      expect(files).toEqual(names.flatMap((name) => [name, name]))
+      expect(all.truncated).toBe(false)
+
+      const cut = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "hit", path: tmpDir, limit: 5 },
+        ctxGrep,
+      )
+      expect(cut.matches.map((match) => [match.file.slice(tmpDir.length + 1), match.line])).toEqual(
+        all.matches.slice(0, 5).map((match) => [match.file.slice(tmpDir.length + 1), match.line]),
+      )
+      expect(cut.truncated).toBe(true)
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
+  it.scopedLive("a file over the size cap is skipped and counted", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/big.log`, `needle\n${"x".repeat(11 * 1024 * 1024)}`)
+      yield* fs.writeFileString(`${tmpDir}/small.txt`, "needle\n")
+
+      const result = yield* runToolWithCtx(GrepTool, { pattern: "needle", path: tmpDir }, ctxGrep)
+      expect(result.matches.map((match) => match.file.slice(tmpDir.length + 1))).toEqual([
+        "small.txt",
+      ])
+      expect(result.oversized).toBe(1)
+    }).pipe(Effect.provide(IndexLayer)),
+  )
+
   it.scopedLive("a cut never splits a surrogate pair", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
