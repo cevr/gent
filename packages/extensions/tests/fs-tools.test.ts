@@ -726,6 +726,26 @@ describe("FileIndex fallback walk", () => {
     }).pipe(Effect.provide(FallbackLayer)),
   )
 
+  it.scopedLive("an edited .gitignore applies to the next listing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "first.txt")
+      yield* fs.writeFileString(`${tmpDir}/first.txt`, "a")
+      yield* fs.writeFileString(`${tmpDir}/second.txt`, "b")
+
+      const fileIndex = yield* FileIndex
+      const names = fileIndex
+        .listFiles({ root: tmpDir, cwd: tmpDir })
+        .pipe(Effect.map((files) => files.map((f) => f.relativePath)))
+      expect(yield* names).not.toContain("first.txt")
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "second.txt")
+      const after = yield* names
+      expect(after).toContain("first.txt")
+      expect(after).not.toContain("second.txt")
+    }).pipe(Effect.provide(FallbackLayer)),
+  )
+
   it.scopedLive("listFiles returns full file list (no early break)", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -757,33 +777,6 @@ describe("FileIndex fallback walk", () => {
         .pipe(Effect.timeout("5 seconds"))
       expect(files.map((f) => f.relativePath)).toEqual(["src/a.ts"])
     }).pipe(Effect.provide(FallbackLayer)),
-  )
-
-  it.scopedLive("gitignore cache is scoped per layer instance (no cross-instance bleed)", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const tmpDir = yield* fs.makeTempDirectoryScoped()
-      yield* fs.writeFileString(`${tmpDir}/foo.txt`, "x")
-      yield* fs.writeFileString(`${tmpDir}/bar.txt`, "y")
-
-      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "foo.txt")
-      yield* Effect.gen(function* () {
-        const idx = yield* FileIndex
-        yield* idx.listFiles({ root: tmpDir, cwd: tmpDir })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(FallbackLayer), Effect.scoped)
-
-      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "bar.txt")
-      const filesB = yield* Effect.gen(function* () {
-        const idx = yield* FileIndex
-        return yield* idx.listFiles({ root: tmpDir, cwd: tmpDir })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(FallbackLayer), Effect.scoped)
-      const namesB = filesB.map((f) => f.relativePath)
-
-      expect(namesB).toContain("foo.txt")
-      expect(namesB).not.toContain("bar.txt")
-    }).pipe(Effect.provide(PlatformLayerFileIndex)),
   )
 })
 

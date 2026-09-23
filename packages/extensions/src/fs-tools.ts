@@ -3,14 +3,12 @@ import {
   Context,
   Effect,
   FileSystem,
-  HashMap,
   Layer,
   Option,
   Path,
   Result,
   Schema,
   type Scope,
-  TxRef,
 } from "effect"
 import picomatch from "picomatch"
 import { FileFinder as NativeFileFinder } from "@ff-labs/fff-bun"
@@ -65,8 +63,6 @@ export class FileIndex extends Context.Service<FileIndex, FileIndexService>()(
 
 type PathMatcher = (path: string) => boolean
 
-type GitignoreCacheRef = TxRef.TxRef<HashMap.HashMap<string, ReadonlyArray<PathMatcher>>>
-
 /** The walk stops with an error past this many files; the caller narrows `path`. */
 const FALLBACK_MAX_FILES = 100_000
 
@@ -107,23 +103,12 @@ const makeFallbackService: Effect.Effect<
 > = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const cacheRef: GitignoreCacheRef = yield* TxRef.make(
-    HashMap.empty<string, ReadonlyArray<PathMatcher>>(),
-  )
-
+  // Read on every listing: one small file, and an edit applies at once.
   const loadGitignore = (cwd: string): Effect.Effect<ReadonlyArray<PathMatcher>> =>
-    Effect.gen(function* () {
-      const cache = yield* TxRef.get(cacheRef)
-      const cached = HashMap.get(cache, cwd)
-      if (cached._tag === "Some") return cached.value
-
-      const patterns = yield* fs.readFileString(path.join(cwd, ".gitignore")).pipe(
-        Effect.map(parseGitignorePatterns),
-        Effect.orElseSucceed((): ReadonlyArray<PathMatcher> => []),
-      )
-      yield* TxRef.update(cacheRef, (m) => HashMap.set(m, cwd, patterns))
-      return patterns
-    })
+    fs.readFileString(path.join(cwd, ".gitignore")).pipe(
+      Effect.map(parseGitignorePatterns),
+      Effect.orElseSucceed((): ReadonlyArray<PathMatcher> => []),
+    )
 
   const scanAllFiles = (cwd: string): Effect.Effect<ReadonlyArray<IndexedFile>, FileIndexError> =>
     Effect.gen(function* () {
