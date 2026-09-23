@@ -624,6 +624,7 @@ const watchParent = () => {
 setInterval(() => {
   if (process.ppid !== host) process.kill(process.pid, "SIGKILL")
 }, 250)`
+  // oxlint-disable-next-line effect/noGlobals -- the watchdog must be an OS thread that runs while a cell blocks the main thread; an Effect Worker runs on the blocked loop.
   return new Worker(URL.createObjectURL(new Blob([source])), { ref: false })
 }
 
@@ -634,6 +635,7 @@ setInterval(() => {
  * left open never outlives the transport.
  */
 const runWorkerMain = Runtime.makeRunMain(({ fiber, teardown }) => {
+  // oxlint-disable-next-line effect/noGlobals -- the worker entry is a process adapter; exit ends timers and sockets a cell left open.
   fiber.addObserver((exit) => teardown(exit, (code) => process.exit(code)))
 })
 
