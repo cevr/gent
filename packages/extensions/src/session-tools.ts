@@ -154,7 +154,8 @@ const RenameSessionTool = tool({
 /**
  * One message from this session to another. Every session has it: a parent
  * corrects a child, a child asks its parent, two siblings hand off a fact.
- * The text lands on the target's active branch as an interjection. A running
+ * The text lands as an interjection on the target's active branch; a child's
+ * message to its parent lands on the branch that owns the child. A running
  * turn reads it at its next step; an idle branch wakes and answers it.
  */
 
@@ -317,6 +318,12 @@ const SendSessionTool = tool({
     if (Predicate.isUndefined(receiver) || Predicate.isUndefined(receiver.activeBranchId)) {
       return yield* new SendSessionError({ message: `No session ${targetId}` })
     }
+    // A child reports to the branch that owns it, not to whichever branch
+    // the person has open on the parent now.
+    const branchId = Option.fromUndefinedOr(sender.parentBranchId).pipe(
+      Option.filter(() => params.to === "parent"),
+      Option.getOrElse(() => receiver.activeBranchId),
+    )
     const relation = relationOf(sender, receiver)
     const from = {
       sessionId: sender.id,
@@ -330,7 +337,7 @@ const SendSessionTool = tool({
     yield* ctx.Session.send({
       delivery: "steer",
       sessionId: receiver.id,
-      branchId: receiver.activeBranchId,
+      branchId,
       requestId: RequestId.make(`session-send:${ctx.toolCallId}`),
       content: sessionMessageText({ from, message }),
       metadata: {
