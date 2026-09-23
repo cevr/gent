@@ -1498,6 +1498,59 @@ describe("ClientProvider errors", () => {
     }),
   )
 
+  it.live("a refetched snapshot keeps the error on screen", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
+      client.setErrorIn(FIRST, "send refused")
+      // The feed came back after a reconnect and hydrates again.
+      client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
+      expect(client.error()).toBe("send refused")
+    }),
+  )
+
+  it.live("an error a later turn replaced does not come back with a snapshot", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      client.switchSession(SECOND.sessionId, SECOND.branchId, "Second")
+      client.setErrorIn(SECOND, "send refused")
+      client.applySessionSnapshot(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0 }))
+      expect(client.error()).toBe("send refused")
+      client.applySessionEvent(
+        makeEnvelope(
+          1,
+          StreamStarted.make({ sessionId: SECOND.sessionId, branchId: SECOND.branchId }),
+        ),
+      )
+      client.applySessionSnapshot(snapshotOf(SECOND, { costUsd: 0, lastInputTokens: 0 }))
+      expect(client.error()).toBeNull()
+    }),
+  )
+
   it.live("an error set once the snapshot is in shows at once", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

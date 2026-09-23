@@ -819,14 +819,18 @@ export function ClientProvider(props: ClientProviderProps) {
   const [extensionHealth, setExtensionHealth] =
     createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
 
-  // Errors a session earned before its snapshot was in, shown when the
-  // snapshot lands: the snapshot writes the status and would overwrite them.
-  // That covers a session the reader left and the one just switched to.
+  // The error each session last showed, until a later status replaces it. A
+  // snapshot writes the status, so every snapshot shows the held error again:
+  // the one the reader returns to, the one just switched to, and a feed that
+  // hydrates again after a reconnect.
   const heldErrors = new Map<string, string>()
   const identityKey = (identity: SessionIdentity) =>
     `${identity.sessionId}\u0000${identity.branchId}`
-  // The identity whose snapshot has landed since the last session change.
-  let snapshotIn = Option.none<string>()
+  /** Write the status of the session in view; it replaces that session's held error. */
+  const showStatus = (status: AgentStatus): void => {
+    Option.map(sessionOption(), (current) => heldErrors.delete(identityKey(current)))
+    setAgentStore({ status })
+  }
 
   /**
    * Drop everything the previous session left behind.
@@ -850,7 +854,6 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedReasoningLevel: Option.none(),
     })
     setSessionMetrics(EMPTY_SESSION_METRICS)
-    snapshotIn = Option.none()
     setNoticeState(Option.none())
     clearConnectionIssue()
     if (input.clearExtensionHealth) setExtensionHealth(EMPTY_EXTENSION_HEALTH)
@@ -938,11 +941,9 @@ export function ClientProvider(props: ClientProviderProps) {
     if (current.value.sessionId !== input.sessionId || current.value.branchId !== input.branchId)
       return
     if (input.runtime._tag === "Idle") {
-      if (agentStore.status._tag === "Streaming") {
-        setAgentStore({ status: AgentStatus.cases.Idle.make({}) })
-      }
+      if (agentStore.status._tag === "Streaming") showStatus(AgentStatus.cases.Idle.make({}))
     } else {
-      setAgentStore({ status: AgentStatus.cases.Streaming.make({}) })
+      showStatus(AgentStatus.cases.Streaming.make({}))
     }
   }
 
@@ -994,11 +995,8 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
     })
     setSessionMetrics(metricsOf(snapshot))
-    const key = identityKey(snapshot)
-    snapshotIn = Option.some(key)
-    const held = Option.fromUndefinedOr(heldErrors.get(key))
+    const held = Option.fromUndefinedOr(heldErrors.get(identityKey(snapshot)))
     if (Option.isSome(held)) {
-      heldErrors.delete(key)
       setAgentStore({ status: AgentStatus.cases.Error.make({ error: held.value }) })
     }
   }
@@ -1035,7 +1033,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const applyAgentLifecycleEvent = (event: EventEnvelope["event"]): void => {
     const lifecycle = reduceAgentLifecycle(event)
     const status = Option.fromNullishOr(lifecycle.status)
-    if (Option.isSome(status)) setAgentStore({ status: status.value })
+    if (Option.isSome(status)) showStatus(status.value)
     // A user message starts the next turn; the notice from before it is spent.
     if (event._tag === "MessageReceived" && event.message.role === "user") {
       setNoticeState(Option.none())
@@ -1152,9 +1150,7 @@ export function ClientProvider(props: ClientProviderProps) {
           Effect.sync(() => {
             log.error("createSession.failed", { error: String(err) })
             dispatchSession(SessionStateEvent.cases.CreateFailed.make({}))
-            setAgentStore({
-              status: AgentStatus.cases.Error.make({ error: formatError(err) }),
-            })
+            showStatus(AgentStatus.cases.Error.make({ error: formatError(err) }))
           }),
         ),
       ),
@@ -1333,11 +1329,9 @@ export function ClientProvider(props: ClientProviderProps) {
           })
         }).pipe(
           Effect.tapError((err) =>
-            Effect.sync(() => {
-              setAgentStore({
-                status: AgentStatus.cases.Error.make({ error: formatError(err) }),
-              })
-            }),
+            Effect.sync(() =>
+              showStatus(AgentStatus.cases.Error.make({ error: formatError(err) })),
+            ),
           ),
         ),
       )
@@ -1384,21 +1378,20 @@ export function ClientProvider(props: ClientProviderProps) {
         modelStore.driverIds.includes(model.provider),
       ),
     setErrorIn: (target, error) => {
-      const key = identityKey(target)
-      const inView = Option.exists(sessionOption(), (current) => sameIdentity(current, target))
-      // The session in view shows it now; until its snapshot is in, the
-      // error is also held, so the snapshot shows it again over its status.
-      if (inView) agentValue.setError(error)
-      if (inView && Option.contains(snapshotIn, key)) return
-      heldErrors.set(key, error)
+      // The session in view shows it now. Either way it is held, so the
+      // session's next snapshot shows it again over the status it writes.
+      if (Option.exists(sessionOption(), (current) => sameIdentity(current, target))) {
+        agentValue.setError(error)
+      }
+      heldErrors.set(identityKey(target), error)
     },
     setError: (error) => {
       const nextError = Option.fromNullishOr(error)
       if (Option.isSome(nextError)) {
-        setAgentStore({ status: AgentStatus.cases.Error.make({ error: nextError.value }) })
+        showStatus(AgentStatus.cases.Error.make({ error: nextError.value }))
         return
       }
-      setAgentStore({ status: AgentStatus.cases.Idle.make({}) })
+      showStatus(AgentStatus.cases.Idle.make({}))
     },
     notice,
     setNotice: (message) => setNoticeState(Option.some(message)),
