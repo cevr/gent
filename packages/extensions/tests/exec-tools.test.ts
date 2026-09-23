@@ -1674,7 +1674,9 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  test("TRUNCATE, any DROP, and DELETE without WHERE are destructive", () => {
+  // A SQL client asks when its text holds DELETE, DROP or TRUNCATE as a
+  // word: no statement, comment, string or WHERE is read.
+  test("a DELETE, DROP or TRUNCATE word anywhere in a SQL client's text is destructive", () => {
     for (const command of [
       "psql -c 'TRUNCATE t'",
       "psql -c 'DROP VIEW v'",
@@ -1693,72 +1695,54 @@ describe("classifyBashCommand", () => {
       "psql -c 'DELETE FROM t -- WHERE'",
       'psql -c "DELETE FROM t -- \' WHERE"',
       "mysql -e 'DELETE FROM t # WHERE'",
-    ]) {
-      expect(classifyBashCommand(command).level, command).toBe("destructive")
-    }
-    for (const command of [
-      "psql -c 'SELECT TRUNCATE(1.5, 1)'",
-      "psql -c 'DELETE FROM t WHERE id = 1'",
-      "psql -c 'delete from t where id in (1, 2)'",
-      "psql -c \"DELETE FROM t WHERE id = 1; SELECT 'WHERE'\"",
-      "psql -c 'DELETE FROM t WHERE id = 1 -- only one'",
-      "psql -c 'SELECT 1' drop_db",
-      // A line comment ends at the newline: the WHERE after it is read.
-      "printf 'DELETE FROM t -- x\\nWHERE id = 1' | psql",
-    ]) {
-      expect(classifyBashCommand(command).level, command).toBe("safe")
-    }
-  })
-
-  test("each SQL argument and input is its own script", () => {
-    for (const command of [
-      "psql -c 'DELETE FROM t' -c 'SELECT 1 WHERE true'",
-      "psql -c 'DELETE FROM t' -o /nonexistent/gent-probe-x/where.txt",
-      "sqlite3 /nonexistent/gent-probe-x 'DELETE FROM t' '.print where'",
-      "psql '-cDELETE FROM t'",
-    ]) {
-      expect(classifyBashCommand(command).level, command).toBe("destructive")
-    }
-    expect(classifyBashCommand("psql -c 'DELETE FROM t WHERE id = 1' -c 'SELECT 1'").level).toBe(
-      "safe",
-    )
-  })
-
-  test("a DELETE with modifiers, a table list, a quoted WHERE or a WHERE outside its query deletes all", () => {
-    for (const command of [
       "mysql -e 'DELETE t FROM t'",
       "mysql -e 'DELETE LOW_PRIORITY FROM t'",
-      "mysql -e 'DELETE QUICK IGNORE FROM t'",
       "mysql -e 'DELETE t1, t2 FROM t1 JOIN t2 ON t1.a = t2.a'",
       "mysql -e 'DELETE `t` FROM `where`'",
       "psql -c 'delete from \"where\"'",
-      "psql -c \"DELETE FROM t RETURNING 'where'\"",
       "psql -c 'DELETE FROM t RETURNING $$ where $$'",
       "psql -c 'WITH x AS (DELETE FROM t RETURNING *) SELECT 1 FROM x WHERE true'",
-      "psql -c 'DELETE FROM t USING (SELECT 1 WHERE true) s'",
-      // Any target list: a statement that starts with DELETE needs its own WHERE.
       "mysql --socket=/nonexistent/gent-probe-x/mysql.sock -e 'DELETE `probe`.`t` FROM `probe`.`t`'",
-      "mysql -e 'DELETE probe . t FROM probe . t'",
-      "mysql -e 'DELETE `a` FROM `t` AS `a`'",
-      "mysql -e 'DELETE `t1`, `t2` FROM `t1` JOIN `t2` ON `t1`.a = `t2`.a'",
-      "mysql -e 'DELETE FROM t1, t2 USING t1 JOIN t2'",
-      'psql -c \'DELETE FROM "s"."t" AS a USING u\'',
-      "psql -c 'WITH x AS (SELECT 1) DELETE FROM s . t'",
       "psql -c '/* note */ DELETE FROM ONLY s.t'",
-      // MySQL may read a backslash in a string as an escape, or not.
       `mysql -e "SELECT 'a\\\\'; DELETE FROM t; -- '"`,
+      // Long-option values, attached values and every argument are SQL text.
+      "psql --command='DELETE FROM gent_probe_x'",
+      "psql --command 'DELETE FROM gent_probe_x'",
+      "mysql --execute='DELETE FROM gent_probe_x'",
+      "mysql -e'DELETE FROM gent_probe_x'",
+      "psql '-cDELETE FROM t'",
+      "psql -XcDELETE",
+      "sqlite3 /nonexistent/gent-probe-x 'DELETE FROM t' '.print where'",
+      "psql -c 'DELETE FROM t' -c 'SELECT 1 WHERE true'",
+      // Bodies, EXPLAIN ANALYZE, PREPARE and dynamic SQL run the statement.
+      "psql -c 'DO $$ BEGIN DELETE FROM gent_probe_x; END $$'",
+      "psql -c 'CREATE FUNCTION f() RETURNS void AS $$ DELETE FROM gent_probe_x $$ LANGUAGE sql; SELECT f()'",
+      "psql -c 'EXPLAIN ANALYZE DELETE FROM gent_probe_x'",
+      "psql -c 'PREPARE p AS DELETE FROM gent_probe_x; EXECUTE p'",
+      `mysql -e "PREPARE s FROM 'DELETE FROM gent_probe_x'; EXECUTE s"`,
+      `psql -c "DO 'BEGIN DELETE FROM gent_probe_x; END'"`,
+      "psql -c 'CREATE RULE r AS ON INSERT TO a DO ALSO DELETE FROM gent_probe_x'",
+      // A comment between DROP or TRUNCATE and its object.
+      "psql -c 'DROP/**/TABLE gent_probe_x'",
+      "mysql -e 'DROP/**/TABLE gent_probe_x'",
+      "psql -c 'TRUNCATE/**/gent_probe_x'",
+      "duckdb -c 'DROP/**/TABLE gent_probe_x'",
+      // Accepted over-asks: a scoped DELETE, a word in a string or a clause.
+      "psql -c 'DELETE FROM t WHERE id = 1'",
+      "printf 'DELETE FROM t -- x\\nWHERE id = 1' | psql",
+      "psql -c \"SELECT 'delete from t'\"",
+      "psql -c 'CREATE TABLE t (a int REFERENCES u ON DELETE CASCADE)'",
+      "psql -c 'SELECT TRUNCATE(1.5, 1)'",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
-      "mysql -e 'DELETE t FROM t JOIN u ON t.a = u.a WHERE u.b = 1'",
-      "mysql -e 'DELETE LOW_PRIORITY FROM t WHERE id = 1'",
-      "mysql -e 'DELETE `probe`.`t` FROM `probe`.`t` WHERE id = 1'",
-      "psql -c 'WITH x AS (SELECT 1) DELETE FROM s.t USING x WHERE t.id = x.id'",
-      "psql -c 'DELETE FROM \"t\" WHERE id = 1'",
-      "psql -c \"SELECT 'delete from t'\"",
-      "psql -c 'CREATE TABLE t (a int REFERENCES u ON DELETE CASCADE)'",
-      "psql -c 'DELETE FROM t WHERE id IN (SELECT id FROM u)'",
+      "psql -c 'select 1'",
+      "psql -c 'SELECT 1' drop_db",
+      "psql -c 'SELECT deleted_at, dropped FROM t'",
+      "mysql -e 'SHOW TABLES'",
+      "sqlite3 /nonexistent/gent-probe-x/db.sqlite .tables",
+      "echo 'SELECT 1' | psql",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }

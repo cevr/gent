@@ -2868,226 +2868,27 @@ const killsHard = (args: ReadonlyArray<string>) =>
   })
 
 /**
- * A SQL statement that drops or truncates: any `DROP <object>` (a table, a
- * function, a user, and `ALTER TABLE … DROP COLUMN`), and `TRUNCATE` with or
- * without `TABLE` (Postgres and MySQL make it optional). The name after
- * `TRUNCATE` is not a `(`: MySQL's `TRUNCATE(x, d)` rounds a number. It is
- * read in the raw text, comments and strings included: a false match asks.
+ * A word that drops, truncates or deletes: DELETE, DROP or TRUNCATE in any
+ * case. No statement is parsed: a comment, a string, a body or a WHERE does
+ * not change the answer, so `DELETE … WHERE id = 1` and `SELECT 'drop'` ask
+ * too. A short option's value may be attached to its letters (`-cDELETE …`).
  */
-const SQL_DROP = /\b(drop\s+(?:materialized\s+)?[a-z_]+)|\b(truncate)(?:\s+table)?\s+(?!\()\S/i
-
-/** How a SQL client's dialect writes comments, strings and quoted names. */
-interface SqlDialect {
-  /** A backslash escapes the next character in a `'` or `"` string (MySQL). Postgres `E'…'` always. */
-  readonly backslash: boolean
-  /** `$tag$ … $tag$` quotes text (Postgres, DuckDB). */
-  readonly dollar: boolean
-  /** `#` starts a line comment (MySQL). */
-  readonly hash: boolean
-  /** `--` starts a line comment only before a blank or the end (MySQL). */
-  readonly dashBlank: boolean
-  /** Block comments nest (Postgres). */
-  readonly nested: boolean
-  /** `[name]` quotes a name (SQLite). */
-  readonly brackets: boolean
-  /** `E'…'` strings read backslash escapes (Postgres). */
-  readonly escapeStrings: boolean
-  /** A `/*!` comment holds code the server runs (MySQL). */
-  readonly executable: boolean
-}
-
-const POSTGRES: SqlDialect = {
-  backslash: false,
-  dollar: true,
-  hash: false,
-  dashBlank: false,
-  nested: true,
-  brackets: false,
-  escapeStrings: true,
-  executable: false,
-}
-const SQLITE: SqlDialect = {
-  ...POSTGRES,
-  dollar: false,
-  nested: false,
-  brackets: true,
-  escapeStrings: false,
-}
-/** MySQL reads a backslash as an escape unless `NO_BACKSLASH_ESCAPES` is set: both are read. */
-const MYSQL: ReadonlyArray<SqlDialect> = [true, false].map((backslash) => ({
-  backslash,
-  dollar: false,
-  hash: true,
-  dashBlank: true,
-  nested: false,
-  brackets: false,
-  escapeStrings: false,
-  executable: true,
-}))
-
-/** The end of the quoted text that starts at `at` with `quote`, past its closing quote; doubling escapes it. */
-const quotedEnd = (sql: string, at: number, quote: string, backslash: boolean): number => {
-  let index = at + 1
-  while (index < sql.length) {
-    const char = sql.charAt(index)
-    if (backslash && char === "\\") {
-      index += 2
-    } else if (char !== quote) {
-      index++
-    } else if (sql.charAt(index + 1) === quote) {
-      index += 2
-    } else {
-      return index + 1
-    }
-  }
-  return sql.length
-}
-
-/** The end of the block comment that starts at `at`, past its close. */
-const blockCommentEnd = (sql: string, at: number, nested: boolean): number => {
-  let depth = 0
-  let index = at
-  while (index < sql.length) {
-    if (sql.startsWith("/*", index)) {
-      if (depth === 0 || nested) depth++
-      index += 2
-    } else if (sql.startsWith("*/", index)) {
-      depth--
-      index += 2
-      if (depth === 0) return index
-    } else {
-      index++
-    }
-  }
-  return sql.length
-}
-
-/** `index`, or `fallback` when a search found nothing. */
-const foundOr = (index: number, fallback: number) => {
-  if (index === -1) return fallback
-  return index
-}
-
-/** A comment or quoted text: where it ends, and the text it reads as. */
-interface SqlSpan {
-  readonly end: number
-  readonly text: string
-}
-
-/** A comment that starts at `at`: `--`, MySQL's `#`, or a block comment other than MySQL's `/*!`. */
-const sqlComment = (sql: string, at: number, dialect: SqlDialect): Option.Option<SqlSpan> => {
-  const two = sql.slice(at, at + 2)
-  const dashes = two === "--" && (!dialect.dashBlank || /^\s?$/.test(sql.charAt(at + 2)))
-  if (dashes || (dialect.hash && two.startsWith("#"))) {
-    return Option.some({ end: foundOr(sql.indexOf("\n", at), sql.length), text: " " })
-  }
-  if (two !== "/*" || (dialect.executable && sql.charAt(at + 2) === "!")) return Option.none()
-  return Option.some({ end: blockCommentEnd(sql, at, dialect.nested), text: " " })
-}
-
-/** Where the string, quoted name or dollar-quoted text that starts at `at` ends. */
-const sqlQuotedEnd = (sql: string, at: number, dialect: SqlDialect): Option.Option<number> => {
-  const char = sql.charAt(at)
-  const wordBefore = /[\w$]/.test(sql.charAt(at - 1))
-  if (/^[eE]'/.test(sql.slice(at, at + 2)) && !wordBefore && dialect.escapeStrings) {
-    return Option.some(quotedEnd(sql, at + 1, "'", true))
-  }
-  if (char === "'" || char === '"') return Option.some(quotedEnd(sql, at, char, dialect.backslash))
-  if (char === "`") return Option.some(quotedEnd(sql, at, "`", false))
-  if (char === "[" && dialect.brackets) {
-    return Option.some(foundOr(sql.indexOf("]", at), sql.length - 1) + 1)
-  }
-  if (char !== "$" || !dialect.dollar || wordBefore) return Option.none()
-  return Option.map(Option.fromNullishOr(/^\$(?:[A-Za-z_]\w*)?\$/.exec(sql.slice(at))), ([tag]) => {
-    const close = sql.indexOf(tag, at + tag.length)
-    return foundOr(close, sql.length - tag.length) + tag.length
-  })
-}
+const SQL_DESTRUCTIVE = /\b(delete|drop|truncate)\b/i
+const ATTACHED_SQL_DESTRUCTIVE = /^-[A-Za-z]+?(delete|drop|truncate)\b/i
 
 /**
- * The comment or quoted text that starts at `at`; none when none starts
- * there. An unclosed one runs to the end.
+ * A SQL client whose text holds a destructive word: any argument, option
+ * values as written (`--command=…`, `-e …`), or its readable input.
  */
-const sqlSpan = (sql: string, at: number, dialect: SqlDialect): Option.Option<SqlSpan> =>
-  Option.orElse(sqlComment(sql, at, dialect), () =>
-    Option.map(sqlQuotedEnd(sql, at, dialect), (end) => ({ end, text: " x " })),
+const sqlRisk: CommandRisk = ({ texts, invocation }) => {
+  const input = segmentInputs(invocation.segment).scripts.map((word) => word.text)
+  return Arr.findFirst([...texts, ...input], (text) =>
+    Option.flatMap(
+      Option.fromNullishOr(SQL_DESTRUCTIVE.exec(text) ?? ATTACHED_SQL_DESTRUCTIVE.exec(text)),
+      ([, word = ""]) => destructive(`SQL ${word.toUpperCase()}`),
+    ),
   )
-
-/** `sql` as `dialect` reads it: each comment a blank, each string or quoted name the word `x`. */
-const sqlCode = (sql: string, dialect: SqlDialect): string => {
-  let code = ""
-  let index = 0
-  while (index < sql.length) {
-    const span = sqlSpan(sql, index, dialect)
-    if (Option.isNone(span)) {
-      code += sql.charAt(index)
-      index++
-    } else {
-      code += span.value.text
-      index = span.value.end
-    }
-  }
-  return code
 }
-
-/**
- * A statement that starts with `DELETE`: at the start of the text, after
- * `;`, after `(` (a query inside another), after the `)` that closes a WITH
- * query, or in a trigger or block body (`BEGIN`, `THEN`, `ELSE`, `DO`). Its
- * target list may take any shape (`DELETE s . t FROM …`, `DELETE t1, t2`).
- * `ON DELETE`, `AFTER DELETE` and `GRANT DELETE` are not statements.
- */
-const SQL_DELETE = /(?:^|[;()]|\b(?:begin|then|else|do)\b)\s*delete\b/gi
-const SQL_SCOPE = /[();]|\bwhere\b/gi
-
-/**
- * Whether a `DELETE` statement in `code` has no `WHERE` of its own: none before its
- * statement ends at `;`, or at the `)` that closes the query around it
- * (`WITH x AS (DELETE FROM t RETURNING *) SELECT … WHERE …`), and none inside
- * a parenthesis of its own.
- */
-const deletesAll = (code: string): boolean =>
-  Array.from(code.matchAll(SQL_DELETE)).some((match) => {
-    let depth = 0
-    for (const token of code.slice(match.index + match[0].length).matchAll(SQL_SCOPE)) {
-      const text = token[0].toLowerCase()
-      if (text === "(") {
-        depth++
-      } else if (text === ")") {
-        if (depth === 0) return true
-        depth--
-      } else if (text === ";") {
-        return true
-      } else if (depth === 0) {
-        return false
-      }
-    }
-    return true
-  })
-
-/**
- * A SQL client that drops, truncates or deletes everything, in one of its
- * arguments or its input; each is a script of its own. A short option's
- * value may be attached (`-cDELETE FROM t`).
- */
-const sqlRisk =
-  (dialects: ReadonlyArray<SqlDialect>): CommandRisk =>
-  ({ texts, invocation }) => {
-    const input = segmentInputs(invocation.segment).scripts.map((word) => word.text)
-    const scripts = [...texts, ...input].flatMap((text) => {
-      if (/^-[A-Za-z]./.test(text)) return [text, text.slice(2)]
-      return [text]
-    })
-    return Arr.findFirst(scripts, (script) => {
-      const dropped = Option.fromNullishOr(SQL_DROP.exec(script))
-      if (Option.isSome(dropped)) {
-        const [, drop, truncate] = dropped.value
-        return destructive((drop ?? truncate ?? "").toUpperCase().replace(/\s+/g, " "))
-      }
-      const all = dialects.some((dialect) => deletesAll(sqlCode(script, dialect)))
-      return destructiveWhen(all, "DELETE FROM without WHERE")
-    })
-  }
 
 /**
  * Files that hold keys or secrets: anything under `.ssh`, `.gnupg` or `.aws`,
@@ -3418,11 +3219,7 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         "dd (raw disk write)",
       ),
     ),
-    psql: risky(sqlRisk([POSTGRES])),
-    ...each(["mysql", "mariadb"], risky(sqlRisk(MYSQL))),
-    sqlite3: risky(sqlRisk([SQLITE])),
-    // DuckDB takes dollar quotes and double-quoted names: read as both.
-    duckdb: risky(sqlRisk([POSTGRES, SQLITE])),
+    ...each(["psql", "mysql", "mariadb", "sqlite3", "duckdb"], risky(sqlRisk)),
   }),
 )
 
