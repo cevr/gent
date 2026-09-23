@@ -774,7 +774,7 @@ describe("formatActivityHeader", () => {
         cell([op("write", "b.ts", "failed")]),
         cell([], "error"),
       ]),
-    ).toBe("3 cells · 3 ops · 2 children · 2 failed")
+    ).toBe("3 cells · 3 ops · 2 children · 1 failed · 1 cell failed")
     expect(formatActivityHeader([cell([])])).toBe("1 cell")
   })
 
@@ -785,11 +785,22 @@ describe("formatActivityHeader", () => {
       "1 cell · 1 op · 1 failed",
     )
     expect(
+      formatActivityHeader([cell([op("bash", "a", "failed"), op("bash", "b", "failed")], "error")]),
+    ).toBe("1 cell · 2 ops · 2 failed")
+  })
+
+  test("a cell that failed while its ops succeeded is worded apart from op failures", () => {
+    // After a restart the op row shows exit 0; the header must not call it failed.
+    expect(formatActivityHeader([cell([op("bash", "pwd")], "error")])).toBe(
+      "1 cell · 1 op · 1 cell failed",
+    )
+    expect(
       formatActivityHeader([
-        cell([op("bash", "a", "failed"), op("bash", "b", "failed")], "error"),
+        cell([op("bash", "a", "failed")], "error"),
         cell([op("read", "c.ts")], "error"),
+        cell([], "error"),
       ]),
-    ).toBe("2 cells · 3 ops · 3 failed")
+    ).toBe("3 cells · 2 ops · 1 failed · 2 cells failed")
   })
 
   test("a finished group carries the sum of its call durations", () => {

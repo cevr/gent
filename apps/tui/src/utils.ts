@@ -659,13 +659,14 @@ export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string
   }
   const operations = calls.flatMap((call) => call.operations)
   const children = operations.filter(isChildOperation).length
-  // A cell that failed with a failed op is one failure, the op's: a reload
-  // settles an interrupted op as failed, and the count must not grow with it.
-  const failed = calls.reduce((sum, call) => {
-    const failedOps = call.operations.filter((operation) => operation.outcome === "failed").length
-    if (failedOps === 0 && call.status === "error") return sum + 1
-    return sum + failedOps
-  }, 0)
+  // "N failed" counts ops whose exit or status failed. A cell that failed with
+  // no failed op (a throw after its ops, or a restart) is its own failure,
+  // worded apart; one that failed with a failed op is that op's failure.
+  const isFailedOp = (operation: ActivityOperation) => operation.outcome === "failed"
+  const failed = operations.filter(isFailedOp).length
+  const failedCells = calls.filter(
+    (call) => call.status === "error" && !call.operations.some(isFailedOp),
+  ).length
   const parts = [plural(calls.length, "cell")]
   if (operations.length > 0) parts.push(plural(operations.length, "op"))
   else {
@@ -674,6 +675,7 @@ export function formatActivityHeader(calls: ReadonlyArray<ActivityCall>): string
   }
   if (children > 0) parts.push(plural(children, "child", "children"))
   if (failed > 0) parts.push(`${failed} failed`)
+  if (failedCells > 0) parts.push(`${plural(failedCells, "cell")} failed`)
   const duration = formatGroupDuration(calls)
   if (duration.length > 0) parts.push(duration)
   return parts.join(" · ")
