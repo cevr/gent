@@ -269,12 +269,6 @@ interface BashRisk {
 
 const DESTRUCTIVE_PATTERNS: Array<[RegExp, string]> = [
   [/\brm\s+(-\w*[rf]\w*\s+|.*--recursive|.*--force)/, "rm with -r/-f flags"],
-  [/\bgit\s+reset\s+--hard\b/, "git reset --hard"],
-  [/\bgit\s+push\s+.*--force\b/, "git push --force"],
-  [/\bgit\s+push\s+-f\b/, "git push -f"],
-  [/\bgit\s+clean\b/, "git clean"],
-  [/\bgit\s+checkout\s+--?\s/, "git checkout -- (discard changes)"],
-  [/\bgit\s+restore\s+--staged\b/, "git restore --staged"],
   [/\bdrop\s+table\b/i, "DROP TABLE"],
   [/\btruncate\s+table\b/i, "TRUNCATE TABLE"],
   [/\bkill\s+-9\b/, "kill -9"],
@@ -282,10 +276,6 @@ const DESTRUCTIVE_PATTERNS: Array<[RegExp, string]> = [
   [/\bmkfs\b/, "mkfs (format filesystem)"],
   [/\bdd\s+if=/, "dd (raw disk write)"],
   [/\bsudo\s+rm\b/, "sudo rm"],
-  [
-    /\bgit\s+add\s+(-A\b|--all\b|\.(\s|$))/,
-    "git add everything (stages files other agents may own)",
-  ],
 ]
 
 const EXTERNAL_PATTERNS: Array<[RegExp, string]> = [
@@ -293,7 +283,6 @@ const EXTERNAL_PATTERNS: Array<[RegExp, string]> = [
   [/\bwget\b.*\|\s*(ba)?sh\b/, "wget piped to shell"],
   [/\bnpm\s+publish\b/, "npm publish"],
   [/\bdocker\s+push\b/, "docker push"],
-  [/\bgit\s+push\b(?!.*--force)(?!.*-f)/, "git push"],
   [/\bpip\s+upload\b/, "pip upload"],
 ]
 
@@ -322,10 +311,166 @@ const SENSITIVE_PATTERNS: Array<[RegExp, string]> = [
 
 const SAFE_RISK: BashRisk = { level: "safe", reason: "" }
 
+// ── git command classification ──
+//
+// Git commands are classified from shell words, not from the raw text, so
+// global options (`git -c k=v push`), env prefixes, wrappers (`sudo`,
+// `env`) and quoting (`"--force"`) cannot move a flag out of sight.
+
+/**
+ * Read a quoted run starting after the opening quote at `start`. Returns the
+ * unquoted text and the index of the closing quote (or the end).
+ */
+const readQuoted = (command: string, start: number, quote: string) => {
+  let text = ""
+  let index = start
+  for (; index < command.length; index++) {
+    const char = command.charAt(index)
+    if (char === quote) break
+    if (quote === '"' && char === "\\" && index + 1 < command.length) {
+      index++
+      text += command.charAt(index)
+    } else {
+      text += char
+    }
+  }
+  return { text, end: index }
+}
+
+/** Split a command into segments of shell words. Quotes are removed. */
+function shellSegments(command: string): Array<Array<string>> {
+  const segments: Array<Array<string>> = []
+  let words: Array<string> = []
+  let word = ""
+  let inWord = false
+  const endWord = () => {
+    if (inWord) words.push(word)
+    word = ""
+    inWord = false
+  }
+  const endSegment = () => {
+    endWord()
+    if (words.length > 0) segments.push(words)
+    words = []
+  }
+  for (let index = 0; index < command.length; index++) {
+    const char = command.charAt(index)
+    if (char === "'" || char === '"') {
+      const quoted = readQuoted(command, index + 1, char)
+      word += quoted.text
+      inWord = true
+      index = quoted.end
+    } else if (char === "\\" && index + 1 < command.length) {
+      index++
+      word += command.charAt(index)
+      inWord = true
+    } else if (/[;&|\n()`]/.test(char)) {
+      // Separators and subshell or substitution delimiters start a new
+      // command: `$(git push -f)` and `(git push -f)` classify as commands.
+      endSegment()
+    } else if (/\s/.test(char)) {
+      endWord()
+    } else {
+      word += char
+      inWord = true
+    }
+  }
+  endSegment()
+  return segments
+}
+
+/** Git global options whose value is the next word. */
+const GIT_OPTIONS_WITH_VALUE = new Set([
+  "-c",
+  "-C",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--config-env",
+  "--super-prefix",
+])
+
+const FORCE_PUSH_TOKEN = /^(-[a-zA-Z]*f[a-zA-Z]*|--force.*|\+.+)$/
+
+const gitSubcommandRisk = (
+  subcommand: string,
+  args: ReadonlyArray<string>,
+): Option.Option<BashRisk> => {
+  const destructive = (reason: string) => Option.some<BashRisk>({ level: "destructive", reason })
+  switch (subcommand) {
+    case "push":
+      if (args.some((arg) => FORCE_PUSH_TOKEN.test(arg))) return destructive("git push --force")
+      return Option.some({ level: "external", reason: "git push" })
+    case "reset":
+      if (args.includes("--hard")) return destructive("git reset --hard")
+      return Option.none()
+    case "clean":
+      return destructive("git clean")
+    case "checkout":
+      if (args.includes("--") || args[0] === "-") {
+        return destructive("git checkout -- (discard changes)")
+      }
+      return Option.none()
+    case "restore":
+      if (args.includes("--staged")) return destructive("git restore --staged")
+      return Option.none()
+    case "add":
+      if (args.some((arg) => arg === "-A" || arg === "--all" || arg === ".")) {
+        return destructive("git add everything (stages files other agents may own)")
+      }
+      return Option.none()
+    default:
+      return Option.none()
+  }
+}
+
+/** Every git invocation in one segment: any `git` word starts one. */
+const segmentGitRisks = (segment: ReadonlyArray<string>): Array<BashRisk> => {
+  const risks: Array<BashRisk> = []
+  for (let index = 0; index < segment.length; index++) {
+    const word = segment[index] ?? ""
+    if (word !== "git" && !word.endsWith("/git")) continue
+    let cursor = index + 1
+    while (cursor < segment.length && (segment[cursor] ?? "").startsWith("-")) {
+      if (GIT_OPTIONS_WITH_VALUE.has(segment[cursor] ?? "")) cursor++
+      cursor++
+    }
+    const subcommand = Option.fromUndefinedOr(segment[cursor])
+    if (Option.isNone(subcommand)) continue
+    const risk = gitSubcommandRisk(subcommand.value, segment.slice(cursor + 1))
+    if (Option.isSome(risk)) risks.push(risk.value)
+  }
+  return risks
+}
+
+const MAX_NESTED_COMMAND_DEPTH = 4
+
+/**
+ * The strongest git risk in a command. A word that itself holds a command
+ * (`bash -c '...'`, `eval "..."`, a quoted substitution) is classified too.
+ */
+function classifyGitCommands(command: string, depth = 0): Option.Option<BashRisk> {
+  const risks: Array<BashRisk> = []
+  for (const segment of shellSegments(command)) {
+    risks.push(...segmentGitRisks(segment))
+    if (depth >= MAX_NESTED_COMMAND_DEPTH) continue
+    for (const word of segment) {
+      if (!/[\s;&|()`]/.test(word)) continue
+      const nested = classifyGitCommands(word, depth + 1)
+      if (Option.isSome(nested)) risks.push(nested.value)
+    }
+  }
+  return Option.fromUndefinedOr(risks.find((risk) => risk.level === "destructive")).pipe(
+    Option.orElse(() => Option.fromUndefinedOr(risks[0])),
+  )
+}
+
 export function classifyBashCommand(command: string): BashRisk {
   for (const [pattern, reason] of DESTRUCTIVE_PATTERNS) {
     if (pattern.test(command)) return { level: "destructive", reason }
   }
+  const git = classifyGitCommands(command)
+  if (Option.isSome(git)) return git.value
   for (const [pattern, reason] of EXTERNAL_PATTERNS) {
     if (pattern.test(command)) return { level: "external", reason }
   }
@@ -394,18 +539,26 @@ interface BackgroundBashTarget {
   readonly Session: Pick<ExtensionContextService["Session"], "getSession" | "listBranches" | "send">
 }
 
+/** Characters that make bash expand a directory word (`~`, `$VAR`, backticks, globs). */
+const SHELL_EXPANSION = /[~$`*?[{]/
+
 /**
  * Detect `cd dir && cmd` or `cd dir; cmd` and split into cwd + command.
  * Models often emit this despite instructions to use the cwd param.
+ * A directory word that bash would expand is left in the command, so bash
+ * resolves it; only a single-quoted word is always literal.
  */
 export function splitCdCommand(cmd: string): Option.Option<{ cwd: string; command: string }> {
   const match = Option.fromNullishOr(
     cmd.match(/^\s*cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)\s*(.+)$/s),
   )
   if (Option.isNone(match)) return Option.none()
-  const cwd = Option.fromNullishOr(match.value[1]).pipe(
-    Option.orElse(() => Option.fromNullishOr(match.value[2])),
+  const expandable = Option.fromNullishOr(match.value[1]).pipe(
     Option.orElse(() => Option.fromNullishOr(match.value[3])),
+  )
+  if (Option.exists(expandable, (word) => SHELL_EXPANSION.test(word))) return Option.none()
+  const cwd = Option.fromNullishOr(match.value[2]).pipe(
+    Option.orElse(() => expandable),
     Option.getOrElse(() => ""),
   )
   const command = Option.getOrElse(Option.fromNullishOr(match.value[4]), () => "")
@@ -417,13 +570,15 @@ export function splitCdCommand(cmd: string): Option.Option<{ cwd: string; comman
  * Inject --trailer on git commit commands for session traceability.
  */
 export function injectGitTrailers(cmd: string, sessionId: SessionId): string {
-  if (!/\bgit\s+commit\b/.test(cmd)) return cmd
+  const gitCommit = /\bgit\s+commit(?=\s|$)/
+  if (!gitCommit.test(cmd)) return cmd
   if (/--trailer/.test(cmd)) return cmd
-  return cmd.replace(/\bgit\s+commit\b/, `git commit --trailer "Session-Id: ${sessionId}"`)
+  return cmd.replace(gitCommit, `git commit --trailer "Session-Id: ${sessionId}"`)
 }
 
 /**
- * Strip trailing & to prevent background jobs escaping tool control.
+ * Strip a trailing `&` so the whole command does not escape tool control.
+ * An inner `cmd & other` job is not stripped.
  */
 export function stripBackground(cmd: string): string {
   return cmd.replace(/\s*&\s*$/, "")
@@ -432,8 +587,9 @@ export function stripBackground(cmd: string): string {
 const decodeUtf8 = (chunks: Iterable<Uint8Array>): string => {
   const decoder = new TextDecoder()
   let out = ""
-  for (const chunk of chunks) out += decoder.decode(chunk)
-  return out
+  // `stream: true` holds a partial multibyte sequence until the next chunk.
+  for (const chunk of chunks) out += decoder.decode(chunk, { stream: true })
+  return out + decoder.decode()
 }
 
 /**

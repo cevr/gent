@@ -13,9 +13,24 @@ import {
 const AnswersSchema = Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String)))
 const decodeAnswers = Schema.decodeUnknownEffect(AnswersSchema)
 
-const parseAnswers = (notes: string): Effect.Effect<ReadonlyArray<ReadonlyArray<string>>> =>
+/** Exactly one answer list per question: pad with empty lists, drop extras. */
+const alignAnswers = (
+  answers: ReadonlyArray<ReadonlyArray<string>>,
+  questionCount: number,
+): ReadonlyArray<ReadonlyArray<string>> =>
+  Array.from({ length: questionCount }, (_, index) => answers[index] ?? [])
+
+/**
+ * Notes that are not a JSON answer list are a free-text answer to the first
+ * question. Either way the result has one answer list per question.
+ */
+const parseAnswers = (
+  notes: string,
+  questionCount: number,
+): Effect.Effect<ReadonlyArray<ReadonlyArray<string>>> =>
   decodeAnswers(notes).pipe(
     Effect.orElseSucceed((): ReadonlyArray<ReadonlyArray<string>> => [[notes]]),
+    Effect.map((answers) => alignAnswers(answers, questionCount)),
   )
 
 // AskUser Params — canonical questions[] input
@@ -93,9 +108,9 @@ export const AskUserTool = tool({
       return { answers: [], cancelled: true }
     }
     const notes = Option.fromNullishOr(decision.notes)
-    let answers: ReadonlyArray<ReadonlyArray<string>> = [[]]
+    let answers = alignAnswers([], params.questions.length)
     if (Option.isSome(notes)) {
-      answers = yield* parseAnswers(notes.value)
+      answers = yield* parseAnswers(notes.value, params.questions.length)
     }
     return { answers }
   }),
