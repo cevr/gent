@@ -29,8 +29,8 @@ import {
   HOOK_FILE,
   isSteeringFile,
   OxlintConfigSchema,
-  PACKAGE_SURFACE_MANIFESTS,
   type PackageJson,
+  workspaceManifests,
 } from "./guards"
 import gentRules from "./gent-rules"
 
@@ -111,15 +111,24 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
 
 const isSourceFile = (file: string): boolean => /\.[cm]?[jt]sx?$/.test(file)
 
-/** The findings that read the package manifests and the root tsconfig. */
-const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* () {
-  const packageJsonPaths = PACKAGE_SURFACE_MANIFESTS
-  const [tsconfigJson, ...packageJsons] = yield* Effect.all(
-    [readJsonFile("tsconfig.json"), ...packageJsonPaths.map(readJsonFile)],
+/** The one root manifest field the package-surface check reads. */
+const RootManifestSchema = Schema.Struct({
+  workspaces: Schema.optional(Schema.Array(Schema.String)),
+})
+
+/** The findings that read every workspace manifest and the root tsconfig. */
+const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* (
+  trackedFiles: ReadonlyArray<string>,
+) {
+  const [rootManifest, tsconfigJson] = yield* Effect.all(
+    [readJsonFile("package.json"), readJsonFile("tsconfig.json")],
     { concurrency: "unbounded" },
   )
+  const { workspaces } = yield* Schema.decodeUnknownEffect(RootManifestSchema)(rootManifest)
+  const manifests = workspaceManifests(workspaces ?? [], trackedFiles)
+  const packageJsons = yield* Effect.forEach(manifests, readJsonFile, { concurrency: 8 })
   const packageJsonByPath = new Map<string, PackageJson>(
-    packageJsonPaths.map((path, index) => [path, packageJsons[index]]),
+    manifests.map((path, index) => [path, packageJsons[index]]),
   )
   return findPackageSurfaceFindings(packageJsonByPath, tsconfigJson)
 })
@@ -208,7 +217,7 @@ const program = Effect.gen(function* () {
     ...treeFindings,
     // The lint config must not name a file or a rule that is gone.
     ...(yield* lintConfigFindings(trackedFiles, sourceTexts)),
-    ...(yield* packageSurfaceFindings()),
+    ...(yield* packageSurfaceFindings(trackedFiles)),
   ]
 
   // Two finders may report one line with one message; say it once.

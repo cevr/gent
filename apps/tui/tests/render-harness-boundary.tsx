@@ -28,9 +28,8 @@ import {
   type Session as DomainSession,
   type GentNamespacedClient,
   ConnectionState,
-  emptyQueueSnapshot,
 } from "@gent/core/protocol"
-import { testAgent, type SessionRuntimeState } from "@gent/core/test-utils"
+import { emptyQueueSnapshot, testAgent, type SessionRuntimeState } from "@gent/core/test-utils"
 
 const noop = () => {}
 const noopLog: ClientLog = { debug: noop, info: noop, warn: noop, error: noop }

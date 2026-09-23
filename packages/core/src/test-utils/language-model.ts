@@ -2,6 +2,7 @@
 import {
   Cause,
   Clock,
+  Context,
   Deferred,
   Effect,
   Layer,
@@ -13,6 +14,7 @@ import {
   Schema,
   Stream,
 } from "effect"
+import { BunServices } from "@effect/platform-bun"
 import { LanguageModel } from "effect/unstable/ai"
 import { FetchHttpClient } from "effect/unstable/http"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter creates worker files before the child runtime starts.
@@ -26,6 +28,8 @@ import { ToolCallId } from "../domain/ids.js"
 import { ProviderError } from "../domain/errors.js"
 import {
   aiError,
+  Auth,
+  AuthApi,
   CurrentResolveModelAssertion,
   finishPart,
   type LanguageModelStreamPart,
@@ -207,6 +211,19 @@ export const createWorkerEnv = (root: string, providerMode?: string): Record<str
   env["GENT_AUTH_DIRECTORY"] = path.join(root, "auth")
   return env
 }
+
+/**
+ * Store a test API key for anthropic and openai in `directory`, the auth
+ * store a spawned gent reads through `GENT_AUTH_DIRECTORY` (see
+ * `createWorkerEnv`), so the child starts without asking for a key.
+ */
+export const seedAuthKeys = (directory: string) =>
+  Effect.gen(function* () {
+    const services = yield* Layer.build(Auth.Live(directory).pipe(Layer.provide(BunServices.layer)))
+    const auth = Context.get(services, Auth)
+    yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "test-key" }))
+    yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))
+  }).pipe(Effect.scoped)
 
 class WaitForError extends Schema.TaggedError<WaitForError>()(
   "@gent/core/src/test-utils/language-model/WaitForError",

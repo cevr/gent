@@ -1,4 +1,7 @@
 import { Option, Schema } from "effect"
+// A write or a caller in test support proves a reader works, not that
+// production supplies it; the lint rule reads the same definition.
+import { isTestSupport } from "./gent-rules"
 
 /** What every guard reports: a place in a file, and what is wrong there. */
 export interface Finding {
@@ -1097,7 +1100,6 @@ export const findUnenabledPluginRules = (
 const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_LOG_LEVEL", "a developer sets this by hand to raise log verbosity"],
   ["GENT_PORT", "the operator of a standalone server picks its port"],
-  ["GENT_DATA_DIR", "the operator names the directory holding data.db"],
   ["GENT_AUTH_DIRECTORY", "the operator names the auth directory"],
   ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
   ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
@@ -1193,22 +1195,6 @@ interface VariableUse {
   readonly file: string
   readonly line: number
 }
-
-const isTestFile = (file: string): boolean =>
-  /\.test\.[cm]?[jt]sx?$/.test(file) || /(?:^|\/)tests\//.test(file)
-
-/**
- * Test support: the tests, the e2e fixtures, the core harness, the lint
- * fixtures and the testbeds, which launch gent the way an operator does. A
- * write there proves a reader works, not that production supplies
- * the variable, and a name there is an assertion, not a read.
- */
-const isTestSupport = (file: string): boolean =>
-  isTestFile(file) ||
-  file.startsWith("packages/e2e/") ||
-  file.startsWith("testbeds/") ||
-  file.includes("/test-utils/") ||
-  file.includes("/fixtures/")
 
 /** The name each match captured, in whichever alternative captured it. */
 const namesMatching = (line: string, pattern: RegExp): ReadonlyArray<string> =>
@@ -2791,7 +2777,7 @@ const mentions = (facts: ExportFacts, surface: ScannedSurface, name: string): bo
   })
 
 const mayConsume = (file: string, surface: ScannedSurface): boolean =>
-  (surface.testsCount || !isTestFile(file)) &&
+  (surface.testsCount || !isTestSupport(file)) &&
   !surface.outsideOf.some((prefix) => file.startsWith(prefix))
 
 const messageFor = (file: string, declaration: Declaration): string =>
@@ -2949,25 +2935,28 @@ interface TsConfigJson {
   }
 }
 
-/** One package, the entry points it may expose, and whether it must stay private. */
+/** One workspace package, the entry points it exposes, and whether it must stay private. */
 interface PackageSurface {
   readonly packageJson: string
   readonly alias: string
   readonly mustBePrivate: boolean
-  /** `exports` keys the package may carry; a tsconfig path is allowed when it maps onto one. */
+  /** The `exports` keys the package carries, every one of them and no other. */
   readonly entryPoints: ReadonlyArray<string>
 }
 
 /**
- * Core's public entry points follow their audience. Two authoring surfaces are
- * deliberately split: `extensions/api` for extensions that use the loop,
- * `extensions/branch-tools` for the rarer feature that implements a loop
- * seam. Keeping them apart is what keeps `api` small. `protocol` serves
+ * Every workspace package has a row, so an `exports` map added anywhere is
+ * checked. Core's public entry points follow their audience. Two authoring
+ * surfaces are deliberately split: `extensions/api` for extensions that use
+ * the loop, `extensions/branch-tools` for the rarer feature that implements a
+ * loop seam. Keeping them apart is what keeps `api` small. `protocol` serves
  * clients, `host` serves the processes that compose a server, and
  * `test-utils` serves tests. `@gent/extensions` is the builtin composition
  * package and exposes only its root and `./client`; `@gent/sdk` exposes the
  * stable root client contract and nothing else. `@gent/tui` is the terminal
- * app; its one entry, `./extensions`, is the client-extension authoring surface.
+ * app; its one entry, `./extensions`, is the client-extension authoring
+ * surface. The server app, the e2e harness, the tooling and the examples are
+ * leaves: nothing imports them, so they expose nothing.
  */
 const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
   {
@@ -3000,20 +2989,48 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
     mustBePrivate: false,
     entryPoints: ["./extensions"],
   },
+  {
+    packageJson: "apps/server/package.json",
+    alias: "@gent/server-http",
+    mustBePrivate: false,
+    entryPoints: [],
+  },
+  {
+    packageJson: "packages/e2e/package.json",
+    alias: "@gent/e2e",
+    mustBePrivate: true,
+    entryPoints: [],
+  },
+  {
+    packageJson: "packages/tooling/package.json",
+    alias: "@gent/tooling",
+    mustBePrivate: true,
+    entryPoints: [],
+  },
+  {
+    packageJson: "examples/package.json",
+    alias: "@gent/examples",
+    mustBePrivate: true,
+    entryPoints: [],
+  },
 ]
 
-/** The manifests the package-surface check reads, one per surface. */
-export const PACKAGE_SURFACE_MANIFESTS: ReadonlyArray<string> = PACKAGE_SURFACES.map(
-  (surface) => surface.packageJson,
-)
-
-const allowedKeys = (surface: PackageSurface): ReadonlySet<string> => new Set(surface.entryPoints)
-
-/** The `exports` key a tsconfig path maps onto, when the path belongs to the alias. */
-const entryPointOfPath = (surface: PackageSurface, key: string): Option.Option<string> => {
-  if (key === surface.alias) return Option.some(".")
-  if (key.startsWith(`${surface.alias}/`)) return Option.some(`.${key.slice(surface.alias.length)}`)
-  return Option.none()
+/**
+ * The manifest of every workspace package: each `workspaces` pattern of the
+ * root manifest (a directory, or a directory with one `*` segment) joined to
+ * `package.json`, matched against the tracked files.
+ */
+export const workspaceManifests = (
+  workspaces: ReadonlyArray<string>,
+  trackedFiles: ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+  const patterns = workspaces.map(
+    (workspace) =>
+      new RegExp(
+        `^${workspace.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", "[^/]+")}/package\\.json$`,
+      ),
+  )
+  return trackedFiles.filter((file) => patterns.some((pattern) => pattern.test(file)))
 }
 
 const packageFindings = (
@@ -3028,58 +3045,70 @@ const packageFindings = (
       message: `private: ${surface.alias} must stay private; it is not a published contract`,
     })
   }
-  const allowed = allowedKeys(surface)
-  const exportsMap = Option.fromNullishOr(packageJson.exports)
-  for (const key of Object.keys(Option.getOrElse(exportsMap, () => ({})))) {
+  const allowed = new Set(surface.entryPoints)
+  const exported = Object.keys(
+    Option.getOrElse(Option.fromNullishOr(packageJson.exports), () => ({})),
+  )
+  for (const key of exported) {
     if (allowed.has(key)) continue
+    const supported = surface.entryPoints.join(", ") || "none"
     findings.push({
       file: surface.packageJson,
       line: 1,
-      message: `exports["${key}"]: ${surface.alias} may only expose its supported entry points: ${[...allowed].join(", ")}`,
+      message: `exports["${key}"]: ${surface.alias} may only expose its supported entry points: ${supported}`,
     })
   }
-  return findings
-}
-
-const pathFindings = (
-  surface: PackageSurface,
-  tsconfigJson: TsConfigJson,
-): ReadonlyArray<Finding> => {
-  const allowed = allowedKeys(surface)
-  const paths = Option.getOrElse(
-    Option.flatMap(Option.fromNullishOr(tsconfigJson.compilerOptions), (options) =>
-      Option.fromNullishOr(options.paths),
-    ),
-    () => ({}),
-  )
-  const findings: Array<Finding> = []
-  for (const key of Object.keys(paths)) {
-    const entryPoint = entryPointOfPath(surface, key)
-    if (Option.isNone(entryPoint)) continue
-    if (allowed.has(entryPoint.value)) continue
+  for (const entryPoint of surface.entryPoints) {
+    if (exported.includes(entryPoint)) continue
     findings.push({
-      file: "tsconfig.json",
+      file: surface.packageJson,
       line: 1,
-      message: `compilerOptions.paths["${key}"]: Do not give TypeScript a public-looking ${surface.alias} path for an internal module`,
+      message: `exports["${entryPoint}"] is missing: the package-surface row for ${surface.alias} names it; export it, or drop it from the row`,
     })
   }
   return findings
 }
 
 /**
- * Check every package surface whose package.json was read. A surface absent
- * from `packageJsons` is skipped, so a caller may check one package alone.
+ * `@gent/*` resolves one way: through each package's `exports`, which the
+ * rows above check. A `paths` alias is a second resolution TypeScript alone
+ * reads, so it could publish a module the `exports` check never sees.
+ */
+const pathFindings = (tsconfigJson: TsConfigJson): ReadonlyArray<Finding> =>
+  Object.keys(tsconfigJson.compilerOptions?.paths ?? {}).map((key) => ({
+    file: "tsconfig.json",
+    line: 1,
+    message: `compilerOptions.paths["${key}"]: workspace packages resolve through their package.json exports; drop the alias`,
+  }))
+
+/**
+ * Check every workspace manifest against its row. `packageJsons` holds every
+ * workspace manifest by path: one with no row is reported, and so is a row
+ * with no manifest.
  */
 export const findPackageSurfaceFindings = (
   packageJsons: ReadonlyMap<string, PackageJson>,
   tsconfigJson: TsConfigJson,
-): ReadonlyArray<Finding> =>
-  PACKAGE_SURFACES.flatMap((surface) =>
+): ReadonlyArray<Finding> => {
+  const rows = new Set(PACKAGE_SURFACES.map((surface) => surface.packageJson))
+  const unlisted = [...packageJsons.keys()]
+    .filter((file) => !rows.has(file))
+    .map((file) => ({
+      file,
+      line: 1,
+      message: `a workspace package with no package-surface row in guards.ts; add one naming its entry points (none for a leaf)`,
+    }))
+  const checked = PACKAGE_SURFACES.flatMap((surface) =>
     Option.match(Option.fromNullishOr(packageJsons.get(surface.packageJson)), {
-      onNone: (): ReadonlyArray<Finding> => [],
-      onSome: (packageJson) => [
-        ...packageFindings(surface, packageJson),
-        ...pathFindings(surface, tsconfigJson),
+      onNone: (): ReadonlyArray<Finding> => [
+        {
+          file: "packages/tooling/src/guards.ts",
+          line: 1,
+          message: `package-surface row ${surface.packageJson} names no workspace package; drop the row`,
+        },
       ],
+      onSome: (packageJson) => packageFindings(surface, packageJson),
     }),
   )
+  return [...unlisted, ...checked, ...pathFindings(tsconfigJson)]
+}
