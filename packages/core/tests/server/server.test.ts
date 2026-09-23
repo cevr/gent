@@ -2649,19 +2649,20 @@ describe("requestId idempotency", () => {
             return value
           }),
         keyOf: (input) => Option.some(input.requestId),
-        maxEntries: 2,
-        successTtl: "60 seconds",
       })
 
-      const first = yield* run({ requestId: "req-cap-first" })
-      expect(yield* run({ requestId: "req-cap-second" })).toBe(2)
-      expect(yield* run({ requestId: "req-cap-third" })).toBe(3)
+      // The cap is 1024 entries: fill it, then add one more.
+      const first = yield* run({ requestId: "req-cap-0" })
+      for (let index = 1; index <= 1024; index += 1) {
+        yield* run({ requestId: `req-cap-${index}` })
+      }
+      expect(value).toBe(1025)
 
-      // Past the 2-entry cap, "req-cap-first" was evicted to make room for
-      // "req-cap-third", so this call is a fresh lookup, not a cache hit.
-      const retry = yield* run({ requestId: "req-cap-first" })
+      // Past the cap, "req-cap-0" was evicted to make room for
+      // "req-cap-1024", so this call is a fresh lookup, not a cache hit.
+      const retry = yield* run({ requestId: "req-cap-0" })
       expect(retry).not.toBe(first)
-      expect(retry).toBe(4)
+      expect(retry).toBe(1026)
     }),
   )
 
@@ -2681,7 +2682,6 @@ describe("requestId idempotency", () => {
             return input.marker
           }),
         keyOf: (input) => Option.some(input.requestId),
-        successTtl: "60 seconds",
       })
 
       // F1 populates the cache with key="K", body uses marker="m1".

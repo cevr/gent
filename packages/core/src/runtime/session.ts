@@ -156,8 +156,6 @@ const DEDUP_MAX_ENTRIES = 1024
 export const makeRequestDeduper = <In, A, E>(opts: {
   readonly body: (input: In) => Effect.Effect<A, E>
   readonly keyOf: (input: In) => Option.Option<string>
-  readonly maxEntries?: number
-  readonly successTtl?: Duration.Input
 }): Effect.Effect<(input: In) => Effect.Effect<A, E>> =>
   Effect.gen(function* () {
     // Body bridge: `Cache.lookup` takes only the key, but each call has a
@@ -166,9 +164,6 @@ export const makeRequestDeduper = <In, A, E>(opts: {
     // and removes it on exit via `Effect.ensuring`, which keeps `pending`
     // free of stale-body leaks under interruption and same-key races.
     const pending = yield* Ref.make(new Map<string, Effect.Effect<A, E>>())
-    const successTtl = Duration.fromInputUnsafe(
-      Option.getOrElse(Option.fromUndefinedOr(opts.successTtl), () => DEDUP_SUCCESS_TTL),
-    )
     const cache = yield* Cache.makeWith<string, A, E>(
       (key) =>
         Effect.gen(function* () {
@@ -178,13 +173,10 @@ export const makeRequestDeduper = <In, A, E>(opts: {
           return yield* body.value
         }),
       {
-        capacity: Option.getOrElse(
-          Option.fromUndefinedOr(opts.maxEntries),
-          () => DEDUP_MAX_ENTRIES,
-        ),
+        capacity: DEDUP_MAX_ENTRIES,
         timeToLive: (exit) => {
           if (Exit.isSuccess(exit)) {
-            return successTtl
+            return DEDUP_SUCCESS_TTL
           }
           return Duration.zero
         },
