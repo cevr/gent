@@ -259,7 +259,7 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                 `
               const cascadedIds = descendantRows.map((row) => row.id)
               if (cascadedIds.length === 0) return cascadedIds
-              yield* sql`DELETE FROM agent_loop_queues WHERE session_id IN ${sql.in(cascadedIds)}`
+              // Queues, branches, messages and their chunk links cascade by foreign key.
               yield* sql`DELETE FROM sessions WHERE id IN ${sql.in(cascadedIds)}`
               yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
               return cascadedIds
@@ -430,7 +430,9 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
           messageId: MessageId,
           partJsons: ReadonlyArray<string>,
         ) {
-          yield* sql`DELETE FROM message_chunks WHERE message_id = ${messageId}`
+          // Called only for a message row this transaction just inserted: it
+          // has no chunks yet, and an insert orphans none. The session delete
+          // cascade is the one path that orphans chunks, and it sweeps them.
           yield* Effect.forEach(
             partJsons,
             (partJson, ordinal) =>
@@ -441,7 +443,6 @@ export class MessageStorage extends Context.Service<MessageStorage, MessageStora
               }),
             { discard: true },
           )
-          yield* sql`DELETE FROM content_chunks WHERE id NOT IN (SELECT chunk_id FROM message_chunks)`
         })
         const ensureMessageWorkspace = Effect.fn("MessageStorage.ensureMessageWorkspace")(
           function* (message: Pick<Message, "sessionId" | "branchId">) {
