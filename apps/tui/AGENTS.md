@@ -150,35 +150,35 @@ Special prefixes at input start trigger different modes:
 
 ### Slash Commands
 
-| Command            | Action                                                  |
-| ------------------ | ------------------------------------------------------- |
-| `/new`, `/clear`   | Start a new session                                     |
-| `/sessions`        | Open the command palette; its Sessions level lists them |
-| `/branch`          | Create new branch                                       |
-| `/fork`            | Fork from a message                                     |
-| `/agents`, `/tree` | Agents pane: every loop, live and stored                |
-| `/thread`          | Thread pane: the sessions and windows this one runs on  |
-| `/btw`, `/side`    | Fork pane: ask a parallel session on the side           |
+| Command            | Action                                                           |
+| ------------------ | ---------------------------------------------------------------- |
+| `/new`, `/clear`   | Start a new session                                              |
+| `/sessions`        | Agents pane: every session, live and stored; side threads marked |
+| `/agents`, `/tree` | Aliases of `/sessions`                                           |
+| `/branch`          | Create new branch                                                |
+| `/fork`            | Fork from a message                                              |
+| `/thread`          | Thread pane: the sessions and windows this one runs on           |
+| `/btw`, `/side`    | Fork pane: ask a parallel session on the side                    |
 
 ## Extensions
 
 Every builtin without its own view lives in `src/extensions/builtins.tsx`; a
 builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 
-| Extension ID                              | Where                    | What                                  |
-| ----------------------------------------- | ------------------------ | ------------------------------------- |
-| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers |
-| `@gent/connection`                        | `builtins.tsx`           | Connection status widget              |
-| `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup        |
-| `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup   |
-| `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command               |
-| `@gent/goal`                              | `builtins.tsx`           | Goal label, goal continuation row     |
-| `@gent/session-tools`                     | `builtins.tsx`           | Sender row for `session.send`         |
-| `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter               |
-| `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane and tray                  |
-| `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                      |
-| `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                        |
-| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row       |
+| Extension ID                              | Where                    | What                                    |
+| ----------------------------------------- | ------------------------ | --------------------------------------- |
+| `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers   |
+| `@gent/connection`                        | `builtins.tsx`           | Connection status widget                |
+| `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup          |
+| `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup     |
+| `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command                 |
+| `@gent/goal`                              | `builtins.tsx`           | Goal label, goal continuation row       |
+| `@gent/session-tools`                     | `builtins.tsx`           | Sender row for `session.send`           |
+| `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter                 |
+| `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane (the session browser), tray |
+| `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                        |
+| `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                          |
+| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row         |
 
 Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions
 

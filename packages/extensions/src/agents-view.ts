@@ -64,6 +64,8 @@ export interface DurableAgentRow {
   readonly cwd: Option.Option<string>
   readonly parent: Option.Option<AgentRowKey>
   readonly updatedAt: number
+  /** Spawned beside its parent's work (a delegate child or a `/btw` fork), not a handoff. */
+  readonly sideThread: boolean
 }
 
 /** One reconciled row, ready for display. */
@@ -80,6 +82,8 @@ export interface AgentRow {
   readonly live: boolean
   /** Depth in the parent/child tree; 0 for a top-level agent. */
   readonly depth: number
+  /** From the durable row; a loop with no session row yet is not marked. */
+  readonly sideThread: boolean
 }
 
 /**
@@ -153,6 +157,7 @@ export const reconcileAgentRows = (params: {
       parent: Option.flatMap(durable, (row) => row.parent),
       live: Option.isSome(live),
       depth: 0,
+      sideThread: Option.exists(durable, (row) => row.sideThread),
     })
   }
   return rows
@@ -288,6 +293,8 @@ export const AgentRowEntry = Schema.Struct({
   depth: Schema.Finite,
   /** The session this loop was delegated from; absent at a tree root. */
   parentSessionId: Schema.optional(SessionId),
+  /** The session opened a thread of its own under a parent; a handoff shares its parent's. */
+  sideThread: Schema.Boolean,
 })
 export type AgentRowEntry = typeof AgentRowEntry.Type
 
@@ -341,6 +348,9 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string
         cwd: Option.fromUndefinedOr(session.cwd),
         parent,
         updatedAt: session.updatedAt.getTime(),
+        // A handoff joins its parent's thread. A delegate child or a `/btw` fork
+        // has a parent and is the session its own thread is named after.
+        sideThread: Option.isSome(parent) && session.threadId === session.id,
       },
     ]
   })
@@ -372,6 +382,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
           parentSessionId: Option.getOrUndefined(
             Option.map(row.parent, (parent) => parent.sessionId),
           ),
+          sideThread: row.sideThread,
         })),
       }
     }),

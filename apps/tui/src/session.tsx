@@ -1172,9 +1172,6 @@ function createPromptSearchController(params: {
 
 interface SessionCommandRegistryProps {
   readonly client: ClientContextValue
-  readonly command: {
-    readonly openPalette: () => void
-  }
   readonly ext: {
     readonly commands: Accessor<ReadonlyArray<Command>>
     readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
@@ -1261,13 +1258,6 @@ const createSessionBuiltins = (props: SessionCommandRegistryProps): Command[] =>
     category: "Session",
     slash: "frecency-reset",
     onSelect: props.resetFrecency,
-  },
-  {
-    id: "session.sessions",
-    title: "Open Sessions",
-    category: "Session",
-    slash: "sessions",
-    onSelect: () => props.command.openPalette(),
   },
   {
     id: "session.branch",
@@ -2721,7 +2711,6 @@ export function createSessionController(props: {
 
   createSessionCommandRegistry({
     client,
-    command,
     ext,
     cast,
     frecency: () => frecency.lookup(),

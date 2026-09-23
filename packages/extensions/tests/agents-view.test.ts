@@ -37,6 +37,7 @@ const durable = (overrides: {
   parentSession?: string
   parentBranch?: string
   updatedAt?: number
+  sideThread?: boolean
 }): DurableAgentRow => ({
   sessionId: sid(overrides.session),
   branchId: bid(overrides.branch),
@@ -52,6 +53,7 @@ const durable = (overrides: {
     })),
   ),
   updatedAt: overrides.updatedAt ?? 0,
+  sideThread: overrides.sideThread ?? false,
 })
 
 const find = (rows: ReadonlyArray<AgentRow>, session: string, branch: string) =>
@@ -408,6 +410,7 @@ const ReplySchema = Schema.Struct({
       live: Schema.Boolean,
       depth: Schema.Finite,
       parentSessionId: Schema.optional(Schema.String),
+      sideThread: Schema.Boolean,
     }),
   ),
 })
@@ -422,9 +425,10 @@ const openHarness = Effect.gen(function* () {
   })
 })
 
-const listAgents = (input: { readonly query?: string }) =>
+type Harness = Effect.Success<typeof openHarness>
+
+const requestRows = (harness: Harness, input: { readonly query?: string }) =>
   Effect.gen(function* () {
-    const harness = yield* openHarness
     const raw = yield* harness.client.extension.request({
       sessionId: harness.sessionId,
       branchId: harness.branchId,
@@ -433,6 +437,13 @@ const listAgents = (input: { readonly query?: string }) =>
       input,
     })
     const reply = yield* Schema.decodeUnknownEffect(ReplySchema)(raw)
+    return { raw, reply }
+  })
+
+const listAgents = (input: { readonly query?: string }) =>
+  Effect.gen(function* () {
+    const harness = yield* openHarness
+    const { raw, reply } = yield* requestRows(harness, input)
     return { raw, reply, harness, sessionId: harness.sessionId, branchId: harness.branchId }
   })
 
@@ -521,6 +532,39 @@ describe("AgentsViewExtension via RPC", () => {
           // The tray counts a session's subtree client-side, so the link travels.
           expect(parentRow?.parentSessionId).toBeUndefined()
           expect(childRow?.parentSessionId).toBe(harness.sessionId)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a stored child with no loop is listed, and only a spawned one is a side thread",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* openHarness
+          const parent = { parentSessionId: harness.sessionId, parentBranchId: harness.branchId }
+          // A delegate child or a `/btw` fork opens a thread of its own.
+          const spawned = yield* harness.client.session.create({ cwd: "/tmp/spawned", ...parent })
+          // A handoff continues the parent's thread.
+          const handoff = yield* harness.client.session.create({
+            cwd: "/tmp/handoff",
+            continueThread: true,
+            ...parent,
+          })
+
+          const { reply } = yield* requestRows(harness, {})
+          const rowFor = (sessionId: string) =>
+            reply.rows.find((row) => row.sessionId === sessionId)
+          const spawnedRow = rowFor(spawned.sessionId)
+          const handoffRow = rowFor(handoff.sessionId)
+          // Neither child ever ran, so no loop exists: the rows come from storage.
+          expect(spawnedRow?.live).toBe(false)
+          expect(spawnedRow?.section).toBe("inactive")
+          expect(handoffRow?.live).toBe(false)
+          expect(spawnedRow?.sideThread).toBe(true)
+          expect(handoffRow?.sideThread).toBe(false)
+          expect(rowFor(harness.sessionId)?.sideThread).toBe(false)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
