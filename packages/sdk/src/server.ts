@@ -33,12 +33,12 @@ import {
   BranchStorage,
   MessageStorage,
   SessionStorage,
-  type RpcHandlersLive,
+  RpcHandlersLive,
   provideWorkspaceIdHeader,
-  type WorkspaceHeaders,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
-  buildServerRoot,
+  buildServerRoutes,
+  createDependencies,
   BunPlatformLive,
   ScriptedLanguageModel,
   StateLocation,
@@ -381,15 +381,27 @@ const readLock = (
     )
   })
 
+/**
+ * Name the server in its entry. A failed write fails the start: a server
+ * that holds the kernel lock with no entry leaves every client waiting for
+ * a name that never comes.
+ */
 const writeLock = (
   home: string,
   entry: ServerLockEntry,
-): Effect.Effect<void, never, FileSystem.FileSystem> =>
+): Effect.Effect<void, GentConnectionError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* serverLockPath(home)
     const json = yield* Schema.encodeEffect(ServerLockEntryJson)(entry).pipe(Effect.orDie)
-    yield* fs.writeFileString(path, json).pipe(Effect.ignore)
+    yield* fs.writeFileString(path, json).pipe(
+      Effect.mapError(
+        (error) =>
+          new GentConnectionError({
+            message: `cannot write the server lock entry ${path}: ${error.message}`,
+          }),
+      ),
+    )
   })
 
 /** Removes the entry only while it still names `serverId`. */
@@ -895,7 +907,6 @@ interface OwnedServerInternal {
   readonly handlerContext: Context.Context<BuiltRpcHandlers>
   readonly port: number
   readonly serverId: string
-  readonly headers: WorkspaceHeaders
 }
 
 /** WeakMap keyed by GentServer object identity — keeps handler context private */
@@ -1013,9 +1024,9 @@ const buildOwnedServer = (
     )
     // A user extension imports the same effect modules the shipped ones do.
     yield* platform.bindModules(BuiltinExtensionModules)
-    const serverRoot = yield* buildServerRoot({
-      observability: GentObservability(options.cwd, logLevel, yield* resolveLogDir),
-      dependencies: {
+    const observability = GentObservability(options.cwd, logLevel, yield* resolveLogDir)
+    const coreServices = yield* Layer.buildWithScope(
+      createDependencies({
         cwd: options.cwd,
         // One broken user extension is reported, not fatal: the rest of the profile runs.
         failOnExtensionFailure: false,
@@ -1031,7 +1042,19 @@ const buildOwnedServer = (
         extensions: options.extensions ?? BuiltinExtensions,
         branchTools: options.branchTools ?? CellBranchTools,
         languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
-      },
+      }).pipe(Layer.provide(observability)),
+      scope,
+    ).pipe(
+      Effect.mapError(
+        (error) => new GentConnectionError({ message: `server root failed: ${String(error)}` }),
+      ),
+    )
+    const coreServicesLive = Layer.succeedContext(coreServices)
+    const rpcHandlersContext = yield* Layer.buildWithScope(
+      Layer.provide(RpcHandlersLive, coreServicesLive),
+      scope,
+    )
+    const httpRoutes = buildServerRoutes(coreServicesLive, {
       identity: {
         serverId,
         pid,
@@ -1039,15 +1062,11 @@ const buildOwnedServer = (
         dbPath: Option.getOrElse(dbPath, () => ":memory:"),
         buildFingerprint,
       },
-    }).pipe(
-      Effect.mapError(
-        (error) => new GentConnectionError({ message: `server root failed: ${String(error)}` }),
-      ),
-    )
+    })
 
-    const HttpServerLive = HttpRouter.serve(serverRoot.httpRoutes).pipe(
+    const HttpServerLive = HttpRouter.serve(httpRoutes).pipe(
       Layer.provide(Layer.succeedContext(httpServerCtx)),
-      Layer.provide(serverRoot.coreServicesLive),
+      Layer.provide(coreServicesLive),
     )
 
     yield* Layer.buildWithScope(HttpServerLive, scope).pipe(Effect.orDie)
@@ -1056,7 +1075,7 @@ const buildOwnedServer = (
     if (options.debug === true) {
       yield* seedDebugSession(options.cwd).pipe(
         provideWorkspaceIdHeader(Headers.fromInput(workspaceHeaders)),
-        Effect.provideContext(serverRoot.coreServices),
+        Effect.provideContext(coreServices),
         Effect.catchEager((error) =>
           Effect.logWarning("Debug session seeding failed").pipe(
             Effect.annotateLogs({ error: String(error) }),
@@ -1070,10 +1089,9 @@ const buildOwnedServer = (
       workspaceId: workspaceIdForCwd(options.cwd),
     })
     ownedInternals.set(server, {
-      handlerContext: serverRoot.rpcHandlersContext,
+      handlerContext: rpcHandlersContext,
       port,
       serverId,
-      headers: workspaceHeaders,
     })
 
     return server
@@ -1247,25 +1265,24 @@ const startOwnedServer = (
     const osInfo = yield* platform.osInfo
     const pid = yield* platform.pid
     const server = yield* buildOwnedServer(options, stateSpec, providerSpec)
-    const internalOption = getOwnedInternal(server)
-    if (Option.isSome(internalOption)) {
-      const internal = internalOption.value
-      yield* serverLock.write(
-        home,
-        new ServerLockEntry({
-          serverId: internal.serverId,
-          pid,
-          hostname: osInfo.hostname,
-          rpcUrl: server.url,
-          dbPath,
-          buildFingerprint: fingerprint,
-          startedAt: yield* Clock.currentTimeMillis,
-        }),
-      )
-      // The entry goes before the kernel lock is released: finalizers run in reverse.
-      yield* Effect.addFinalizer(() =>
-        serverLock.remove(home, internal.serverId).pipe(Effect.ignore),
-      )
-    }
+    const internal = yield* Effect.fromOption(getOwnedInternal(server)).pipe(
+      Effect.mapError(
+        () => new GentConnectionError({ message: "owned server internal state missing" }),
+      ),
+    )
+    yield* serverLock.write(
+      home,
+      new ServerLockEntry({
+        serverId: internal.serverId,
+        pid,
+        hostname: osInfo.hostname,
+        rpcUrl: server.url,
+        dbPath,
+        buildFingerprint: fingerprint,
+        startedAt: yield* Clock.currentTimeMillis,
+      }),
+    )
+    // The entry goes before the kernel lock is released: finalizers run in reverse.
+    yield* Effect.addFinalizer(() => serverLock.remove(home, internal.serverId).pipe(Effect.ignore))
     return server
   })

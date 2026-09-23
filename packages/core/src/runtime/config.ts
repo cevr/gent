@@ -598,7 +598,7 @@ const TrustConfig = Schema.fromJsonString(
 )
 
 /** Whether `trustedProjects` names the canonical root that owns this project extension directory. */
-export const isProjectRootTrusted = Effect.fn("ExtensionLoader.projectRootTrust")(function* (
+const isProjectRootTrusted = Effect.fn("ExtensionLoader.projectRootTrust")(function* (
   trustedProjects: ReadonlyArray<string>,
   projectDir: string,
 ) {

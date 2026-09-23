@@ -306,7 +306,6 @@ type SessionRuntimeLayerRequirements =
   | ClusterMessageStorage.MessageStorage
   | EventStorage
   | EventStore
-  | EventStore
   | ExtensionRegistry
   | ModelRegistry
   | GentPlatform

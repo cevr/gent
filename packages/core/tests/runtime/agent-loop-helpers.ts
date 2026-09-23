@@ -36,13 +36,7 @@ import {
 import { testAgents } from "../helpers/test-preset"
 import { type ToolCapability } from "@gent/core/extensions/api"
 import type { AnyResourceContribution } from "../../src/domain/extension"
-import {
-  type AgentEvent,
-  EventEnvelope,
-  EventId,
-  ExtensionStatePublisherLive,
-  EventStore,
-} from "../../src/domain/event"
+import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
 import {
   BranchStorage,
   SessionStorage,
@@ -307,9 +301,8 @@ export const actorTestRoot = <S = never, ES = never, X = never, EX = never>(
     baseDeps,
     Layer.provide(params.toolRunner ?? ToolRunner.Test(), baseDeps),
   )
-  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, deps)
   return AgentLoopTestActor({ baseSections: [] }).pipe(
-    Layer.provideMerge(Layer.mergeAll(deps, statePublisherLayer, AgentLoopSessionGovernance.Live)),
+    Layer.provideMerge(Layer.mergeAll(deps, AgentLoopSessionGovernance.Live)),
   )
 }
 export const makeLayer = (

@@ -44,7 +44,6 @@ import {
   TEST_MODEL_CONTEXT_LIMIT_TOKENS,
 } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
-import { ExtensionStatePublisherLive } from "../../src/domain/event"
 import {
   baseLocalLayerWithProvider,
   createRpcHarness,
@@ -157,16 +156,12 @@ const makeRuntimeLayer = (
   if (!Predicate.isUndefined(profileCacheLayer)) {
     baseDeps = Layer.merge(baseDepsWithoutProfile, profileCacheLayer)
   }
-  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, baseDeps)
-  const sessionRuntimeLayer = Layer.provide(
-    sessionRuntimeLayers({ baseSections: [] }),
-    Layer.merge(baseDeps, statePublisherLayer),
-  )
+  const sessionRuntimeLayer = Layer.provide(sessionRuntimeLayers({ baseSections: [] }), baseDeps)
   const sessionMutationsLayer = Layer.provide(
     SessionMutationsLive,
-    Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer),
+    Layer.mergeAll(baseDeps, sessionRuntimeLayer),
   )
-  return Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
+  return Layer.mergeAll(baseDeps, sessionRuntimeLayer, sessionMutationsLayer)
 }
 const makeLiveToolRuntimeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
@@ -193,11 +188,7 @@ const makeLiveToolRuntimeLayer = (
     AgentLoopSessionGovernance.Live,
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
-  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, deps)
-  return Layer.provideMerge(
-    sessionRuntimeLayers({ baseSections: [] }),
-    Layer.merge(deps, statePublisherLayer),
-  )
+  return Layer.provideMerge(sessionRuntimeLayers({ baseSections: [] }), deps)
 }
 const createSessionBranch = Effect.gen(function* () {
   const sessionStorage = yield* SessionStorage

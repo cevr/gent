@@ -717,7 +717,7 @@ describe("tool execution", () => {
       })
       const eventTags: Array<string> = []
       const events: Array<ToolCallStarted> = []
-      const statePublisherLayer = Layer.succeed(
+      const eventStoreLayer = Layer.succeed(
         EventStore,
         EventStore.of({
           subscribe: () => Stream.empty,
@@ -742,7 +742,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        statePublisherLayer,
+        eventStoreLayer,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
@@ -802,7 +802,7 @@ describe("tool execution", () => {
         readonly tag: string
         readonly summary: ToolCallSucceeded["summary"]
       }> = []
-      const statePublisherLayer = Layer.succeed(
+      const eventStoreLayer = Layer.succeed(
         EventStore,
         EventStore.of({
           subscribe: () => Stream.empty,
@@ -826,7 +826,7 @@ describe("tool execution", () => {
             },
           ]),
         ),
-        statePublisherLayer,
+        eventStoreLayer,
         ApprovalService.Test(),
         RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )

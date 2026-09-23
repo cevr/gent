@@ -1054,8 +1054,6 @@ describe("Effect-purity locks (compile-time)", () => {
     type _BadExtensionHostProcessError = typeof PublicExtensionApi.ExtensionHostProcessError
     // @ts-expect-error — host file lock Tag is private; extensions reach file locks through ExtensionContext.FileLock
     type _BadFileLockService = typeof PublicExtensionApi.FileLockService
-    // @ts-expect-error — extension state publisher is private; extensions publish through ExtensionContext.State
-    type _BadExtensionStatePublisher = typeof PublicExtensionApi.ExtensionStatePublisher
     // @ts-expect-error — capability access enforcement is runtime lowering, not author API
     type _BadRequireCapabilityWrite = typeof PublicExtensionApi.requireCapabilityWrite
 

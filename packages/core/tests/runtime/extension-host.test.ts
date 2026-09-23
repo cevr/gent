@@ -77,7 +77,11 @@ import {
   scanRuntimeProfileExtensions,
   type RuntimeProfileInputs,
 } from "../../src/runtime/extension-host"
-import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
+import {
+  ConfigService,
+  isProjectExtensionDirectoryTrusted,
+  RuntimeEnvironment,
+} from "../../src/runtime/config"
 import {
   MessageStorage,
   SessionStorage,
@@ -151,7 +155,7 @@ import {
 } from "../../src/domain/extension"
 import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/unstable/cluster"
-import { AgentEvent, EventStore, ExtensionStatePublisherLive } from "../../src/domain/event"
+import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
@@ -218,7 +222,7 @@ describe("ambient extension host context", () => {
         }
       }
       expectAbsent(lockExit, "FileLockService")
-      expectAbsent(stateExit, "ExtensionStatePublisher")
+      expectAbsent(stateExit, "EventStore")
     }),
   )
 
@@ -258,12 +262,9 @@ describe("ambient extension host context", () => {
       expect(envelopes.map((envelope) => envelope.event._tag)).toStrictEqual(["MessageReceived"])
     }).pipe(
       Effect.provide(
-        Layer.provideMerge(
-          ExtensionStatePublisherLive,
-          Layer.mergeAll(
-            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-            EventStore.Memory,
-          ),
+        Layer.mergeAll(
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -337,11 +338,8 @@ describe("ambient extension host context", () => {
         // under the workspace in scope at pull time; the memory store reads none.
         Effect.provide(
           Layer.provideMerge(
-            ExtensionStatePublisherLive,
-            Layer.provideMerge(
-              EventStoreLive,
-              SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-            ),
+            EventStoreLive,
+            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
           ),
         ),
       ),
@@ -384,11 +382,8 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provide(
         Layer.provideMerge(
-          ExtensionStatePublisherLive,
-          Layer.provideMerge(
-            EventStoreLive,
-            SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-          ),
+          EventStoreLive,
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
         ),
       ),
     ),
@@ -532,6 +527,54 @@ export default { manifest: { id: "profile-trust" }, setup: Effect.void };`,
           makeCacheLayer({ cwd: project, home, extensions: [], allowFailedExtensions: true }),
         ),
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive("a revoke that also breaks the user config stops project extensions", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      // Under the repo, so the project module resolves `effect`.
+      const directory = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../../.."),
+        prefix: ".tmp-profile-broken-trust-",
+      })
+      const home = path.join(directory, "home")
+      const project = path.join(directory, "project")
+      const userConfig = path.join(home, ".gent", "config.json")
+      yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+      yield* fs.makeDirectory(path.join(project, ".gent", "extensions"), { recursive: true })
+      const projectRoot = yield* fs.realPath(project)
+      yield* fs.writeFileString(
+        path.join(project, ".gent", "extensions", "entry.ts"),
+        `import { Effect } from "effect";
+export default { manifest: { id: "profile-broken-trust" }, setup: Effect.void };`,
+      )
+      yield* fs.writeFileString(userConfig, encodeJson({ trustedProjects: [projectRoot] }))
+      const activeIds = (profile: SessionProfile) =>
+        profile.resolved.extensions.map((extension) => String(extension.manifest.id))
+      const clientTrust = isProjectExtensionDirectoryTrusted({
+        userDir: path.join(home, ".gent", "extensions"),
+        projectDir: path.join(project, ".gent", "extensions"),
+      })
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const resolve = Effect.scoped(cache.resolve(project))
+        expect(activeIds(yield* resolve)).toContain("profile-broken-trust")
+        expect(yield* clientTrust).toBe(true)
+
+        // One edit revokes the grant and leaves a trailing comma.
+        yield* fs.writeFileString(userConfig, '{"trustedProjects":[],}')
+        // The server and the client give one answer: the project is not trusted.
+        expect(activeIds(yield* resolve)).not.toContain("profile-broken-trust")
+        expect(yield* clientTrust).toBe(false)
+      }).pipe(
+        Effect.provide(
+          makeCacheLayer({ cwd: project, home, extensions: [], allowFailedExtensions: true }),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("8".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
   )
@@ -4542,16 +4585,12 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, baseDeps)
-  const sessionRuntimeLayer = Layer.provide(
-    SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, statePublisherLayer),
-  )
+  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live({ baseSections: [] }), baseDeps)
   const sessionMutationsLayer = Layer.provide(
     SessionMutationsLive,
-    Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer),
+    Layer.mergeAll(baseDeps, sessionRuntimeLayer),
   )
-  return Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
+  return Layer.mergeAll(baseDeps, sessionRuntimeLayer, sessionMutationsLayer)
 }
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
@@ -5179,7 +5218,7 @@ describe("live Profile", () => {
         }
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs, []),
+          yield* scanRuntimeProfileExtensions(inputs),
         )
         expect(events).toEqual([])
         expect(declarations.extensionDeclarations.failed).toContainEqual(
@@ -5229,7 +5268,7 @@ describe("live Profile", () => {
 
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs, []),
+          yield* scanRuntimeProfileExtensions(inputs),
         )
         expect(declarations.extensionDeclarations.failed).toEqual([
           expect.objectContaining({
@@ -5254,7 +5293,7 @@ describe("live Profile", () => {
         // A disabled id silences its file.
         const quiet = yield* loadRuntimeProfileDeclarations(
           { ...inputs, disabledExtensions: ["broken", "folder-broken", "local"] },
-          yield* scanRuntimeProfileExtensions(inputs, []),
+          yield* scanRuntimeProfileExtensions(inputs),
         )
         expect(quiet.extensionDeclarations.failed).toEqual([])
 
