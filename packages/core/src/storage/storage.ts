@@ -208,9 +208,9 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                 })
               }
             }
-            // A session with no thread of its own starts one. Only a caller
-            // continuing existing work — a compaction handoff — passes the
-            // parent's thread; a spawn stays out of it by saying nothing.
+            // A session with no thread of its own starts one. Only a create
+            // with `continueThread` (the TUI `/handoff`) passes the parent's
+            // thread; a spawn stays out of it by saying nothing.
             const stored = Option.match(Option.fromUndefinedOr(session.threadId), {
               onNone: () => new Session({ ...session, threadId: session.id }),
               onSome: () => session,

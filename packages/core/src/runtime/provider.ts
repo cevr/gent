@@ -439,7 +439,7 @@ const envCredentialSet = (name: Option.Option<string>): Effect.Effect<boolean> =
  * when one of `modelIds` routes to it; the caller resolves those models for
  * the session it asks about (its registry, config, and model override).
  */
-export const listAuthProviders = Effect.fn("AuthGuard.listProviders")(function* (
+export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
   modelIds: ReadonlyArray<ModelId>,
 ) {
   const auth = yield* Auth

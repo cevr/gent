@@ -693,7 +693,7 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
     role: "assistant",
     parts: [
       makeText(
-        "Steer should cut ahead of queued regular work. Regular sends should merge by newline while a turn is active.",
+        "Steer should cut ahead of queued regular work. Regular sends queue in order while a turn is active.",
       ),
     ],
     createdAt: nowPlus(-36_000),
