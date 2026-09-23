@@ -216,7 +216,6 @@ export const SteerCommand = Schema.Union([
      * gets `joinedTurn`.
      */
     metadata: Schema.optional(MessageMetadata),
-    agent: Schema.optional(AgentName),
     /**
      * Start a turn when the branch is idle, instead of waiting in the queue.
      *
@@ -1019,7 +1018,6 @@ const QueueEntryFields = {
   id: MessageId,
   content: Schema.String,
   createdAt: Schema.Finite,
-  agentOverride: Schema.optional(AgentName),
 }
 
 const SteeringEntry = Schema.TaggedStruct("Steering", QueueEntryFields)
@@ -1050,21 +1048,14 @@ export const emptyQueueSnapshot = (): QueueSnapshot =>
 // promoted from optional to required. `runtime/agent/loop-inbox.ts` is the
 // only module that interprets these values; this file declares their shape.
 
+/**
+ * One turn waiting in a branch's queue. A row written before admission moved
+ * onto the session may still carry `agentOverride`, `runSpec` or
+ * `interactive`; the struct ignores keys it does not declare, so the row
+ * decodes, and migration 023 copied that admission onto its session.
+ */
 export const QueuedTurnItem = Schema.Struct({
   message: Message,
-  agentOverride: Schema.optional(AgentName),
-  runSpec: Schema.optional(RunSpecSchema),
-  /**
-   * `false` withholds the tools that ask the user, which a child turn has no
-   * one to answer. Only `false` is read, so absent and `true` mean the same
-   * thing, and only the `@gent/delegate` extension writes it.
-   *
-   * It stays optional under this name because a queue row on disk may predate
-   * any change: a required field rejects a row whose key is absent, and a
-   * renamed one drops a stored `false` and hands the child the tools it was
-   * denied. Both were measured, not assumed.
-   */
-  interactive: Schema.optional(Schema.Boolean),
   /**
    * The admitter asked for a turn even when the branch has no prior history.
    *

@@ -67,9 +67,9 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
           lastEventId: nullValue,
           reasoningLevel: absent,
           resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+          agent: AgentName.make("cowork"),
           runtime: {
             _tag: "Idle",
-            agent: AgentName.make("cowork"),
             queue: emptyQueueSnapshot(),
           },
           metrics: {

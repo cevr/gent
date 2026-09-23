@@ -33,7 +33,6 @@ import {
   type AgentDefinition,
   type AgentEvent,
   type AgentName,
-  AgentName as AgentNameSchema,
   BranchId,
   type CreateSessionInput,
   DEFAULT_AGENT_NAME,
@@ -415,16 +414,11 @@ const isReconnectingState = (state: ConnectionState): boolean =>
  * into a streaming turn, and an idle branch takes an ordinary `sendMessage`
  * that starts a turn by itself.
  *
- * Choosing an agent here is local state, not an instruction to a running
- * turn: it picks the agent the next turn starts with, and `selectAgent`
- * does that directly.
+ * An interjection names no agent: the agent is a property of the session.
  */
 export const SteerCommandInput = Schema.TaggedUnion({
   Cancel: {},
-  Interject: {
-    message: Schema.String,
-    agent: Schema.optional(AgentNameSchema),
-  },
+  Interject: { message: Schema.String },
 })
 export type SteerCommandInput = Schema.Schema.Type<typeof SteerCommandInput>
 
@@ -936,7 +930,7 @@ export function ClientProvider(props: ClientProviderProps) {
     let status: AgentStatus = AgentStatus.cases.Streaming.make({})
     if (rt._tag === "Idle") status = AgentStatus.cases.Idle.make({})
     setAgentStore({
-      agent: Option.fromNullishOr(rt.agent),
+      agent: Option.some(snapshot.agent),
       status,
       cost: snapshot.metrics.costUsd,
       resolvedModelId: Option.some(snapshot.resolvedModelId),

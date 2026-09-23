@@ -711,9 +711,9 @@ const interactionOwnerMigration = Effect.gen(function* () {
 })
 
 /**
- * What admitted a turn, kept beside its position so a restart resumes the
- * turn under the same agent and run overrides. Nullable: a plain turn and
- * every row written before this column read as no admission.
+ * What admitted a turn, once kept beside its position. Admission is a
+ * session property now (023); the column stays so the chain and older rows
+ * are unchanged, and migration 023 reads it once.
  */
 const turnRecordAdmissionMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient

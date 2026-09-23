@@ -2645,13 +2645,9 @@ describe("shipped model surface", () => {
           extensionInputs: [...shippedPreset.extensionInputs, scopedAgent],
           branchTools: CellBranchTools,
           providerLayer,
+          admission: { agent: AgentName.make("scoped") },
         })
-        yield* client.message.send({
-          sessionId,
-          branchId,
-          content: "read the note",
-          agentOverride: AgentName.make("scoped"),
-        })
+        yield* client.message.send({ sessionId, branchId, content: "read the note" })
         const messages = yield* waitFor(
           client.message.list({ branchId }),
           (list) =>

@@ -415,6 +415,7 @@ const seedOverflowingHistory = Effect.gen(function* () {
     new Session({
       id: sessionIdModelContextDegrade,
       name: "Degrade Test",
+      admission: { agent: agent.name },
       createdAt: now,
       updatedAt: now,
     }),
@@ -477,7 +478,6 @@ describe("context compaction degrade path", () => {
             branchId: branchIdModelContextDegrade,
             commandId: ActorCommandId.make("turn:continue"),
             content: "continue",
-            agentOverride: agent.name,
           })
           const events = (yield* (yield* EventStorage).listEvents({
             sessionId: sessionIdModelContextDegrade,

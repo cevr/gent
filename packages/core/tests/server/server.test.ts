@@ -2824,7 +2824,7 @@ describe("message.send", () => {
       ),
   )
 
-  it.live("applies runSpec overrides through the public message contract", () =>
+  it.live("a session created with a run spec runs its turns under it", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const assistantText = "runSpec acceptance reply"
@@ -2838,19 +2838,23 @@ describe("message.send", () => {
           },
         ])
         const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
-        const created = yield* client.session.create({ cwd: process.cwd() })
+        const created = yield* client.session.create({
+          cwd: process.cwd(),
+          admission: {
+            runSpec: {
+              overrides: {
+                modelId: ModelId.make("custom/model"),
+                reasoningEffort: "high",
+                systemPromptAddendum: "Extra public contract instructions",
+              },
+            },
+          },
+        })
 
         yield* client.message.send({
           sessionId: created.sessionId,
           branchId: created.branchId,
           content: "use run spec",
-          runSpec: {
-            overrides: {
-              modelId: ModelId.make("custom/model"),
-              reasoningEffort: "high",
-              systemPromptAddendum: "Extra public contract instructions",
-            },
-          },
         })
 
         const snapshot = yield* waitFor(
@@ -2913,11 +2917,15 @@ describe("message.send", () => {
           createE2ELayer({ ...e2ePreset, providerLayer, configServiceLayer }),
         )
         const created = yield* client.session.create({ cwd: process.cwd() })
-        const replied = (text: string) =>
+        const specified = yield* client.session.create({
+          cwd: process.cwd(),
+          admission: { runSpec: { overrides: { modelId: ModelId.make("custom/model") } } },
+        })
+        const replied = (session: typeof created, text: string) =>
           waitFor(
             client.session.getSnapshot({
-              sessionId: created.sessionId,
-              branchId: created.branchId,
+              sessionId: session.sessionId,
+              branchId: session.branchId,
             }),
             (current) =>
               current.messages.some(
@@ -2934,17 +2942,63 @@ describe("message.send", () => {
           branchId: created.branchId,
           content: "use the configured model",
         })
-        yield* replied("configured reply")
+        yield* replied(created, "configured reply")
 
         yield* client.message.send({
-          sessionId: created.sessionId,
-          branchId: created.branchId,
+          sessionId: specified.sessionId,
+          branchId: specified.branchId,
           content: "use the run spec model",
-          runSpec: { overrides: { modelId: ModelId.make("custom/model") } },
         })
-        yield* replied("run spec reply")
+        yield* replied(specified, "run spec reply")
         yield* controls.assertDone
       }).pipe(Effect.timeout("6 seconds")),
+    ),
+  )
+
+  it.live("a session's own model setting wins over the run spec it was created with", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sessionModel = ModelId.make("custom/session-model")
+        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+          {
+            ...textStep("session model reply"),
+            assertRequest: (request) => {
+              expect(request.model).toBe(sessionModel)
+            },
+          },
+        ])
+        const { client } = yield* createRpcClient(createE2ELayer({ ...e2ePreset, providerLayer }))
+        const created = yield* client.session.create({
+          cwd: process.cwd(),
+          admission: { runSpec: { overrides: { modelId: ModelId.make("custom/model") } } },
+        })
+        const target = { sessionId: created.sessionId, branchId: created.branchId }
+        const admitted = yield* client.session.getSnapshot(target)
+        expect(admitted.agent).toBe(AgentName.make("main"))
+        expect(admitted.resolvedModelId).toBe(ModelId.make("custom/model"))
+
+        yield* client.session.updateSettings({
+          sessionId: created.sessionId,
+          modelId: sessionModel,
+          reasoningLevel: Option.getOrUndefined(Option.none()),
+        })
+        expect((yield* client.session.getSnapshot(target)).resolvedModelId).toBe(sessionModel)
+        yield* client.message.send({ ...target, content: "use the session model" })
+        yield* waitFor(
+          client.session.getSnapshot(target),
+          (current) =>
+            current.messages.some(
+              (message) =>
+                message.role === "assistant" &&
+                message.parts.some(
+                  (part) => part.type === "text" && part.text === "session model reply",
+                ),
+            ),
+          5_000,
+          "assistant reply on the session model",
+        )
+        yield* controls.assertDone
+      }).pipe(Effect.timeout("4 seconds")),
     ),
   )
 

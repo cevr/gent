@@ -1,6 +1,6 @@
 import type { LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
-import { Predicate, Clock, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Clock, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 import {
@@ -9,13 +9,7 @@ import {
   entityIdOf,
   type SessionRuntimeState,
 } from "../../src/domain/agent-loop"
-import {
-  AgentDefinition,
-  AgentName,
-  type Model,
-  ModelId,
-  type RunSpec,
-} from "../../src/domain/agent"
+import { AgentDefinition, AgentName, type Model, ModelId } from "../../src/domain/agent"
 import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
 import {
   ModelRegistry,
@@ -37,6 +31,7 @@ import {
   Message,
   type QueueSnapshot,
   type SteerCommand,
+  type SessionAdmission,
 } from "../../src/domain/message"
 import { testAgents } from "../helpers/test-preset"
 import { type ToolCapability } from "@gent/core/extensions/api"
@@ -69,6 +64,7 @@ import {
   MessageId,
 } from "../../src/domain/ids"
 import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
+import { omitUndefined } from "../../src/domain/guards"
 // ============================================================================
 // Shared helpers
 // ============================================================================
@@ -123,10 +119,7 @@ export interface AgentLoopService {
   readonly runOnce: (input: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
-    readonly agentName: AgentName
     readonly prompt: string
-    readonly interactive?: boolean
-    readonly runSpec?: RunSpec
   }) => Effect.Effect<void, AgentLoopError | StorageError, BranchStorage | SessionStorage>
   readonly getQueue: (input: {
     readonly sessionId: SessionId
@@ -169,19 +162,9 @@ export const makeAgentLoopService = Effect.gen(function* () {
         })
         yield* ensureStorageParents({ sessionId: input.sessionId, branchId: input.branchId })
         const ref = yield* refFor(input.sessionId, input.branchId)
-        let payload = {
-          workspaceId: DefaultWorkspaceId,
-          message,
-          agentOverride: input.agentName,
-          // Actor operation payloads require optional fields explicitly.
-          runSpec: input.runSpec,
-          interactive: input.interactive,
-        }
-        if (Predicate.isNotUndefined(input.runSpec))
-          payload = { ...payload, runSpec: input.runSpec }
-        if (Predicate.isNotUndefined(input.interactive))
-          payload = { ...payload, interactive: input.interactive }
-        yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
+        yield* ref.execute(
+          AgentLoopActor.SubmitAndWait.make({ workspaceId: DefaultWorkspaceId, message }),
+        )
       }),
     getQueue: (input) =>
       Effect.gen(function* () {
@@ -212,56 +195,44 @@ export const makeAgentLoopService = Effect.gen(function* () {
 export const runAgentLoop = (
   _agentLoop: AgentLoopService,
   message: Message,
-  options?: {
-    readonly agentOverride?: AgentName
-    readonly runSpec?: RunSpec
-    readonly interactive?: boolean
-  },
+  /** The agent the session runs as; set when the test's first turn creates it. */
+  admission?: SessionAdmission,
 ) =>
-  ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
+  ensureStorageParents({
+    sessionId: message.sessionId,
+    branchId: message.branchId,
+    ...omitUndefined({ admission }),
+  }).pipe(
     Effect.flatMap(() =>
       Effect.gen(function* () {
         const actorClientFactory = yield* AgentLoopActor.Context
         const ref = yield* actorClientFactory(
           entityIdOf(DefaultWorkspaceId, message.sessionId, message.branchId),
         )
-        const payload = {
-          workspaceId: DefaultWorkspaceId,
-          message,
-          // Actor operation payloads require optional fields explicitly.
-          agentOverride: options?.agentOverride,
-          runSpec: options?.runSpec,
-          interactive: options?.interactive,
-        }
-        yield* ref.execute(AgentLoopActor.SubmitAndWait.make(payload))
+        yield* ref.execute(
+          AgentLoopActor.SubmitAndWait.make({ workspaceId: DefaultWorkspaceId, message }),
+        )
       }),
     ),
   )
 export const submitAgentLoop = (
   _agentLoop: AgentLoopService,
   message: Message,
-  options?: {
-    readonly agentOverride?: AgentName
-    readonly runSpec?: RunSpec
-    readonly interactive?: boolean
-  },
+  /** The agent the session runs as; set when the test's first turn creates it. */
+  admission?: SessionAdmission,
 ) =>
-  ensureStorageParents({ sessionId: message.sessionId, branchId: message.branchId }).pipe(
+  ensureStorageParents({
+    sessionId: message.sessionId,
+    branchId: message.branchId,
+    ...omitUndefined({ admission }),
+  }).pipe(
     Effect.flatMap(() =>
       Effect.gen(function* () {
         const actorClientFactory = yield* AgentLoopActor.Context
         const ref = yield* actorClientFactory(
           entityIdOf(DefaultWorkspaceId, message.sessionId, message.branchId),
         )
-        const payload = {
-          workspaceId: DefaultWorkspaceId,
-          message,
-          // Actor operation payloads require optional fields explicitly.
-          agentOverride: options?.agentOverride,
-          runSpec: options?.runSpec,
-          interactive: options?.interactive,
-        }
-        yield* ref.execute(AgentLoopActor.Submit.make(payload))
+        yield* ref.execute(AgentLoopActor.Submit.make({ workspaceId: DefaultWorkspaceId, message }))
       }),
     ),
   )

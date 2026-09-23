@@ -43,6 +43,7 @@ export {
   MessageSegment,
   ProjectedMessage,
   Session,
+  SessionAdmission,
   ToolInteraction,
   SteerCommand,
   assistantMessageIdForTurn,

@@ -33,8 +33,8 @@ import {
   RpcId,
   type SessionId,
 } from "../domain/ids.js"
+import type { AgentName } from "../domain/agent.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { type AgentName, DEFAULT_AGENT_NAME, type RunSpec } from "../domain/agent.js"
 import {
   emptyLoopQueueState,
   FollowUpQueueEntryInfo,
@@ -57,7 +57,6 @@ import {
   SessionOperationStorage,
   type SessionStorage,
   ToolCallBindingStorage,
-  type TurnRecord,
   TurnRecordStorage,
 } from "../storage/storage.js"
 import {
@@ -91,7 +90,7 @@ import {
   type WaitingForInteractionState,
 } from "../domain/agent-loop.js"
 import { type AgentEvent, ErrorOccurred, EventPublisher } from "../domain/event.js"
-import { causeChainMessage, omitUndefined } from "../domain/guards.js"
+import { causeChainMessage } from "../domain/guards.js"
 import {
   type ActiveStreamHandle,
   type AgentLoopTurnProfile,
@@ -99,6 +98,7 @@ import {
   makeAgentLoopTurnExecution,
   makeTurnLedger,
   runAgentLoopTurnProfile,
+  sessionAgentName,
   signalActiveStreamInterrupt,
   type TurnOutcome,
 } from "./turn.js"
@@ -307,9 +307,6 @@ const toQueueEntry = (
     content,
     createdAt: item.message.createdAt.getTime(),
   }
-  if (!Predicate.isUndefined(item.agentOverride)) {
-    Object.assign(fields, { agentOverride: item.agentOverride })
-  }
   if (tag === "Steering") {
     return Option.some(SteeringQueueEntryInfo.make(fields))
   }
@@ -435,15 +432,6 @@ const clearInFlightQueuedTurn = (queue: LoopQueueState, messageId: MessageId): L
   return queue
 }
 
-/**
- * A steering item a running step may take.
- *
- * An item carrying an agent override or a run spec needs a turn profile of its
- * own, which a step boundary cannot build, so it waits for a turn boundary.
- */
-const deliverableAtStep = (item: QueuedTurnItem) =>
-  Predicate.isUndefined(item.agentOverride) && Predicate.isUndefined(item.runSpec)
-
 /** The loop still owns this message: starting, running, waiting, or queued. */
 const stateHoldsMessage = (state: LoopState, messageId: MessageId) =>
   state._tag !== "Idle" && state.message.id === messageId
@@ -497,17 +485,15 @@ export const buildInitialAgentLoopState = (params: {
  * the current phase reads either one, never both.
  */
 const projectRuntimeState = (s: AgentLoopState): SessionRuntimeState => {
-  // One shipped agent. A run narrows it per turn through `agentOverride`; the
-  // branch itself never holds another, so the projection names the default.
-  const agent = DEFAULT_AGENT_NAME
+  // The agent is the session's, not the loop's: the snapshot names it.
   const queue = queueSnapshotFromQueueState(s.queue)
 
   return Match.type<LoopState>().pipe(
     Match.tagsExhaustive({
-      Idle: () => SessionRuntimeStateSchema.cases.Idle.make({ agent, queue }),
-      Running: () => SessionRuntimeStateSchema.cases.Running.make({ agent, queue }),
+      Idle: () => SessionRuntimeStateSchema.cases.Idle.make({ queue }),
+      Running: () => SessionRuntimeStateSchema.cases.Running.make({ queue }),
       WaitingForInteraction: () =>
-        SessionRuntimeStateSchema.cases.WaitingForInteraction.make({ agent, queue }),
+        SessionRuntimeStateSchema.cases.WaitingForInteraction.make({ queue }),
     }),
   )(s.state)
 }
@@ -833,7 +819,7 @@ export const makeLoopInbox = (
     }) {
       if (params.finalStep) return false
       const state = yield* TxSubscriptionRef.get(scope.loopRef)
-      const items = state.queue.steering.filter(deliverableAtStep)
+      const items = state.queue.steering
       for (const item of items) {
         yield* params.join(item)
       }
@@ -899,6 +885,8 @@ type AgentLoopWorkerContext<E = never, R = never> = {
   ) => Effect.Effect<void>
   readonly publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
   readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
+  /** The agent the session runs as; it names the actor of each turn's wide event. */
+  readonly sessionAgent: Effect.Effect<AgentName, AgentLoopError | E, R>
 }
 
 /**
@@ -1035,7 +1023,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
         withWideEvent({
           service: "agent-loop",
           method: "turn",
-          actor: startState.agentOverride ?? DEFAULT_AGENT_NAME,
+          actor: yield* scope.sessionAgent,
           envelope: { sessionId: scope.sessionId, branchId: scope.branchId },
         }),
         Effect.matchCauseEffect({
@@ -1315,7 +1303,7 @@ const makeAgentLoopBehavior = (
     const extensionRegistry = yield* ExtensionRegistry
     const eventPublisher = yield* EventPublisher
     yield* ToolCallBindingStorage
-    const turnRecords = yield* TurnRecordStorage
+    yield* TurnRecordStorage
     yield* ToolRunner
     const followUp = yield* AgentLoopFollowUp
     const messageStorage = yield* MessageStorage
@@ -1496,6 +1484,7 @@ const makeAgentLoopBehavior = (
             ),
           () => keepAlive(false),
         ),
+      sessionAgent: sessionAgentName(sessionId),
     })
 
     const startTurnWorker = Effect.forkIn(
@@ -1567,34 +1556,8 @@ const makeAgentLoopBehavior = (
       })
       const message = incomplete.at(-1)
       if (Predicate.isUndefined(message)) return Option.none<QueuedTurnItem>()
-      // The turn resumes under the admission that started it. A turn cut
-      // before it settled still has it in the queue's in-flight slot; one
-      // that settled has it in its record.
-      const inFlight = (yield* inbox.read).queue.inFlight
-      if (Predicate.isNotUndefined(inFlight) && inFlight.message.id === message.id) {
-        return Option.some(inFlight)
-      }
-      const record = yield* turnRecords.get({ sessionId, branchId, messageId: message.id }).pipe(
-        Effect.asSome,
-        Effect.catchEager((error) =>
-          Effect.logWarning("agent-loop.recovery-read-failed").pipe(
-            Effect.annotateLogs({ read: "turn record", sessionId, branchId, error: String(error) }),
-            Effect.as(Option.none<TurnRecord>()),
-          ),
-        ),
-      )
-      return Option.some<QueuedTurnItem>({
-        message,
-        ...Option.match(record, {
-          onNone: () => ({}),
-          onSome: (value) =>
-            omitUndefined({
-              agentOverride: value.agentOverride,
-              runSpec: value.runSpec,
-              interactive: value.interactive,
-            }),
-        }),
-      })
+      // The session names the agent the resumed turn runs as.
+      return Option.some<QueuedTurnItem>({ message })
     })
 
     return {
@@ -2043,9 +2006,6 @@ const buildAgentLoopActorHandlers = (config: {
       readonly message?: MessageType
       readonly content?: string
       readonly metadata?: MessageMetadata
-      readonly agentOverride?: AgentName
-      readonly runSpec?: RunSpec
-      readonly interactive?: boolean
       readonly wake?: boolean
     }
 
@@ -2076,9 +2036,6 @@ const buildAgentLoopActorHandlers = (config: {
       yield* ensureTarget(message)
       const item: QueuedTurnItem = {
         message,
-        agentOverride: input.agentOverride,
-        runSpec: input.runSpec,
-        interactive: input.interactive,
         wake: input.wake,
       }
       return item
@@ -2306,12 +2263,7 @@ const buildAgentLoopActorHandlers = (config: {
         yield* ensureTarget(operation.message)
         yield* markWrite
         if (yield* turnAlreadyCompleted(operation.message.id)) return
-        const item: QueuedTurnItem = {
-          message: operation.message,
-          agentOverride: operation.agentOverride,
-          runSpec: operation.runSpec,
-          interactive: operation.interactive,
-        }
+        const item: QueuedTurnItem = { message: operation.message }
         yield* reserveAndStart(handle, item, { queueOnly: false })
       })
 
@@ -2371,7 +2323,6 @@ const buildAgentLoopActorHandlers = (config: {
           })
           const item: QueuedTurnItem = {
             message: interjectMessage,
-            agentOverride: command.agent,
             wake: command.wake,
           }
           // Steering joins the running turn at its next step boundary; the open

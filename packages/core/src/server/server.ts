@@ -21,6 +21,7 @@ import {
   copyMessageToBranch,
   projectMessagesWithToolInteractions,
   Session,
+  type SessionAdmission,
   toolCallReceipts,
 } from "../domain/message.js"
 import {
@@ -128,8 +129,7 @@ import {
   SessionProfileCache,
 } from "../runtime/extension-host.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
-import { type AgentName, DEFAULT_AGENT_NAME } from "../domain/agent.js"
-import { applyAgentOverrides, resolveSessionSettings } from "../runtime/turn.js"
+import { resolveSessionSettings, sessionAgentDefinition } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { omitUndefined } from "../domain/guards.js"
@@ -499,7 +499,9 @@ const makeSessionMutationsService: Effect.Effect<
   /**
    * Check the parent a create names and admit the child's depth. Returns the
    * thread the new session joins: the parent's for a handoff
-   * (`continueThread`), none otherwise, so storage starts a new one.
+   * (`continueThread`), none otherwise, so storage starts a new one. A handoff
+   * also keeps the parent's admission unless the create names its own: it
+   * continues the same work as the same agent.
    */
   const admitParent = Effect.fn("SessionMutations.admitParent")(function* (
     input: CreateSessionInput,
@@ -511,7 +513,7 @@ const makeSessionMutationsService: Effect.Effect<
       if (input.continueThread === true) {
         return yield* new NotFoundError({ message: "continueThread requires parentSessionId" })
       }
-      return Option.none<SessionId>()
+      return { threadId: Option.none<SessionId>(), admission: input.admission }
     }
     const parentSessionId = input.parentSessionId
     const parent = yield* sessionStorage.getSession(parentSessionId)
@@ -535,8 +537,13 @@ const makeSessionMutationsService: Effect.Effect<
         })
       }
     }
-    if (input.continueThread !== true) return Option.none<SessionId>()
-    return Option.some(parent.threadId ?? parent.id)
+    if (input.continueThread !== true) {
+      return { threadId: Option.none<SessionId>(), admission: input.admission }
+    }
+    return {
+      threadId: Option.some(parent.threadId ?? parent.id),
+      admission: input.admission ?? parent.admission,
+    }
   })
 
   const createSession = Effect.fn("SessionMutations.createSession")(function* (
@@ -548,7 +555,7 @@ const makeSessionMutationsService: Effect.Effect<
       (result) => result,
       Effect.gen(function* () {
         const sessionId = SessionId.make(yield* platform.randomId)
-        const threadId = yield* admitParent(input)
+        const { threadId, admission } = yield* admitParent(input)
 
         const branchId = BranchId.make(yield* platform.randomId)
         const now = yield* DateTime.nowAsDate
@@ -564,7 +571,7 @@ const makeSessionMutationsService: Effect.Effect<
           parentSessionId: input.parentSessionId,
           parentBranchId: input.parentBranchId,
           threadId: Option.getOrUndefined(threadId),
-          admission: input.admission,
+          admission,
           createdAt: now,
           updatedAt: now,
         })
@@ -915,15 +922,12 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
   const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(session.cwd))
   const configService = yield* ConfigService
   const config = yield* configService.get(session.cwd)
-  const agent = Option.fromUndefinedOr(
-    [...registry.getResolved().agents.values()].find((entry) => entry.name === runtime.agent),
-  )
-  const settings = resolveSessionSettings(
-    Option.map(agent, (definition) =>
-      applyAgentOverrides(definition, Option.fromUndefinedOr(config.agents?.[definition.name])),
-    ),
-    session,
-  )
+  const agent = sessionAgentDefinition({
+    agents: [...registry.getResolved().agents.values()],
+    admission: Option.fromUndefinedOr(session.admission),
+    configAgents: Option.fromUndefinedOr(config.agents),
+  })
+  const settings = resolveSessionSettings(agent.definition, session)
 
   // Extension state is no longer hydrated through the session snapshot —
   // clients call the extension's typed `client.extension.request(...)` on
@@ -938,6 +942,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     lastEventId: Option.getOrNull(Option.fromUndefinedOr(snapshotState.lastEventId)),
     modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
+    agent: agent.name,
     resolvedModelId: settings.modelId,
     resolvedReasoningLevel: Option.getOrUndefined(settings.reasoningLevel),
     runtime,
@@ -1079,8 +1084,6 @@ const RpcHandlers = GentRpcs.toLayer(
             sessionId: input.sessionId,
             branchId: input.branchId,
             content: input.content,
-            agentOverride: input.agentOverride,
-            runSpec: input.runSpec,
             requestId: input.requestId,
           })
           .pipe(
@@ -1308,20 +1311,21 @@ const RpcHandlers = GentRpcs.toLayer(
             ),
           )
           const agents = [...registry.getResolved().agents.values()]
-          const modelFor = (name: AgentName) =>
+          const modelFor = (admission: Option.Option<SessionAdmission>) =>
             resolveSessionSettings(
-              Option.map(
-                Option.fromUndefinedOr(agents.find((entry) => entry.name === name)),
-                (definition) =>
-                  applyAgentOverrides(
-                    definition,
-                    Option.fromUndefinedOr(config.agents?.[definition.name]),
-                  ),
-              ),
+              sessionAgentDefinition({
+                agents,
+                admission,
+                configAgents: Option.fromUndefinedOr(config.agents),
+              }).definition,
               Option.getOrElse(session, () => ({})),
             ).modelId
-          const modelIds = [modelFor(DEFAULT_AGENT_NAME)]
-          if (!Predicate.isUndefined(agentName)) modelIds.push(modelFor(agentName))
+          // The session's own agent, then an agent the caller asks about.
+          const modelIds = [
+            modelFor(Option.flatMap(session, (found) => Option.fromUndefinedOr(found.admission))),
+          ]
+          if (!Predicate.isUndefined(agentName))
+            modelIds.push(modelFor(Option.some({ agent: agentName })))
           return yield* listAuthProviders(modelIds).pipe(
             Effect.provideService(ExtensionRegistry, registry),
             Effect.provideService(Auth, authStore),

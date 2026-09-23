@@ -97,6 +97,7 @@ import {
   Session,
   type SteerCommand,
   toolResultMessageIdForTurn,
+  type SessionAdmission,
 } from "../../src/domain/message"
 import {
   defineExtension,
@@ -477,7 +478,6 @@ describe("concurrency", () => {
         yield* loop.runOnce({
           sessionId: session.id,
           branchId: branch.id,
-          agentName: DEFAULT_AGENT_NAME,
           prompt: "run serial tools",
         })
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
@@ -1255,7 +1255,7 @@ describe("max turn steps", () => {
       yield* Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
         yield* runAgentLoop(agentLoop, userMessage("who are you"), {
-          agentOverride: AgentName.make("no-such-agent"),
+          agent: AgentName.make("no-such-agent"),
         })
 
         const events = yield* Ref.get(eventsRef)
@@ -1792,14 +1792,19 @@ describe("native model compaction integration", () => {
     return Effect.scoped(
       Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
-        yield* ensureStorageParents({ sessionId, branchId })
+        const admission: SessionAdmission = {
+          runSpec: { overrides: { modelId, reasoningEffort: "high" } },
+        }
+        yield* ensureStorageParents({ sessionId, branchId, admission })
         const storage = yield* MessageStorage
         yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
           discard: true,
         })
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "summarize then answer"), {
-          runSpec: { overrides: { modelId, reasoningEffort: "high" } },
-        })
+        yield* runAgentLoop(
+          agentLoop,
+          makeMessage(sessionId, branchId, "summarize then answer"),
+          admission,
+        )
         const summary = observedHints.filter((hints) => Predicate.isNotUndefined(hints.maxTokens))
         expect(summary).toHaveLength(1)
         expect(summary[0]?.reasoning).toBe("none")
@@ -1838,14 +1843,17 @@ describe("native model compaction integration", () => {
     return Effect.scoped(
       Effect.gen(function* () {
         const agentLoop = yield* makeAgentLoopService
-        yield* ensureStorageParents({ sessionId, branchId })
+        const admission = { runSpec: { overrides: { contextLength: 6_000 } } }
+        yield* ensureStorageParents({ sessionId, branchId, admission })
         const storage = yield* MessageStorage
         yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
           discard: true,
         })
-        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "small current turn"), {
-          runSpec: { overrides: { contextLength: 6_000 } },
-        })
+        yield* runAgentLoop(
+          agentLoop,
+          makeMessage(sessionId, branchId, "small current turn"),
+          admission,
+        )
 
         expect(providerCalls).toBe(2)
         const durable = yield* storage.listMessages(branchId)
@@ -2182,6 +2190,7 @@ const makeHarness = (initial: { state: LoopState; queue: LoopQueueState }) =>
         Ref.update(ranTurns, (ids) => [...ids, String(state.message.id)]).pipe(
           Effect.as(TurnOutcome.cases.Done.make({})),
         ),
+      sessionAgent: Effect.succeed(DEFAULT_AGENT_NAME),
     })
     const phase = inbox.phase
     const queue = TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue))
@@ -3263,52 +3272,6 @@ describe("model-change notice", () => {
       }).pipe(Effect.timeout("30 seconds")),
     40_000,
   )
-
-  it.scopedLive(
-    "a turn under another agent writes no notice; the turn after it notices the change back",
-    () =>
-      Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          textStep("default one"),
-          textStep("helper one"),
-          textStep("default again"),
-        ])
-        const { client, sessionId, branchId } = yield* createRpcHarness({
-          ...e2ePreset,
-          agents: [...testAgents, helperAgent],
-          providerLayer,
-        })
-        const turn = (content: string, reply: string, agentOverride?: AgentName) =>
-          Effect.gen(function* () {
-            yield* client.message.send({ sessionId, branchId, content, agentOverride })
-            return yield* waitFor(
-              client.message.list({ branchId }),
-              (current) =>
-                current.some((message) =>
-                  message.parts.some((part) => part.type === "text" && part.text === reply),
-                ),
-              10_000,
-              `reply: ${reply}`,
-            )
-          })
-        const notices = <M extends { readonly metadata?: { readonly customType?: string } }>(
-          messages: ReadonlyArray<M>,
-        ) => messages.filter((message) => message.metadata?.customType === "model-change")
-        yield* turn("first", "default one")
-        // The override picks its own model on purpose: no notice.
-        expect(notices(yield* turn("second", "helper one", helperAgent.name))).toHaveLength(0)
-        // Back on the default model, the helper's reply above is attributed.
-        const back = notices(yield* turn("third", "default again"))
-        expect(back).toHaveLength(1)
-        expect(
-          back[0]?.parts.some(
-            (part) =>
-              part.type === "text" && part.text.includes(`generated by ${helperAgent.model}`),
-          ),
-        ).toBe(true)
-        yield* controls.assertDone
-      }).pipe(Effect.timeout("15 seconds")),
-  )
 })
 
 describe("turn record", () => {
@@ -3356,7 +3319,7 @@ describe("turn record", () => {
             yield* submitAgentLoop(
               agentLoop,
               makeMessage(sessionId, branchId, "child task before restart"),
-              { agentOverride: helperAgent.name, runSpec, interactive: false },
+              { agent: helperAgent.name, runSpec, interactive: false },
             )
             yield* Deferred.await(firstCalled)
             // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
@@ -3457,7 +3420,7 @@ describe("turn record", () => {
             yield* submitAgentLoop(
               agentLoop,
               makeMessage(sessionId, branchId, "work under the helper"),
-              { agentOverride: helperAgent.name },
+              { agent: helperAgent.name },
             )
             yield* Deferred.await(firstCalled)
           }).pipe(
@@ -3546,7 +3509,7 @@ describe("turn record", () => {
             yield* submitAgentLoop(
               agentLoop,
               makeMessage(sessionId, branchId, "dispatch under the helper"),
-              { agentOverride: helperAgent.name },
+              { agent: helperAgent.name },
             )
             yield* Deferred.await(entered)
           }).pipe(
@@ -7259,7 +7222,6 @@ describe("streaming", () => {
             branchId: BranchId.make("b1"),
             requestId: "req-interject-priority",
             message: "steer now",
-            agent: helperAgent.name,
           })
           yield* Deferred.succeed(gate, void 0)
           yield* Fiber.join(fiber)

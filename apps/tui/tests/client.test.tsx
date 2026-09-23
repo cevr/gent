@@ -368,9 +368,9 @@ const snapshotOf = (
   lastEventId: nullValue,
   reasoningLevel: absent,
   resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+  agent: AgentName.make("cowork"),
   runtime: {
     _tag: "Idle",
-    agent: AgentName.make("cowork"),
     queue: emptyQueueSnapshot(),
   },
   metrics: {
@@ -653,7 +653,8 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: 42,
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        runtime: { _tag: "Running", agent: AgentName.make("main"), queue: emptyQueueSnapshot() },
+        agent: AgentName.make("main"),
+        runtime: { _tag: "Running", queue: emptyQueueSnapshot() },
         metrics: {
           turns: 1,
           durationMs: 0,
@@ -664,7 +665,6 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.isStreaming()).toBe(true)
       const runtime = {
         _tag: "Idle",
-        agent: AgentName.make("main"),
         queue: emptyQueueSnapshot(),
       } satisfies Parameters<ClientContextValue["applySessionRuntime"]>[0]["runtime"]
       client.applySessionRuntime({ sessionId, branchId: BranchId.make("old-branch"), runtime })
@@ -715,7 +715,8 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: 1,
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
-        runtime: { _tag: "Running", agent: AgentName.make("main"), queue: emptyQueueSnapshot() },
+        agent: AgentName.make("main"),
+        runtime: { _tag: "Running", queue: emptyQueueSnapshot() },
         metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
       })
       yield* notify("Usage: /driver <agent> <driver-id|default>")
@@ -726,7 +727,7 @@ describe("ClientProvider session lifecycle", () => {
       client.applySessionRuntime({
         sessionId,
         branchId,
-        runtime: { _tag: "Idle", agent: AgentName.make("main"), queue: emptyQueueSnapshot() },
+        runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
       })
       client.setError("provider refused the request")
       yield* notify('Unknown driver "nope".')
@@ -827,7 +828,7 @@ describe("ClientProvider session lifecycle", () => {
       expect(client.agent()).toBe(AgentName.make("deepwork"))
     }),
   )
-  it.live("model() reads the snapshot's server-resolved model", () =>
+  it.live("model() and agent() read the snapshot's server-resolved model and session agent", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       const setup = yield* Effect.promise(() =>
@@ -849,9 +850,9 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+        agent: AgentName.make("cowork"),
         runtime: {
           _tag: "Idle",
-          agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         },
         metrics: {
@@ -870,6 +871,8 @@ describe("ClientProvider session lifecycle", () => {
         ),
       )
       expect(client.model()).toBe("anthropic/claude-haiku-4-5-20251001")
+      // The footer names the session's agent, which the snapshot carries.
+      expect(client.agent()).toBe(AgentName.make("cowork"))
     }),
   )
   it.live("applySessionSnapshot refreshes the active session metadata", () =>
@@ -895,9 +898,9 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: "high",
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+        agent: AgentName.make("cowork"),
         runtime: {
           _tag: "Idle",
-          agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         },
         metrics: {
@@ -958,9 +961,9 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: "high",
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+        agent: AgentName.make("cowork"),
         runtime: {
           _tag: "Running",
-          agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         },
         metrics: {
@@ -1022,9 +1025,9 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: "medium",
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+        agent: AgentName.make("cowork"),
         runtime: {
           _tag: "Running",
-          agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         },
         metrics: {
@@ -1079,9 +1082,9 @@ describe("ClientProvider session lifecycle", () => {
         lastEventId: nullValue,
         reasoningLevel: absent,
         resolvedModelId: ModelId.make("anthropic/claude-haiku-4-5-20251001"),
+        agent: AgentName.make("cowork"),
         runtime: {
           _tag: "Idle",
-          agent: AgentName.make("cowork"),
           queue: emptyQueueSnapshot(),
         },
         metrics: {
@@ -1146,9 +1149,9 @@ const snapshotFor = (
   modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
   resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+  agent: AgentName.make("cowork"),
   runtime: {
     _tag: "Idle",
-    agent: AgentName.make("cowork"),
     queue: emptyQueueSnapshot(),
   },
   metrics: {
@@ -1161,7 +1164,6 @@ const snapshotFor = (
 
 const runtimeSnapshot = (): SessionRuntimeState => ({
   _tag: "Idle",
-  agent: AgentName.make("cowork"),
   queue: emptyQueueSnapshot(),
 })
 

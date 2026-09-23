@@ -12,12 +12,7 @@ import {
   TxRef,
   TxSemaphore,
 } from "effect"
-import {
-  type AgentDefinition,
-  AgentName,
-  RunSpecSchema,
-  type SessionDepthLimitError,
-} from "./agent.js"
+import { type AgentDefinition, type AgentName, type SessionDepthLimitError } from "./agent.js"
 import {
   getToolId,
   getToolMetadata,
@@ -690,9 +685,6 @@ export const SessionSendParams = Schema.Union([
     branchId: BranchId,
     content: Schema.String,
     commandId: Schema.optional(ActorCommandId),
-    agentOverride: Schema.optional(AgentName),
-    interactive: Schema.optional(Schema.Boolean),
-    runSpec: Schema.optional(RunSpecSchema),
     completion: Schema.optional(Schema.Literal("admission")),
   }),
   Schema.Struct({
@@ -711,7 +703,6 @@ export const SessionSendParams = Schema.Union([
     content: Schema.String,
     requestId: Schema.optional(RequestId),
     metadata: Schema.optional(MessageMetadata),
-    agent: Schema.optional(AgentName),
     wake: Schema.optional(Schema.Boolean),
   }),
 ]).pipe(Schema.toTaggedUnion("delivery"))
