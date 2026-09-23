@@ -577,20 +577,30 @@ export const doctor = Command.make("doctor", {}, () =>
   }),
 )
 
-/** A process holds the kernel lock, named or not: the database is in use. */
+/** A server holds or answers for the database, named or not: the database is in use. */
 const serverHoldsLock = Predicate.or(Predicate.isTagged("Alive"), Predicate.isTagged("Unnamed"))
+
+/** `storage reset` moves the database away, so it refuses while any server uses it. */
+export const refuseResetWhileServing = (
+  home: string,
+): Effect.Effect<void, CliStartupError, FileSystem.FileSystem | GentPlatform> =>
+  Effect.gen(function* () {
+    const status = yield* serverLock
+      .status(home)
+      .pipe(
+        Effect.mapError((error) => new CliStartupError({ message: error.message, cause: error })),
+      )
+    if (!serverHoldsLock(status)) return
+    yield* Console.error("Error: shared server is running. Stop it with `gent server stop` first.")
+    return yield* new CliStartupError({
+      message: "shared server is running; refusing to reset storage",
+    })
+  })
 
 const storageReset = Command.make("reset", {}, () =>
   Effect.gen(function* () {
     const home = yield* readHome
-    if (serverHoldsLock(yield* serverLock.status(home))) {
-      yield* Console.error(
-        "Error: shared server is running. Stop it with `gent server stop` first.",
-      )
-      return yield* new CliStartupError({
-        message: "shared server is running; refusing to reset storage",
-      })
-    }
+    yield* refuseResetWhileServing(home)
 
     const result = yield* resetStorage(home)
     if (result.archived.length === 0) {

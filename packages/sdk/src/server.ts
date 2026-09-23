@@ -5,6 +5,7 @@ import {
   Context,
   Deferred,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Match,
@@ -12,7 +13,7 @@ import {
   Path,
   Predicate,
   Schema,
-  type Scope,
+  Scope,
 } from "effect"
 import { join as pathJoin, resolve as pathResolve } from "node:path"
 import { Database } from "bun:sqlite"
@@ -403,6 +404,22 @@ const removeLock = (
     )
   })
 
+/**
+ * Remove an entry proved stale. The kernel lock is held from the read through
+ * the removal, so no new owner can write its entry in between. A lock that
+ * cannot be taken means a new owner holds it: its entry is not ours to remove.
+ */
+const removeStaleEntry = (
+  home: string,
+  serverId: string,
+): Effect.Effect<boolean, GentConnectionError, FileSystem.FileSystem | GentPlatform> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      if (!(yield* holdKernelLock(home))) return false
+      return yield* removeLock(home, serverId)
+    }),
+  )
+
 const lockStatus = (
   home: string,
 ): Effect.Effect<ServerLockStatus, GentConnectionError, FileSystem.FileSystem | GentPlatform> =>
@@ -413,28 +430,43 @@ const lockStatus = (
       if (held) return ServerLockStatus.cases.Unnamed.make({})
       return ServerLockStatus.cases.None.make({})
     }
-    if (held) return ServerLockStatus.cases.Alive.make({ entry: entry.value })
+    // A server from before the kernel lock holds none, but it still answers for its entry.
+    if (held || (yield* probeServerLockEntryIdentity(entry.value))) {
+      return ServerLockStatus.cases.Alive.make({ entry: entry.value })
+    }
     return ServerLockStatus.cases.Stale.make({ entry: entry.value })
   })
 
 /** `stop` polls a signalled server this many times, 100 ms apart, before it gives up. */
 const STOP_WAIT_ATTEMPTS = 20
 
-const releasedWithin = (
+/** Gone means the kernel lock is free and the entry's endpoint no longer answers. */
+const serverGone = (
   home: string,
+  entry: ServerLockEntry,
+): Effect.Effect<boolean, GentConnectionError, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    if (yield* kernelLockHeld(home)) return false
+    return !(yield* probeServerLockEntryIdentity(entry))
+  })
+
+const goneWithin = (
+  home: string,
+  entry: ServerLockEntry,
 ): Effect.Effect<boolean, GentConnectionError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     for (let attempt = 0; attempt < STOP_WAIT_ATTEMPTS; attempt++) {
-      if (!(yield* kernelLockHeld(home))) return true
+      if (yield* serverGone(home, entry)) return true
       yield* Effect.sleep("100 millis")
     }
-    return !(yield* kernelLockHeld(home))
+    return yield* serverGone(home, entry)
   })
 
 /**
  * Stop the server the entry names. SIGTERM goes out only after the identity
  * endpoint confirms every field of the entry, so a reused pid is never signalled.
- * An entry whose kernel lock is free is proved stale, and `removeStale` removes it.
+ * An entry whose kernel lock is free and whose endpoint does not answer is
+ * proved stale, and `removeStale` removes it.
  */
 const stopLocked = (
   home: string,
@@ -447,7 +479,7 @@ const stopLocked = (
     const { entry } = status
     if (status._tag === "Stale") {
       if (options?.removeStale !== true) return ServerStopResult.cases.NotRunning.make({ entry })
-      yield* removeLock(home, entry.serverId)
+      yield* removeStaleEntry(home, entry.serverId)
       return ServerStopResult.cases.Removed.make({ entry })
     }
     if (!(yield* probeServerLockEntryIdentity(entry))) {
@@ -455,8 +487,9 @@ const stopLocked = (
     }
     const platform = yield* GentPlatform
     yield* platform.signal(entry.pid, "SIGTERM").pipe(Effect.ignore)
-    if (!(yield* releasedWithin(home))) return ServerStopResult.cases.StillRunning.make({ entry })
-    yield* removeLock(home, entry.serverId)
+    if (!(yield* goneWithin(home, entry)))
+      return ServerStopResult.cases.StillRunning.make({ entry })
+    yield* removeStaleEntry(home, entry.serverId)
     return ServerStopResult.cases.Stopped.make({ entry })
   })
 
@@ -1158,11 +1191,13 @@ const buildOwnedServer = (
  * Server id, db and build prove the endpoint; pid and host prove signal
  * ownership, so a pid reused after a crash is never attached to or signalled.
  */
+const IDENTITY_PROBE_TIMEOUT = "3 seconds"
+
 const probeServerLockEntryIdentity = (entry: ServerLockEntry): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
     const baseUrl = entry.rpcUrl.replace("/rpc", "")
-    const response = yield* http.get(`${baseUrl}/_gent/identity`).pipe(Effect.timeout(3000))
+    const response = yield* http.get(`${baseUrl}/_gent/identity`)
     if (response.status >= 400) return false
     const identity = yield* Schema.decodeUnknownEffect(
       Schema.Struct({
@@ -1181,6 +1216,8 @@ const probeServerLockEntryIdentity = (entry: ServerLockEntry): Effect.Effect<boo
       identity.buildFingerprint === entry.buildFingerprint
     )
   }).pipe(
+    // One bound over the request and the body: a server can send headers and stall its body.
+    Effect.timeout(IDENTITY_PROBE_TIMEOUT),
     // @effect-diagnostics-next-line strictEffectProvide:off self-contained probe, no scope lifetime
     Effect.provide(FetchHttpClient.layer),
     Effect.catchEager(() => Effect.succeed(false)),
@@ -1236,23 +1273,41 @@ const resolveServerInternal = (
     // An entry that failed the identity probe once. The owner writes its entry
     // only after it listens, so a second failure on the same entry is final.
     let unanswered = Option.none<string>()
+    const attachOrBlock = (holder: ServerLockEntry) => {
+      if (holder.buildFingerprint === fingerprint && holder.dbPath === dbPath) {
+        return Effect.succeed(
+          GentServer.cases.Attached.make({
+            url: holder.rpcUrl,
+            workspaceId: workspaceIdForCwd(options.cwd),
+          }),
+        )
+      }
+      return Effect.fail(
+        new GentConnectionError({ message: holderBlocksMessage(holder, fingerprint, dbPath) }),
+      )
+    }
+    const scope = yield* Effect.scope
     for (let attempt = 0; attempt < HOLDER_WAIT_ATTEMPTS; attempt++) {
-      if (yield* serverLock.hold(home))
+      // The lock is taken in a child scope, so a start that does not own can let it go.
+      const lockScope = yield* Scope.fork(scope)
+      if (yield* serverLock.hold(home).pipe(Scope.provide(lockScope))) {
+        // A server from before the kernel lock holds none; its entry still names it.
+        const existing = yield* serverLock.read(home)
+        if (
+          Option.isSome(existing) &&
+          existing.value.dbPath === dbPath &&
+          (yield* probeServerLockEntryIdentity(existing.value))
+        ) {
+          yield* Scope.close(lockScope, Exit.void)
+          return yield* attachOrBlock(existing.value)
+        }
         return yield* startOwnedServer(options, stateSpec, providerSpec, home, dbPath, fingerprint)
+      }
+      yield* Scope.close(lockScope, Exit.void)
       const entry = yield* serverLock.read(home)
       if (Option.isSome(entry)) {
         const holder = entry.value
-        if (yield* probeServerLockEntryIdentity(holder)) {
-          if (holder.buildFingerprint === fingerprint && holder.dbPath === dbPath) {
-            return GentServer.cases.Attached.make({
-              url: holder.rpcUrl,
-              workspaceId: workspaceIdForCwd(options.cwd),
-            })
-          }
-          return yield* new GentConnectionError({
-            message: holderBlocksMessage(holder, fingerprint, dbPath),
-          })
-        }
+        if (yield* probeServerLockEntryIdentity(holder)) return yield* attachOrBlock(holder)
         if (Option.contains(unanswered, holder.serverId)) {
           return yield* new GentConnectionError({
             message: `PID ${holder.pid} holds ${paths.serverKernelLock} but does not answer as a gent server at ${holder.rpcUrl}; stop it, then retry`,
@@ -1269,7 +1324,8 @@ const resolveServerInternal = (
 
 /**
  * Start the server that owns the database. The caller holds the kernel lock in
- * this scope, so any entry already on disk names a server that is gone.
+ * this scope and has probed the entry on disk, so that entry names a server
+ * that is gone, or one on another database.
  */
 const startOwnedServer = (
   options: GentServerOptions,

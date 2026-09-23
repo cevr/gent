@@ -830,6 +830,63 @@ describe("Server Lock Ownership", () => {
   )
 
   it.scopedLive(
+    "an older-build server that answers but holds no kernel lock blocks startup unsignalled",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const home = yield* makeTmpHomeScoped
+          const dbPath = (yield* dataPaths(home)).dbPath
+          // A server from before the kernel lock: it serves its identity but holds no lock.
+          const holder = yield* lockWithIdentity(
+            home,
+            makeEntry({ dbPath, buildFingerprint: "older-build" }),
+            {},
+          )
+          expect((yield* serverLock.status(home))._tag).toBe("Alive")
+          const { result, signals } = yield* Gent.server({
+            cwd: home,
+            state: Gent.state.sqlite({ home }),
+            provider: Gent.provider.mock(),
+          }).pipe(Effect.flip, withSignalTrap)
+          expect(result._tag).toBe("@gent/core/GentConnectionError")
+          expect(result.message).toContain(`PID ${holder.pid}`)
+          expect(result.message).toContain("older-build")
+          expect(signals).toEqual([])
+          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe(holder.serverId)
+        }),
+      ),
+  )
+
+  it.scopedLive(
+    "an identity endpoint that sends headers and never finishes its body is bounded",
+    () =>
+      provideFs(
+        Effect.gen(function* () {
+          const endpoint = yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun endpoint that stalls its body
+              Bun.serve({
+                port: 0,
+                fetch: () =>
+                  new Response(
+                    new ReadableStream({
+                      start: (controller) => controller.enqueue(new TextEncoder().encode("{")),
+                    }),
+                    { headers: { "content-type": "application/json" } },
+                  ),
+              }),
+            ),
+            (server) => Effect.promise(() => server.stop(true)),
+          )
+          const entry = makeEntry({ rpcUrl: `${new URL(endpoint.url).origin}/rpc` })
+          const answered = yield* serverLock.probe(entry).pipe(Effect.timeout("5 seconds"))
+          expect(answered).toBe(false)
+        }),
+      ),
+    10_000,
+  )
+
+  it.scopedLive(
     "a crashed server's lock is released by the OS, even while its pid is reused",
     () =>
       provideFs(
@@ -900,7 +957,15 @@ describe("serverLock.stop", () => {
         rpcUrl: `${new URL(endpoint.url).origin}/rpc`,
       })
       yield* serverLock.write(home, locked)
-      const { release } = yield* holdAsAnotherServer(home)
+      const held = yield* holdAsAnotherServer(home)
+      // The server exits: its kernel lock goes, and its endpoint stops answering.
+      const release = held.release.pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            void endpoint.stop(true)
+          }),
+        ),
+      )
       return { locked, release }
     })
 
@@ -921,6 +986,48 @@ describe("serverLock.stop", () => {
         const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
         expect(result._tag).toBe("None")
         expect(signals).toEqual([])
+      }),
+    ),
+  )
+
+  it.scopedLive("stale-entry cleanup never removes the entry a new owner writes", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const lockPath = (yield* dataPaths(home)).serverLock
+        const base = yield* FileSystem.FileSystem
+        const newOwner = makeEntry({ serverId: "new-owner" })
+        const newOwnerScope = yield* Scope.make()
+        yield* Effect.addFinalizer(() => Scope.close(newOwnerScope, Exit.void))
+        let paused = false
+        let newOwnerTookLock = false
+        // Between the cleanup's read and its removal, a new server tries to own the database.
+        const racing = FileSystem.FileSystem.of({
+          ...base,
+          remove: (path, options) => {
+            if (path !== lockPath || paused) return base.remove(path, options)
+            paused = true
+            return Effect.gen(function* () {
+              if (yield* serverLock.hold(home).pipe(Scope.provide(newOwnerScope))) {
+                newOwnerTookLock = true
+                yield* serverLock.write(home, newOwner)
+              }
+            }).pipe(
+              Effect.orDie,
+              Effect.provideService(FileSystem.FileSystem, base),
+              Effect.andThen(base.remove(path, options)),
+            )
+          },
+        })
+        yield* serverLock.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
+        const result = yield* serverLock
+          .stop(home, { removeStale: true })
+          .pipe(Effect.provideService(FileSystem.FileSystem, racing))
+        expect(result._tag).toBe("Removed")
+        expect(paused).toBe(true)
+        if (newOwnerTookLock) {
+          expect(Option.getOrThrow(yield* serverLock.read(home)).serverId).toBe("new-owner")
+        }
       }),
     ),
   )

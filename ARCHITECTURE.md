@@ -875,7 +875,7 @@ Production rule:
 `packages/sdk/src/server.ts` owns shared-server discovery. Two files sit beside `data.db` in the data directory (`GENT_DATA_DIR`, else `~/.gent`):
 
 - `server.lock.db` is the kernel lock. The owning server holds an exclusive SQLite lock on it (`BEGIN EXCLUSIVE`, `busy_timeout` 0) for the life of its scope. The OS releases it when the process exits. A server is alive exactly when this lock cannot be taken, so a crash, a reboot, or a reused pid cannot leave a live-looking lock, and two concurrent starts give one owner: the other waits for the owner's entry and attaches.
-- `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. `gent server stop` sends SIGTERM only after the same probe; `--all` removes an entry whose kernel lock is free.
+- `server.lock` is the discovery entry the owner writes once it listens: url, pid, and the identity tuple. Clients attach only after `/_gent/identity` confirms the full tuple. An entry whose endpoint confirms the tuple counts as alive even when the kernel lock is free (a server from before the kernel lock), and a start probes it after it takes the lock, before it replaces the entry. `gent server stop` sends SIGTERM only after the same probe; `--all` removes an entry whose kernel lock is free and whose endpoint does not answer, and holds the kernel lock through that removal so a new owner's entry is never deleted.
 
 A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it.
 
