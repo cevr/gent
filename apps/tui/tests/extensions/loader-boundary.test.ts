@@ -1401,6 +1401,38 @@ export default defineClientExtension("@test/b", {
       rmSync(collisionDir, { recursive: true, force: true })
     }),
   )
+  // The server fails every extension that shares an id within a scope; the
+  // client applies the same rule, so neither half of a duplicate loads.
+  it.scopedLive("two files with one id in a scope both fail and neither loads", () =>
+    Effect.gen(function* () {
+      yield* integrationFixture
+      const duplicateDir = join(TEST_DIR, "duplicate-id")
+      mkdirSync(duplicateDir, { recursive: true })
+      for (const name of ["one", "two"]) {
+        writeFileSync(
+          join(duplicateDir, `${name}.client.ts`),
+          `import { Effect } from "effect"
+import { defineClientExtension, rendererContribution } from "@gent/tui/extensions"
+
+export default defineClientExtension("@test/dup", {
+  setup: Effect.succeed(rendererContribution(["dup_${name}"], () => "${name}")),
+})`,
+        )
+      }
+      const resolved = yield* loadTuiExtensions({
+        builtins: builtinClientModules,
+        userDir: duplicateDir,
+        projectDir: join(TEST_DIR, "no-project"),
+      })
+      expect(resolved.renderers.has("dup_one")).toBe(false)
+      expect(resolved.renderers.has("dup_two")).toBe(false)
+      expect(resolved.failures).toEqual([
+        { id: "@test/dup", reason: 'Duplicate extension id "@test/dup" in scope "user"' },
+        { id: "@test/dup", reason: 'Duplicate extension id "@test/dup" in scope "user"' },
+      ])
+      rmSync(duplicateDir, { recursive: true, force: true })
+    }),
+  )
   it.scopedLive("builtin autocomplete sources stay visible", () =>
     Effect.gen(function* () {
       yield* integrationFixture

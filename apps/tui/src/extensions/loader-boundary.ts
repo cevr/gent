@@ -570,6 +570,30 @@ const importExtension = (
   )
 
 /**
+ * The server's duplicate-id rule: every extension that shares its id with
+ * another in the same scope fails, so neither half of a duplicate loads.
+ */
+const rejectDuplicateIds = (extensions: ReadonlyArray<ImportedExtension>) => {
+  const keyOf = (ext: ImportedExtension) => `${ext.scope}:${ext.module.id}`
+  const counts = new Map<string, number>()
+  for (const ext of extensions) {
+    const key = keyOf(ext)
+    counts.set(key, Option.getOrElse(Option.fromUndefinedOr(counts.get(key)), () => 0) + 1)
+  }
+  const unique: Array<ImportedExtension> = []
+  const failures: Array<ClientExtensionFailure> = []
+  for (const ext of extensions) {
+    if (Option.getOrElse(Option.fromUndefinedOr(counts.get(keyOf(ext))), () => 0) > 1) {
+      failures.push({
+        id: ext.module.id,
+        reason: `Duplicate extension id "${ext.module.id}" in scope "${ext.scope}"`,
+      })
+    } else unique.push(ext)
+  }
+  return { unique, failures }
+}
+
+/**
  * Load all TUI extensions: discover files, import modules, run setups, resolve
  * with scope precedence.
  *
@@ -602,11 +626,13 @@ export const loadTuiExtensions = (opts: {
         filePath: `builtin:${module.id}`,
       }),
     )
-    const enabled = [...builtins, ...imported].filter((ext) => !disabled.has(ext.module.id))
-    const [setupFailures, loaded] = yield* Effect.partition(enabled, (ext) =>
+    const enabled = rejectDuplicateIds(
+      [...builtins, ...imported].filter((ext) => !disabled.has(ext.module.id)),
+    )
+    const [setupFailures, loaded] = yield* Effect.partition(enabled.unique, (ext) =>
       setupExtension(ext, timeout),
     )
-    return resolveTuiExtensions(loaded, [...importFailures, ...setupFailures])
+    return resolveTuiExtensions(loaded, [...importFailures, ...enabled.failures, ...setupFailures])
   })
 
 // ── extension context ───────────────────────────────────────────────────────
