@@ -1078,6 +1078,59 @@ const literalMatch = (
   return Option.map(Arr.head(ranges), (first) => ({ strategy, index: first.start, ranges }))
 }
 
+/**
+ * A file's text with each CRLF read as LF, so a search typed with LF matches
+ * across CRLF lines. `toSource` maps a view offset back to the file: the LF of
+ * a CRLF maps to its CR, so a range that ends before a line break stops before
+ * both characters.
+ */
+interface LineFeedView {
+  readonly text: string
+  readonly toSource: (index: number) => number
+}
+
+const lineFeedView = (content: string): LineFeedView => {
+  if (!content.includes("\r\n")) return { text: content, toSource: (index) => index }
+  const offsets: Array<number> = []
+  for (let index = 0; index < content.length; index++) {
+    offsets.push(index)
+    if (content.charAt(index) === "\r" && content.charAt(index + 1) === "\n") index++
+  }
+  return {
+    text: content.replaceAll("\r\n", "\n"),
+    toSource: (index) => offsets[index] ?? content.length,
+  }
+}
+
+/** The line break the line at `index` ends with; the last line takes the one before it. */
+const lineEndingAt = (content: string, index: number): string => {
+  let lineEnd = content.indexOf("\n", index)
+  if (lineEnd === -1) lineEnd = content.lastIndexOf("\n", index - 1)
+  if (lineEnd > 0 && content.charAt(lineEnd - 1) === "\r") return "\r\n"
+  return "\n"
+}
+
+/**
+ * Match on the LF view, so line endings never decide a match; a search the
+ * view misses (one typed with a bare CR) is tried on the file as written.
+ */
+const findEditMatch = (content: string, oldString: string): Option.Option<MatchResult> => {
+  const view = lineFeedView(content)
+  const viewed = Option.map(
+    findMatch(view.text, oldString.replaceAll("\r\n", "\n")),
+    (match): MatchResult => ({
+      strategy: match.strategy,
+      index: view.toSource(match.index),
+      ranges: match.ranges.map((range) => ({
+        start: view.toSource(range.start),
+        end: view.toSource(range.end),
+      })),
+    }),
+  )
+  if (Option.isSome(viewed) || view.text === content) return viewed
+  return findMatch(content, oldString)
+}
+
 function findMatch(content: string, oldString: string): Option.Option<MatchResult> {
   // Tier 1: exact
   const exact = literalMatch("exact", content, oldString)
@@ -1094,16 +1147,22 @@ function findMatch(content: string, oldString: string): Option.Option<MatchResul
   return findNormalizedMatch(content, unescaped)
 }
 
-/** Splice `replacement` over each range. The replacement is literal text. */
+/**
+ * Splice `replacement` over each range. The replacement is literal text, and
+ * its line breaks take the ending of the line each range starts on, so a
+ * CRLF file stays CRLF and the lines outside the ranges keep their bytes.
+ */
 const spliceRanges = (
   content: string,
   ranges: ReadonlyArray<MatchRange>,
   replacement: string,
 ): string => {
+  const lines = replacement.replaceAll("\r\n", "\n")
   let result = ""
   let cursor = 0
   for (const range of ranges) {
-    result += content.slice(cursor, range.start) + replacement
+    const ending = lineEndingAt(content, range.start)
+    result += content.slice(cursor, range.start) + lines.replaceAll("\n", ending)
     cursor = range.end
   }
   return result + content.slice(cursor)
@@ -1162,7 +1221,7 @@ export const EditTool = tool({
         const replaceAll = params.replaceAll === true
 
         // Try fuzzy match strategy
-        const match = findMatch(content, params.oldString)
+        const match = findEditMatch(content, params.oldString)
 
         if (Option.isNone(match)) {
           return yield* new EditError({

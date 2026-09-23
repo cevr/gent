@@ -689,6 +689,45 @@ describe("file encodings", () => {
     }),
   )
 
+  encodingTest("edit matches across lines in a CRLF file and writes CRLF line endings", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const filePath = `${dir}/crlf.txt`
+      yield* fs.writeFileString(filePath, "alpha\r\nbeta\r\ngamma\r\n")
+      const result = yield* runToolWithCtx(
+        EditTool,
+        { path: filePath, oldString: "alpha\nbeta", newString: "one\ntwo\nthree" },
+        stubCtx,
+      )
+      expect(result.replacements).toBe(1)
+      expect(yield* fs.readFileString(filePath)).toBe("one\r\ntwo\r\nthree\r\ngamma\r\n")
+    }),
+  )
+
+  encodingTest(
+    "edit in a mixed file gives the replacement its line's ending and leaves other lines alone",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* fs.makeTempDirectoryScoped()
+        const filePath = `${dir}/mixed.txt`
+        yield* fs.writeFileString(filePath, "a\r\nb\nc\r\nd\n")
+        yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "b\nc", newString: "B\nC" },
+          stubCtx,
+        )
+        expect(yield* fs.readFileString(filePath)).toBe("a\r\nB\nC\r\nd\n")
+        yield* runToolWithCtx(
+          EditTool,
+          { path: filePath, oldString: "a\nB", newString: "x\ny\nB" },
+          stubCtx,
+        )
+        expect(yield* fs.readFileString(filePath)).toBe("x\r\ny\r\nB\nC\r\nd\n")
+      }),
+  )
+
   // Bytes the decoder can only show as U+FFFD: a rewrite of the text would not
   // give them back.
   const malformed: ReadonlyArray<[string, Uint8Array]> = [
