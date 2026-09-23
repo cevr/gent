@@ -2525,7 +2525,8 @@ describe("shipped model surface", () => {
             assistantMessageId: cellAssistant?.id,
           },
         ])
-        // A reload reads the inner call back from those events, with its input and output.
+        // A reload reads the inner call back from those events: the row's input and a
+        // bounded summary, never the full output.
         const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
         const cellInteraction = snapshot.messages
           .flatMap((message) => message.toolInteractions)
@@ -2535,9 +2536,10 @@ describe("shipped model surface", () => {
             toolName: "read",
             status: "completed",
             input: { path: file },
-            output: expect.stringContaining("shipped surface"),
+            summary: expect.stringContaining("shipped surface"),
           },
         ])
+        expect(cellInteraction?.operations?.[0]?.output).toBeUndefined()
 
         // Working data from the first cell is still bound in the next turn.
         const second = yield* runTurn("use the note", "second")

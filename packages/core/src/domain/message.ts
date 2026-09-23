@@ -2,7 +2,7 @@ import { Option, Predicate, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import { AgentName, ModelId, ReasoningEffort, RunSpecSchema } from "./agent.js"
-import type { EventEnvelope, Usage } from "./event.js"
+import type { EventEnvelope, ToolCallStarted, Usage } from "./event.js"
 import * as Response from "effect/unstable/ai/Response"
 
 // ── head-tail ───────────────────────────────────────────────────────────────
@@ -115,8 +115,9 @@ export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteract
   ...ToolInteractionFields,
   /**
    * The calls a cell admitted, from the branch's tool receipts. Wire only,
-   * never stored. Absent when the branch has no receipts for them, as on a
-   * fork, which copies messages but not events.
+   * never stored. Each carries what its collapsed row draws: bounded scalar
+   * input and summary, never the output. Absent when the branch has no
+   * receipts for them, as on a fork, which copies messages but not events.
    */
   operations: Schema.optional(Schema.Array(ToolOperation)),
 }) {}
@@ -734,8 +735,36 @@ const findResultForToolCall = (
 /** What a branch's tool receipts add to its messages: durations, and the calls each cell admitted. */
 interface ToolCallReceipts {
   readonly durations: ReadonlyMap<ToolCallId, number>
-  /** Keyed by the admitting cell's call id, in start order. */
-  readonly operations: ReadonlyMap<ToolCallId, ReadonlyArray<ToolOperation>>
+  /** Keyed by `callKey` of the admitting cell, in start order. */
+  readonly operations: ReadonlyMap<string, ReadonlyArray<ToolOperation>>
+}
+
+/**
+ * A call's identity in a branch: the assistant message that holds it plus its
+ * id, as cell storage keys a cell. A provider can reuse a call id across
+ * steps. Historical receipts carry no message id and key by the call id alone.
+ */
+const callKey = (assistantMessageId: Option.Option<MessageId>, toolCallId: string): string =>
+  `${Option.getOrElse(assistantMessageId, () => "")}\u0000${toolCallId}`
+
+/**
+ * An operation's input as its collapsed row reads it: top-level scalar fields,
+ * each string cut to the summary bound. Nested values stay on the branch.
+ */
+// oxlint-disable-next-line effect/noNullish -- ToolInteraction.input is an UndefinedOr wire field; absent input stays absent.
+type BoundedInput = string | Readonly<Record<string, string | number | boolean>> | undefined
+
+// oxlint-disable-next-line effect/noUnknownParameters -- Tool input is an external model value; only its scalar fields are kept.
+const boundedInput = (input: unknown): BoundedInput => {
+  if (Predicate.isString(input)) return clipSummary(input)
+  if (!Predicate.isObject(input) || Array.isArray(input))
+    return Option.getOrUndefined(Option.none<string>())
+  const kept: Record<string, string | number | boolean> = {}
+  for (const [key, value] of Object.entries(input)) {
+    if (Predicate.isString(value)) kept[key] = clipSummary(value)
+    else if (Predicate.isNumber(value) || Predicate.isBoolean(value)) kept[key] = value
+  }
+  return kept
 }
 
 const noReceipts: ToolCallReceipts = { durations: new Map(), operations: new Map() }
@@ -746,29 +775,47 @@ const noReceipts: ToolCallReceipts = { durations: new Map(), operations: new Map
  * a call a cell admitted; it lands under that cell with its own input and
  * result, as the live feed draws it.
  */
+/** Where an admitted operation sits: under its cell's key, at its start order. */
+interface OperationSlot {
+  readonly parent: string
+  readonly index: number
+}
+
+/** Place one admitted call under its cell. The snapshot carries what the collapsed op row draws; the full output stays on the branch. */
+const admitOperation = (
+  event: ToolCallStarted,
+  operations: Map<string, Array<ToolOperation>>,
+  slots: Map<string, OperationSlot>,
+): void => {
+  if (Predicate.isUndefined(event.parentToolCallId)) return
+  const message = Option.fromUndefinedOr(event.assistantMessageId)
+  const key = callKey(message, event.toolCallId)
+  if (slots.has(key)) return
+  const parent = callKey(message, event.parentToolCallId)
+  const siblings = operations.get(parent) ?? []
+  slots.set(key, { parent, index: siblings.length })
+  siblings.push({
+    id: event.toolCallId,
+    toolName: event.toolName,
+    status: "running",
+    input: boundedInput(event.input),
+    summary: Option.getOrUndefined(Option.none<string>()),
+    output: Option.getOrUndefined(Option.none<string>()),
+    durationMs: Option.getOrUndefined(Option.none<number>()),
+  })
+  operations.set(parent, siblings)
+}
+
 export const toolCallReceipts = (events: ReadonlyArray<EventEnvelope>): ToolCallReceipts => {
   const started = new Map<ToolCallId, number>()
   const durations = new Map<ToolCallId, number>()
-  const operations = new Map<ToolCallId, Array<ToolOperation>>()
-  const operationIndex = new Map<ToolCallId, { parent: ToolCallId; index: number }>()
+  const operations = new Map<string, Array<ToolOperation>>()
+  const slots = new Map<string, OperationSlot>()
   for (const envelope of events) {
     const event = envelope.event
     if (event._tag === "ToolCallStarted") {
       started.set(event.toolCallId, envelope.createdAt)
-      const parent = event.parentToolCallId
-      if (Predicate.isUndefined(parent) || operationIndex.has(event.toolCallId)) continue
-      const siblings = operations.get(parent) ?? []
-      operationIndex.set(event.toolCallId, { parent, index: siblings.length })
-      siblings.push({
-        id: event.toolCallId,
-        toolName: event.toolName,
-        status: "running",
-        input: event.input,
-        summary: Option.getOrUndefined(Option.none<string>()),
-        output: Option.getOrUndefined(Option.none<string>()),
-        durationMs: Option.getOrUndefined(Option.none<number>()),
-      })
-      operations.set(parent, siblings)
+      admitOperation(event, operations, slots)
       continue
     }
     if (event._tag !== "ToolCallSucceeded" && event._tag !== "ToolCallFailed") continue
@@ -777,7 +824,9 @@ export const toolCallReceipts = (events: ReadonlyArray<EventEnvelope>): ToolCall
       Option.map(Option.fromUndefinedOr(startedAt), (at) => Math.max(0, envelope.createdAt - at)),
     )
     if (Predicate.isNotUndefined(durationMs)) durations.set(event.toolCallId, durationMs)
-    const position = operationIndex.get(event.toolCallId)
+    const position = slots.get(
+      callKey(Option.fromUndefinedOr(event.assistantMessageId), event.toolCallId),
+    )
     if (Predicate.isUndefined(position)) continue
     const siblings = operations.get(position.parent)
     const current = siblings?.[position.index]
@@ -787,8 +836,9 @@ export const toolCallReceipts = (events: ReadonlyArray<EventEnvelope>): ToolCall
     siblings[position.index] = {
       ...current,
       status,
-      summary: event.summary,
-      output: event.output,
+      summary: Option.getOrUndefined(
+        Option.map(Option.fromUndefinedOr(event.summary), clipSummary),
+      ),
       durationMs,
     }
   }
@@ -808,6 +858,7 @@ const settledOperations = (
 }
 
 const messagePartsToolInteractions = (
+  messageId: MessageId,
   parts: ReadonlyArray<MessagePart>,
   resultForToolCall: (partIndex: number) => Option.Option<ToolResultState>,
   receipts: ToolCallReceipts,
@@ -823,8 +874,13 @@ const messagePartsToolInteractions = (
       status = "completed"
       if (result.value.isError) status = "error"
     }
-    const operations = Option.map(Option.fromUndefinedOr(receipts.operations.get(id)), (found) =>
-      settledOperations(found, status),
+    const operations = Option.fromUndefinedOr(
+      receipts.operations.get(callKey(Option.some(messageId), id)),
+    ).pipe(
+      Option.orElse(() =>
+        Option.fromUndefinedOr(receipts.operations.get(callKey(Option.none(), id))),
+      ),
+      Option.map((found) => settledOperations(found, status)),
     )
     interactions.push({
       id,
@@ -853,6 +909,7 @@ export const projectMessagesWithToolInteractions = (
     projectMessage(
       message,
       messagePartsToolInteractions(
+        message.id,
         message.parts,
         (partIndex) => findResultForToolCall(index, partIndex, pairings),
         receipts,
