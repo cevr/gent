@@ -127,7 +127,6 @@ describe("resolveStartupAuthState", () => {
       const auth = yield* resolveStartupAuthState({
         client,
         state,
-        requestedAgent: AgentName.make("cowork"),
       })
       expect(auth.initialAgent).toBe(AgentName.make("deepwork"))
       expect(auth.missingProviders).toEqual([ProviderId.make("openai")])
@@ -189,7 +188,6 @@ describe("resolveStartupAuthState", () => {
       const auth = yield* resolveStartupAuthState({
         client,
         state,
-        requestedAgent: AgentName.make("cowork"),
       })
       expect(auth.initialAgent).toBeUndefined()
       expect(calls).toEqual([

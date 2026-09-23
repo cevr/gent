@@ -50,6 +50,7 @@ import {
   WakeTool,
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
+import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BranchId, SessionId, ToolCallId, SteerCommand } from "@gent/core/protocol"
 import {
   RequestId,
@@ -99,6 +100,29 @@ const answered = (messages: ReadonlyArray<MessageLike>, text: string): boolean =
   messages.some((message) => message.role === "assistant" && textOf(Option.some(message)) === text)
 
 describe("wake", () => {
+  test("a wake's result reads as its mode, due time, repeat and note, not JSON", () => {
+    const summary = (result: {
+      readonly wakeId: string
+      readonly dueAt: string
+      readonly everySeconds?: number
+      readonly mode: "wake" | "notify"
+      readonly note: string
+    }) =>
+      toolResultSummary(Option.some(WakeTool), { note: "check CI" }, { isFailure: false, result })
+    expect(
+      summary({ wakeId: "w1", dueAt: "2026-09-23T10:00:00.000Z", mode: "wake", note: "check CI" }),
+    ).toBe("wake at 2026-09-23T10:00:00.000Z · check CI")
+    expect(
+      summary({
+        wakeId: "w2",
+        dueAt: "2026-09-23T10:00:00.000Z",
+        everySeconds: 60,
+        mode: "notify",
+        note: "stand up",
+      }),
+    ).toBe("notify at 2026-09-23T10:00:00.000Z · every 60s · stand up")
+  })
+
   it.live("a due time comes from afterSeconds or an ISO time, never both", () =>
     Effect.gen(function* () {
       const now = 1_000_000

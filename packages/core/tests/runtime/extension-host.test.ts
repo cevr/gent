@@ -47,6 +47,7 @@ import {
   ApprovalService,
   buildResourceLayer,
   compileExtensionHooks,
+  configHealthStatuses,
   CurrentExtensionHostContext,
   type DiscoveredExtension,
   discoverExtensions,
@@ -88,10 +89,10 @@ import {
 } from "../../src/domain/ids"
 import { dateFromMillis, Session, Branch, messagePartsDisplayText } from "../../src/domain/message"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import type {
-  ModelDriverContribution,
+import {
+  type ModelDriverContribution,
   ProviderAuthInfo,
-  ProviderResolution,
+  type ProviderResolution,
 } from "../../src/domain/driver"
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
 import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
@@ -411,8 +412,11 @@ const makeCacheLayer = (params: {
     cwd: params.cwd,
     home: params.home,
   })
-  const configServiceLive = ConfigService.Live.pipe(
-    Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
+  // The config service and environment are outputs too, so a test reads
+  // config health from the same instance the cache builds profiles with.
+  const configLive = ConfigService.Live.pipe(
+    Layer.provide(BunServices.layer),
+    Layer.provideMerge(runtimeEnvironmentLive),
   )
   return SessionProfileCache.Live({
     failOnExtensionFailure: params.allowFailedExtensions !== true,
@@ -421,12 +425,12 @@ const makeCacheLayer = (params: {
     extensions: params.extensions,
   }).pipe(
     Layer.provide(
-      Layer.mergeAll(
+      Layer.merge(
         BunServices.layer,
-        configServiceLive,
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
       ),
     ),
+    Layer.provideMerge(configLive),
   )
 }
 
@@ -490,40 +494,45 @@ describe("session profile resolution", () => {
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
-  it.scopedLive("a broken config file resolves the profile and reports the file as a failure", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const launch = yield* fs.makeTempDirectoryScoped()
-      const project = yield* fs.makeTempDirectoryScoped()
-      const home = yield* fs.makeTempDirectoryScoped()
-      const projectConfig = path.join(project, ".gent", "config.json")
-      yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
-      // A trailing comma: not JSON.
-      yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"], }')
-      const healthy = markerExtension("@gent/test-session-profile/config-healthy", "live")
+  it.scopedLive(
+    "a broken config file still resolves the profile; health, not the profile, reports it",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const launch = yield* fs.makeTempDirectoryScoped()
+        const project = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const projectConfig = path.join(project, ".gent", "config.json")
+        yield* fs.makeDirectory(path.dirname(projectConfig), { recursive: true })
+        // A trailing comma: not JSON.
+        yield* fs.writeFileString(projectConfig, '{ "disabledExtensions": ["x"], }')
+        const healthy = markerExtension("@gent/test-session-profile/config-healthy", "live")
 
-      yield* Effect.gen(function* () {
-        const cache = yield* SessionProfileCache
-        const profile = yield* cache.resolve(project)
-        expect(profile.resolved.extensions.map((extension) => extension.manifest.id)).toEqual([
-          ExtensionId.make("@gent/test-session-profile/config-healthy"),
-        ])
-        expect(profile.resolved.failedExtensions).toMatchObject([
-          { sourcePath: projectConfig, scope: "project", phase: "load" },
-        ])
-      }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(
-          makeCacheLayer({
-            cwd: launch,
-            home,
-            extensions: [healthy],
-            allowFailedExtensions: true,
-          }),
-        ),
-      )
-    }).pipe(Effect.provide(BunPlatformLive)),
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const profile = yield* cache.resolve(project)
+          expect(profile.resolved.extensions.map((extension) => extension.manifest.id)).toEqual([
+            ExtensionId.make("@gent/test-session-profile/config-healthy"),
+          ])
+          // The cached profile outlives a fix to the file, so it holds no config
+          // failure; the live health read reports the file.
+          expect(profile.resolved.failedExtensions).toEqual([])
+          expect(yield* configHealthStatuses(project)).toMatchObject([
+            { sourcePath: projectConfig, scope: "project", phase: "load", status: "failed" },
+          ])
+        }).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          Effect.provide(
+            makeCacheLayer({
+              cwd: launch,
+              home,
+              extensions: [healthy],
+              allowFailedExtensions: true,
+            }),
+          ),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
   )
 
   it.scopedLive("suspends only the extension whose process resource fails to start", () =>
@@ -1007,7 +1016,9 @@ describe("driver resolution", () => {
         makeExt("auth-ext", "builtin", { modelDrivers: [driverA, driverB] }),
       ])
       yield* listModelCatalog(resolved.modelDrivers, (driverId) => {
-        if (driverId === "auth-a") return Effect.succeed({ type: "api", key: "secret-a" })
+        if (driverId === "auth-a") {
+          return Effect.succeed(ProviderAuthInfo.cases.Api.make({ key: "secret-a" }))
+        }
         return Effect.succeed(Option.getOrUndefined(Option.none<ProviderAuthInfo>()))
       })
       // Each driver's listModels should have been called with the auth from resolveAuth(its id)
@@ -1016,7 +1027,9 @@ describe("driver resolution", () => {
       if (Option.isNone(authAEntry)) return
       expect(Option.isSome(authAEntry.value.auth)).toBe(true)
       if (Option.isNone(authAEntry.value.auth)) return
-      expect(authAEntry.value.auth.value.key).toBe("secret-a")
+      expect(authAEntry.value.auth.value).toEqual(
+        ProviderAuthInfo.cases.Api.make({ key: "secret-a" }),
+      )
       const authBEntry = Option.fromUndefinedOr(seenAuth.find((s) => s.driverId === "auth-b"))
       expect(Option.isSome(authBEntry)).toBe(true)
       if (Option.isNone(authBEntry)) return

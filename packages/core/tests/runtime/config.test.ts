@@ -23,7 +23,6 @@ import {
 } from "../../src/domain/agent"
 import { ConfigService, RuntimeEnvironment, UserConfig } from "../../src/runtime/config"
 import { test } from "bun:test"
-import { ToolCallId } from "../../src/domain/ids"
 
 // ── config-service.test ─────────────────────────────────────────────────────
 
@@ -408,6 +407,123 @@ describe("user configuration", () => {
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(liveConfigAt(cwd, home)))
       }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    // A newer build (a rift binary) can add a key this build does not know;
+    // they share ~/.gent, so a write here must not erase it.
+    it.scopedLive("a driver write keeps every key it did not change, known or not", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const readRaw = fs
+          .readFileString(userConfigPath)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* fs.writeFileString(
+            userConfigPath,
+            encodeJson({
+              trustedProjects: ["/x"],
+              futureField: { nested: [1, 2] },
+              agents: { main: { reasoningEffort: "high", futureOverride: true } },
+            }),
+          )
+          yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
+          expect(yield* readRaw).toEqual({
+            trustedProjects: ["/x"],
+            futureField: { nested: [1, 2] },
+            agents: { main: { reasoningEffort: "high", futureOverride: true } },
+            driverOverrides: { main: { _tag: "Model", id: "anthropic" } },
+          })
+          // Clearing the last override removes the key it owns, and only that.
+          yield* cfg.clearDriverOverride(AgentName.make("main"))
+          expect(yield* readRaw).toEqual({
+            trustedProjects: ["/x"],
+            futureField: { nested: [1, 2] },
+            agents: { main: { reasoningEffort: "high", futureOverride: true } },
+          })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive("a driver write keeps unknown keys inside the overrides it touches", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+        const readRaw = fs
+          .readFileString(userConfigPath)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          yield* fs.writeFileString(
+            userConfigPath,
+            encodeJson({
+              driverOverrides: {
+                main: { _tag: "Model", id: "openai", futureOption: true },
+                helper: { _tag: "Model", id: "openai", futureOption: "kept" },
+              },
+            }),
+          )
+          // One override changes; the other does not. Both keep their unknown key.
+          yield* cfg.setDriverOverride(AgentName.make("main"), DriverRef.make({ id: "anthropic" }))
+          expect(yield* readRaw).toEqual({
+            driverOverrides: {
+              main: { _tag: "Model", id: "anthropic", futureOption: true },
+              helper: { _tag: "Model", id: "openai", futureOption: "kept" },
+            },
+          })
+          // Clearing one override deletes that entry, and only that entry.
+          yield* cfg.clearDriverOverride(AgentName.make("main"))
+          expect(yield* readRaw).toEqual({
+            driverOverrides: { helper: { _tag: "Model", id: "openai", futureOption: "kept" } },
+          })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive(
+      "a driver write through a symlinked config writes the target and keeps the link",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const cwd = yield* fs.makeTempDirectoryScoped()
+          const home = yield* fs.makeTempDirectoryScoped()
+          const dotfiles = yield* fs.makeTempDirectoryScoped()
+          const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+          const target = path.join(dotfiles, "gent-config.json")
+          yield* fs.writeFileString(target, encodeJson({ trustedProjects: ["/x"] }))
+          yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+          yield* fs.symlink(target, userConfigPath)
+          yield* Effect.gen(function* () {
+            const cfg = yield* ConfigService
+            yield* cfg.setDriverOverride(
+              AgentName.make("main"),
+              DriverRef.make({ id: "anthropic" }),
+            )
+            expect(yield* fs.readLink(userConfigPath)).toBe(target)
+            const written = yield* fs
+              .readFileString(target)
+              .pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))),
+              )
+            expect(written).toEqual({
+              trustedProjects: ["/x"],
+              driverOverrides: { main: { _tag: "Model", id: "anthropic" } },
+            })
+            // The staged file lands beside the target, then renames over it.
+            expect(yield* fs.readDirectory(dotfiles)).toEqual(["gent-config.json"])
+            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          }).pipe(Effect.provide(liveConfigAt(cwd, home)))
+        }).pipe(Effect.provide(BunServices.layer)),
     )
 
     it.scopedLive("a write without a fresh read refuses a config broken after startup", () =>
@@ -861,17 +977,10 @@ describe("configured driver override routing", () => {
 // ── execution-overrides.test ────────────────────────────────────────────────
 
 /**
- * RunSpec threading tests.
- *
- * Verifies the run-spec JSON contract used by the headless CLI.
- *
- * Public message.send runSpec behavior is covered by
- * tests/server/message-send.test.ts.
+ * The run-spec JSON a session's stored admission carries.
  */
 
-// ── Tests ──
-
-describe("run spec CLI serialization", () => {
+describe("stored run spec", () => {
   const codec = Schema.fromJsonString(RunSpecSchema)
 
   test("round-trips through JSON encode/decode", () => {
@@ -883,7 +992,6 @@ describe("run spec CLI serialization", () => {
         reasoningEffort: "high",
         systemPromptAddendum: "Be concise.",
       },
-      parentToolCallId: ToolCallId.make("tc-abc-123"),
     } satisfies Schema.Schema.Type<typeof RunSpecSchema>
 
     const json = Schema.encodeSync(codec)(runSpec)
@@ -893,11 +1001,11 @@ describe("run spec CLI serialization", () => {
     expect(decoded).toEqual(runSpec)
   })
 
-  test("round-trips with minimal runSpec", () => {
-    const runSpec = { parentToolCallId: ToolCallId.make("tc-only") }
-    const json = Schema.encodeSync(codec)(runSpec)
-    const decoded = Schema.decodeSync(codec)(json)
-    expect(decoded.parentToolCallId).toBe(ToolCallId.make("tc-only"))
+  test("a row that still carries the dropped parentToolCallId decodes", () => {
+    const decoded = Schema.decodeSync(codec)(
+      '{"overrides":{"maxModelAttempts":32},"parentToolCallId":"tc-old"}',
+    )
+    expect(decoded).toEqual({ overrides: { maxModelAttempts: 32 } })
   })
 
   test("round-trips empty runSpec", () => {

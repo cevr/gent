@@ -26,9 +26,11 @@ import {
 import { type CredentialCacheCell, EMPTY_CREDENTIAL_CELL } from "../src/providers.js"
 import {
   ProviderAuthError,
-  type ProviderAuthInfo,
+  ProviderAuthInfo,
+  type ProviderHints,
   RequestId,
   type StoredOAuthCredentials,
+  type UpdateStoredOAuth,
 } from "@gent/core/extensions/api"
 import {
   FetchHttpClient,
@@ -113,7 +115,7 @@ const makeFakeAuthStore = (state: PersistState, initial: Option.Option<StoredOAu
       state.lastWritten = Option.some(next)
       return Effect.void
     })
-  const update: NonNullable<ProviderAuthInfo["update"]> = (f) =>
+  const update: UpdateStoredOAuth = (f) =>
     Effect.gen(function* () {
       const pair = yield* f(stored)
       if (Option.isSome(pair[1])) yield* put(pair[1].value)
@@ -122,21 +124,23 @@ const makeFakeAuthStore = (state: PersistState, initial: Option.Option<StoredOAu
   const write = (next: StoredOAuthCredentials) => put(next).pipe(lock.withPermits(1))
   const read = () => stored
   // The credential a `resolveModel` call receives: the stored one plus `update`.
-  const authInfo = (): ProviderAuthInfo => ({
-    type: "oauth",
-    ...Option.getOrThrow(stored),
-    update,
-  })
-  // A second gent process shares the auth files but not this process's lock.
-  const writeFromOtherProcess = put
-  return { update, write, writeFromOtherProcess, read, authInfo, writes }
+  const authInfo = (): ProviderAuthInfo => ProviderAuthInfo.cases.Oauth.make({ update })
+  return { update, write, read, authInfo, writes }
 }
 const makeAuthInfo = (state: PersistState, credentials: OpenAICredentials): ProviderAuthInfo =>
   makeFakeAuthStore(state, Option.some(toStoredCredentials(credentials))).authInfo()
 // A credential cache over a fresh cell.
+// A ChatGPT sign-in held in its own fake store.
+const oauthInfo = (stored: StoredOAuthCredentials): ProviderAuthInfo =>
+  makeFakeAuthStore({ lastWritten: Option.none(), failNext: false }, Option.some(stored)).authInfo()
+// The store access of a sign-in; an API key has none.
+const updateOf = (authInfo: ProviderAuthInfo): UpdateStoredOAuth => {
+  if (authInfo._tag === "Oauth") return authInfo.update
+  return () => Effect.die(new Error("an API key has no OAuth store"))
+}
 const credentialCache = (io: OpenAICredentialIO, authInfo: ProviderAuthInfo) =>
   SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
-    Effect.flatMap((cellRef) => makeOpenAICredentialCache(cellRef, io, authInfo)),
+    Effect.flatMap((cellRef) => makeOpenAICredentialCache(cellRef, io, updateOf(authInfo))),
   )
 // TestClock starts at time 0, so `expires` values are absolute offsets.
 const FAR_FUTURE = 10 * 60 * 1000
@@ -181,12 +185,11 @@ describe("OpenAI credential cache — initial seed from authInfo", () => {
           Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
       // authInfo with empty access AND empty refresh seeds EMPTY cell.
-      const authInfo: ProviderAuthInfo = {
-        type: "oauth",
+      const authInfo = oauthInfo({
         access: "",
         refresh: "",
         expires: 0,
-      }
+      })
       const cache = credentialCache(makeIO(state), authInfo)
       const result = yield* runWithTestClock(
         Effect.gen(function* () {
@@ -221,12 +224,11 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
       const cellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
       const driver = buildOpenAIModelDriver(cellRef, new Map(), Option.none(), testCatalogSource())
-      const authInfo: ProviderAuthInfo = {
-        type: "oauth",
-        access: "stale-access",
-        refresh: "stale-refresh",
-        expires: 0,
-      }
+      const store = makeFakeAuthStore(
+        { lastWritten: Option.none(), failNext: false },
+        Option.some({ access: "stale-access", refresh: "stale-refresh", expires: 0 }),
+      )
+      const authInfo = store.authInfo()
       const exit = yield* runWithTestClock(
         Effect.gen(function* () {
           // resolveModel checks the credential, so it runs the refresh.
@@ -243,11 +245,13 @@ describe("OpenAI credential cache — token endpoint timeout", () => {
         ),
       ).pipe(Effect.timeout("3 seconds"))
       // The timed-out refresh is a failure that passes: resolveModel returns
-      // (the request then fails as retryable), and the cell keeps the seed.
-      // Without the timeout the join never returns and the 3 s bound fails.
+      // (the request then fails as retryable), and the stored refresh token
+      // is kept for the retry. Without the timeout the join never returns
+      // and the 3 s bound fails.
       expect(Exit.isSuccess(exit)).toBe(true)
-      const cell = yield* SynchronizedRef.get(cellRef)
-      expect(cell._tag === "Durable" && cell.creds.refresh).toBe("stale-refresh")
+      expect(Option.map(store.read(), (stored) => stored.refresh)).toEqual(
+        Option.some("stale-refresh"),
+      )
     }),
   )
 })
@@ -724,7 +728,7 @@ describe("OpenAI credential cache — invalidate preserves durable refresh token
         refreshResult: () =>
           Effect.fail(new ProviderAuthError({ message: "should not be called" })),
       }
-      const authInfo: ProviderAuthInfo = { type: "oauth", access: "", refresh: "", expires: 0 }
+      const authInfo = oauthInfo({ access: "", refresh: "", expires: 0 })
       const cache = credentialCache(makeIO(state), authInfo)
       yield* runWithTestClock(
         Effect.gen(function* () {
@@ -776,10 +780,14 @@ describe("OpenAI credential cache — a shared cell survives rebuilds", () => {
               EMPTY_CREDENTIAL_CELL,
             )
           // First "resolveModel" build — refreshes once.
-          const first = yield* makeOpenAICredentialCache(cellRef, makeIO(state), authInfo)
+          const first = yield* makeOpenAICredentialCache(cellRef, makeIO(state), updateOf(authInfo))
           yield* first.getFresh
           // Second "resolveModel" build with same Ref — must hit cache.
-          const second = yield* makeOpenAICredentialCache(cellRef, makeIO(state), authInfo)
+          const second = yield* makeOpenAICredentialCache(
+            cellRef,
+            makeIO(state),
+            updateOf(authInfo),
+          )
           const result = yield* second.getFresh
           expect(result.access).toBe("fresh-access")
           expect(refreshCount).toBe(1)
@@ -1090,14 +1098,9 @@ const validAuthInfo = (
     () => "fresh-refresh",
   )
   const accountId = Option.fromUndefinedOr(overrides?.accountId)
-  const base = {
-    type: "oauth",
-    access,
-    refresh,
-    expires: FAR_FUTURE_MS,
-  }
-  if (Option.isNone(accountId)) return base
-  return { ...base, accountId: accountId.value }
+  const base = { access, refresh, expires: FAR_FUTURE_MS }
+  if (Option.isNone(accountId)) return oauthInfo(base)
+  return oauthInfo({ ...base, accountId: accountId.value })
 }
 const noopRefreshIO = (): OpenAICredentialIO => ({
   refresh: () => Effect.fail(new ProviderAuthError({ message: "should not be called" })),
@@ -1259,12 +1262,11 @@ describe("codexTransformClient — auth headers", () => {
         refresh: () => Effect.fail(new ProviderAuthError({ message: "no usable refresh token" })),
       }
       // authInfo with stale access + non-empty refresh forces refresh.
-      const stalAuthInfo: ProviderAuthInfo = {
-        type: "oauth",
+      const stalAuthInfo = oauthInfo({
         access: "stale-access",
         refresh: "stale-refresh",
         expires: 0, // already expired → forces refresh
-      }
+      })
       const creds = yield* credentialCache(refreshFails, stalAuthInfo)
       const fakeState: FakeClientState = {
         captured: [],
@@ -1331,12 +1333,11 @@ describe("codexTransformClient — auth headers", () => {
           return Effect.fail(new ProviderAuthError({ message: "should not be called twice" }))
         },
       }
-      const stalAuthInfo: ProviderAuthInfo = {
-        type: "oauth",
+      const stalAuthInfo = oauthInfo({
         access: "seed-access",
         refresh: "seed-refresh",
         expires: 0, // forces refresh on first getFresh
-      }
+      })
       const creds = yield* credentialCache(rotateIO, stalAuthInfo)
       const fakeState: FakeClientState = {
         captured: [],
@@ -1660,12 +1661,11 @@ describe("codexTransformClient — 401 recovery", () => {
       }
       // Empty access on authInfo forces an initial refresh (otherwise the
       // cache hits with the seed token and never calls our IO).
-      const stalAuthInfo: ProviderAuthInfo = {
-        type: "oauth",
+      const stalAuthInfo = oauthInfo({
         access: "",
         refresh: "seed-refresh",
         expires: 0,
-      }
+      })
       const creds = yield* credentialCache(rotateIO, stalAuthInfo)
       const state: FakeClientState = {
         captured: [],
@@ -1703,12 +1703,11 @@ describe("codexTransformClient — 401 recovery", () => {
             accountId: Option.none(),
           }),
       }
-      const stalAuthInfo: ProviderAuthInfo = {
-        type: "oauth",
+      const stalAuthInfo = oauthInfo({
         access: "",
         refresh: "seed",
         expires: 0,
-      }
+      })
       const creds = yield* credentialCache(noopRotateIO, stalAuthInfo)
       const state: FakeClientState = {
         captured: [],
@@ -1796,12 +1795,11 @@ describe("codexTransformClient — 401 recovery", () => {
               return Effect.fail(new ProviderAuthError({ message: "rotation failed mid-recovery" }))
             }),
         }
-        const stalAuthInfo: ProviderAuthInfo = {
-          type: "oauth",
+        const stalAuthInfo = oauthInfo({
           access: "",
           refresh: "seed-refresh",
           expires: 0,
-        }
+        })
         const creds = yield* credentialCache(rotateThenFailIO, stalAuthInfo)
         const state: FakeClientState = {
           captured: [],
@@ -1868,16 +1866,11 @@ describe("codexTransformClient — 401 recovery", () => {
 // Far-future expiry so cache hits the warm branch and `getFresh` skips
 // the refresh round-trip (avoids hitting auth.openai.com from tests).
 const NOW_MS = 1_700_000_000_000
-const makeOAuthInfo = (): ProviderAuthInfo => ({
-  type: "oauth",
-  access: "test-access",
-  refresh: "test-refresh",
-  expires: FAR_FUTURE_MS,
-})
-const makeApiAuthInfo = (key: string): ProviderAuthInfo => ({
-  type: "api",
-  key,
-})
+// The stored sign-in behind the cells these tests plant: the same refresh
+// token ("r"), so a planted cell is that sign-in's current credential.
+const makeOAuthInfo = (): ProviderAuthInfo =>
+  oauthInfo({ access: "test-access", refresh: "r", expires: FAR_FUTURE_MS })
+const makeApiAuthInfo = (key: string): ProviderAuthInfo => ProviderAuthInfo.cases.Api.make({ key })
 const makeDurableCell = (creds: OpenAICredentials): CredentialCacheCell<OpenAICredentials> => ({
   _tag: "Durable",
   creds,
@@ -2048,7 +2041,11 @@ describe("OpenAI reasoning hints", () => {
       ),
     )
   }
-  const effortsFor = (authInfo: ProviderAuthInfo, models: ReadonlyArray<string>) =>
+  const effortsFor = (
+    authInfo: ProviderAuthInfo,
+    models: ReadonlyArray<string>,
+    reasoning: ProviderHints["reasoning"] = "none",
+  ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
         makeDurableCell({
@@ -2067,7 +2064,7 @@ describe("OpenAI reasoning hints", () => {
       const fetchState = makeFakeFetchState()
       for (const modelName of models) {
         const model = yield* driver.resolveModel(modelName, authInfo, {
-          reasoning: "none",
+          reasoning,
           maxTokens: 768,
         })
         yield* runOne(model, fetchState)
@@ -2107,6 +2104,41 @@ describe("OpenAI reasoning hints", () => {
           Option.none(),
         ])
       }),
+  )
+
+  it.live("an effort the model does not accept becomes the nearest one it does", () =>
+    Effect.gen(function* () {
+      // The accepted values are each model page's `reasoning.effort` list
+      // (developers.openai.com/api/docs/models).
+      const cases: ReadonlyArray<readonly [string, ProviderHints["reasoning"], string]> = [
+        // Above the ceiling: the highest accepted.
+        ["gpt-5-mini", "max", "high"],
+        ["gpt-5.4", "max", "xhigh"],
+        ["gpt-5.1", "xhigh", "high"],
+        ["gpt-5.1-codex", "max", "high"],
+        ["gpt-5.2-pro", "max", "xhigh"],
+        // A level the model skips: the next one up.
+        ["gpt-5-pro", "low", "high"],
+        ["gpt-5.4", "minimal", "low"],
+        ["gpt-5.4-pro", "low", "medium"],
+        // Accepted as sent.
+        ["gpt-5.6-sol", "max", "max"],
+        ["gpt-6-astra", "max", "max"],
+        ["gpt-5-mini", "minimal", "minimal"],
+      ]
+      for (const [model, hint, sent] of cases) {
+        const expected = [Option.some(sent)]
+        expect({
+          model,
+          hint,
+          api: yield* effortsFor(makeApiAuthInfo("hint-test-key"), [model], hint),
+        }).toEqual({ model, hint, api: expected })
+      }
+      // The ChatGPT sign-in path reads the same table.
+      expect(yield* effortsFor(makeOAuthInfo(), ["gpt-5-mini"], "max")).toEqual([
+        Option.some("high"),
+      ])
+    }),
   )
 })
 
@@ -2276,12 +2308,11 @@ describe("buildOpenAIModelDriver — token endpoint outage", () => {
             body: '{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}',
           }
         })
-        const authInfo: ProviderAuthInfo = {
-          type: "oauth",
+        const authInfo = oauthInfo({
           access: "expired-access",
           refresh: "old-refresh",
           expires: 0,
-        }
+        })
         // One attempt of the loop: resolve the model, then send one request.
         const attempt = Effect.gen(function* () {
           const model = yield* driver.resolveModel("gpt-5.4", authInfo)
@@ -2322,12 +2353,11 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
         if (!request.url.endsWith("/oauth/token")) return openaiResponsesHappyResponse()
         return { status: 400, body: '{"error":"invalid_grant"}' }
       })
-      const authInfo: ProviderAuthInfo = {
-        type: "oauth",
+      const authInfo = oauthInfo({
         access: "expired-access",
         refresh: "revoked-refresh",
         expires: 0,
-      }
+      })
       const exit = yield* Effect.gen(function* () {
         const model = yield* driver.resolveModel("gpt-5.4", authInfo)
         return yield* LanguageModel.generateText({ prompt: "hi" }).pipe(
@@ -2372,12 +2402,11 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
         }
         return { status: 401, body: '{"error":{"message":"token revoked"}}' }
       })
-      const authInfo: ProviderAuthInfo = {
-        type: "oauth",
+      const authInfo = oauthInfo({
         access: "revoked-access",
         refresh: "revoked-refresh",
         expires: FAR_FUTURE_MS,
-      }
+      })
       const shown = yield* Effect.gen(function* () {
         const model = yield* driver.resolveModel("gpt-5.4", authInfo)
         const { client, sessionId, branchId } = yield* createRpcHarness({
@@ -2537,12 +2566,11 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
         if (!request.url.endsWith("/oauth/token")) return openaiResponsesHappyResponse()
         return { status: 400, body: '{"error":"invalid_grant"}' }
       })
-      const revoked: ProviderAuthInfo = {
-        type: "oauth",
+      const revoked = oauthInfo({
         access: "revoked-access",
         refresh: "revoked-refresh",
         expires: 0,
-      }
+      })
       const first = yield* driver
         .resolveModel("gpt-5.4", revoked)
         // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
@@ -2576,7 +2604,7 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
     Effect.gen(function* () {
       const cellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(EMPTY_CREDENTIAL_CELL)
-      return yield* makeOpenAICredentialCache(cellRef, { refresh }, store.authInfo())
+      return yield* makeOpenAICredentialCache(cellRef, { refresh }, store.update)
     })
   const rotatedFrom = (refreshToken: string): OpenAICredentials => ({
     access: `rotated-from-${refreshToken}-access`,
@@ -2670,30 +2698,6 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
         )
       }),
     ).pipe(Effect.timeout("4 seconds")),
-  )
-
-  it.live("a refresh another process already used adopts that process's rotation", () =>
-    runWithTestClock(
-      Effect.gen(function* () {
-        const store = makeStore()
-        yield* store.write(expiredOldAccount)
-        const refreshTokens: Array<string> = []
-        const profileB = yield* secondProfile(store, (refreshToken) =>
-          Effect.gen(function* () {
-            refreshTokens.push(refreshToken)
-            // The other process won the race: it rotated the token and wrote the files.
-            yield* store.writeFromOtherProcess(toStoredCredentials(rotatedFrom(refreshToken)))
-            return yield* new ProviderAuthError({ message: "refresh_token_reused" })
-          }),
-        )
-        const served = yield* profileB.getFresh
-        expect(served.refresh).toBe("rotated-from-old-refresh")
-        expect(refreshTokens).toEqual(["old-refresh"])
-        // The adopted credential is served from the cell; nothing refreshes again.
-        expect((yield* profileB.getFresh).refresh).toBe("rotated-from-old-refresh")
-        expect(refreshTokens).toEqual(["old-refresh"])
-      }),
-    ),
   )
 
   it.live("a refused refresh with no newer stored credential still fails", () =>

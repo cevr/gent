@@ -276,12 +276,13 @@ export const sessionMessageBody = (from: SessionMessageSender, content: string):
   )
 }
 
-const SendSessionTool = tool({
+export const SendSessionTool = tool({
   id: "session.send",
   description:
     "Send a message to another session: `parent` for the one that started you, or a session id from delegate.list. A running session reads it at its next step; an idle one wakes to answer. Use it to ask your parent a question, hand a child a correction, or pass a sibling a fact.",
   params: SendSessionParams,
   output: SendSessionResult,
+  summary: (input, output) => `to ${output.relation} · ${input.message.trim()}`,
   execute: Effect.fn("SendSessionTool.execute")(function* (params: typeof SendSessionParams.Type) {
     const ctx = yield* ExtensionContext
     const message = params.message.trim()

@@ -168,6 +168,8 @@ const withTitle = (title: Option.Option<string>, content: string): string =>
 
 export const PromptTool = tool({
   id: "prompt",
+  // A confirm or a review waits on the user; a non-interactive turn has none.
+  interactive: true,
   description:
     "Present content to the user for review, confirmation, or informational display. " +
     "Use mode=present for informational content (no response needed), " +
@@ -245,6 +247,7 @@ const HandoffResult = Schema.Struct({
 /** One approval with `metadata.type: "handoff"`; on yes the client opens the new session. */
 export const HandoffTool = tool({
   id: "handoff",
+  interactive: true,
   description:
     "Create a new session with distilled context from the current one. Blocks until the user confirms. Context pressure is not a reason: the runtime compacts the window by itself.",
   promptSnippet: "Transfer context to a new session",
