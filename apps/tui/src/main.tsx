@@ -493,4 +493,19 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
   process.on("SIGTERM", onSignal)
 })
 
-runCliMain(Effect.scoped(mainEffect), { teardown: gracefulCliTeardown })
+/**
+ * A failure that ends the CLI (a startup error such as an unknown agent) is
+ * reported on stderr. Stdout carries only the session's output, so a caller
+ * that pipes it reads the reply and nothing else.
+ */
+const reportFailureOnStderr = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.tapCause(effect, (cause) => {
+    if (Cause.hasInterruptsOnly(cause)) return Effect.void
+    if (!Runtime.getErrorReported(Cause.squash(cause))) return Effect.void
+    return Effect.logError(cause).pipe(Effect.provideService(Logger.LogToStderr, true))
+  })
+
+runCliMain(Effect.scoped(mainEffect).pipe(reportFailureOnStderr), {
+  teardown: gracefulCliTeardown,
+  disableErrorReporting: true,
+})

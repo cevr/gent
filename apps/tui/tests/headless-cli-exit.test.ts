@@ -85,10 +85,15 @@ describe("headless CLI", () => {
     "an unknown --agent fails before any turn runs",
     () =>
       Effect.gen(function* () {
-        const { exitCode, stdout } = yield* runHeadless(["--agent", "revieww", "Say hi in 3 words"])
+        const { exitCode, stdout, stderr } = yield* runHeadless([
+          "--agent",
+          "revieww",
+          "Say hi in 3 words",
+        ])
         expect(exitCode).toBe(1)
-        // The CLI's startup failures print through the runtime's logger, on stdout.
-        expect(stdout).toContain("NotFoundError: Unknown agent: revieww")
+        // A startup failure is reported on stderr; stdout stays the session's output.
+        expect(stderr).toContain("NotFoundError: Unknown agent: revieww")
+        expect(stdout).not.toContain("Unknown agent")
         expect(stdout).not.toContain("Latest user message")
       }).pipe(Effect.provide(BunServices.layer)),
     20000,
