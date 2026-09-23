@@ -313,12 +313,12 @@ const SendSessionTool = tool({
       relation: inverse(relation),
     }
     const details: SessionMessageDetails = { from }
-    yield* ctx.Session.steer({
-      _tag: "Interject",
+    yield* ctx.Session.send({
+      delivery: "steer",
       sessionId: receiver.id,
       branchId: receiver.activeBranchId,
       requestId: RequestId.make(`session-send:${ctx.toolCallId}`),
-      message: sessionMessageText({ from, message }),
+      content: sessionMessageText({ from, message }),
       metadata: { customType: SESSION_MESSAGE_TYPE, extensionId: "@gent/session-tools", details },
       // The receiver may be idle; a parked message nobody reads is a lost question.
       wake: true,

@@ -334,12 +334,11 @@ const stubCtx = testToolContext({
     getDetail: dieStub("getDetail"),
     renameCurrent: dieStub("renameCurrent"),
     listBranches: Effect.die("listBranches not wired in test"),
-    queueFollowUp: dieStub("queueFollowUp"),
     dequeueFollowUp: dieStub("dequeueFollowUp"),
     create: dieStub("create"),
     delete: dieStub("delete"),
     send: dieStub("send"),
-    steer: dieStub("steer"),
+    stop: dieStub("stop"),
     events: () => Stream.die("events not wired in test"),
     listSessions: Effect.die("listSessions not wired in test"),
     listActiveLoops: Effect.die("listActiveLoops not wired in test"),
@@ -356,6 +355,13 @@ const withSession = (
   ...ctx,
   Session: session,
 })
+/** A fake `Session.send` that records the background notice, a `queue` delivery. */
+const onQueue =
+  (record: (notice: { sourceId: string; content: string }) => Effect.Effect<unknown>) =>
+  (params: Parameters<TestToolContext["Session"]["send"]>[0]) => {
+    if (params.delivery !== "queue") return Effect.die(`unexpected ${params.delivery} delivery`)
+    return record({ sourceId: params.sourceId, content: params.content }).pipe(Effect.asVoid)
+  }
 const now = dateFromMillis(0)
 
 const BoundedBashResult = Schema.Struct({
@@ -485,7 +491,7 @@ describe("BashTool execution", () => {
               createdAt: now,
             }),
           ]),
-          queueFollowUp: (params) => Deferred.succeed(sent, params),
+          send: onQueue((notice) => Deferred.succeed(sent, notice)),
         })
         const result = yield* runToolWithCtx(
           BashTool,
@@ -545,7 +551,7 @@ describe("BashTool execution", () => {
               createdAt: now,
             }),
           ]),
-          queueFollowUp: (params) => Deferred.succeed(sent, params),
+          send: onQueue((notice) => Deferred.succeed(sent, notice)),
         })
         const scope = yield* Scope.make()
         const context = yield* Layer.buildWithScope(makePlatformLayer(), scope)
@@ -573,7 +579,7 @@ describe("BashTool execution", () => {
           ...stubCtx.Session,
           getSession: () => Effect.sync(() => Option.getOrUndefined(Option.none<Session>())),
           listBranches: Effect.succeed([]),
-          queueFollowUp: (params) => Deferred.succeed(sent, params),
+          send: onQueue((notice) => Deferred.succeed(sent, notice)),
         })
 
         const result = yield* runToolWithCtx(
@@ -615,7 +621,7 @@ describe("BashTool execution", () => {
                 createdAt: now,
               }),
             ]),
-            queueFollowUp: (params) => Deferred.succeed(sent, params),
+            send: onQueue((notice) => Deferred.succeed(sent, notice)),
           },
         )
         const millis = yield* Clock.currentTimeMillis
@@ -694,7 +700,7 @@ describe("BashTool execution", () => {
                 createdAt: now,
               }),
             ]),
-            queueFollowUp: (params) => Deferred.succeed(sent, params),
+            send: onQueue((notice) => Deferred.succeed(sent, notice)),
           },
         )
         const millis = yield* Clock.currentTimeMillis
@@ -748,7 +754,7 @@ describe("BashTool execution", () => {
                 createdAt: now,
               }),
             ]),
-            queueFollowUp: (params) => Deferred.succeed(sent, params),
+            send: onQueue((notice) => Deferred.succeed(sent, notice)),
           },
         )
         const scope = yield* Scope.make()
@@ -810,7 +816,7 @@ describe("BashTool execution", () => {
             listBranches: Effect.succeed([
               new Branch({ id: stubCtx.branchId, sessionId: stubCtx.sessionId, createdAt: now }),
             ]),
-            queueFollowUp: (params) => Ref.update(notices, (all) => [...all, params]),
+            send: onQueue((notice) => Ref.update(notices, (all) => [...all, notice])),
           },
         )
 
