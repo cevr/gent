@@ -13,9 +13,19 @@ import {
 const AnswersSchema = Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String)))
 const decodeAnswers = Schema.decodeUnknownEffect(AnswersSchema)
 
-const parseAnswers = (notes: string): Effect.Effect<ReadonlyArray<ReadonlyArray<string>>> =>
+/**
+ * Notes that are not a JSON answer list are a free-text answer to the first
+ * question; the other questions get an empty answer, one list per question.
+ */
+const parseAnswers = (
+  notes: string,
+  questionCount: number,
+): Effect.Effect<ReadonlyArray<ReadonlyArray<string>>> =>
   decodeAnswers(notes).pipe(
-    Effect.orElseSucceed((): ReadonlyArray<ReadonlyArray<string>> => [[notes]]),
+    Effect.orElseSucceed((): ReadonlyArray<ReadonlyArray<string>> => [
+      [notes],
+      ...Array.from({ length: questionCount - 1 }, () => []),
+    ]),
   )
 
 // AskUser Params — canonical questions[] input
@@ -93,9 +103,9 @@ export const AskUserTool = tool({
       return { answers: [], cancelled: true }
     }
     const notes = Option.fromNullishOr(decision.notes)
-    let answers: ReadonlyArray<ReadonlyArray<string>> = [[]]
+    let answers: ReadonlyArray<ReadonlyArray<string>> = params.questions.map(() => [])
     if (Option.isSome(notes)) {
-      answers = yield* parseAnswers(notes.value)
+      answers = yield* parseAnswers(notes.value, params.questions.length)
     }
     return { answers }
   }),

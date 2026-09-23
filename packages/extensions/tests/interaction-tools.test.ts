@@ -102,6 +102,34 @@ describe("AskUser Tool", () => {
     )
   })
 
+  it.live("an approval without notes answers each question with an empty list", () => {
+    const { ctx } = makeCtx(Effect.succeed({ approved: true }))
+
+    return runToolWithCtx(
+      AskUserTool,
+      { questions: [{ question: "One?" }, { question: "Two?" }, { question: "Three?" }] },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.answers).toEqual([[], [], []])
+      }),
+    )
+  })
+
+  it.live("free-text notes answer the first question and leave the rest empty", () => {
+    const { ctx } = makeCtx(Effect.succeed({ approved: true, notes: "free text" }))
+
+    return runToolWithCtx(
+      AskUserTool,
+      { questions: [{ question: "One?" }, { question: "Two?" }] },
+      ctx,
+    ).pipe(
+      Effect.map((result) => {
+        expect(result.answers).toEqual([["free text"], []])
+      }),
+    )
+  })
+
   it.live("cancel returns cancelled flag with empty answers", () => {
     const { ctx } = makeCtx(Effect.succeed({ approved: false }))
 

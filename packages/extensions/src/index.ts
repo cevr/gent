@@ -1,4 +1,4 @@
-import { Effect, type FileSystem, Option, type Path, Schema } from "effect"
+import { type FileSystem, Option, type Path, Result, Schema } from "effect"
 import {
   type ExtensionHost,
   type GentExtension,
@@ -33,14 +33,10 @@ import { InteractionToolsExtension } from "./interaction-tools.js"
  */
 declare const __GENT_BUILTIN_ARTIFACT_ID__: unknown
 
-const buildArtifactId = Option.flatMap(
-  Effect.runSync(
-    Effect.try({
-      try: () => Option.some(__GENT_BUILTIN_ARTIFACT_ID__),
-      catch: () => Option.none<unknown>(),
-    }).pipe(Effect.catchEager(() => Effect.succeed(Option.none<unknown>()))),
-  ),
-  Schema.decodeUnknownOption(Schema.NonEmptyString),
+// Source mode has no definition: reading the symbol throws a ReferenceError.
+const buildArtifactId = Result.try(() => __GENT_BUILTIN_ARTIFACT_ID__).pipe(
+  Result.getSuccess,
+  Option.flatMap(Schema.decodeUnknownOption(Schema.NonEmptyString)),
 )
 
 const BuiltinArtifactIdentity: Option.Option<LoadedArtifactIdentity> = Option.map(
