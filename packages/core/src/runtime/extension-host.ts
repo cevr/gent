@@ -1051,16 +1051,15 @@ const scanDir = Effect.fn("ExtensionLoader.scanDir")(function* (dir: string) {
 })
 
 /**
- * Discover extension files from a directory, sorted by name. An entry that
+ * A directory's scanned extension files, sorted by name. An entry that
  * cannot be read is a `load` failure for that path alone; its siblings are
  * still discovered.
  */
 const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
-  dir: string,
+  scanned: DirScan,
   scope: ExtensionScope,
 ) {
   const path = yield* Path.Path
-  const scanned = yield* scanDir(dir)
   const failed: FailedExtension[] = []
   for (const entry of scanned.unreadable) {
     const message = `Failed to read ${entry.path}: ${entry.error.message}`
@@ -1072,30 +1071,62 @@ const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
   return { paths: scanned.paths, failed }
 })
 
+type DirScan = Effect.Success<ReturnType<typeof scanDir>>
+
+/** The user and project extension directories a profile discovers. */
+interface ExtensionDirectories {
+  readonly userDir: string
+  readonly projectDir: string
+}
+
 /**
- * The extension files a profile would load, each with its version, and the
- * paths that failed to read. A profile is keyed on it, so an added, removed,
- * fixed or edited extension file reaches the next resolve.
+ * One read of the extension directories. A profile is keyed on it
+ * (`extensionScanStamp`) and loaded from it, so its key names exactly the
+ * file versions it loaded.
  */
-const discoveredFilesStamp = (inputs: {
+interface ExtensionScan {
+  readonly dirs: ExtensionDirectories
+  readonly user: DirScan
+  readonly project: DirScan
+}
+
+const scanExtensionDirectories = Effect.fn("ExtensionLoader.scanExtensionDirectories")(function* (
+  dirs: ExtensionDirectories,
+) {
+  const scan: ExtensionScan = {
+    dirs,
+    user: yield* scanDir(dirs.userDir),
+    project: yield* scanDir(dirs.projectDir),
+  }
+  return scan
+})
+
+/** The extension directories a profile for these inputs reads, read once. */
+export const scanRuntimeProfileExtensions = (inputs: {
   readonly cwd: string
   readonly home: string
-}): Effect.Effect<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> =>
+}): Effect.Effect<ExtensionScan, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
-    const dirs = extensionDirectories(path, inputs)
-    const found = [yield* scanDir(dirs.userDir), yield* scanDir(dirs.projectDir)]
-    return found.flatMap(({ paths, unreadable }) => [
-      ...paths.map((file) => `${file.path}@${file.version}`),
-      ...unreadable.map((entry) => `!${entry.path}`),
-    ])
+    return yield* scanExtensionDirectories(extensionDirectories(path, inputs))
   })
+
+/**
+ * The extension files a scan found, each with its version, and the paths
+ * that failed to read. A profile is keyed on it, so an added, removed, fixed
+ * or edited extension file reaches the next resolve.
+ */
+const extensionScanStamp = (scan: ExtensionScan): ReadonlyArray<string> =>
+  [scan.user, scan.project].flatMap(({ paths, unreadable }) => [
+    ...paths.map((file) => `${file.path}@${file.version}`),
+    ...unreadable.map((entry) => `!${entry.path}`),
+  ])
 
 /** The user and project extension directories a profile discovers. */
 const extensionDirectories = (
   path: Path.Path,
   inputs: { readonly cwd: string; readonly home: string },
-) => ({
+): ExtensionDirectories => ({
   userDir: path.join(inputs.home, GENT_CONFIG_DIRECTORY, "extensions"),
   projectDir: path.join(path.resolve(inputs.cwd), GENT_CONFIG_DIRECTORY, "extensions"),
 })
@@ -1108,7 +1139,11 @@ const importExtensionModule = (filePath: string) => import(filePath)
 /**
  * Load a single extension from a file path. The import names the file's
  * version, so an edited file is imported again instead of from Bun's module
- * cache.
+ * cache. Two limits follow from Bun's module cache. Bun never drops a module,
+ * so every version of an edited file stays in memory until the process
+ * exits. And only the entry file is versioned: a module it imports by a
+ * relative path keeps the first version this process loaded, for a file
+ * extension as for a directory extension's index.
  */
 const loadExtensionFile = Effect.fn("ExtensionLoader.loadExtensionFile")(function* (
   file: DiscoveredFile,
@@ -1257,16 +1292,22 @@ export const configHealthStatuses = Effect.fn("ExtensionHealth.configHealthStatu
 })
 
 /** Discover and load extensions from all configured directories. Per-file isolation — one broken file does not suppress siblings. */
-export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (opts: {
-  readonly userDir: string // ~/.gent/extensions
-  readonly projectDir: string // .gent/extensions
-}) {
+export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (
+  dirs: ExtensionDirectories,
+) {
+  return yield* loadExtensionScan(yield* scanExtensionDirectories(dirs))
+})
+
+/** Load the extensions one scan found; see `discoverExtensions`. */
+const loadExtensionScan = Effect.fn("ExtensionLoader.loadExtensionScan")(function* (
+  scan: ExtensionScan,
+) {
   const path = yield* Path.Path
-  const user = yield* discoverDir(opts.userDir, "user")
-  const project = yield* discoverDir(opts.projectDir, "project")
+  const user = yield* discoverDir(scan.user, "user")
+  const project = yield* discoverDir(scan.project, "project")
   const userPaths = user.paths
   const projectPaths = project.paths
-  const projectTrusted = yield* isProjectExtensionDirectoryTrusted(opts)
+  const projectTrusted = yield* isProjectExtensionDirectoryTrusted(scan.dirs)
 
   const loaded: DiscoveredExtension[] = []
   const failed: FailedExtension[] = [...user.failed]
@@ -1646,6 +1687,7 @@ interface RuntimeProfileDeclarations {
 
 export const loadRuntimeProfileDeclarations = (
   inputs: RuntimeProfileInputs,
+  scan: ExtensionScan,
 ): Effect.Effect<
   RuntimeProfileDeclarations,
   never,
@@ -1660,7 +1702,7 @@ export const loadRuntimeProfileDeclarations = (
     const disabledSet = new Set(inputs.disabledExtensions ?? [])
 
     // 2. Discover external extensions (user + project dirs)
-    const discovery = yield* discoverExtensions(extensionDirectories(path, inputs)).pipe(
+    const discovery = yield* loadExtensionScan(scan).pipe(
       Effect.catchEager((error) =>
         Effect.logWarning("runtime-profile.extension.discovery.failed").pipe(
           Effect.annotateLogs({ error: String(error), cwd: canonicalCwd }),
@@ -1800,7 +1842,7 @@ const placeKey = (workspaceId: WorkspaceId, cwd: string): string =>
 
 /**
  * The raw disabled list as the config names it, and the extension files on
- * disk (`discoveredFilesStamp`). It only finds a profile the same inputs
+ * disk (`extensionScanStamp`). It only finds a profile the same inputs
  * resolved before; the profile itself is keyed by `profileKey`.
  */
 const listKey = (
@@ -2105,7 +2147,7 @@ export class SessionProfileCache extends Context.Service<
         const entryFor = (
           place: string,
           list: string,
-          files: ReadonlyArray<string>,
+          scan: ExtensionScan,
           cwd: string,
           fresh: FreshConfig,
           restore: Restore,
@@ -2115,10 +2157,12 @@ export class SessionProfileCache extends Context.Service<
               Option.fromNullishOr(entries.get(key)),
             )
             if (Option.isSome(aliased)) return aliased.value
+            const files = extensionScanStamp(scan)
             const declarations = yield* restore(
-              loadRuntimeProfileDeclarations(effectiveInputs(inputsFor(cwd), fresh.config)).pipe(
-                Effect.provideContext(platformServicesContext),
-              ),
+              loadRuntimeProfileDeclarations(
+                effectiveInputs(inputsFor(cwd), fresh.config),
+                scan,
+              ).pipe(Effect.provideContext(platformServicesContext)),
             )
             const key = profileKey(place, declarations.extensionDeclarations, files)
             const found = Option.fromNullishOr(entries.get(key))
@@ -2189,17 +2233,17 @@ export class SessionProfileCache extends Context.Service<
                 // `current` in the order they read it: a read from before an
                 // edit cannot put the older profile back.
                 const fresh = yield* restore(configService.getFresh(canonicalCwd))
-                const files = yield* restore(
-                  discoveredFilesStamp(inputsFor(canonicalCwd)).pipe(
+                const scan = yield* restore(
+                  scanRuntimeProfileExtensions(inputsFor(canonicalCwd)).pipe(
                     Effect.provideContext(platformServicesContext),
                   ),
                 )
                 const list = listKey(
                   place,
                   effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
-                  files,
+                  extensionScanStamp(scan),
                 )
-                const entry = yield* entryFor(place, list, files, canonicalCwd, fresh, restore)
+                const entry = yield* entryFor(place, list, scan, canonicalCwd, fresh, restore)
                 leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
                 yield* Scope.addFinalizer(callerScope, release(entry, lock))
                 const previous = Option.fromNullishOr(current.get(place))

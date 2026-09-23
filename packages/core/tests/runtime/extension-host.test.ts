@@ -71,6 +71,7 @@ import {
   type TurnProfileDefaults,
   validateLoadedExtensions,
   loadRuntimeProfileDeclarations,
+  scanRuntimeProfileExtensions,
   type RuntimeProfileInputs,
 } from "../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
@@ -4959,7 +4960,10 @@ describe("live Profile", () => {
           platform: "darwin",
           extensions: [resourceExtension, validExtension, invalidExtension],
         }
-        const declarations = yield* loadRuntimeProfileDeclarations(inputs)
+        const declarations = yield* loadRuntimeProfileDeclarations(
+          inputs,
+          yield* scanRuntimeProfileExtensions(inputs),
+        )
         expect(events).toEqual([])
         expect(declarations.extensionDeclarations.failed).toContainEqual(
           expect.objectContaining({
@@ -5006,7 +5010,10 @@ describe("live Profile", () => {
         yield* fs.writeFileString(path.join(projectDir, "local.ts"), "export default 1\n")
         const inputs = { cwd, home, platform: "darwin", extensions: [] }
 
-        const declarations = yield* loadRuntimeProfileDeclarations(inputs)
+        const declarations = yield* loadRuntimeProfileDeclarations(
+          inputs,
+          yield* scanRuntimeProfileExtensions(inputs),
+        )
         expect(declarations.extensionDeclarations.failed).toEqual([
           expect.objectContaining({
             manifest: { id: "broken" },
@@ -5028,10 +5035,10 @@ describe("live Profile", () => {
         ])
 
         // A disabled id silences its file.
-        const quiet = yield* loadRuntimeProfileDeclarations({
-          ...inputs,
-          disabledExtensions: ["broken", "folder-broken", "local"],
-        })
+        const quiet = yield* loadRuntimeProfileDeclarations(
+          { ...inputs, disabledExtensions: ["broken", "folder-broken", "local"] },
+          yield* scanRuntimeProfileExtensions(inputs),
+        )
         expect(quiet.extensionDeclarations.failed).toEqual([])
 
         // A test root that fails on a failed extension sees the import failure too.
