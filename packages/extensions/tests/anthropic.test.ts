@@ -780,6 +780,39 @@ describe("keychainTransformClient — 401 recovery", () => {
       expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer fresh-access")
     }),
   )
+  it.scopedLive("401 with the keychain unchanged → refresh with its refresh token → retry", () =>
+    Effect.gen(function* () {
+      // The server revoked a token whose expiry is still ahead; the keychain
+      // still holds it, so only a refresh can replace it.
+      const held: Array<Option.Option<ClaudeCredentials>> = []
+      const creds = yield* credentialCache({
+        read: Effect.succeed(makeCredsKeychain("revoked")),
+        refresh: (credential) =>
+          Effect.sync(() => {
+            held.push(credential)
+            return makeCredsKeychain("renewed")
+          }),
+      })
+      const fakeState: FakeClientState = {
+        captured: [],
+        responder: respondFirstWith(
+          new Response("auth", { status: 401 }),
+          new Response("ok", { status: 200 }),
+        ),
+      }
+      const transform = buildKeychainTransformClient(creds, TEST_ENV)
+      const wrapped = transform(makeFakeClient(fakeState))
+      const response = yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
+      )
+      expect(response.status).toBe(200)
+      expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer revoked-access")
+      expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer renewed-access")
+      expect(held).toEqual([Option.some(makeCredsKeychain("revoked"))])
+    }),
+  )
   it.scopedLive(
     "two consecutive 401s — second surfaces (real auth failure, no infinite loop)",
     () =>

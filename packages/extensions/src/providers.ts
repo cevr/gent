@@ -209,6 +209,7 @@ export const makeCredentialCache = <C>(
 ): Effect.Effect<CredentialCache<C>> =>
   Effect.sync(() => {
     const Cell = CredentialCacheCell(config.credentials)
+    const sameCredential = Schema.toEquivalence(config.credentials)
     const durable = (creds: C, at: number, invalidated: boolean): CredentialCacheCell<C> =>
       Cell.cases.Durable.make({ creds, at, invalidated })
 
@@ -343,7 +344,18 @@ export const makeCredentialCache = <C>(
           // Without an external source the cell is the only copy.
           let fromSource = cached
           if (Option.isSome(config.read)) fromSource = yield* config.read.value(cached)
-          if (Option.isSome(fromSource) && freshEnoughAt(config.expiresAt(fromSource.value), now)) {
+          // After a 401 the source may still hold the rejected credential, and
+          // its expiry says nothing about a revocation: only a refresh helps.
+          const rejected =
+            current._tag !== "Empty" &&
+            current.invalidated &&
+            Option.isSome(fromSource) &&
+            sameCredential(fromSource.value, current.creds)
+          if (
+            !rejected &&
+            Option.isSome(fromSource) &&
+            freshEnoughAt(config.expiresAt(fromSource.value), now)
+          ) {
             return [Exit.succeed(fromSource.value), durable(fromSource.value, now, false)]
           }
 
