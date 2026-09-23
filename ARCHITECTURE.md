@@ -2,8 +2,6 @@
 
 Minimal agent harness. Effect-first. Small seams. One owner per concern.
 
-The resource evolution plan is in [`docs/malleability.md`](docs/malleability.md).
-
 ## Core Model
 
 `gent` is organized around six nouns:
@@ -37,10 +35,10 @@ updates this list in the same commit.
    `packages/extensions/src/index.ts`.
 4. **Schema-first transport contract.** Every RPC input and output is a
    Schema; thin adapters carry it. Receipts:
-   `packages/core/src/server/rpc.ts`, `packages/core/src/server/rpc.ts`.
+   `packages/core/src/server/rpc.ts`.
 5. **Event and projection commit together.** A session mutation writes its
    row and its events in one transaction, so a reader never sees one without
-   the other. Receipt: `transactWithEvent` in
+   the other. Receipt: `transactWithEvents` in
    `packages/core/src/server/server.ts`.
 6. **Tool calls replay from durable bindings.** A resumed turn re-delivers a
    tool result from `tool_call_bindings`; it never re-runs the tool.
@@ -67,14 +65,15 @@ updates this list in the same commit.
     `packages/core/src/runtime/model-context.ts`.
 11. **A model change is a durable user-role notice the loop writes.** The
     settings update only records the choice. At each step boundary the loop
-    compares the model the branch's last settled step ran on (its
-    `StreamEnded`) with the model this step resolves; when they differ it
+    compares the model the branch last ran on or was told it continues with
+    (its last `StreamEnded`, or the last model-change notice) with the model
+    this step resolves; when they differ it
     writes one `model-change` message, and that step reads it. The id names
     both models, so a replay after a further switch writes the right one. A
     turn under an agent or run-spec model override writes none; the turn after
     it notices the change back. An effort change, or a branch with no settled
     step, writes nothing. Receipts: `modelChangeNotice` in
-    `packages/core/src/runtime/model-context.ts`, `lastSettledModel` in
+    `packages/core/src/runtime/model-context.ts`, `lastKnownModel` in
     `packages/core/src/runtime/turn.ts`.
 12. **Tool guidance lives on the tool and follows the active tool list.**
     `promptGuidelines` are deduped per turn from the post-policy tools only.
@@ -287,7 +286,10 @@ The production server uses one live profile owner:
   build into a child of the server scope, and `buildSessionProfile` stages the
   catalog from that context. An extension whose process resource fails to build
   is reported as failed at the `startup` phase; the rest of the profile stays
-  live. There is no reconciler, publication, or admission lease. Test roots
+  live. There is no reconciler, publication, or admission lease. Gent owns
+  resource identity, configuration and graph policy; Effect owns Context,
+  Layer, Scope and finalization; effect-encore owns durable actor commands and
+  recovery. Test roots
   (`createE2ELayer`) set `failOnExtensionFailure`, so a failed extension is a
   defect that names it; `allowFailedExtensions: true` keeps a failure-path
   test running. The harness loads every `extensionInputs`/`extensions` entry

@@ -12,7 +12,7 @@ range upward to `renderOffset + 1`. It does not clear saved terminal lines.
 
 Herdr reproduced the defect when returning from 80×24 to 44×22. The same
 check passed after the patch, including a seeded transcript and a return
-from 120×40. See `docs/fx-ui-acceptance.md` for captures and validation.
+from 120×40. See `docs/research/2026-09-18-fx-ui-acceptance.md` for captures and validation.
 
 Remove this patch when an OpenTUI release handles non-bottom-pinned
 split-footer resize cleanup. Recheck these paths before removing it.
