@@ -43,7 +43,6 @@ import {
   Message,
   type MessageMetadata,
   messagePartsTextLines,
-  messageSingleText,
   type QueuedTurnItem,
   type QueueEntryInfo,
   QueueSnapshot,
@@ -78,7 +77,6 @@ import {
   queueFollowUpOn,
   type RemoveFollowUpInput,
   type RequestExtensionInput,
-  turnMessageIds,
   type RespondInteractionInput,
   type RunningState,
   type SessionRuntimeState,
@@ -208,7 +206,7 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * The loop's inbox: everything a branch does with input it has accepted but
  * not yet answered.
  *
- * One module owns admission, follow-up batching, steering, the durable
+ * One module owns admission, follow-up order, steering, the durable
  * checkpoint, the wake decision, and the question "does this loop still hold
  * that message". No other module reads the queue representation —
  * `steering`, `followUp`, `inFlight`.
@@ -283,76 +281,18 @@ export const wantsWakeOnRecovery = (
 
 const FOLLOW_UP_QUEUE_MAX = 10
 
-const canBatchQueuedFollowUp = (existing: QueuedTurnItem, incoming: QueuedTurnItem): boolean => {
-  if (
-    !Predicate.isUndefined(existing.agentOverride) ||
-    !Predicate.isUndefined(incoming.agentOverride)
-  )
-    return false
-  if (!Predicate.isUndefined(existing.runSpec) || !Predicate.isUndefined(incoming.runSpec)) {
-    return false
-  }
-  if (!Predicate.isUndefined(existing.interactive) || !Predicate.isUndefined(incoming.interactive))
-    return false
-  if (existing.message.role !== "user" || incoming.message.role !== "user") return false
-  if (existing.message._tag === "interjection" || incoming.message._tag === "interjection") {
-    return false
-  }
-  return (
-    !Predicate.isUndefined(messageSingleText(existing.message.parts)) &&
-    !Predicate.isUndefined(messageSingleText(incoming.message.parts))
-  )
-}
-
-const mergeQueuedFollowUp = (
-  existing: QueuedTurnItem,
-  incoming: QueuedTurnItem,
-): QueuedTurnItem => {
-  const existingText = Option.fromUndefinedOr(messageSingleText(existing.message.parts))
-  const incomingText = Option.fromUndefinedOr(messageSingleText(incoming.message.parts))
-  if (Option.isNone(existingText) || Option.isNone(incomingText)) return incoming
-
-  // The merged item answers for every message it carries, so each caller
-  // waits for this item's turn rather than finding its id gone.
-  const merged: QueuedTurnItem = {
-    ...existing,
-    mergedMessageIds: [...turnMessageIds(existing).slice(1), ...turnMessageIds(incoming)],
-    message: Message.cases.regular.make({
-      id: existing.message.id,
-      sessionId: existing.message.sessionId,
-      branchId: existing.message.branchId,
-      role: existing.message.role,
-      parts: [Prompt.textPart({ text: `${existingText.value}\n${incomingText.value}` })],
-      createdAt: existing.message.createdAt,
-      turnDurationMs: existing.message.turnDurationMs,
-      metadata: existing.message.metadata,
-    }),
-  }
-  if (incoming.wake === true) return { ...merged, wake: true }
-  return merged
-}
-
+/**
+ * Each follow-up stays its own item with its own id, parts, and turn. A
+ * repeat of a queued id replaces that item in place, so a retry neither
+ * duplicates nor drops content.
+ */
 const appendFollowUpItem = (
   queue: ReadonlyArray<QueuedTurnItem>,
   item: QueuedTurnItem,
 ): QueuedTurnItem[] => {
   const existingIndex = queue.findIndex((queued) => queued.message.id === item.message.id)
-  if (existingIndex >= 0) {
-    return queue.map((queued, index) => {
-      if (index === existingIndex) {
-        return item
-      }
-      return queued
-    })
-  }
-
-  if (item.keyed === true) return [...queue, item]
-
-  const last = queue[queue.length - 1]
-  if (Predicate.isUndefined(last) || !canBatchQueuedFollowUp(last, item)) {
-    return [...queue, item]
-  }
-  return [...queue.slice(0, -1), mergeQueuedFollowUp(last, item)]
+  if (existingIndex < 0) return [...queue, item]
+  return queue.with(existingIndex, item)
 }
 
 const toQueueEntry = (
@@ -503,12 +443,12 @@ const clearInFlightQueuedTurn = (queue: LoopQueueState, messageId: MessageId): L
 const deliverableAtStep = (item: QueuedTurnItem) =>
   Predicate.isUndefined(item.agentOverride) && Predicate.isUndefined(item.runSpec)
 
-/** The loop still owns this message: starting, running, waiting, or queued, alone or merged. */
+/** The loop still owns this message: starting, running, waiting, or queued. */
 const stateHoldsMessage = (state: LoopState, messageId: MessageId) =>
-  state._tag !== "Idle" && turnMessageIds(state).includes(messageId)
+  state._tag !== "Idle" && state.message.id === messageId
 
 const loopHoldsMessage = (s: AgentLoopState, messageId: MessageId): boolean => {
-  const item = (queued: QueuedTurnItem) => turnMessageIds(queued).includes(messageId)
+  const item = (queued: QueuedTurnItem) => queued.message.id === messageId
   return (
     stateHoldsMessage(s.state, messageId) ||
     (Predicate.isNotUndefined(s.startingState) && stateHoldsMessage(s.startingState, messageId)) ||
@@ -535,8 +475,8 @@ export interface AgentLoopState {
   readonly queue: LoopQueueState
   readonly turnFailure?: {
     readonly epoch: number
-    /** The messages the failed turn carried; only their callers fail. */
-    readonly messageIds: ReadonlyArray<MessageId>
+    /** The message whose turn failed; only that message's caller fails. */
+    readonly messageId: MessageId
     readonly error: unknown
   }
   readonly startingState?: LoopState
@@ -934,10 +874,9 @@ type AgentLoopWorkerContext<E = never, R = never> = {
   readonly interruptToolWork: Effect.Effect<void>
   readonly inbox: LoopInbox
   readonly admissionGateRef: Ref.Ref<AdmissionGate>
-  /** Marks the turn failed for every message it carries. */
   readonly recordTurnFailure: (
     cause: Cause.Cause<unknown>,
-    turn: RunningState,
+    messageId: MessageId,
   ) => Effect.Effect<void>
   readonly publishEvent: (event: AgentEvent) => Effect.Effect<void, AgentLoopError>
   readonly runTurn: (state: RunningState) => Effect.Effect<TurnOutcome, AgentLoopError | E, R>
@@ -1043,7 +982,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     cause: Cause.Cause<unknown>,
   ): Effect.Effect<void, AgentLoopError> =>
     Effect.gen(function* () {
-      yield* scope.recordTurnFailure(cause, startState)
+      yield* scope.recordTurnFailure(cause, startState.message.id)
       yield* publishPhaseFailure(cause)
       // A turn that failed before it settled still holds the in-flight slot,
       // and `take` hands that slot back first. Clear it, so the failed turn
@@ -1088,7 +1027,7 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
         }),
         Effect.catchCause((cause) =>
           scope
-            .recordTurnFailure(cause, startState)
+            .recordTurnFailure(cause, startState.message.id)
             .pipe(Effect.andThen(publishPhaseFailure(cause)), Effect.ignore),
         ),
         Effect.ignore,
@@ -1463,12 +1402,12 @@ const makeAgentLoopBehavior = (
       startedRef,
     })
 
-    const recordTurnFailure = (cause: Cause.Cause<unknown>, turn: RunningState) =>
+    const recordTurnFailure = (cause: Cause.Cause<unknown>, messageId: MessageId) =>
       TxSubscriptionRef.update(loopRef, (s) => ({
         ...s,
         turnFailure: {
           epoch: turnFailureEpoch(s) + 1,
-          messageIds: turnMessageIds(turn),
+          messageId,
           error: causeToAgentLoopError(cause),
         },
       }))
@@ -1710,7 +1649,7 @@ const hasTurnFailureFor =
   } =>
     Predicate.isNotUndefined(state.turnFailure) &&
     state.turnFailure.epoch > baseline &&
-    state.turnFailure.messageIds.includes(messageId)
+    state.turnFailure.messageId === messageId
 
 const waitForTurnFailureAfterEpoch = (
   behavior: AgentLoopBehavior,
