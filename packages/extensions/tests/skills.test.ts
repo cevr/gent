@@ -73,29 +73,27 @@ description: Effect v4 patterns
 
 Content here`
     const result = parseSkillFile(content, "effect-v4.md")
-    expect(result).toEqual(
-      Option.some({
-        name: "effect-v4",
-        description: "Effect v4 patterns",
-        content: "Content here",
-      }),
-    )
+    expect(result).toEqual({
+      name: "effect-v4",
+      description: "Effect v4 patterns",
+      content: "Content here",
+    })
   })
 
   test("falls back to filename for name", () => {
     const result = parseSkillFile("# My Skill\n\nSome content", "my-skill.md")
-    expect(Option.getOrThrow(result).name).toBe("my-skill")
+    expect(result.name).toBe("my-skill")
   })
 
   test("extracts description from first paragraph", () => {
     const result = parseSkillFile("# Title\nShort description\n\nMore content", "test.md")
-    expect(Option.getOrThrow(result).description).toBe("Short description")
+    expect(result.description).toBe("Short description")
   })
 
   test("a folded block scalar description reads as one line", () => {
     const content =
       "---\nname: arch\ndescription: >-\n  Effect-first patterns.\n  Use when designing.\n---\nBody"
-    const result = Option.getOrThrow(parseSkillFile(content, "arch"))
+    const result = parseSkillFile(content, "arch")
     expect(result.name).toBe("arch")
     expect(result.description).toBe("Effect-first patterns. Use when designing.")
     expect(result.content).toBe("Body")
@@ -103,21 +101,19 @@ Content here`
 
   test("a literal block scalar description keeps its words on one prompt line", () => {
     const content = "---\nname: lit\ndescription: |\n  First line.\n  Second line.\n---\nBody"
-    expect(Option.getOrThrow(parseSkillFile(content, "lit")).description).toBe(
-      "First line. Second line.",
-    )
+    expect(parseSkillFile(content, "lit").description).toBe("First line. Second line.")
   })
 
   test("quoted values lose their quotes", () => {
     const content = `---\nname: "quoted"\ndescription: 'Single: quoted'\n---\nBody`
-    const result = Option.getOrThrow(parseSkillFile(content, "file"))
+    const result = parseSkillFile(content, "file")
     expect(result.name).toBe("quoted")
     expect(result.description).toBe("Single: quoted")
   })
 
   test("a frontmatter with no name uses the file name and keeps its description", () => {
     const content = "---\ndescription: only desc\n---\nbody"
-    const result = Option.getOrThrow(parseSkillFile(content, "named-by-file.md"))
+    const result = parseSkillFile(content, "named-by-file.md")
     expect(result.name).toBe("named-by-file")
     expect(result.description).toBe("only desc")
     expect(result.content).toBe("body")
@@ -125,14 +121,24 @@ Content here`
 
   test("a frontmatter with neither key describes the skill from its body", () => {
     const content = "---\nversion: 2\n---\n# Title\nBody text\n\nMore"
-    const result = Option.getOrThrow(parseSkillFile(content, "bare"))
+    const result = parseSkillFile(content, "bare")
     expect(result.name).toBe("bare")
     expect(result.description).toBe("Body text")
   })
 
+  test("a CRLF body gives its first paragraph as the description", () => {
+    const result = parseSkillFile("# Title\r\nShort description\r\n\r\nMore content\r\n", "crlf.md")
+    expect(result.description).toBe("Short description")
+  })
+
+  test("a long fallback description is cut at a code point, not inside a surrogate pair", () => {
+    const result = parseSkillFile(`${"a".repeat(99)}😀 tail`, "emoji.md")
+    expect(result.description).toBe(`${"a".repeat(99)}😀`)
+  })
+
   test("malformed YAML falls back to the file name", () => {
     const content = "---\nname: [unclosed\n---\nbody"
-    const result = Option.getOrThrow(parseSkillFile(content, "broken.md"))
+    const result = parseSkillFile(content, "broken.md")
     expect(result.name).toBe("broken")
     expect(result.content).toBe("body")
   })

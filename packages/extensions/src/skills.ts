@@ -229,10 +229,7 @@ export class Skills extends Context.Service<Skills, SkillsService>()(
                 .readFileString(filePath.value)
                 .pipe(skipOnError(filePath.value))
               if (Option.isNone(text)) continue
-              const parsed = parseSkillFile(text.value, entry)
-              if (Option.isSome(parsed)) {
-                result.push({ ...parsed.value, filePath: filePath.value, level })
-              }
+              result.push({ ...parseSkillFile(text.value, entry), filePath: filePath.value, level })
             }
 
             return result
@@ -354,10 +351,7 @@ const parseFrontmatter = (yaml: string): SkillHeader =>
     },
   )
 
-export function parseSkillFile(
-  content: string,
-  filename: string,
-): Option.Option<{ name: string; description: string; content: string }> {
+export function parseSkillFile(content: string, filename: string) {
   let header = NO_HEADER
   let body = content
   const lines = content.split("\n")
@@ -376,15 +370,20 @@ export function parseSkillFile(
   // Without a description key, the first body paragraph (minus a heading) describes the skill.
   const description = header.description.pipe(
     Option.orElse(() =>
-      Option.fromNullishOr(body.split("\n\n")[0]).pipe(
-        Option.map((paragraph) => oneLine(paragraph.replace(/^#.*(\n|$)/, "")).slice(0, 100)),
+      Option.fromNullishOr(body.split(/\r?\n\r?\n/)[0]).pipe(
+        // Cut at a code point: a UTF-16 slice can split a surrogate pair.
+        Option.map((paragraph) =>
+          Array.from(oneLine(paragraph.replace(/^#.*(\r?\n|$)/, "")))
+            .slice(0, 100)
+            .join(""),
+        ),
         Option.filter((text) => text.length > 0),
       ),
     ),
     Option.getOrElse(() => `Skill: ${name}`),
   )
 
-  return Option.some({ name, description, content: body })
+  return { name, description, content: body }
 }
 
 // Format skills for system prompt
