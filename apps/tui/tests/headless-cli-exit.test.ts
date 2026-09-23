@@ -1,8 +1,7 @@
 import { it, describe, expect } from "effect-bun-test"
 import { BunServices } from "@effect/platform-bun"
-import { Effect, FileSystem, Layer, Path } from "effect"
-import { Auth, AuthApi } from "@gent/core/host"
-import { createWorkerEnv } from "@gent/core/test-utils"
+import { Effect, FileSystem, Path } from "effect"
+import { createWorkerEnv, seedAuthKeys } from "@gent/core/test-utils"
 const makeTempDir = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   return yield* fs.makeTempDirectoryScoped({ prefix: "gent-headless-exit-" })
@@ -17,14 +16,6 @@ const waitForExit = (proc: Bun.Subprocess, timeoutMs: number) => {
     Effect.promise(() => proc.exited),
     timeout,
   )
-}
-const seedAuth = (directory: string) => {
-  const authLayer = Auth.Live(directory).pipe(Layer.provide(BunServices.layer))
-  return Effect.gen(function* () {
-    const auth = yield* Auth
-    yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "test-key" }))
-    yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))
-  }).pipe(Effect.provide(authLayer))
 }
 const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) => {
   // eslint-disable-next-line effect/noGlobals -- child process env must inherit the host environment.
@@ -55,7 +46,7 @@ const runGent = (args: ReadonlyArray<string>, options: { readonly keyless?: bool
     const env = createWorkerEnv(homeDir, "debug-scripted")
     const mode: Array<string> = []
     if (options.keyless !== true) {
-      yield* seedAuth(env["GENT_AUTH_DIRECTORY"]!)
+      yield* seedAuthKeys(env["GENT_AUTH_DIRECTORY"]!)
       mode.push("--debug")
     }
     // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
@@ -249,7 +240,7 @@ describe("compiled binary", () => {
         yield* fs.makeDirectory(extensionDir, { recursive: true })
         yield* fs.writeFileString(path.join(extensionDir, "peers-probe.ts"), PEERS_PROBE)
         const env = createWorkerEnv(homeDir, "debug-scripted")
-        yield* seedAuth(env["GENT_AUTH_DIRECTORY"]!)
+        yield* seedAuthKeys(env["GENT_AUTH_DIRECTORY"]!)
         // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
         const proc = Bun.spawn([binary, "--debug", "-H", "Say hi in 3 words"], {
           cwd: homeDir,

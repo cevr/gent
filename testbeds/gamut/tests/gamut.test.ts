@@ -2,9 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import {
   decodeState,
+  failureText,
   isSettled,
+  latestEventId,
   openTurnSessions,
   encodeState,
+  parseCount,
+  runRecord,
   paneIdFromSplit,
   presetConfigJson,
   PRESETS,
@@ -92,10 +96,16 @@ describe("gamut state file", () => {
     pane: "wZ:p9",
     binary: "/checkout/apps/tui/bin/gent",
     preset: "sol-luna",
+    sendMark: 7,
   }
 
   test("round trips every field", () => {
     expect(decodeState(encodeState(state))).toEqual(state)
+  })
+
+  test("a state file from before any send reads its send mark as zero", () => {
+    const { sendMark: _mark, ...older } = state
+    expect(decodeState(JSON.stringify(older)).sendMark).toBe(0)
   })
 
   test("a missing field is refused rather than read as undefined", () => {
@@ -131,14 +141,28 @@ describe("gamut pane id", () => {
   })
 })
 
-describe("a settled pane", () => {
-  test("an idle status line with no working child is settled", () => {
-    expect(isSettled("  Done.\n\nidle · work (main) · GPT-5.6 Sol · medium   ctx 1%\n")).toBe(true)
+describe("a settled run", () => {
+  const finished = { started: true, open: [] }
+  test("an idle status line with every turn ended is settled", () => {
+    expect(
+      isSettled("  Done.\n\nidle · work (main) · GPT-5.6 Sol · medium   ctx 1%\n", finished),
+    ).toBe(true)
+  })
+  // The footer's first slot holds a held error or an extension notice in
+  // place of the phase word (apps/tui/src/app.tsx, phaseLabels).
+  test("a held error in the footer still settles once every turn has ended", () => {
+    expect(
+      isSettled("  Done.\n\nprovider rejected the key · work (main) · GPT-5.6 Sol\n", finished),
+    ).toBe(true)
+  })
+  test("an extension notice in the footer still settles once every turn has ended", () => {
+    expect(isSettled("wake alarm set for 10:00 · work (main) · GPT-5.6 Sol\n", finished)).toBe(true)
   })
   test("an idle root with a working background child is not settled", () => {
     expect(
       isSettled(
         "idle · work (main) · GPT-5.6 Sol\n ◆ main working · Task 2. Read-only audit  ^t agents\n",
+        finished,
       ),
     ).toBe(false)
   })
@@ -146,8 +170,39 @@ describe("a settled pane", () => {
     expect(
       isSettled(
         "┃ Reply with the word idle · ready\n  Generating (3s)\nwork (main) · GPT-5.6 Sol\n",
+        finished,
       ),
     ).toBe(false)
+  })
+  test("an open turn in the record is not settled, whatever the pane shows", () => {
+    expect(isSettled("idle · work (main)\n", { started: true, open: ["child"] })).toBe(false)
+  })
+  test("a run with no turn started yet is not settled", () => {
+    expect(isSettled("ready · work (main)\n", { started: false, open: [] })).toBe(false)
+  })
+})
+
+describe("gamut command-line counts", () => {
+  test("a positive whole number is read", () => {
+    expect(parseCount("wait seconds", "600")).toBe(600)
+  })
+  test("a word, a fraction, zero or a negative is refused", () => {
+    for (const value of ["abc", "1.5", "0", "-3", ""]) {
+      expect(() => parseCount("wait seconds", value)).toThrow("must be a positive whole number")
+    }
+  })
+})
+
+describe("gamut failure line", () => {
+  test("a herdr error reply gives its message", () => {
+    const reply = `{"id":"cli:pane:current","error":{"code":"server_not_running","message":"no herdr server is running"}}`
+    expect(failureText("", reply)).toBe("no herdr server is running")
+    expect(failureText(reply, "")).toBe("no herdr server is running")
+  })
+  test("another command gives its last stderr line, then its last stdout line", () => {
+    expect(failureText("building\n", "warning\nerror: no such file\n\n")).toBe("error: no such file")
+    expect(failureText("only stdout\n", "")).toBe("only stdout")
+    expect(failureText("", "")).toBe("no output")
   })
 })
 
@@ -179,6 +234,36 @@ describe("gamut open turns", () => {
       ["failed", "ErrorOccurred"],
     ])
     expect(openTurnSessions(db)).toEqual([])
+  })
+  test("the record says whether any turn has started", () => {
+    expect(runRecord(withEvents([]), 0)).toEqual({ started: false, open: [] })
+    expect(runRecord(withEvents([["s", "MessageReceived"]]), 0)).toEqual({
+      started: true,
+      open: ["s"],
+    })
+  })
+  // `send` marks the newest event id before it types; the message it sends
+  // is stored after that mark, so a turn the previous prompt finished does
+  // not count as the new one having run.
+  test("a turn at or before the send mark does not count as started", () => {
+    const db = withEvents([
+      ["s", "MessageReceived"],
+      ["s", "TurnCompleted"],
+    ])
+    expect(runRecord(db, 2)).toEqual({ started: false, open: [] })
+    db.run("INSERT INTO events (session_id, event_tag) VALUES ('s', 'MessageReceived')")
+    expect(runRecord(db, 2)).toEqual({ started: true, open: ["s"] })
+  })
+  test("the send mark is the newest event id, zero before any event", () => {
+    expect(latestEventId(withEvents([]))).toBe(0)
+    expect(
+      latestEventId(
+        withEvents([
+          ["s", "MessageReceived"],
+          ["s", "TurnCompleted"],
+        ]),
+      ),
+    ).toBe(2)
   })
   test("a wake message after the last turn reopens the session", () => {
     const db = withEvents([

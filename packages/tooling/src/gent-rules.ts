@@ -137,6 +137,31 @@ const hasAllowComment = (
     })
 }
 
+/** A lint fixture: a file the rule tests run through the rules. */
+const LINT_FIXTURE = /(?:^|\/)packages\/tooling\/fixtures\//
+
+/**
+ * Test support: files that exist to test gent, not to ship it -- the tests,
+ * the e2e fixtures, the core harness, the testbeds, and the lint fixtures.
+ * One definition for two readers: the `core-entry-boundary` rule calls
+ * everything else product code, and the guards (`guards.ts`) never count a
+ * caller or an env write here as proof of production use. Takes a
+ * repo-relative or an absolute path.
+ */
+export const isTestSupport = (file: string): boolean =>
+  LINT_FIXTURE.test(file) ||
+  /\.test\.[cm]?[jt]sx?$/.test(file) ||
+  /(?:^|\/)(?:tests|testbeds|packages\/e2e|packages\/core\/src\/test-utils)\//.test(file)
+
+/**
+ * A lint fixture mirrors the repo layout, so a rule judges it as the file at
+ * the same path under the repo root; any other file is its own subject.
+ */
+const fixtureSubject = (filename: string): string => {
+  const match = LINT_FIXTURE.exec(filename)
+  return match === null ? filename : filename.slice(match.index + match[0].length)
+}
+
 const isTestFilename = (filename: string): boolean =>
   /\.test\.tsx?$/.test(filename) || /\/tests\/.*\.[cm]?tsx?$/.test(filename)
 
@@ -714,8 +739,7 @@ const plugin: Plugin = {
       create(context) {
         const filename = context.filename
         const extensionFile = isExtensionFilename(filename)
-        const productFile =
-          !isTestFilename(filename) && !/\/packages\/(?:e2e|core\/src\/test-utils)\//.test(filename)
+        const productFile = !isTestSupport(fixtureSubject(filename))
         const outsideCore = !/\/packages\/core\//.test(filename)
         if (!extensionFile && !productFile && !outsideCore) return {}
         const tuiExtension = filename.includes("apps/tui/src/extensions/")

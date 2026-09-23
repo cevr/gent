@@ -12,11 +12,11 @@ import {
   Session,
   SessionId,
   ConnectionState,
-  emptyQueueSnapshot,
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
   type QueueEntryInfo,
 } from "@gent/core/protocol"
+import { emptyQueueSnapshot } from "@gent/core/test-utils"
 import { Gent, type GentRuntime } from "@gent/sdk"
 import {
   App,
