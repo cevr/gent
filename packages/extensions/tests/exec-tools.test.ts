@@ -1641,6 +1641,51 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("an option a runner's table does not know asks; its known options keep their reading", () => {
+    const r = "rm -rf /nonexistent/gent-probe-x"
+    for (const command of [
+      `parallel --nice 10 ${r}`,
+      "parallel --arg-sep @@ rm -rf @@ /nonexistent/gent-probe-x",
+      `echo x | parallel --block 1M ${r}`,
+      `echo x | parallel --rpl '{Z} $_="${r}"' {Z}`,
+      `/usr/bin/time -o /nonexistent/gent-probe-x ${r}`,
+      `command time -f %e ${r}`,
+      `env --argv0 x ${r}`,
+      // An exact flag name is that flag, not a prefix of a valued option (`--tagstring`).
+      `parallel --tag ${r} ::: a`,
+      // An unknown option asks even when the word after it runs nothing.
+      "timeout --gent-probe-unknown 5 ls",
+      "nohup --gent-probe-unknown ls",
+      "xargs --gent-probe-unknown echo",
+      "ssh -Z host ls",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "parallel -j 4 -k echo ::: a b",
+      "parallel --nice 10 --bar echo ::: a",
+      "parallel --tag ls -l ::: a",
+      "time -p ls",
+      "/usr/bin/time -o /nonexistent/gent-probe-x/t.txt ls",
+      "command -v rm",
+      "env -i PATH=/usr/bin ls",
+      "sudo -E ls",
+      "nice -10 ls",
+      "timeout --preserve-status 5 bun test",
+      "xargs -0 -r echo",
+      "setsid -f ls",
+      "ssh -t host uptime",
+      "watch -d ls",
+      "npx -y prettier --check .",
+      "uv run --frozen pytest",
+      "strace -f -c ls",
+      "flock -n /nonexistent/gent-probe-x/l ls",
+      "caffeinate -i ls",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("fish's script options are read", () => {
     for (const command of [
       "fish -C 'rm -rf /nonexistent/gent-probe-x'",

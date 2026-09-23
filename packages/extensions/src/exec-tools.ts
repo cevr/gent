@@ -1183,12 +1183,23 @@ interface ValueOptions {
   readonly attached?: string
   /** A `-name` word is one long option, not a cluster of letters (`arch -arm64`, `-arch x`). */
   readonly singleDash?: boolean
+  /** Letters of the options that take no value. A runner asks on an option its table does not name. */
+  readonly flags?: string
+  /** Long names of the options that take no value, or only one after `=`. */
+  readonly longFlags?: ReadonlyArray<string>
 }
 
-/** Options that take a value: the letters, and the long names separated by spaces. */
-const options = (short: string, long = ""): ValueOptions => ({
+const names = (text: string) => text.split(" ").filter((name) => name.length > 0)
+
+/**
+ * Options that take a value: the letters, and the long names separated by
+ * spaces; then the flags, which take none, in the same two forms.
+ */
+const options = (short: string, long = "", flags = "", longFlags = ""): ValueOptions => ({
   short,
-  long: long.split(" ").filter((name) => name.length > 0),
+  long: names(long),
+  flags,
+  longFlags: names(longFlags),
 })
 
 /** Where an option's value starts: argument `word`, from character `from`. */
@@ -1259,7 +1270,11 @@ const readLongOption = (
   let next = index + 1
   if (equals !== -1) {
     value = Option.some({ word: index, from: equals + 1 })
-  } else if ((valued.long ?? []).some((option) => abbreviates(name, option))) {
+  } else if (
+    // An exact flag name wins over a valued name it abbreviates (`--tag`, `--tagstring`).
+    !(valued.longFlags ?? []).includes(name) &&
+    (valued.long ?? []).some((option) => abbreviates(name, option))
+  ) {
     value = Option.some({ word: index + 1, from: 0 })
     next = index + 2
   }
@@ -1577,6 +1592,44 @@ const inputShellStarts = (
     }
     return runCommands(resolved, other).some((wrapped) => wrapped.length > 0)
   })
+}
+
+/** Whether `valued` names `option`, as an option that takes a value or as a flag. */
+const knowsOption = (valued: ValueOptions, option: ParsedOption) => {
+  if (!option.long) {
+    return `${valued.short ?? ""}${valued.attached ?? ""}${valued.flags ?? ""}`.includes(
+      option.name,
+    )
+  }
+  const known = [...(valued.long ?? []), ...(valued.longFlags ?? [])]
+  return known.some((name) => abbreviates(option.name, name))
+}
+
+/**
+ * A runner that starts the command after its leading options, given an
+ * option its table does not name: whether that option takes the next word
+ * is not known, so neither is the command. It asks.
+ */
+const unknownOptionRuns = ({
+  path,
+  words,
+  spec: { valued, runs },
+}: ResolvedCommand): SegmentRuns => {
+  const starts = runs.some(
+    (run) =>
+      (run._tag === "Command" && run.after.length === 0) ||
+      run._tag === "Joined" ||
+      run._tag === "Stdin",
+  )
+  if (!starts) return NO_RUNS
+  const { options: read } = parseWords(words, valued, "leading")
+  return Option.match(
+    Arr.findFirst(read, (option) => !knowsOption(valued, option)),
+    {
+      onNone: () => NO_RUNS,
+      onSome: ({ name }) => unreadableRun(`an option of ${path} the guard does not know: ${name}`),
+    },
+  )
 }
 
 /** What a `Joined`, `OptionScript`, `Stdin` or `InputShell` run runs beyond the commands it starts. */
@@ -2731,7 +2784,10 @@ const commandRuns = (invocation: Invocation): SegmentRuns => {
   if (name === "source" || name === ".")
     return scriptFileRuns(invocation.segment, Option.fromUndefinedOr(words[1]))
   const resolved = resolveCommand(words)
-  const runs = resolved.spec.runs.map((run) => specRuns(invocation, resolved, run))
+  const runs = [
+    unknownOptionRuns(resolved),
+    ...resolved.spec.runs.map((run) => specRuns(invocation, resolved, run)),
+  ]
   if (name === "git") runs.push(gitRuns(invocation))
   return mergeRuns(runs)
 }
@@ -2975,85 +3031,128 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
   Object.entries({
     // Keywords, and commands that run the command after them as it is.
     // Multicall binaries: the next word is the applet (`busybox rm -rf x`).
-    ...each(
-      ["!", "{", "if", "then", "elif", "else", "do", "while", "until", "time", "busybox"],
-      runner(),
-    ),
-    ...each(["toybox", "nohup", "setsid", "chronic", "unbuffer", "command", "builtin"], runner()),
+    ...each(["!", "{", "if", "then", "elif", "else", "do", "while", "until"], runner()),
+    ...each(["busybox", "toybox", "nohup", "builtin"], runner()),
+    // bash's `time -p`, and GNU and BSD `/usr/bin/time -o FILE -f FORMAT`.
+    time: runner(options("fo", "format output", "aplqv", "append portability verbose quiet")),
+    setsid: runner(options("", "", "cfw", "ctty fork wait")),
+    chronic: runner(options("", "", "ev")),
+    unbuffer: runner(options("", "", "p")),
+    command: runner(options("", "", "pvV")),
     coproc: runner({}, { named: true }),
     // `function f { … }`: the word after the name opens the body.
     function: runner({}, { positionals: 1 }),
     sudo: spec(
       options(
-        "CDghpRrTtUu",
+        "cCDghpRrTtUu",
         "user group close-from chdir host prompt role type command-timeout other-user chroot",
+        "AbBEeHiKklnNPSsVvh",
+        "askpass background bell preserve-env edit set-home login remove-timestamp reset-timestamp list non-interactive preserve-groups stdin shell validate",
       ),
       [command(), inputShell("si", ["shell", "login"])],
       rootRmRisk,
     ),
-    doas: spec(options("uC"), [command(), inputShell("s")], rootRmRisk),
+    doas: spec(options("uC", "", "nsL"), [command(), inputShell("s")], rootRmRisk),
     // `-S` splits its value into the command it runs.
-    env: spec(options("CPSu", "unset chdir split-string"), [
-      command(),
-      optionScript("S", ["split-string"], true),
-    ]),
-    exec: runner(options("a")),
-    pkexec: runner(options("", "user")),
+    env: spec(
+      options(
+        "aCLPSUu",
+        "argv0 unset chdir split-string",
+        "iv0",
+        "ignore-environment null debug ignore-signal default-signal block-signal list-signal-handling",
+      ),
+      [command(), optionScript("S", ["split-string"], true)],
+    ),
+    exec: runner(options("a", "", "cl")),
+    pkexec: runner(options("", "user", "", "disable-internal-agent keep-cwd")),
     // macOS `arch -arm64 cmd`, `arch -arch x86_64 -e VAR=v cmd`.
-    arch: runner({ long: ["arch", "e", "d"], singleDash: true }),
+    arch: runner({
+      long: ["arch", "e", "d"],
+      longFlags: names("arm64 arm64e x86_64 x86_64h i386 32 64 c h"),
+      singleDash: true,
+    }),
     unshare: runner(
       options(
         "SGRw",
         "setuid setgid root wd propagation map-user map-group map-users map-groups setgroups",
+        "cCfimnpTuUr",
+        "fork mount uts ipc net pid user cgroup time map-root-user map-current-user kill-child mount-proc keep-caps",
       ),
     ),
     "systemd-run": runner(
       options(
         "HMCpuE",
         "host machine capsule property unit setenv description slice uid gid nice working-directory service-type on-active on-boot on-startup on-unit-active on-unit-inactive on-calendar timer-property path-property socket-property",
+        "dGPqStr",
+        "user system scope pty pipe quiet wait collect same-dir shell no-block no-ask-password remain-after-exit send-sighup",
       ),
     ),
     // `sg group cmd` and `sg group -c cmd` run a shell script. Shadow's sg
     // runs only the first word; the words after it are read too, in case
     // another sg joins them.
     sg: spec(options("c"), [joined(1), optionScript("c")]),
-    ...each(["nice", "gnice"], runner(options("n", "adjustment"))),
-    ionice: runner(options("cnpPu", "class classdata pid pgid uid")),
+    // `nice -10 cmd`: an old form of `-n 10`.
+    ...each(["nice", "gnice"], runner(options("n", "adjustment", "0123456789"))),
+    ionice: runner(options("cnpPu", "class classdata pid pgid uid", "t", "ignore")),
     ...each(
       ["timeout", "gtimeout"],
-      runner(options("sk", "signal kill-after"), { positionals: 1 }),
+      runner(options("sk", "signal kill-after", "v", "verbose preserve-status foreground"), {
+        positionals: 1,
+      }),
     ),
     stdbuf: runner(options("ioe", "input output error")),
-    caffeinate: runner(options("tw")),
-    flock: spec(options("cEw", "command timeout conflict-exit-code"), [
-      command({ positionals: 1 }),
-      optionScript("c", ["command"]),
-    ]),
-    strace: runner(options("abeEIoOpPsSuX", "output attach user env")),
-    ltrace: runner(options("aeFnopsu", "output")),
-    chroot: runner(options("", "userspec groups"), { positionals: 1 }),
-    taskset: runner({}, { positionals: 1 }),
-    runuser: spec(options("cgGsuw", "command group supp-group shell user"), [
-      command(),
-      optionScript("c", ["command"]),
-    ]),
+    caffeinate: runner(options("tw", "", "dimsu")),
+    flock: spec(
+      options(
+        "cEw",
+        "command timeout conflict-exit-code",
+        "enosuxF",
+        "shared exclusive nonblock nb unlock close no-fork verbose",
+      ),
+      [command({ positionals: 1 }), optionScript("c", ["command"])],
+    ),
+    strace: runner(
+      options("abeEIoOpPsSuX", "output attach user env", "cCdDfFhiknqrtTvVwxyzZ", "summary-only"),
+    ),
+    ltrace: runner(options("aeFnopsu", "output", "bcCdfhiLrStTV")),
+    chroot: runner(options("", "userspec groups", "", "skip-chdir"), { positionals: 1 }),
+    taskset: runner(options("", "", "acp", "all-tasks cpu-list pid"), { positionals: 1 }),
+    runuser: spec(
+      options(
+        "cgGsuw",
+        "command group supp-group shell user",
+        "flmpP",
+        "login preserve-environment pty fast",
+      ),
+      [command(), optionScript("c", ["command"])],
+    ),
     // BSD `script [-q] file command…`.
-    script: spec(options("cEIOT", "command log-in log-out log-timing"), [
-      command({ positionals: 1 }),
-      optionScript("c", ["command"]),
-    ]),
+    script: spec(
+      options(
+        "cEIOT",
+        "command log-in log-out log-timing",
+        "adefFkqr",
+        "append return flush quiet force",
+      ),
+      [command({ positionals: 1 }), optionScript("c", ["command"])],
+    ),
     // With no `-c`, `su` starts the user's shell, and it runs its input.
     su: spec(options("cgGsw", "command session-command"), [
       optionScript("c", ["command", "session-command"]),
       inputShell(""),
     ]),
     "nix-shell": spec(options("AIp", "run command attr"), [optionScript("", ["run", "command"])]),
-    dotenv: runner(options("ecv")),
+    dotenv: runner(options("ecpv", "", "o", "debug no-expand override")),
     // `-e`, `-i` and `-l` take only an attached value; so do `--max-lines`,
     // `--replace` and `--eof`, after `=`.
     xargs: spec(
       {
-        ...options("aEdILnPsJRS", "arg-file delimiter max-args max-procs max-chars"),
+        ...options(
+          "aEdILnPsJRS",
+          "arg-file delimiter max-args max-procs max-chars process-slot-var",
+          "0oprtx",
+          "null no-run-if-empty verbose interactive open-tty exit show-limits eof replace max-lines",
+        ),
         attached: "eil",
       },
       [Run.cases.Stdin.make({})],
@@ -3061,7 +3160,9 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     parallel: spec(
       options(
         "aCdEIjLnNPSs",
-        `arg-file colsep delimiter jobs max-args max-replace-args max-lines max-chars sshlogin sshloginfile results joblog tmpdir workdir tagstring timeout retries load memfree basefile env halt delay ${PARALLEL_REPLACE_OPTIONS.join(" ")}`,
+        `arg-file colsep delimiter jobs max-args max-replace-args max-lines max-chars sshlogin sshloginfile results joblog tmpdir workdir tagstring timeout retries load memfree basefile env halt delay nice ${PARALLEL_REPLACE_OPTIONS.join(" ")}`,
+        "0gkmqrtuvX",
+        "keep-order bar progress eta quote ungroup line-buffer lb group dry-run null no-run-if-empty xargs tag files pipe plus shuf tty silent verbose will-cite no-notice",
       ),
       [Run.cases.Stdin.make({})],
     ),
@@ -3072,10 +3173,18 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ),
     fd: spec({}, [Run.cases.FindExec.make({ actions: ["-x", "-X", "--exec", "--exec-batch"] })]),
     eval: spec({}, [joined()]),
-    ssh: spec(options("bcDEeFIiJLlmOopQRSWwB"), [joined(1)]),
-    watch: spec(options("n", "interval"), [joined()]),
+    ssh: spec(options("bcDEeFIiJLlmOopQRSWwB", "", "46AaCfGgKkMNnqsTtVvXxYy"), [joined(1)]),
+    watch: spec(
+      options(
+        "n",
+        "interval",
+        "bcdegprtwx",
+        "beep color differences errexit chgexit precise no-title no-wrap exec",
+      ),
+      [joined()],
+    ),
     // `trap '<script>' SIGNAL`: the script runs when the signal (or `EXIT`) comes.
-    trap: spec({}, [joined(0, 1)]),
+    trap: spec(options("", "", "lp"), [joined(0, 1)]),
     // Package managers and runners.
     pnpm: spec(options("CF", `filter dir ${PUBLISH_OPTIONS}`)),
     npm: spec(options("w", `workspace prefix userconfig cache ${PUBLISH_OPTIONS}`)),
@@ -3085,13 +3194,19 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       ...spec(options("pZ", "package manifest-path registry token config index color")),
       toolchain: true,
     },
-    ...each(["pnpm exec", "yarn exec"], runner()),
+    "pnpm exec": runner(
+      options("", "resume-from", "r", "recursive parallel report-summary workspace-root"),
+    ),
+    "yarn exec": runner(),
     // `npx -c '<script>'` runs a shell script.
     ...each(
       ["npm exec", "npm x", "npx"],
-      spec(options("pc", "package call"), [command(), optionScript("c", ["call"])]),
+      spec(
+        options("pcw", "package call workspace", "qy", "yes no no-install quiet workspaces ws"),
+        [command(), optionScript("c", ["call"])],
+      ),
     ),
-    ...each(["bunx", "bun x"], runner(options("p", "package"))),
+    ...each(["bunx", "bun x"], runner(options("p", "package", "", "bun silent verbose"))),
     ...each(
       ["pnpm publish", "npm publish", "yarn publish", "yarn npm publish", "bun publish"],
       PUBLISH,
@@ -3124,8 +3239,15 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     docker: spec(options("Hcl", "host context config log-level tlscacert tlscert tlskey")),
     ...each(["docker push", "docker image push"], risky(external("docker push"))),
     uv: spec(options("", "directory project")),
-    "uv run": runner(options("", "with python package env-file extra group")),
-    "op run": runner(options("", "env-file")),
+    "uv run": runner(
+      options(
+        "",
+        "with python package env-file extra group",
+        "mqv",
+        "module frozen locked no-sync no-project isolated all-extras no-dev script quiet verbose",
+      ),
+    ),
+    "op run": runner(options("", "env-file", "", "no-masking")),
     ...each(["mise exec", "mise x"], runner({}, { after: ["--"] })),
     "direnv exec": runner({}, { positionals: 1 }),
     ...each(["nix develop", "nix shell"], runner({}, { after: ["-c", "--command"] })),
