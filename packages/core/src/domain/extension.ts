@@ -45,6 +45,7 @@ import type { ApprovalDecision, ApprovalRequest, InteractionPendingError } from 
 import {
   type Branch,
   type Message,
+  extensionMetadata,
   MessageMetadata,
   type Session,
   type SessionAdmission,
@@ -331,7 +332,7 @@ export class ExtensionLoadError extends Schema.TaggedError<ExtensionLoadError>(
 export interface SystemPromptInput {
   readonly basePrompt: string
   readonly agent: AgentDefinition
-  /** False when no user can answer in this turn: a child turn no client opened (`turnCanAsk`). */
+  /** False when no user can answer in this turn: a spawned session's turn no client opened (`turnCanAsk`). */
   readonly interactive?: boolean
   /**
    * Tools resolved for this turn, for a hook that renders them into the
@@ -365,7 +366,9 @@ export interface TurnAfterInput {
    *
    * The driver already retries a stream that breaks before any output, and the
    * loop already spends its continuations on one that breaks after partial
-   * output. This is true only once both are exhausted.
+   * output. This is true only once both are exhausted, and for a turn a
+   * failed phase stopped (a storage write, a stream defect), which gets its
+   * hooks once, after its receipt.
    */
   readonly streamFailed: boolean
   /** The turn spent its continuations and never answered. */
@@ -687,8 +690,9 @@ export const mapExtensionServiceError = <A, E, R>(
  *
  * Every mode stamps the sending extension's id on the message's `metadata`,
  * over any the caller set, and removes the client origin only the server
- * stamps: a turn it opens in a child session has no user to ask
- * (`turnCanAsk`).
+ * stamps: a turn it opens in a spawned session has no user to ask
+ * (`turnCanAsk`). A client's extension request that sends to its own branch
+ * while it runs sends as that client instead.
  */
 export const SessionSendParams = Schema.Union([
   Schema.Struct({
@@ -900,14 +904,9 @@ const extensionServicesFromHostContext = (
   const extensionId = Option.getOrElse(extensionIdOption, () => ExtensionId.make("unknown"))
   // Every message a leaf sends names it as the author, whatever the caller
   // set, and never carries the client origin only the server stamps: a turn
-  // it opens in a child session knows no user started it.
-  const send: ExtensionSessionService["send"] = (params) => {
-    const { fromClient: _forged, ...metadata } = Option.getOrElse(
-      Option.fromUndefinedOr(params.metadata),
-      (): MessageMetadata => ({}),
-    )
-    return ctx.Session.send({ ...params, metadata: { ...metadata, extensionId } })
-  }
+  // it opens in a spawned session knows no user started it.
+  const send: ExtensionSessionService["send"] = (params) =>
+    ctx.Session.send({ ...params, metadata: extensionMetadata(extensionId, params.metadata) })
   return Context.empty().pipe(
     Context.add(ExtensionContext, {
       extensionId,

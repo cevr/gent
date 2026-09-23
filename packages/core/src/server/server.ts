@@ -24,6 +24,7 @@ import {
   type SessionAdmission,
   toolCallReceipts,
   clientMetadata,
+  sessionThread,
 } from "../domain/message.js"
 import {
   BranchStorage,
@@ -158,11 +159,14 @@ import type { Headers } from "effect/unstable/http"
 /**
  * A client's steer as the loop receives it: an interjection carries the
  * server's client origin over whatever the client set (`clientMetadata`), so
- * no client can claim an extension author or drop its own origin.
+ * no client can claim an extension author, a client request's grant, or drop
+ * its own origin.
  */
 const clientSteer = (command: TransportSteerCommand): TransportSteerCommand => {
   if (command._tag !== "Interject") return command
-  return { ...command, metadata: clientMetadata(command.metadata) }
+  // A client request's grant is the loop's to hand out; a client cannot claim one.
+  const { clientRequest: _claimed, ...interject } = command
+  return { ...interject, metadata: clientMetadata(command.metadata) }
 }
 
 // ── connection-tracker ──────────────────────────────────────────────────────
@@ -609,7 +613,7 @@ const makeSessionMutationsService: Effect.Effect<
       return { threadId: Option.none<SessionId>(), admission }
     }
     return {
-      threadId: Option.some(parent.threadId ?? parent.id),
+      threadId: Option.some(sessionThread(parent)),
       admission: admission ?? parent.admission,
     }
   })

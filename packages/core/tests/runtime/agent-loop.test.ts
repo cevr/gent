@@ -2265,6 +2265,7 @@ const makeHarness = (
       recordTurnFailure: (_cause, messageId) =>
         Ref.update(failedTurns, (ids) => [...ids, String(messageId)]),
       publishEvent: () => Effect.void,
+      completeFailedTurn: () => Effect.void,
       interactionAnswered: (requestId) => Effect.succeed(answered.has(requestId)),
       runTurn: (state) =>
         Effect.gen(function* () {
@@ -6759,6 +6760,104 @@ describe("streaming", () => {
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
     }),
   )
+  it.live("a turn a phase failure stops ends with one failed TurnCompleted after its error", () =>
+    Effect.gen(function* () {
+      const providerLayer = scriptedProvider([
+        [textDeltaPart("not committed"), finishPart({ finishReason: "stop" })],
+      ])
+      const seen = yield* Ref.make<ReadonlyArray<AgentEvent>>([])
+      const record = (event: AgentEvent) => Ref.update(seen, (events) => [...events, event])
+      // The assistant line's append fails: a storage failure inside a turn
+      // phase, which the model stream never sees.
+      const failingPublisherLayer = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: (event: AgentEvent) => {
+            if (event._tag === "MessageReceived" && event.message.role === "assistant") {
+              return Effect.fail(new EventStoreError({ message: "append failed" }))
+            }
+            return Effect.gen(function* () {
+              yield* record(event)
+              return EventEnvelope.make({
+                id: EventId.make(0),
+                event,
+                createdAt: yield* Clock.currentTimeMillis,
+              })
+            })
+          },
+          deliver: () => Effect.void,
+          publish: record,
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const messageStorage = yield* MessageStorage
+        const message = makeMessage(
+          SessionId.make("phase-failure-session"),
+          BranchId.make("phase-failure-branch"),
+          "hello",
+        )
+        const exit = yield* Effect.exit(runAgentLoop(agentLoop, message))
+        expect(exit._tag).toBe("Failure")
+        const events = yield* Ref.get(seen)
+        const tags = events.map((event) => event._tag)
+        expect(events.filter((event) => event._tag === "TurnCompleted")).toEqual([
+          expect.objectContaining({ messageId: message.id, streamFailed: true }),
+        ])
+        // The error names the cause first; the receipt ends the turn.
+        expect(tags.lastIndexOf("ErrorOccurred")).toBeGreaterThanOrEqual(0)
+        expect(tags.lastIndexOf("ErrorOccurred")).toBeLessThan(tags.indexOf("TurnCompleted"))
+        // The stored duration is the receipt's mark: the turn is complete.
+        const stored = yield* messageStorage.getMessage(message.id)
+        expect(stored?.turnDurationMs).toBeDefined()
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
+    }),
+  )
+  it.live("a failure after the turn stored its receipt appends no second TurnCompleted", () =>
+    Effect.gen(function* () {
+      const providerLayer = scriptedProvider([
+        [textDeltaPart("answered"), finishPart({ finishReason: "stop" })],
+      ])
+      const appended = yield* Ref.make<ReadonlyArray<AgentEvent>>([])
+      // The receipt is stored, then its delivery breaks: the turn fails after
+      // its completion is durable.
+      const publisherLayer = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: (event: AgentEvent) =>
+            Effect.gen(function* () {
+              yield* Ref.update(appended, (events) => [...events, event])
+              return EventEnvelope.make({
+                id: EventId.make(0),
+                event,
+                createdAt: yield* Clock.currentTimeMillis,
+              })
+            }),
+          deliver: (envelope) => {
+            if (envelope.event._tag === "TurnCompleted") return Effect.die("delivery broke")
+            return Effect.void
+          },
+          publish: () => Effect.void,
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const message = makeMessage(
+          SessionId.make("late-failure-session"),
+          BranchId.make("late-failure-branch"),
+          "hello",
+        )
+        yield* Effect.exit(runAgentLoop(agentLoop, message))
+        const completions = (yield* Ref.get(appended)).filter(
+          (event) => event._tag === "TurnCompleted",
+        )
+        expect(completions).toEqual([expect.objectContaining({ messageId: message.id })])
+        expect(completions[0]).not.toHaveProperty("streamFailed", true)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, publisherLayer)))
+    }),
+  )
   it.live("a waiting caller is not failed by an earlier turn's failure", () =>
     Effect.gen(function* () {
       const sessionId = SessionId.make("foreign-failure-session")
@@ -7945,6 +8044,8 @@ describe("streaming", () => {
         expect(tags).toContain("TurnCompleted")
         const error = events.find((event) => event._tag === "ErrorOccurred")
         expect(error).toEqual(expect.objectContaining({ error: "native response part failed" }))
+        // A stream failure may end the turn: it is not marked as a notice.
+        expect(error).not.toHaveProperty("notice")
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(assistant).toBeDefined()
         expect(assistant?.parts).toEqual([Prompt.textPart({ text: "partial answer" })])

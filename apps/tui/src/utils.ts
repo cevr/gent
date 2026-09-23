@@ -634,15 +634,6 @@ export function describeCellCode(code: string): ReadonlyArray<string> {
  */
 export const shortId = (id: string): string => id.slice(-8)
 
-/**
- * An `ErrorOccurred` the turn continues past, such as a compaction fallback:
- * it neither fails the turn nor puts the agent in the error state. Read by
- * property, because an event from a server whose schema has no `notice`
- * field does not carry it.
- */
-export const isErrorNotice = (event: { readonly _tag: "ErrorOccurred" }): boolean =>
-  Predicate.hasProperty(event, "notice") && event.notice === true
-
 /** The noun a count takes, without the count: `line` for one, `lines` otherwise. */
 export const countNoun = (count: number, singular: string, pluralForm = `${singular}s`): string => {
   if (count === 1) return singular

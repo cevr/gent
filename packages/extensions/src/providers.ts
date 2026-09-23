@@ -32,6 +32,7 @@ import {
   type ProviderHints,
   ProviderId,
   type ProviderResolution,
+  writeFileAtomic,
 } from "@gent/core/extensions/api"
 import {
   FetchHttpClient,
@@ -781,7 +782,8 @@ const writeCachedModels = Effect.fn("ModelsDev.writeCache")(
     if (text.length === 0) return
 
     yield* fs.makeDirectory(path.dirname(cachePath), { recursive: true })
-    yield* fs.writeFileString(cachePath, text)
+    // Another gent process may read the cache while this one writes it.
+    yield* writeFileAtomic(cachePath, text)
   },
   Effect.catchEager((e) =>
     Effect.logWarning("failed to write model cache").pipe(

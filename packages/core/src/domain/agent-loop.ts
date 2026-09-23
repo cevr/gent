@@ -13,6 +13,7 @@ import { Message, MessageMetadata, QueueSnapshot, SteerCommand } from "./message
 import {
   ActorCommandId,
   BranchId,
+  ClientRequestGrant,
   ExtensionId,
   InteractionRequestId,
   type InteractionRequestId as InteractionRequestIdType,
@@ -378,6 +379,8 @@ export const QueueFollowUpPayload = Schema.Struct({
   metadata: Schema.optional(MessageMetadata),
   /** Start a turn for the item even on a branch with no prior history. */
   wake: Schema.optional(Schema.Boolean),
+  /** The client request it was sent under; see `ClientRequestGrant`. */
+  clientRequest: Schema.optional(ClientRequestGrant),
 })
 export type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
 
@@ -402,6 +405,8 @@ const QueueFollowUpFields = {
   message: Message,
   /** Start a turn for this item even on a branch with no prior history. */
   wake: Schema.optional(Schema.Boolean),
+  /** The client request it was sent under; see `ClientRequestGrant`. */
+  clientRequest: Schema.optional(ClientRequestGrant),
 }
 
 const SteerFields = {
@@ -675,7 +680,14 @@ export const queueFollowUpOn = Effect.fn("AgentLoop.client.queueFollowUp")(funct
   })
   const ref = yield* loopRefFor(input.sessionId, input.branchId)
   yield* ref
-    .execute(AgentLoop.QueueFollowUp.make({ workspaceId, message, wake: input.wake }))
+    .execute(
+      AgentLoop.QueueFollowUp.make({
+        workspaceId,
+        message,
+        wake: input.wake,
+        clientRequest: input.clientRequest,
+      }),
+    )
     .pipe(asAgentLoopError(`Failed to queue follow-up ${message.id}`))
 })
 

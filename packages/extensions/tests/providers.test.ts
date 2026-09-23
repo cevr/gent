@@ -6,6 +6,7 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Option,
   Path,
   Ref,
   Schema,
@@ -333,6 +334,7 @@ describe("models.dev catalog", () => {
         ]),
       )
       yield* ageCacheTwoDays(cachePath)
+      const oldInode = (yield* fs.stat(cachePath)).ino
       const calls = yield* Ref.make(0)
 
       const models = yield* modelsDevCatalog(home).pipe(
@@ -343,6 +345,10 @@ describe("models.dev catalog", () => {
       expect(yield* Ref.get(calls)).toBe(1)
       expect(models.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
       expect(models.map((model) => model.id)).not.toContain(ModelId.make("openai/gpt-4.1"))
+      // The new cache replaces the old file by a rename, never a rewrite in
+      // place: another process reads the old catalog or the new one, whole.
+      expect(Option.isSome(oldInode)).toBe(true)
+      expect((yield* fs.stat(cachePath)).ino).not.toEqual(oldInode)
 
       // The cache holds gent's canonical `Model[]`, never the raw payload.
       const written = yield* fs.readFileString(cachePath)

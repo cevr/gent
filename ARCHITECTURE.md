@@ -247,18 +247,29 @@ Resource layers. Trusted setup can still perform its own effects; this is not a
 sandbox boundary.
 
 `SessionProfileCache` builds one profile per (workspace, cwd, set of
-extensions the config leaves active or failed). Each resolve reads the config as
-it is now, so an edit to `disabledExtensions` reaches the next turn and the next
-session without a restart; a list that leaves the same extensions, such as one
-that names an unknown id, finds the profile already built. `resolve` takes a
+extensions the config leaves active or failed, versions of the extension files
+on disk). Each resolve reads the config and lists the user and project
+extension directories as they are now, under the place's lock, so an edit to
+`disabledExtensions` and an added, fixed or edited extension file reach the
+next turn and the next session without a restart; a file is imported under its
+version (mtime, size, inode), so Bun's module cache does not serve the old one.
+A directory extension's version is its index file's. A list that leaves the
+same extensions, such as one that names an unknown id, finds the profile
+already built. Finding or building the profile, its lease and making it
+current are one step no interrupt can split. `resolve` takes a
 lease in the caller's scope: a turn and an extension request hold it until they
 end, a branch loop holds it while its branch Resources live, and a query holds
 it for its read. The newest profile of a (workspace, cwd) stays cached; a
-superseded one closes its scope, and with it its process resources, when its
-last lease is released. It builds every
-extension's process-scope resources in resolution order, each in its own child
+superseded one closes its scope when its last lease is released. It builds
+every extension's process-scope resources in resolution order, each in its own
 scope, and reports an extension whose layer fails as failed at the startup
-phase. `buildSessionProfile` then stages the `ExtensionRegistry` and the base
+phase. An extension's process resources are shared by every profile of the
+place that builds them over the same context: the same resource-bearing
+extensions before it, and itself (id, source, file version). So a profile
+rebuilt for a config edit keeps the resources the edit leaves alone, and their
+state with them (an open `/btw` fork, the agents-view watchers, a running
+background job); a resource closes when the last profile that holds it
+retires. `buildSessionProfile` then stages the `ExtensionRegistry` and the base
 prompt sections over the built resource context. Profile tests use the live
 cache. The tool test layer uses the production composition root. Neither has a
 separate activation implementation.
@@ -410,8 +421,17 @@ Shape:
 - turn resolution streams through `LanguageModel.streamText` from `ModelResolver`, with durable stream/tool/finalization events derived from the response stream.
 - New `TurnCompleted` receipts include `streamFailed`, including explicit false.
   Historical receipts can omit it; absence does not prove model success. The
-  receipt commits with turn duration. This flag reports model failure only, not
-  task success or a complete child outcome. Actor Idle is not completion proof.
+  receipt commits with turn duration. This flag reports a failed turn only (a
+  broken model stream or a failed turn phase), not task success or a complete
+  child outcome. Actor Idle is not completion proof.
+- Every admitted turn ends with exactly one `TurnCompleted`. A turn phase that
+  fails (a storage write, a profile resolve) publishes `ErrorOccurred`, then
+  `completeFailedTurn` appends the receipt with `streamFailed: true`, and the
+  turn's `turnAfter` hooks run once after it, under the turn's profile. The
+  stored turn duration is the receipt's mark, so a failure after `finalizeTurn`
+  stored it appends no second receipt and runs no second hook. `ErrorOccurred` with `notice: true` is a notice the
+  turn goes on past (a compaction that fell back to truncation); a client ends
+  the turn on `TurnCompleted`, never on `ErrorOccurred`.
 - New turn-stream start/end receipts include the user-message ID and model-step
   number. Model, failure, and interruption paths keep that identity.
   Historical receipts can omit it and must not be treated
@@ -537,17 +557,28 @@ replay also requires a trusted, unchanged saved tool binding.
 
 Whether a turn can ask comes from its session and its origin, not from a
 stored flag (`turnCanAsk` in `domain/message.ts`): a turn can ask unless its
-session has a parent and no client opened it. A top-level session's user
-watches every turn there, so its wake, monitor and delegate-completion turns
-ask. In a child session, only a turn a client opened asks (a user who prompts
-or steers the child); a turn its parent's `delegate.start` or `session.send`,
-a wake or a monitor opened declines. A `/btw` fork is a child of the session
-it forks, and `btw` opens each of its turns with `Session.send`, so a fork
-turn declines too: the `/btw` pane shows the fork's reply, not its approvals. The origin is trusted: the server stamps
+session was spawned and no client opened it. A spawned session
+(`isSpawnedSession`) has a parent and starts its own thread: a delegate child
+or a `/btw` fork. A handoff has a parent too, but it joins the parent's
+thread, so it is the user's own conversation; spawn depth counts the same
+rule. A top-level or handoff session's user watches every turn there, so its
+wake, monitor, delegate-completion and slash-command turns ask. In a spawned
+session, only a turn a client opened asks (a user who prompts or steers the
+child); a turn its parent's `delegate.start` or `session.send`, a wake or a
+monitor opened declines. `btw` opens each fork turn with `Session.send`, so a
+fork turn declines too: the `/btw` pane shows the fork's reply, not its
+approvals. The origin is trusted: the server stamps
 `metadata.fromClient` on every message a client sends (`message.send`, a
 session's initial prompt, a `steer.command` interjection) over whatever the
 client set, and removes a client-supplied `extensionId`; an extension's
-`Session.send` stamps its own id and removes `fromClient`. A child row stored
+`Session.send` stamps its own id and removes `fromClient`. One exception keeps
+a slash command a user types in a spawned child able to ask: while a client's
+extension request runs, a message it sends to the request's own branch keeps
+the client origin. A send to any other branch, or one made after the request
+ended, is an extension send. Every extension gets the same rule. Neither
+boundary passes the loop's marks: `joinedTurn` and a runtime custom type
+(`continuation`, `steering`, ...) would make recovery skip the turn, so both
+are removed; an extension keeps its own custom types, a client sets none. A child row stored
 before the stamp existed has no origin, so its turn declines on recovery. A
 declined turn's `approve` answers at once, and the tools that ask the user are
 withheld. The loop reads the fact from the turn's opening message and the

@@ -567,7 +567,11 @@ interface HarnessRun {
   readonly interactive?: boolean
 }
 
-const hostRun = (run: HarnessRun) => ({ ...run, interactive: run.interactive ?? true })
+const hostRun = (run: HarnessRun) => ({
+  ...run,
+  interactive: run.interactive ?? true,
+  clientRequest: Option.none(),
+})
 
 /**
  * One turn's profile and every model tool binding it captures, as the loop

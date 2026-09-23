@@ -41,6 +41,15 @@ export type InteractionRequestId = typeof InteractionRequestId.Type
 export const RequestId = Schema.String.check(Schema.isMaxLength(128))
 export type RequestId = typeof RequestId.Type
 
+/**
+ * A client's extension request while it runs, as its branch's loop knows it.
+ * A message the request sends to its own branch carries the grant, and the
+ * loop stamps the client origin only if the grant is still live when it
+ * admits the message.
+ */
+export const ClientRequestGrant = Schema.String.pipe(branded("ClientRequestGrant"))
+export type ClientRequestGrant = typeof ClientRequestGrant.Type
+
 export const ExtensionId = Schema.String.pipe(branded("ExtensionId"))
 export type ExtensionId = typeof ExtensionId.Type
 

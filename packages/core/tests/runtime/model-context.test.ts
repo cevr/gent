@@ -489,7 +489,10 @@ describe("context compaction degrade path", () => {
       }).pipe(Effect.provide(layer), Effect.timeout("8 seconds"))
       expect(yield* controls.callCount).toBe(1)
       // The notice text is the projection's; tests/runtime/agent/turn-window.test.ts reads it.
-      expect(result.events.filter((event) => event._tag === "ErrorOccurred")).toHaveLength(1)
+      // The notice is marked as one: the turn went on and completed.
+      expect(result.events.filter((event) => event._tag === "ErrorOccurred")).toEqual([
+        expect.objectContaining({ notice: true }),
+      ])
       expect(result.events.some((event) => event._tag === "TurnCompleted")).toBe(true)
       expect(
         result.durable.some((message) => message.metadata?.customType === "context-window"),
@@ -1202,6 +1205,7 @@ describe("turn window projection", () => {
       expect(notices).toHaveLength(1)
       expect(notices[0]?.error).toContain("Context compaction failed (SummaryGenerationFailed)")
       expect(notices[0]?.error).toContain(`continuing with ${omitted} older messages omitted`)
+      expect(notices[0]?.notice).toBe(true)
     }),
   )
 })

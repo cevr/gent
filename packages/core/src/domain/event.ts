@@ -126,7 +126,11 @@ export const AgentEvent = Schema.TaggedUnion({
     messageId: Schema.optional(MessageId),
     durationMs: Schema.Finite,
     interrupted: Schema.optional(Schema.Boolean),
-    // Absent in historical receipts; absence does not prove model success.
+    /**
+     * The turn ended on a failure: its model stream broke, or a turn phase
+     * failed. The `ErrorOccurred` before this receipt names the cause. Absent
+     * in historical receipts; absence does not prove model success.
+     */
     streamFailed: Schema.optional(Schema.Boolean),
     /**
      * True when the turn ended without the model ever producing an answer —
@@ -211,6 +215,12 @@ export const AgentEvent = Schema.TaggedUnion({
     sessionId: SessionId,
     branchId: Schema.optional(BranchId),
     error: Schema.String,
+    /**
+     * The turn goes on past this error: it is a notice, such as a compaction
+     * that fell back to truncation. Absent on an error the turn may end on and
+     * on historical events. A turn always ends with its `TurnCompleted`.
+     */
+    notice: Schema.optional(Schema.Literal(true)),
   },
   ProviderRetrying: {
     sessionId: SessionId,

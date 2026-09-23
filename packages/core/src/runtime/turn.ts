@@ -68,6 +68,7 @@ import {
   type ExtensionRegistryService,
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
+  type RunOpener,
 } from "./extension-host.js"
 import type * as Response from "effect/unstable/ai/Response"
 import { credentialFailureMessage, type ProviderAuthError } from "../domain/driver.js"
@@ -750,6 +751,88 @@ const commitWithEvent = Effect.fn("TurnHelpers.commitWithEvent")(function* <A, E
     yield* eventPublisher.deliver(committed.envelope)
   }
   return committed.result
+})
+
+/**
+ * Ends a turn that a phase failure stopped. It appends one `TurnCompleted`
+ * with `streamFailed`, after the `ErrorOccurred` that names the cause, so
+ * every admitted turn ends with exactly one receipt. The stored turn duration
+ * is the receipt's mark. If the failure came after `finalizeTurn` stored it,
+ * this appends nothing and returns none; otherwise it returns the duration,
+ * and the caller runs the turn's `turnAfter` hooks (`emitFailedTurnAfter`).
+ */
+export const completeFailedTurn = Effect.fn("TurnHelpers.completeFailedTurn")(function* (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly messageId: MessageId
+  readonly startedAtMs: number
+}) {
+  const messageStorage = yield* MessageStorage
+  const eventPublisher = yield* EventPublisher
+  const storageTransaction = yield* makeStorageTransaction
+  const message = yield* messageStorage.getMessage(params.messageId)
+  if (!Predicate.isUndefined(message?.turnDurationMs)) return Option.none<number>()
+  const endedAt = yield* DateTime.now
+  const durationMs = Math.max(0, DateTime.toEpochMillis(endedAt) - params.startedAtMs)
+  const envelope = yield* storageTransaction(
+    messageStorage.updateMessageTurnDuration(params.messageId, durationMs).pipe(
+      Effect.andThen(
+        eventPublisher.append(
+          TurnCompleted.make({
+            sessionId: params.sessionId,
+            branchId: params.branchId,
+            messageId: params.messageId,
+            durationMs,
+            streamFailed: true,
+          }),
+        ),
+      ),
+    ),
+  )
+  yield* eventPublisher.deliver(envelope)
+  return Option.some(durationMs)
+})
+
+/**
+ * The `turnAfter` hooks of a turn a phase failure stopped, run once, after
+ * `completeFailedTurn` appended its receipt. A handler reads it as a failed
+ * turn (`streamFailed`), as it reads a broken stream: a goal pauses rather
+ * than stall. It runs under the turn's profile, as `finalizeTurn` does.
+ */
+export const emitFailedTurnAfter = Effect.fn("TurnHelpers.emitFailedTurnAfter")(function* (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly messageId: MessageId
+  readonly durationMs: number
+  readonly metrics: TurnMetrics
+}) {
+  const extensionRegistry = yield* ExtensionRegistry
+  const agentName = yield* sessionAgentName(params.sessionId)
+  // The ledger counts this turn only if the turn began: a failure before
+  // that leaves another turn's counts, which are not this turn's usage.
+  const usage = Option.match(
+    Option.filter(Option.some(params.metrics), (metrics) =>
+      Option.contains(metrics.messageId, params.messageId),
+    ),
+    {
+      onNone: () => ({ known: { inputTokens: 0, outputTokens: 0 }, complete: false }),
+      onSome: (metrics) => ({
+        known: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
+        complete: metrics.usageKnown,
+      }),
+    },
+  )
+  yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter({
+    sessionId: params.sessionId,
+    branchId: params.branchId,
+    messageId: params.messageId,
+    durationMs: params.durationMs,
+    agentName,
+    interrupted: false,
+    streamFailed: true,
+    unanswered: false,
+    usage,
+  })
 })
 
 export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageReceived")(
@@ -1674,9 +1757,9 @@ const endStep = (
 type AgentLoopTurnExecutionContext = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly resolveTurnProfile: (run: {
-    readonly openedByClient: boolean
-  }) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
+  readonly resolveTurnProfile: (
+    run: RunOpener,
+  ) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption
@@ -2924,7 +3007,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (cancelled) yield* scope.turnInterruption.interrupt
 
       // Whether a user can answer comes from what opened the turn and
-      // whether its session has a parent (`turnCanAsk`).
+      // whether its session was spawned (`turnCanAsk`).
       const turnProfile = yield* scope.resolveTurnProfile({
         openedByClient: openedByClient(state.message),
       })

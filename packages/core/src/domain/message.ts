@@ -1,6 +1,6 @@
 import { Option, Predicate, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
+import { BranchId, ClientRequestGrant, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
 import { AgentName, ModelId, ReasoningEffort, RunSpecSchema } from "./agent.js"
 import type { EventEnvelope, ToolCallStarted, Usage } from "./event.js"
 import * as Response from "effect/unstable/ai/Response"
@@ -232,7 +232,9 @@ export const MessageMetadata = Schema.Struct({
   extensionId: Schema.optional(Schema.String),
   /**
    * Set by the server on every message a client sends (`clientMetadata`),
-   * over any value the client gave; an extension's `Session.send` removes it.
+   * over any value the client gave; an extension's `Session.send` removes it,
+   * except that a client's extension request sends to its own branch as the
+   * client while it runs (`clientRequestOrigin` in `extension-host.ts`).
    * A turn such a message opens has a user watching it (`turnCanAsk`).
    */
   fromClient: Schema.optional(Schema.Boolean),
@@ -243,6 +245,7 @@ export const MessageMetadata = Schema.Struct({
    * it joined answers it, and it never gets a `TurnCompleted` of its own, so
    * recovery must not read it as a turn. An interjection that woke an idle
    * branch is a turn in its own right, carries no mark, and still recovers.
+   * No client or extension can set it (`clientMetadata`, `extensionMetadata`).
    */
   joinedTurn: Schema.optional(Schema.Boolean),
   /** Arbitrary structured details for the custom message */
@@ -252,30 +255,60 @@ export type MessageMetadata = typeof MessageMetadata.Type
 
 /**
  * The envelope of a message a client sends: the server's client origin over
- * whatever the client set, and no extension author. Only the server calls
- * this, at the RPC boundary, so no client can forge either field.
+ * whatever the client set, no extension author, and none of the marks the
+ * loop and extensions own (`joinedTurn`, `customType`). Only the server calls
+ * this, at the RPC boundary, so no client can forge any of them.
  */
 export const clientMetadata = (metadata?: MessageMetadata): MessageMetadata => {
-  const { extensionId: _author, ...rest } = Option.getOrElse(
-    Option.fromUndefinedOr(metadata),
-    (): MessageMetadata => ({}),
-  )
+  const {
+    extensionId: _author,
+    joinedTurn: _joined,
+    customType: _type,
+    ...rest
+  } = Option.getOrElse(Option.fromUndefinedOr(metadata), (): MessageMetadata => ({}))
   return { ...rest, fromClient: true }
 }
 
 /**
- * Whether a turn can ask its user. A top-level session always has its user
- * watching, so its wake, monitor and child-completion turns ask too. A child
- * session's turn asks only when a client opened it: no one watches a turn its
- * parent, a wake or a monitor opened, so an approval there declines at once.
- * A child row stored before the client origin existed has no stamp, so it
- * declines. The answer comes from the turn's opening message and the stored
- * session, so it holds for the turn's whole life, a restart included.
+ * The envelope of a message an extension sends: its own id as the author
+ * over whatever it set, no client origin (only the server stamps one), and
+ * none of the loop's marks: no `joinedTurn`, and no runtime custom type
+ * (`RuntimeUserMessageType`). Either would make recovery skip the turn the
+ * message opens. An extension keeps its own custom types.
+ */
+export const extensionMetadata = (
+  extensionId: string,
+  metadata?: MessageMetadata,
+): MessageMetadata => {
+  const {
+    fromClient: _origin,
+    joinedTurn: _joined,
+    customType,
+    ...rest
+  } = Option.getOrElse(Option.fromUndefinedOr(metadata), (): MessageMetadata => ({}))
+  return {
+    ...rest,
+    ...(Predicate.isNotUndefined(customType) &&
+      !isRuntimeUserMessageType(customType) && { customType }),
+    extensionId,
+  }
+}
+
+/**
+ * Whether a turn can ask its user. A session its user drives (a top-level
+ * session, or a handoff that continues its thread) always has its user
+ * watching, so its wake, monitor, child-completion and slash-command turns
+ * ask too. A spawned session's turn (`isSpawnedSession`) asks only when a
+ * client opened it: no one watches a turn its parent, a wake or a monitor
+ * opened, so an approval there declines at once. A spawned row stored before
+ * the client origin existed has no stamp, so it declines. The answer comes
+ * from the turn's opening message and the stored session, so it holds for
+ * the turn's whole life, a restart included.
  */
 export const turnCanAsk = (turn: {
-  readonly sessionHasParent: boolean
+  readonly sessionIsSpawned: boolean
   readonly openedByClient: boolean
-}): boolean => !turn.sessionHasParent || turn.openedByClient
+}): boolean => !turn.sessionIsSpawned || turn.openedByClient
 
 /** Whether a client sent the message that opens a turn (`clientMetadata`). */
 export const openedByClient = (opening: Message): boolean => opening.metadata?.fromClient === true
@@ -319,6 +352,12 @@ export const SteerCommand = Schema.Union([
      * being answered, a child reporting back — says so here.
      */
     wake: Schema.optional(Schema.Boolean),
+    /**
+     * The client request this steer was sent under. The loop gives the
+     * interjection the client origin only if that request still runs when
+     * the loop admits it. The server drops one a client sets.
+     */
+    clientRequest: Schema.optional(ClientRequestGrant),
   }),
 ])
 export type SteerCommand = typeof SteerCommand.Type
@@ -516,6 +555,22 @@ export class Session extends Schema.Class<Session>("Session")({
   createdAt: DateFromNumber,
   updatedAt: DateFromNumber,
 }) {}
+
+/** The thread a session belongs to: its stored thread, else its own. */
+export const sessionThread = (session: Pick<Session, "id" | "threadId">): SessionId =>
+  session.threadId ?? session.id
+
+/**
+ * A spawned session: one with a parent that starts its own thread (a
+ * delegate child, a `/btw` fork). A handoff also has a parent, but it joins
+ * the parent's thread, so it is the same user's conversation, not a spawn.
+ * One rule for spawn depth (`getSessionDepth`) and for who can answer in a
+ * session's turns (`turnCanAsk`).
+ */
+export const isSpawnedSession = (
+  session: Pick<Session, "id" | "threadId" | "parentSessionId">,
+): boolean =>
+  Predicate.isNotUndefined(session.parentSessionId) && sessionThread(session) === session.id
 
 // Branch
 

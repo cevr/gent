@@ -50,7 +50,11 @@ import { Actor } from "effect-encore"
 import type { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import type { SqlClient } from "effect/unstable/sql"
-import type { QueueSnapshot, Session, SteerCommand as SteerCommandType } from "../domain/message.js"
+import {
+  isSpawnedSession,
+  type QueueSnapshot,
+  type SteerCommand as SteerCommandType,
+} from "../domain/message.js"
 import type { PromptSection } from "../domain/capability.js"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "./agent-loop.js"
 import {
@@ -238,10 +242,9 @@ export const makeRequestDeduper = <In, A, E>(opts: {
  */
 
 /**
- * Spawn depth of a session: the spawn edges on its persisted parent chain.
- * Root sessions have depth 0. A handoff joins its parent's thread, a spawn
- * starts its own, so an edge whose child keeps the parent's thread is a
- * handoff and does not count.
+ * Spawn depth of a session: the spawned sessions on its persisted parent
+ * chain (`isSpawnedSession`). Root sessions have depth 0. A handoff joins its
+ * parent's thread and does not count.
  */
 export const getSessionDepth = Effect.fn("SessionDepth.getSessionDepth")(function* (
   sessionId: SessionId,
@@ -259,15 +262,7 @@ export const getSessionDepth = Effect.fn("SessionDepth.getSessionDepth")(functio
       message: `Cannot determine session depth for "${sessionId}" — ancestry is missing or incomplete.`,
     })
   }
-  const threadOf = (session: Session) => session.threadId ?? session.id
-  let depth = 0
-  for (let index = 0; index < ancestors.length - 1; index++) {
-    const child = ancestors[index]
-    const parent = ancestors[index + 1]
-    if (Predicate.isUndefined(child) || Predicate.isUndefined(parent)) continue
-    if (threadOf(child) !== threadOf(parent)) depth += 1
-  }
-  return depth
+  return ancestors.filter(isSpawnedSession).length
 })
 
 /**
