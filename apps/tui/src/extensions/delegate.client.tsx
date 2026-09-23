@@ -11,7 +11,7 @@ import {
 } from "@gent/extensions/client"
 import { useTheme } from "../theme"
 import { ToolFrame, UserRow } from "../ui"
-import { formatUsageStats, shortSessionId, type ToolInput } from "../utils"
+import { formatUsageStats, shortId, type ToolInput } from "../utils"
 import type { ToolRendererProps } from "../tool-renderers"
 import {
   clientContributions,
@@ -69,7 +69,7 @@ const startLine = (props: ToolRendererProps): string => {
   return Option.flatMap(output, decodeHandle).pipe(
     Option.match({
       onNone: () => "result arrives as a message",
-      onSome: (handle) => `child ${shortSessionId(handle.sessionId)} · result arrives as a message`,
+      onSome: (handle) => `child ${shortId(handle.sessionId)} · result arrives as a message`,
     }),
   )
 }
@@ -157,7 +157,7 @@ const completionHeader = (state: CompletionState, details: CompletionDetails): s
     Option.map((text) => ` · ${text}`),
     Option.getOrElse(() => ""),
   )
-  return `${state.who} ${state.status} · ${shortSessionId(details.sessionId)}${usage}`
+  return `${state.who} ${state.status} · ${shortId(details.sessionId)}${usage}`
 }
 
 function ChildToolTree(props: { details: CompletionDetails }) {

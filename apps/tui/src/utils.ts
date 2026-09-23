@@ -630,11 +630,11 @@ export function describeCellCode(code: string): ReadonlyArray<string> {
 }
 
 /**
- * A session id as rows show it: its last 8 characters. A session id is a
- * UUIDv7, whose head is its start time, so children started together share
+ * A session or branch id as rows show it: its last 8 characters. Both are
+ * UUIDv7, whose head is its start time, so ids made in the same minute share
  * the head; the tail is random.
  */
-export const shortSessionId = (sessionId: string): string => sessionId.slice(-8)
+export const shortId = (id: string): string => id.slice(-8)
 
 /** The noun a count takes, without the count: `line` for one, `lines` otherwise. */
 export const countNoun = (count: number, singular: string, pluralForm = `${singular}s`): string => {

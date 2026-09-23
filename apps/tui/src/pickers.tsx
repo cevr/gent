@@ -13,7 +13,7 @@ import {
   usePickerGeometry,
 } from "./ui"
 import { useTheme } from "./theme"
-import { formatError, truncate } from "./utils"
+import { formatError, shortId, truncate } from "./utils"
 import { useClient, useRuntime } from "./client"
 import { type Branch, type BranchTreeNode } from "@gent/sdk"
 import {
@@ -269,7 +269,7 @@ export const formatBranchLabel = (
   branch: Branch,
   messageCount: Option.Option<number> = Option.none(),
 ): string => {
-  const name = Option.getOrElse(Option.fromNullishOr(branch.name), () => branch.id.slice(0, 8))
+  const name = Option.getOrElse(Option.fromNullishOr(branch.name), () => shortId(branch.id))
   const count = Option.match(messageCount, {
     onNone: () => "",
     onSome: (value) => ` (${value})`,

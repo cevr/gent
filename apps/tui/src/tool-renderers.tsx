@@ -21,7 +21,7 @@ import {
   getString,
   isAbsPath,
   plural,
-  shortSessionId,
+  shortId,
   splitLines,
   toolArgSummary,
   type ToolInput,
@@ -1398,7 +1398,7 @@ function ReadSessionToolRenderer(props: ToolRendererProps) {
   const subtitle = () => {
     const sid = getInputField(props.toolCall.input, "sessionId")
     if (Option.isNone(sid)) return Option.getOrUndefined(Option.none<string>())
-    return shortSessionId(sid.value)
+    return shortId(sid.value)
   }
 
   const summary = (): Option.Option<string> => {
