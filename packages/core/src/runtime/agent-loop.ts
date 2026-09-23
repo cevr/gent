@@ -2301,17 +2301,18 @@ const buildAgentLoopActorHandlers = (config: {
       }
     })
 
+    /**
+     * Mailbox admission from another branch or the runtime. It carries no
+     * client grant: a grant is live only on its own branch, whose follow-ups
+     * take the re-entrant path (`admitFollowUp`).
+     */
     const enqueueMessage = Effect.fn("AgentLoopActor.enqueueMessage")(function* (
       handle: AgentLoopBehavior,
       input: FollowUpInput,
     ) {
       const wasAlreadyWarm = yield* markWrite
-      const built = yield* buildFollowUpItem(input)
-      const { result: reserved, item } = yield* admitWithOrigin(
-        built,
-        Option.fromUndefinedOr(input.clientRequest),
-        (admitted) => handle.inbox.admit(admitted, { queueOnly: !wasAlreadyWarm }),
-      )
+      const item = yield* buildFollowUpItem(input)
+      const reserved = yield* handle.inbox.admit(item, { queueOnly: !wasAlreadyWarm })
       if (Option.isSome(reserved)) yield* handle.startTurn(item).pipe(orCleanup(handle))
       if (!wasAlreadyWarm && (yield* shouldWake(handle, input))) {
         yield* startNextQueuedTurnIfIdle(handle)
@@ -2637,7 +2638,6 @@ const buildAgentLoopActorHandlers = (config: {
             yield* enqueueMessage(handle, {
               message: operation.message,
               wake: operation.wake,
-              clientRequest: operation.clientRequest,
             })
           }).pipe(provideActorWorkspace),
       ),
