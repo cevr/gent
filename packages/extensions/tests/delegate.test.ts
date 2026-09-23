@@ -23,6 +23,8 @@ import {
 import { DEFAULT_AGENT_NAME, RequestId } from "@gent/core/extensions/api"
 import {
   ApprovalService,
+  createE2ELayer,
+  createRpcClient,
   createRpcHarness,
   runToolWithCtx,
   testToolContext,
@@ -2178,5 +2180,163 @@ describe("a child's start turn with runtime lines", () => {
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
+  )
+})
+
+// ── a restart mid-child ─────────────────────────────────────────────────────
+
+/**
+ * Two processes over one file database and one home: the first stops while
+ * its children run, the second is the restarted server. Each process lives
+ * in its own scope.
+ */
+const restartableHome = Effect.gen(function* () {
+  const home = yield* makeTempDirectoryScoped("delegate-restart-")
+  const fs = yield* FileSystem.FileSystem
+  const layerFor = (providerLayer: Parameters<typeof createRpcHarness>[0]["providerLayer"]) =>
+    createE2ELayer({
+      ...e2ePreset,
+      providerLayer,
+      storagePath: `${home}/gent.db`,
+      extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
+    })
+  const registryOf = (branchId: BranchId) =>
+    fs.readFileString(`${home}/.gent/delegates/${branchId}.json`).pipe(Effect.map(decodeRegistry))
+  return { layerFor, registryOf }
+}).pipe(Effect.provide(BunFileSystem.layer))
+
+type RestartableHome = Effect.Success<typeof restartableHome>
+
+/**
+ * First process: the parent starts one child per todo and ends its turn.
+ * Every child's model call hangs, so the process stops with all of them
+ * mid-turn. Returns the parent once each child is running and the parent is
+ * idle.
+ */
+const stopWithRunningChildren = (home: RestartableHome, todos: ReadonlyArray<string>) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const running = yield* Deferred.make<void>()
+      let childCalls = 0
+      let parentCalls = 0
+      const providerLayer = LanguageModelLayers.testStream((options) => {
+        const texts = promptTexts(options.prompt)
+        if (todos.some((todo) => texts[0]?.endsWith(todo) === true)) {
+          childCalls += 1
+          if (childCalls < todos.length) return Effect.never
+          return Deferred.succeed(running, void 0).pipe(Effect.andThen(Effect.never))
+        }
+        parentCalls += 1
+        if (parentCalls > 1) return Effect.succeed(reply("started, ending my turn"))
+        return Effect.succeed(
+          Stream.fromIterable([
+            ...todos.map((todo, index) =>
+              toolCallPart(
+                "delegate.start",
+                { todo },
+                { toolCallId: ToolCallId.make(`start-${index + 1}`) },
+              ),
+            ),
+            finishPart({ finishReason: "tool-calls" }),
+          ]),
+        )
+      })
+      const { client } = yield* createRpcClient(home.layerFor(providerLayer))
+      const created = yield* client.session.create({ cwd: "/tmp" })
+      const parent = { sessionId: created.sessionId, branchId: created.branchId }
+      yield* client.message.send({ ...parent, content: "delegate these" })
+      yield* Deferred.await(running)
+      yield* waitFor(
+        client.session.getSnapshot(parent),
+        (current) =>
+          current.runtime._tag === "Idle" &&
+          messageTexts(current.messages).includes("started, ending my turn"),
+        5_000,
+        "the parent ended its turn with its children running",
+      )
+      return parent
+    }),
+  )
+
+describe("a child running when the server stopped", () => {
+  it.live(
+    "resumes when the parent opens, and its completion wakes the parent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const parent = yield* stopWithRunningChildren(home, [childTask])
+          const [stuck] = yield* home.registryOf(parent.branchId)
+          expect(stuck).toMatchObject({ submitted: true, delivered: false })
+          expect(stuck?.completed).toBeUndefined()
+
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            if (promptTexts(options.prompt)[0]?.endsWith(childTask) === true) {
+              return Effect.succeed(reply("pong"))
+            }
+            return Effect.succeed(reply("read it"))
+          })
+          const { client } = yield* createRpcClient(home.layerFor(providerLayer))
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot(parent),
+            (current) =>
+              completionMessages(current.messages).length === 1 &&
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes("read it"),
+            8_000,
+            "the resumed child's completion woke the parent",
+          )
+          expect(messageTexts(completionMessages(snapshot.messages)).join("\n")).toContain("pong")
+          const [entry] = yield* home.registryOf(parent.branchId)
+          expect(entry).toMatchObject({ submitted: true, delivered: true })
+          expect(entry?.completed).toEqual({})
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    25_000,
+  )
+
+  it.live(
+    "stops counting toward the cap once it resumes, so a full branch can start another",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          const todos = [1, 2, 3, 4].map((n) => `CHILD-TASK-${n}: reply with pong`)
+          const parent = yield* stopWithRunningChildren(home, todos)
+          const stuck = yield* home.registryOf(parent.branchId)
+          expect(stuck.filter((entry) => Predicate.isUndefined(entry.completed))).toHaveLength(4)
+
+          const fifth = "CHILD-TASK-5: reply with pong"
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if ([...todos, fifth].some((todo) => texts[0]?.endsWith(todo) === true)) {
+              return Effect.succeed(reply("pong"))
+            }
+            const asked = texts.includes("START-FIFTH")
+            if (asked && !promptToolCallIds(options.prompt).includes("start-5")) {
+              return Effect.succeed(toolStep("delegate.start", { todo: fifth }, "start-5"))
+            }
+            return Effect.succeed(reply("read it"))
+          })
+          const { client } = yield* createRpcClient(home.layerFor(providerLayer))
+          yield* waitFor(
+            client.session.getSnapshot(parent),
+            (current) =>
+              completionMessages(current.messages).length === 4 && current.runtime._tag === "Idle",
+            10_000,
+            "all four resumed children completed",
+          )
+          yield* client.message.send({ ...parent, content: "START-FIFTH" })
+          const settled = yield* waitFor(
+            client.session.getSnapshot(parent),
+            (current) =>
+              completionMessages(current.messages).length === 5 && current.runtime._tag === "Idle",
+            10_000,
+            "the fifth child was admitted and completed",
+          )
+          expect(cappedResults(settled.messages)).toHaveLength(0)
+        }).pipe(Effect.timeout("30 seconds")),
+      ),
+    35_000,
   )
 })

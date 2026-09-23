@@ -9505,3 +9505,107 @@ describe("session depth guard", () => {
     ),
   )
 })
+
+describe("a repeated durable send", () => {
+  it.scopedLive(
+    "opens the target's loop, so a turn the previous process left unfinished resumes",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-durable-repeat-")
+        const dbPath = `${tempDir}/gent.db`
+        const target = yield* Ref.make(Option.none<{ sessionId: SessionId; branchId: BranchId }>())
+        // The sender repeats the same durable turn each time its own loop
+        // opens, the way an extension re-sends work after a restart.
+        const extension = defineExtension({
+          id: "@gent/test-durable-repeat",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("loopOpen", () =>
+              Effect.gen(function* () {
+                const current = yield* Ref.get(target)
+                if (Option.isNone(current)) return
+                const ctx = yield* ExtensionContext
+                if (ctx.sessionId === current.value.sessionId) return
+                yield* ctx.Session.send({
+                  delivery: "turn",
+                  ...current.value,
+                  content: "TARGET-TASK: answer",
+                  commandId: ActorCommandId.make("durable-repeat-turn"),
+                  completion: "admission",
+                })
+              }),
+            )
+          }),
+        })
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [...e2ePreset.extensionInputs, extension],
+            storagePath: dbPath,
+          })
+        const isTargetCall = (prompt: Prompt.RawInput) =>
+          Prompt.make(prompt).content.some(
+            (message) =>
+              message.role === "user" &&
+              message.content.some(
+                (part) => part.type === "text" && part.text.includes("TARGET-TASK"),
+              ),
+          )
+
+        // First process: the target's turn starts and hangs, then the process stops.
+        const running = yield* Deferred.make<void>()
+        const sender = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const providerLayer = LanguageModelLayers.testStream((options) => {
+              if (!isTargetCall(options.prompt)) return Effect.never
+              return Deferred.succeed(running, void 0).pipe(Effect.andThen(Effect.never))
+            })
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            const created = yield* client.session.create({ cwd: "/tmp" })
+            yield* Ref.set(
+              target,
+              Option.some({ sessionId: created.sessionId, branchId: created.branchId }),
+            )
+            const opened = yield* client.session.create({ cwd: "/tmp" })
+            const senderTarget = { sessionId: opened.sessionId, branchId: opened.branchId }
+            yield* client.session.getSnapshot(senderTarget)
+            yield* Deferred.await(running)
+            return senderTarget
+          }),
+        )
+        const targetBranch = Option.getOrThrow(yield* Ref.get(target))
+
+        // Second process: only the sender opens. Its repeat is answered from
+        // the stored reply, and the target's turn still resumes.
+        const targetCalls = yield* Ref.make(0)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const providerLayer = LanguageModelLayers.testStream((options) => {
+              if (!isTargetCall(options.prompt)) return Effect.never
+              return Ref.update(targetCalls, (n) => n + 1).pipe(
+                Effect.as(
+                  Stream.fromIterable([
+                    textDeltaPart("resumed answer"),
+                    finishPart({ finishReason: "stop" }),
+                  ] satisfies LanguageModelStreamPart[]),
+                ),
+              )
+            })
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            yield* client.session.getSnapshot(sender)
+            yield* waitFor(
+              client.message.list({ branchId: targetBranch.branchId }),
+              (messages) => hasAssistantText(messages, "resumed answer"),
+              5_000,
+              "the target's unfinished turn resumed",
+            )
+            const messages = yield* client.message.list({ branchId: targetBranch.branchId })
+            expect(messages.filter((message) => message.role === "user")).toHaveLength(1)
+            expect(yield* Ref.get(targetCalls)).toBe(1)
+          }),
+        )
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+})

@@ -693,7 +693,9 @@ export const mapExtensionServiceError = <A, E, R>(
  *   The current branch refuses a `turn`: a turn that waits on its own loop
  *   never returns, so it takes `queue`. Two branches that send each other a
  *   `turn` with a `commandId` wait on each other; `completion: "admission"` is
- *   the safe shape for mutual traffic.
+ *   the safe shape for mutual traffic. A repeat of the same `commandId`
+ *   with `admission` admits nothing new, but it opens the target's loop, so a
+ *   turn the previous process left unfinished resumes.
  * - `queue` waits behind the running turn, keyed by `sourceId` so a repeat is
  *   a no-op and `dequeueFollowUp` can take it back. `wake` starts a turn even
  *   on a branch with no prior history.

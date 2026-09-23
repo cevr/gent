@@ -340,9 +340,15 @@ Shape:
   registry, not live actors.
 - The delegate keeps one child registry per parent branch as a JSON file under
   `~/.gent/delegates/<branchId>.json`. `delegate.list` reads it; the delegate
-  reconciles it lazily on the parent's next turn and on every read, so a caller
-  that died between the child's receipt and delivery leaves a child the registry
-  still resolves, never a running one nobody delivers.
+  reconciles it when the parent's loop opens (`loopOpen`), on the parent's
+  first turn in the process, and on every read, so a caller that died between
+  the child's receipt and delivery leaves a child the registry still resolves,
+  never a running one nobody delivers. Reconcile re-sends the start of a child
+  with no receipt. The repeat admits nothing new, but a durable `turn` send
+  reads the target's state first, which opens its loop, so a child the
+  previous process stopped mid-turn resumes and its completion wakes the
+  parent. Without that, a restart left the child stuck and counting toward the
+  cap.
 - One writer settles a child's completion. The delegate's `turnAfter` hook on
   the child branch delivers every receipt as one idempotent follow-up message
   on the parent branch (metadata `customType: "child-completion"`, `wake` set
@@ -494,8 +500,8 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   branch (metadata `customType: "child-completion"`) with the outcome and a
   bounded preview, and the message wakes the parent. Nothing waits on a child.
   Lazy reconcile covers the crash window between the
-  receipt and the hook: the delegate reconciles its registry on the parent's
-  next turn and on every `delegate.list`, so a caller that died mid-op leaves a
+  receipt and the hook: the delegate reconciles its registry when the parent's
+  loop opens, on its first turn, and on every `delegate.list`, so a caller that died mid-op leaves a
   child the registry still resolves, never a running one nobody delivers.
 - The delegate ships three ordinary tools: `delegate.start`,
   `delegate.cancel`, `delegate.list`; messaging a child is `session.send`. A child's first message opens with `Task from your parent session <id>.` and says where its final reply goes, so the child does not take a bare instruction for an injection. `delegate.start` accepts RunSpec
