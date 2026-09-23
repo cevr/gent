@@ -344,6 +344,7 @@ type CreateBranchParams = Parameters<SessionMutationsService["createSessionBranc
 type ForkBranchParams = Parameters<SessionMutationsService["forkSessionBranch"]>[0]
 type SwitchBranchParams = Parameters<SessionMutationsService["switchActiveBranch"]>[0]
 type SessionMutationError = Effect.Error<ReturnType<SessionMutationsService["switchActiveBranch"]>>
+type RenameSessionResult = Effect.Success<ReturnType<SessionMutationsService["renameSession"]>>
 
 const createSessionResult = (operation: StoredCreateSessionResult): CreateSessionResult => ({
   sessionId: operation.sessionId,
@@ -419,14 +420,21 @@ const makeSessionMutationsService: Effect.Effect<
   const governance = yield* AgentLoopSessionGovernance
   const eventStore = yield* EventStore
 
-  const transactWithEvent = <A, E, R>(
-    mutation: Effect.Effect<A, E, R>,
-    ...events: ReadonlyArray<AgentEvent>
+  /**
+   * Run `mutation` (its reads and its writes) in one storage transaction and
+   * append the events it returns there; deliver them after commit.
+   */
+  const transactWithEvents = <A, E, R>(
+    mutation: Effect.Effect<
+      { readonly result: A; readonly events: ReadonlyArray<AgentEvent> },
+      E,
+      R
+    >,
   ): Effect.Effect<A, E | EventStoreError | StorageError, R> =>
     Effect.gen(function* () {
       const committed = yield* storageTransaction(
         Effect.gen(function* () {
-          const result = yield* mutation
+          const { result, events } = yield* mutation
           const envelopes: Array<EventEnvelope> = []
           for (const event of events) envelopes.push(yield* eventPublisher.append(event))
           return { result, envelopes }
@@ -760,12 +768,10 @@ const makeSessionMutationsService: Effect.Effect<
             message: `Branch "${input.toBranchId}" not found in current session`,
           })
         }
-        yield* sessionStorage.updateSession(
-          new Session({
-            ...session,
-            activeBranchId: input.toBranchId,
-            updatedAt: yield* DateTime.nowAsDate,
-          }),
+        yield* sessionStorage.setActiveBranch(
+          input.sessionId,
+          input.toBranchId,
+          yield* DateTime.nowAsDate,
         )
         const envelope = yield* eventPublisher.append(
           BranchSwitched.make({
@@ -827,20 +833,20 @@ const makeSessionMutationsService: Effect.Effect<
     renameSession: Effect.fn("SessionMutations.renameSession")(function* (input) {
       const trimmed = input.name.trim().slice(0, 80)
       if (trimmed.length === 0) return { renamed: false }
-      const session = yield* sessionStorage.getSession(input.sessionId)
-      if (Predicate.isUndefined(session)) return { renamed: false }
-      if (session.name === trimmed) return { renamed: false }
-      yield* transactWithEvent(
-        sessionStorage.updateSession(
-          new Session({
-            ...session,
-            name: trimmed,
-            updatedAt: yield* DateTime.nowAsDate,
-          }),
-        ),
-        SessionNameUpdated.make({ sessionId: input.sessionId, name: trimmed }),
+      const unchanged: RenameSessionResult = { renamed: false }
+      return yield* transactWithEvents(
+        Effect.gen(function* () {
+          const session = yield* sessionStorage.getSession(input.sessionId)
+          if (Predicate.isUndefined(session) || session.name === trimmed) {
+            return { result: unchanged, events: [] }
+          }
+          yield* sessionStorage.renameSession(input.sessionId, trimmed, yield* DateTime.nowAsDate)
+          return {
+            result: { renamed: true, name: trimmed },
+            events: [SessionNameUpdated.make({ sessionId: input.sessionId, name: trimmed })],
+          }
+        }),
       )
-      return { renamed: true, name: trimmed }
     }),
 
     deleteSession: Effect.fn("SessionMutations.deleteSession")(function* (sessionId) {
@@ -848,19 +854,26 @@ const makeSessionMutationsService: Effect.Effect<
     }),
 
     updateSettings: Effect.fn("SessionMutations.updateSettings")(function* (input) {
-      const session = yield* sessionStorage.getSession(input.sessionId)
-      if (Predicate.isUndefined(session)) {
-        return yield* new NotFoundError({ message: "Session not found" })
-      }
       const settings = { modelId: input.modelId, reasoningLevel: input.reasoningLevel }
       // The model-change notice is a branch write; the loop owns it and
       // writes it at the next step boundary (turn.ts `noticeModelChange`).
-      const updated = new Session({ ...session, ...settings, updatedAt: yield* DateTime.nowAsDate })
-      yield* transactWithEvent(
-        sessionStorage.updateSession(updated),
-        SessionSettingsUpdated.make({ sessionId: input.sessionId, ...settings }),
+      return yield* transactWithEvents(
+        Effect.gen(function* () {
+          const session = yield* sessionStorage.getSession(input.sessionId)
+          if (Predicate.isUndefined(session)) {
+            return yield* new NotFoundError({ message: "Session not found" })
+          }
+          yield* sessionStorage.updateSessionSettings(
+            input.sessionId,
+            settings,
+            yield* DateTime.nowAsDate,
+          )
+          return {
+            result: settings,
+            events: [SessionSettingsUpdated.make({ sessionId: input.sessionId, ...settings })],
+          }
+        }),
       )
-      return settings
     }),
   } satisfies SessionMutationsService
 })
