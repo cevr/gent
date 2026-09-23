@@ -13,7 +13,6 @@ export { BranchStorage, MessageStorage, SessionStorage } from "./storage/storage
 export {
   provideWorkspaceIdHeader,
   WORKSPACE_ID_HEADER,
-  type WorkspaceHeaders,
   workspaceHeadersForCwd,
   workspaceIdForCwd,
 } from "./server/workspace-rpc.js"

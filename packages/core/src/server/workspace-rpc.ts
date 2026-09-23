@@ -42,7 +42,7 @@ export const workspaceIdForCwd = (cwd: string): WorkspaceId =>
  * transport edge; `workspaceIdForCwd` keeps the branded value for callers
  * that need it.
  */
-export type WorkspaceHeaders = Record<string, string>
+type WorkspaceHeaders = Record<string, string>
 
 export const workspaceHeadersForCwd = (cwd: string): WorkspaceHeaders => {
   const headers = { [WORKSPACE_ID_HEADER]: String(workspaceIdForCwd(cwd)) }

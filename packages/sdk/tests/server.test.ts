@@ -613,6 +613,25 @@ describe("Server Lock", () => {
     ),
   )
 
+  it.scopedLive("a start that cannot write its lock entry fails instead of hiding", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const home = yield* makeTmpHomeScoped
+        // A directory where the entry goes: the write fails.
+        const entryPath = (yield* dataPaths(home)).serverLock
+        yield* fs.makeDirectory(entryPath, { recursive: true })
+        const started = yield* Gent.server({
+          cwd: home,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        }).pipe(Effect.scoped, Effect.flip, Effect.timeout("10 seconds"))
+        // Without the entry every client would wait for a server that never names itself.
+        expect(started.message).toContain(entryPath)
+      }),
+    ),
+  )
+
   it.scopedLive("an attached client reads the workspace its cwd names", () =>
     provideFs(
       Effect.gen(function* () {
