@@ -407,15 +407,15 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           const projectRead = yield* Effect.result(
             readConfigFresh(path.join(cwd, ConfigService.CONFIG_RELATIVE)),
           )
+          // A project file that does not load sets nothing, the same as in
+          // `get(cwd)`.
           let project = new UserConfig({})
-          if (Result.isSuccess(projectRead)) {
-            project = projectRead.success
-            // The cached project snapshot is launch-cwd only; other cwds read
-            // their own file on every `get(cwd)` call.
-            if (cwd === runtimeEnvironment.cwd) yield* Ref.set(projectConfigRef, project)
-          } else {
-            failures.push(projectRead.failure)
-          }
+          if (Result.isSuccess(projectRead)) project = projectRead.success
+          else failures.push(projectRead.failure)
+          // The cached project snapshot is launch-cwd only; other cwds read
+          // their own file on every `get(cwd)` call. It follows this read,
+          // or a broken file would leave the old settings active.
+          if (cwd === runtimeEnvironment.cwd) yield* Ref.set(projectConfigRef, project)
           return { config: mergeConfigs(user, project), failures }
         }),
 

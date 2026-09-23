@@ -371,6 +371,33 @@ describe("user configuration", () => {
       }).pipe(Effect.provide(BunServices.layer)),
     )
 
+    it.scopedLive("a launch project config that breaks drops its cached settings", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const cwd = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+        const projectConfigPath = path.join(cwd, ConfigService.CONFIG_RELATIVE)
+        yield* fs.makeDirectory(path.dirname(projectConfigPath), { recursive: true })
+        yield* fs.writeFileString(projectConfigPath, encodeJson({ disabledExtensions: ["x"] }))
+        const live = ConfigService.Live.pipe(
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
+          Layer.provide(BunServices.layer),
+        )
+        yield* Effect.gen(function* () {
+          const cfg = yield* ConfigService
+          expect((yield* cfg.get()).disabledExtensions).toEqual(["x"])
+          yield* fs.writeFileString(projectConfigPath, '{ "disabledExtensions": ["x"], }')
+          const fresh = yield* cfg.getFresh(cwd)
+          expect(fresh.failures.map((failure) => failure.path)).toEqual([projectConfigPath])
+          // The fresh read and the cached launch read agree: the broken file sets nothing.
+          expect(fresh.config.disabledExtensions).toBeUndefined()
+          expect((yield* cfg.get()).disabledExtensions).toBeUndefined()
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(live))
+      }).pipe(Effect.provide(BunServices.layer)),
+    )
+
     it.live("re-setting an agent's driver replaces the prior override", () =>
       Effect.gen(function* () {
         const cfg = yield* ConfigService
