@@ -574,16 +574,82 @@ const startsSubstitution = (text: string, index: number) =>
 /**
  * Read the commands of the `$(...)` or backticks at `index`; returns the
  * index after them. They read the stdin of the command around them, `input`.
+ * `$((…))` is arithmetic: its words are data, and only the substitutions
+ * inside it run.
  */
-const readSubstitution = (
+function readSubstitution(
   source: ShellSource,
   index: number,
   input: Option.Option<ShellSegment>,
-): number => {
+): number {
   if (source.text.charAt(index) === "`") {
     return readCommands(source, index + 1, Option.some("`"), input)
   }
+  if (source.text.startsWith("$((", index)) {
+    const end = arithmeticEnd(source, index + 3)
+    if (Option.isSome(end)) return readArithmetic(source, index + 3, end.value, input)
+  }
   return readCommands(source, index + 2, Option.some(")"), input)
+}
+
+/**
+ * Where the arithmetic that starts at `from` (after `((` or `$((`) ends: the
+ * index of the first `)` of a closing `))`, as bash finds it. With no such
+ * `))`, bash reads `((` as two subshells and `$((` as a substitution that
+ * opens one. A substitution inside is read on a scratch copy of the source,
+ * so its commands are found once, by the reader that decides.
+ */
+function arithmeticEnd(source: ShellSource, from: number): Option.Option<number> {
+  const text = source.text
+  const scratch: ShellSource = { ...source, segments: [] }
+  let depth = 0
+  let at = from
+  while (at < text.length) {
+    const skipped = skipQuotedText(scratch, at)
+    if (Option.isNone(skipped)) return Option.none()
+    const char = text.charAt(at)
+    if (skipped.value === at && char === ")" && depth === 0) {
+      return Option.filter(Option.some(at), () => text.charAt(at + 1) === ")")
+    }
+    if (skipped.value === at && char === "(") depth++
+    if (skipped.value === at && char === ")") depth--
+    at = Math.max(skipped.value, at + 1)
+  }
+  return Option.none()
+}
+
+/**
+ * The index after the escape, quoted run or substitution at `at`, or `at`
+ * for any other character; none for a quote that does not close.
+ */
+function skipQuotedText(source: ShellSource, at: number): Option.Option<number> {
+  const text = source.text
+  const char = text.charAt(at)
+  if (char === "\\") return Option.some(at + 2)
+  if (startsSubstitution(text, at)) return Option.some(readSubstitution(source, at, Option.none()))
+  if (char === "'") {
+    const close = text.indexOf("'", at + 1)
+    return Option.filter(Option.some(close + 1), () => close !== -1)
+  }
+  if (char !== '"') return Option.some(at)
+  let index = at + 1
+  while (index < text.length && text.charAt(index) !== '"') {
+    if (text.charAt(index) === "\\") index += 2
+    else if (startsSubstitution(text, index)) index = readSubstitution(source, index, Option.none())
+    else index++
+  }
+  return Option.filter(Option.some(index + 1), () => index < text.length)
+}
+
+/** The substitutions inside the arithmetic from `from` to `end` run; returns the index after its `))`. */
+function readArithmetic(
+  source: ShellSource,
+  from: number,
+  end: number,
+  input: Option.Option<ShellSegment>,
+): number {
+  readExpansions(source, from, end, input)
+  return end + 2
 }
 
 /**
@@ -727,12 +793,17 @@ const heredocBodyEnd = (text: string, from: number, heredoc: PendingHeredoc) => 
   return { bodyEnd: text.length, next: text.length }
 }
 
-/** The `$(...)` and backticks of an expanding heredoc body run. */
-const readExpansions = (source: ShellSource, from: number, to: number) => {
+/** The `$(...)` and backticks of an expanding heredoc body or of arithmetic run. */
+function readExpansions(
+  source: ShellSource,
+  from: number,
+  to: number,
+  input: Option.Option<ShellSegment>,
+) {
   for (let index = from; index < to; index++) {
     if (source.text.charAt(index) === "\\") index++
     else if (startsSubstitution(source.text, index))
-      index = readSubstitution(source, index, Option.none()) - 1
+      index = readSubstitution(source, index, input) - 1
   }
 }
 
@@ -743,7 +814,7 @@ const readHeredocBodies = (reader: CommandReader, from: number): number => {
   for (const heredoc of reader.heredocs) {
     const { bodyEnd, next } = heredocBodyEnd(source.text, index, heredoc)
     heredoc.segment.stdin.push(sourceWord(source, index, bodyEnd, heredoc.expands))
-    if (heredoc.expands) readExpansions(source, index, bodyEnd)
+    if (heredoc.expands) readExpansions(source, index, bodyEnd, Option.none())
     index = next
   }
   reader.heredocs.length = 0
@@ -836,6 +907,16 @@ const readSeparator = (reader: CommandReader, index: number): Option.Option<numb
   const text = reader.source.text
   const char = text.charAt(index)
   const pair = text.slice(index, index + 2)
+  // `(( … ))` and `for (( … ))`: arithmetic, closed by `))`.
+  if (pair === "((") {
+    const end = arithmeticEnd(reader.source, index + 2)
+    if (Option.isSome(end)) {
+      endWord(reader)
+      return Option.some(
+        readArithmetic(reader.source, index + 2, end.value, reader.segment.pipedFrom),
+      )
+    }
+  }
   if (char === "(") {
     // A subshell reads the stdin of the command in whose place it stands.
     const input = reader.segment.pipedFrom
@@ -1077,6 +1158,11 @@ interface ValueOptions {
   readonly long?: ReadonlyArray<string>
   /** `+o`, `+x`: a `+` cluster is options too (shells). */
   readonly plus?: boolean
+  /**
+   * A valued letter in a cluster takes the next unused word and the cluster
+   * goes on (shells: `bash -oc pipefail '…'` is `-o pipefail -c '…'`).
+   */
+  readonly nextWord?: boolean
 }
 
 /** Where an option's value starts: argument `word`, from character `from`. */
@@ -1154,10 +1240,18 @@ const readOption = (
     into.options.push({ name, long: true, value })
     return next
   }
+  let taken = 0
   for (let at = 1; at < arg.length; at++) {
     const letter = arg.charAt(at)
     into.shorts.add(letter)
-    if ((valued.short ?? "").includes(letter)) {
+    if ((valued.short ?? "").includes(letter) && valued.nextWord === true) {
+      taken++
+      into.options.push({
+        name: letter,
+        long: false,
+        value: Option.some({ word: index + taken, from: 0 }),
+      })
+    } else if ((valued.short ?? "").includes(letter)) {
       // The rest of the cluster is the value; a bare letter takes the next word.
       if (at < arg.length - 1) {
         into.options.push({
@@ -1173,10 +1267,11 @@ const readOption = (
         value: Option.some({ word: index + 1, from: 0 }),
       })
       return index + 2
+    } else {
+      into.options.push({ name: letter, long: false, value: Option.none() })
     }
-    into.options.push({ name: letter, long: false, value: Option.none() })
   }
-  return index + 1
+  return index + 1 + taken
 }
 
 const isOptionWord = (arg: string, valued: ValueOptions) =>
@@ -1641,16 +1736,28 @@ const segmentInputs = (segment: ShellSegment): SegmentRuns => {
   return { scripts: inputs.scripts, unreadable: [...inputs.unreadable, ...expanded] }
 }
 
-/** A script file a shell or `source` runs: not read, unless it only exists at run time. */
-const scriptFileRuns = (file: Option.Option<ShellWord>): SegmentRuns => {
+/** File names of the stdin of the process that opens them. */
+const STDIN_FILES = new Set(["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"])
+
+/**
+ * A script file a shell or `source` runs: not read, unless it only exists at
+ * run time. A stdin file is the stdin of the command in `segment`.
+ */
+const scriptFileRuns = (segment: ShellSegment, file: Option.Option<ShellWord>): SegmentRuns => {
   if (Option.exists(file, isProcessSubstitution)) {
     return unreadableRun("a script from a process substitution")
   }
+  if (Option.exists(file, (word) => STDIN_FILES.has(word.text))) return segmentInputs(segment)
   return NO_RUNS
 }
 
 /** Shell options whose value is the next word (`-o pipefail`, `--rcfile x`). */
-const SHELL_OPTIONS: ValueOptions = { short: "oO", long: ["rcfile", "init-file"], plus: true }
+const SHELL_OPTIONS: ValueOptions = {
+  short: "oO",
+  long: ["rcfile", "init-file"],
+  plus: true,
+  nextWord: true,
+}
 
 /**
  * A shell: the argument after its options with `-c`; its stdin with `-s` or
@@ -1667,7 +1774,7 @@ const shellRuns = ({ segment, words }: Invocation): SegmentRuns => {
   const operand = Option.fromUndefinedOr(words[end])
   if (!hasShort(parsed, "c")) {
     if (hasShort(parsed, "s") || Option.isNone(operand)) return segmentInputs(segment)
-    return scriptFileRuns(operand)
+    return scriptFileRuns(segment, operand)
   }
   const literal = Option.filter(operand, (word) => !word.dynamic && !word.text.includes("{}"))
   if (Option.isSome(literal)) return scriptRuns([literal.value])
@@ -1954,7 +2061,8 @@ const commandRuns = (invocation: Invocation): SegmentRuns => {
   if (Option.isSome(split)) return joinedRuns(name, split.value)
   if (SHELL_NAMES.has(name)) return shellRuns(invocation)
   if (FOREIGN_SHELLS.has(name)) return foreignShellRuns(invocation)
-  if (name === "source" || name === ".") return scriptFileRuns(Option.fromUndefinedOr(words[1]))
+  if (name === "source" || name === ".")
+    return scriptFileRuns(invocation.segment, Option.fromUndefinedOr(words[1]))
   if (name === "git") return gitRuns(invocation)
   if (name === "trap") return trapRuns(invocation)
   const runs: Array<SegmentRuns> = []
