@@ -419,6 +419,37 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive("a contribution key outside the known buckets fails the extension by name", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../.."),
+        prefix: ".tmp-client-unknown-key-",
+      })
+      const userDir = path.join(root, "home/.gent/extensions")
+      const projectDir = path.join(root, "project/.gent/extensions")
+      yield* fs.makeDirectory(userDir, { recursive: true })
+      // A user extension written against the old vocabulary.
+      yield* fs.writeFileString(
+        path.join(userDir, "stale.client.ts"),
+        `
+import { Effect } from "effect";
+export default {
+  id: "@user/stale-labels",
+  setup: Effect.succeed({ borderLabels: [{ position: "top-left", produce: () => [] }] }),
+};
+`,
+      )
+      const result = yield* Effect.promise(() =>
+        loadTuiExtensions({ userDir, projectDir, runtime }),
+      )
+      expect(result.failures).toEqual([
+        { id: "@user/stale-labels", reason: 'unknown contribution "borderLabels"' },
+      ])
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.live("Effect setup is run through the runtime; FileSystem is provided", () =>
     Effect.gen(function* () {
       const fxSetup: ClientEffect<ClientContributions> = Effect.gen(function* () {

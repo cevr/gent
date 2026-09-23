@@ -767,6 +767,24 @@ export interface ClientContributions {
   readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
 }
 
+/**
+ * Every contribution bucket. The loader fails an extension that returns any
+ * other key, so a renamed bucket fails loudly instead of dropping its items.
+ */
+const CONTRIBUTION_BUCKETS = {
+  renderers: true,
+  messageRenderers: true,
+  widgets: true,
+  commands: true,
+  interactionRenderers: true,
+  statusLabels: true,
+  autocomplete: true,
+} satisfies Record<keyof ClientContributions, true>
+
+/** The first key a setup returned that is not a contribution bucket. */
+export const unknownContributionKey = (keys: ReadonlyArray<string>): Option.Option<string> =>
+  Option.fromUndefinedOr(keys.find((key) => !Object.hasOwn(CONTRIBUTION_BUCKETS, key)))
+
 type MutableClientContributions = {
   -readonly [Key in keyof ClientContributions]: ClientContributions[Key]
 }
