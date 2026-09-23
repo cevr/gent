@@ -142,6 +142,20 @@ describe("resolveTuiExtensions", () => {
     expect(bashRenderer.value(toolProps)).toBe("project")
   })
 
+  // Same-scope order is code-unit order, as on the server, so both ends pick
+  // the same winner: "@test/Z" sorts before "@test/a" whatever the locale.
+  test("a same-scope collision is won by the id first in code-unit order", () => {
+    const resolved = resolveTuiExtensions([
+      make("@test/a", "user", rendererContribution(["bash"], renderer("lower"))),
+      make("@test/Z", "user", rendererContribution(["bash"], renderer("upper"))),
+    ])
+    const bashRenderer = Option.fromNullishOr(resolved.renderers.get("bash"))
+    expect(Option.isSome(bashRenderer)).toBe(true)
+    if (Option.isNone(bashRenderer)) return
+    expect(bashRenderer.value(toolProps)).toBe("upper")
+    expect(resolved.failures.map((failure) => failure.id)).toEqual(["@test/a"])
+  })
+
   test("widgets stay user-ordered by priority after scope resolution", () => {
     const resolved = resolveTuiExtensions([
       make(

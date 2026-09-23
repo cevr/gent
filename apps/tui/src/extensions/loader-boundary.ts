@@ -1,4 +1,4 @@
-import { Cause, Duration, Effect, FileSystem, Option, Path, Predicate, Schema } from "effect"
+import { Cause, Duration, Effect, FileSystem, Option, Order, Path, Predicate, Schema } from "effect"
 import {
   type ExtensionScope,
   isClientEntrypoint,
@@ -92,7 +92,8 @@ const discoverDir = (
       }
     }
 
-    return results.sort((a, b) => a.filePath.localeCompare(b.filePath))
+    // Code-unit order, not the locale's, as the server discovers.
+    return results.sort((a, b) => Order.String(a.filePath, b.filePath))
   })
 
 /** Discover TUI extension files from user and project directories. */
@@ -351,11 +352,12 @@ export const resolveTuiExtensions = (
   loadFailures: ReadonlyArray<ClientExtensionFailure> = [],
 ): ResolvedTuiExtensions => {
   const failures = [...loadFailures]
-  // Sort by scope precedence, then by id for deterministic same-scope order (matches server)
+  // Scope precedence, then id in code-unit order, as the server sorts: the
+  // order picks the winner of a same-scope collision.
   const sorted = [...extensions].sort((a, b) => {
     const scopeDiff = SCOPE_PRECEDENCE[a.scope] - SCOPE_PRECEDENCE[b.scope]
     if (scopeDiff !== 0) return scopeDiff
-    return a.id.localeCompare(b.id)
+    return Order.String(a.id, b.id)
   })
   const collected = <A>(
     // eslint-disable-next-line effect/noNullish -- extension contribution buckets may be omitted.
