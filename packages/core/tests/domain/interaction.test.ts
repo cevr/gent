@@ -323,7 +323,9 @@ describe("Interaction Request", () => {
         return yield* Effect.die(new Error("expected pending"))
       }
       // Store resolution keyed by requestId
-      yield* interaction.storeResolution(error.requestId, { approved: true })
+      yield* interaction.storeResolution({ sessionId, branchId }, error.requestId, {
+        approved: true,
+      })
       // Second present — finds stored resolution, returns it
       const result = yield* asCall(interaction, { sessionId, branchId })(
         interaction.present({ text: "Approve?" }, { sessionId, branchId }),
@@ -353,7 +355,10 @@ describe("Interaction Request", () => {
         createdAt: 0,
       })
       // Client responds — store the resolution
-      yield* interaction.storeResolution(requestId, { approved: true, notes: "yes" })
+      yield* interaction.storeResolution({ sessionId, branchId }, requestId, {
+        approved: true,
+        notes: "yes",
+      })
       // Tool re-calls present() — should find stored resolution via context lookup
       const result = yield* asCall(interaction, { sessionId, branchId })(
         interaction.present({ text: "Approve?" }, { sessionId, branchId }),
@@ -398,7 +403,10 @@ describe("Interaction Request", () => {
       const persisted = pending.find((r) => r.requestId === requestId)!
       yield* service2.rehydrate(persisted)
       // Client responds
-      yield* service2.storeResolution(requestId, { approved: true, notes: "ship it" })
+      yield* service2.storeResolution({ sessionId, branchId }, requestId, {
+        approved: true,
+        notes: "ship it",
+      })
       // Tool re-calls present() — should find the stored resolution
       const result = yield* asCall(service2, { sessionId, branchId })(
         service2.present({ text: "Approve deployment?" }, { sessionId, branchId }),
@@ -436,13 +444,22 @@ describe("Interaction Request", () => {
           ),
         ),
       )
-      yield* interaction.storeResolution(requestId, { approved: false, notes: "no" })
+      yield* interaction.storeResolution({ sessionId, branchId }, requestId, {
+        approved: false,
+        notes: "no",
+      })
       const conflict = yield* Effect.flip(
-        interaction.storeResolution(requestId, { approved: true, notes: "yes" }),
+        interaction.storeResolution({ sessionId, branchId }, requestId, {
+          approved: true,
+          notes: "yes",
+        }),
       )
       expect(conflict._tag).toBe("InteractionDecisionConflictError")
       // The same answer again is accepted: a retried reply is not an error.
-      yield* interaction.storeResolution(requestId, { approved: false, notes: "no" })
+      yield* interaction.storeResolution({ sessionId, branchId }, requestId, {
+        approved: false,
+        notes: "no",
+      })
       const stored = yield* is.listOpen({ sessionId, branchId })
       expect(stored.map((record) => record.decisionJson)).toEqual([
         `{"approved":false,"notes":"no"}`,
@@ -474,8 +491,12 @@ describe("Interaction Request", () => {
       )
       const exits = yield* Effect.all(
         [
-          Effect.exit(interaction.storeResolution(requestId, { approved: false })),
-          Effect.exit(interaction.storeResolution(requestId, { approved: true })),
+          Effect.exit(
+            interaction.storeResolution({ sessionId, branchId }, requestId, { approved: false }),
+          ),
+          Effect.exit(
+            interaction.storeResolution({ sessionId, branchId }, requestId, { approved: true }),
+          ),
         ],
         { concurrency: "unbounded" },
       )
@@ -516,8 +537,10 @@ describe("Interaction Request", () => {
       })
       for (const record of yield* is.listOpen({ sessionId, branchId }))
         yield* second.rehydrate(record)
-      yield* first.storeResolution(requestId, { approved: false })
-      const conflict = yield* Effect.flip(second.storeResolution(requestId, { approved: true }))
+      yield* first.storeResolution({ sessionId, branchId }, requestId, { approved: false })
+      const conflict = yield* Effect.flip(
+        second.storeResolution({ sessionId, branchId }, requestId, { approved: true }),
+      )
       expect(conflict._tag).toBe("InteractionDecisionConflictError")
       const stored = yield* is.listOpen({ sessionId, branchId })
       expect(stored.map((record) => record.decisionJson)).toEqual([`{"approved":false}`])
@@ -546,9 +569,9 @@ describe("Interaction Request", () => {
         }),
       ).pipe(Effect.exit)
       const first = yield* pendingId(yield* run)
-      yield* interaction.storeResolution(first, { approved: true, notes: "one" })
+      yield* interaction.storeResolution(branch, first, { approved: true, notes: "one" })
       const second = yield* pendingId(yield* run)
-      yield* interaction.storeResolution(second, { approved: true, notes: "two" })
+      yield* interaction.storeResolution(branch, second, { approved: true, notes: "two" })
       const third = yield* run.pipe(Effect.timeoutOption("2 seconds"))
       expect(Option.map(third, (exit) => Exit.isSuccess(exit) && exit.value)).toEqual(
         Option.some("one/two"),
@@ -571,7 +594,7 @@ describe("Interaction Request", () => {
       const ask = (text: string) =>
         asCall(interaction, branch)(interaction.present({ text }, branch)).pipe(Effect.exit)
       const first = yield* pendingId(yield* ask("Delete a.txt?"))
-      yield* interaction.storeResolution(first, { approved: true })
+      yield* interaction.storeResolution(branch, first, { approved: true })
       const second = yield* pendingId(yield* ask("Delete b.txt?"))
       expect(second).not.toBe(first)
       expect(yield* interaction.pendingRequestId(branch)).toBe(second)
@@ -622,7 +645,7 @@ describe("Interaction Request", () => {
       // Run 1: A asks its first question and parks.
       yield* step
       const x = yield* pendingId(yield* runA("A1").pipe(Effect.exit))
-      yield* interaction.storeResolution(x, { approved: true })
+      yield* interaction.storeResolution(branch, x, { approved: true })
       // Run 2: A takes and keeps its first answer; B asks next; A then
       // queues its second ask behind B's question.
       yield* step
@@ -631,7 +654,7 @@ describe("Interaction Request", () => {
       const y = yield* pendingId(yield* runB.pipe(Effect.exit))
       yield* Deferred.completeWith(gate, Effect.void)
       expect(yield* pendingId(yield* Fiber.join(secondRun))).toBe(y)
-      yield* interaction.storeResolution(y, { approved: true })
+      yield* interaction.storeResolution(branch, y, { approved: true })
       // Run 3: B takes its answer. A's first question changed, so its kept
       // answer goes; the queued place it meets is its own, not another call's.
       yield* step
@@ -682,7 +705,7 @@ describe("Interaction Request", () => {
     }).pipe(Effect.provide(storageLive)),
   )
 
-  it.live("an answer that comes after its request closed is not kept", () =>
+  it.live("every answer to a request that closed without one is refused", () =>
     Effect.gen(function* () {
       const interaction = yield* makeInteractionService({
         onPresent: () => Effect.void,
@@ -698,8 +721,53 @@ describe("Interaction Request", () => {
         )(interaction.present({ text: "Go?" }, branch)).pipe(Effect.exit),
       )
       yield* interaction.endTurn(branch)
-      yield* interaction.storeResolution(closed, { approved: true })
+      // Neither reply is the first answer: nothing would take it.
+      const yes = yield* Effect.flip(
+        interaction.storeResolution(branch, closed, { approved: true }),
+      )
+      const no = yield* Effect.flip(
+        interaction.storeResolution(branch, closed, { approved: false }),
+      )
+      expect(yes._tag).toBe("InteractionRequestMismatchError")
+      expect(no._tag).toBe("InteractionRequestMismatchError")
       expect(yield* interaction.answered(closed)).toBe(false)
+    }).pipe(Effect.provide(storageLive)),
+  )
+
+  it.live("a retried reply after its call took the answer succeeds and changes nothing", () =>
+    Effect.gen(function* () {
+      const interaction = yield* makeInteractionService({
+        onPresent: () => Effect.void,
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(yield* InteractionStorage),
+      })
+      const branch = { sessionId: SessionId.make("s-retry"), branchId: BranchId.make("b-retry") }
+      yield* ensureStorageParents(branch)
+      const run = asCall(interaction, branch)
+      const requestId = yield* pendingId(
+        yield* run(interaction.present({ text: "Go?" }, branch)).pipe(Effect.exit),
+      )
+      expect(yield* interaction.storeResolution(branch, requestId, { approved: true })).toBe(true)
+      // The step runs again and its call takes the answer: the branch shows no request.
+      expect((yield* run(interaction.present({ text: "Go?" }, branch))).approved).toBe(true)
+      expect(yield* interaction.pendingRequestId(branch)).toBeUndefined()
+      expect(yield* interaction.storeResolution(branch, requestId, { approved: true })).toBe(false)
+      const changed = yield* Effect.flip(
+        interaction.storeResolution(branch, requestId, { approved: false }),
+      )
+      expect(changed._tag).toBe("InteractionDecisionConflictError")
+      // Another branch cannot answer it.
+      const other = { ...branch, branchId: BranchId.make("b-retry-other") }
+      const fresh = yield* pendingId(
+        yield* run(interaction.present({ text: "Again?" }, branch)).pipe(Effect.exit),
+      )
+      const misaddressed = yield* Effect.flip(
+        interaction.storeResolution(other, fresh, { approved: true }),
+      )
+      expect(misaddressed._tag).toBe("InteractionRequestMismatchError")
+      expect(yield* interaction.answered(fresh)).toBe(false)
+      // Nor did it store an answer: the branch's own reply is the first.
+      expect(yield* interaction.storeResolution(branch, fresh, { approved: false })).toBe(true)
     }).pipe(Effect.provide(storageLive)),
   )
 
@@ -769,10 +837,10 @@ describe("Interaction Request", () => {
       const first = yield* Queue.take(presented)
       // The second inner call waits for the slot; it does not refuse or park.
       expect(yield* interaction.pendingRequestId(branch)).toBe(first)
-      yield* interaction.storeResolution(first, { approved: true, notes: "one" })
+      yield* interaction.storeResolution(branch, first, { approved: true, notes: "one" })
       const second = yield* Queue.take(presented)
       expect(second).not.toBe(first)
-      yield* interaction.storeResolution(second, { approved: false, notes: "two" })
+      yield* interaction.storeResolution(branch, second, { approved: false, notes: "two" })
       const answers = yield* Fiber.join(both).pipe(Effect.timeout("2 seconds"))
       expect(answers.map((answer) => answer.notes)).toEqual(["one", "two"])
       expect(taken).toEqual([first, second])
@@ -802,11 +870,11 @@ describe("Interaction Request", () => {
           branch,
         )(askOwned(interaction, is, branch, taken)("Delete it?")).pipe(Effect.forkChild)
         const requestId = yield* Queue.take(presented)
-        yield* interaction.storeResolution(requestId, { approved: false })
+        yield* interaction.storeResolution(branch, requestId, { approved: false })
         // Whether or not the waiting call took the first answer yet, the second
         // reply cannot change it.
         const conflict = yield* Effect.flip(
-          interaction.storeResolution(requestId, { approved: true }),
+          interaction.storeResolution(branch, requestId, { approved: true }),
         )
         expect(conflict._tag).toBe("InteractionDecisionConflictError")
         const answer = yield* Fiber.join(waiting).pipe(Effect.timeout("2 seconds"))
@@ -836,12 +904,12 @@ describe("Interaction Request", () => {
       const stopped = yield* ask("Delete a.txt?", Option.none())
       const first = yield* Queue.take(presented)
       yield* Fiber.interrupt(stopped)
-      yield* interaction.storeResolution(first, { approved: true })
+      yield* interaction.storeResolution(branch, first, { approved: true })
       const resumed = yield* ask("Delete b.txt?", Option.some(first))
       const second = yield* Queue.take(presented)
       expect(second).not.toBe(first)
       expect(yield* interaction.pendingRequestId(branch)).toBe(second)
-      yield* interaction.storeResolution(second, { approved: true, notes: "b" })
+      yield* interaction.storeResolution(branch, second, { approved: true, notes: "b" })
       expect((yield* Fiber.join(resumed).pipe(Effect.timeout("2 seconds"))).notes).toBe("b")
       expect(taken).toEqual([second])
     }).pipe(Effect.provide(storageLive)),

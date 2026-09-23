@@ -1306,6 +1306,59 @@ describe("interaction.respondInteraction", () => {
   )
 
   it.live(
+    "a retried reply after the call took its answer succeeds; a changed one conflicts",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const finalReply = "approval taken before the retry"
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("approval_probe", { text: "approve deploy?" }),
+            textStep(finalReply),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [InteractionProbeExtension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filter((envelope) => envelope.event._tag === "InteractionPresented"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "run approval probe" })
+          const event = Array.from(yield* Fiber.join(presented))[0]?.event
+          if (event?._tag !== "InteractionPresented") return yield* Effect.die("no dialog")
+          const reply = { sessionId, branchId, requestId: event.requestId, approved: true }
+          yield* client.interaction.respondInteraction(reply)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.parts.some((part) => part.type === "text" && part.text === finalReply),
+              ),
+            5_000,
+            "the call took the answer and the turn ended",
+          )
+          // A client that resends its reply is told it landed.
+          yield* client.interaction.respondInteraction(reply)
+          const changed = yield* Effect.flip(
+            client.interaction.respondInteraction({ ...reply, approved: false }),
+          )
+          expect(changed._tag).toBe("InteractionDecisionConflictError")
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
     "two guarded calls in one step ask one at a time and each gets its own answer",
     () =>
       Effect.scoped(

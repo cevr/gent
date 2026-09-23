@@ -2240,7 +2240,7 @@ it.scopedLive(
         ).toBe("StorageError")
         expect(yield* Ref.get(approvalCalls)).toBe(1)
         const approval = yield* ApprovalService
-        yield* approval.storeResolution(pending.requestId, { approved: false })
+        yield* approval.storeResolution(cellToolHost, pending.requestId, { approved: false })
         const attempts = yield* Effect.all(
           [
             resumeCellToolOperation(resumeParams).pipe(Effect.exit),
@@ -2410,7 +2410,7 @@ it.scopedLive(
             yield* prepareCell
             const host = yield* makeCellToolHost(yield* currentHostParams)
             const pending = yield* askThenLoseWorker(host, requestToolHost("1", "approve"))
-            yield* (yield* ApprovalService).storeResolution(pending.requestId, {
+            yield* (yield* ApprovalService).storeResolution(cellToolHost, pending.requestId, {
               approved: true,
             })
             return pending
@@ -2437,7 +2437,7 @@ it.scopedLive(
               yield* makeCellToolHost(hostParams),
               requestToolHost("2", "approve"),
             )
-            yield* (yield* ApprovalService).storeResolution(pending.requestId, {
+            yield* (yield* ApprovalService).storeResolution(cellToolHost, pending.requestId, {
               approved: true,
             })
             return pending
@@ -4234,7 +4234,10 @@ it.scopedLive(
           (event) => event.event._tag === "InteractionPresented",
         ),
       ).toHaveLength(1)
-      yield* approval.storeResolution(firstId, { approved: false, notes: "First denied" })
+      yield* approval.storeResolution(cellOperationStorage, firstId, {
+        approved: false,
+        notes: "First denied",
+      })
       expect(yield* Fiber.join(first)).toEqual({ approved: false, notes: "First denied" })
       // The call took its answer and runs on: its receipt waits for nothing,
       // and the answer cannot be resumed a second time.
@@ -4245,7 +4248,7 @@ it.scopedLive(
       const second = yield* askAs(peer, "Second?").pipe(Effect.forkChild)
       const secondId = yield* waitingOn(peer)
       expect(secondId).not.toBe(firstId)
-      yield* approval.storeResolution(secondId, { approved: true })
+      yield* approval.storeResolution(cellOperationStorage, secondId, { approved: true })
       expect(yield* Fiber.join(second)).toEqual({ approved: true })
       expect(yield* (yield* InteractionStorage).listOpen(cellOperationStorage)).toEqual([])
     }).pipe(

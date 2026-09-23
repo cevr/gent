@@ -189,14 +189,22 @@ export interface InteractionService {
     // oxlint-disable-next-line effect/noNullish -- The public interaction lookup preserves undefined for no pending request.
   }) => Effect.Effect<InteractionRequestId | undefined>
   /**
-   * Store the answer to a request. The first answer wins, in storage and in
-   * memory. The same answer again succeeds with `false`; a different one
-   * fails with a conflict. True when this reply stored the answer.
+   * Store the answer to a request the branch shows. The first answer wins,
+   * in storage and in memory; true when this reply stored it. The same answer
+   * again succeeds with `false`, also after the call took it: a client that
+   * retries its reply is told it landed. A different one fails with a
+   * conflict. A request the branch does not show and that keeps no answer
+   * (a wrong id, another branch's request, or one that closed without an
+   * answer) is refused as a mismatch.
    */
   readonly storeResolution: (
+    branch: BranchRef,
     requestId: InteractionRequestId,
     decision: ApprovalDecision,
-  ) => Effect.Effect<boolean, EventStoreError | InteractionDecisionConflictError>
+  ) => Effect.Effect<
+    boolean,
+    EventStoreError | InteractionDecisionConflictError | InteractionRequestMismatchError
+  >
   /** True when this request has an answer that its owner has not taken yet. */
   readonly answered: (requestId: InteractionRequestId) => Effect.Effect<boolean>
   /**
@@ -795,40 +803,75 @@ export const makeInteractionService = (
     })
 
     return {
-      storeResolution: (requestId, decision) =>
+      storeResolution: (branchRef, requestId, decision) =>
         Effect.gen(function* () {
+          const key = contextKey(branchRef)
           const decisionJson = yield* encodeInteractionDecision(decision)
+          const shown = (current: InteractionState) =>
+            branchOf(current, key).open.pipe(Option.filter((open) => open.admitted))
+          const shownHere = (current: InteractionState) =>
+            Option.exists(shown(current), (open) => open.requestId === requestId)
+          const mismatch = (current: InteractionState) => {
+            const pending = Option.map(shown(current), (open) => open.requestId)
+            let message = "Interaction response requestId does not match the pending request"
+            if (Option.isNone(pending))
+              message = "No pending interaction request exists for this session branch"
+            return new InteractionRequestMismatchError({
+              message,
+              ...Option.match(pending, {
+                onNone: () => ({}),
+                onSome: (expectedRequestId) => ({ expectedRequestId }),
+              }),
+              actualRequestId: requestId,
+              sessionId: branchRef.sessionId,
+              branchId: branchRef.branchId,
+            })
+          }
+          // Another branch's request is never answered from here, not even
+          // in storage.
+          const before = yield* Ref.get(state)
+          const elsewhere = Array.from(before.branches, ([other, branch]) => ({ other, branch }))
+            .filter(({ other }) => other !== key)
+            .some(({ branch }) =>
+              Option.exists(branch.open, (open) => open.requestId === requestId),
+            )
+          if (elsewhere) return yield* mismatch(before)
           const durable = yield* config.storage.decide(requestId, decisionJson)
           // The first answer wins. Storage decides for a request with a row;
-          // memory keeps the same rule for one without. A request that closed
-          // after the caller looked keeps no answer: nothing would take it.
-          const earlier = yield* Ref.modify(
+          // memory keeps the same rule for one without. A request that is not
+          // shown keeps no new answer: nothing would take it.
+          const [earlier, stored, after] = yield* Ref.modify(
             state,
-            (current): readonly [Option.Option<ApprovalDecision>, InteractionState] => {
+            (
+              current,
+            ): readonly [
+              readonly [Option.Option<ApprovalDecision>, boolean, InteractionState],
+              InteractionState,
+            ] => {
               const kept = Option.fromUndefinedOr(current.decisions.get(requestId))
-              if (Option.isSome(kept)) return [kept, current]
-              const open = Array.from(current.branches.values()).some((branch) =>
-                Option.exists(branch.open, (value) => value.requestId === requestId),
-              )
-              if (!open || Option.exists(durable, (stored) => !stored.first))
-                return [Option.none(), current]
+              if (Option.isSome(kept)) return [[kept, false, current], current]
+              if (!shownHere(current) || Option.exists(durable, (row) => !row.first))
+                return [[Option.none(), false, current], current]
               const decisions = new Map(current.decisions).set(requestId, decision)
-              return [Option.none(), { ...current, decisions }]
+              const next = { ...current, decisions }
+              return [[Option.none(), true, next], next]
             },
           )
-          let keptJson = Option.map(durable, (stored) => stored.decisionJson)
-          if (Option.isNone(durable) && Option.isSome(earlier))
-            keptJson = Option.some(yield* encodeInteractionDecision(earlier.value))
-          const first = Option.match(durable, {
-            onNone: () => Option.isNone(earlier),
-            onSome: (stored) => stored.first,
-          })
-          if (first) {
+          if (stored) {
             // A call that waits for this answer in place takes it now.
             yield* signal
             return true
           }
-          if (Option.getOrElse(keptJson, () => decisionJson) === decisionJson) return false
+          let keptJson = Option.flatMap(durable, (row) =>
+            Option.liftPredicate(row.decisionJson, () => !row.first),
+          )
+          if (Option.isSome(earlier) && Option.isNone(keptJson))
+            keptJson = Option.some(yield* encodeInteractionDecision(earlier.value))
+          // Neither shown nor answered: a wrong id, or a request that closed
+          // without an answer. Storage may have kept the reply on its closed
+          // row; nothing takes it.
+          if (Option.isNone(keptJson)) return yield* mismatch(after)
+          if (keptJson.value === decisionJson) return false
           return yield* new InteractionDecisionConflictError({
             message: "This request already has a different answer",
             requestId,
