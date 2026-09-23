@@ -19,7 +19,7 @@ const WebSearchParams = Schema.Struct({
     description: "Web search query",
   }),
   numResults: Schema.optionalKey(
-    Schema.Finite.annotate({
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).annotate({
       description: "Number of search results to return (default: 8)",
     }),
   ),
