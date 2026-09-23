@@ -32,8 +32,6 @@ import {
   validateToolBindingIdentity,
 } from "../domain/capability.js"
 import { storageError, StorageError, storageErrorExcept } from "../domain/errors.js"
-import { AgentName, RunSpecSchema } from "../domain/agent.js"
-import { omitUndefined } from "../domain/guards.js"
 import { CurrentWorkspaceId, WorkspaceId } from "../server/workspace-rpc.js"
 import {
   branchFromRow,
@@ -62,6 +60,7 @@ import {
   type LoopQueueState as LoopQueueStateType,
   type Message,
   Session,
+  SessionAdmission,
 } from "../domain/message.js"
 import { GentPlatform } from "../runtime/gent-platform.js"
 import {
@@ -77,6 +76,7 @@ import { BunCrypto } from "@effect/platform-bun"
 import type { MessageStorage as ClusterMessageStorage } from "effect/unstable/cluster"
 import { fromSqlClient as encoreSqlMessageStorage } from "effect-encore"
 
+const encodeSessionAdmission = Schema.encodeEffect(Schema.fromJsonString(SessionAdmission))
 // ── sqlite/owned-tool-call ──────────────────────────────────────────────────
 
 export interface OwnedToolCallAddress extends ToolCallBindingKey {
@@ -137,7 +137,26 @@ export interface SessionStorageService {
   // oxlint-disable-next-line effect/noNullish -- Storage lookup uses undefined for an absent row.
   readonly getSession: (id: SessionId) => Effect.Effect<Session | undefined, StorageError>
   readonly listSessions: Effect.Effect<ReadonlyArray<Session>, StorageError>
-  readonly updateSession: (session: Session) => Effect.Effect<Session, StorageError>
+  /**
+   * Each write sets only the columns it names, so two writers that touch
+   * different fields of one session (a rename and a `/model` switch) never
+   * restore each other's old value.
+   */
+  readonly renameSession: (
+    id: SessionId,
+    name: string,
+    updatedAt: Date,
+  ) => Effect.Effect<void, StorageError>
+  readonly updateSessionSettings: (
+    id: SessionId,
+    settings: Pick<Session, "modelId" | "reasoningLevel">,
+    updatedAt: Date,
+  ) => Effect.Effect<void, StorageError>
+  readonly setActiveBranch: (
+    id: SessionId,
+    branchId: BranchId,
+    updatedAt: Date,
+  ) => Effect.Effect<void, StorageError>
   /**
    * Deletes the session and every descendant, returning the full set of
    * session ids the cascade actually removed. Callers use the returned set
@@ -203,6 +222,14 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
               parent_session_id: toSqlNull(session.parentSessionId),
               parent_branch_id: toSqlNull(session.parentBranchId),
               thread_id: stored.threadId,
+              admission_json: toSqlNull(
+                Option.getOrUndefined(
+                  yield* Option.match(Option.fromUndefinedOr(session.admission), {
+                    onNone: () => Effect.succeedNone,
+                    onSome: (admission) => Effect.asSome(encodeSessionAdmission(admission)),
+                  }),
+                ),
+              ),
               created_at: session.createdAt.getTime(),
               updated_at: session.updatedAt.getTime(),
             })}`
@@ -233,13 +260,28 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
           }),
         ).pipe(Effect.mapError(storageError("Failed to list sessions"))),
 
-        updateSession: Effect.fn("SessionStorage.updateSession")(
-          function* (session) {
+        renameSession: Effect.fn("SessionStorage.renameSession")(
+          function* (id, name, updatedAt) {
             const workspaceId = yield* CurrentWorkspaceId
-            yield* sql`UPDATE sessions SET name = ${toSqlNull(session.name)}, model_id = ${toSqlNull(session.modelId)}, reasoning_level = ${toSqlNull(session.reasoningLevel)}, active_branch_id = ${toSqlNull(session.activeBranchId)}, updated_at = ${session.updatedAt.getTime()} WHERE id = ${session.id} AND workspace_id = ${workspaceId}`
-            return session
+            yield* sql`UPDATE sessions SET name = ${name}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId}`
           },
-          Effect.mapError(storageError("Failed to update session")),
+          Effect.mapError(storageError("Failed to rename session")),
+        ),
+
+        updateSessionSettings: Effect.fn("SessionStorage.updateSessionSettings")(
+          function* (id, settings, updatedAt) {
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* sql`UPDATE sessions SET model_id = ${toSqlNull(settings.modelId)}, reasoning_level = ${toSqlNull(settings.reasoningLevel)}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId}`
+          },
+          Effect.mapError(storageError("Failed to update session settings")),
+        ),
+
+        setActiveBranch: Effect.fn("SessionStorage.setActiveBranch")(
+          function* (id, branchId, updatedAt) {
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* sql`UPDATE sessions SET active_branch_id = ${branchId}, updated_at = ${updatedAt.getTime()} WHERE id = ${id} AND workspace_id = ${workspaceId}`
+          },
+          Effect.mapError(storageError("Failed to set active branch")),
         ),
 
         deleteSession: Effect.fn("SessionStorage.deleteSession")(
@@ -904,7 +946,7 @@ export class RelationshipStorage extends Context.Service<
             SELECT ${sql.literal(SESSION_COLUMNS)}, 0
             FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
             UNION ALL
-            SELECT s.id, s.name, s.cwd, s.model_id, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.thread_id, s.created_at, s.updated_at, a.depth + 1
+            SELECT s.id, s.name, s.cwd, s.model_id, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.thread_id, s.admission_json, s.created_at, s.updated_at, a.depth + 1
             FROM sessions s
             JOIN ancestors a ON s.id = a.parent_session_id
             WHERE a.depth < 20 AND s.workspace_id = ${workspaceId}
@@ -1058,19 +1100,24 @@ const decodeRow = Schema.decodeUnknownEffect(RowToRecord)
 
 export interface InteractionStorageService {
   /** Startup recovery enumerates owners, then reads each workspace under its own scope. */
-  readonly listPendingWorkspaces: Effect.Effect<ReadonlyArray<WorkspaceId>, StorageError>
+  readonly listOpenWorkspaces: Effect.Effect<ReadonlyArray<WorkspaceId>, StorageError>
   readonly persist: (
     record: InteractionRequestRecord,
   ) => Effect.Effect<InteractionRequestRecord, StorageError>
   readonly resolve: (requestId: InteractionRequestId) => Effect.Effect<void, StorageError>
+  /**
+   * The owning call took the answer and keeps it until the call or its turn
+   * ends. The row leaves the pending slot but stays open for recovery.
+   */
+  readonly take: (requestId: InteractionRequestId) => Effect.Effect<void, StorageError>
   readonly decide: (
     requestId: InteractionRequestId,
     decisionJson: string,
   ) => Effect.Effect<void, StorageError>
-  /** List pending interactions. Pass `scope` to narrow to a specific session+branch
-   *  (used by the projection for per-session UI). Omit `scope` to scan the current workspace
-   *  (startup recovery supplies each persisted workspace id). */
-  readonly listPending: (scope?: {
+  /** List open interactions: pending ones, and taken answers a call still keeps.
+   *  Pass `scope` to narrow to a specific session+branch. Omit `scope` to scan the
+   *  current workspace (startup recovery supplies each persisted workspace id). */
+  readonly listOpen: (scope?: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
   }) => Effect.Effect<ReadonlyArray<InteractionRequestRecord>, StorageError>
@@ -1086,12 +1133,12 @@ export class InteractionStorage extends Context.Service<
       const sql = yield* SqlClient.SqlClient
 
       return InteractionStorage.of({
-        listPendingWorkspaces: Effect.gen(function* () {
+        listOpenWorkspaces: Effect.gen(function* () {
           const rows = yield* sql<{ readonly workspace_id: string }>`
               SELECT DISTINCT s.workspace_id
               FROM interaction_requests ir
               JOIN sessions s ON s.id = ir.session_id
-              WHERE ir.status = 'pending'
+              WHERE ir.status IN ('pending', 'taken')
               ORDER BY s.workspace_id
             `
           return yield* Schema.decodeEffect(Schema.Array(WorkspaceId))(
@@ -1132,6 +1179,18 @@ export class InteractionStorage extends Context.Service<
           Effect.mapError(storageError("Failed to store interaction decision")),
         ),
 
+        take: Effect.fn("InteractionStorage.take")(
+          function* (requestId) {
+            const workspaceId = yield* CurrentWorkspaceId
+            yield* sql`UPDATE interaction_requests
+              SET status = 'taken'
+              WHERE request_id = ${requestId}
+                AND status = 'pending'
+                AND session_id IN (SELECT id FROM sessions WHERE workspace_id = ${workspaceId})`
+          },
+          Effect.mapError(storageError("Failed to mark interaction answer taken")),
+        ),
+
         resolve: Effect.fn("InteractionStorage.resolve")(
           function* (requestId) {
             const workspaceId = yield* CurrentWorkspaceId
@@ -1143,7 +1202,7 @@ export class InteractionStorage extends Context.Service<
           Effect.mapError(storageError("Failed to resolve interaction request")),
         ),
 
-        listPending: Effect.fn("InteractionStorage.listPending")(
+        listOpen: Effect.fn("InteractionStorage.listOpen")(
           function* (scope?: { sessionId: SessionId; branchId: BranchId }) {
             const workspaceId = yield* CurrentWorkspaceId
             const rows = yield* Option.match(Option.fromUndefinedOr(scope), {
@@ -1151,7 +1210,7 @@ export class InteractionStorage extends Context.Service<
                 () => sql<InteractionRequestRow>`SELECT ir.request_id, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.owner_tool_call_id, ir.owner_occurrence, ir.status, ir.created_at
                 FROM interaction_requests ir
                 JOIN sessions s ON s.id = ir.session_id
-                WHERE ir.status = 'pending'
+                WHERE ir.status IN ('pending', 'taken')
                   AND s.workspace_id = ${workspaceId}
                 ORDER BY ir.created_at ASC`,
               onSome: (
@@ -1159,7 +1218,7 @@ export class InteractionStorage extends Context.Service<
               ) => sql<InteractionRequestRow>`SELECT ir.request_id, ir.session_id, ir.branch_id, ir.params_json, ir.decision_json, ir.owner_tool_call_id, ir.owner_occurrence, ir.status, ir.created_at
                 FROM interaction_requests ir
                 JOIN sessions s ON s.id = ir.session_id
-                WHERE ir.status = 'pending'
+                WHERE ir.status IN ('pending', 'taken')
                   AND ir.session_id = ${scope.sessionId}
                   AND ir.branch_id = ${scope.branchId}
                   AND s.workspace_id = ${workspaceId}
@@ -1719,20 +1778,6 @@ export const PendingToolCall = Schema.Struct({
 })
 export type PendingToolCall = typeof PendingToolCall.Type
 
-/**
- * What admitted the turn: the agent, the run's overrides, and whether anyone
- * can answer a question. The queue holds these only until the turn starts, so
- * the record keeps them for a restart that resumes the turn. Every field is
- * optional: a plain turn stores none, and a row written before this existed
- * reads as a plain turn.
- */
-const TurnAdmission = Schema.Struct({
-  agentOverride: Schema.optional(AgentName),
-  runSpec: Schema.optional(RunSpecSchema),
-  interactive: Schema.optional(Schema.Boolean),
-})
-type TurnAdmission = typeof TurnAdmission.Type
-
 export const TurnRecord = Schema.Struct({
   /** The last step whose assistant and tool messages committed. 0 before step 1. */
   step: Schema.Natural,
@@ -1740,7 +1785,6 @@ export const TurnRecord = Schema.Struct({
   continuations: Schema.Natural,
   /** Tool calls the current step issued and has not settled. */
   pendingToolCalls: Schema.Array(PendingToolCall),
-  ...TurnAdmission.fields,
 })
 export type TurnRecord = typeof TurnRecord.Type
 
@@ -1760,25 +1804,10 @@ const TurnRecordRow = Schema.Struct({
   step: Schema.Finite,
   continuations: Schema.Finite,
   pending_tool_calls_json: Schema.String,
-  admission_json: Schema.NullOr(Schema.String),
 })
 
 const decodePending = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(PendingToolCall)))
 const encodePending = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(PendingToolCall)))
-const decodeAdmission = Schema.decodeEffect(Schema.fromJsonString(TurnAdmission))
-const encodeAdmission = Schema.encodeEffect(Schema.fromJsonString(TurnAdmission))
-
-/** The admission fields a record carries; none for a plain turn. */
-const admissionOf = (record: TurnAdmission): Option.Option<TurnAdmission> => {
-  const admission = omitUndefined({
-    agentOverride: record.agentOverride,
-    runSpec: record.runSpec,
-    interactive: record.interactive,
-  })
-  if (Object.keys(admission).length === 0) return Option.none()
-  return Option.some(admission)
-}
-
 interface TurnRecordStorageService {
   /** The turn's position, or the empty record when the turn has no row yet. */
   readonly get: (key: TurnRecordKey) => Effect.Effect<TurnRecord, StorageError>
@@ -1799,7 +1828,7 @@ export class TurnRecordStorage extends Context.Service<
         return yield* Effect.gen(function* () {
           const workspaceId = yield* CurrentWorkspaceId
           const rows = yield* sql<typeof TurnRecordRow.Type>`
-            SELECT t.step, t.continuations, t.pending_tool_calls_json, t.admission_json
+            SELECT t.step, t.continuations, t.pending_tool_calls_json
             FROM turn_records t
             JOIN sessions s ON s.id = t.session_id
             WHERE t.session_id = ${key.sessionId}
@@ -1812,15 +1841,10 @@ export class TurnRecordStorage extends Context.Service<
           if (Predicate.isUndefined(row)) return emptyTurnRecord
           const decoded = yield* Schema.decodeEffect(TurnRecordRow)(row)
           const pendingToolCalls = yield* decodePending(decoded.pending_tool_calls_json)
-          let admission: TurnAdmission = {}
-          if (!Predicate.isNull(decoded.admission_json)) {
-            admission = yield* decodeAdmission(decoded.admission_json)
-          }
           return {
             step: Math.max(0, Math.trunc(decoded.step)),
             continuations: Math.max(0, Math.trunc(decoded.continuations)),
             pendingToolCalls,
-            ...admission,
           } satisfies TurnRecord
         }).pipe(Effect.mapError(storageError("Failed to read the turn record")))
       })
@@ -1831,11 +1855,6 @@ export class TurnRecordStorage extends Context.Service<
       ) {
         return yield* Effect.gen(function* () {
           const pendingJson = yield* encodePending(record.pendingToolCalls)
-          const admission = admissionOf(record)
-          let admissionJson = Option.none<string>()
-          if (Option.isSome(admission)) {
-            admissionJson = Option.some(yield* encodeAdmission(admission.value))
-          }
           const updatedAt = (yield* DateTime.nowAsDate).getTime()
           yield* sql`
             INSERT INTO turn_records (
@@ -1845,7 +1864,6 @@ export class TurnRecordStorage extends Context.Service<
               step,
               continuations,
               pending_tool_calls_json,
-              admission_json,
               updated_at
             ) VALUES (
               ${key.sessionId},
@@ -1854,14 +1872,12 @@ export class TurnRecordStorage extends Context.Service<
               ${record.step},
               ${record.continuations},
               ${pendingJson},
-              ${toSqlNull(Option.getOrUndefined(admissionJson))},
               ${updatedAt}
             )
             ON CONFLICT (session_id, branch_id, message_id) DO UPDATE SET
               step = excluded.step,
               continuations = excluded.continuations,
               pending_tool_calls_json = excluded.pending_tool_calls_json,
-              admission_json = excluded.admission_json,
               updated_at = excluded.updated_at
           `
         }).pipe(Effect.mapError(storageError("Failed to write the turn record")))
@@ -1873,17 +1889,14 @@ export class TurnRecordStorage extends Context.Service<
 }
 
 /** The record a step boundary writes once its messages have committed. */
-export const turnRecordAtStep = (
-  params: TurnAdmission & {
-    readonly step: number
-    readonly continuations: number
-    readonly pendingToolCalls: ReadonlyArray<PendingToolCall>
-  },
-): TurnRecord => ({
+export const turnRecordAtStep = (params: {
+  readonly step: number
+  readonly continuations: number
+  readonly pendingToolCalls: ReadonlyArray<PendingToolCall>
+}): TurnRecord => ({
   step: Math.max(0, Math.trunc(params.step)),
   continuations: Math.max(0, Math.trunc(params.continuations)),
   pendingToolCalls: params.pendingToolCalls,
-  ...Option.getOrElse(admissionOf(params), (): TurnAdmission => ({})),
 })
 
 // ── sqlite-storage ──────────────────────────────────────────────────────────

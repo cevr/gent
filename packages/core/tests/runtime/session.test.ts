@@ -37,10 +37,9 @@ import {
   TEST_MODEL_CONTEXT_LIMIT_TOKENS,
 } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
-import { AgentEvent, EventPublisherLive } from "../../src/domain/event"
+import { EventPublisherLive } from "../../src/domain/event"
 import {
   baseLocalLayerWithProvider,
-  type CallRecord,
   createRpcHarness,
   RecordingEventStore,
   SequenceRecorder,
@@ -248,12 +247,6 @@ const createSessionBranchWithIds = (input: {
     )
     return input
   })
-const eventTags = (calls: ReadonlyArray<CallRecord>) =>
-  calls
-    .filter((call) => call.service === "EventStore" && call.method === "append")
-    .map((call) => Schema.decodeUnknownOption(AgentEvent)(call.args))
-    .filter(Option.isSome)
-    .map(({ value }) => value._tag)
 const latestUserText = (request: { readonly prompt: Prompt.RawInput }) =>
   (() => {
     const latest = [...Prompt.make(request.prompt).content]
@@ -431,69 +424,6 @@ describe("SessionRuntime", () => {
         }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
       )
     }),
-  )
-  it.live(
-    "sendUserMessage keeps agentOverride turn-scoped and leaves the default agent selected",
-    () =>
-      Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          {
-            ...textStep("override reply"),
-            assertRequest: (request) => {
-              expect(request.model).toBe("test/override")
-            },
-          },
-          {
-            ...textStep("default reply"),
-            assertRequest: (request) => {
-              expect(request.model).toBe("test/default")
-            },
-          },
-        ])
-        const layer = makeRuntimeLayer(providerLayer)
-        yield* narrowR(
-          Effect.gen(function* () {
-            const sessionRuntime = yield* SessionRuntime
-            const messageStorage = yield* MessageStorage
-            const recorder = yield* SequenceRecorder
-            const { sessionId, branchId } = yield* createSessionBranch
-            yield* sessionRuntime.sendUserMessage({
-              sessionId,
-              branchId,
-              content: "first",
-              agentOverride: AgentName.make("memory:reflect"),
-            })
-            yield* sessionRuntime.sendUserMessage({
-              sessionId,
-              branchId,
-              content: "second",
-            })
-            const messages = yield* waitFor(
-              messageStorage.listMessages(branchId),
-              (current) => current.filter((message) => message.role === "assistant").length === 2,
-              5000,
-              "two assistant replies",
-            )
-            expect(messages.map((message) => message.role)).toEqual([
-              "user",
-              "assistant",
-              "user",
-              "assistant",
-            ])
-            const stateStream = yield* sessionRuntime.watchState({ sessionId, branchId })
-            const stateOption = yield* Stream.runHead(stateStream)
-            expect(stateOption._tag).toBe("Some")
-            if (stateOption._tag === "Some") {
-              expect(stateOption.value._tag).toBe("Idle")
-              expect(stateOption.value.agent).toBe(DEFAULT_AGENT_NAME)
-            }
-            const calls = yield* recorder.getCalls
-            expect(eventTags(calls)).not.toContain("AgentSwitched")
-            yield* controls.assertDone
-            // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-          }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer)),
-        )
-      }),
   )
   it.scopedLive("durable admission returns before model completion and retries enqueue once", () =>
     Effect.gen(function* () {
@@ -833,18 +763,18 @@ const makeLayer = (
     // default `ModelRegistry.Test()`, so later merges win the tag.
     extraLayers: [ModelRegistry.Test(models)],
   })
-const createSessionBranchSessionMetrics = (modelIdLabel = "test/priced") =>
+const createSessionBranchSessionMetrics = (agent = AgentName.make("cowork")) =>
   Effect.gen(function* () {
     const sessions = yield* SessionStorage
     const branches = yield* BranchStorage
     const sessionId = SessionId.make("metrics-session")
     const branchId = BranchId.make("metrics-branch")
     const now = dateFromMillis(1_767_225_600_000)
-    void modelIdLabel
     yield* sessions.createSession(
       new Session({
         id: sessionId,
         name: "Metrics Test",
+        admission: { agent },
         createdAt: now,
         updatedAt: now,
       }),
@@ -875,14 +805,12 @@ describe("session metrics", () => {
             branchId,
             commandId: ActorCommandId.make("turn:first"),
             content: "first",
-            agentOverride: AgentName.make("cowork"),
           })
           yield* runtime.sendUserMessage({
             sessionId,
             branchId,
             commandId: ActorCommandId.make("turn:second"),
             content: "second",
-            agentOverride: AgentName.make("cowork"),
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
           const streamEndeds = envelopes
@@ -929,13 +857,14 @@ describe("session metrics", () => {
         Effect.gen(function* () {
           const runtime = yield* SessionRuntime
           const events = yield* EventStorage
-          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics()
+          const { sessionId, branchId } = yield* createSessionBranchSessionMetrics(
+            AgentName.make("routed"),
+          )
           yield* runtime.sendUserMessage({
             sessionId,
             branchId,
             commandId: ActorCommandId.make("turn:routed"),
             content: "routed",
-            agentOverride: AgentName.make("routed"),
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
           return envelopes.map((e) => e.event).filter((e) => e._tag === "StreamEnded")
@@ -964,7 +893,6 @@ describe("session metrics", () => {
             branchId,
             commandId: ActorCommandId.make("turn:first"),
             content: "first",
-            agentOverride: AgentName.make("cowork"),
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
           return envelopes
@@ -992,7 +920,6 @@ describe("session metrics", () => {
             branchId,
             commandId: ActorCommandId.make("turn:one"),
             content: "one",
-            agentOverride: AgentName.make("cowork"),
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
           const projected = envelopes
@@ -1024,7 +951,6 @@ describe("session metrics", () => {
             branchId,
             commandId: ActorCommandId.make("turn:one"),
             content: "one",
-            agentOverride: AgentName.make("cowork"),
           })
           const first = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
           const second = (yield* getSessionSnapshot({ sessionId, branchId })).metrics
@@ -1058,7 +984,6 @@ describe("session metrics", () => {
             branchId,
             commandId: ActorCommandId.make("turn:one"),
             content: "one",
-            agentOverride: AgentName.make("cowork"),
           })
           const envelopes = yield* events.listEvents({ sessionId, branchId })
           const streamEndeds = envelopes

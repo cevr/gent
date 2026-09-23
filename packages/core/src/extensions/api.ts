@@ -130,7 +130,7 @@ export {
 } from "../domain/extension.js"
 export { isRecord, isRecordArray, omitUndefined } from "../domain/guards.js"
 // Runs a command to completion over the Effect `ChildProcessSpawner`.
-export { ProcessError, runProcess } from "../runtime/gent-platform.js"
+export { ProcessError, runProcess, writeFileAtomic } from "../runtime/gent-platform.js"
 export { headTailChars } from "../domain/message.js"
 export { maximumModelToolResultChars } from "../runtime/model-context.js"
 // ── Public API ──

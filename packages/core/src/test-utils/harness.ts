@@ -9,6 +9,7 @@ import {
   PubSub,
   Random,
   Ref,
+  Schema,
   Stream,
 } from "effect"
 import {
@@ -65,6 +66,7 @@ import {
   SessionProfileCache,
 } from "../runtime/extension-host.js"
 import { ConfigService } from "../runtime/config.js"
+import { omitUndefined } from "../domain/guards.js"
 import {
   type BranchToolFeature,
   captureCurrentToolBinding,
@@ -78,7 +80,7 @@ import { type ApprovalDecision, encodeInteractionDecision } from "../domain/inte
 import { LanguageModelLayers } from "./language-model.js"
 import { makeInProcessClient, RpcHandlersLive, StateLocation } from "../server/server.js"
 import { workspaceHeadersForCwd } from "../server/workspace-rpc.js"
-import { Branch, type Message, Session } from "../domain/message.js"
+import { Branch, type Message, Session, SessionAdmission } from "../domain/message.js"
 import type { StorageError } from "../domain/errors.js"
 import {
   AgentLoopQueueStorage,
@@ -480,17 +482,28 @@ export const collectTestContributions = <E, R>(
 
 // Mock Helpers
 
+const sameAdmission = Schema.toEquivalence(SessionAdmission)
+
 export function ensureStorageParents(input: {
   readonly sessionId: SessionId | string
   readonly branchId?: never
+  readonly admission?: SessionAdmission
 }): Effect.Effect<void, StorageError, SessionStorage>
 export function ensureStorageParents(input: {
   readonly sessionId: SessionId | string
   readonly branchId: BranchId | string
+  readonly admission?: SessionAdmission
 }): Effect.Effect<void, StorageError, SessionStorage | BranchStorage>
+/**
+ * Creates the session and branch a test writes under when they are missing.
+ * `admission` is the agent the new session runs as; a session that already
+ * exists under another admission is a test fault, since an agent is fixed at
+ * creation.
+ */
 export function ensureStorageParents(input: {
   readonly sessionId: SessionId | string
   readonly branchId?: BranchId | string
+  readonly admission?: SessionAdmission
 }): Effect.Effect<void, StorageError, SessionStorage | BranchStorage> {
   return Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage
@@ -507,7 +520,15 @@ export function ensureStorageParents(input: {
           id: sessionId,
           createdAt: now,
           updatedAt: now,
+          ...omitUndefined({ admission: input.admission }),
         }),
+      )
+    } else if (
+      Predicate.isNotUndefined(input.admission) &&
+      !sameAdmission(session.admission ?? {}, input.admission)
+    ) {
+      return yield* Effect.die(
+        new Error(`session ${sessionId} already runs under another admission`),
       )
     }
 
@@ -888,6 +909,8 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
 interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner"> {
   /** Working directory passed to the seeded session.create call. Defaults to `/tmp`. */
   readonly cwd?: string
+  /** The seeded session's agent, run spec and interactivity; its turns all run under it. */
+  readonly admission?: SessionAdmission
 }
 
 /**
@@ -904,10 +927,11 @@ interface RpcHarnessConfig extends Omit<E2ELayerConfig, "toolRunner"> {
  */
 export const createRpcHarness = (config: RpcHarnessConfig) =>
   Effect.gen(function* () {
-    const { cwd, ...layerConfig } = config
+    const { cwd, admission, ...layerConfig } = config
     const { client } = yield* createRpcClient(createE2ELayer(layerConfig))
     const { sessionId, branchId } = yield* client.session.create({
       cwd: cwd ?? "/tmp",
+      ...omitUndefined({ admission }),
     })
     return { client, sessionId, branchId }
   })

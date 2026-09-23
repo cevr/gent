@@ -6,6 +6,7 @@ import {
   Message,
   MessageMetadata,
   Session,
+  SessionAdmission,
 } from "../domain/message.js"
 import { AgentEvent, EventId } from "../domain/event.js"
 import { isReasoningEffort, ModelId } from "../domain/agent.js"
@@ -57,6 +58,7 @@ export const SessionRow = Schema.Struct({
   parent_session_id: Schema.NullOr(SessionId),
   parent_branch_id: Schema.NullOr(BranchId),
   thread_id: Schema.NullOr(SessionId),
+  admission_json: Schema.NullOr(Schema.String),
   created_at: Schema.Finite,
   updated_at: Schema.Finite,
 })
@@ -107,7 +109,7 @@ const SESSION_PARENT_BRANCH_CHECK =
   "CHECK (parent_branch_id IS NULL OR parent_session_id IS NOT NULL)"
 
 export const SESSION_COLUMNS =
-  "id, name, cwd, model_id, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, thread_id, created_at, updated_at"
+  "id, name, cwd, model_id, reasoning_level, active_branch_id, parent_session_id, parent_branch_id, thread_id, admission_json, created_at, updated_at"
 
 /** One message row per content chunk, scoped through the owning session. Interpolate with `sql.literal`. */
 export const MESSAGE_CHUNK_SELECT = `SELECT m.id, m.session_id, m.branch_id, m.kind, m.role, m.created_at, m.turn_duration_ms, m.metadata,
@@ -117,10 +119,16 @@ export const MESSAGE_CHUNK_SELECT = `SELECT m.id, m.session_id, m.branch_id, m.k
   LEFT JOIN content_chunks c ON c.id = mc.chunk_id
   JOIN sessions s ON s.id = m.session_id`
 
+const decodeAdmission = Schema.decodeEffect(Schema.fromJsonString(SessionAdmission))
+
 const rowToSession = (row: SessionRow) =>
   Effect.gen(function* () {
     const createdAt = yield* decodeDateFromMillis(row.created_at)
     const updatedAt = yield* decodeDateFromMillis(row.updated_at)
+    const admission = yield* Option.match(Option.fromNullishOr(row.admission_json), {
+      onNone: () => Effect.succeedNone,
+      onSome: (json) => Effect.asSome(decodeAdmission(json)),
+    })
     return new Session({
       id: row.id,
       name: Option.getOrUndefined(Option.fromNullishOr(row.name)),
@@ -133,6 +141,7 @@ const rowToSession = (row: SessionRow) =>
       parentSessionId: Option.getOrUndefined(Option.fromNullishOr(row.parent_session_id)),
       parentBranchId: Option.getOrUndefined(Option.fromNullishOr(row.parent_branch_id)),
       threadId: Option.getOrUndefined(Option.fromNullishOr(row.thread_id)),
+      admission: Option.getOrUndefined(admission),
       createdAt,
       updatedAt,
     })
@@ -702,15 +711,68 @@ const interactionOwnerMigration = Effect.gen(function* () {
 })
 
 /**
- * What admitted a turn, kept beside its position so a restart resumes the
- * turn under the same agent and run overrides. Nullable: a plain turn and
- * every row written before this column read as no admission.
+ * What admitted a turn, once kept beside its position. Admission is a
+ * session property now (023); the column stays so the chain and older rows
+ * are unchanged, and migration 023 reads it once.
  */
 const turnRecordAdmissionMigration = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   yield* sql
     .unsafe(`ALTER TABLE turn_records ADD COLUMN admission_json TEXT`)
     .pipe(ignoreAlreadyAppliedSqliteError("022_turn_record_admission", "ADD COLUMN admission_json"))
+})
+
+/**
+ * The agent a session's turns run as, set when the session is created.
+ * Nullable: a plain session and every row stored before this column run as
+ * the default agent. A session whose turns were admitted per turn before this
+ * existed (a delegate child's first turn, a headless `--agent` run) takes the
+ * admission its stored turn record or queued turn carried, so its later turns
+ * keep the agent, the run overrides and the withheld tools.
+ *
+ * When rows disagree, the turn that runs next wins: the one in flight, then
+ * steering, then follow-ups, each in queue order. After those, the latest
+ * stored turn wins, by `updated_at` and then by rowid.
+ */
+const sessionAdmissionMigration = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  yield* sql
+    .unsafe(`ALTER TABLE sessions ADD COLUMN admission_json TEXT`)
+    .pipe(ignoreAlreadyAppliedSqliteError("023_session_admission", "ADD COLUMN admission_json"))
+  yield* sql.unsafe(`
+    WITH admitted(session_id, admission, source, position, tiebreak) AS (
+      SELECT q.session_id, json_remove(json_extract(q.queue_json, '$.inFlight'), '$.message', '$.wake', '$.keyed'), 0, 0, 0
+      FROM agent_loop_queues q
+      WHERE json_extract(q.queue_json, '$.inFlight') IS NOT NULL
+      UNION ALL
+      SELECT q.session_id, json_remove(e.value, '$.message', '$.wake', '$.keyed'), 1, e.key, 0
+      FROM agent_loop_queues q, json_each(q.queue_json, '$.steering') e
+      UNION ALL
+      SELECT q.session_id, json_remove(e.value, '$.message', '$.wake', '$.keyed'), 2, e.key, 0
+      FROM agent_loop_queues q, json_each(q.queue_json, '$.followUp') e
+      UNION ALL
+      SELECT session_id, admission_json, 3, -updated_at, -rowid
+      FROM turn_records WHERE admission_json IS NOT NULL
+    ),
+    renamed(session_id, admission, source, position, tiebreak) AS (
+      SELECT session_id,
+        CASE WHEN json_extract(admission, '$.agentOverride') IS NULL
+          THEN json_remove(admission, '$.agentOverride')
+          ELSE json_remove(
+            json_set(admission, '$.agent', json_extract(admission, '$.agentOverride')),
+            '$.agentOverride'
+          )
+        END,
+        source, position, tiebreak
+      FROM admitted
+    )
+    UPDATE sessions SET admission_json = (
+      SELECT r.admission FROM renamed r
+      WHERE r.session_id = sessions.id AND r.admission <> '{}'
+      ORDER BY r.source, r.position, r.tiebreak LIMIT 1
+    )
+    WHERE admission_json IS NULL
+  `)
 })
 
 const turnRecordsMigration = Effect.gen(function* () {
@@ -795,6 +857,7 @@ const makeStorageMigratorLive = (
       "020_drop_message_search_index": dropMessageSearchIndexMigration,
       "021_interaction_owner": interactionOwnerMigration,
       "022_turn_record_admission": turnRecordAdmissionMigration,
+      "023_session_admission": sessionAdmissionMigration,
       ...featureMigrations,
     }),
     table: "gent_storage_migrations",

@@ -12,6 +12,8 @@ import {
   Layer,
   Logger,
   Option,
+  Predicate,
+  Record,
   Runtime,
   Schema,
   Scope,
@@ -104,8 +106,6 @@ const makeUiLayer = () => Layer.provideMerge(LinkLayer, PlatformLayer)
 const runHeadlessTurn = (
   bundle: GentClientBundle,
   state: Extract<InitialState, { readonly _tag: "headless" }>,
-  agent: Option.Option<AgentName>,
-  runSpec: Option.Option<RunSpec>,
 ) => {
   const branchId = Option.fromNullishOr(state.session.activeBranchId)
   if (Option.isNone(branchId)) {
@@ -136,14 +136,9 @@ const runHeadlessTurn = (
       ),
     )
 
-    yield* runHeadless(
-      bundle.client,
-      state.session.id,
-      resolvedBranchId,
-      state.prompt,
-      Option.getOrUndefined(agent),
-      Option.getOrUndefined(runSpec),
-    ).pipe(Effect.withSpan("Headless.run"))
+    yield* runHeadless(bundle.client, state.session.id, resolvedBranchId, state.prompt).pipe(
+      Effect.withSpan("Headless.run"),
+    )
   })
 }
 
@@ -280,6 +275,23 @@ const runGent = ({
     })
 
     if (headless) {
+      const decodedRunSpec = yield* Option.match(runSpecJson, {
+        onNone: () => Effect.succeed(Option.none<RunSpec>()),
+        onSome: (runSpec) =>
+          Schema.decodeEffect(Schema.fromJsonString(RunSpecSchema))(runSpec).pipe(
+            Effect.asSome,
+            Effect.mapError(
+              (e) => new CliStartupError({ message: `Invalid --run-spec: ${String(e)}`, cause: e }),
+            ),
+          ),
+      })
+      // The agent is a session property: the flags shape a new session only.
+      const admitsAgent = Option.isSome(requestedAgent) || Option.isSome(decodedRunSpec)
+      if (admitsAgent && Option.isSome(session)) {
+        return yield* new CliStartupError({
+          message: "--agent and --run-spec apply to a new session; drop --session to use them",
+        })
+      }
       yield* bundle.runtime.lifecycle.waitForReady
       const state = yield* resolveInitialState({
         client: bundle.client,
@@ -289,6 +301,13 @@ const runGent = ({
         headless,
         prompt,
         promptArg,
+        admission: Record.filter(
+          {
+            agent: Option.getOrUndefined(requestedAgent),
+            runSpec: Option.getOrUndefined(decodedRunSpec),
+          },
+          Predicate.isNotUndefined,
+        ),
       })
 
       const startupAuth = yield* resolveStartupAuthState({
@@ -310,18 +329,7 @@ const runGent = ({
         })
       }
 
-      const decodedRunSpec = yield* Option.match(runSpecJson, {
-        onNone: () => Effect.succeed(Option.none<RunSpec>()),
-        onSome: (runSpec) =>
-          Schema.decodeEffect(Schema.fromJsonString(RunSpecSchema))(runSpec).pipe(
-            Effect.asSome,
-            Effect.mapError(
-              (e) => new CliStartupError({ message: `Invalid --run-spec: ${String(e)}`, cause: e }),
-            ),
-          ),
-      })
-
-      yield* runHeadlessTurn(bundle, state, requestedAgent, decodedRunSpec)
+      yield* runHeadlessTurn(bundle, state)
       return
     }
 

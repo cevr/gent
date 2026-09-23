@@ -14,6 +14,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   encodeToolOutput,
   headTailChars,
+  isRuntimeUserMessage,
   Message,
   MessageRole,
   messageWithParts,
@@ -187,6 +188,12 @@ export const CONTEXT_WINDOW_MESSAGE_TYPE: RuntimeUserMessageType = "context-wind
 /** The durable line the loop writes when a branch's model changes between steps. */
 export const MODEL_CHANGE_MESSAGE_TYPE: RuntimeUserMessageType = "model-change"
 
+/** What a model-change notice announced; the next boundary compares against it. */
+const ModelChangeDetails = Schema.TaggedStruct(MODEL_CHANGE_MESSAGE_TYPE, {
+  nextModelId: ModelId,
+})
+const isModelChangeDetails = Schema.is(ModelChangeDetails)
+
 /**
  * A user-role line the model reads when the step it is about to run uses
  * another model than the branch's last settled step, so attribution of the
@@ -217,8 +224,19 @@ export const modelChangeNotice = (params: {
       }),
     ],
     createdAt: params.createdAt,
-    metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
+    metadata: {
+      customType: MODEL_CHANGE_MESSAGE_TYPE,
+      details: ModelChangeDetails.make({ nextModelId: params.nextModelId }),
+    },
   })
+
+/** The model a notice announced. Notices written before this detail existed announce nothing. */
+export const announcedModel = (message: Message): Option.Option<ModelId> => {
+  if (message.metadata?.customType !== MODEL_CHANGE_MESSAGE_TYPE) return Option.none()
+  const details = message.metadata.details
+  if (!isModelChangeDetails(details)) return Option.none()
+  return Option.some(details.nextModelId)
+}
 
 /** The history a handoff marker summarizes; every message in it stays durable and readable by id. */
 const ContextHandoffSummary = Schema.Struct({
@@ -279,12 +297,17 @@ export const windowDetails = (message: Message): Option.Option<ContextWindowDeta
   return Option.some(details)
 }
 
-/** The newest user message anchors a window: the model keeps that unit and loses what came before. */
+/**
+ * The newest user message anchors a window: the model keeps that unit and loses
+ * what came before. A line the runtime wrote inside a turn (a window marker, a
+ * model-change notice, a max-steps or continuation line, a joined steer) is part
+ * of that turn, never its start; anchoring on it would summarize the prompt away.
+ */
 export const latestUserMessageId = (messages: ReadonlyArray<Message>): Option.Option<MessageId> => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (Predicate.isNotUndefined(message) && message.role === "user") {
-      if (Option.isSome(windowDetails(message))) continue
+      if (isRuntimeUserMessage(message)) continue
       return Option.some(message.id)
     }
   }

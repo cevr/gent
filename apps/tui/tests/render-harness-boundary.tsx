@@ -10,7 +10,12 @@ import { KeyboardScopeProvider, TerminalDimensionsProvider } from "../src/termin
 import { ThemeProvider } from "../src/theme"
 import { CommandProvider } from "../src/commands"
 import { EnvProvider, WorkspaceProvider } from "../src/workspace"
-import { type ClientLog, ClientProvider, type Session } from "../src/client"
+import {
+  type ClientContextValue,
+  type ClientLog,
+  ClientProvider,
+  type Session,
+} from "../src/client"
 import {
   type Session as DomainSession,
   type GentNamespacedClient,
@@ -67,9 +72,9 @@ export const createMockClient = (overrides?: NamespaceOverrides): GentNamespaced
           lastEventId: nullValue,
           reasoningLevel: absent,
           resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+          agent: AgentName.make("cowork"),
           runtime: {
             _tag: "Idle",
-            agent: AgentName.make("cowork"),
             queue: emptyQueueSnapshot(),
           },
           metrics: {
@@ -334,3 +339,33 @@ afterEach(() => {
   if (Option.isSome(currentSetup)) destroyRenderSetup(currentSetup.value)
   currentSetup = Option.none()
 })
+
+/**
+ * The agent a session runs as reaches the UI only through its snapshot. A
+ * test that needs the agent to change lands a snapshot that names the new
+ * one: of the active session, as a refresh would, or of a test session when
+ * none is active, as opening one would.
+ */
+export const applySnapshotAgent = (client: ClientContextValue, agent: AgentName): void => {
+  const state = client.sessionState()
+  let session: Pick<Session, "sessionId" | "branchId" | "name"> &
+    Partial<Pick<Session, "modelId" | "reasoningLevel">> = {
+    sessionId: SessionId.make("session-test"),
+    branchId: BranchId.make("branch-test"),
+    name: "Test Session",
+  }
+  if (state.status === "active") session = state.session
+  client.applySessionSnapshot({
+    sessionId: session.sessionId,
+    branchId: session.branchId,
+    name: session.name,
+    modelId: session.modelId,
+    reasoningLevel: session.reasoningLevel,
+    messages: [],
+    lastEventId: Option.getOrNull(Option.none()),
+    resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+    agent,
+    runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+    metrics: { turns: 0, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+  })
+}

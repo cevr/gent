@@ -2047,6 +2047,7 @@ export const buildAnthropicModelDriver = (
 ): ModelDriverContribution => ({
   id: "anthropic",
   name: "Anthropic",
+  envCredential: "ANTHROPIC_API_KEY",
   listModels: driverListModels(catalog, "anthropic"),
   retry: {
     ...DEFAULT_RETRY_POLICY,

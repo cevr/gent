@@ -12,7 +12,6 @@ import {
   type ReasoningEffort,
   resolveAgentDriver,
   resolveAgentModel,
-  type RunSpec,
 } from "../domain/agent.js"
 import {
   compileSystemPrompt,
@@ -31,6 +30,7 @@ import {
   normalizeResponseParts,
   projectResponsePartsToMessageParts,
   responseUsage,
+  type SessionAdmission,
   stringifyOutput,
   summarizeOutput,
 } from "../domain/message.js"
@@ -44,6 +44,7 @@ import {
   ToolCallId,
 } from "../domain/ids.js"
 import {
+  Cause,
   Context,
   DateTime,
   Deferred,
@@ -60,6 +61,7 @@ import {
 } from "effect"
 import type { ExtensionHostContext, TurnProjection } from "../domain/extension.js"
 import {
+  ApprovalService,
   CurrentExtensionHostContext,
   ExtensionRegistry,
   type ExtensionRegistryService,
@@ -139,6 +141,7 @@ import {
   ModelContextCapabilityFailure,
   ModelContextLedger,
   ModelContextProjectionError,
+  announcedModel,
   modelChangeNotice,
   projectContextWindow,
   projectModelContext,
@@ -989,7 +992,7 @@ const mergeSystemPromptAddendum = (
   })
 
 /** Config `agents[name]` and `RunSpec.overrides` reshape a definition the same way. */
-export const applyAgentOverrides = (
+const applyAgentOverrides = (
   agent: AgentDefinition,
   overrides: Option.Option<AgentRunOverrides>,
 ): AgentDefinition => {
@@ -1017,6 +1020,50 @@ export const applyAgentOverrides = (
     }),
   })
 }
+
+/**
+ * The agent a session's turns run as: the agent its admission names (the
+ * default one when it names none), reshaped by config `agents[name]` and then
+ * by the admission's run overrides. The turn, the snapshot and the auth check
+ * all read it here, so a child session is its agent everywhere.
+ */
+export const sessionAgentDefinition = (params: {
+  readonly agents: ReadonlyArray<AgentDefinition>
+  readonly admission: Option.Option<SessionAdmission>
+  readonly configAgents: Option.Option<Readonly<Record<string, AgentRunOverrides>>>
+}) => {
+  const name = Option.getOrElse(
+    Option.flatMap(params.admission, (admission) => Option.fromUndefinedOr(admission.agent)),
+    () => DEFAULT_AGENT_NAME,
+  )
+  const definition = Option.fromUndefinedOr(
+    params.agents.find((entry) => entry.name === name),
+  ).pipe(
+    Option.map((agent) =>
+      applyAgentOverrides(
+        applyAgentOverrides(
+          agent,
+          Option.flatMap(params.configAgents, (agents) => Option.fromUndefinedOr(agents[name])),
+        ),
+        Option.flatMap(params.admission, (admission) =>
+          Option.fromUndefinedOr(admission.runSpec?.overrides),
+        ),
+      ),
+    ),
+  )
+  return { name, definition }
+}
+
+/** The agent a session's turns run as, by name; the default when the session names none. */
+export const sessionAgentName = Effect.fn("TurnHelpers.sessionAgentName")(function* (
+  sessionId: SessionId,
+) {
+  const session = yield* (yield* SessionStorage).getSession(sessionId)
+  return Option.getOrElse(
+    Option.fromUndefinedOr(session?.admission?.agent),
+    () => DEFAULT_AGENT_NAME,
+  )
+})
 
 interface SessionSettingsSource {
   readonly modelId?: ModelId
@@ -1049,26 +1096,36 @@ export const resolveSessionSettings = (
 })
 
 export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function* (params: {
-  agentOverride?: AgentNameType
-  runSpec?: RunSpec
   branchId: BranchId
   sessionId: SessionId
   baseSections: ReadonlyArray<PromptSection>
-  interactive?: boolean
 }) {
   const extensionRegistry = yield* ExtensionRegistry
   const messageStorage = yield* MessageStorage
   const sessionStorage = yield* SessionStorage
   const eventPublisher = yield* EventPublisher
   const hostCtx = yield* CurrentExtensionHostContext
-  const currentAgent = params.agentOverride ?? DEFAULT_AGENT_NAME
+  // The session names the agent every one of its turns runs as. A turn whose
+  // session cannot be read fails rather than run as the default agent, which
+  // would hand a child the tools and model its parent withheld.
+  const session = Option.fromUndefinedOr(yield* sessionStorage.getSession(params.sessionId))
+  const admission = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.admission))
   const rawMessages = yield* messageStorage
     .listMessages(params.branchId)
     .pipe(Effect.map((items) => [...items]))
   const resolvedExtensions = extensionRegistry.getResolved()
-  const agents = [...resolvedExtensions.agents.values()]
-  const agent = agents.find((entry) => entry.name === currentAgent)
-  if (Predicate.isUndefined(agent)) {
+  // `ConfigService` is required, so a root that omits it fails at wiring.
+  const configService = yield* ConfigService
+  // Overrides come from the session's cwd, so a multi-cwd server reads each
+  // project's own config. `get(undefined)` reads the launch-cwd config.
+  const sessionConfig = yield* configService.get(hostCtx.cwd)
+  // Config `agents[name]` reshapes the definition; the session's run overrides win.
+  const { name: currentAgent, definition } = sessionAgentDefinition({
+    agents: [...resolvedExtensions.agents.values()],
+    admission,
+    configAgents: Option.fromUndefinedOr(sessionConfig.agents),
+  })
+  if (Option.isNone(definition)) {
     yield* eventPublisher
       .publish(
         ErrorOccurred.make({
@@ -1081,16 +1138,10 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
     return undefined
   }
-  // `ConfigService` is required, so a root that omits it fails at wiring.
-  const configService = yield* ConfigService
-  // Overrides come from the session's cwd, so a multi-cwd server reads each
-  // project's own config. `get(undefined)` reads the launch-cwd config.
-  const sessionConfig = yield* configService.get(hostCtx.cwd)
-  // Config `agents[name]` reshapes the definition; the run's own overrides win.
-  const effectiveAgent = applyAgentOverrides(
-    applyAgentOverrides(agent, Option.fromUndefinedOr(sessionConfig.agents?.[agent.name])),
-    Option.fromUndefinedOr(params.runSpec?.overrides),
-  )
+  const effectiveAgent = definition.value
+  const interactive = Option.flatMap(admission, (value) =>
+    Option.fromUndefinedOr(value.interactive),
+  ).pipe(Option.getOrUndefined)
 
   // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
   // then `UserConfig.driverOverrides[agent.name]`, else default.
@@ -1124,7 +1175,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     tools: hostTools,
     modelTools: tools,
     promptSections: extensionSections,
-  } = compileToolPolicy(allTools, effectiveAgent, params, extensionProjections)
+  } = compileToolPolicy(allTools, effectiveAgent, { interactive }, extensionProjections)
   const entriesByToolId = new Map<string, ResolvedToolCapability>()
   for (const entry of allToolEntries) {
     const bound = yield* attachToolBindingIdentity(entry, resolvedExtensions.extensions)
@@ -1150,21 +1201,10 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   const systemPrompt = yield* extensionRegistry.getResolved().extensionHooks.resolveSystemPrompt({
     basePrompt: turnPrompt,
     agent: dispatchAgent,
-    interactive: params.interactive,
+    interactive,
     tools,
     hostTools,
   })
-  // A failed read runs the turn on the agent's defaults; the log says so, since
-  // the model the turn uses then differs from the one the session names.
-  const session = yield* sessionStorage.getSession(params.sessionId).pipe(
-    Effect.map(Option.fromUndefinedOr),
-    Effect.catchEager((error) =>
-      Effect.logWarning("turn.session-settings-unreadable").pipe(
-        Effect.annotateLogs({ sessionId: params.sessionId, error: String(error) }),
-        Effect.as(Option.none<SessionSettingsSource>()),
-      ),
-    ),
-  )
   // The session's own settings win over the agent definition and config.
   const settings = resolveSessionSettings(
     Option.some(dispatchAgent),
@@ -1369,10 +1409,13 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     directive,
     project,
     persist: persistDurableMessage,
+    // The summary is plain text under a small output cap. Reasoning tokens
+    // count against that cap on some providers, so the summary asks for none
+    // and never inherits the turn's effort.
     summaryModel: (maxTokens) =>
       resolveAdmittedModel({
         ...modelRequest,
-        hints: { ...modelRequest.hints, maxTokens },
+        hints: { ...modelRequest.hints, maxTokens, reasoning: "none" },
       }),
   })
 
@@ -1648,35 +1691,38 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const eventStorage = yield* EventStorage
 
     /**
-     * The model the branch's last settled step actually ran on, derived from
-     * its `StreamEnded`. The step boundary compares it with the model the
-     * next step resolves; where the settings event sits in the log does not
-     * matter. The cursor only bounds the read to the events since the last
-     * settled step it saw; the value is always re-derived from the log.
+     * The model the branch last ran on or was told it continues with: a
+     * settled step's `StreamEnded`, or a model-change notice's announced
+     * model, whichever the log holds last. The step boundary compares it with
+     * the model the next step resolves; where the settings event sits in the
+     * log does not matter. A notice counts because the model reads it on every
+     * later step: a step on the new model that breaks, or a resend after an
+     * interrupt, does not need the switch announced again. The cursor only
+     * bounds the read to the events since the last one it saw; the value is
+     * always re-derived from the log.
      */
-    const settledStepModel = ({ event }: EventEnvelope): Option.Option<ModelIdType> => {
-      if (event._tag !== "StreamEnded") return Option.none()
-      return Option.fromUndefinedOr(event.model)
+    const knownStepModel = ({ event }: EventEnvelope): Option.Option<ModelIdType> => {
+      if (event._tag === "StreamEnded") return Option.fromUndefinedOr(event.model)
+      if (event._tag === "MessageReceived") return announcedModel(event.message)
+      return Option.none()
     }
-    const lastSettledStep = yield* Ref.make<{
+    const lastKnownStep = yield* Ref.make<{
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
     }>({ cursor: 0, model: Option.none() })
-    const lastSettledModel = Effect.gen(function* () {
-      const known = yield* Ref.get(lastSettledStep)
+    const lastKnownModel = Effect.gen(function* () {
+      const known = yield* Ref.get(lastKnownStep)
       const events = yield* eventStorage.listEvents({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         afterId: known.cursor,
       })
-      const settledIndex = events.findLastIndex((envelope) =>
-        Option.isSome(settledStepModel(envelope)),
-      )
-      const current = Option.match(Option.fromUndefinedOr(events[settledIndex]), {
+      const knownIndex = events.findLastIndex((envelope) => Option.isSome(knownStepModel(envelope)))
+      const current = Option.match(Option.fromUndefinedOr(events[knownIndex]), {
         onNone: () => known,
-        onSome: (envelope) => ({ cursor: envelope.id, model: settledStepModel(envelope) }),
+        onSome: (envelope) => ({ cursor: envelope.id, model: knownStepModel(envelope) }),
       })
-      yield* Ref.set(lastSettledStep, current)
+      yield* Ref.set(lastKnownStep, current)
       return current.model
     })
     const clearProcessLocalReplayBindings = (assistantMessageId: string) =>
@@ -1774,22 +1820,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             ),
           )
       })
-
-    /**
-     * Keep what admitted the turn beside its position. A plain turn has
-     * nothing to keep and writes no row here.
-     */
-    const recordTurnAdmission = Effect.fn("AgentLoop.recordTurnAdmission")(function* (
-      state: RunningState,
-    ) {
-      const admission = omitUndefined({
-        agentOverride: state.agentOverride,
-        runSpec: state.runSpec,
-        interactive: state.interactive,
-      })
-      if (Object.keys(admission).length === 0) return
-      yield* updateTurnRecord(state.message.id, () => admission)
-    })
 
     /** The step opened: its assistant message committed, its calls are pending. */
     const openTurnStep = Effect.fn("AgentLoop.openTurnStep")(function* (params: {
@@ -2297,12 +2327,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     /** The turn context for a running turn: agent, prompt, model, and bindings. */
     const resolveForState = (state: RunningState, turnProfile: AgentLoopTurnProfile) =>
       resolveTurnContext({
-        agentOverride: state.agentOverride,
-        runSpec: state.runSpec,
         branchId: scope.branchId,
         sessionId: scope.sessionId,
         baseSections: turnProfile.turnBaseSections,
-        interactive: state.interactive,
       })
 
     const resolveReplayHostBindings = Effect.fn("AgentLoop.resolveReplayHostBindings")(
@@ -2696,13 +2723,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         resolved = { ...resolved, messages: [...resolved.messages, persisted] }
       })
       // A `/model` switch lands here, never between a tool call and its
-      // result: the settings writer only records the choice. A turn under an
-      // agent or run-spec model override picks its own model on purpose and
-      // writes no notice; the turn after it notices the change back.
-      const overridesModel =
-        Predicate.isNotUndefined(params.state.agentOverride) ||
-        Predicate.isNotUndefined(params.state.runSpec?.overrides?.modelId)
-      const previousModel = yield* lastSettledModel.pipe(
+      // result: the settings writer only records the choice.
+      const previousModel = yield* lastKnownModel.pipe(
         Effect.catch((cause) =>
           Effect.logWarning("turn.model-change-read-failed").pipe(
             Effect.annotateLogs({ error: String(cause) }),
@@ -2710,11 +2732,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           ),
         ),
       )
-      if (
-        !overridesModel &&
-        Option.isSome(previousModel) &&
-        previousModel.value !== resolved.modelId
-      ) {
+      if (Option.isSome(previousModel) && previousModel.value !== resolved.modelId) {
         yield* appendBoundaryLine(
           modelChangeNotice({
             sessionId: scope.sessionId,
@@ -2907,7 +2925,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
 
       let preserveReplayBindings = false
-      const turnAgent = state.agentOverride ?? DEFAULT_AGENT_NAME
+      // The session names its agent; each resolved step reports it again.
+      const turnAgent = yield* sessionAgentName(scope.sessionId)
 
       /**
        * Run model steps until one says stop, the branch is interrupted, or a
@@ -2933,9 +2952,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       return yield* Effect.gen(function* () {
         yield* persistMessageReceived({ message: state.message })
-        // The queue forgets the admission once it settles; the record keeps
-        // it, so a restart resumes this turn under the same agent and run.
-        yield* recordTurnAdmission(state)
         yield* scope.inbox.settle(state.message.id)
 
         const resumed = yield* resumeTurn({
@@ -2969,12 +2985,20 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
         .pipe(provideTurnContext)
         .pipe(
-          Effect.ensuring(
+          Effect.onExit((exit) =>
             Effect.gen(function* () {
-              if (!preserveReplayBindings) {
-                yield* clearProcessLocalReplayBindingsForTurn(state.message.id)
-                yield* clearProcessLocalToolResultsForTurn(state.message.id)
-              }
+              if (preserveReplayBindings) return
+              yield* clearProcessLocalReplayBindingsForTurn(state.message.id)
+              yield* clearProcessLocalToolResultsForTurn(state.message.id)
+              // A request lives no longer than its turn. A turn stopped by
+              // shutdown has not ended: it runs again after the restart.
+              if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) return
+              const approval = yield* Effect.serviceOption(ApprovalService)
+              if (Option.isSome(approval))
+                yield* approval.value.endTurn({
+                  sessionId: scope.sessionId,
+                  branchId: scope.branchId,
+                })
             }),
           ),
         )

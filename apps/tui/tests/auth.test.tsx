@@ -22,7 +22,12 @@ import {
 import { BunServices } from "@effect/platform-bun"
 import { LinkOpener, LinkOpenerError } from "../src/os"
 import { type ClientContextValue, useClient } from "../src/client"
-import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
+import {
+  applySnapshotAgent,
+  createMockClient,
+  createMockRuntime,
+  renderWithProviders,
+} from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { onMount } from "solid-js"
 
@@ -299,7 +304,7 @@ describe("Auth route", () => {
       )
       expect(pending.map((entry) => entry.agentName)).toEqual(["cowork"])
       const clientContext = yield* requireClient(ctx)
-      clientContext.selectAgent(AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       yield* Effect.promise(() => setup.renderOnce())
       expect(pending.map((entry) => entry.agentName)).toEqual(["cowork", "deepwork"])
       const secondPending = Option.fromNullishOr(pending[1])
@@ -403,7 +408,7 @@ describe("Auth route", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       const clientContext = yield* requireClient(ctx)
-      clientContext.selectAgent(AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       const reloaded = yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("openai")),
       )
@@ -522,7 +527,7 @@ describe("Auth route", () => {
       setup.mockInput.pressEnter()
       yield* Effect.promise(() => setup.renderOnce())
       const clientContext = yield* requireClient(ctx)
-      clientContext.selectAgent(AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       yield* Effect.promise(() => waitForRenderedFrame(setup, (frame) => frame.includes("openai")))
       yield* Deferred.succeed(authorizeDeferred, {
         authorizationId: "auth-old",
@@ -709,7 +714,7 @@ describe("Auth route", () => {
         waitForRenderedFrame(setup, (frame) => frame.includes("Open the URL below")),
       )
       const clientContext = yield* requireClient(ctx)
-      clientContext.selectAgent(AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       yield* Effect.yieldNow
       yield* Effect.promise(() => setup.renderOnce())
       expect(calls.at(-1)).toEqual({ agentName: "deepwork", sessionId: activeSessionId })

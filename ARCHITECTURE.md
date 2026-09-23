@@ -92,7 +92,9 @@ updates this list in the same commit.
     No `ExtensionContext` facet duplicates an Effect platform service; the
     facets are host authority only (`Session`, `Interaction`,
     `FileLock`, `State`). An atomic write has one owner, `writeFileAtomic` in
-    `packages/extensions/src/fs-tools.ts`. Host facts core cannot get from
+    `packages/core/src/runtime/gent-platform.ts`; core config, extensions
+    (through `@gent/core/extensions/api`) and the TUI (through
+    `@gent/core/host`) all call it. Host facts core cannot get from
     Effect (OS info, executable path, home directory) stay on `GentPlatform`.
     The TUI session controller owns screen state, views render and dispatch;
     app-specific UI facets live at the app edge. Receipts:
@@ -346,8 +348,6 @@ Shape:
   the durable steering queue; a running turn delivers it at its next safe step
   boundary (tool results stored, no stream open) by persisting the interjection
   as a transcript message before the next model call, so the same turn continues.
-  Items with an agent override or run spec need their own turn profile and wait
-  for the turn boundary, where steering still precedes queued follow-ups.
 - Follow-up admission from inside a held side-mutation permit (a running turn, a
   tool invocation, an extension request) only appends to the durable queue. The
   turn starts from a wake that runs after the permit is released, or at the next
@@ -472,11 +472,10 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   addresses "the orchestrator" reaches children too. Parents read child output through `read_session` on the
   returned session/branch IDs. The session is the only copy of a child's
   output; the completion message carries the outcome and a preview.
-- The TUI child view reads the delegate's registry via `DelegateRpc.Children`,
-  scoped to the parent branch. It repaints on the delegate's
-  `ExtensionStateChanged` pulses and hydrates each child's tool calls and stream
-  text from per-child event streams. Core publishes no `AgentRun*` events; the
-  view is delegate-owned state end to end.
+- The TUI agents pane lists children through `AgentsViewRpc.ListAgents` and
+  refreshes on the delegate's `ExtensionStateChanged` pulses, matched by
+  `DELEGATE_EXTENSION_ID`. Completion rows read the completion message's
+  details. Core publishes no `AgentRun*` events.
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
   root depth; a parent at the depth limit cannot spawn. Only spawn edges count:
@@ -549,8 +548,9 @@ client responds via respondInteraction RPC
 Key properties:
 
 - **No Deferred, no blocked fiber.** `WaitingForInteraction` is a cold state — no background turn work. The machine is checkpointed and survives restarts.
-- **Crash-safe resume.** `rehydrate()` rebuilds the in-memory context lookup and re-publishes the event. If the process dies before wake, `listPending()` in `InteractionStorage` provides the pending requests for recovery.
-- **An answer goes to its owner.** The owner of a request is the tool call that asked and the index of that ask in the call's run; the row stores both (`owner_tool_call_id`, `owner_occurrence`, nullable for older rows). A branch shows one request at a time. Other owners queue in the order they asked, and a call that asks the same question never takes another call's answer. An answer whose owner ends its run without taking it is settled as abandoned, so the next owner asks. A dispatching tool's inner call (a cell) resumes by its request id and is refused, not queued, while another request is open.
+- **Crash-safe resume.** `rehydrate()` rebuilds the in-memory context lookup and re-publishes the event. If the process dies before wake, `listOpen()` in `InteractionStorage` provides the open requests for recovery: pending ones, and `taken` ones whose call still keeps the answer.
+- **An answer goes to its owner.** The owner of a request is the tool call that asked and the index of that ask in the call's run; the row stores both (`owner_tool_call_id`, `owner_occurrence`, nullable for older rows). A branch shows one request at a time. Other owners queue in the order they asked, and a call that asks the same question never takes another call's answer. An answer whose owner ends its run without taking it is settled as abandoned, so the next owner asks. A dispatching tool's inner call (a cell) resumes by its request id and is refused, not queued, while another request is open. An answer matches its question as well as its owner; a changed question asks again, for a dispatching owner too. A call keeps the answers it took (row status `taken`) until it ends, so a call that asks twice takes both, also across a restart. Only a tool call the loop runs can ask natively; an ask with no call and no dispatching owner is refused.
+- **A request lives no longer than its turn.** A turn that ends without parking settles its open request and its kept answers, and publishes `InteractionResolved` with `dismissed: true` for a dialog nobody answered. A cancel sets the turn's interrupt latch even while the loop is parked, and an answer that arrived while a sibling call still ran resumes the turn as soon as it parks.
 - **Exact replay.** Resume uses the saved assistant message, call ID, input, and
   binding. Completed sibling results are reused with their structured values.
   Only unfinished calls execute again. A pending call can repeat work before its
@@ -660,7 +660,13 @@ cannot evaluate; the branch interrupt flag also stops later calls in that turn.
 Inner calls a cell admits publish the ordinary tool events with a
 `parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact
 receipts (`tool`, `outcome`, `summary`) to the saved cell result whenever a cell
-made inner calls, so the transcript keeps effects visible after reload. The TUI
+made inner calls, so the transcript keeps effects visible after reload. A
+receipt summary, like the `summary` on a terminal tool event, comes from the
+tool's optional `summary(input, output)` over wire values when the tool has one
+(read, write, edit, grep and bash do); otherwise, or when it throws, the head of
+the output. Recovery resolves each completed operation's recorded binding the
+way a resume does; a binding that no longer resolves keeps the head of the
+output. The TUI
 nests live inner calls under the cell, counts them in the compact tree, and shows
 receipts in the `cell` renderer. The headless runner indents nested calls.
 
@@ -1040,10 +1046,17 @@ Other notes:
   fails that loop, not one extension. Release runs in reverse build order when the owning
   scope closes.
 - Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
-- Agent choice is turn-scoped: `QueuedTurnItem.agentOverride` names the agent
-  for one turn and nothing else. A branch holds no agent of its own, so there
-  is no steering command, loop state field, or durable event for switching one.
-- `createSession` accepts optional `initialPrompt` + `agentOverride` for atomic create-and-send.
+- The agent is a session property. `Session.admission` (agent, run spec,
+  interactive; `sessions.admission_json`, migration 023) is fixed at creation,
+  and every turn of the session runs under it: the first, a wake, a queued
+  follow-up, a steer that starts a turn, and a recovered turn after a restart.
+  `sessionAgentDefinition` (`runtime/turn.ts`) resolves it once for the turn,
+  the snapshot (`SessionSnapshot.agent`) and the auth check. No queue item,
+  steering command, turn record or loop state carries an agent. A handoff
+  (`continueThread`) keeps its parent's admission unless it names one.
+- Model precedence: the session's `/model` setting, then the admission's run
+  overrides, then config `agents[name]`, then the agent definition.
+- `createSession` accepts optional `initialPrompt` + `admission` for atomic create-and-send.
 
 ### EventPublisher
 

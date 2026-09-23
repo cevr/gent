@@ -209,6 +209,8 @@ describe("ambient extension host context", () => {
         pendingRequestId: () => Effect.die("not used"),
         storeResolution: () => Effect.die("not used"),
         rehydrate: () => Effect.die("not used"),
+        answered: () => Effect.die("not used"),
+        endTurn: () => Effect.die("not used"),
         beginStep: () => Effect.die("not used"),
         ownCall: () => (self) => self,
       }),
@@ -945,7 +947,7 @@ describe("driver resolution", () => {
         makeExt("ext", "builtin", { modelDrivers: [first, second] }),
       ])
       const result = yield* listModelCatalog(resolved.modelDrivers)
-      expect(result.map((model) => model.id)).toEqual([
+      expect(result.models.map((model) => model.id)).toEqual([
         ModelId.make("first/one"),
         ModelId.make("second/one"),
       ])
@@ -968,7 +970,7 @@ describe("driver resolution", () => {
         makeExt("ext", "builtin", { modelDrivers: [listing, silent] }),
       ])
       const result = yield* listModelCatalog(resolved.modelDrivers)
-      expect(result.map((model) => model.id)).toEqual([ModelId.make("listing/one")])
+      expect(result.models.map((model) => model.id)).toEqual([ModelId.make("listing/one")])
     }),
   )
   it.live("listModelCatalog passes resolveAuth(driverId) into each driver's listModels", () =>
@@ -1017,7 +1019,7 @@ describe("driver resolution", () => {
       expect(Option.isNone(authBEntry.value.auth)).toBe(true)
     }),
   )
-  it.live("listModelCatalog rejects a malformed driver catalog", () =>
+  it.live("a failing driver catalog is skipped and reported; the others still list", () =>
     Effect.gen(function* () {
       const malformed = makeCatalogModel("broken/invalid")
       Reflect.set(malformed, "name", 42)
@@ -1027,19 +1029,27 @@ describe("driver resolution", () => {
         resolveModel: stubResolution,
         listModels: () => Effect.succeed([malformed]),
       }
+      // A user driver whose local server is down.
+      const offline: ModelDriverContribution = {
+        id: "offline",
+        name: "Offline",
+        resolveModel: stubResolution,
+        listModels: () => Effect.die(new Error("connect ECONNREFUSED 127.0.0.1:11434")),
+      }
+      const working: ModelDriverContribution = {
+        id: "working",
+        name: "Working",
+        resolveModel: stubResolution,
+        listModels: () => Effect.succeed([makeCatalogModel("working/one")]),
+      }
       const resolved = resolveExtensions([
-        makeExt("broken-ext", "builtin", { modelDrivers: [broken] }),
+        makeExt("drivers-ext", "builtin", { modelDrivers: [broken, offline, working] }),
       ])
-      const result = yield* listModelCatalog(resolved.modelDrivers).pipe(
-        Effect.catchEager((error) =>
-          Effect.sync(() => {
-            let message = error.message
-            if (error._tag === "DriverError") message = error.reason
-            return message
-          }),
-        ),
-      )
-      expect(result).toContain("invalid model catalog")
+      const result = yield* listModelCatalog(resolved.modelDrivers)
+      expect(result.models.map((model) => model.id)).toEqual([ModelId.make("working/one")])
+      expect(result.failures.map((failure) => failure.driverId)).toEqual(["broken", "offline"])
+      expect(result.failures[0]?.error).toContain("invalid model catalog")
+      expect(result.failures[1]?.error).toContain("ECONNREFUSED")
     }),
   )
 })
@@ -1268,12 +1278,10 @@ describe("extension activation isolation", () => {
     }),
   )
 
-  it.live("validation does NOT collide rpc(non-model) with same-name tool", () =>
+  it.live("validation fails a tool and a request that share an id in one scope", () =>
     Effect.gen(function* () {
-      // A capability that doesn't surface as a tool (no `model` audience)
-      // must NOT trigger a "tool" collision against a same-name tool.
-      // The tool list is "things audience-authorized as model"; cross-audience
-      // sharing of an id is fine.
+      // Tools and requests share one id namespace: resolution keeps one
+      // winner per id, so a passing pair would silently drop the tool.
       const result = yield* validateLoadedExtensions([
         makeLoaded("model-tool", {
           tools: [
@@ -1289,11 +1297,38 @@ describe("extension activation isolation", () => {
         makeLoaded("rpc-only", { requests: [rawRpcLeaf("shared_name")] }),
       ])
 
-      expect(result.active.map((ext) => ext.manifest.id).sort()).toEqual([
+      expect(result.active).toEqual([])
+      expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
         ExtensionId.make("model-tool"),
         ExtensionId.make("rpc-only"),
       ])
-      expect(result.failed).toEqual([])
+      expect(result.failed.every((ext) => ext.error.includes('capability "shared_name"'))).toBe(
+        true,
+      )
+    }),
+  )
+
+  it.live("validation fails one extension whose own tool and request share an id", () =>
+    Effect.gen(function* () {
+      // One extension, one id twice: resolution would keep only the request.
+      const result = yield* validateLoadedExtensions([
+        makeLoaded("self-shadow", {
+          tools: [
+            tool({
+              id: "shared_name",
+              description: "model",
+              params: Schema.Struct({}),
+              output: Schema.Void,
+              execute: () => Effect.void,
+            }),
+          ],
+          requests: [rawRpcLeaf("shared_name")],
+        }),
+      ])
+
+      expect(result.active).toEqual([])
+      expect(result.failed.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("self-shadow")])
+      expect(result.failed[0]?.error).toContain('capability "shared_name"')
     }),
   )
 
@@ -3671,60 +3706,60 @@ const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
     .filter((call) => call.service === "EventStore" && call.method === "append")
     .map((call) => Schema.decodeUnknownSync(AgentEvent)(call.args)._tag)
-describe("agent override behavior", () => {
-  it.scopedLive(
-    "sendUserMessage keeps agentOverride turn-scoped and does not switch the session agent",
-    () =>
-      Effect.gen(function* () {
-        const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-          {
-            ...textStep("override reply"),
-            assertRequest: (request) => {
-              expect(request.model).toBe("test/override")
-            },
+describe("session agent", () => {
+  it.scopedLive("every turn of a session runs as the agent it was created with", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          ...textStep("first reply"),
+          assertRequest: (request) => {
+            expect(request.model).toBe("test/override")
           },
-          {
-            ...textStep("default reply"),
-            assertRequest: (request) => {
-              expect(request.model).toBe("test/default")
-            },
+        },
+        {
+          ...textStep("second reply"),
+          assertRequest: (request) => {
+            expect(request.model).toBe("test/override")
           },
+        },
+      ])
+      yield* Effect.gen(function* () {
+        const mutations = yield* SessionMutations
+        const sessionRuntime = yield* SessionRuntime
+        const messageStorage = yield* MessageStorage
+        const recorder = yield* SequenceRecorder
+        const session = yield* mutations.createSession({
+          name: "Session Agent Test",
+          admission: { agent: AgentName.make("memory:reflect") },
+        })
+        yield* sessionRuntime.sendUserMessage({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+          content: "first",
+        })
+        yield* sessionRuntime.sendUserMessage({
+          sessionId: session.sessionId,
+          branchId: session.branchId,
+          content: "second",
+        })
+        const messages = yield* waitFor(
+          messageStorage.listMessages(session.branchId),
+          (current) => current.filter((message) => message.role === "assistant").length === 2,
+          5000,
+          "two assistant replies",
+        )
+        const calls = yield* recorder.getCalls
+        expect(messages.map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+          "user",
+          "assistant",
         ])
-        yield* Effect.gen(function* () {
-          const mutations = yield* SessionMutations
-          const sessionRuntime = yield* SessionRuntime
-          const messageStorage = yield* MessageStorage
-          const recorder = yield* SequenceRecorder
-          const session = yield* mutations.createSession({ name: "Agent Override Test" })
-          yield* sessionRuntime.sendUserMessage({
-            sessionId: session.sessionId,
-            branchId: session.branchId,
-            content: "with override",
-            agentOverride: AgentName.make("memory:reflect"),
-          })
-          yield* sessionRuntime.sendUserMessage({
-            sessionId: session.sessionId,
-            branchId: session.branchId,
-            content: "without override",
-          })
-          const messages = yield* waitFor(
-            messageStorage.listMessages(session.branchId),
-            (current) => current.filter((message) => message.role === "assistant").length === 2,
-            5000,
-            "two assistant replies",
-          )
-          const calls = yield* recorder.getCalls
-          expect(messages.map((message) => message.role)).toEqual([
-            "user",
-            "assistant",
-            "user",
-            "assistant",
-          ])
-          expect(eventTags(calls)).not.toContain("AgentSwitched")
-          yield* controls.assertDone
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
-      }).pipe(Effect.provide(BunCrypto.layer)),
+        expect(eventTags(calls)).not.toContain("AgentSwitched")
+        yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeMutationsLayer(providerLayer)), Effect.scoped)
+    }).pipe(Effect.provide(BunCrypto.layer)),
   )
   it.scopedLive("createSession skips dispatch when initialPrompt is missing or empty", () =>
     Effect.gen(function* () {
@@ -3775,6 +3810,7 @@ describe("addressed session verbs via RPC", () => {
           parentBranchId: ctx.branchId,
           historyBranchId: ctx.branchId,
           requestId: input.requestId,
+          admission: { interactive: false },
         })
         const detailBefore = yield* ctx.Session.getDetail(child.sessionId)
         const historyMessages =
@@ -3785,7 +3821,6 @@ describe("addressed session verbs via RPC", () => {
           ...child,
           content: input.prompt,
           commandId: ActorCommandId.make(`spawn:${input.requestId}`),
-          interactive: false,
         })
         // The durable history ends at the marker; a bounded read takes until it.
         const history = yield* ctx.Session.events(child).pipe(

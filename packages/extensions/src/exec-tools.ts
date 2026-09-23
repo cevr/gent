@@ -17,6 +17,7 @@ import {
   Stream,
 } from "effect"
 import { SqlClient } from "effect/unstable/sql"
+import { countOf } from "./fs-tools.js"
 import {
   type BranchId,
   defineExtension,
@@ -343,19 +344,29 @@ function shellSegments(command: string): Array<Array<string>> {
   let words: Array<string> = []
   let word = ""
   let inWord = false
+  // The word after `>` or `<` is a redirection target, not an argument.
+  let redirectTarget = false
   const endWord = () => {
-    if (inWord) words.push(word)
+    if (inWord && redirectTarget) redirectTarget = false
+    else if (inWord) words.push(word)
     word = ""
     inWord = false
   }
   const endSegment = () => {
     endWord()
+    redirectTarget = false
     if (words.length > 0) segments.push(words)
     words = []
   }
   for (let index = 0; index < command.length; index++) {
     const char = command.charAt(index)
-    if (char === "'" || char === '"') {
+    if (char === "$" && command.charAt(index + 1) === "'") {
+      // ANSI-C quoting: `$'--hard'` is the word `--hard`.
+      const quoted = readQuoted(command, index + 2, "'")
+      word += quoted.text
+      inWord = true
+      index = quoted.end
+    } else if (char === "'" || char === '"') {
       const quoted = readQuoted(command, index + 1, char)
       word += quoted.text
       inWord = true
@@ -364,10 +375,22 @@ function shellSegments(command: string): Array<Array<string>> {
       index++
       word += command.charAt(index)
       inWord = true
+    } else if (char === "&" && /[<>]/.test(command.charAt(index - 1))) {
+      // `>&1` duplicates a descriptor; the `&` is part of the redirection.
+      continue
     } else if (/[;&|\n()`]/.test(char)) {
       // Separators and subshell or substitution delimiters start a new
       // command: `$(git push -f)` and `(git push -f)` classify as commands.
       endSegment()
+    } else if (char === "<" || char === ">") {
+      // A redirection ends the word: `--hard>/dev/null` is `--hard`. A
+      // descriptor number (`2>`) belongs to the redirection.
+      if (inWord && /^\d+$/.test(word)) {
+        word = ""
+        inWord = false
+      }
+      endWord()
+      redirectTarget = true
     } else if (/\s/.test(char)) {
       endWord()
     } else {
@@ -388,40 +411,98 @@ const GIT_OPTIONS_WITH_VALUE = new Set([
   "--namespace",
   "--config-env",
   "--super-prefix",
+  "--attr-source",
 ])
 
 const FORCE_PUSH_TOKEN = /^(-[a-zA-Z]*f[a-zA-Z]*|--force.*|\+.+)$/
+const DELETE_PUSH_TOKEN = /^(-[a-zA-Z]*d[a-zA-Z]*|--delete|--mirror|--prune|:.+)$/
+
+/** Checkout options whose value is the next word. */
+const CHECKOUT_OPTIONS_WITH_VALUE = new Set(["-b", "-B", "--orphan", "--conflict"])
+
+/** The words of a checkout that are not options or option values. */
+const checkoutPositionals = (args: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const positionals: Array<string> = []
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] ?? ""
+    if (CHECKOUT_OPTIONS_WITH_VALUE.has(arg)) index++
+    else if (!arg.startsWith("-")) positionals.push(arg)
+  }
+  return positionals
+}
+
+/** A short option cluster (`-fb`) or long option that holds `short` or equals one of `long`. */
+const hasOption = (args: ReadonlyArray<string>, short: string, ...long: ReadonlyArray<string>) =>
+  args.some(
+    (arg) => long.includes(arg) || (/^-[a-zA-Z]+$/.test(arg) && arg.slice(1).includes(short)),
+  )
+
+const destructive = (reason: string) => Option.some<BashRisk>({ level: "destructive", reason })
+
+const destructiveWhen = (condition: boolean, reason: string): Option.Option<BashRisk> => {
+  if (condition) return destructive(reason)
+  return Option.none()
+}
+
+/** The risk of each git subcommand that can lose work or reach a remote. */
+const GIT_SUBCOMMAND_RISKS = {
+  push: (args: ReadonlyArray<string>): Option.Option<BashRisk> => {
+    if (args.some((arg) => FORCE_PUSH_TOKEN.test(arg))) return destructive("git push --force")
+    if (args.some((arg) => DELETE_PUSH_TOKEN.test(arg))) {
+      return destructive("git push that can delete remote refs")
+    }
+    return Option.some({ level: "external", reason: "git push" })
+  },
+  reset: (args: ReadonlyArray<string>) =>
+    destructiveWhen(args.includes("--hard"), "git reset --hard"),
+  clean: () => destructive("git clean"),
+  // A branch switch (`git checkout main`, `-b feat origin/main`) keeps work.
+  // Paths do not: a tree-ish plus a path, `--ours`/`--theirs`, a merge
+  // checkout, or a force. One bare word stays safe: the classifier cannot
+  // tell a path from a branch without the file system.
+  checkout: (args: ReadonlyArray<string>) =>
+    destructiveWhen(
+      args.includes("--") ||
+        args.includes(".") ||
+        args[0] === "-" ||
+        checkoutPositionals(args).length >= 2 ||
+        hasOption(args, "f", "--force") ||
+        hasOption(args, "p", "--patch") ||
+        hasOption(args, "m", "--merge", "--ours", "--theirs"),
+      "git checkout that discards working-tree changes",
+    ),
+  // Every form can lose work: the default and `--worktree` overwrite the
+  // working tree, and `--staged` drops staged content the tree may not hold.
+  restore: () => destructive("git restore (can discard changes)"),
+  switch: (args: ReadonlyArray<string>) =>
+    destructiveWhen(
+      hasOption(args, "f", "--force", "--discard-changes"),
+      "git switch --discard-changes",
+    ),
+  // `-D`, `-d --force` and `-f <branch> <commit>` all drop or move unmerged commits.
+  branch: (args: ReadonlyArray<string>) =>
+    destructiveWhen(
+      hasOption(args, "D") || hasOption(args, "f", "--force"),
+      "git branch -D/--force (can drop unmerged commits)",
+    ),
+  stash: (args: ReadonlyArray<string>) =>
+    destructiveWhen(args[0] === "drop" || args[0] === "clear", `git stash ${args[0] ?? ""}`),
+  add: (args: ReadonlyArray<string>) =>
+    destructiveWhen(
+      args.some((arg) => arg === "-A" || arg === "--all" || arg === "."),
+      "git add everything (stages files other agents may own)",
+    ),
+}
+
+const isRiskySubcommand = (subcommand: string): subcommand is keyof typeof GIT_SUBCOMMAND_RISKS =>
+  Object.hasOwn(GIT_SUBCOMMAND_RISKS, subcommand)
 
 const gitSubcommandRisk = (
   subcommand: string,
   args: ReadonlyArray<string>,
 ): Option.Option<BashRisk> => {
-  const destructive = (reason: string) => Option.some<BashRisk>({ level: "destructive", reason })
-  switch (subcommand) {
-    case "push":
-      if (args.some((arg) => FORCE_PUSH_TOKEN.test(arg))) return destructive("git push --force")
-      return Option.some({ level: "external", reason: "git push" })
-    case "reset":
-      if (args.includes("--hard")) return destructive("git reset --hard")
-      return Option.none()
-    case "clean":
-      return destructive("git clean")
-    case "checkout":
-      if (args.includes("--") || args[0] === "-") {
-        return destructive("git checkout -- (discard changes)")
-      }
-      return Option.none()
-    case "restore":
-      if (args.includes("--staged")) return destructive("git restore --staged")
-      return Option.none()
-    case "add":
-      if (args.some((arg) => arg === "-A" || arg === "--all" || arg === ".")) {
-        return destructive("git add everything (stages files other agents may own)")
-      }
-      return Option.none()
-    default:
-      return Option.none()
-  }
+  if (!isRiskySubcommand(subcommand)) return Option.none()
+  return GIT_SUBCOMMAND_RISKS[subcommand](args)
 }
 
 /** Every git invocation in one segment: any `git` word starts one. */
@@ -523,6 +604,12 @@ const BashResult = Schema.Struct({
   exitCode: Schema.Finite,
 })
 
+/** Lines a stream printed; a trailing newline ends a line, it does not start one. */
+const outputLineCount = (text: string): number => {
+  if (text.length === 0) return 0
+  return text.replace(/\n$/, "").split("\n").length
+}
+
 const SIGKILL_DELAY_MS = 3000
 
 type BackgroundBashJobKey = string
@@ -556,7 +643,10 @@ export function splitCdCommand(cmd: string): Option.Option<{ cwd: string; comman
   const expandable = Option.fromNullishOr(match.value[1]).pipe(
     Option.orElse(() => Option.fromNullishOr(match.value[3])),
   )
-  if (Option.exists(expandable, (word) => SHELL_EXPANSION.test(word))) return Option.none()
+  // `cd -` names the previous directory, which only bash knows.
+  if (Option.exists(expandable, (word) => word === "-" || SHELL_EXPANSION.test(word))) {
+    return Option.none()
+  }
   const cwd = Option.fromNullishOr(match.value[2]).pipe(
     Option.orElse(() => expandable),
     Option.getOrElse(() => ""),
@@ -570,10 +660,15 @@ export function splitCdCommand(cmd: string): Option.Option<{ cwd: string; comman
  * Inject --trailer on git commit commands for session traceability.
  */
 export function injectGitTrailers(cmd: string, sessionId: SessionId): string {
-  const gitCommit = /\bgit\s+commit(?=\s|$)/
-  if (!gitCommit.test(cmd)) return cmd
-  if (/--trailer/.test(cmd)) return cmd
-  return cmd.replace(gitCommit, `git commit --trailer "Session-Id: ${sessionId}"`)
+  // `git -C dir commit` and `git -c k=v commit` are commits too. Each commit
+  // gets the trailer unless its own command already passes one.
+  const gitCommit = /(\bgit(?:\s+-[cC]\s+\S+)*\s+commit)(?=\s|$)/g
+  return cmd.replace(gitCommit, (commit: string, _group: string, offset: number) => {
+    const rest = cmd.slice(offset + commit.length)
+    const ownArgs = rest.split(/&&|\|\||[;|\n]/)[0] ?? ""
+    if (/--trailer/.test(ownArgs)) return commit
+    return `${commit} --trailer "Session-Id: ${sessionId}"`
+  })
 }
 
 /**
@@ -831,6 +926,8 @@ export const BashTool = tool({
   promptSnippet: "Execute shell commands",
   params: BashParams,
   output: BashResult,
+  summary: (_input, output) =>
+    `exit ${output.exitCode} · ${countOf(outputLineCount(output.stdout) + outputLineCount(output.stderr), "line")}`,
   execute: Effect.fn("BashTool.execute")(function* (params: typeof BashParams.Type) {
     const ctx = yield* ExtensionContext
     const timeout = Math.min(

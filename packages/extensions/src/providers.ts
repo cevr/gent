@@ -272,6 +272,41 @@ export const makeCredentialCache = <C>(
 
     type Step = readonly [Exit.Exit<C, CredentialFailure>, CredentialCacheCell<C>]
 
+    // The store lock orders refreshes inside one process only. Another gent
+    // process on the same auth files can use the refresh token first; the
+    // provider then refuses this refresh (`refresh_token_reused`) for good.
+    // Its rotation is in the store by then, so a refused refresh reads the
+    // store once more and adopts a changed, fresh credential.
+    const adoptAfterRefusal = (
+      store: CredentialStore<C>,
+      attempted: C,
+      cause: Cause.Cause<CredentialFailure>,
+      now: number,
+    ): Effect.Effect<Step, CredentialFailure> => {
+      const refused = Cause.findErrorOption(cause).pipe(
+        Option.filter((error) => error._tag === "ProviderAuthError"),
+      )
+      if (Option.isNone(refused)) return Effect.failCause(cause)
+      return store
+        .update((stored): Effect.Effect<readonly [Option.Option<C>, Option.Option<C>]> => {
+          const adoptable = Option.filter(
+            stored,
+            (creds) => !store.same(creds, attempted) && freshEnoughAt(config.expiresAt(creds), now),
+          )
+          return Effect.succeed([adoptable, Option.none<C>()])
+        })
+        .pipe(
+          Effect.orElseSucceed(() => Option.none<C>()),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.failCause(cause),
+              onSome: (creds): Effect.Effect<Step> =>
+                Effect.succeed([Exit.succeed(creds), durable(creds, now, false)]),
+            }),
+          ),
+        )
+    }
+
     // Read and refresh under the store lock. The store's credential wins
     // over the held one when they differ: another writer put it there.
     const fromStore = (
@@ -282,6 +317,7 @@ export const makeCredentialCache = <C>(
       let held = Option.none<C>()
       if (current._tag !== "Empty") held = Option.some(current.creds)
       let rotated = Option.none<{ readonly creds: C; readonly replaces: C }>()
+      let refreshedFrom = Option.none<C>()
       const result = (serve: C, write: Option.Option<C>): readonly [C, Option.Option<C>] => [
         serve,
         write,
@@ -289,11 +325,8 @@ export const makeCredentialCache = <C>(
       return store
         .update((stored) =>
           Effect.gen(function* () {
-            if (Option.isNone(stored)) {
-              // Nothing to adopt: a removed sign-in is not written back.
-              if (Option.isSome(held)) return yield* signedOut
-              return result(yield* config.refresh(held), Option.none())
-            }
+            // Nothing to adopt: a removed sign-in is not written back.
+            if (Option.isNone(stored)) return yield* signedOut
             const adopted = Option.isNone(held) || !store.same(stored.value, held.value)
             let base = stored.value
             if (!adopted && Option.isSome(held)) base = held.value
@@ -301,6 +334,7 @@ export const makeCredentialCache = <C>(
             if (trustedBase && freshEnoughAt(config.expiresAt(base), now)) {
               return result(base, Option.none())
             }
+            refreshedFrom = Option.some(base)
             const refreshed = yield* config.refresh(Option.some(base))
             rotated = Option.some({ creds: refreshed, replaces: base })
             return result(refreshed, Option.some(refreshed))
@@ -314,7 +348,12 @@ export const makeCredentialCache = <C>(
             }
             // The refresh or the read failed: the cell keeps the held
             // refresh token so a retry can re-attempt with it.
-            if (Option.isNone(rotated)) return Effect.failCause(exit.cause)
+            if (Option.isNone(rotated)) {
+              return Option.match(refreshedFrom, {
+                onNone: () => Effect.failCause(exit.cause),
+                onSome: (attempted) => adoptAfterRefusal(store, attempted, exit.cause, now),
+              })
+            }
             // The refresh worked but the write failed: keep the rotation.
             return Effect.succeed([
               Exit.fail(persistFailure(exit.cause)),
@@ -863,9 +902,9 @@ type OpenAiCompatConfig = Required<Parameters<typeof OpenAiLanguageModel.layer>[
 export const readOptionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
   Config.option(Config.string(name)).pipe(Effect.orElseSucceed(() => Option.none()))
 
+/** Sampling limits every OpenAI-compatible driver sends; reasoning effort is the driver's own mapping. */
 export const buildOpenAiCompatConfig = (
   hints: Option.Option<ProviderHints>,
-  includeReasoning: boolean,
 ): OpenAiCompatConfig => {
   let config: OpenAiCompatConfig = {}
   if (Option.isSome(hints)) {
@@ -873,10 +912,6 @@ export const buildOpenAiCompatConfig = (
     if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
     const temperature = Option.fromNullishOr(hints.value.temperature)
     if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-    const reasoning = Option.fromNullishOr(hints.value.reasoning)
-    if (includeReasoning && Option.isSome(reasoning) && reasoning.value !== "none") {
-      config = { ...config, reasoning_effort: reasoning.value }
-    }
   }
   return config
 }
@@ -909,6 +944,7 @@ const makeApiKeyCompatDriver = (params: {
 }): ModelDriverContribution => ({
   id: params.id,
   name: params.name,
+  envCredential: params.envVarName,
   // The driver id is the models.dev provider id, so no mapping is needed.
   listModels: driverListModels(params.catalog, params.id),
   retry: {
@@ -932,7 +968,7 @@ const makeApiKeyCompatDriver = (params: {
         modelName,
         apiKey: apiKey.value,
         apiUrl: params.apiUrl,
-        config: buildOpenAiCompatConfig(Option.fromNullishOr(hints), false),
+        config: buildOpenAiCompatConfig(Option.fromNullishOr(hints)),
       })
     }),
   auth: {

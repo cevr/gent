@@ -1270,7 +1270,52 @@ const OpenAiReasoningEffort = Schema.Literals([
   "max",
 ])
 
-const buildOpenAiResponsesConfig = (hints: Option.Option<ProviderHints>): OpenAiResponsesConfig => {
+type OpenAiReasoningEffort = typeof OpenAiReasoningEffort.Type
+
+/**
+ * The lowest `reasoning.effort` each model family accepts, first match wins,
+ * from the model pages at developers.openai.com/api/docs/models. A request
+ * that names an effort below it fails with HTTP 400. A model none of these
+ * match (GPT-5.1 and later GPT-5 releases) accepts "none".
+ */
+const OPENAI_EFFORT_FLOORS: ReadonlyArray<{
+  readonly pattern: RegExp
+  readonly floor: OpenAiReasoningEffort
+}> = [
+  // Pro tiers accept only "high".
+  { pattern: /-pro(-|$)/, floor: "high" },
+  { pattern: /^gpt-6-astra(-|$)/, floor: "low" },
+  { pattern: /codex|^o\d/, floor: "low" },
+  // The first GPT-5 family starts at "minimal".
+  { pattern: /^gpt-5(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/, floor: "minimal" },
+]
+
+/**
+ * The effort a request sends for a gent reasoning hint. OpenAI runs a
+ * reasoning model at its default effort when the request names none, so a
+ * hint of "none" names the lowest effort the model accepts
+ * (`OPENAI_EFFORT_FLOORS`). A model without reasoning gets no effort.
+ */
+const openAiReasoningEffort = (
+  modelName: string,
+  hint: ProviderHints["reasoning"],
+): Option.Option<OpenAiReasoningEffort> => {
+  if (/^(gpt-3|gpt-4|chatgpt-)/.test(modelName) || modelName.endsWith("-chat-latest")) {
+    return Option.none()
+  }
+  return Schema.decodeUnknownOption(OpenAiReasoningEffort)(hint).pipe(
+    Option.map((effort) => {
+      if (effort !== "none") return effort
+      const floor = OPENAI_EFFORT_FLOORS.find((entry) => entry.pattern.test(modelName))
+      return floor?.floor ?? effort
+    }),
+  )
+}
+
+const buildOpenAiResponsesConfig = (
+  modelName: string,
+  hints: Option.Option<ProviderHints>,
+): OpenAiResponsesConfig => {
   let config: OpenAiResponsesConfig = { store: false }
   if (Option.isSome(hints)) {
     const cacheKey = Option.fromUndefinedOr(hints.value.cacheKey)
@@ -1279,8 +1324,8 @@ const buildOpenAiResponsesConfig = (hints: Option.Option<ProviderHints>): OpenAi
     if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
     const temperature = Option.fromNullishOr(hints.value.temperature)
     if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-    const reasoning = Schema.decodeUnknownOption(OpenAiReasoningEffort)(hints.value.reasoning)
-    if (Option.isSome(reasoning) && reasoning.value !== "none") {
+    const reasoning = openAiReasoningEffort(modelName, hints.value.reasoning)
+    if (Option.isSome(reasoning)) {
       config = {
         ...config,
         reasoning: { effort: reasoning.value, summary: "auto" },
@@ -1375,6 +1420,7 @@ export const buildOpenAIModelDriver = (
 ): ModelDriverContribution => ({
   id: "openai",
   name: "OpenAI",
+  envCredential: "OPENAI_API_KEY",
   retry: {
     ...DEFAULT_RETRY_POLICY,
     // An accepted request can still end with an error event inside the stream; OpenAI names its code.
@@ -1389,7 +1435,7 @@ export const buildOpenAIModelDriver = (
       // backend speaks the Responses shape, so the OAuth path uses
       // @effect/ai-openai instead of the chat-completions compat adapter.
       if (Option.isSome(auth) && auth.value.type === "oauth") {
-        const config = buildOpenAiResponsesConfig(Option.fromNullishOr(hints))
+        const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
         if (!isOpenAIOAuthModel(modelName)) {
           return yield* new ProviderAuthError({
             message: `Model "${modelName}" not available with ChatGPT OAuth`,
@@ -1407,10 +1453,18 @@ export const buildOpenAIModelDriver = (
       }
 
       if (Option.isSome(apiKey)) {
-        const config = buildOpenAiCompatConfig(Option.fromNullishOr(hints), true)
+        const config = buildOpenAiCompatConfig(Option.fromNullishOr(hints))
+        const reasoning = openAiReasoningEffort(modelName, hints?.reasoning)
         return makeApiKeyOpenAIResolution(
           modelName,
-          { ...config, prompt_cache_key: hints?.cacheKey },
+          {
+            ...config,
+            ...Option.match(reasoning, {
+              onNone: () => ({}),
+              onSome: (effort) => ({ reasoning_effort: effort }),
+            }),
+            prompt_cache_key: hints?.cacheKey,
+          },
           apiKey.value,
         )
       }

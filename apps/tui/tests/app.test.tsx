@@ -34,6 +34,7 @@ import {
   createMockRuntime,
   renderFrame,
   renderWithProviders,
+  applySnapshotAgent,
 } from "./render-harness-boundary"
 import { onMount } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
@@ -81,9 +82,9 @@ describe("resolveStartupAuthState", () => {
               messages: [],
               lastEventId: nullValue,
               reasoningLevel: absent,
+              agent: AgentName.make("deepwork"),
               runtime: {
                 _tag: idleTag,
-                agent: AgentName.make("deepwork"),
                 queue: emptyQueueSnapshot(),
               },
               metrics: {
@@ -135,7 +136,7 @@ describe("resolveStartupAuthState", () => {
       ])
     }),
   )
-  it.live("uses the requested agent for headless auth checks", () =>
+  it.live("a headless session checks auth for the agent it was created with", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
@@ -150,9 +151,9 @@ describe("resolveStartupAuthState", () => {
               messages: [],
               lastEventId: nullValue,
               reasoningLevel: absent,
+              agent: AgentName.make("deepwork"),
               runtime: {
                 _tag: idleTag,
-                agent: AgentName.make("cowork"),
                 queue: emptyQueueSnapshot(),
               },
               metrics: {
@@ -188,7 +189,7 @@ describe("resolveStartupAuthState", () => {
       const auth = yield* resolveStartupAuthState({
         client,
         state,
-        requestedAgent: AgentName.make("deepwork"),
+        requestedAgent: AgentName.make("cowork"),
       })
       expect(auth.initialAgent).toBeUndefined()
       expect(calls).toEqual([
@@ -196,34 +197,13 @@ describe("resolveStartupAuthState", () => {
       ])
     }),
   )
-  it.live("falls back to the default agent when a fresh session has no runtime agent yet", () =>
+  it.live("a session with no branch yet checks auth for the default agent", () =>
     Effect.gen(function* () {
       const calls: Array<{
         agentName?: AgentName
         sessionId?: string
       }> = []
       const client = createMockClient({
-        session: {
-          getSnapshot: () =>
-            Effect.succeed({
-              sessionId: SessionId.make("session-a"),
-              branchId: BranchId.make("branch-a"),
-              messages: [],
-              lastEventId: nullValue,
-              reasoningLevel: absent,
-              runtime: {
-                _tag: idleTag,
-                agent: absent,
-                queue: emptyQueueSnapshot(),
-              },
-              metrics: {
-                turns: 0,
-                durationMs: 0,
-                costUsd: 0,
-                lastInputTokens: 0,
-              },
-            }),
-        },
         auth: {
           listProviders: (input: { agentName?: AgentName; sessionId?: string }) => {
             calls.push(input)
@@ -235,7 +215,6 @@ describe("resolveStartupAuthState", () => {
         _tag: "session",
         session: {
           id: SessionId.make("session-a"),
-          activeBranchId: BranchId.make("branch-a"),
           name: "Session A",
           createdAt: dateFromMillis(0),
           updatedAt: dateFromMillis(0),
@@ -322,6 +301,48 @@ describe("resolveInitialState", () => {
         }),
       )
       expect(error.reason).toBe("headless-missing-prompt")
+    }),
+  )
+
+  it.live("a new headless session is created as the requested agent and run spec", () =>
+    Effect.gen(function* () {
+      const created: Array<{ readonly admission?: unknown }> = []
+      const session = new Session({
+        id: SessionId.make("session-test"),
+        activeBranchId: BranchId.make("branch-test"),
+        createdAt: dateFromMillis(0),
+        updatedAt: dateFromMillis(0),
+      })
+      const admission = {
+        agent: AgentName.make("deepwork"),
+        runSpec: { overrides: { maxSteps: 3 } },
+      }
+      const state = yield* resolveInitialState({
+        client: createMockClient({
+          session: {
+            create: (input: { readonly admission?: unknown }) =>
+              Effect.sync(() => {
+                created.push(input)
+                return {
+                  sessionId: session.id,
+                  branchId: BranchId.make("branch-test"),
+                  name: "Test Session",
+                }
+              }),
+            get: () => Effect.succeed(session),
+          },
+        }),
+        cwd: "/tmp",
+        session: Option.none(),
+        continue_: false,
+        headless: true,
+        prompt: Option.none(),
+        promptArg: Option.some("hi"),
+        admission,
+      })
+      expect(state).toMatchObject({ _tag: "headless", session: { id: "session-test" } })
+      // The agent is fixed on the session; the prompt's turn carries none.
+      expect(created.map((input) => input.admission)).toEqual([admission])
     }),
   )
 
@@ -543,7 +564,7 @@ describe("App auth gate", () => {
         ),
       )
       const clientContext = yield* requireClient(ctx)
-      clientContext.selectAgent(AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       const frame = yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -1153,9 +1174,9 @@ describe("App auth gate", () => {
               messages: [],
               lastEventId: nullValue,
               reasoningLevel: absent,
+              agent: "cowork",
               runtime: {
                 _tag: "Idle",
-                agent: "cowork",
                 queue: emptyQueueSnapshot(),
               },
               metrics: {
@@ -1436,7 +1457,7 @@ describe("App auth gate", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, (frame) => frame.includes("API Keys"), "auth gate"),
       )
-      clientContext.selectAgent(AgentName.make("deepwork"))
+      applySnapshotAgent(clientContext, AgentName.make("deepwork"))
       yield* Effect.promise(() =>
         waitForRenderedFrame(
           setup,
@@ -1865,7 +1886,44 @@ describe("TUI renderer surfaces", () => {
       const frame = renderFrame(setup)
       expect(frame).toContain("connection")
       expect(frame).toContain("failed extensions")
-      expect(frame).toContain("@gent/memory")
+      // The reason, not only the id: a broken config names its parse error.
+      expect(frame).toContain("@gent/memory: startup boom")
+    }),
+  )
+  it.live("ConnectionWidget names a model catalog that did not load", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <ConnectionWidget />, {
+          client: createMockClient({
+            extension: {
+              listStatus: () =>
+                Effect.succeed({
+                  _tag: "Degraded",
+                  healthyExtensions: [],
+                  degradedExtensions: [
+                    {
+                      manifest: { id: "@user/local-models" },
+                      scope: "user",
+                      sourcePath: "/home/.gent/extensions/local-models.ts",
+                      _tag: "Degraded",
+                      issues: [
+                        {
+                          _tag: "ModelCatalogFailed",
+                          driverId: "ollama",
+                          error: "connect ECONNREFUSED",
+                        },
+                      ],
+                    },
+                  ],
+                }),
+            },
+          }),
+        }),
+      )
+      const frame = renderFrame(setup)
+      expect(frame).toContain("some models unavailable")
+      expect(frame).toContain("ollama: connect ECONNREFUSED")
+      expect(frame).not.toContain("failed extensions")
     }),
   )
   it.live("ConnectionWidget surfaces failed extensions for the active session", () =>

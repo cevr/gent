@@ -1504,6 +1504,7 @@ describe("cell approvals", () => {
                         output: Schema.Boolean,
                         execute: (mark) =>
                           Ref.update(marks, (values) => [...values, mark]).pipe(Effect.as(true)),
+                        summary: (mark) => `marked ${mark}`,
                       }),
                       tool({
                         id: "approve",
@@ -1588,7 +1589,12 @@ describe("cell approvals", () => {
                 result: {
                   stateLost: true,
                   operations: [
-                    { tool: "mark", outcome: "succeeded", toolCallId: expect.any(String) },
+                    {
+                      tool: "mark",
+                      outcome: "succeeded",
+                      toolCallId: expect.any(String),
+                      summary: "marked before",
+                    },
                     { tool: "approve", outcome: "succeeded", toolCallId: expect.any(String) },
                   ],
                 },
@@ -1897,7 +1903,7 @@ it.scopedLive(
         expect((yield* operations.get({ cell: cellToolHost, operationId: "2" })).state._tag).toBe(
           "Waiting",
         )
-        expect(yield* (yield* InteractionStorage).listPending(cellToolHost)).toHaveLength(1)
+        expect(yield* (yield* InteractionStorage).listOpen(cellToolHost)).toHaveLength(1)
         if (pending._tag !== "CellToolCallSuspended") return yield* Effect.die(pending)
         const undecided = yield* recoverCellExecution(hostParams).pipe(Effect.flip)
         expect(undecided._tag).toBe("CellToolCallSuspended")
@@ -1989,6 +1995,7 @@ it.scopedLive(
                 params: Schema.Struct({ valid: Schema.Boolean }),
                 output: Schema.Finite,
                 execute: () => Effect.succeed(1),
+                summary: (input, output) => `counted ${output} (valid ${input.valid})`,
               }),
             ],
           },
@@ -2027,7 +2034,8 @@ it.scopedLive(
               toolCallId: expect.any(String),
               tool: "count",
               outcome: "succeeded",
-              summary: expect.any(String),
+              // Recovery resolves the recorded binding, so the author's summary holds.
+              summary: "counted 1 (valid true)",
             },
           ],
         })
@@ -2493,8 +2501,9 @@ describe("shipped model surface", () => {
           isFailure: false,
           result: {
             display: expect.stringContaining("shipped surface"),
-            // The saved result carries inner-operation receipts for the transcript.
-            operations: [{ tool: "read", outcome: "succeeded" }],
+            // The saved result carries inner-operation receipts for the transcript,
+            // summarized by the read tool itself.
+            operations: [{ tool: "read", outcome: "succeeded", summary: `${file} · 1 line` }],
           },
         })
         const cellToolCallId = first[0]?.id
@@ -2525,8 +2534,8 @@ describe("shipped model surface", () => {
             assistantMessageId: cellAssistant?.id,
           },
         ])
-        // A reload reads the inner call back from those events: the row's input, a
-        // bounded summary, and the bounded output its collapsed row draws.
+        // A reload reads the inner call back from those events: the row's input, the
+        // tool's own summary, and the bounded output its collapsed row draws.
         const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
         const cellInteraction = snapshot.messages
           .flatMap((message) => message.toolInteractions)
@@ -2536,7 +2545,7 @@ describe("shipped model surface", () => {
             toolName: "read",
             status: "completed",
             input: { path: file },
-            summary: expect.stringContaining("shipped surface"),
+            summary: `${file} · 1 line`,
           },
         ])
         const readOutput = yield* Schema.decodeUnknownEffect(
@@ -2650,13 +2659,9 @@ describe("shipped model surface", () => {
           extensionInputs: [...shippedPreset.extensionInputs, scopedAgent],
           branchTools: CellBranchTools,
           providerLayer,
+          admission: { agent: AgentName.make("scoped") },
         })
-        yield* client.message.send({
-          sessionId,
-          branchId,
-          content: "read the note",
-          agentOverride: AgentName.make("scoped"),
-        })
+        yield* client.message.send({ sessionId, branchId, content: "read the note" })
         const messages = yield* waitFor(
           client.message.list({ branchId }),
           (list) =>
@@ -3447,7 +3452,7 @@ it.scopedLive(
           expect(yield* Ref.get(approvalCalls)).toBe(1)
           expect(yield* Ref.get(nativeCalls)).toBe(0)
           const pending = yield* Effect.gen(function* () {
-            return yield* (yield* InteractionStorage).listPending({ sessionId, branchId })
+            return yield* (yield* InteractionStorage).listOpen({ sessionId, branchId })
           }).pipe(
             Effect.provideContext(context),
             Effect.provideService(CurrentWorkspaceId, workspaceId),
@@ -3962,7 +3967,7 @@ it.live("never leaves an approval behind when its operation link fails", () =>
         yield* storage.suspend(key, requestOperationStorage).pipe(Effect.flip),
       ),
     ).toBe(true)
-    expect(yield* interactions.listPending(cellOperationStorage)).toEqual([])
+    expect(yield* interactions.listOpen(cellOperationStorage)).toEqual([])
     expect((yield* storage.get(key)).state._tag).toBe("Started")
     yield* sql`DROP TRIGGER reject_cell_link`
     expect(
@@ -3970,9 +3975,9 @@ it.live("never leaves an approval behind when its operation link fails", () =>
         yield* storage.suspend(key, requestOperationStorage).pipe(sql.withTransaction, Effect.flip),
       ),
     ).toBe(true)
-    expect(yield* interactions.listPending(cellOperationStorage)).toEqual([])
+    expect(yield* interactions.listOpen(cellOperationStorage)).toEqual([])
     yield* storage.suspend(key, requestOperationStorage)
-    expect(yield* interactions.listPending(cellOperationStorage)).toEqual([requestOperationStorage])
+    expect(yield* interactions.listOpen(cellOperationStorage)).toEqual([requestOperationStorage])
     expect((yield* storage.get(key)).state).toEqual({ _tag: "Waiting", requestId })
   }).pipe(
     Effect.provide(SqliteStorage.TestWithSql(CellBranchTools.storage, CellBranchTools.migrations)),

@@ -1,13 +1,20 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { SessionStorage, SqliteStorage } from "../../src/storage/storage"
+import {
+  BranchStorage,
+  MessageStorage,
+  SessionStorage,
+  SqliteStorage,
+} from "../../src/storage/storage"
 import type { FeatureMigrations } from "../../src/storage/schema"
 import { BunServices } from "@effect/platform-bun"
 import { Database } from "bun:sqlite"
 import { GentPlatform } from "../../src/runtime/gent-platform"
-import { dateFromMillis, Session } from "../../src/domain/message"
-import { SessionId } from "../../src/domain/ids"
+import { Branch, dateFromMillis, Message, Session } from "../../src/domain/message"
+import { AgentName } from "../../src/domain/agent"
+import * as Prompt from "effect/unstable/ai/Prompt"
+import { BranchId, MessageId, SessionId } from "../../src/domain/ids"
 import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 import { makeTempDirectoryScoped } from "../../src/test-utils/language-model"
 
@@ -121,5 +128,137 @@ describe("message search index removal", () => {
         Effect.provide(storage),
       )
     }),
+  )
+})
+
+describe("session admission", () => {
+  it.scopedLive("a session keeps the admission it was created with", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionStorage
+      const sessionId = SessionId.make("admitted-session")
+      const admission = {
+        agent: AgentName.make("helper"),
+        interactive: false,
+        runSpec: { overrides: { deniedTools: ["delegate.start"] } },
+      }
+      yield* sessions.createSession(
+        new Session({ id: sessionId, admission, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
+      )
+      expect((yield* sessions.getSession(sessionId))?.admission).toEqual(admission)
+      const plain = SessionId.make("plain-session")
+      yield* sessions.createSession(
+        new Session({ id: plain, createdAt: FIXED_NOW, updatedAt: FIXED_NOW }),
+      )
+      expect((yield* sessions.getSession(plain))?.admission).toBeUndefined()
+    }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(kernelOnly)),
+  )
+
+  it.scopedLive(
+    "an older database gives a session the admission its stored turn or queued turn carried",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* makeTempDirectoryScoped("gent-session-admission-")
+        const dbPath = `${dir}/data.db`
+        const storage = SqliteStorage.LiveWithSql(dbPath, () => Layer.empty, {}).pipe(
+          Layer.provide(GentPlatform.Test()),
+          Layer.provide(BunServices.layer),
+        )
+        const recorded = SessionId.make("recorded-child")
+        const queued = SessionId.make("queued-child")
+        const plain = SessionId.make("plain-parent")
+        // A stored turn names `old`; the turn in flight names `new`.
+        const both = SessionId.make("recorded-and-in-flight")
+        // Two stored turns disagree; the later one names `new`.
+        const history = SessionId.make("two-records")
+        const branch = (sessionId: SessionId) => BranchId.make(`${sessionId}-branch`)
+        const turn = (sessionId: SessionId) => MessageId.make(`${sessionId}-turn`)
+        const laterTurn = MessageId.make(`${history}-z-later`)
+
+        // The shape a build before this migration left: sessions with no
+        // admission, and the per-turn admission on a turn record or a queued turn.
+        yield* Effect.gen(function* () {
+          const sessions = yield* SessionStorage
+          const branches = yield* BranchStorage
+          const messages = yield* MessageStorage
+          for (const sessionId of [recorded, queued, plain, both, history]) {
+            yield* sessions.createSession(
+              new Session({
+                id: sessionId,
+                createdAt: FIXED_NOW,
+                updatedAt: FIXED_NOW,
+              }),
+            )
+            yield* branches.createBranch(
+              new Branch({ id: branch(sessionId), sessionId, createdAt: FIXED_NOW }),
+            )
+            yield* messages.createMessage(
+              Message.cases.regular.make({
+                id: turn(sessionId),
+                sessionId,
+                branchId: branch(sessionId),
+                role: "user",
+                parts: [Prompt.textPart({ text: "task" })],
+                createdAt: FIXED_NOW,
+              }),
+            )
+          }
+          yield* messages.createMessage(
+            Message.cases.regular.make({
+              id: laterTurn,
+              sessionId: history,
+              branchId: branch(history),
+              role: "user",
+              parts: [Prompt.textPart({ text: "later task" })],
+              createdAt: FIXED_NOW,
+            }),
+          )
+          const sql = yield* SqlClient.SqlClient
+          const admissionJson =
+            '{"agentOverride":"helper","interactive":false,"runSpec":{"overrides":{"deniedTools":["delegate.start"]}}}'
+          yield* sql`INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
+            VALUES (${recorded}, ${branch(recorded)}, ${turn(recorded)}, 1, 0, '[]', ${admissionJson}, 1)`
+          const queueJson = `{"steering":[],"followUp":[],"inFlight":{"message":{"_tag":"regular","id":"q"},"agentOverride":"helper","interactive":false}}`
+          yield* sql`INSERT INTO agent_loop_queues (workspace_id, session_id, branch_id, queue_json, updated_at)
+            VALUES (${WORKSPACE}, ${queued}, ${branch(queued)}, ${queueJson}, 1)`
+          const oldJson = '{"agentOverride":"old"}'
+          const newJson = '{"agentOverride":"new"}'
+          yield* sql`INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
+            VALUES (${both}, ${branch(both)}, ${turn(both)}, 1, 0, '[]', ${oldJson}, 5)`
+          const inFlightJson = `{"steering":[],"followUp":[],"inFlight":{"message":{"_tag":"regular","id":"f"},"agentOverride":"new"}}`
+          yield* sql`INSERT INTO agent_loop_queues (workspace_id, session_id, branch_id, queue_json, updated_at)
+            VALUES (${WORKSPACE}, ${both}, ${branch(both)}, ${inFlightJson}, 1)`
+          // The earlier record sorts first by key and by rowid; only its time says it is older.
+          yield* sql`INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
+            VALUES (${history}, ${branch(history)}, ${turn(history)}, 1, 0, '[]', ${oldJson}, 1)`
+          yield* sql`INSERT INTO turn_records (session_id, branch_id, message_id, step, continuations, pending_tool_calls_json, admission_json, updated_at)
+            VALUES (${history}, ${branch(history)}, ${laterTurn}, 1, 0, '[]', ${newJson}, 2)`
+          yield* sql`UPDATE sessions SET admission_json = NULL`
+          yield* sql`DELETE FROM gent_storage_migrations WHERE name = 'session_admission'`
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer under test.
+        }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(storage))
+
+        yield* Effect.gen(function* () {
+          const sessions = yield* SessionStorage
+          expect((yield* sessions.getSession(recorded))?.admission).toEqual({
+            agent: AgentName.make("helper"),
+            interactive: false,
+            runSpec: { overrides: { deniedTools: ["delegate.start"] } },
+          })
+          expect((yield* sessions.getSession(queued))?.admission).toEqual({
+            agent: AgentName.make("helper"),
+            interactive: false,
+          })
+          expect((yield* sessions.getSession(plain))?.admission).toBeUndefined()
+          // The turn that runs next keeps its agent over an older record.
+          expect((yield* sessions.getSession(both))?.admission).toEqual({
+            agent: AgentName.make("new"),
+          })
+          // Among stored turns, the latest one wins.
+          expect((yield* sessions.getSession(history))?.admission).toEqual({
+            agent: AgentName.make("new"),
+          })
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer under test.
+        }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(storage))
+      }),
   )
 })

@@ -18,6 +18,7 @@ import {
   DriverOverridesFromConfig,
   isRetiredDriverRef,
 } from "../domain/agent.js"
+import { writeFileAtomic } from "./gent-platform.js"
 
 // ── runtime-environment ─────────────────────────────────────────────────────
 
@@ -188,19 +189,23 @@ interface ConfigServiceService {
    * Read user and project config from disk without using the launch snapshot.
    * A file that does not decode never stops the read: it is reported in
    * `failures` and read as the last user config that loaded (user) or as
-   * empty (project). A failed user file also refuses writes until it loads.
+   * empty (project).
    */
   readonly getFresh: (cwd: string) => Effect.Effect<FreshConfig>
   /** Set a per-agent driver override. Replaces any existing entry for `agent`.
-   *  Fails with `ConfigLoadError` when the user config on disk did not decode:
-   *  writing would replace the unreadable file with a default and discard
-   *  every setting in it. */
+   *  The write starts from the user config on disk now, not the launch
+   *  snapshot, so a hand edit made while gent runs survives. Fails with
+   *  `ConfigLoadError` when that file does not decode (writing would discard
+   *  every setting in it) and with `ConfigWriteError` when the file cannot be
+   *  replaced. */
   readonly setDriverOverride: (
     agent: AgentName,
     driver: DriverRef,
-  ) => Effect.Effect<void, ConfigLoadError>
+  ) => Effect.Effect<void, ConfigLoadError | ConfigWriteError>
   /** Remove a per-agent driver override. No-op when the agent has none. */
-  readonly clearDriverOverride: (agent: AgentName) => Effect.Effect<void, ConfigLoadError>
+  readonly clearDriverOverride: (
+    agent: AgentName,
+  ) => Effect.Effect<void, ConfigLoadError | ConfigWriteError>
 }
 
 /** A fresh config read: the merged config and every file that did not load. */
@@ -210,6 +215,12 @@ interface FreshConfig {
 }
 
 export class ConfigLoadError extends Schema.TaggedError<ConfigLoadError>()("ConfigLoadError", {
+  path: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** The user config could not be written; the file on disk is unchanged. */
+export class ConfigWriteError extends Schema.TaggedError<ConfigWriteError>()("ConfigWriteError", {
   path: Schema.String,
   message: Schema.String,
 }) {}
@@ -244,11 +255,6 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
       // State: user + project configs
       const userConfigRef = yield* SynchronizedRef.make<UserConfig>(new UserConfig({}))
       const projectConfigRef = yield* Ref.make<UserConfig>(new UserConfig({}))
-      // Set when the user config exists but does not decode. Reads still
-      // degrade to an empty config so a broken file cannot stop a turn, but
-      // writes refuse: `saveUserConfig` would persist that empty config over
-      // the user's file and discard every setting it holds.
-      const userLoadFailureRef = yield* Ref.make<Option.Option<ConfigLoadError>>(Option.none())
 
       const ensureUserConfig = Effect.gen(function* () {
         const exists = yield* fs.exists(userConfigPath)
@@ -305,18 +311,15 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
 
       // Load config from disk (merges project over user).
       //
-      // A project config that will not decode stays tolerant — gent never
-      // writes that file, so a broken one can only mislead, not lose data.
-      // A user config that will not decode is remembered: reads degrade,
-      // writes refuse.
+      // A config that will not decode reads as empty, so a broken file
+      // cannot stop a turn. Writes never start from this snapshot: each one
+      // reads the user file again and refuses when it does not decode.
       const loadConfig = Effect.gen(function* () {
         const projectConfig = yield* readConfigOrEmpty(projectConfigPath)
         const userConfig = yield* readConfigFresh(userConfigPath).pipe(
-          Effect.tap(() => Ref.set(userLoadFailureRef, Option.none())),
           Effect.catchEager((error) =>
             Effect.logWarning("Config load failed — writes refused until it is fixed").pipe(
               Effect.annotateLogs({ path: userConfigPath, error: error.message }),
-              Effect.andThen(Ref.set(userLoadFailureRef, Option.some(error))),
               Effect.as(new UserConfig({})),
             ),
           ),
@@ -328,16 +331,18 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
         return mergeConfigs(userConfig, projectConfig)
       }).pipe(Effect.asVoid)
 
-      // Save user config to disk
+      // Replace the user config through a staged sibling, so a reader (or a
+      // crash) never sees a half-written file.
       const saveUserConfig = (config: UserConfig) =>
         Effect.gen(function* () {
-          const configDir = path.dirname(userConfigPath)
-          yield* fs.makeDirectory(configDir, { recursive: true })
+          yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
           const json = yield* Schema.encodeEffect(UserConfigJson)(config)
-          yield* fs.writeFileString(userConfigPath, json)
+          yield* writeFileAtomic(userConfigPath, json)
         }).pipe(
-          Effect.catchEager((e) =>
-            Effect.logWarning("Config save failed").pipe(Effect.annotateLogs({ error: String(e) })),
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+          Effect.mapError(
+            (cause) => new ConfigWriteError({ path: userConfigPath, message: String(cause) }),
           ),
         )
 
@@ -358,19 +363,18 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           readonly updated: UserConfig
           readonly save: boolean
         },
-      ): Effect.Effect<boolean, ConfigLoadError> =>
-        Effect.gen(function* () {
-          // Refuse before touching the ref: a write built on the fallback
-          // empty config would overwrite a file we could not read.
-          const failure = yield* Ref.get(userLoadFailureRef)
-          if (Option.isSome(failure)) return yield* failure.value
-          return yield* SynchronizedRef.modifyEffect(userConfigRef, (current) => {
-            const decision = decide(current)
-            let save = Effect.void
-            if (decision.save) save = saveUserConfig(decision.updated)
-            return save.pipe(Effect.as([true, decision.updated]))
-          })
-        })
+      ): Effect.Effect<void, ConfigLoadError | ConfigWriteError> =>
+        // The ref orders writers; the file is the source. Deciding on the file
+        // as it is now keeps a hand edit made since the last read, and a file
+        // that does not decode fails here instead of being replaced.
+        SynchronizedRef.updateEffect(userConfigRef, () =>
+          Effect.gen(function* () {
+            const onDisk = yield* readConfigFresh(userConfigPath)
+            const decision = decide(onDisk)
+            if (decision.save) yield* saveUserConfig(decision.updated)
+            return decision.updated
+          }),
+        )
 
       const service: ConfigServiceService = {
         get: Effect.fn("ConfigService.get")(function* (cwd) {
@@ -393,15 +397,10 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           if (Result.isSuccess(userRead)) {
             user = userRead.success
             // Publish only a fully decoded snapshot; user config is shared by
-            // all profile keys. A successful read means the file parses again:
-            // lift the write refusal so a user who fixed their config can save.
+            // all profile keys.
             yield* SynchronizedRef.set(userConfigRef, user)
-            yield* Ref.set(userLoadFailureRef, Option.none())
           } else {
             failures.push(userRead.failure)
-            // The file changed under us and no longer decodes: refuse writes,
-            // or the next save would replace the user's edit with the snapshot.
-            yield* Ref.set(userLoadFailureRef, Option.some(userRead.failure))
             user = yield* SynchronizedRef.get(userConfigRef)
           }
           const projectRead = yield* Effect.result(

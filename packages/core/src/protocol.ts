@@ -44,6 +44,7 @@ export {
   OutputCut,
   ProjectedMessage,
   Session,
+  SessionAdmission,
   ToolInteraction,
   SteerCommand,
   assistantMessageIdForTurn,

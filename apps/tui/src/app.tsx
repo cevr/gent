@@ -1,4 +1,4 @@
-import { Console, Effect, Match, Option, Predicate, Schema } from "effect"
+import { Console, Effect, Match, Option, Predicate, Record, Schema } from "effect"
 import {
   type AgentName,
   type Branch,
@@ -7,6 +7,7 @@ import {
   ModelId,
   type ProviderId,
   ReasoningEffort,
+  type SessionAdmission,
   SessionId,
 } from "@gent/core/protocol"
 import type {
@@ -141,12 +142,14 @@ const toSession = (session: DomainSession): ClientSession | undefined => {
 const createAndLoadSession = (input: {
   client: Pick<GentNamespacedClient, "session">
   cwd: string
+  admission?: SessionAdmission
 }): Effect.Effect<DomainSession, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
     const requestId = yield* randomId
     const result = yield* input.client.session.create({
       cwd: input.cwd,
       requestId,
+      ...Record.filter({ admission: input.admission }, Predicate.isNotUndefined),
     })
     const session = yield* input.client.session.get({ sessionId: result.sessionId })
     const decodedSession = Option.fromNullishOr(session)
@@ -257,7 +260,7 @@ const resolveSessionRuntimeAgent = (
       sessionId: session.id,
       branchId: branchId.value,
     })
-    .pipe(Effect.map((snapshot) => Option.fromNullishOr(snapshot.runtime.agent)))
+    .pipe(Effect.map((snapshot) => Option.some(snapshot.agent)))
 }
 
 export const resolveStartupAuthState = (input: {
@@ -279,13 +282,10 @@ export const resolveStartupAuthState = (input: {
       sessionAgent = yield* resolveSessionRuntimeAgent(input.client, input.state.session)
     }
 
-    const requestedAgent = Option.fromNullishOr(input.requestedAgent)
-    let candidateAgent = requestedAgent
-    if (input.state._tag === "headless") {
-      candidateAgent = Option.orElse(requestedAgent, () => sessionAgent)
-    } else {
-      candidateAgent = Option.orElse(sessionAgent, () => requestedAgent)
-    }
+    // A session runs as its own agent; a requested one only names a session not yet made.
+    const candidateAgent = Option.orElse(sessionAgent, () =>
+      Option.fromNullishOr(input.requestedAgent),
+    )
     const authAgent = Option.getOrElse(candidateAgent, () => DEFAULT_AGENT_NAME)
 
     // Thread sessionId so per-session cwd resolves project-level
@@ -315,9 +315,11 @@ export const resolveInitialState = (input: {
   headless: boolean
   prompt: Option.Option<string>
   promptArg: Option.Option<string>
+  /** The agent and run spec a new headless session runs as, for every turn. */
+  admission?: SessionAdmission
 }): Effect.Effect<InitialState, GentClientRpcError | AppBootstrapError> =>
   Effect.gen(function* () {
-    const { client, cwd, session, continue_, headless, prompt, promptArg } = input
+    const { client, cwd, session, continue_, headless, prompt, promptArg, admission } = input
 
     if (headless) {
       if (Option.isNone(promptArg) || promptArg.value.length === 0) {
@@ -339,7 +341,7 @@ export const resolveInitialState = (input: {
         } satisfies InitialState
       }
 
-      const created = yield* createAndLoadSession({ client, cwd })
+      const created = yield* createAndLoadSession({ client, cwd, admission })
       return {
         _tag: "headless",
         session: created,
@@ -441,23 +443,38 @@ export function ConnectionWidget() {
     if (health._tag === "Degraded") return health.degradedExtensions
     return []
   }
+  // Each failed extension with its reason: an id alone ("config") does not
+  // say which file broke or why.
   const failedExtensions = () => [
-    ...degradedExtensions()
-      .filter((extension) => extension.issues.some((issue) => issue._tag === "ActivationFailed"))
-      .map((extension) => extension.manifest.id),
-    ...ext.failures().map((failure) => failure.id),
+    ...degradedExtensions().flatMap((extension) =>
+      extension.issues
+        .filter((issue) => issue._tag === "ActivationFailed")
+        .map((issue) => `${extension.manifest.id}: ${issue.error}`),
+    ),
+    ...ext.failures().map((failure) => `${failure.id}: ${failure.reason}`),
   ]
+  const unavailableCatalogs = () =>
+    degradedExtensions().flatMap((extension) =>
+      extension.issues
+        .filter((issue) => issue._tag === "ModelCatalogFailed")
+        .map((issue) => `${issue.driverId}: ${issue.error}`),
+    )
   const hasFailedExtensions = () => failedExtensions().length > 0
   // Reconnecting and the restart count belong to the status row;
   // this widget draws what the label cannot: issues and failed extensions.
+  const hasUnavailableCatalogs = () => unavailableCatalogs().length > 0
   const visible = () =>
-    Option.isSome(connectionIssue()) || Option.isSome(disconnectedReason()) || hasFailedExtensions()
+    Option.isSome(connectionIssue()) ||
+    Option.isSome(disconnectedReason()) ||
+    hasFailedExtensions() ||
+    hasUnavailableCatalogs()
   const accent = () => {
-    if (hasFailedExtensions()) return theme.warning
+    if (hasFailedExtensions() || hasUnavailableCatalogs()) return theme.warning
     return theme.error
   }
   const subtitle = () => {
     if (hasFailedExtensions()) return "extension activation degraded"
+    if (hasUnavailableCatalogs()) return "some models unavailable"
     if (Option.isSome(disconnectedReason())) return "runtime unavailable"
     return Option.getOrElse(connectionIssue(), () => "")
   }
@@ -481,10 +498,27 @@ export function ConnectionWidget() {
           </Show>
           <Show when={hasFailedExtensions()}>
             <text>
-              <span style={{ fg: theme.text }}>
-                failed extensions: {failedExtensions().join(", ")}
-              </span>
+              <span style={{ fg: theme.text }}>failed extensions:</span>
             </text>
+            <For each={failedExtensions()}>
+              {(line) => (
+                <text paddingLeft={2}>
+                  <span style={{ fg: theme.textMuted }}>{line}</span>
+                </text>
+              )}
+            </For>
+          </Show>
+          <Show when={hasUnavailableCatalogs()}>
+            <text>
+              <span style={{ fg: theme.text }}>model catalogs that did not load:</span>
+            </text>
+            <For each={unavailableCatalogs()}>
+              {(line) => (
+                <text paddingLeft={2}>
+                  <span style={{ fg: theme.textMuted }}>{line}</span>
+                </text>
+              )}
+            </For>
           </Show>
         </box>
       </box>

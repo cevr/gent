@@ -34,7 +34,6 @@ import {
   type AgentDefinition,
   type AgentEvent,
   type AgentName,
-  AgentName as AgentNameSchema,
   BranchId,
   type CreateSessionInput,
   DEFAULT_AGENT_NAME,
@@ -419,16 +418,11 @@ const isReconnectingState = (state: ConnectionState): boolean =>
  * into a streaming turn, and an idle branch takes an ordinary `sendMessage`
  * that starts a turn by itself.
  *
- * Choosing an agent here is local state, not an instruction to a running
- * turn: it picks the agent the next turn starts with, and `selectAgent`
- * does that directly.
+ * An interjection names no agent: the agent is a property of the session.
  */
 export const SteerCommandInput = Schema.TaggedUnion({
   Cancel: {},
-  Interject: {
-    message: Schema.String,
-    agent: Schema.optional(AgentNameSchema),
-  },
+  Interject: { message: Schema.String },
 })
 export type SteerCommandInput = Schema.Schema.Type<typeof SteerCommandInput>
 
@@ -588,14 +582,6 @@ interface ClientActionValue {
   sendMessage: (content: string) => void
   // Steering (fire-and-forget)
   steer: (command: SteerCommandInput) => void
-  /**
-   * Choose the agent the next turn starts with.
-   *
-   * Local to this UI: it names what a new turn begins as, so there is no
-   * running turn to instruct and nothing to send. A turn already streaming
-   * keeps the agent it started with.
-   */
-  selectAgent: (agent: AgentName) => void
 }
 
 export type ClientContextValue = ClientTransportValue &
@@ -940,7 +926,7 @@ export function ClientProvider(props: ClientProviderProps) {
     let status: AgentStatus = AgentStatus.cases.Streaming.make({})
     if (rt._tag === "Idle") status = AgentStatus.cases.Idle.make({})
     setAgentStore({
-      agent: Option.fromNullishOr(rt.agent),
+      agent: Option.some(snapshot.agent),
       status,
       cost: snapshot.metrics.costUsd,
       resolvedModelId: Option.some(snapshot.resolvedModelId),
@@ -1364,10 +1350,6 @@ export function ClientProvider(props: ClientProviderProps) {
         ),
       )
     },
-    selectAgent: (agent) => {
-      setAgentStore({ agent: Option.some(agent) })
-    },
-
     steer: (command) => {
       const currentSession = sessionOption()
       if (Option.isNone(currentSession)) return

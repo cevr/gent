@@ -43,7 +43,7 @@ export const basePromptSections = [
 
 /**
  * The one shipped agent and its persona. Its model is `DEFAULT_MODEL_ID`.
- * Children spawned from a cell inherit it, so there is no roster of role
+ * Children run as the `delegate` agent, so there is no roster of role
  * agents to pick from.
  */
 export const main = AgentDefinition.make({

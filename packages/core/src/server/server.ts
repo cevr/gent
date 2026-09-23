@@ -21,6 +21,7 @@ import {
   copyMessageToBranch,
   projectMessagesWithToolInteractions,
   Session,
+  type SessionAdmission,
   toolCallReceipts,
 } from "../domain/message.js"
 import {
@@ -113,6 +114,7 @@ import {
   Auth,
   AuthApi,
   listAuthProviders,
+  ModelCatalogRecord,
   ModelRegistry,
   ModelResolver,
   modelCatalog,
@@ -124,12 +126,12 @@ import {
   ApprovalService,
   ExtensionRegistry,
   type ExtensionRegistryService,
+  type ModelCatalogFailure,
   resolveExistingSessionBranch,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
-import { type AgentName, DEFAULT_AGENT_NAME } from "../domain/agent.js"
-import { applyAgentOverrides, resolveSessionSettings } from "../runtime/turn.js"
+import { resolveSessionSettings, sessionAgentDefinition } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { omitUndefined } from "../domain/guards.js"
@@ -261,23 +263,46 @@ export const getBranchTree = (
 
 // ── extension-health ────────────────────────────────────────────────────────
 
+/** Each failed catalog under the extension that contributes its driver. */
+const catalogFailuresByExtension = (
+  resolved: ReturnType<ExtensionRegistryService["getResolved"]>,
+  failures: ReadonlyArray<ModelCatalogFailure>,
+): ReadonlyMap<string, ReadonlyArray<ExtensionHealthIssue>> => {
+  const byExtension = new Map<string, Array<ExtensionHealthIssue>>()
+  for (const failure of failures) {
+    const driver = resolved.modelDrivers.get(failure.driverId)
+    const owner = resolved.extensions.find((extension) =>
+      (extension.contributions.modelDrivers ?? []).some((candidate) => candidate === driver),
+    )
+    if (Predicate.isUndefined(owner)) continue
+    const issues = byExtension.get(owner.manifest.id) ?? []
+    issues.push(
+      ExtensionHealthIssue.cases.ModelCatalogFailed.make({
+        driverId: failure.driverId,
+        error: failure.error,
+      }),
+    )
+    byExtension.set(owner.manifest.id, issues)
+  }
+  return byExtension
+}
+
 export const buildExtensionHealthSnapshot = (
   activationStatuses: ReadonlyArray<ExtensionStatusInfo>,
+  runtimeIssues: ReadonlyMap<string, ReadonlyArray<ExtensionHealthIssue>> = new Map(),
 ): ExtensionHealthSnapshot => {
   const extensions = activationStatuses.map((status) => {
-    let activationFailure = Option.none<ExtensionHealthIssue>()
+    const issues: Array<ExtensionHealthIssue> = []
     if (status.status === "failed") {
-      activationFailure = Option.some(
+      issues.push(
         ExtensionHealthIssue.cases.ActivationFailed.make({
           phase: status.phase,
           error: status.error,
         }),
       )
+    } else {
+      issues.push(...(runtimeIssues.get(status.manifest.id) ?? []))
     }
-    const issues = Option.match(activationFailure, {
-      onNone: (): ReadonlyArray<ExtensionHealthIssue> => [],
-      onSome: (issue) => [issue],
-    })
 
     const payload = {
       manifest: status.manifest,
@@ -320,6 +345,7 @@ type CreateBranchParams = Parameters<SessionMutationsService["createSessionBranc
 type ForkBranchParams = Parameters<SessionMutationsService["forkSessionBranch"]>[0]
 type SwitchBranchParams = Parameters<SessionMutationsService["switchActiveBranch"]>[0]
 type SessionMutationError = Effect.Error<ReturnType<SessionMutationsService["switchActiveBranch"]>>
+type RenameSessionResult = Effect.Success<ReturnType<SessionMutationsService["renameSession"]>>
 
 const createSessionResult = (operation: StoredCreateSessionResult): CreateSessionResult => ({
   sessionId: operation.sessionId,
@@ -395,14 +421,21 @@ const makeSessionMutationsService: Effect.Effect<
   const governance = yield* AgentLoopSessionGovernance
   const eventStore = yield* EventStore
 
-  const transactWithEvent = <A, E, R>(
-    mutation: Effect.Effect<A, E, R>,
-    ...events: ReadonlyArray<AgentEvent>
+  /**
+   * Run `mutation` (its reads and its writes) in one storage transaction and
+   * append the events it returns there; deliver them after commit.
+   */
+  const transactWithEvents = <A, E, R>(
+    mutation: Effect.Effect<
+      { readonly result: A; readonly events: ReadonlyArray<AgentEvent> },
+      E,
+      R
+    >,
   ): Effect.Effect<A, E | EventStoreError | StorageError, R> =>
     Effect.gen(function* () {
       const committed = yield* storageTransaction(
         Effect.gen(function* () {
-          const result = yield* mutation
+          const { result, events } = yield* mutation
           const envelopes: Array<EventEnvelope> = []
           for (const event of events) envelopes.push(yield* eventPublisher.append(event))
           return { result, envelopes }
@@ -499,7 +532,9 @@ const makeSessionMutationsService: Effect.Effect<
   /**
    * Check the parent a create names and admit the child's depth. Returns the
    * thread the new session joins: the parent's for a handoff
-   * (`continueThread`), none otherwise, so storage starts a new one.
+   * (`continueThread`), none otherwise, so storage starts a new one. A handoff
+   * also keeps the parent's admission unless the create names its own: it
+   * continues the same work as the same agent.
    */
   const admitParent = Effect.fn("SessionMutations.admitParent")(function* (
     input: CreateSessionInput,
@@ -511,7 +546,7 @@ const makeSessionMutationsService: Effect.Effect<
       if (input.continueThread === true) {
         return yield* new NotFoundError({ message: "continueThread requires parentSessionId" })
       }
-      return Option.none<SessionId>()
+      return { threadId: Option.none<SessionId>(), admission: input.admission }
     }
     const parentSessionId = input.parentSessionId
     const parent = yield* sessionStorage.getSession(parentSessionId)
@@ -535,8 +570,13 @@ const makeSessionMutationsService: Effect.Effect<
         })
       }
     }
-    if (input.continueThread !== true) return Option.none<SessionId>()
-    return Option.some(parent.threadId ?? parent.id)
+    if (input.continueThread !== true) {
+      return { threadId: Option.none<SessionId>(), admission: input.admission }
+    }
+    return {
+      threadId: Option.some(parent.threadId ?? parent.id),
+      admission: input.admission ?? parent.admission,
+    }
   })
 
   const createSession = Effect.fn("SessionMutations.createSession")(function* (
@@ -548,7 +588,7 @@ const makeSessionMutationsService: Effect.Effect<
       (result) => result,
       Effect.gen(function* () {
         const sessionId = SessionId.make(yield* platform.randomId)
-        const threadId = yield* admitParent(input)
+        const { threadId, admission } = yield* admitParent(input)
 
         const branchId = BranchId.make(yield* platform.randomId)
         const now = yield* DateTime.nowAsDate
@@ -564,6 +604,7 @@ const makeSessionMutationsService: Effect.Effect<
           parentSessionId: input.parentSessionId,
           parentBranchId: input.parentBranchId,
           threadId: Option.getOrUndefined(threadId),
+          admission,
           createdAt: now,
           updatedAt: now,
         })
@@ -736,12 +777,10 @@ const makeSessionMutationsService: Effect.Effect<
             message: `Branch "${input.toBranchId}" not found in current session`,
           })
         }
-        yield* sessionStorage.updateSession(
-          new Session({
-            ...session,
-            activeBranchId: input.toBranchId,
-            updatedAt: yield* DateTime.nowAsDate,
-          }),
+        yield* sessionStorage.setActiveBranch(
+          input.sessionId,
+          input.toBranchId,
+          yield* DateTime.nowAsDate,
         )
         const envelope = yield* eventPublisher.append(
           BranchSwitched.make({
@@ -803,20 +842,20 @@ const makeSessionMutationsService: Effect.Effect<
     renameSession: Effect.fn("SessionMutations.renameSession")(function* (input) {
       const trimmed = input.name.trim().slice(0, 80)
       if (trimmed.length === 0) return { renamed: false }
-      const session = yield* sessionStorage.getSession(input.sessionId)
-      if (Predicate.isUndefined(session)) return { renamed: false }
-      if (session.name === trimmed) return { renamed: false }
-      yield* transactWithEvent(
-        sessionStorage.updateSession(
-          new Session({
-            ...session,
-            name: trimmed,
-            updatedAt: yield* DateTime.nowAsDate,
-          }),
-        ),
-        SessionNameUpdated.make({ sessionId: input.sessionId, name: trimmed }),
+      const unchanged: RenameSessionResult = { renamed: false }
+      return yield* transactWithEvents(
+        Effect.gen(function* () {
+          const session = yield* sessionStorage.getSession(input.sessionId)
+          if (Predicate.isUndefined(session) || session.name === trimmed) {
+            return { result: unchanged, events: [] }
+          }
+          yield* sessionStorage.renameSession(input.sessionId, trimmed, yield* DateTime.nowAsDate)
+          return {
+            result: { renamed: true, name: trimmed },
+            events: [SessionNameUpdated.make({ sessionId: input.sessionId, name: trimmed })],
+          }
+        }),
       )
-      return { renamed: true, name: trimmed }
     }),
 
     deleteSession: Effect.fn("SessionMutations.deleteSession")(function* (sessionId) {
@@ -824,19 +863,26 @@ const makeSessionMutationsService: Effect.Effect<
     }),
 
     updateSettings: Effect.fn("SessionMutations.updateSettings")(function* (input) {
-      const session = yield* sessionStorage.getSession(input.sessionId)
-      if (Predicate.isUndefined(session)) {
-        return yield* new NotFoundError({ message: "Session not found" })
-      }
       const settings = { modelId: input.modelId, reasoningLevel: input.reasoningLevel }
       // The model-change notice is a branch write; the loop owns it and
       // writes it at the next step boundary (turn.ts `noticeModelChange`).
-      const updated = new Session({ ...session, ...settings, updatedAt: yield* DateTime.nowAsDate })
-      yield* transactWithEvent(
-        sessionStorage.updateSession(updated),
-        SessionSettingsUpdated.make({ sessionId: input.sessionId, ...settings }),
+      return yield* transactWithEvents(
+        Effect.gen(function* () {
+          const session = yield* sessionStorage.getSession(input.sessionId)
+          if (Predicate.isUndefined(session)) {
+            return yield* new NotFoundError({ message: "Session not found" })
+          }
+          yield* sessionStorage.updateSessionSettings(
+            input.sessionId,
+            settings,
+            yield* DateTime.nowAsDate,
+          )
+          return {
+            result: settings,
+            events: [SessionSettingsUpdated.make({ sessionId: input.sessionId, ...settings })],
+          }
+        }),
       )
-      return settings
     }),
   } satisfies SessionMutationsService
 })
@@ -914,15 +960,12 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
   const registry = yield* resolveRegistryForCwd(Option.fromUndefinedOr(session.cwd))
   const configService = yield* ConfigService
   const config = yield* configService.get(session.cwd)
-  const agent = Option.fromUndefinedOr(
-    [...registry.getResolved().agents.values()].find((entry) => entry.name === runtime.agent),
-  )
-  const settings = resolveSessionSettings(
-    Option.map(agent, (definition) =>
-      applyAgentOverrides(definition, Option.fromUndefinedOr(config.agents?.[definition.name])),
-    ),
-    session,
-  )
+  const agent = sessionAgentDefinition({
+    agents: [...registry.getResolved().agents.values()],
+    admission: Option.fromUndefinedOr(session.admission),
+    configAgents: Option.fromUndefinedOr(config.agents),
+  })
+  const settings = resolveSessionSettings(agent.definition, session)
 
   // Extension state is no longer hydrated through the session snapshot —
   // clients call the extension's typed `client.extension.request(...)` on
@@ -937,6 +980,7 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     lastEventId: Option.getOrNull(Option.fromUndefinedOr(snapshotState.lastEventId)),
     modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
+    agent: agent.name,
     resolvedModelId: settings.modelId,
     resolvedReasoningLevel: Option.getOrUndefined(settings.reasoningLevel),
     runtime,
@@ -1053,6 +1097,7 @@ const RpcHandlers = GentRpcs.toLayer(
     const configService = yield* ConfigService
     const sessionRuntime = yield* SessionRuntime
     const authStore = yield* Auth
+    const catalogRecord = yield* ModelCatalogRecord
     const providerAuth = yield* ProviderAuth
     const extensionRegistry = yield* ExtensionRegistry
     const sessionStorage = yield* SessionStorage
@@ -1078,8 +1123,6 @@ const RpcHandlers = GentRpcs.toLayer(
             sessionId: input.sessionId,
             branchId: input.branchId,
             content: input.content,
-            agentOverride: input.agentOverride,
-            runSpec: input.runSpec,
             requestId: input.requestId,
           })
           .pipe(
@@ -1240,10 +1283,12 @@ const RpcHandlers = GentRpcs.toLayer(
       "model.list": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
           const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
-          return yield* modelCatalog().pipe(
+          const catalog = yield* modelCatalog().pipe(
             Effect.provideService(ExtensionRegistry, registry),
             Effect.provideService(Auth, authStore),
+            Effect.provideService(ModelCatalogRecord, catalogRecord),
           )
+          return catalog.models
         }),
 
       "driver.list": ({ sessionId }: OptionalSessionPayload) =>
@@ -1307,20 +1352,21 @@ const RpcHandlers = GentRpcs.toLayer(
             ),
           )
           const agents = [...registry.getResolved().agents.values()]
-          const modelFor = (name: AgentName) =>
+          const modelFor = (admission: Option.Option<SessionAdmission>) =>
             resolveSessionSettings(
-              Option.map(
-                Option.fromUndefinedOr(agents.find((entry) => entry.name === name)),
-                (definition) =>
-                  applyAgentOverrides(
-                    definition,
-                    Option.fromUndefinedOr(config.agents?.[definition.name]),
-                  ),
-              ),
+              sessionAgentDefinition({
+                agents,
+                admission,
+                configAgents: Option.fromUndefinedOr(config.agents),
+              }).definition,
               Option.getOrElse(session, () => ({})),
             ).modelId
-          const modelIds = [modelFor(DEFAULT_AGENT_NAME)]
-          if (!Predicate.isUndefined(agentName)) modelIds.push(modelFor(agentName))
+          // The session's own agent, then an agent the caller asks about.
+          const modelIds = [
+            modelFor(Option.flatMap(session, (found) => Option.fromUndefinedOr(found.admission))),
+          ]
+          if (!Predicate.isUndefined(agentName))
+            modelIds.push(modelFor(Option.some({ agent: agentName })))
           return yield* listAuthProviders(modelIds).pipe(
             Effect.provideService(ExtensionRegistry, registry),
             Effect.provideService(Auth, authStore),
@@ -1358,8 +1404,24 @@ const RpcHandlers = GentRpcs.toLayer(
       "extension.listStatus": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
           const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
-          const activationStatuses = registry.getResolved().extensionStatuses
-          return buildExtensionHealthSnapshot(activationStatuses)
+          const resolved = registry.getResolved()
+          // Health reads what the last catalog run recorded. Only a profile
+          // whose catalog never ran is listed here, once.
+          const recorded = yield* catalogRecord.lastFailures(resolved)
+          const failures = yield* Option.match(recorded, {
+            onSome: Effect.succeed,
+            onNone: () =>
+              modelCatalog().pipe(
+                Effect.provideService(ExtensionRegistry, registry),
+                Effect.provideService(Auth, authStore),
+                Effect.provideService(ModelCatalogRecord, catalogRecord),
+                Effect.map((catalog) => catalog.failures),
+              ),
+          })
+          return buildExtensionHealthSnapshot(
+            resolved.extensionStatuses,
+            catalogFailuresByExtension(resolved, failures),
+          )
         }),
 
       "extension.request": ({
@@ -1635,9 +1697,13 @@ export const createDependencies = (config: DependenciesConfig) => {
     ),
     Layer.merge(storageLive, Layer.merge(sessionProfileCacheLive, platformServicesLive)),
   )
+  const modelCatalogRecordLive = ModelCatalogRecord.Live
   const modelRegistryLive =
     config.overrides?.modelRegistryLayer ??
-    Layer.provide(ModelRegistry.Live, Layer.mergeAll(extensionRegistryLive, authLive))
+    Layer.provide(
+      ModelRegistry.Live,
+      Layer.mergeAll(extensionRegistryLive, authLive, modelCatalogRecordLive),
+    )
   const authDeps = Layer.mergeAll(authLive, extensionRegistryLive)
   const providerAuthLive = Layer.provide(ProviderAuth.Live, authDeps)
   const fileLockServiceLive = FileLockService.layer
@@ -1659,6 +1725,7 @@ export const createDependencies = (config: DependenciesConfig) => {
       authLive,
       providerAuthLive,
       configServiceLive,
+      modelCatalogRecordLive,
       modelRegistryLive,
       extensionRegistryLive,
       fileLockServiceLive,
@@ -1691,10 +1758,10 @@ export const createDependencies = (config: DependenciesConfig) => {
       const approvalService = yield* ApprovalService
       const sessionRuntime = yield* SessionRuntime
 
-      const workspaces = yield* interactionStore.listPendingWorkspaces
+      const workspaces = yield* interactionStore.listOpenWorkspaces
       for (const workspaceId of workspaces) {
         yield* Effect.gen(function* () {
-          const pending = yield* interactionStore.listPending()
+          const pending = yield* interactionStore.listOpen()
           if (pending.length === 0) return
 
           let recovered = 0

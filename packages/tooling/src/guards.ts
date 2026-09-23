@@ -1423,7 +1423,7 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     ),
     scope: "shipped-and-tests",
     message:
-      "the Files and Process facets are removed; yield FileSystem, Path and ChildProcessSpawner, call runProcess, and write atomically with writeFileAtomic in packages/extensions/src/fs-tools.ts",
+      "the Files and Process facets are removed; yield FileSystem, Path and ChildProcessSpawner, call runProcess, and write atomically with writeFileAtomic from @gent/core/extensions/api",
   },
   {
     on: "line",

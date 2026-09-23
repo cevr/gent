@@ -2,12 +2,11 @@
 import { Effect, Option, Schema } from "effect"
 import { For, Show } from "solid-js"
 import { formatHeadTail } from "@gent/core/protocol"
-import { ref } from "@gent/core/extensions/api"
 import {
   CHILD_COMPLETION_TYPE,
   ChildCompletionDetails,
   childOutcomeWords,
-  DelegateRpc,
+  DELEGATE_EXTENSION_ID,
   readChildCompletionHeadline,
 } from "@gent/extensions/client"
 import { useTheme } from "../theme"
@@ -36,7 +35,6 @@ import {
  */
 
 /** The server delegate's id; the client module shares it by convention. */
-const DELEGATE_EXTENSION_ID = ref(DelegateRpc.Children).extensionId
 
 /** A child session id as the rows show it. */
 const shortSession = (sessionId: string) => sessionId.slice(0, 8)

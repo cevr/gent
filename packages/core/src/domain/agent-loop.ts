@@ -2,13 +2,11 @@ import { type Context, DateTime, Effect, Option, Predicate, Schema } from "effec
 import type { ToolCapability } from "./capability.js"
 import {
   type AgentDefinition as AgentDefinitionType,
-  AgentName,
   type AgentName as AgentNameType,
   type DriverRef,
   type EffectiveModelDriver,
   type ModelId as ModelIdType,
   type ReasoningEffort as ReasoningEffortType,
-  RunSpecSchema,
 } from "./agent.js"
 import type { AgentEvent } from "./event.js"
 import { Message, MessageMetadata, QueueSnapshot, SteerCommand } from "./message.js"
@@ -46,9 +44,6 @@ export const asAgentLoopError = (message: string) =>
 const RunningTurnFields = {
   message: Message,
   startedAtMs: Schema.Finite,
-  agentOverride: Schema.optional(AgentName),
-  runSpec: Schema.optional(RunSpecSchema),
-  interactive: Schema.optional(Schema.Boolean),
 }
 
 // ── Turn types (not persisted in machine state) ──
@@ -98,15 +93,12 @@ export type WaitingForInteractionState = Extract<LoopState, { _tag: "WaitingForI
 
 export const SessionRuntimeStateSchema = Schema.TaggedUnion({
   Idle: {
-    agent: AgentName,
     queue: QueueSnapshot,
   },
   Running: {
-    agent: AgentName,
     queue: QueueSnapshot,
   },
   WaitingForInteraction: {
-    agent: AgentName,
     queue: QueueSnapshot,
   },
 })
@@ -190,9 +182,6 @@ export const buildIdleState = (): IdleState => LoopState.cases.Idle.make({})
  */
 type TurnOrigin = {
   readonly message: Message
-  readonly agentOverride?: AgentNameType
-  readonly runSpec?: typeof RunSpecSchema.Type
-  readonly interactive?: boolean
 }
 
 export const buildRunningState = (
@@ -202,9 +191,6 @@ export const buildRunningState = (
   LoopState.cases.Running.make({
     message: item.message,
     startedAtMs: options.startedAtMs,
-    agentOverride: item.agentOverride,
-    runSpec: item.runSpec,
-    interactive: item.interactive,
   })
 
 export const toWaitingForInteractionState = (params: {
@@ -214,9 +200,6 @@ export const toWaitingForInteractionState = (params: {
   LoopState.cases.WaitingForInteraction.make({
     message: params.state.message,
     startedAtMs: params.state.startedAtMs,
-    agentOverride: params.state.agentOverride,
-    runSpec: params.state.runSpec,
-    interactive: params.state.interactive,
     pendingRequestId: params.pendingRequestId,
   })
 
@@ -376,9 +359,6 @@ export const SendUserMessagePayload = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   content: Schema.String,
-  agentOverride: Schema.optional(AgentName),
-  interactive: Schema.optional(Schema.Boolean),
-  runSpec: Schema.optional(RunSpecSchema),
   /** Client-generated correlation id for end-to-end observability. */
   requestId: Schema.optional(RequestId),
 })
@@ -409,9 +389,6 @@ const WorkspaceFields = {
 const TurnSubmissionFields = {
   ...WorkspaceFields,
   message: Message,
-  agentOverride: Schema.optional(AgentName),
-  runSpec: Schema.optional(RunSpecSchema),
-  interactive: Schema.optional(Schema.Boolean),
 }
 
 const QueueFollowUpFields = {
@@ -627,10 +604,6 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
   const payload = {
     workspaceId: yield* CurrentWorkspaceId,
     message,
-    // Actor operation payloads require optional fields explicitly.
-    agentOverride: input.agentOverride,
-    interactive: input.interactive,
-    runSpec: input.runSpec,
   }
   const ref = yield* loopRefFor(input.sessionId, input.branchId)
   if (input.completion === "admission") {

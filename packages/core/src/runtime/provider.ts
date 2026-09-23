@@ -1,12 +1,13 @@
 import {
   Cause,
+  Config,
   Context,
   Duration,
   Effect,
-  type FileSystem,
+  FileSystem,
   Layer,
   Option,
-  type Path,
+  Path,
   Predicate,
   Random,
   Schedule,
@@ -16,6 +17,7 @@ import {
   Stream,
 } from "effect"
 import { KeyValueStore } from "effect/unstable/persistence"
+import { Database } from "bun:sqlite"
 import {
   AgentName,
   byReleaseDateDesc,
@@ -26,11 +28,15 @@ import {
   ProviderId,
 } from "../domain/agent.js"
 import { SessionId, ToolCallId } from "../domain/ids.js"
-import { ExtensionRegistry, listModelCatalog } from "./extension-host.js"
+import {
+  ExtensionRegistry,
+  type ExtensionRegistryService,
+  listModelCatalog,
+  type ModelCatalogFailure,
+} from "./extension-host.js"
 import { causeMessage } from "../domain/guards.js"
 import {
   DEFAULT_RETRY_POLICY,
-  type DriverError,
   type PersistAuth,
   ProviderAuthError,
   type ProviderAuthInfo,
@@ -121,7 +127,8 @@ type AuthType = typeof AuthType.Type
 
 // ── Auth-guard wire types ───────────────────────────────────────────────
 
-const AuthSource = Schema.Literals(["none", "stored"])
+/** Where a provider's credential comes from: the auth store, or the driver's env variable. */
+const AuthSource = Schema.Literals(["none", "stored", "env"])
 type AuthSource = typeof AuthSource.Type
 
 export const AuthProviderInfo = Schema.Struct({
@@ -173,24 +180,35 @@ export interface AuthService extends AuthStoreAccess {
   ) => Effect.Effect<A, E | AuthError>
 }
 
+/** Wraps one provider's store operation in a lock another process also honors. */
+type ProviderLock = (
+  provider: string,
+) => <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E | AuthError>
+
 /**
  * One owner for a credential store: every write for one provider takes that
  * provider's lock. All profiles of a process share the store, and each
  * profile's drivers hold their own caches, so the store is the only place
- * where their writes can be ordered.
+ * where their writes can be ordered. A store on disk is also shared by every
+ * gent process on the machine (a gamut run, a rift binary, a second data
+ * directory); `crossProcess` orders those, inside the in-process lock so one
+ * fiber per process waits on it.
  */
-export const serializeAuthStore = (store: AuthStoreAccess): AuthService => {
+export const serializeAuthStore = (
+  store: AuthStoreAccess,
+  crossProcess: ProviderLock = () => (effect) => effect,
+): AuthService => {
   const locks = new Map<string, Semaphore.Semaphore>()
   const exclusive =
     (provider: string) =>
-    <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+    <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | AuthError> =>
       Effect.suspend(() => {
         let lock = locks.get(provider)
         if (Predicate.isUndefined(lock)) {
           lock = Semaphore.makeUnsafe(1)
           locks.set(provider, lock)
         }
-        return lock.withPermits(1)(effect)
+        return crossProcess(provider)(effect).pipe(lock.withPermits(1))
       })
   return {
     get: store.get,
@@ -207,6 +225,73 @@ export const serializeAuthStore = (store: AuthStoreAccess): AuthService => {
       ),
   }
 }
+
+// ── auth file lock ──────────────────────────────────────────────────────────
+
+/** SQLite reports a lock another connection holds as `SQLITE_BUSY`. */
+const isSqliteBusy = Schema.is(Schema.Struct({ code: Schema.Literal("SQLITE_BUSY") }))
+
+/** Another connection holds the provider's lock file; try again shortly. */
+class AuthLockBusy extends Schema.TaggedError<AuthLockBusy>()("AuthLockBusy", {}) {}
+
+/** A writer polls a busy lock this often, this many times (about 30 seconds). */
+const AUTH_LOCK_POLL = Duration.millis(20)
+const AUTH_LOCK_POLLS = 1500
+
+/**
+ * An exclusive SQLite transaction on one lock file per provider. The OS drops
+ * the lock when its process exits, so a crash never leaves a held lock (the
+ * same kind of lock the server kernel uses). Taking it never blocks the event
+ * loop: a busy file is polled.
+ */
+const fileProviderLock =
+  (lockDirectory: string, pathService: Path.Path, fs: FileSystem.FileSystem): ProviderLock =>
+  (provider) =>
+  (effect) => {
+    const file = pathService.join(lockDirectory, `${encodeURIComponent(provider)}.lock.db`)
+    const lockError = (cause: unknown) =>
+      new AuthError({ message: `Failed to take the auth lock for "${provider}"`, cause })
+    const open = Effect.try({
+      try: () => new Database(file, { create: true }),
+      catch: lockError,
+    })
+    const take = (db: Database) =>
+      Effect.try({
+        try: () => {
+          db.exec("PRAGMA busy_timeout = 0")
+          db.exec("BEGIN EXCLUSIVE")
+        },
+        catch: (cause) => {
+          if (isSqliteBusy(cause)) return new AuthLockBusy()
+          return lockError(cause)
+        },
+      })
+    const close = (db: Database) =>
+      Effect.sync(() => {
+        db.close()
+      })
+    const acquire = fs.makeDirectory(lockDirectory, { recursive: true }).pipe(
+      Effect.mapError(lockError),
+      Effect.andThen(open),
+      Effect.flatMap((db) =>
+        take(db).pipe(
+          Effect.onError(() => close(db)),
+          Effect.as(db),
+        ),
+      ),
+      Effect.retry({
+        while: (error) => error._tag === "AuthLockBusy",
+        schedule: Schedule.spaced(AUTH_LOCK_POLL),
+        times: AUTH_LOCK_POLLS,
+      }),
+      Effect.catchTag("AuthLockBusy", () =>
+        Effect.fail(
+          new AuthError({ message: `Timed out waiting for the auth lock for "${provider}"` }),
+        ),
+      ),
+    )
+    return Effect.acquireUseRelease(acquire, () => effect, close)
+  }
 
 export class Auth extends Context.Service<Auth, AuthService>()(
   "@gent/core/src/runtime/provider/Auth",
@@ -247,18 +332,26 @@ export class Auth extends Context.Service<Auth, AuthService>()(
             Effect.as(undefined),
           )
 
-        return serializeAuthStore({
-          get: (provider) =>
-            store.get(provider).pipe(
-              Effect.map(Option.getOrUndefined),
-              Effect.catchTag("SchemaError", (e) => discardInvalid(provider, e)),
-              Effect.mapError(wrap("Failed to read auth info")),
-            ),
-          set: (provider, info) =>
-            store.set(provider, info).pipe(Effect.mapError(wrap("Failed to persist auth info"))),
-          remove: (provider) =>
-            kv.remove(provider).pipe(Effect.mapError(wrap("Failed to remove auth info"))),
-        })
+        const fs = yield* FileSystem.FileSystem
+        const pathService = yield* Path.Path
+        // A dot directory inside the store: no provider id starts with a dot,
+        // so it never reads as a credential, and it goes with the store.
+        const lockDirectory = pathService.join(directory, ".locks")
+        return serializeAuthStore(
+          {
+            get: (provider) =>
+              store.get(provider).pipe(
+                Effect.map(Option.getOrUndefined),
+                Effect.catchTag("SchemaError", (e) => discardInvalid(provider, e)),
+                Effect.mapError(wrap("Failed to read auth info")),
+              ),
+            set: (provider, info) =>
+              store.set(provider, info).pipe(Effect.mapError(wrap("Failed to persist auth info"))),
+            remove: (provider) =>
+              kv.remove(provider).pipe(Effect.mapError(wrap("Failed to remove auth info"))),
+          },
+          fileProviderLock(lockDirectory, pathService, fs),
+        )
       }),
     ).pipe(Layer.provide(Layer.orDie(KeyValueStore.layerFileSystem(directory))))
 
@@ -284,6 +377,17 @@ export class Auth extends Context.Service<Auth, AuthService>()(
 
 // ── Auth guard ──────────────────────────────────────────────────────────
 
+/** True when the named env variable holds a non-empty value. */
+const envCredentialSet = (name: Option.Option<string>): Effect.Effect<boolean> =>
+  Option.match(name, {
+    onNone: () => Effect.succeed(false),
+    onSome: (envName) =>
+      Config.option(Config.nonEmptyString(envName)).pipe(
+        Effect.map(Option.isSome),
+        Effect.orElseSucceed(() => false),
+      ),
+  })
+
 /**
  * Every registered model driver with its stored auth. A driver is `required`
  * when one of `modelIds` routes to it; the caller resolves those models for
@@ -304,6 +408,12 @@ export const listAuthProviders = Effect.fn("AuthGuard.listProviders")(function* 
     const provider = ProviderId.make(driver.id)
     const storedInfo = yield* auth.get(driver.id)
     if (Predicate.isUndefined(storedInfo)) {
+      // Drivers try a stored credential first, then their env variable.
+      const fromEnv = yield* envCredentialSet(Option.fromUndefinedOr(driver.envCredential))
+      if (fromEnv) {
+        providers.push({ provider, hasKey: true, source: "env", required: required.has(driver.id) })
+        continue
+      }
       providers.push({ provider, hasKey: false, required: required.has(driver.id) })
       continue
     }
@@ -661,6 +771,39 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
  */
 export const TEST_MODEL_CONTEXT_LIMIT_TOKENS = 128_000
 
+type ResolvedProfile = ReturnType<ExtensionRegistryService["getResolved"]>
+
+interface ModelCatalogRecordService {
+  /** Keep the failures of the catalog run that just finished for this profile. */
+  readonly record: (
+    profile: ResolvedProfile,
+    failures: ReadonlyArray<ModelCatalogFailure>,
+  ) => Effect.Effect<void>
+  /** The failures of this profile's last catalog run; none when it never ran. */
+  readonly lastFailures: (
+    profile: ResolvedProfile,
+  ) => Effect.Effect<Option.Option<ReadonlyArray<ModelCatalogFailure>>>
+}
+
+/**
+ * The failures of each profile's last catalog run, written where the catalog
+ * runs (a turn's model lookup, `model.list`) and read by extension health, so
+ * a health read never lists every driver again. Keyed weakly by the profile's
+ * resolved extensions: a profile the cache drops takes its record with it.
+ */
+export class ModelCatalogRecord extends Context.Service<
+  ModelCatalogRecord,
+  ModelCatalogRecordService
+>()("@gent/core/src/runtime/provider/ModelCatalogRecord") {
+  static Live: Layer.Layer<ModelCatalogRecord> = Layer.sync(ModelCatalogRecord, () => {
+    const byProfile = new WeakMap<ResolvedProfile, ReadonlyArray<ModelCatalogFailure>>()
+    return ModelCatalogRecord.of({
+      record: (profile, failures) => Effect.sync(() => void byProfile.set(profile, failures)),
+      lastFailures: (profile) => Effect.sync(() => Option.fromUndefinedOr(byProfile.get(profile))),
+    })
+  })
+}
+
 /**
  * Every model the caller's profile can run, newest release first: each model
  * driver's own catalog, read with the auth stored for that driver. Core
@@ -671,8 +814,9 @@ export const TEST_MODEL_CONTEXT_LIMIT_TOKENS = 128_000
  */
 export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* () {
   const authStore = yield* Auth
-  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
-  const catalog = yield* listModelCatalog(modelDrivers, (providerId) =>
+  const catalogRecord = yield* ModelCatalogRecord
+  const profile = (yield* ExtensionRegistry).getResolved()
+  const catalog = yield* listModelCatalog(profile.modelDrivers, (providerId) =>
     authStore.get(providerId).pipe(
       Effect.map((info) =>
         Option.getOrUndefined(
@@ -690,29 +834,32 @@ export const modelCatalog = Effect.fn("ModelRegistry.modelCatalog")(function* ()
       ),
     ),
   )
-  return byReleaseDateDesc(catalog)
+  yield* catalogRecord.record(profile, catalog.failures)
+  return { models: byReleaseDateDesc(catalog.models), failures: catalog.failures }
 })
 
 /** One model of the caller's profile catalog: the turn's context limit and pricing. */
 interface ModelRegistryService {
   readonly get: (
     modelId: string,
-  ) => Effect.Effect<Option.Option<Model>, DriverError | ProviderAuthError, ExtensionRegistry>
+  ) => Effect.Effect<Option.Option<Model>, ProviderAuthError, ExtensionRegistry>
 }
 
 export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryService>()(
   "@gent/core/src/runtime/provider/ModelRegistry",
 ) {
-  static Live: Layer.Layer<ModelRegistry, never, Auth> = Layer.effect(
+  static Live: Layer.Layer<ModelRegistry, never, Auth | ModelCatalogRecord> = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
       const authStore = yield* Auth
+      const catalogRecord = yield* ModelCatalogRecord
       return ModelRegistry.of({
         get: (modelId) =>
           modelCatalog().pipe(
             Effect.provideService(Auth, authStore),
-            Effect.map((models) =>
-              Option.fromUndefinedOr(models.find((model) => model.id === modelId)),
+            Effect.provideService(ModelCatalogRecord, catalogRecord),
+            Effect.map((catalog) =>
+              Option.fromUndefinedOr(catalog.models.find((model) => model.id === modelId)),
             ),
           ),
       })

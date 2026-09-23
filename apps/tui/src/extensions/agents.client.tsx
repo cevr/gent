@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { DateTime, Effect, Option, Predicate, Schedule } from "effect"
 import { createEffect, createSignal, For, on, Show } from "solid-js"
-import { type AgentRowEntry, AgentsViewRpc, DelegateRpc } from "@gent/extensions/client"
+import { type AgentRowEntry, AgentsViewRpc, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
 import { useScopedKeyboard, useTerminalDimensions } from "../terminal"
 import { useTheme } from "../theme"
 import { formatAge, formatDuration, truncate, workingIconFrame } from "../utils"
@@ -628,10 +628,9 @@ export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
 
     // A delegate pulse in the current session means its subtree changed.
     // The pane owns its own query while open, so only a closed pane refetches.
-    const delegateExtensionId = ref(DelegateRpc.Children).extensionId
     lifecycle.addCleanup(
       transport.onExtensionStateChanged((pulse) => {
-        if (pulse.extensionId !== delegateExtensionId) return
+        if (pulse.extensionId !== DELEGATE_EXTENSION_ID) return
         if (!controller.open()) controller.refresh("")
       }),
     )

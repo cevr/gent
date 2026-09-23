@@ -11,13 +11,7 @@ import {
   Stdio,
   Stream,
 } from "effect"
-import {
-  formatHeadTail,
-  type AgentName,
-  type BranchId,
-  type RunSpec,
-  type SessionId,
-} from "@gent/core/protocol"
+import { formatHeadTail, type BranchId, type SessionId } from "@gent/core/protocol"
 import {
   CellOperationReceipts,
   formatGenericToolText,
@@ -188,8 +182,6 @@ export const runHeadless = (
   sessionId: SessionId,
   branchId: BranchId,
   promptText: string,
-  agentOverride?: AgentName,
-  runSpec?: RunSpec,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -308,8 +300,6 @@ export const runHeadless = (
           branchId,
           content: promptText,
           requestId: sendRequestId,
-          agentOverride,
-          runSpec,
         }),
       ).pipe(
         Effect.retry({

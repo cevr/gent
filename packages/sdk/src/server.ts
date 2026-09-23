@@ -576,7 +576,7 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
 
   yield* sessions.createSession(session)
   yield* branches.createBranch(branch)
-  yield* sessions.updateSession(new Session({ ...session, activeBranchId: branchId }))
+  yield* sessions.setActiveBranch(sessionId, branchId, session.updatedAt)
 
   const user1 = Message.cases.regular.make({
     id: MessageId.make(yield* platform.randomId),

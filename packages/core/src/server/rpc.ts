@@ -7,7 +7,6 @@ import {
   Model,
   ModelId,
   ReasoningEffort,
-  RunSpecSchema,
   SessionDepthLimitError,
 } from "../domain/agent.js"
 import { InvalidStateError, NotFoundError, ProviderError } from "../domain/errors.js"
@@ -23,7 +22,7 @@ import {
 } from "../domain/ids.js"
 import { InteractionRequestMismatchError } from "../domain/interaction.js"
 import { DriverError, ProviderAuthError } from "../domain/driver.js"
-import { ConfigLoadError } from "../runtime/config.js"
+import { ConfigLoadError, ConfigWriteError } from "../runtime/config.js"
 import { SessionRuntimeError } from "../runtime/session.js"
 import {
   AuthAuthorization,
@@ -38,6 +37,7 @@ import {
   ProjectedMessage,
   QueueSnapshot,
   Session,
+  SessionAdmission,
   SteerCommand,
 } from "../domain/message.js"
 import { SessionRuntimeMetrics, SessionRuntimeStateSchema } from "../domain/agent-loop.js"
@@ -65,6 +65,7 @@ export class ExtensionProtocolError extends Schema.TaggedError<ExtensionProtocol
 
 export const GentRpcError = Schema.Union([
   ConfigLoadError,
+  ConfigWriteError,
   StorageError,
   SessionRuntimeError,
   ProviderError,
@@ -99,6 +100,8 @@ export const CreateSessionInput = Schema.Struct({
   historyBranchId: Schema.optional(BranchId),
   /** If provided, sends this message immediately after creation */
   initialPrompt: Schema.optional(Schema.String),
+  /** What every turn of the new session runs as. Fixed at creation. */
+  admission: Schema.optional(SessionAdmission),
   requestId: Schema.optional(RequestId),
 })
 export type CreateSessionInput = typeof CreateSessionInput.Type
@@ -131,10 +134,6 @@ export const SendMessageInput = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   content: Schema.String,
-  /** Per-run agent override — switches agent for this message only. Uses fresh ephemeral sessions to avoid state bleed. */
-  agentOverride: Schema.optional(AgentName),
-  /** Per-run dispatch config — forwarded to the agent loop for this turn only. */
-  runSpec: Schema.optional(RunSpecSchema),
   requestId: Schema.optional(RequestId),
 })
 export type SendMessageInput = typeof SendMessageInput.Type
@@ -153,12 +152,14 @@ export class SessionSnapshot extends Schema.Class<SessionSnapshot>("SessionSnaps
   lastEventId: Schema.NullOr(Schema.Finite),
   modelId: Schema.optional(ModelId),
   reasoningLevel: Schema.optional(ReasoningEffort),
+  /** The agent every turn of the session runs as (its admission, or the default). */
+  agent: AgentName,
   /** What the next turn would use once session settings, config, and the
    * agent definition are folded together. Clients render these; they never
    * re-derive the precedence. */
   resolvedModelId: ModelId,
   resolvedReasoningLevel: Schema.optional(ReasoningEffort),
-  /** Current runtime state (`_tag` + agent/queue). Idle sessions return Idle runtime. */
+  /** Current runtime state (`_tag` + queue). Idle sessions return Idle runtime. */
   runtime: Schema.suspend(() => SessionRuntimeStateSchema),
   /** Cumulative usage derived from the event log (turns, tokens, cost, last
    * model). The server is the authority — clients that hydrate from here do
@@ -287,6 +288,11 @@ const ExtensionManifestInfo = Schema.Struct({
 export const ExtensionHealthIssue = Schema.Union([
   Schema.TaggedStruct("ActivationFailed", {
     phase: ExtensionActivationPhase,
+    error: Schema.String,
+  }),
+  /** A model driver of this extension could not list its models; they are left out. */
+  Schema.TaggedStruct("ModelCatalogFailed", {
+    driverId: Schema.String,
     error: Schema.String,
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
