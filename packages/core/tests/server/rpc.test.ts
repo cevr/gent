@@ -869,6 +869,7 @@ const approveThroughRejectingOwner = (params: OrderedApprovalParams) =>
       branchId: ctx.branchId,
       persist: () => Effect.fail(new EventStoreError({ message: "the owner refused the request" })),
       resumeRequestId: Effect.succeedNone,
+      take: () => Effect.void,
     }
     const exit = yield* Effect.exit(
       ctx.Interaction.approve({ text: params.text }).pipe(
@@ -1578,21 +1579,17 @@ describe("interaction.respondInteraction", () => {
         const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
         const dbPath = `${tempDir}/gent-owner.db`
         const aPresented = yield* Deferred.make<void>()
-        const cAskedAgain = yield* Deferred.make<void>()
         const extension = orderedApprovalExtension((params, attempt) =>
           Effect.gen(function* () {
-            if (params.label === "A") {
-              // After the restart, C asks before A takes its answer.
-              if (attempt > 1) yield* Deferred.await(cAskedAgain)
-              return yield* approveAs(params)
-            }
+            // After the restart, C's inner call waits for the slot while A,
+            // which still runs, takes its answer; C's owner then refuses its
+            // request, and A's answer is not touched.
+            if (params.label === "A") return yield* approveAs(params)
             if (attempt === 1) {
               yield* Deferred.await(aPresented)
               return yield* approveAs(params)
             }
-            return yield* approveThroughRejectingOwner(params).pipe(
-              Effect.ensuring(Deferred.completeWith(cAskedAgain, Effect.void)),
-            )
+            return yield* approveThroughRejectingOwner(params)
           }),
         )
         const firstProvider = yield* LanguageModelLayers.sequence([
@@ -1978,6 +1975,153 @@ describe("interaction.respondInteraction", () => {
           const results = toolResultTexts(snapshot.messages)
           expect(results.some((result) => result.includes("ask=early"))).toBe(true)
           expect(results.some((result) => result.includes("slow=done"))).toBe(true)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "the first answer wins: a different second reply is refused and the call gets the first",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // The resumed call waits before it asks again, so both replies
+          // land while the request is still open with its first answer.
+          const resumeGate = yield* Deferred.make<void>()
+          const extension = orderedApprovalExtension((params, attempt) =>
+            Effect.gen(function* () {
+              if (attempt > 1) yield* Deferred.await(resumeGate)
+              const ctx = yield* ExtensionContext
+              const decision = yield* ctx.Interaction.approve({ text: params.text })
+              return `approved=${String(decision.approved)}`
+            }),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            toolCallStep("ordered_approval", { label: "X", text: "Run it?" }),
+            textStep("answered once"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [extension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filterMap((envelope) => {
+              if (envelope.event._tag === "InteractionPresented")
+                return Result.succeed(envelope.event)
+              return Result.failVoid
+            }),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "ask once" })
+          const request = Array.from(yield* Fiber.join(presented))[0]
+          if (Predicate.isUndefined(request)) return yield* Effect.die("Missing dialog")
+          const reply = (approved: boolean) =>
+            client.interaction.respondInteraction({
+              sessionId,
+              branchId,
+              requestId: request.requestId,
+              approved,
+            })
+          yield* reply(false)
+          const conflict = yield* Effect.flip(reply(true))
+          expect(conflict._tag).toBe("InteractionDecisionConflictError")
+          // A retried reply with the same answer is accepted.
+          yield* reply(false)
+          yield* Deferred.completeWith(resumeGate, Effect.void)
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "answered once",
+          }).pipe(Effect.timeout("5 seconds"))
+          const results = toolResultTexts(snapshot.messages)
+          expect(results.some((result) => result.includes("approved=false"))).toBe(true)
+          expect(results.some((result) => result.includes("approved=true"))).toBe(false)
+          const resolved = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.takeUntil((envelope) => envelope.event._tag === "TurnCompleted"),
+            Stream.filter((envelope) => envelope.event._tag === "InteractionResolved"),
+            Stream.runCollect,
+          )
+          expect(Array.from(resolved)).toHaveLength(1)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "a sibling that asks after the first answer came leaves that answer to its call",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const firstAnswered = yield* Deferred.make<void>()
+          // `late` asks only after the answer to `early` is in, while the step
+          // still runs. `early` parked on its question and no longer runs.
+          const extension = orderedApprovalExtension((params) =>
+            Effect.gen(function* () {
+              if (params.label === "late") yield* Deferred.await(firstAnswered)
+              return yield* approveAs(params)
+            }),
+          )
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            multiToolCallStep(
+              { toolName: "ordered_approval", input: { label: "early", text: "First?" } },
+              { toolName: "ordered_approval", input: { label: "late", text: "Second?" } },
+            ),
+            textStep("both answered"),
+          ])
+          const { client } = yield* createRpcClient(
+            createE2ELayer({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [extension],
+              approvalLayer: ApprovalService.Live,
+            }),
+          )
+          const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+          // Answer each dialog the moment it shows, without waiting for a park.
+          const answers = new Map([
+            ["First?", "one"],
+            ["Second?", "two"],
+          ])
+          yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.filterMap((envelope) => {
+              if (envelope.event._tag === "InteractionPresented")
+                return Result.succeed(envelope.event)
+              return Result.failVoid
+            }),
+            Stream.runForEach((presented) =>
+              client.interaction
+                .respondInteraction({
+                  sessionId,
+                  branchId,
+                  requestId: presented.requestId,
+                  approved: true,
+                  notes: Option.getOrElse(
+                    Option.fromUndefinedOr(answers.get(presented.text)),
+                    () => "unexpected",
+                  ),
+                })
+                .pipe(Effect.andThen(Deferred.completeWith(firstAnswered, Effect.void))),
+            ),
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "two calls ask" })
+          const snapshot = yield* waitForReply({
+            client,
+            sessionId,
+            branchId,
+            reply: "both answered",
+          }).pipe(Effect.timeout("5 seconds"))
+          const results = toolResultTexts(snapshot.messages)
+          expect(results.some((result) => result.includes("early=one"))).toBe(true)
+          expect(results.some((result) => result.includes("late=two"))).toBe(true)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     12_000,

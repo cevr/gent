@@ -1088,8 +1088,11 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
     notes: input.notes,
     ...omitUndefined({ editedContent: input.editedContent }),
   }
-  // 1. Store resolution durably so re-entering present() finds it
-  yield* approvalService.storeResolution(input.requestId, decision)
+  // 1. Store resolution durably so re-entering present() finds it. The first
+  //    answer wins: the same answer again is a retried reply and changes
+  //    nothing; a different one fails with a conflict.
+  const first = yield* approvalService.storeResolution(input.requestId, decision)
+  if (!first) return
   // 2. Wake the machine. present() marks the row resolved only when the
   //    tool consumes the durable decision.
   yield* sessionRuntime.respondInteraction({

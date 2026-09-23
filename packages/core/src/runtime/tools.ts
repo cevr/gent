@@ -595,6 +595,12 @@ export type BranchToolLayerFactory = (input: BranchToolLayerInput) => ErasedReso
 interface BranchToolWorkApi {
   /** Cancel in-flight work. Must be safe to call when nothing is running. */
   readonly cancel: Effect.Effect<void>
+  /**
+   * The loop is closing, as when the server stops. End in-flight work and
+   * record no outcome for it, so that after a restart recovery finds the work
+   * as a crash leaves it. Must be safe to call when nothing is running.
+   */
+  readonly stop: Effect.Effect<void>
 }
 
 /**

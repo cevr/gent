@@ -185,6 +185,11 @@ interface CellToolOperationStorageService {
     key: CellToolOperationKey,
     requestId: InteractionRequestId,
   ) => Effect.Effect<CellToolOperation, StorageError>
+  /** The call took its answer and runs on: it waits for nothing now. */
+  readonly take: (
+    key: CellToolOperationKey,
+    requestId: InteractionRequestId,
+  ) => Effect.Effect<void, StorageError>
   readonly complete: (
     key: CellToolOperationKey,
     result: Prompt.ToolResultPart,
@@ -341,11 +346,14 @@ const makeToolOperationStorage = Effect.gen(function* () {
   ) {
     return yield* Effect.gen(function* () {
       yield* ownCell(cell)
+      // Operation ids are the worker's call numbers stored as text: sort them
+      // as numbers, or call 10 comes before call 2. A receipt's place is its
+      // only link to the call in the source.
       const rows = yield* sql<typeof OperationAddressRow.Type>`
             SELECT operation_id FROM cell_tool_operations
             WHERE assistant_message_id = ${cell.assistantMessageId}
               AND cell_tool_call_id = ${cell.toolCallId}
-            ORDER BY operation_id
+            ORDER BY CAST(operation_id AS INTEGER), operation_id
           `
       return yield* Effect.forEach(rows, (raw) =>
         Effect.gen(function* () {
@@ -430,6 +438,22 @@ const makeToolOperationStorage = Effect.gen(function* () {
       return resumed
     }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
   })
+  const take = Effect.fn("CellToolOperationStorage.take")(function* (
+    key: CellToolOperationKey,
+    requestId: InteractionRequestId,
+  ) {
+    yield* outsideTransaction
+    return yield* Effect.gen(function* () {
+      yield* own(key)
+      yield* requireOpenCell(key)
+      const operation = yield* read(key)
+      if (!hasInteraction(operation.state) || operation.state.requestId !== requestId)
+        return yield* new StorageError({
+          message: "Cell operation is not asking this request",
+        })
+      yield* write(key, { ...operation, state: CellToolOperationState.cases.Started.make({}) })
+    }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
+  })
   const complete = Effect.fn("CellToolOperationStorage.complete")(function* (
     key: CellToolOperationKey,
     result: Prompt.ToolResultPart,
@@ -467,6 +491,7 @@ const makeToolOperationStorage = Effect.gen(function* () {
     listForToolCall,
     suspend,
     resume,
+    take,
     complete,
   } satisfies CellToolOperationStorageService
 })
@@ -1027,12 +1052,16 @@ export class CellOperationHost extends Context.Service<
     readonly catalog?: CellCatalog
     readonly call: (
       request: Extract<CellResponse, { _tag: "HostCall" }>,
-    ) => Effect.Effect<Schema.Json, CellEvaluationError | CellToolCallSuspended>
+    ) => Effect.Effect<Schema.Json, CellEvaluationError>
   }
 >()("@gent/extensions/src/cell/CellOperationHost") {}
 
-/** Host control signal. It must never become a catchable error inside cell code. */
-export class CellToolCallSuspended extends Schema.TaggedError<CellToolCallSuspended>()(
+/**
+ * Recovery's signal: an operation a lost worker left waiting has no answer
+ * yet, so the turn parks on its request. A live inner call never suspends; it
+ * waits for its answer in place.
+ */
+class CellToolCallSuspended extends Schema.TaggedError<CellToolCallSuspended>()(
   "CellToolCallSuspended",
   {
     operationId: Schema.NonEmptyString,
@@ -1183,7 +1212,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
       Effect.gen(function* () {
         const result = yield* Deferred.make<
           Extract<CellResponse, { _tag: "Evaluated" | "Failed" }>,
-          CellKernelError | CellToolCallSuspended
+          CellKernelError
         >()
         const seen = new Set<string>()
         const pending = new Set<string>()
@@ -1637,9 +1666,9 @@ export const cellInteractionOwner = (
             new EventStoreError({ message: "Failed to persist interaction request", cause }),
         ),
       ),
-  // `Started` has raised no interaction yet, so a fresh one begins. `Resuming`
-  // is mid-approval and replays the id it recorded. Any other state was never
-  // admitted to ask.
+  // `Started` waits for no answer, so a fresh ask begins. `Resuming` came back
+  // from a crash mid-approval and takes the answer it recorded. Any other
+  // state was never admitted to ask.
   resumeRequestId: storage.get(key).pipe(
     Effect.mapError(
       (cause) => new EventStoreError({ message: "Cannot read the interaction owner", cause }),
@@ -1650,6 +1679,14 @@ export const cellInteractionOwner = (
       return new EventStoreError({ message: "The owning call cannot take an interaction" })
     }),
   ),
+  take: (requestId) =>
+    storage
+      .take(key, requestId)
+      .pipe(
+        Effect.mapError(
+          (cause) => new EventStoreError({ message: "Failed to record the taken answer", cause }),
+        ),
+      ),
 })
 
 // ── operation receipt ───────────────────────────────────────────────────────
@@ -1756,12 +1793,15 @@ export const executeBoundCellTool = Effect.fn("CellToolCall.executeBound")(funct
       params.binding,
     )
     .pipe(
+      // An inner call waits for its answer in place, so it never parks. A
+      // call that parks anyway has no turn to resume it: it fails closed.
       Effect.mapError(
-        (pending) =>
-          new CellToolCallSuspended({
-            operationId: params.request.operationId,
-            toolCallId: params.toolCallId,
-            pending,
+        () =>
+          new CellEvaluationError({
+            phase: "execute",
+            message:
+              "The call parked on an interaction, which an inner cell call cannot resume. Its effects may have occurred.",
+            output: "",
           }),
       ),
     )
@@ -2016,10 +2056,6 @@ export class CellExecutionIncomplete extends Schema.TaggedError<CellExecutionInc
 ) {}
 
 const CellFailure = Schema.Union([CellEvaluationError, CellKernelError, CellProcessError])
-const isPassThrough = Predicate.or(
-  Predicate.isTagged("CellToolCallSuspended"),
-  Predicate.isTagged("StorageError"),
-)
 type Kernel = Effect.Success<ReturnType<typeof openCellKernel>>
 
 interface CellExecutionService {
@@ -2028,11 +2064,13 @@ interface CellExecutionService {
     readonly toolCallId: ToolCallId
   }) => Effect.Effect<
     Prompt.ToolResultPart,
-    StorageError | CellExecutionIncomplete | CellToolCallSuspended,
+    StorageError | CellExecutionIncomplete,
     CellOperationHost
   >
   readonly reset: Effect.Effect<void, CellKernelError>
   readonly cancel: Effect.Effect<void>
+  /** The loop closes: end the running cell and record nothing, as a crash would. */
+  readonly stop: Effect.Effect<void>
 }
 
 /** One branch scope owns admission and a lazily acquired kernel. Host authority stays per call. */
@@ -2057,7 +2095,9 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           Layer.merge(
             Layer.effect(
               BranchToolWork,
-              Effect.map(CellExecution, (cells) => BranchToolWork.of({ cancel: cells.cancel })),
+              Effect.map(CellExecution, (cells) =>
+                BranchToolWork.of({ cancel: cells.cancel, stop: cells.stop }),
+              ),
             ),
             ModelContextLedger.Branch,
           ),
@@ -2084,6 +2124,8 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         >()
         const permit = yield* Semaphore.make(1)
         let cancellationEpoch = 0
+        // Set once the loop closes: a run that ends records nothing.
+        let stopping = false
         let active = Option.none<Deferred.Deferred<never, CellKernelError>>()
         const cancelled = () =>
           new CellKernelError({
@@ -2225,13 +2267,8 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
                     providerExecuted: false,
                   }),
                 ),
-              onFailure: (
-                error,
-              ): Effect.Effect<Prompt.ToolResultPart, StorageError | CellToolCallSuspended> => {
-                // A suspended cell loses its worker like any kernel failure: the next
-                // run restores the last good namespace instead of demanding a reset.
-                if (error._tag === "CellToolCallSuspended") recoveryPending = true
-                if (isPassThrough(error)) return Effect.fail(error)
+              onFailure: (error): Effect.Effect<Prompt.ToolResultPart, StorageError> => {
+                if (error._tag === "StorageError") return Effect.fail(error)
                 if (error._tag !== "CellEvaluationError") recoveryPending = true
                 return Schema.encodeEffect(CellFailure)(error).pipe(
                   Effect.mapError(
@@ -2251,6 +2288,9 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               },
             }),
           )
+          // The loop closed under this run. Leave its record as a crash would,
+          // so recovery after a restart resumes a waiting operation.
+          if (stopping) return yield* Effect.interrupt
           yield* storage.complete(address, result)
           return result
         })
@@ -2265,11 +2305,16 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           if (Option.isSome(active)) yield* Deferred.fail(active.value, cancelled())
           yield* Semaphore.withPermit(permit, Effect.void)
         })
+        const stop = Effect.fn("CellExecution.stop")(function* () {
+          stopping = true
+          yield* cancel()
+        })
         return CellExecution.of({
           run: (call) =>
             Effect.suspend(() => Semaphore.withPermit(permit, run(call, cancellationEpoch))),
           reset: Semaphore.withPermit(permit, reset()),
           cancel: cancel().pipe(Effect.uninterruptible),
+          stop: stop().pipe(Effect.uninterruptible),
         })
       }),
     )
@@ -2343,9 +2388,7 @@ export const CellTool = tool({
     "A failed cell may have completed effects. Do not replay source to recover unknown outcomes.",
   ],
   execute: Effect.fn("CellTool.execute")(function* () {
-    const saved = yield* dispatchCell().pipe(
-      Effect.catchTag("CellToolCallSuspended", (suspended) => Effect.fail(suspended.pending)),
-    )
+    const saved = yield* dispatchCell()
     const result = yield* Schema.decodeUnknownEffect(Schema.Json)(saved.result)
     if (saved.isFailure) {
       return yield* new ToolResultFailure({ message: "Cell execution failed", result })

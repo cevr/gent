@@ -523,33 +523,62 @@ One interaction primitive: `ctx.Interaction.approve({ text, metadata? })` → `{
 
 Tools that need human input call `ctx.Interaction.approve()`, which delegates to
 `ApprovalService`. The turn parks without keeping a blocked tool fiber. Cold
-replay also requires a trusted, unchanged saved tool binding. A source-only tool
+replay also requires a trusted, unchanged saved tool binding.
+
+An inner call of a dispatching tool (a cell) is the exception: its dispatcher
+cannot replay its source, so the call waits for its answer in place through the
+`InteractionOwnership` seam, and the other inner calls keep running. The turn
+stays Running while the dialog is open. A native call that asks while such a
+call's question is open waits for the slot, then asks its own question. A call
+that asks after a sibling parked with an answered question parks behind that
+answer; the sibling takes it when the step runs again. A source-only tool
 without durable identity can resume in the same loaded generation, but not after
 an unsupported restart or replacement.
 
 ```text
-tool calls ctx.Interaction.approve({ text, metadata? })
-  → ApprovalService.present() checks for stored resolution (cold resume)
-    → if found: returns { approved, notes?, editedContent? }
+native call: tool calls ctx.Interaction.approve({ text, metadata? })
+  → ApprovalService.present() checks for a stored answer (cold resume)
+    → if found: takes it, returns { approved, notes?, editedContent? }
     → if not: persists to InteractionStorage, publishes InteractionPresented
       → InteractionPendingError thrown
         → machine parks in WaitingForInteraction (cold, no turn fiber)
 
+inner call of a cell (owned ask, `ctx.owned` set)
+  → waits for the slot while the open request's owner still runs
+    (refused when that owner parked: it would never free the slot)
+  → persists through InteractionOwnership (operation → Waiting), publishes
+    InteractionPresented
+  → waits in place for the answer; the turn stays Running, siblings run on
+  → answer: InteractionOwnership.take (operation → Started), request settles,
+    the cell code gets the answer and continues
+
 client responds via respondInteraction RPC
   → storeResolution(requestId, { approved, notes?, editedContent? })
-    → machine receives InteractionResponded
+    → first answer wins: storage keeps it with one conditional UPDATE and
+      memory keeps the same rule; the same answer again changes nothing, a
+      different one fails with InteractionDecisionConflictError
+    → parked native call: machine receives InteractionResponded
       → WaitingForInteraction → ExecutingTools
-        → tool re-runs, calls ctx.Interaction.approve(), finds stored resolution
-          → continues normally
+        → tool re-runs, calls ctx.Interaction.approve(), takes the answer
+    → owned call waiting in place: takes the answer at once
+
+cancel while an owned call waits: the cell cancels, its call ends, the turn
+  ends and dismisses the dialog (InteractionResolved dismissed: true)
+loop close (server stop) while an owned call waits: the turn is interrupted,
+  then BranchToolWork.stop ends the cell and records nothing, as a crash
+  would; after a restart the request is rehydrated, the turn resumes on it
+  (cell recovery suspends), and an answer runs the waiting operation once;
+  the cell then reports its worker state as lost
 ```
 
 **Event-driven UI.** The `@gent/interaction-tools` extension emits typed interaction events (`InteractionPresented` and friends on the session stream) and the client renders those directly. There is no `extensionSnapshots` cache and no projection mirror; source of truth is the storage row plus the durable interaction events (`derive-do-not-create-states`).
 
 Key properties:
 
-- **No Deferred, no blocked fiber.** `WaitingForInteraction` is a cold state — no background turn work. The machine is checkpointed and survives restarts.
+- **No blocked fiber for a native call.** `WaitingForInteraction` is a cold state — no background turn work. The machine is checkpointed and survives restarts. Only an owned call (a cell's inner call) waits in place, because its dispatcher cannot replay its source.
+- **The first answer wins.** Two replies can both pass the pending check; `InteractionStorage.decide` stores only when the row has no answer, and `storeResolution` keeps the same rule in memory. A retried reply with the same answer succeeds and publishes nothing; a different one fails with `InteractionDecisionConflictError`, so a late approval cannot flip a decline.
 - **Crash-safe resume.** `rehydrate()` rebuilds the in-memory context lookup and re-publishes the event. If the process dies before wake, `listOpen()` in `InteractionStorage` provides the open requests for recovery: pending ones, and `taken` ones whose call still keeps the answer.
-- **An answer goes to its owner.** The owner of a request is the tool call that asked and the index of that ask in the call's run; the row stores both (`owner_tool_call_id`, `owner_occurrence`, nullable for older rows). A branch shows one request at a time. Other owners queue in the order they asked, and a call that asks the same question never takes another call's answer. An answer whose owner ends its run without taking it is settled as abandoned, so the next owner asks. A dispatching tool's inner call (a cell) resumes by its request id and is refused, not queued, while another request is open. An answer matches its question as well as its owner; a changed question asks again, for a dispatching owner too. A call keeps the answers it took (row status `taken`) until it ends, so a call that asks twice takes both, also across a restart. Only a tool call the loop runs can ask natively; an ask with no call and no dispatching owner is refused.
+- **An answer goes to its owner.** The owner of a request is the tool call that asked and the index of that ask in the call's run; the row stores both (`owner_tool_call_id`, `owner_occurrence`, nullable for older rows). A branch shows one request at a time. Other owners queue in the order they asked, and a call that asks the same question never takes another call's answer. An answer whose owner ends its run without taking it is settled as abandoned, so the next owner asks. A dispatching tool's inner call (a cell) waits for the slot while the open request's owner still runs, and is refused when that owner parked; after a crash it resumes by its request id. An answer matches its question as well as its owner; a changed question asks again, for a dispatching owner too. A call keeps the answers it took (row status `taken`) until it ends, so a call that asks twice takes both, also across a restart. Only a tool call the loop runs can ask natively; an ask with no call and no dispatching owner is refused.
 - **A request lives no longer than its turn.** A turn that ends without parking settles its open request and its kept answers, and publishes `InteractionResolved` with `dismissed: true` for a dialog nobody answered. A cancel sets the turn's interrupt latch even while the loop is parked, and an answer that arrived while a sibling call still ran resumes the turn as soon as it parks.
 - **Exact replay.** Resume uses the saved assistant message, call ID, input, and
   binding. Completed sibling results are reused with their structured values.
@@ -715,12 +744,13 @@ this RPC test. It returns saved
 JSON success data or fails with the public `ToolResultFailure` type. The normal
 tool runner preserves that failure's JSON data and still supplies transcript
 identity itself. The type cannot select a call ID or tool name. Permission checks
-and preflight hooks still run before execution. The cell declaration maps worker
-suspension back to the original pending interaction for the actor. The fresh
-approval RPC test checks allow and deny through the real compiled worker. The
-host tool restarts at its approval boundary and records one decision. The outer
-source does not restart or continue after approval. Recovery returns the saved
-operation results in a failed outer result with visible worker state loss.
+and preflight hooks still run before execution. An inner call that asks waits
+for its answer in place: sibling calls keep running, and the cell code continues
+with the approved result or the declined failure. The approval RPC tests check
+allow, deny, a sibling that finishes while the dialog is open, and a native call
+beside the cell, through the real compiled worker. Only a lost worker leaves an
+operation waiting; recovery then returns the saved operation results in a
+failed outer result with visible worker state loss.
 
 The input schema in `cell.ts` accepts optional `reset: true`. Admission
 reads this flag from the stored assistant call. After a fresh claim commits, the
@@ -797,11 +827,11 @@ operation recovery and never evaluate their source again.
 `ToolRunner.runBound`. It does not resolve a missing binding by name. The caller still owns the durable operation
 receipt. Execution returns the original tool result.
 A separate result conversion runs after persistence and maps failures to cell errors.
-`CellToolCallSuspended` instead carries the pending interaction and inner call
-identity out of evaluation. The kernel stops and discards the worker; it does
-not send that signal to cell JavaScript as a catchable error. Recorded execution
-preserves the suspension and leaves its outer claim incomplete. Durable inner
-operation resume uses the recorded host below; suspension never authorizes cell replay.
+An inner call never parks the turn: it waits for its answer in place. A call
+that parks anyway fails closed as a cell error. Only recovery suspends: an
+operation a lost worker left waiting, with no answer yet, parks the turn on its
+request. Durable inner operation resume uses the recorded host below; suspension
+never authorizes cell replay.
 
 The tool operation storage section of `cell.ts` records inner operations under an
 admitted outer cell in the same SQLite database. The operation's input, tool
@@ -809,7 +839,8 @@ binding, and derived tool-call ID are immutable. Its state is Started, Waiting,
 Resuming, or Completed. Repeated admission never grants another execution.
 Resume requires the exact waiting request and a valid saved approval decision.
 It commits Resuming before tool execution; that state cannot be reclaimed after
-a crash. A unique request link prevents two operations from sharing an approval.
+a crash. A call that takes its answer (in place, or on resume) returns its
+operation to Started before the request settles, so its next ask starts fresh. A unique request link prevents two operations from sharing an approval.
 The existing interaction service still owns the request and decision. Completed
 cells cannot admit or resume more host effects. Message deletion cascades to
 these receipts. Suspension persists a new approval through InteractionStorage
