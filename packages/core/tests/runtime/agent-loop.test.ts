@@ -2237,6 +2237,7 @@ const makeHarness = (
     const turnInterruption = yield* makeTurnInterruption
     const answered = options.answered ?? new Set<InteractionRequestId>()
     const failedTurns = yield* Ref.make<ReadonlyArray<string>>([])
+    const loopScope = yield* Scope.make()
     const worker = makeAgentLoopWorker<never, never>({
       sessionId,
       branchId,
@@ -2276,7 +2277,7 @@ const makeHarness = (
           return TurnOutcome.cases.Done.make({})
         }),
       sessionAgent: options.sessionAgent ?? Effect.succeed(DEFAULT_AGENT_NAME),
-      loopScope: yield* Scope.make(),
+      loopScope,
     })
     const phase = inbox.phase
     const queue = TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue))
@@ -2294,6 +2295,7 @@ const makeHarness = (
       turnWorkerQueue,
       gateRef,
       sideMutationSemaphore,
+      loopScope,
     }
   }).pipe(Effect.provide(memoryQueueStorage))
 
@@ -2508,6 +2510,36 @@ describe("a start interrupted while it waits for the loop", () => {
       expect(yield* Ref.get(harness.ranTurns)).toEqual(["reserved-first", "queued-second"])
       yield* Fiber.interrupt(loop)
     }),
+  )
+
+  it.live("closing the loop while a reserved start waits runs no turn and fails the caller", () =>
+    Effect.gen(function* () {
+      const reserved = queuedItem("reserved-then-closed")
+      const harness = yield* makeHarness(
+        { state: buildIdleState(), queue: emptyLoopQueueState() },
+        { settles: true },
+      )
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      // Something holds the loop, so the reserved start waits for it.
+      yield* harness.sideMutationSemaphore.take(1)
+      const caller = yield* Effect.forkChild(
+        harness.worker.admitAndStart(reserved, { queueOnly: false }),
+        { startImmediately: true },
+      )
+      yield* Scope.close(harness.loopScope, Exit.void)
+      const exit = yield* Fiber.await(caller)
+      yield* harness.sideMutationSemaphore.release(1)
+
+      // The caller hears the close; it does not hang.
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(String(Cause.squash(exit.cause))).toContain("closed before its turn started")
+      }
+      // The permit is free, and no start is left to take it.
+      yield* Effect.yieldNow
+      expect(yield* Ref.get(harness.ranTurns)).toEqual([])
+      yield* Fiber.interrupt(loop)
+    }).pipe(Effect.timeout("2 seconds")),
   )
 
   it.live("an admitted start strands nothing, and both items run once", () =>
@@ -4586,6 +4618,100 @@ describe("a submit whose caller is interrupted before its turn starts", () => {
         const messages = yield* (yield* MessageStorage).listMessages(branchId)
         expect(messages.filter((message) => message.id === interrupted.id)).toHaveLength(1)
         expect(streamCalls).toBe(1)
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
+    }),
+  )
+})
+
+describe("a loop closed while a submitted turn waits to start", () => {
+  it.scopedLive("no turn runs, and the waiting caller gets the close error", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("closed-submit-session")
+      const branchId = BranchId.make("closed-submit-branch")
+      const warm = makeMessage(sessionId, branchId, "warm")
+      const waited = makeMessage(sessionId, branchId, "waited")
+      const behind = makeMessage(sessionId, branchId, "behind")
+      let streamCalls = 0
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Effect.sync(() => {
+          streamCalls += 1
+          return Stream.fromIterable([
+            textDeltaPart("done"),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies LanguageModelStreamPart[])
+        }),
+      )
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const hold = request({
+        id: "hold-loop",
+        input: Schema.String,
+        output: Schema.String,
+        execute: (value: string) =>
+          Deferred.succeed(entered, void 0).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(value),
+          ),
+      })
+      const layer = actorTestRoot({
+        provider: providerLayer,
+        registry: ExtensionRegistry.fromResolved(makeTestExtensions([], [hold])),
+      })
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(agentLoop, warm)
+        expect(streamCalls).toBe(1)
+        // An extension request holds the idle loop.
+        const holding = yield* Effect.forkChild(
+          Effect.exit(
+            requestExtensionViaActor({
+              sessionId,
+              branchId,
+              commandId: ActorCommandId.make("hold-loop"),
+              capabilityId: "hold-loop",
+              input: "held",
+            }),
+          ),
+        )
+        yield* Deferred.await(entered)
+        // A SubmitAndWait reserves the idle loop and waits for the permit.
+        const waiter = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, waited)))
+        // A Submit queues behind the reservation, which proves it stands.
+        const submitted = yield* Effect.forkChild(Effect.exit(submitAgentLoop(agentLoop, behind)))
+        const queue = yield* waitForOption(
+          () =>
+            agentLoop
+              .getQueue({ sessionId, branchId })
+              .pipe(Effect.map(Option.liftPredicate((q) => q.followUp.length === 1))),
+          "behind message queued",
+        )
+        expect(queue.followUp.map((entry) => entry.id)).toEqual([behind.id])
+        // The branch closes under it.
+        const actorClientFactory = yield* AgentLoopActor.Context
+        const ref = yield* actorClientFactory(entityIdOf(DefaultWorkspaceId, sessionId, branchId))
+        yield* ref.execute(
+          AgentLoopActor.TerminateBranch.make({
+            workspaceId: DefaultWorkspaceId,
+            sessionId,
+            branchId,
+            commandId: ActorCommandId.make("close-branch"),
+          }),
+        )
+        const exit = yield* Fiber.join(waiter)
+        yield* Deferred.succeed(release, void 0)
+        yield* Fiber.join(holding)
+        // A Submit that only queued returned at admission.
+        expect((yield* Fiber.join(submitted))._tag).toBe("Success")
+
+        expect(exit._tag).toBe("Failure")
+        if (Exit.isFailure(exit)) {
+          expect(Cause.squash(exit.cause)).toBeInstanceOf(AgentLoopError)
+        }
+        // The closed start ran no turn, and nothing ran after it.
+        expect(streamCalls).toBe(1)
+        const messages = yield* (yield* MessageStorage).listMessages(branchId)
+        expect(messages.map((message) => message.id)).not.toContain(waited.id)
+        expect(messages.map((message) => message.id)).not.toContain(behind.id)
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
