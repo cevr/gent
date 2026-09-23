@@ -225,7 +225,7 @@ describe("runHeadless", () => {
       const rendered = renderHeadlessToolCall({
         toolName: "cell",
         status: "completed",
-        input: Option.some({ code: "await tools.call('read', {path: 'a.txt'})" }),
+        input: Option.some({ code: "await tools.read({path: 'a.txt'})" }),
         output: Option.some(
           encodeCellOutput({
             display: "ok",

@@ -65,8 +65,16 @@ import {
   openCellProcess,
   pageText,
   recoverCellExecution,
+  renderToolSignature,
   resumeCellToolOperation,
 } from "../src/cell.js"
+import { BashTool } from "../src/exec-tools.js"
+import { EditTool, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
+import { GoalTool } from "../src/goal.js"
+import { AskUserTool, HandoffTool, PromptTool } from "../src/interaction-tools.js"
+import { WebSearchTool } from "../src/network-tools.js"
+import { ReadSessionTool } from "../src/session-tools.js"
+import { CancelTool, MonitorTool, WakeTool } from "../src/wake.js"
 import {
   CellEvaluationError,
   CellProtocolError,
@@ -84,7 +92,13 @@ import {
   SqliteStorage,
   ToolCallBindingStorage,
 } from "@gent/core-internal/storage/storage.js"
-import { defineExtension, ExtensionContext, ExtensionHost, tool } from "@gent/core/extensions/api"
+import {
+  defineExtension,
+  ExtensionContext,
+  ExtensionHost,
+  tool,
+  type ToolCapability,
+} from "@gent/core/extensions/api"
 import {
   AgentDefinition,
   AgentName,
@@ -141,7 +155,7 @@ import {
   runAgentLoopTurnProfile,
   toolResultMessageIdForTurn,
 } from "@gent/core-internal/runtime/turn.js"
-import { shippedPreset } from "./helpers/test-preset.js"
+import { buildCellExecutable, shippedPreset } from "./helpers/test-preset.js"
 import { ExternalToolRunner, type TurnExecutor } from "@gent/core-internal/domain/driver.js"
 import {
   ChildAgentHandle,
@@ -151,7 +165,6 @@ import {
   ListChildren,
   StartChild,
 } from "../src/delegate.js"
-import { ReadSessionTool } from "../src/session-tools.js"
 import { Gent } from "@gent/sdk"
 import { SqlClient } from "effect/unstable/sql"
 import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
@@ -183,33 +196,6 @@ export const buildCellWorker = Effect.gen(function* () {
   return { binaryPath, workerPath }
 })
 
-export const buildCellExecutable = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const platform = yield* GentPlatform
-  const bunPath = yield* platform.execPath
-  const directory = yield* fs.makeTempDirectoryScoped()
-  const binaryPath = path.join(directory, "gent-cell")
-  const sourcePath = new URL("../src/cell-worker-boundary.ts", import.meta.url).pathname
-  const build = yield* ChildProcess.make(
-    bunPath,
-    [
-      "build",
-      sourcePath,
-      "--compile",
-      "--no-compile-autoload-bunfig",
-      "--no-compile-autoload-dotenv",
-      "--no-compile-autoload-tsconfig",
-      "--no-compile-autoload-package-json",
-      "--outfile",
-      binaryPath,
-    ],
-    { stdout: "ignore", stderr: "inherit" },
-  )
-  expect(Number(yield* build.exitCode)).toBe(0)
-  return { binaryPath, workerPath: binaryPath }
-})
-
 // ── cell/cell-execution.test ────────────────────────────────────────────────
 
 const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)
@@ -220,6 +206,12 @@ const testLayer = SqliteStorage.MemoryWithSql(
 const sessionId = SessionId.make("cell-execution-session")
 const branchId = BranchId.make("cell-execution-branch")
 const now = dateFromMillis(1_767_225_600_000)
+
+/** A catalog that selects the named host tools, hashed by their names. */
+const hostCatalog = (...names: ReadonlyArray<string>) => ({
+  hash: names.join(","),
+  tools: names.map((name) => ({ name, description: name, guidelines: [], parameters: {} })),
+})
 
 const setupCalls = Effect.fn("test.setupCells")(function* (
   sources: ReadonlyArray<string>,
@@ -292,7 +284,7 @@ describe("recorded cell execution", () => {
       Effect.gen(function* () {
         const worker = yield* buildCellWorker
         const [first, second, third, fourth] = yield* setupCalls(
-          ["await tools.call('wait', {})", "await tools.call('must-not-run', {})", "1", "6 * 7"],
+          ["await tools.wait({})", "await tools['must-not-run']({})", "1", "6 * 7"],
           [3],
         )
         if (!first || !second || !third || !fourth) return yield* Effect.die("Missing test cells")
@@ -300,6 +292,7 @@ describe("recorded cell execution", () => {
         const stopped = yield* Deferred.make<boolean>()
         const calls = yield* Ref.make(0)
         const host = CellOperationHost.of({
+          catalog: hostCatalog("wait", "must-not-run"),
           call: () =>
             Ref.update(calls, (n) => n + 1).pipe(
               Effect.andThen(Deferred.succeed(started, true)),
@@ -356,7 +349,7 @@ describe("recorded cell execution", () => {
         const [define, hang, useAgain, later, wipe, gone] = yield* setupCalls(
           [
             "let n = 41; const seen = new Map([['k', new Date(0)]]); const fn = () => 1; n",
-            "await tools.call('wait', {})",
+            "await tools.wait({})",
             "n + 1",
             "[n, seen.get('k') instanceof Date, typeof fn].join(',')",
             "typeof n",
@@ -368,6 +361,7 @@ describe("recorded cell execution", () => {
           return yield* Effect.die("Missing test cells")
         const started = yield* Deferred.make<boolean>()
         const host = CellOperationHost.of({
+          catalog: hostCatalog("wait"),
           call: () => Deferred.succeed(started, true).pipe(Effect.andThen(Effect.never)),
         })
         const open = Effect.gen(function* () {
@@ -410,7 +404,7 @@ describe("recorded cell execution", () => {
         const worker = yield* buildCellWorker
         const [keep, suspend, reuse] = yield* setupCalls([
           "const kept = 7; kept",
-          "await tools.call('approve', {})",
+          "await tools.approve({})",
           "kept + 1",
         ])
         if (!keep || !suspend || !reuse) return yield* Effect.die("Missing test cell")
@@ -420,6 +414,7 @@ describe("recorded cell execution", () => {
           branchId,
         })
         const host = CellOperationHost.of({
+          catalog: hostCatalog("approve"),
           call: (request) =>
             Effect.fail(
               new CellToolCallSuspended({
@@ -458,7 +453,7 @@ describe("recorded cell execution", () => {
       Effect.gen(function* () {
         const worker = yield* buildCellWorker
         const [first, next] = yield* setupCalls([
-          "try { await tools.call('approve', {}) } catch { await tools.call('must-not-run', {}) }",
+          "try { await tools.approve({}) } catch { await tools['must-not-run']({}) }",
           "42",
         ])
         if (!first || !next) return yield* Effect.die("Missing test cell")
@@ -470,6 +465,7 @@ describe("recorded cell execution", () => {
         })
         const innerCallId = ToolCallId.make("cell-inner-call")
         const host = CellOperationHost.of({
+          catalog: hostCatalog("approve", "must-not-run"),
           call: (request) =>
             Ref.update(calls, (count) => count + 1).pipe(
               Effect.andThen(
@@ -521,13 +517,14 @@ describe("recorded cell execution", () => {
         const output = path.join(directory, "effects.txt")
         yield* fs.writeFileString(output, "")
         const calls = yield* setupCalls([
-          "let n = await tools.call('append', {}); n",
+          "let n = await tools.append({}); n",
           "n++; throw new Error('cell failed')",
           "n",
         ])
         const [first, failed, next] = calls
         if (!first || !failed || !next) return yield* Effect.die("Missing test cell")
         const host = CellOperationHost.of({
+          catalog: hostCatalog("append"),
           call: () =>
             Effect.gen(function* () {
               const before = yield* fs.readFileString(output)
@@ -591,14 +588,12 @@ describe("recorded cell execution", () => {
         const directory = yield* fs.makeTempDirectoryScoped()
         const output = path.join(directory, "effects.txt")
         yield* fs.writeFileString(output, "")
-        const [first, next] = yield* setupCalls([
-          "await tools.call('append-and-wait', {})",
-          "21 * 2",
-        ])
+        const [first, next] = yield* setupCalls(["await tools['append-and-wait']({})", "21 * 2"])
         if (!first || !next) return yield* Effect.die("Missing test cell")
         const started = yield* Deferred.make<boolean>()
         const stopped = yield* Deferred.make<boolean>()
         const host = CellOperationHost.of({
+          catalog: hostCatalog("append-and-wait"),
           call: () =>
             Effect.gen(function* () {
               const before = yield* fs.readFileString(output)
@@ -645,11 +640,7 @@ describe("recorded cell execution", () => {
         const fs = yield* FileSystem.FileSystem
         const savedWorker = `${worker.workerPath}.saved`
         yield* fs.rename(worker.workerPath, savedWorker)
-        const [first, next, crash] = yield* setupCalls([
-          "41",
-          "42",
-          "tools.call.constructor('return process.exit(0)')()",
-        ])
+        const [first, next, crash] = yield* setupCalls(["41", "42", "process.exit(0)"])
         if (!first || !next || !crash) return yield* Effect.die("Missing test cell")
         const execution = Context.get(
           yield* Layer.build(
@@ -688,10 +679,13 @@ describe("cell worker process", () => {
       Effect.gen(function* () {
         const artifact = yield* buildCellExecutable
         const kernel = yield* openCellKernel(artifact)
-        const host = CellOperationHost.of({ call: () => Effect.succeed(21) })
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("value"),
+          call: () => Effect.succeed(21),
+        })
         expect(
           (yield* kernel
-            .evaluate("let saved = await tools.call('value', {}); saved")
+            .evaluate("let saved = await tools.value({}); saved")
             .pipe(Effect.provideService(CellOperationHost, host))).display,
         ).toBe("21")
         expect(
@@ -699,15 +693,13 @@ describe("cell worker process", () => {
             .display,
         ).toBe("42")
         const executable = yield* kernel
-          .evaluate("tools.call.constructor('return process.execPath')()")
+          .evaluate("process.execPath")
           .pipe(Effect.provideService(CellOperationHost, host))
         const fs = yield* FileSystem.FileSystem
         expect(executable.display).toBe(yield* fs.realPath(artifact.binaryPath))
         expect(
           (yield* kernel
-            .evaluate(
-              "Object.keys(process.env).length > 0 && process.cwd() === tools.call.constructor('return process.cwd()')()",
-            )
+            .evaluate("Object.keys(process.env).length > 0 && process.cwd() === process.cwd()")
             .pipe(Effect.provideService(CellOperationHost, host))).display,
         ).toBe("true")
         const runtime = yield* kernel
@@ -794,6 +786,7 @@ describe("cell worker process", () => {
         const started = yield* Deferred.make<number>()
         const stopped = yield* Deferred.make<boolean>()
         const host = CellOperationHost.of({
+          catalog: hostCatalog("wait"),
           call: (request) =>
             Deferred.succeed(started, Number(request.input)).pipe(
               Effect.andThen(Effect.never),
@@ -801,7 +794,7 @@ describe("cell worker process", () => {
             ),
         })
         const evaluation = yield* kernel
-          .evaluate("await tools.call('wait', tools.call.constructor('return process.pid')())")
+          .evaluate("await tools.wait(process.pid)")
           .pipe(Effect.provideService(CellOperationHost, host), Effect.forkScoped)
         const pid = yield* Deferred.await(started)
         yield* kernel.close
@@ -824,6 +817,7 @@ describe("cell worker process", () => {
         const started = yield* Deferred.make<number>()
         const stopped = yield* Deferred.make<boolean>()
         const host = CellOperationHost.of({
+          catalog: hostCatalog("wait"),
           call: (request) =>
             Deferred.succeed(started, Number(request.input)).pipe(
               Effect.andThen(Effect.never),
@@ -831,7 +825,7 @@ describe("cell worker process", () => {
             ),
         })
         const evaluation = yield* kernel
-          .evaluate("await tools.call('wait', tools.call.constructor('return process.pid')())")
+          .evaluate("await tools.wait(process.pid)")
           .pipe(Effect.provideService(CellOperationHost, host), Effect.forkScoped)
         const pid = yield* Deferred.await(started)
         yield* Fiber.interrupt(evaluation)
@@ -857,10 +851,16 @@ describe("cell worker process", () => {
     () =>
       Effect.gen(function* () {
         const kernel = yield* openCellKernel(yield* buildCellWorker)
-        const firstHost = CellOperationHost.of({ call: () => Effect.succeed(20) })
-        const nextHost = CellOperationHost.of({ call: () => Effect.succeed(22) })
+        const firstHost = CellOperationHost.of({
+          catalog: hostCatalog("value"),
+          call: () => Effect.succeed(20),
+        })
+        const nextHost = CellOperationHost.of({
+          catalog: hostCatalog("value"),
+          call: () => Effect.succeed(22),
+        })
         const first = yield* kernel
-          .evaluate("let n = await tools.call('value', {}); n")
+          .evaluate("let n = await tools.value({}); n")
           .pipe(Effect.provideService(CellOperationHost, firstHost))
         expect(first.display).toBe("20")
         const error = yield* kernel
@@ -868,7 +868,7 @@ describe("cell worker process", () => {
           .pipe(Effect.provideService(CellOperationHost, firstHost), Effect.flip)
         expect(error._tag).toBe("CellEvaluationError")
         const next = yield* kernel
-          .evaluate("n + await tools.call('value', {})")
+          .evaluate("n + await tools.value({})")
           .pipe(Effect.provideService(CellOperationHost, nextHost))
         expect(next.display).toBe("43")
         yield* kernel.reset
@@ -898,6 +898,7 @@ describe("cell worker process", () => {
         let calls = 0
         let pid = 0
         const host = CellOperationHost.of({
+          catalog: hostCatalog("started"),
           call: (request) =>
             Effect.sync(() => {
               calls++
@@ -906,9 +907,7 @@ describe("cell worker process", () => {
             }),
         })
         const error = yield* kernel
-          .evaluate(
-            "let retained = 41; await tools.call('started', tools.call.constructor('return process.pid')()); while (true) {}",
-          )
+          .evaluate("let retained = 41; await tools.started(process.pid); while (true) {}")
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
         expect(error._tag).toBe("CellKernelError")
         if (error._tag !== "CellKernelError") return yield* error
@@ -918,7 +917,7 @@ describe("cell worker process", () => {
         expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
         expect((yield* platform.signal(pid, 0).pipe(Effect.flip))._tag).toBe("SignalError")
         const later = yield* kernel
-          .evaluate("await tools.call('started', 0)")
+          .evaluate("await tools.started(0)")
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
         expect(later._tag).toBe("CellKernelError")
         expect(calls).toBe(1)
@@ -929,7 +928,7 @@ describe("cell worker process", () => {
         expect(fresh.display).toBe("undefined")
         expect(calls).toBe(1)
         const crash = yield* kernel
-          .evaluate("tools.call.constructor('process.exit(7)')()")
+          .evaluate("process.exit(7)")
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
         if (crash._tag !== "CellKernelError") return yield* crash
         expect(crash.reason).toBe("process")
@@ -951,16 +950,17 @@ describe("cell worker process", () => {
         })
         // Host operations own their bounds: a slow one outlives the compute deadline.
         const host = CellOperationHost.of({
+          catalog: hostCatalog("slow"),
           // gent/no-sleep: allow real-clock host operation that outlives the kernel deadline
           call: () => Effect.sleep("900 millis").pipe(Effect.as(5)),
         })
         const slow = yield* kernel
-          .evaluate("const v = await tools.call('slow', 0); v + 1")
+          .evaluate("const v = await tools.slow(0); v + 1")
           .pipe(Effect.provideService(CellOperationHost, host))
         expect(slow.display).toBe("6")
         // Compute after the host operation returns is bounded again.
         const spun = yield* kernel
-          .evaluate("await tools.call('slow', 0); while (true) {}")
+          .evaluate("await tools.slow(0); while (true) {}")
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
         expect(spun._tag).toBe("CellKernelError")
         if (spun._tag !== "CellKernelError") return yield* spun
@@ -1023,7 +1023,7 @@ describe("cell worker process", () => {
         const kernel = yield* openCellKernel({ ...launch, maximumReplacements: 1 })
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
         const crash = yield* kernel
-          .evaluate("tools.call.constructor('process.exit(7)')()")
+          .evaluate("process.exit(7)")
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
         expect(crash._tag).toBe("CellKernelError")
         yield* fs.writeFileString(launch.workerPath, "process.exit(2)")
@@ -1055,7 +1055,8 @@ describe("cell worker process", () => {
               CellRequest.cases.Evaluate.make({
                 cellId: "one",
                 outputToken: "one-token",
-                source: "const n = await tools.call('count', {}); n + 1",
+                source: "const n = await tools.count({}); n + 1",
+                catalog: hostCatalog("count"),
               }),
             )
             const call = yield* Queue.take(responses)
@@ -1316,7 +1317,7 @@ describe("cell approvals", () => {
               ]
               const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
                 toolCallStep("cell", {
-                  code: "await tools.call('mark', 'before'); await tools.call('approve', {}); await tools.call('mark', 'after')",
+                  code: "await tools.mark('before'); await tools.approve({}); await tools.mark('after')",
                 }),
                 textStep("Cell recovery reported"),
               ])
@@ -2158,9 +2159,9 @@ const cellOnly = (step: SequenceStep): SequenceStep => ({
       .map((message) => message.content)
       .join("\n")
     expect(system).toContain("## Host Tools")
-    expect(system).toContain("- **read**(path")
-    expect(system).toContain("await tools.call(name, input)")
-    expect(system).not.toContain("- **cell**(")
+    expect(system).toContain("- tools.read(input: { path: string")
+    expect(system).toContain("`tools.describe(id)` returns the full input schema")
+    expect(system).not.toContain("tools.cell(")
   },
 })
 
@@ -2176,7 +2177,7 @@ describe("shipped model surface", () => {
         const directory = yield* fs.makeTempDirectoryScoped()
         const file = path.join(directory, "note.txt")
         yield* fs.writeFileString(file, "shipped surface")
-        const readNote = `const note = (await tools.call('read', {path: ${encodeJson(file)}})).content; note`
+        const readNote = `const note = (await tools.read({path: ${encodeJson(file)}})).content; note`
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           cellOnly(toolCallStep("cell", { code: readNote })),
           textStep("first"),
@@ -2278,8 +2279,8 @@ describe("shipped model surface", () => {
         // Parallel delegation is a cell recipe, not a tool mode.
         const code = [
           `const [a, b] = await Promise.all([`,
-          `  tools.call('read', {path: ${encodeJson(left)}}),`,
-          `  tools.call('read', {path: ${encodeJson(right)}}),`,
+          `  tools.read({path: ${encodeJson(left)}}),`,
+          `  tools.read({path: ${encodeJson(right)}}),`,
           `]); a.content + ' | ' + b.content`,
         ].join("\n")
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
@@ -2358,8 +2359,8 @@ describe("shipped model surface", () => {
         })
         const code = [
           `let grep = 'reachable'`,
-          `try { await tools.call('grep', {pattern: 'scoped', path: ${encodeJson(directory)}}) } catch { grep = 'unreachable' }`,
-          `(await tools.call('read', {path: ${encodeJson(file)}})).content + ' | grep ' + grep`,
+          `try { await tools.grep({pattern: 'scoped', path: ${encodeJson(directory)}}) } catch { grep = 'unreachable' }`,
+          `(await tools.read({path: ${encodeJson(file)}})).content + ' | grep ' + grep`,
         ].join("\n")
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
           cellOnly(toolCallStep("cell", { code })),
@@ -2548,7 +2549,7 @@ describe("child cell", () => {
           if (parentCalls === 1) {
             return step([
               toolCallPart("cell", {
-                code: "const h = await tools.call('delegate.start', { todo: 'compute' }); typeof h.requestId === 'string'",
+                code: "const h = await tools.delegate.start({ todo: 'compute' }); typeof h.requestId === 'string'",
               }),
               finishPart({ finishReason: "tool-calls" }),
             ])
@@ -2669,33 +2670,33 @@ describe("branch cell lifetime", () => {
         }> = [
           {
             send: true,
-            code: "const child = await tools.call('delegate.start', {todo: 'Wait for cancellation'}); await tools.call('child-handle', {_tag: 'save', handle: child}); await tools.call('model-started', {call: 1}); true",
+            code: "const child = await tools.delegate.start({todo: 'Wait for cancellation'}); await tools['child-handle']({_tag: 'save', handle: child}); await tools['model-started']({call: 1}); true",
           },
           {
             send: true,
-            code: "(await tools.call('delegate.list', {})).find((kid) => kid.requestId === child.requestId).completed === false",
+            code: "(await tools.delegate.list({})).find((kid) => kid.requestId === child.requestId).completed === false",
           },
           {
             send: true,
             reset: true,
-            code: "const saved = await tools.call('child-handle', {_tag: 'get'}); typeof child === 'undefined' && (await tools.call('delegate.list', {})).find((kid) => kid.requestId === saved.requestId).completed === false",
+            code: "const saved = await tools['child-handle']({_tag: 'get'}); typeof child === 'undefined' && (await tools.delegate.list({})).find((kid) => kid.requestId === saved.requestId).completed === false",
           },
           {
             send: true,
-            code: "const id = (await tools.call('child-handle', {_tag: 'get'})).requestId; await tools.call('delegate.cancel', {requestId: id}); true",
+            code: "const id = (await tools['child-handle']({_tag: 'get'})).requestId; await tools.delegate.cancel({requestId: id}); true",
           },
           // The cancelled child's completion arrives as a message; no cell ever waited for it.
           {
             send: false,
-            code: "const cancelled = await tools.call('child-handle', {_tag: 'get'}); (await tools.call('delegate.list', {})).find((kid) => kid.requestId === cancelled.requestId).interrupted === true",
+            code: "const cancelled = await tools['child-handle']({_tag: 'get'}); (await tools.delegate.list({})).find((kid) => kid.requestId === cancelled.requestId).interrupted === true",
           },
           {
             send: true,
-            code: "const finished = await tools.call('delegate.start', {todo: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['delegate.start'], systemPromptAddendum: 'Report the verified result'}}); await tools.call('child-handle', {_tag: 'save', handle: finished}); await tools.call('model-started', {call: 12}); true",
+            code: "const finished = await tools.delegate.start({todo: 'Return the result', overrides: {modelId: 'custom/model', reasoningEffort: 'high', allowedTools: ['read_session'], deniedTools: ['delegate.start'], systemPromptAddendum: 'Report the verified result'}}); await tools['child-handle']({_tag: 'save', handle: finished}); await tools['model-started']({call: 12}); true",
           },
           {
             send: false,
-            code: "const h = await tools.call('child-handle', {_tag: 'get'}); const reply = await tools.call('read_session', {sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.call('delegate.list', {}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.messageCount > 0 && reply.content.includes('verified child result')",
+            code: "const h = await tools['child-handle']({_tag: 'get'}); const reply = await tools.read_session({sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.delegate.list({}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.messageCount > 0 && reply.content.includes('verified child result')",
           },
         ]
         const steps = turns.flatMap<SequenceStep>((turn, index) => [
@@ -2723,8 +2724,8 @@ describe("branch cell lifetime", () => {
               .map((message) => message.content)
               .join("\n")
             expect(system).toContain("Report the verified result")
-            expect(system).toContain("**read_session**")
-            expect(system).not.toContain("**delegate**")
+            expect(system).toContain("- tools.read_session(input: { sessionId: string")
+            expect(system).not.toContain("- tools.delegate.start(")
           },
         })
         const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence(steps)
@@ -2844,12 +2845,12 @@ describe("branch cell lifetime", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const sources = [
-              "const names = tools.search('').tools.map((entry) => entry.name); if (names.includes('hidden') || names.includes('cell') || !names.includes('worker')) throw new Error('Wrong catalog'); const spec = tools.describe('worker'); if (spec.parameters.type !== 'number' || !spec.guidelines.includes('Supply the current worker PID')) throw new Error('Wrong tool description'); let kept = 21; await tools.call('worker', tools.call.constructor('return process.pid')()); kept",
+              "const names = Object.keys(tools); if (names.includes('hidden') || names.includes('cell') || !names.includes('worker')) throw new Error('Wrong catalog'); const spec = tools.describe('worker'); if (spec.parameters.type !== 'number' || !spec.guidelines.includes('Supply the current worker PID')) throw new Error('Wrong tool description'); let kept = 21; await tools.worker(process.pid); kept",
               "if (tools.describe('worker').parameters.type !== 'number') throw new Error('Catalog was not retained'); kept += 1",
-              "await tools.call('worker', tools.call.constructor('return process.pid')()); typeof kept",
-              "let rejected = false; try { await tools.call('cell', {code: 'kept = 0'}) } catch (error) { rejected = error.message.includes('A cell cannot invoke another outer cell as a host tool') }; let hiddenRejected = false; try { await tools.call('hidden', {}) } catch { hiddenRejected = true }; rejected && hiddenRejected && kept === 23",
+              "await tools.worker(process.pid); typeof kept",
+              "let rejected = false; try { await tools.cell({code: 'kept = 0'}) } catch (error) { rejected = error.message.includes('tools.cell is not a host tool selected for this turn') }; let hiddenRejected = false; try { await tools.hidden({}) } catch { hiddenRejected = true }; rejected && hiddenRejected && kept === 23",
               "typeof kept",
-              "await tools.call('worker', tools.call.constructor('return process.pid')()); while (true) {}",
+              "await tools.worker(process.pid); while (true) {}",
             ]
             const { layer: providerLayer } = yield* LanguageModelLayers.sequence(
               sources.flatMap((code, index) => {
@@ -3674,7 +3675,7 @@ const fixture = Effect.gen(function* () {
         Prompt.toolCallPart({
           id: cellOperationStorage.toolCallId,
           name: "cell",
-          params: { code: "await tools.call('write', {})" },
+          params: { code: "await tools.write({})" },
           providerExecuted: false,
         }),
       ],
@@ -4240,7 +4241,7 @@ describe("model context directives from a cell", () => {
           const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
             textStep("history reply"),
             toolCallStep("cell", {
-              code: `await context.${directive}(); await tools.call("hold", {})`,
+              code: `await context.${directive}(); await tools.hold({})`,
             }),
             {
               ...textStep("after interrupt"),
@@ -4364,7 +4365,7 @@ describe("turn prompt sections", () => {
         "- The cell is a full Bun process in the working directory with your user's privileges; nothing is sandboxed. Bun (Bun.file, Bun.write, Bun.$, Bun.spawn), bun:sqlite, fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory are all available.",
       )
       expect(guidelines?.content).toContain(
-        "- Shell that changes state (git, installs, deletes, network writes) goes through tools.call('bash', { command })",
+        "- Shell that changes state (git, installs, deletes, network writes) goes through tools.bash({ command })",
       )
       expect(guidelines?.content).toContain("- Return a summary, not the data.")
       expect(guidelines?.content).toContain(
@@ -4379,4 +4380,102 @@ describe("turn prompt sections", () => {
       expect(sections.find((section) => section.id === "cell-catalog")).toBeUndefined()
     }),
   )
+})
+
+// ── cell/tool-signatures.test ───────────────────────────────────────────────
+
+const bracketed = tool({
+  id: "must-not-run",
+  description: "First line.\nSecond line.",
+  params: Schema.Struct({
+    items: Schema.Array(Schema.Union([Schema.String, Schema.Finite])),
+    node: Schema.optional(Schema.Struct({ id: Schema.String })),
+  }),
+  output: Schema.Boolean,
+  execute: () => Effect.succeed(true),
+})
+
+const shippedSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
+  [
+    StartChild,
+    '- tools.delegate.start(input: { todo: string; context?: "fresh" | "fork"; overrides?: object }): Promise<{ requestId: string; sessionId: string; branchId: string }> // Start a child agent on a task',
+  ],
+  [
+    CancelChild,
+    "- tools.delegate.cancel(input: { requestId: string }): Promise<object> // Cancel a running child on this branch. Its turn ends as interrupted; a finished child is left as it is.",
+  ],
+  [
+    ListChildren,
+    "- tools.delegate.list(input?: { completed?: boolean }): Promise<object[]> // List every child this branch owns, from the registry. The registry survives restarts; completed is a turn receipt, no...",
+  ],
+  [
+    BashTool,
+    "- tools.bash(input: { command: string; timeout?: number; cwd?: string; run_in_background?: boolean }): Promise<{ stdout: string; stderr: string; exitCode: number }> // Execute shell commands",
+  ],
+  [
+    ReadTool,
+    "- tools.read(input: { path: string; offset?: number; limit?: number }): Promise<{ content: string; path: string; lineCount: number; truncated: boolean; nextOffset?: number }> // Read file contents with line numbers",
+  ],
+  [
+    WriteTool,
+    "- tools.write(input: { atomic?: boolean; path: string; content: string }): Promise<{ path: string; bytesWritten: number }> // Create or overwrite files",
+  ],
+  [
+    EditTool,
+    "- tools.edit(input: { path: string; oldString: string; newString: string; replaceAll?: boolean }): Promise<{ path: string; replacements: number }> // Apply targeted edits to existing files",
+  ],
+  [
+    GrepTool,
+    "- tools.grep(input: { pattern: string; path?: string; glob?: string; caseSensitive?: boolean; context?: number; limit?: number }): Promise<{ matches: { file: string; line: number; content: string; context?: object }[]; truncated: boolean }> // Search file contents with regex",
+  ],
+  [
+    GoalTool,
+    '- tools.goal(input: { action: "get" | "create" | "complete"; objective?: string; tokenBudget?: number }): Promise<{ goal?: object; remainingTokens?: number; report?: string }> // Persistent goal state',
+  ],
+  [
+    AskUserTool,
+    "- tools.ask_user(input: { questions: object[] }): Promise<{ answers: string[][]; cancelled?: boolean }> // Ask the user questions with optional predefined options",
+  ],
+  [
+    PromptTool,
+    '- tools.prompt(input: { mode: "present" | "confirm" | "review"; content: string; title?: string }): Promise<object> // Present content to the user for review, confirmation, or informational display. Use mode=present for informational co...',
+  ],
+  [
+    HandoffTool,
+    "- tools.handoff(input: { context: string; reason?: string }): Promise<{ handoff: boolean; reason?: string; summary?: string; parentSessionId?: string }> // Transfer context to a new session",
+  ],
+  [
+    WebSearchTool,
+    '- tools.websearch(input: { query: string; numResults?: number; type?: "auto" | "fast" }): Promise<{ output: string; query: string }> // Search the web for information',
+  ],
+  [
+    ReadSessionTool,
+    "- tools.read_session(input: { sessionId: string; branchId?: string }): Promise<{ sessionId: string; content: string; messageCount?: number; branchCount?: number }> // Read a past session's conversation as markdown. A long transcript keeps its head and tail.",
+  ],
+  [
+    WakeTool,
+    '- tools.wake(input: { afterSeconds?: number; at?: string; everySeconds?: number; mode?: "wake" | "notify"; note: string }): Promise<{ wakeId: string; dueAt: string; everySeconds?: number; mode: "wake" | "notify"; note: string }> // Schedule a wake-up alarm',
+  ],
+  [
+    MonitorTool,
+    '- tools.monitor(input: { command: string; cwd?: string; everySeconds?: number; until?: string; timeoutSeconds?: number; mode?: "wake" | "notify"; note: string }): Promise<{ wakeId: string; everySeconds: number; deadline: string; mode: "wake" | "notify"; note: string }> // Poll a command until it succeeds, then wake',
+  ],
+  [
+    CancelTool,
+    "- tools.wake.cancel(input?: { wakeId?: string }): Promise<{ cancelled: string[] }> // Cancel a pending alarm or monitor",
+  ],
+  [
+    bracketed,
+    '- tools["must-not-run"](input: { items: (string | number)[]; node?: { id: string } }): Promise<boolean> // First line.',
+  ],
+]
+
+describe("tool signatures", () => {
+  for (const [capability, expected] of shippedSignatures) {
+    it.effect(`${String(capability.id)} renders its callable path and types`, () =>
+      Effect.gen(function* () {
+        expect(yield* renderToolSignature(capability)).toBe(expected)
+      }),
+    )
+  }
 })

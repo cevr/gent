@@ -715,23 +715,34 @@ set. Default cutover must retain a host binding set when the advertised model
 surface narrows to `cell`; it cannot reuse a cell-only advertised map for discovery.
 
 The catalog is instruction plus data, not a tool. When the surface narrows to
-`cell`, `buildTurnPromptSections` adds a `cell-catalog` section that lists every
-selected host tool with its prompt snippet or description; the section is
-rebuilt each turn, so live composition changes reach the model as ordinary
-instruction changes. `cell.ts` builds the data half
-from the same selected map: name, description, guidelines, and the actual Effect
-AI input schema, hashed over its encoding. `dispatchCell` hands it to the cell
-host; the kernel sends it inside `Evaluate` only when the hash differs
-from what the current worker holds, and clears that memory when a replacement
-worker starts, so the first cell on a new worker carries the full catalog. The
-worker keeps the catalog beside the namespace: `reset` clears bindings, not the
-catalog, and a snapshot never contains it. Inside the cell `tools.search(query,
-offset)` and `tools.describe(name)` are local synchronous reads over that data,
-20 names per page with a next offset; they record no operation receipt and grant
-no execution permission. The RPC lifetime test checks the search set and a host
-schema through the compiled worker, and that a later cell without a catalog
-still describes the tool. An agent-denied tool and the outer `cell` are absent
-from search.
+`cell`, the cell extension's `systemPrompt` hook adds a `## Host Tools` section
+with one signature line per selected host tool: its callable path, an input
+type and a result type rendered from the JSON Schema, and the first line of its
+prompt snippet or description (`- tools.delegate.cancel(input: { requestId:
+string }): Promise<object> // Cancel a running child ...`). Nested objects
+inline while short and otherwise render as `object`. The section is rebuilt
+each turn, so live composition changes reach the model as ordinary instruction
+changes. `cell.ts` builds the data half from the same selected map: name,
+description, guidelines, and the actual Effect AI input schema, hashed over its
+encoding. `dispatchCell` hands it to the cell host; the kernel sends it inside
+`Evaluate` only when the hash differs from what the current worker holds, and
+clears that memory when a replacement worker starts, so the first cell on a new
+worker carries the full catalog. The worker keeps the catalog beside the
+namespace: `reset` clears bindings, not the catalog, and a snapshot never
+contains it.
+
+Inside the cell `tools` is a namespace over that catalog: every selected id is
+a callable path, split on `.` (`delegate.start` is `tools.delegate.start(input)`,
+`must-not-run` is `tools["must-not-run"](input)`). Each node is a Proxy that
+reads the current catalog, so one node can be a tool and a namespace at once
+(`tools.wake(...)` and `tools.wake.cancel(...)`). A call sends the id itself as
+the host call name, so operation receipts and replay key on the tool id. An
+unknown path throws and names the three closest ids. `tools.describe(id)` is a
+local synchronous read of the full entry, schema and guidelines; it records no
+operation receipt and grants no execution permission. The RPC lifetime test
+checks the namespace keys and a host schema through the compiled worker, and
+that a later cell without a catalog still describes the tool. An agent-denied
+tool and the outer `cell` are absent from the namespace.
 
 Tool dispatch accepts separate outer and host binding maps. Normal turns supply
 the selected map for both. Recovery validates pending outer calls against their

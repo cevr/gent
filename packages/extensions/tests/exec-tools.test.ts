@@ -39,7 +39,7 @@ import {
   testToolContext,
   type TestToolContext,
 } from "@gent/core-internal/test-utils/index"
-import { shippedPreset } from "./helpers/test-preset.js"
+import { currentCellPlatform, shippedPreset } from "./helpers/test-preset.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
 import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
@@ -197,6 +197,7 @@ describe("background shell through a cell", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-background-notice-" })
+        const cellPlatform = yield* currentCellPlatform
         for (const afterTurn of [false, true]) {
           const release = `${directory}/release`
           let command = "printf CELL-BACKGROUND-COMPLETE"
@@ -207,13 +208,14 @@ describe("background shell through a cell", () => {
           })
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
             toolCallStep("cell", {
-              code: `await tools.call("bash", ${input})`,
+              code: `await tools.bash(${input})`,
             }),
             textStep("started"),
             textStep("received completion"),
           ])
           const { client, sessionId, branchId } = yield* createRpcHarness({
             ...shippedPreset,
+            extraLayers: [cellPlatform],
             providerLayer,
             durableApproval: true,
           })
@@ -262,12 +264,14 @@ describe("background shell through a cell", () => {
           run_in_background: true,
         })
         const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-          toolCallStep("cell", { code: `await tools.call("bash", ${input})` }),
+          toolCallStep("cell", { code: `await tools.bash(${input})` }),
           textStep("started"),
           textStep("received completion"),
         ])
+        const cellPlatform = yield* currentCellPlatform
         const { client, sessionId, branchId } = yield* createRpcHarness({
           ...shippedPreset,
+          extraLayers: [cellPlatform],
           providerLayer,
           durableApproval: true,
         })

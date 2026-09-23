@@ -17,6 +17,12 @@ import {
 
 // ── cell/cell-worker.test ───────────────────────────────────────────────────
 
+/** A catalog that selects the named host tools, hashed by their names. */
+const catalogOf = (...names: ReadonlyArray<string>) => ({
+  hash: names.join(","),
+  tools: names.map((name) => ({ name, description: name, guidelines: [], parameters: {} })),
+})
+
 const makeHarness = Effect.gen(function* () {
   const requests = yield* Queue.make<CellRequest>({ capacity: 64 })
   const responses = yield* Queue.make<CellResponse>({ capacity: 64 })
@@ -45,7 +51,8 @@ describe("cell worker", () => {
         CellRequest.cases.Evaluate.make({
           cellId: "one",
           outputToken: "one-token",
-          source: "const count = await tools.call('count', {}); count",
+          source: "const count = await tools.count({}); count",
+          catalog: catalogOf("count"),
         }),
       )
       const call = yield* worker.next
@@ -113,18 +120,18 @@ describe("cell worker", () => {
         CellRequest.cases.Evaluate.make({
           cellId: "two",
           outputToken: "two-token",
-          source: "tools.search('').total",
+          source: "Object.keys(tools).join(',')",
         }),
       )
       const second = yield* worker.next
       if (second._tag !== "Evaluated")
         return yield* new CellProtocolError({ message: "Expected result" })
-      expect(second.result.display).toBe("1")
+      expect(second.result.display).toBe("read")
       yield* worker.send(
         CellRequest.cases.Evaluate.make({
           cellId: "three",
           outputToken: "three-token",
-          source: "tools.search('').tools.map((t) => t.name).join(',')",
+          source: "Object.keys(tools).join(',')",
           catalog: {
             hash: "b",
             tools: [{ name: "write", description: "Write a file", guidelines: [], parameters: {} }],
@@ -145,7 +152,8 @@ describe("cell worker", () => {
         CellRequest.cases.Evaluate.make({
           cellId: "one",
           outputToken: "one-token",
-          source: "await tools.call('wait', {})",
+          source: "await tools.wait({})",
+          catalog: catalogOf("wait"),
         }),
       )
       expect((yield* worker.next)._tag).toBe("HostCall")
@@ -175,7 +183,8 @@ describe("cell worker", () => {
         CellRequest.cases.Evaluate.make({
           cellId: "one",
           outputToken: "one-token",
-          source: "await tools.call('denied', {})",
+          source: "await tools.denied({})",
+          catalog: catalogOf("denied"),
         }),
       )
       const call = yield* worker.next
@@ -206,7 +215,8 @@ describe("cell worker", () => {
         CellRequest.cases.Evaluate.make({
           cellId: "one",
           outputToken: "one-token",
-          source: "await tools.call('wait', {})",
+          source: "await tools.wait({})",
+          catalog: catalogOf("wait"),
         }),
       )
       expect((yield* worker.next)._tag).toBe("HostCall")
@@ -225,7 +235,8 @@ describe("cell worker", () => {
         CellRequest.cases.Evaluate.make({
           cellId: "one",
           outputToken: "one-token",
-          source: "await Promise.all(Array.from({ length: 33 }, () => tools.call('wait', {})))",
+          source: "await Promise.all(Array.from({ length: 33 }, () => tools.wait({})))",
+          catalog: catalogOf("wait"),
         }),
       )
       const calls: Array<Extract<CellResponse, { _tag: "HostCall" }>> = []
@@ -260,12 +271,13 @@ describe("cell worker", () => {
 // ── cell/bun-cell-evaluator.test ────────────────────────────────────────────
 
 /** Cells share the test process realm, so each test clears its bindings at scope exit. */
-const makeKernel = (host: typeof CellHost.Service) =>
+const makeKernel = (host: typeof CellHost.Service, ...tools: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const kernel = yield* makeBunCellEvaluator.pipe(
       Effect.provideService(CellHost, host),
       Effect.provideService(CellWorkerEnvironment, { workingDirectory: process.cwd() }),
     )
+    yield* kernel.setCatalog(catalogOf(...tools).tools)
     yield* Effect.addFinalizer(() => kernel.reset)
     return kernel
   })
@@ -275,19 +287,20 @@ describe("Bun cell evaluation", () => {
     Effect.gen(function* () {
       const called = yield* Deferred.make<boolean>()
       const reply = yield* Deferred.make<number>()
-      const kernel = yield* makeKernel({
-        call: () => Deferred.succeed(called, true).pipe(Effect.andThen(Deferred.await(reply))),
-      })
-      const cell = yield* kernel
-        .evaluate("(await tools.call('read', {})) + 1")
-        .pipe(Effect.forkScoped)
+      const kernel = yield* makeKernel(
+        {
+          call: () => Deferred.succeed(called, true).pipe(Effect.andThen(Deferred.await(reply))),
+        },
+        "read",
+      )
+      const cell = yield* kernel.evaluate("(await tools.read({})) + 1").pipe(Effect.forkScoped)
       yield* Deferred.await(called)
       yield* Deferred.succeed(reply, 41)
       expect((yield* Fiber.join(cell)).display).toBe("42")
     }).pipe(Effect.timeout("2 seconds")),
   )
 
-  it.scopedLive("searches and describes the shipped catalog locally without a host call", () =>
+  it.scopedLive("describes the shipped catalog locally without a host call", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0)
       const kernel = yield* makeKernel({
@@ -302,32 +315,99 @@ describe("Bun cell evaluation", () => {
         },
         { name: "write", description: "Write a file", guidelines: [], parameters: {} },
       ])
-      const search = yield* kernel.evaluate(
-        "const page = tools.search('file', 1); `${page.total}:${page.nextOffset}:${page.tools.map((t) => t.name).join(',')}`",
-      )
-      expect(search.display).toBe("2:2:write")
       const described = yield* kernel.evaluate(
         "const spec = tools.describe('read'); `${spec.parameters.properties.path.type}:${spec.guidelines[0]}`",
       )
       expect(described.display).toBe("string:Prefer read over bash")
       const missing = yield* kernel.evaluate("tools.describe('bash')").pipe(Effect.flip)
-      expect(missing.message).toContain("Tool bash is not selected for this turn")
+      expect(missing.message).toContain("tools.bash is not a host tool selected for this turn")
       // Catalog reads are worker-local and never become host operations.
       expect(yield* Ref.get(calls)).toBe(0)
-      // A reset clears the namespace, not the catalog.
+      // A reset clears the bindings, not the catalog.
       yield* kernel.reset
-      expect((yield* kernel.evaluate("tools.search('').total")).display).toBe("2")
+      expect((yield* kernel.evaluate("Object.keys(tools).join(',')")).display).toBe("read,write")
+    }),
+  )
+
+  it.scopedLive("every selected id is a callable path that sends the id and its input", () =>
+    Effect.gen(function* () {
+      const sent = yield* Ref.make<
+        ReadonlyArray<{ readonly id: string; readonly input: Schema.Json }>
+      >([])
+      const kernel = yield* makeKernel(
+        {
+          call: (name, input) =>
+            Ref.update(sent, (seen) => [...seen, { id: name, input }]).pipe(
+              Effect.as({ tool: name } satisfies Schema.Json),
+            ),
+        },
+        "delegate.start",
+        "delegate.list",
+        "wake",
+        "wake.cancel",
+        "read",
+        "must-not-run",
+      )
+      const result = yield* kernel.evaluate(
+        "const started = await tools.delegate.start({ todo: 'x' }); started.tool",
+      )
+      expect(result.display).toBe("delegate.start")
+      yield* kernel.evaluate(
+        "await tools.delegate.list(); await tools.wake({ note: 'n' }); await tools.wake.cancel({ wakeId: 'w' }); await tools['must-not-run'](3)",
+      )
+      expect(yield* Ref.get(sent)).toEqual([
+        { id: "delegate.start", input: { todo: "x" } },
+        { id: "delegate.list", input: {} },
+        { id: "wake", input: { note: "n" } },
+        { id: "wake.cancel", input: { wakeId: "w" } },
+        { id: "must-not-run", input: 3 },
+      ])
+      expect((yield* kernel.evaluate("Object.keys(tools).join(',')")).display).toBe(
+        "delegate,must-not-run,read,wake",
+      )
+      expect((yield* kernel.evaluate("Object.keys(tools.delegate).join(',')")).display).toBe(
+        "list,start",
+      )
+      expect((yield* kernel.evaluate("typeof (await tools.read({ path: 'a' }))")).display).toBe(
+        "object",
+      )
+      // The namespace is not a binding and never reaches a snapshot.
+      expect(result.bindings).toEqual(["started"])
+    }),
+  )
+
+  it.scopedLive("an unknown path or a namespace call throws without a host call", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0)
+      const kernel = yield* makeKernel(
+        { call: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(0)) },
+        "delegate.start",
+        "delegate.list",
+        "read",
+      )
+      const typo = yield* kernel.evaluate("await tools.delegte.start({})").pipe(Effect.flip)
+      expect(typo.message).toContain(
+        "tools.delegte is not a host tool selected for this turn. Close ids: delegate.list, delegate.start",
+      )
+      const namespace = yield* kernel.evaluate("await tools.delegate({})").pipe(Effect.flip)
+      expect(namespace.message).toContain(
+        "tools.delegate is a namespace, not a tool. Its tools: delegate.start, delegate.list",
+      )
+      // `await` probes `then`; a node is not a thenable.
+      expect((yield* kernel.evaluate("typeof tools.read.then")).display).toBe("undefined")
+      expect(yield* Ref.get(calls)).toBe(0)
     }),
   )
 
   it.scopedLive("rejects non-data host arguments before dispatch", () =>
     Effect.gen(function* () {
       const calls = yield* Ref.make(0)
-      const kernel = yield* makeKernel({
-        call: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(0)),
-      })
+      const kernel = yield* makeKernel(
+        { call: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(0)) },
+        "read",
+      )
       const error = yield* kernel
-        .evaluate("await tools.call('read', { callback: () => 1 })")
+        .evaluate("await tools.read({ callback: () => 1 })")
         .pipe(Effect.flip)
       expect(error.phase).toBe("execute")
       expect(yield* Ref.get(calls)).toBe(0)
@@ -336,9 +416,9 @@ describe("Bun cell evaluation", () => {
 
   it.scopedLive("keeps working values across cells and clears them on reset", () =>
     Effect.gen(function* () {
-      const kernel = yield* makeKernel({ call: () => Effect.succeed(7) })
+      const kernel = yield* makeKernel({ call: () => Effect.succeed(7) }, "count")
       yield* kernel.evaluate("const values: number[] = [1, 2, 3]")
-      const result = yield* kernel.evaluate("values.push(await tools.call('count', {})); values")
+      const result = yield* kernel.evaluate("values.push(await tools.count({})); values")
       expect(result.display).toBe("[ 1, 2, 3, 7 ]")
       expect(result.bindings).toEqual(["values"])
       yield* kernel.reset

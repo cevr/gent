@@ -540,7 +540,10 @@ export const formatGroupDuration = (calls: ReadonlyArray<ActivityCall>): string 
 // A cell with no inner calls still did something; its source says what.
 
 const CELL_VERB_PATTERNS: ReadonlyArray<readonly [RegExp, (match: RegExpExecArray) => string]> = [
-  [/tools\.call\(\s*["'`]([\w-]+)["'`]/g, (m) => m[1] ?? ""],
+  [
+    /\btools((?:\.[A-Za-z_$][\w$]*|\[\s*["'`][^"'`]+["'`]\s*\])+)\s*\(/g,
+    (m) => hostToolId(m[1] ?? ""),
+  ],
   [/Bun\.\$`([^`]*)`/g, (m) => `$ ${shellHead(m[1] ?? "")}`],
   [
     /Bun\.spawn\(\s*(?:\{\s*cmd:\s*)?\[\s*((?:["'`][^"'`]*["'`]\s*,?\s*)+)\]/g,
@@ -551,6 +554,18 @@ const CELL_VERB_PATTERNS: ReadonlyArray<readonly [RegExp, (match: RegExpExecArra
   [/new Bun\.Glob\(\s*["'`]([^"'`]+)["'`]/g, (m) => `glob ${m[1]}`],
   [/\bfetch\(\s*["'`]([^"'`]+)["'`]/g, (m) => `fetch ${urlHost(m[1] ?? "")}`],
 ]
+
+/** `.delegate.start` and `["must-not-run"]` name the host tool ids `delegate.start` and `must-not-run`. */
+const hostToolId = (path: string) => {
+  const segments = Array.from(
+    path.matchAll(/\.([A-Za-z_$][\w$]*)|\[\s*["'`]([^"'`]+)["'`]\s*\]/g),
+    (m) => m[1] ?? m[2] ?? "",
+  )
+  const id = segments.join(".")
+  // `tools.describe(id)` reads the catalog; it is not a host tool call.
+  if (id === "describe") return ""
+  return id
+}
 
 const argv = (list: string) =>
   Array.from(list.matchAll(/["'`]([^"'`]*)["'`]/g), (m) => m[1] ?? "").join(" ")

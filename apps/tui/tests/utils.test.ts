@@ -806,8 +806,8 @@ describe("describeCellCode", () => {
       const b = await Bun.file("src/b.ts").text()
       await Bun.write("out.json", JSON.stringify({ a, b }))
       const page = await fetch("https://example.com/docs/x")
-      await tools.call('read', { path: "c.ts" })
-      await tools.call("read", { path: "d.ts" })
+      await tools.read({ path: "c.ts" })
+      await tools.read({ path: "d.ts" })
       Bun.spawn(["git", "status", "--short"])
     `
     expect(describeCellCode(code)).toEqual([
@@ -820,6 +820,16 @@ describe("describeCellCode", () => {
       "read ×2",
       "$ git status --short",
     ])
+  })
+
+  test("names host tools by their id path and skips catalog reads", () => {
+    const code = `
+      const spec = tools.describe("delegate.start")
+      const child = await tools.delegate.start({ todo: "x" })
+      await tools["must-not-run"]({})
+      await tools.wake.cancel()
+    `
+    expect(describeCellCode(code)).toEqual(["delegate.start", "must-not-run", "wake.cancel"])
   })
 
   test("source with no recognised verb yields nothing", () => {

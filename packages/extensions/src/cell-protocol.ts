@@ -249,7 +249,20 @@ export const maximumCellDisplayHeadLength = 48 * 1024
 export const maximumPendingCellCalls = 32
 export const maximumCallsPerCell = 4096
 const maximumCatalogEntries = 512
-export const catalogPageSize = 20
+
+/** A tool id segment that needs no brackets in a property path. */
+const identifierSegment = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+const encodeSegment = Schema.encodeSync(Schema.fromJsonString(Schema.String))
+
+/** The source a model writes to reach `id`: `tools.delegate.start`, `tools["must-not-run"]`. */
+export const toolPath = (id: string): string =>
+  ["tools", ...id.split(".")]
+    .map((segment, index) => {
+      if (index === 0) return segment
+      if (identifierSegment.test(segment)) return `.${segment}`
+      return `[${encodeSegment(segment)}]`
+    })
+    .join("")
 
 /** One selected host tool as the kernel describes it. Descriptions never grant execution. */
 export const CellCatalogEntry = Schema.Struct({
