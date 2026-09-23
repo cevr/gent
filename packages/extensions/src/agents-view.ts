@@ -121,10 +121,6 @@ export const sectionOf = (live: Option.Option<LiveAgentRow>): AgentSection =>
       }),
   })
 
-/** A read status that says the loop is working, as `sectionOf` reads it. */
-const isWorking = (status: Option.Option<string>): boolean =>
-  Option.exists(status, (value) => value !== "Idle")
-
 const SECTION_ORDER = { running: 0, idle: 1, inactive: 2 } satisfies Record<AgentSection, number>
 
 /**
@@ -389,16 +385,13 @@ export const activityText = (state: ActivityFold): Option.Option<string> =>
 
 interface AgentActivityService {
   /**
-   * Follow these loops: start a follower for each key not followed yet, and
-   * stop the followers of loops the runtime lists idle or no longer lists.
-   * A follower follows one loop while that loop works. Each turn's end clears
-   * its line. It ends, and forgets its activity, at a turn's end that finds
-   * the loop idle or gone, at a follow whose listing finds the same, when its
-   * subscription ends, or at once when the loop is not working as it starts.
-   * A later turn gets a new follower from the first listing that sees the
-   * loop working. Only the runtime listing stops a follower, never a
-   * caller's rows, so a filtered listing, or a TUI in another workspace,
-   * cannot blank the tray.
+   * Watch these loops: start a watcher for each key not watched yet, and stop
+   * the watchers of loops the runtime no longer lists. A watcher reads its
+   * loop's events for as long as the loop is listed, so each turn's start
+   * comes from the loop itself, never from a listing: the first line of a
+   * turn is never missed. Each turn's end clears its line. Only the runtime
+   * listing stops a watcher, never a caller's rows, so a filtered listing,
+   * or a TUI in another workspace, cannot blank the tray.
    */
   readonly follow: (
     loops: ReadonlyArray<AgentRowKey>,
@@ -407,10 +400,10 @@ interface AgentActivityService {
 }
 
 /**
- * Process-scoped followers of running child loops. A follower reads the
- * loop's events from now through `ExtensionContext.Session.events`, the same
- * verb any extension has, and folds them into one line per loop. The resource scope
- * owns the fibers, so shutdown stops them.
+ * Process-scoped watchers of listed child loops. A watcher reads the loop's
+ * events from now through `ExtensionContext.Session.events`, the same verb
+ * any extension has, and folds them into one line per loop. The resource
+ * scope owns the fibers, so shutdown stops them.
  */
 export class AgentActivity extends Context.Service<AgentActivity, AgentActivityService>()(
   "@gent/extensions/src/agents-view/AgentActivity",
@@ -419,7 +412,7 @@ export class AgentActivity extends Context.Service<AgentActivity, AgentActivityS
 export const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
   AgentActivity,
   Effect.gen(function* () {
-    const followers = yield* FiberMap.make<string, void>()
+    const watchers = yield* FiberMap.make<string, void>()
     const folds = yield* Ref.make<ReadonlyMap<string, ActivityFold>>(new Map())
     const setFold = (key: string, change: (fold: ActivityFold) => ActivityFold) =>
       Ref.update(folds, (all) => {
@@ -427,44 +420,17 @@ export const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
         next.set(key, change(all.get(key) ?? emptyActivity))
         return next
       })
-    const followOne = (loop: AgentRowKey) =>
+    const watchOne = (loop: AgentRowKey) =>
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
         const key = rowKey(loop)
-        // The loop's runtime status, `None` once it is no longer live.
-        const liveStatus = ctx.Session.listActiveLoops.pipe(
-          Effect.map((loops) =>
-            Option.fromUndefinedOr(
-              loops.find(
-                (candidate) =>
-                  candidate.sessionId === loop.sessionId && candidate.branchId === loop.branchId,
-              ),
-            ).pipe(Option.map((candidate) => candidate.status)),
-          ),
-        )
-        // Only a turn's end asks whether the loop still works: a finished
-        // child stays listed, idle, until it is evicted, and no later event
-        // would come to end its follower.
-        const followsOn = (event: AgentEvent) => {
-          if (event._tag !== "TurnCompleted") return Effect.succeed(true)
-          return Effect.map(liveStatus, (status) => Option.exists(status, isWorking))
-        }
-        // A loop that is not working has no line to report; a listing that
-        // sees it working again starts a follower then.
-        const status = yield* liveStatus
-        if (!Option.exists(status, isWorking)) return
         // From now: the fold needs only what the loop does next, so a
-        // follower never replays the child's whole history.
+        // watcher never replays the child's whole history. A turn's end
+        // empties the fold, and the next turn's events refill it.
         yield* ctx.Session.events({ ...loop, from: "now" }).pipe(
-          Stream.mapEffect((event) =>
-            setFold(key, (fold) => foldActivity(fold, event)).pipe(
-              Effect.andThen(followsOn(event)),
-            ),
-          ),
-          Stream.takeWhile((live) => live),
-          Stream.runDrain,
+          Stream.runForEach((event) => setFold(key, (fold) => foldActivity(fold, event))),
           Effect.catchCause((cause) =>
-            Effect.logWarning("agents-view.activity.follow-failed").pipe(
+            Effect.logWarning("agents-view.activity.watch-failed").pipe(
               Effect.annotateLogs({ sessionId: loop.sessionId, error: String(cause) }),
             ),
           ),
@@ -481,26 +447,20 @@ export const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
       follow: (loops) =>
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
-          // A loop's turn end is sent before the loop settles, so it can
-          // still read as working then; no later event comes to end the
-          // follower of a finished child. The runtime listing does: a loop
-          // it shows idle, or no longer shows, has nothing to report. A
-          // failed listing stops nothing.
+          // A loop the runtime no longer lists has nothing more to report.
+          // A failed listing stops nothing.
           const listing = yield* Effect.option(ctx.Session.listActiveLoops)
           if (Option.isSome(listing)) {
-            const working = new Set(
-              listing.value.filter((loop) => isWorking(loop.status)).map(rowKey),
-            )
-            for (const [key] of Array.from(followers)) {
-              if (!working.has(key)) yield* FiberMap.remove(followers, key)
+            const listed = new Set(listing.value.map(rowKey))
+            for (const [key] of Array.from(watchers)) {
+              if (!listed.has(key)) yield* FiberMap.remove(watchers, key)
             }
           }
-          const wanted = new Map(loops.map((loop) => [rowKey(loop), loop]))
-          for (const [key, loop] of wanted) {
+          for (const loop of loops) {
             yield* FiberMap.run(
-              followers,
-              key,
-              followOne(loop).pipe(Effect.provideService(ExtensionContext, ctx)),
+              watchers,
+              rowKey(loop),
+              watchOne(loop).pipe(Effect.provideService(ExtensionContext, ctx)),
               { onlyIfMissing: true },
             )
           }
@@ -633,13 +593,10 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
     execute: Effect.fn("AgentsViewRpc.ListAgents")(function* (input) {
       const all = yield* collectRows()
       const activity = yield* AgentActivity
-      // Only the rows the tray draws are followed: running children. A root
-      // is never in the tray, and a parent forced into `running` by a busy
-      // child has nothing of its own to report. The follow set comes from
-      // every row, never from the caller's query.
-      yield* activity.follow(
-        all.filter((row) => row.live && isWorking(row.status) && Option.isSome(row.parent)),
-      )
+      // Every listed child is watched, working or idle, so its next turn
+      // reports from its first event. A root is never in the tray. The watch
+      // set comes from every row, never from the caller's query.
+      yield* activity.follow(all.filter((row) => row.live && Option.isSome(row.parent)))
       const rows = filterRows(all, input.query ?? "")
       const lines = new Map<string, string>()
       for (const row of rows) {

@@ -11,6 +11,7 @@ import {
   plural,
   previewOutput,
   workingIconFrame,
+  lineCount,
 } from "./utils"
 import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
 import { useTheme } from "./theme"
@@ -41,6 +42,7 @@ import {
 import type { ScrollBoxRenderable, ScrollbackSurface, SyntaxStyle } from "@opentui/core"
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import {
+  bashOutputRows,
   cellOperations,
   GenericToolRenderer,
   RegisteredToolCall,
@@ -269,6 +271,17 @@ const rowOutputText = (call: ToolCall): string => {
   return formatGenericToolText(call.output) ?? ""
 }
 
+/**
+ * Lines a row counts beneath itself. A bash row counts as its body does, so a
+ * cut stream counts the whole output its record names, not the kept excerpt.
+ */
+const rowOutputLines = (call: ToolCall): number => {
+  if (call.toolName === "bash" && Option.isSome(decodeToolOutputOption(BashOutput, call.output))) {
+    return bashOutputRows(call).total
+  }
+  return lineCount(rowOutputText(call))
+}
+
 /** A declined command never ran and a background one has not ended: neither has lines to count. */
 const hasNoOutputYet = (call: ToolCall): boolean =>
   call.toolName === "bash" &&
@@ -281,8 +294,8 @@ const hasNoOutputYet = (call: ToolCall): boolean =>
 const rowCounts = (call: ToolCall): string => {
   if (call.status === "running" || hasNoOutputYet(call)) return ""
   return formatRowCounts(call.toolName, {
-    input: getString(call.input, "code"),
-    output: rowOutputText(call),
+    inputLines: lineCount(getString(call.input, "code")),
+    outputLines: rowOutputLines(call),
   })
 }
 

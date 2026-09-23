@@ -485,6 +485,27 @@ function parseBashOutput(
   }))
 }
 
+/**
+ * A bash result as numbered rows: stdout then stderr, each numbered and
+ * counted as in the whole output, a cut stream by its cut record. The row
+ * header counts `total` too, so a row and its body name one number, live and
+ * after a reload.
+ */
+export const bashOutputRows = (call: ToolCall): OutputRows =>
+  Option.match(parseBashOutput(call.output), {
+    onNone: () => ({ rows: [], total: 0 }),
+    onSome: (value) => {
+      const streams = [
+        outputRows(value.stdout, textCutFor(call, Option.some("stdout"))),
+        outputRows(value.stderr, textCutFor(call, Option.some("stderr"))),
+      ]
+      return {
+        rows: streams.flatMap((stream) => stream.rows),
+        total: streams.reduce((sum, stream) => sum + stream.total, 0),
+      }
+    },
+  })
+
 function getCommand(input: ToolInput): string {
   return getString(input, "command")
 }
@@ -495,19 +516,7 @@ function BashToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => parseBashOutput(props.toolCall.output))
   const command = createMemo(() => getCommand(props.toolCall.input))
 
-  // stdout then stderr, each numbered and counted as in the whole output.
-  const output = createMemo((): OutputRows => {
-    const d = data()
-    if (Option.isNone(d)) return { rows: [], total: 0 }
-    const streams = [
-      outputRows(d.value.stdout, textCutFor(props.toolCall, Option.some("stdout"))),
-      outputRows(d.value.stderr, textCutFor(props.toolCall, Option.some("stderr"))),
-    ]
-    return {
-      rows: streams.flatMap((stream) => stream.rows),
-      total: streams.reduce((sum, stream) => sum + stream.total, 0),
-    }
-  })
+  const output = createMemo(() => bashOutputRows(props.toolCall))
 
   const collapsedText = createMemo(() => rowsText(windowRows(output().rows, 6)))
   const expandedText = createMemo(() => rowsText(windowRows(output().rows, 100)))

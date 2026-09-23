@@ -721,14 +721,18 @@ export const splitLines = (text: string): Array<string> => {
 /** How many lines a text holds, by the `splitLines` rule: the rule every row and body count uses. */
 export const lineCount = (text: string): number => splitLines(text).length
 
-/** Line counts for a row: cells show code in and display out, bash shows output only; a zero count is left out. The unit keeps them apart from token counts. */
+/**
+ * Line counts for a row: cells show code in and display out, bash shows output
+ * only; a zero count is left out. The unit keeps them apart from token counts.
+ * The caller counts, so a cut output counts the whole output its body numbers.
+ */
 export function formatRowCounts(
   toolName: string,
-  counts: { readonly input: string; readonly output: string },
+  counts: { readonly inputLines: number; readonly outputLines: number },
 ): string {
-  const out = { arrow: "↓", count: lineCount(counts.output) }
+  const out = { arrow: "↓", count: counts.outputLines }
   let all: ReadonlyArray<{ readonly arrow: string; readonly count: number }> = []
-  if (toolName === "cell") all = [{ arrow: "↑", count: lineCount(counts.input) }, out]
+  if (toolName === "cell") all = [{ arrow: "↑", count: counts.inputLines }, out]
   if (toolName === "bash") all = [out]
   // A zero count says nothing: a cell with no output shows only its code.
   const shown = all.filter((entry) => entry.count > 0)

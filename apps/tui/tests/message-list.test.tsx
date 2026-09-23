@@ -1943,6 +1943,36 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("a cut bash row counts the whole output, as its body does", () =>
+    Effect.gen(function* () {
+      const list = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <MessageList
+              items={[assistantToolMessage("assistant-cut", cutBashCall)]}
+              disclosure="preview"
+              syntaxStyle={syntaxStyle}
+              streaming={false}
+            />
+          ),
+          { width: 80, height: 20 },
+        ),
+      )
+      const row = renderFrame(list)
+        .split("\n")
+        .find((line) => line.includes("└ bash"))
+      expect(row?.trim().split(/\s{2,}/)[0]).toBe("└ bash seq 1 1000 · ↓ 1000 lines")
+      const BashToolRenderer = builtinRenderer("bash")
+      const body = yield* Effect.promise(() =>
+        renderWithProviders(() => <BashToolRenderer expanded={true} toolCall={cutBashCall} />, {
+          width: 80,
+          height: 20,
+        }),
+      )
+      expect(renderFrame(body)).toContain("1000 lines")
+    }),
+  )
+
   it.live("collapsed keeps the group header and hides finished rows and output", () =>
     Effect.gen(function* () {
       const items: SessionItem[] = [bashMessage("call-bash-8", 25)]
@@ -2092,6 +2122,21 @@ describe("compact file tool bodies", () => {
     }),
   )
 })
+
+// A reloaded 1000-line stdout keeps two head lines, the marker and two tail lines.
+const cutBashCall: ToolCall = {
+  id: "call-cut",
+  toolName: "bash",
+  status: "completed",
+  input: { command: "seq 1 1000" },
+  summary: absent,
+  output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
+    stdout: "1\n2\n... [996 lines truncated] ...\n999\n1000",
+    stderr: "",
+    exitCode: 0,
+  }),
+  cuts: [OutputCut.cases.Text.make({ field: "stdout", lines: 1000, tailLine: 999, chars: 0 })],
+}
 
 const builtinRenderer = (tool: string) =>
   Option.getOrThrow(

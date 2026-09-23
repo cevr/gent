@@ -937,9 +937,15 @@ describe("working icon and age", () => {
 
 describe("progressive disclosure helpers", () => {
   test("cell rows count code in and display out; bash rows count output only", () => {
-    expect(formatRowCounts("cell", { input: "a\nb\nc", output: "x\ny" })).toBe("↑ 3 ↓ 2 lines")
-    expect(formatRowCounts("bash", { input: "ls", output: "x" })).toBe("↓ 1 line")
-    expect(formatRowCounts("read", { input: "", output: "x" })).toBe("")
+    expect(
+      formatRowCounts("cell", { inputLines: lineCount("a\nb\nc"), outputLines: lineCount("x\ny") }),
+    ).toBe("↑ 3 ↓ 2 lines")
+    expect(
+      formatRowCounts("bash", { inputLines: lineCount("ls"), outputLines: lineCount("x") }),
+    ).toBe("↓ 1 line")
+    expect(
+      formatRowCounts("read", { inputLines: lineCount(""), outputLines: lineCount("x") }),
+    ).toBe("")
   })
 
   test("a final newline ends the last line and does not start one", () => {
@@ -948,19 +954,33 @@ describe("progressive disclosure helpers", () => {
     expect(lineCount("hello\n")).toBe(1)
     expect(lineCount("a\nb\n")).toBe(2)
     expect(lineCount("a\n\n")).toBe(2)
-    expect(formatRowCounts("bash", { input: "ls\n", output: "hello\n" })).toBe("↓ 1 line")
-    expect(formatRowCounts("cell", { input: "a\nb\n", output: "x\n" })).toBe("↑ 2 ↓ 1 lines")
+    expect(
+      formatRowCounts("bash", { inputLines: lineCount("ls\n"), outputLines: lineCount("hello\n") }),
+    ).toBe("↓ 1 line")
+    expect(
+      formatRowCounts("cell", { inputLines: lineCount("a\nb\n"), outputLines: lineCount("x\n") }),
+    ).toBe("↑ 2 ↓ 1 lines")
   })
 
   test("one count of one line reads singular; two counts share the plural", () => {
-    expect(formatRowCounts("bash", { input: "ls", output: "x" })).toBe("↓ 1 line")
-    expect(formatRowCounts("cell", { input: "a", output: "x" })).toBe("↑ 1 ↓ 1 lines")
+    expect(
+      formatRowCounts("bash", { inputLines: lineCount("ls"), outputLines: lineCount("x") }),
+    ).toBe("↓ 1 line")
+    expect(
+      formatRowCounts("cell", { inputLines: lineCount("a"), outputLines: lineCount("x") }),
+    ).toBe("↑ 1 ↓ 1 lines")
   })
 
   test("a zero count is left out, so a cell with no output shows only its code", () => {
-    expect(formatRowCounts("cell", { input: "a", output: "" })).toBe("↑ 1 line")
-    expect(formatRowCounts("bash", { input: "ls", output: "" })).toBe("")
-    expect(formatRowCounts("cell", { input: "", output: "" })).toBe("")
+    expect(
+      formatRowCounts("cell", { inputLines: lineCount("a"), outputLines: lineCount("") }),
+    ).toBe("↑ 1 line")
+    expect(
+      formatRowCounts("bash", { inputLines: lineCount("ls"), outputLines: lineCount("") }),
+    ).toBe("")
+    expect(formatRowCounts("cell", { inputLines: lineCount(""), outputLines: lineCount("") })).toBe(
+      "",
+    )
   })
 
   test("a preview keeps the head and names the hidden remainder", () => {
