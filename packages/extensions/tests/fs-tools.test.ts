@@ -423,6 +423,48 @@ describe("EditTool matching", () => {
       }),
     )
   }
+  // A search that matched only once unescaped was sent escaped, and so was its
+  // replacement: the replacement is unescaped the same way.
+  for (const { name, file, oldString, newString, after } of [
+    {
+      name: "an escaped search on an LF file",
+      file: "a\nb\n",
+      oldString: "a\\nb",
+      newString: "x\\ny",
+      after: "x\ny\n",
+    },
+    {
+      name: "an escaped search on a CRLF file",
+      file: "a\r\nb\r\n",
+      oldString: "a\\nb",
+      newString: "x\\ny",
+      after: "x\r\ny\r\n",
+    },
+    {
+      name: "an escaped search with an escaped tab and backslash",
+      file: "a\tb\n",
+      oldString: "a\\tb",
+      newString: "c\\t\\\\d",
+      after: "c\t\\d\n",
+    },
+  ]) {
+    editTest(`${name} writes its replacement unescaped`, () =>
+      Effect.gen(function* () {
+        const edited = yield* editFile(file, { oldString, newString })
+        expect(edited.exit._tag).toBe("Success")
+        expect(edited.after).toBe(after)
+      }),
+    )
+  }
+  editTest("an exact search keeps the escapes its replacement holds", () =>
+    Effect.gen(function* () {
+      const edited = yield* editFile('s = "a"\n', {
+        oldString: '"a"',
+        newString: '"a\\nb"',
+      })
+      expect(edited.after).toBe('s = "a\\nb"\n')
+    }),
+  )
   for (const { name, file, oldString } of [
     { name: "text the file does not hold", file: "hello world", oldString: "xyz" },
     { name: "a whitespace-only search", file: "a\n\nb", oldString: "   " },

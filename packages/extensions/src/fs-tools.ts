@@ -1134,6 +1134,16 @@ const lineEndingAt = (content: string, index: number): string => {
 }
 
 /**
+ * Where a search matched, and whether it matched only once unescaped: a model
+ * that sent `oldString` escaped (`\\n` for a line break) sent `newString`
+ * the same way, so the replacement is unescaped too.
+ */
+interface EditMatch {
+  readonly ranges: MatchRanges
+  readonly unescaped: boolean
+}
+
+/**
  * A search that names a CR is matched on the file as written first, so it
  * touches only the lines that have that ending. Every other search, and one
  * the file misses, is matched on the LF view, where line endings never decide
@@ -1141,34 +1151,36 @@ const lineEndingAt = (content: string, index: number): string => {
  * a bare CR) goes through the looser tiers on the file. No match starts or
  * ends between a CR and its LF.
  */
-const findEditMatch = (content: string, oldString: string): MatchRanges => {
+const findEditMatch = (content: string, oldString: string): EditMatch => {
   if (oldString.includes("\r")) {
     const exact = literalRanges(content, oldString)
-    if (exact.length > 0) return exact
+    if (exact.length > 0) return { ranges: exact, unescaped: false }
   }
   const view = lineFeedView(content)
-  const viewed = findMatch(view.text, oldString.replaceAll("\r\n", "\n")).map((range) => ({
+  const viewed = findMatch(view.text, oldString.replaceAll("\r\n", "\n"))
+  const ranges = viewed.ranges.map((range) => ({
     start: view.toSource(range.start),
     end: view.toSource(range.end),
   }))
-  if (viewed.length > 0 || view.text === content) return viewed
+  if (ranges.length > 0 || view.text === content) return { ...viewed, ranges }
   return findMatch(content, oldString)
 }
 
-function findMatch(content: string, oldString: string): MatchRanges {
+function findMatch(content: string, oldString: string): EditMatch {
   // Tier 1: exact
   const exact = literalRanges(content, oldString)
-  if (exact.length > 0) return exact
+  if (exact.length > 0) return { ranges: exact, unescaped: false }
 
   // Tier 2: unescape literal \n, \t, \\ in oldString
   const unescaped = unescapeStr(oldString)
-  if (unescaped !== oldString) {
+  const escaped = unescaped !== oldString
+  if (escaped) {
     const unescapedMatch = literalRanges(content, unescaped)
-    if (unescapedMatch.length > 0) return unescapedMatch
+    if (unescapedMatch.length > 0) return { ranges: unescapedMatch, unescaped: true }
   }
 
   // Tier 3: normalize whitespace + unicode in both
-  return findNormalizedMatch(content, unescaped)
+  return { ranges: findNormalizedMatch(content, unescaped), unescaped: escaped }
 }
 
 /**
@@ -1244,7 +1256,7 @@ export const EditTool = tool({
 
         const replaceAll = params.replaceAll === true
 
-        const ranges = findEditMatch(content, params.oldString)
+        const { ranges, unescaped } = findEditMatch(content, params.oldString)
 
         if (ranges.length === 0) {
           return yield* new EditError({
@@ -1264,7 +1276,9 @@ export const EditTool = tool({
 
         let replaced: ReadonlyArray<MatchRange> = ranges.slice(0, 1)
         if (replaceAll) replaced = ranges
-        const newContent = spliceRanges(content, replaced, params.newString)
+        let replacement = params.newString
+        if (unescaped) replacement = unescapeStr(replacement)
+        const newContent = spliceRanges(content, replaced, replacement)
         if (!newContent.isWellFormed()) {
           return yield* new EditError({ message: loneSurrogateMessage("edit"), path: filePath })
         }
