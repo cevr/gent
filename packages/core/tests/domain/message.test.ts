@@ -986,6 +986,38 @@ describe("message part projection", () => {
     expect(tailLines).toEqual(whole.slice(cut.tailLine - 1))
   })
 
+  test("a head or tail that is part of a line says so when whole lines are left out too", () => {
+    const long = (label: string) => `${label}${"x".repeat(20_000)}`
+    const stdout = `${long("first")}\n${long("second")}\nshort`
+    const operation = projectOperation(
+      "bash",
+      { command: "gen" },
+      encodeValue({ stdout, stderr: "", exitCode: 0 }),
+    )
+    const [cut] = operation?.cuts ?? []
+    expect(cut?._tag).toBe("Text")
+    if (cut?._tag !== "Text") return
+    // The head is the start of line 1 and the tail is line 3 whole.
+    expect(cut).toMatchObject({ lines: 3, tailLine: 3, headCut: true })
+    expect(cut.tailCut).toBeUndefined()
+  })
+
+  test("whole head and tail lines carry no part-of-a-line flag", () => {
+    const stdout = Array.from({ length: 900 }, (_, index) => `${index + 1}:${"x".repeat(37)}`).join(
+      "\n",
+    )
+    const operation = projectOperation(
+      "bash",
+      { command: "seq" },
+      encodeValue({ stdout, stderr: "", exitCode: 0 }),
+    )
+    const [cut] = operation?.cuts ?? []
+    expect(cut?._tag).toBe("Text")
+    if (cut?._tag !== "Text") return
+    expect(cut.headCut).toBeUndefined()
+    expect(cut.tailCut).toBeUndefined()
+  })
+
   test("a reloaded grep op keeps the head and tail of its matches with a cut record", () => {
     const matches = Array.from({ length: 200 }, (_, index) => ({
       file: `src/module-${Math.floor(index / 20)}.ts`,

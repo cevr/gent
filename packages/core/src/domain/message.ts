@@ -121,7 +121,9 @@ const ToolInteractionFields = {
  *   line its tail starts on, and `chars` the code points left out. Head and
  *   tail keep whole lines; a piece with no line break is a fragment of the one
  *   line it sits in, so `tailLine` equals the head's last line when the cut
- *   falls inside a single line. `field` is absent when the output is plain text.
+ *   falls inside a single line. `headCut` says the head's last line stops
+ *   before its line break; `tailCut` says the tail's first line starts after
+ *   its line's start. `field` is absent when the output is plain text.
  * - `Items`: the array keeps its head items, then its tail items from the
  *   1-based `tailItem`; `items` is the whole array's length. `files` is the
  *   count of distinct `file` values over the whole array, present when its
@@ -133,6 +135,8 @@ export const OutputCut = Schema.TaggedUnion({
     lines: Schema.Finite,
     tailLine: Schema.Finite,
     chars: Schema.Finite,
+    headCut: Schema.optional(Schema.Literal(true)),
+    tailCut: Schema.optional(Schema.Literal(true)),
   },
   Items: {
     field: Schema.String,
@@ -888,6 +892,8 @@ const textCutCost = (field: Option.Option<string>): number =>
       lines: Number.MAX_SAFE_INTEGER,
       tailLine: Number.MAX_SAFE_INTEGER,
       chars: Number.MAX_SAFE_INTEGER,
+      headCut: true,
+      tailCut: true,
     }),
   ).length + 1
 
@@ -942,14 +948,14 @@ const excerptWithin = (
   const head = wholeHeadLines(text, headWithin(text, Math.floor(room / 2), cost))
   const tail = wholeTailLines(text, tailWithin(text, room - costUpTo(head, cost, Infinity), cost))
   const tailStart = text.length - tail.length
-  return Option.some({
-    text: `${head}\n${CUT_MARKER}\n${tail}`,
-    cut: Option.some({
-      lines: lineCount(text),
-      tailLine: lineCount(text.slice(0, tailStart)),
-      chars: [...text.slice(head.length, tailStart)].length,
-    }),
-  })
+  let cut: TextCut = {
+    lines: lineCount(text),
+    tailLine: lineCount(text.slice(0, tailStart)),
+    chars: [...text.slice(head.length, tailStart)].length,
+  }
+  if (head.length > 0 && text.charAt(head.length) !== "\n") cut = { ...cut, headCut: true }
+  if (tail.length > 0 && text.charAt(tailStart - 1) !== "\n") cut = { ...cut, tailCut: true }
+  return Option.some({ text: `${head}\n${CUT_MARKER}\n${tail}`, cut: Option.some(cut) })
 }
 
 type Scalar = string | number | boolean

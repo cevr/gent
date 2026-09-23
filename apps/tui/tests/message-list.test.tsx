@@ -25,6 +25,7 @@ import {
   Message,
   MessageId,
   MODEL_CHANGE_MESSAGE_TYPE,
+  OutputCut,
   SessionId,
   ToolCallId,
   AgentEvent,
@@ -45,7 +46,12 @@ import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
-import { EditToolRenderer, ReadToolRenderer, useToolRenderers } from "../src/tool-renderers"
+import {
+  BUILTIN_TOOL_RENDERERS,
+  EditToolRenderer,
+  ReadToolRenderer,
+  useToolRenderers,
+} from "../src/tool-renderers"
 import { destroyRenderSetup, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
 import { waitForFrame } from "./helpers-boundary"
@@ -1689,11 +1695,53 @@ describe("FX transcript treatment", () => {
       )
       expect(frame).toMatch(/exit 0 · 1 line(?!s)/)
       expect(frame).toMatch(/1 line(?!s)\s+1 │/)
-      expect(frame).toMatch(/\[[\d,]+ chars truncated\]/)
+      expect(frame).toMatch(/\.\.\. \[[\d,]+ chars truncated\] \.\.\./)
       expect(frame).not.toContain("0 lines truncated")
       // The read gutter numbers the one line once; the other line 1 is the cell's code.
       expect(frame.match(/ 1 │/g)?.length).toBe(2)
       expect(frame).toContain('1 │ {"rows"')
+    }),
+  )
+
+  it.live("a reloaded head or tail that keeps part of a line marks the side it lost", () =>
+    Effect.gen(function* () {
+      const long = (label: string) => `${label}${"x".repeat(20_000)}`
+      const { reloaded } = yield* cellBeforeAndAfterReload("assistant-part-lines", [
+        {
+          id: "op-bash-head-part",
+          toolName: "bash",
+          input: { command: "gen head" },
+          summary: "exit 0 · 3 lines",
+          output: encodeJson({
+            stdout: `${long("first")}\n${long("second")}\nshort-tail`,
+            stderr: "",
+            exitCode: 0,
+          }),
+        },
+        {
+          id: "op-bash-tail-part",
+          toolName: "bash",
+          input: { command: "gen tail" },
+          summary: "exit 0 · 3 lines",
+          output: encodeJson({
+            stdout: `short-head\n${long("second")}\n${long("third")}y`,
+            stderr: "",
+            exitCode: 0,
+          }),
+        },
+      ])
+      const frame = yield* drawnCell(
+        "assistant-part-lines",
+        reloaded,
+        (next) => next.includes("gen head") && next.includes("gen tail"),
+        "reloaded part lines",
+        400,
+      )
+      const text = frame.replace(/\s*\n\s*/g, "")
+      // Line 1 stops early, line 2 is left out whole, line 3 is whole.
+      expect(text).toContain("xxx …... [1 line truncated] ...short-tail")
+      // Line 1 is whole, line 2 is left out whole, line 3 starts late.
+      expect(text).toContain("short-head... [1 line truncated] ...…xxx")
     }),
   )
 
@@ -2043,6 +2091,92 @@ describe("compact file tool bodies", () => {
       expect(frame).toContain("more lines")
       expect(frame).not.toContain("old-line-5")
       expect(frame).not.toContain("new-line-5")
+    }),
+  )
+})
+
+const GrepToolRenderer = Option.getOrThrow(
+  Option.fromUndefinedOr(
+    BUILTIN_TOOL_RENDERERS.find((entry) => entry.toolNames.includes("grep"))?.component,
+  ),
+)
+
+describe("expanded grep body", () => {
+  it.live("a cut result draws its total and a gap between head and tail matches", () =>
+    Effect.gen(function* () {
+      const matches = [
+        { file: "src/a.ts", line: 1, content: "head one" },
+        { file: "src/a.ts", line: 2, content: "head two" },
+        { file: "src/a.ts", line: 90, content: "tail one" },
+        { file: "src/b.ts", line: 5, content: "tail two" },
+      ]
+      const output = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.JsonObject))({
+        matches,
+        truncated: false,
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <GrepToolRenderer
+              expanded={true}
+              toolCall={{
+                id: "grep-cut",
+                toolName: "grep",
+                status: "completed",
+                input: { pattern: "one" },
+                summary: "50 matches for one",
+                output,
+                cuts: [
+                  OutputCut.cases.Items.make({
+                    field: "matches",
+                    items: 50,
+                    tailItem: 49,
+                    files: 7,
+                  }),
+                ],
+              }}
+            />
+          ),
+          { width: 80, height: 30 },
+        ),
+      )
+      const lines = renderFrame(setup)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+      expect(lines).toContain("50 matches in 7 files")
+      const headTwo = lines.findIndex((line) => line.endsWith("head two"))
+      const gap = lines.findIndex((line) => line === "· ··· 46 more matches")
+      const tailOne = lines.findIndex((line) => line.endsWith("tail one"))
+      expect(headTwo).toBeGreaterThan(-1)
+      expect(gap).toBeGreaterThan(headTwo)
+      expect(tailOne).toBeGreaterThan(gap)
+      // The same file on both sides of the cut draws its name again after the gap.
+      expect(lines.slice(gap + 1, tailOne).some((line) => line.includes("src/a.ts"))).toBe(true)
+    }),
+  )
+
+  it.live("a result with no body draws the summary expanded as it does collapsed", () =>
+    Effect.gen(function* () {
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <GrepToolRenderer
+              expanded={true}
+              toolCall={{
+                id: "grep-no-body",
+                toolName: "grep",
+                status: "completed",
+                input: { pattern: "one" },
+                summary: "900 matches for one",
+                output: absent,
+              }}
+            />
+          ),
+          { width: 80, height: 20 },
+        ),
+      )
+      expect(renderFrame(setup)).toContain("900 matches for one")
     }),
   )
 })

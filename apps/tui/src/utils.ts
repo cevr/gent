@@ -629,10 +629,15 @@ export function describeCellCode(code: string): ReadonlyArray<string> {
   return collapseRepeats(found.map((entry) => entry.label))
 }
 
-export const plural = (count: number, singular: string, pluralForm = `${singular}s`) => {
-  if (count === 1) return `${count} ${singular}`
-  return `${count} ${pluralForm}`
+/** The noun a count takes, without the count: `line` for one, `lines` otherwise. */
+export const countNoun = (count: number, singular: string, pluralForm = `${singular}s`): string => {
+  if (count === 1) return singular
+  return pluralForm
 }
+
+/** A count and its noun: `1 line`, `3 lines`. */
+export const plural = (count: number, singular: string, pluralForm = `${singular}s`) =>
+  `${count} ${countNoun(count, singular, pluralForm)}`
 
 const isChildOperation = (operation: ActivityOperation) => operation.tool === "delegate.start"
 
