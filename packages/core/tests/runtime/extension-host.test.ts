@@ -1229,12 +1229,10 @@ describe("extension activation isolation", () => {
     }),
   )
 
-  it.live("validation does NOT collide rpc(non-model) with same-name tool", () =>
+  it.live("validation fails a tool and a request that share an id in one scope", () =>
     Effect.gen(function* () {
-      // A capability that doesn't surface as a tool (no `model` audience)
-      // must NOT trigger a "tool" collision against a same-name tool.
-      // The tool list is "things audience-authorized as model"; cross-audience
-      // sharing of an id is fine.
+      // Tools and requests share one id namespace: resolution keeps one
+      // winner per id, so a passing pair would silently drop the tool.
       const result = yield* validateLoadedExtensions([
         makeLoaded("model-tool", {
           tools: [
@@ -1250,11 +1248,14 @@ describe("extension activation isolation", () => {
         makeLoaded("rpc-only", { requests: [rawRpcLeaf("shared_name")] }),
       ])
 
-      expect(result.active.map((ext) => ext.manifest.id).sort()).toEqual([
+      expect(result.active).toEqual([])
+      expect(result.failed.map((ext) => ext.manifest.id).sort()).toEqual([
         ExtensionId.make("model-tool"),
         ExtensionId.make("rpc-only"),
       ])
-      expect(result.failed).toEqual([])
+      expect(result.failed.every((ext) => ext.error.includes('capability "shared_name"'))).toBe(
+        true,
+      )
     }),
   )
 

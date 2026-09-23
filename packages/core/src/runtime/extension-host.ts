@@ -1444,21 +1444,16 @@ const collectValidationFailures = (
     }
   }
 
-  // Tool collisions: same-scope same-id model-callable tool leaves.
+  // Tools and requests share one id namespace, as `compileCapabilityWinners`
+  // keeps one winner per id: a same-scope tool and request with one id fail
+  // together instead of one silently hiding the other.
   collectScopedCollisions(
-    (cs) => cs.tools ?? [],
-    (cap) => {
-      if (isToolCapability(cap)) {
-        return Option.some(getToolMetadata(cap).id)
-      }
-      return Option.none()
-    },
-    "tool",
-  )
-  collectScopedCollisions(
-    (cs) => cs.requests ?? [],
-    (cap) => Option.some(cap.id),
-    "rpc",
+    (cs): ReadonlyArray<string> => [
+      ...(cs.tools ?? []).filter(isToolCapability).map((cap) => String(getToolMetadata(cap).id)),
+      ...(cs.requests ?? []).map((cap) => String(cap.id)),
+    ],
+    Option.some,
+    "capability",
   )
   collectScopedCollisions(
     (cs) => cs.agents ?? [],
