@@ -155,8 +155,8 @@ const resultsOf = (
     .flatMap((message) => message.parts)
     .filter((part) => part.type === "tool-result" && part.name === toolName)
 
-const completionMessages = (
-  messages: ReadonlyArray<{ readonly metadata?: { readonly customType?: string } }>,
+const completionMessages = <M extends { readonly metadata?: { readonly customType?: string } }>(
+  messages: ReadonlyArray<M>,
 ) => messages.filter((message) => message.metadata?.customType === "child-completion")
 
 const sendPrompt = (harness: Harness, content: string) =>
@@ -1148,5 +1148,76 @@ describe("session.send", () => {
         })
       }).pipe(Effect.timeout("4 seconds")),
     ),
+  )
+})
+
+// ── delegate/later-turns ────────────────────────────────────────────────────
+
+/**
+ * Only a child's first turn returns as its completion. A child that arms a
+ * wake, a monitor or a goal runs later turns nobody waits for, so its task
+ * tells it to send each later result to its parent with session.send.
+ */
+
+describe("a child's later turn", () => {
+  it.live(
+    "a child that arms a wake completes, and the wake's result reaches the parent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const laterResult = "CHILD-LATER: CI is green"
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              const ids = promptToolCallIds(options.prompt)
+              if (!ids.includes("arm-wake")) {
+                return Effect.succeed(
+                  toolStep("wake", { afterSeconds: 0.2, note: "WAKE-NOTE: check CI" }, "arm-wake"),
+                )
+              }
+              if (!texts.some((text) => text.includes("WAKE-NOTE"))) {
+                return Effect.succeed(reply("armed a wake for CI"))
+              }
+              // The wake's turn: a model that follows its task sends the result upward.
+              const told = texts[0].includes("reaches your parent only through session.send")
+              if (told && !ids.includes("send-later")) {
+                return Effect.succeed(
+                  toolStep("session.send", { to: "parent", message: laterResult }, "send-later"),
+                )
+              }
+              return Effect.succeed(reply("checked CI"))
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "wake-child"))
+            }
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate the CI watch")
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              sessionMessages(current.messages).some((message) =>
+                messageTexts([message]).some((text) => text.includes(laterResult)),
+              ),
+            6_000,
+            "the child's later result reached the parent",
+          )
+          // The completion came first, at the end of the turn that armed the wake.
+          const [completion] = completionMessages(snapshot.messages)
+          expect(messageTexts([completion!])[0]).toContain("armed a wake for CI")
+          const [later] = sessionMessages(snapshot.messages)
+          expect(later?.metadata?.details).toMatchObject({ from: { relation: "child" } })
+          expect(snapshot.messages.indexOf(completion!)).toBeLessThan(
+            snapshot.messages.indexOf(later!),
+          )
+          expect(completionMessages(snapshot.messages)).toHaveLength(1)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
 })

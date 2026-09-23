@@ -343,10 +343,18 @@ const CHILD_TASK_PREFIX = "Task from your parent session "
 /**
  * The child's first message names where the task came from. Without it a
  * child reads a bare instruction after its system prompt and can take its
- * own task for an injection.
+ * own task for an injection. It also says how a later turn reports: only the
+ * turn that takes the task returns as the completion, and a wake, a monitor
+ * or a goal starts turns nobody waits for. The first message stays in every
+ * later turn's context, whichever agent runs that turn.
  */
 export const childTaskText = (parentSessionId: SessionId, prompt: string): string =>
-  `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply returns to the parent as your completion; ask it with session.send if you are blocked.\n\n${prompt}`
+  [
+    `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply to this task returns to the parent as your completion; ask it with session.send if you are blocked.`,
+    `End this turn once the task is done or handed to a wake, a monitor or a goal; do not wait for them. A later turn's result reaches your parent only through session.send with to "parent", so send each one there.`,
+    "",
+    prompt,
+  ].join("\n")
 
 /** The task without its source line; a message that is not a child task is returned whole. */
 export const childTaskBody = (text: string): string =>
