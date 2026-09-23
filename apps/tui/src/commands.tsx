@@ -10,7 +10,7 @@ import {
   type JSX,
   Show,
 } from "solid-js"
-import { truncate, truncateStart, useRequiredContext } from "./utils"
+import { shortId, truncate, truncateStart, useRequiredContext } from "./utils"
 import { useTerminalDimensions } from "./terminal"
 import { matchSorter } from "match-sorter"
 import { useClient } from "./client"
@@ -451,7 +451,7 @@ export function CommandPalette() {
             items.map((branch) => ({
               id: `branch.${branch.id}`,
               title: selectedTitle(
-                branch.name ?? `Branch ${branch.id.slice(0, 8)}…${branch.id.slice(-4)}`,
+                branch.name ?? `Branch ${shortId(branch.id)}`,
                 client.session()?.branchId === branch.id,
               ),
               onSelect: () => {

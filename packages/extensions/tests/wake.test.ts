@@ -59,8 +59,6 @@ import {
   type ExtensionContextService,
 } from "@gent/core/extensions/api"
 
-// ── wake/wake.test ──────────────────────────────────────────────────────────
-
 /**
  * `wake` is an alarm and `monitor` a poll: the model sets one, answers, and
  * goes idle; when it fires, a user-role `wake` message on the same branch
@@ -621,7 +619,7 @@ describe("notices", () => {
   )
 })
 
-// ── wake/wake-store.test ────────────────────────────────────────────────────
+// ── wake store ──────────────────────────────────────────────────────────────
 
 /**
  * Alarms live in one file per branch so a restart loses none: the tool writes

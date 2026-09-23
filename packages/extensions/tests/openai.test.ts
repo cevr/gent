@@ -55,7 +55,7 @@ import {
 } from "@gent/core/test-utils"
 import { SessionId } from "@gent/core/protocol"
 
-// ── openai/openai-credential-service.test ───────────────────────────────────
+// ── credential cache ────────────────────────────────────────────────────────
 
 /**
  * OpenAI credential cache — Effect-native, over `makeCredentialCache`.
@@ -801,7 +801,7 @@ describe("OpenAI credential cache — a shared cell survives rebuilds", () => {
 // Suppress unused-warning for Layer (intentional helper import)
 void Layer
 
-// ── openai/openai-device-auth.test ──────────────────────────────────────────
+// ── device-code login ───────────────────────────────────────────────────────
 
 /**
  * OpenAI device-code login. Stubs the three auth.openai.com endpoints
@@ -1007,7 +1007,7 @@ describe("OpenAI device-code login", () => {
   )
 })
 
-// ── openai/openai-codex-transform.test ──────────────────────────────────────
+// ── codex transform client ──────────────────────────────────────────────────
 
 /**
  * codexTransformClient — auth-headers middleware.
@@ -1844,7 +1844,7 @@ describe("codexTransformClient — 401 recovery", () => {
   )
 })
 
-// ── openai/openai-extension-driver.test ─────────────────────────────────────
+// ── model driver ────────────────────────────────────────────────────────────
 
 /**
  * OpenAIExtension model-driver wiring — extension-level regression

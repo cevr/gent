@@ -25,7 +25,7 @@ import {
 import { ConfigService, RuntimeEnvironment, UserConfig } from "../../src/runtime/config"
 import { test } from "bun:test"
 
-// ── config-service.test ─────────────────────────────────────────────────────
+// ── user configuration ──────────────────────────────────────────────────────
 
 /**
  * ConfigService tests - config persistence and first-run setup
@@ -1025,7 +1025,7 @@ describe("user configuration", () => {
   })
 })
 
-// ── driver-override-routing.test ────────────────────────────────────────────
+// ── driver override routing ─────────────────────────────────────────────────
 
 /**
  * Driver override routing — integration test that ConfigService.driverOverrides
@@ -1112,7 +1112,7 @@ describe("configured driver override routing", () => {
   )
 })
 
-// ── execution-overrides.test ────────────────────────────────────────────────
+// ── execution overrides ─────────────────────────────────────────────────────
 
 /**
  * The run-spec JSON a session's stored admission carries.

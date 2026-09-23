@@ -38,6 +38,8 @@ export {
   assistantMessageIdForTurn,
   dateFromMillis,
   formatHeadTail,
+  lineCount,
+  splitLines,
   headTail,
   projectMessage,
 } from "./domain/message.js"

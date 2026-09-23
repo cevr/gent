@@ -665,9 +665,8 @@ export const refuseResetWhileServing = (
         Effect.mapError((error) => new CliStartupError({ message: error.message, cause: error })),
       )
     if (!serverHoldsLock(status)) return
-    yield* Console.error("Error: shared server is running. Stop it with `gent server stop` first.")
     return yield* new CliStartupError({
-      message: "shared server is running; refusing to reset storage",
+      message: "shared server is running; stop it with `gent server stop` first",
     })
   })
 

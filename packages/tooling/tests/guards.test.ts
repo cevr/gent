@@ -33,7 +33,7 @@ import {
 } from "../src/guards"
 import { Option } from "effect"
 
-// ── blanket-eslint-disable.test ─────────────────────────────────────────────
+// ── blanket eslint disable ──────────────────────────────────────────────────
 
 const directive = ["eslint", "disable"].join("-")
 
@@ -101,7 +101,7 @@ describe("blanket eslint disable checker", () => {
   })
 })
 
-// ── core-alias-test-layers.test ─────────────────────────────────────────────
+// ── alias test layers ───────────────────────────────────────────────────────
 
 const FILE = "packages/core/src/domain/widget.ts"
 
@@ -216,7 +216,7 @@ describe("alias alternative-layer guard", () => {
   })
 })
 
-// ── core-child-session-depth.test ───────────────────────────────────────────
+// ── child session depth ─────────────────────────────────────────────────────
 
 const childWriter = `
 yield* sessionStorage.createSession(
@@ -290,7 +290,7 @@ describe("child-session depth guard", () => {
   })
 })
 
-// ── core-feature-independence.test ──────────────────────────────────────────
+// ── core feature independence ───────────────────────────────────────────────
 
 const CELL_IMPORT = 'import { CellExecution } from "../cell/cell-execution.js"'
 
@@ -395,7 +395,7 @@ describe("core feature independence guard", () => {
   })
 })
 
-// ── core-identity-encode.test ───────────────────────────────────────────────
+// ── identity encode ─────────────────────────────────────────────────────────
 
 const ENCODER = "const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))"
 
@@ -459,7 +459,7 @@ describe("identity encode guard", () => {
   })
 })
 
-// ── core-vendor-model-pins.test ─────────────────────────────────────────────
+// ── vendor model pins ───────────────────────────────────────────────────────
 
 describe("vendor model pin guard", () => {
   test("reports a provider-qualified model id in core source", () => {
@@ -490,7 +490,7 @@ describe("vendor model pin guard", () => {
   })
 })
 
-// ── core-unadapted-seams.test ───────────────────────────────────────────────
+// ── unadapted seams ─────────────────────────────────────────────────────────
 
 const SEAMS_FILE = "packages/core/src/domain/extension.ts"
 
@@ -578,7 +578,7 @@ export const requireTelepathy = Effect.gen(function* () {
   })
 })
 
-// ── e2e-fixture-imports.test ────────────────────────────────────────────────
+// ── e2e fixture imports ─────────────────────────────────────────────────────
 
 const noFixtureSource = [
   'import { describe, expect, it } from "effect-bun-test"',
@@ -644,7 +644,7 @@ describe("e2e fixture import guard", () => {
   })
 })
 
-// ── hook-runs-guards.test ───────────────────────────────────────────────────
+// ── hook runs guards ────────────────────────────────────────────────────────
 
 const hook = (...jobs: ReadonlyArray<string>): string =>
   ["pre-commit:", "  parallel: false", "  jobs:", ...jobs].join("\n")
@@ -701,7 +701,7 @@ describe("pre-commit hook runs the guards", () => {
   })
 })
 
-// ── lint-config-guards.test ─────────────────────────────────────────────────
+// ── lint config ─────────────────────────────────────────────────────────────
 
 const CONFIG = ".oxlintrc.json"
 const PLUGIN = "lint/gent-rules.ts"
@@ -846,7 +846,7 @@ describe("a read variable must have a writer", () => {
   })
 })
 
-// ── platform-duplication-guards.test ────────────────────────────────────────
+// ── platform duplication ────────────────────────────────────────────────────
 
 describe("platform duplication guards", () => {
   test("ignores docs and tests", () => {
@@ -986,7 +986,7 @@ describe("platform duplication guards", () => {
   })
 })
 
-// ── retired-surfaces.test ───────────────────────────────────────────────────
+// ── retired surfaces ────────────────────────────────────────────────────────
 
 /** One planted case per retired surface: file, text, and the matched text. */
 const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
@@ -1173,7 +1173,7 @@ describe("retired surface guard", () => {
   })
 })
 
-// ── steering-file-paths.test ────────────────────────────────────────────────
+// ── steering file paths ─────────────────────────────────────────────────────
 
 const TRACKED = [
   "packages/core/src/runtime/provider.ts",
@@ -1258,7 +1258,7 @@ describe("steering file paths", () => {
   })
 })
 
-// ── tui-session-identity.test ───────────────────────────────────────────────
+// ── tui session identity ────────────────────────────────────────────────────
 
 const FILE_TUI_IDENTITY = "apps/tui/src/hooks/use-thing.ts"
 
@@ -1348,7 +1348,7 @@ describe("TUI session identity guard", () => {
   })
 })
 
-// ── suppression-inventory.test ──────────────────────────────────────────────
+// ── suppression inventory ───────────────────────────────────────────────────
 
 const nextLine = ["// @effect", "diagnostics-next-line"].join("-")
 const membraneFile = "packages/core/src/runtime/extension-host.ts"
@@ -1400,7 +1400,7 @@ describe("suppression inventory guard", () => {
   })
 })
 
-// ── export-consumers.test ───────────────────────────────────────────────────
+// ── export consumers ────────────────────────────────────────────────────────
 
 const CORE_FILE = "packages/core/src/runtime/provider.ts"
 const SDK_FILE = "packages/sdk/src/log-paths.ts"
@@ -2378,7 +2378,7 @@ describe("a namesake does not vouch for an export", () => {
   })
 })
 
-// ── undeclared-workspace-imports.test ───────────────────────────────────────
+// ── undeclared workspace imports ────────────────────────────────────────────
 
 describe("undeclared workspace imports", () => {
   const manifests = new Map([

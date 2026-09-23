@@ -13,7 +13,7 @@ import { LanguageModel } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 import { tool } from "@gent/core/extensions/api"
 
-// ── sequence-steps.test ─────────────────────────────────────────────────────
+// ── sequence language model ─────────────────────────────────────────────────
 
 const testToolkit = convertTools([
   tool({
@@ -268,7 +268,7 @@ describe("LanguageModelLayers.sequence", () => {
   )
 })
 
-// ── ../debug/signal-provider.test ───────────────────────────────────────────
+// ── signal language model ───────────────────────────────────────────────────
 
 const callSignalProvider = LanguageModel.streamText({ prompt: [] }).pipe(Stream.runCollect)
 

@@ -35,7 +35,7 @@ import {
 } from "../src/providers.js"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 
-// ── openai-compatible-providers.test ────────────────────────────────────────
+// ── openai compatible providers ─────────────────────────────────────────────
 
 const makeApiAuthInfo = (key: string): ProviderAuthInfo => ProviderAuthInfo.cases.Api.make({ key })
 

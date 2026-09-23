@@ -19,8 +19,6 @@ import {
 } from "../src/cell-protocol.js"
 import { createContext, runInContext } from "node:vm"
 
-// ── cell/cell-protocol.test ─────────────────────────────────────────────────
-
 describe("cell process protocol", () => {
   it.live("preserves a Unicode request split across pipe reads", () =>
     Effect.gen(function* () {
@@ -172,7 +170,7 @@ describe("bounded output", () => {
   })
 })
 
-// ── cell/cell-snapshot.test ─────────────────────────────────────────────────
+// ── cell snapshot ───────────────────────────────────────────────────────────
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 type Context = ReturnType<typeof createContext>

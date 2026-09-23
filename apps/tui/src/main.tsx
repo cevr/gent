@@ -4,7 +4,6 @@ import { BunPlatformLive } from "@gent/core/host"
 import {
   Cause,
   Config,
-  Console,
   Context,
   Effect,
   Exit,
@@ -25,7 +24,7 @@ import {
   shutdownLog,
 } from "./client"
 import { LinkOpener, OsService } from "./os"
-import { AgentName, type ProviderId } from "@gent/core/protocol"
+import { AgentName } from "@gent/core/protocol"
 
 import { render } from "@opentui/solid"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
@@ -57,9 +56,6 @@ import {
 
 // Clear client log on startup
 clearClientLog()
-
-const formatMissingProviders = (providers: readonly ProviderId[]): string =>
-  providers.map((provider) => provider).join(", ")
 
 const waitForRendererDestroy = (renderer: CliRenderer) =>
   Effect.callback<void>((resume) => {
@@ -103,13 +99,9 @@ const runHeadlessTurn = (
 ) => {
   const branchId = Option.fromNullishOr(state.session.activeBranchId)
   if (Option.isNone(branchId)) {
-    return Effect.gen(function* () {
-      yield* Console.error("Error: session has no branch")
-      return yield* new AppBootstrapError({
-        sessionId: state.session.id,
-        reason: "missing-branch",
-      })
-    })
+    return Effect.fail(
+      new AppBootstrapError({ sessionId: state.session.id, reason: "missing-branch" }),
+    )
   }
 
   const resolvedBranchId = branchId.value
@@ -295,9 +287,9 @@ const runGent = ({
       const missingProviders = startupAuth.missingProviders
 
       if (missingProviders.length > 0 && !debug && !Option.isSome(connect)) {
-        const hint = formatMissingProviders(missingProviders)
-        yield* Console.error(`Error: missing required API keys: ${hint}`)
-        return yield* new CliStartupError({ message: hint })
+        return yield* new CliStartupError({
+          message: `missing required API keys: ${missingProviders.join(", ")}`,
+        })
       }
 
       if (state._tag !== "headless") {
@@ -506,7 +498,7 @@ const runCliMain = Runtime.makeRunMain(({ fiber, teardown }) => {
   process.on("SIGTERM", onSignal)
 })
 
-runCliMain(Effect.scoped(mainEffect), {
+runCliMain(mainEffect, {
   teardown: gracefulCliTeardown,
   disableErrorReporting: true,
 })

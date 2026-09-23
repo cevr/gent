@@ -170,37 +170,12 @@ export const reconcileAgentRows = (params: {
 }
 
 /**
- * Walk a row's ancestor chain, stopping at the root, at an orphan, or at a
- * cycle. Shared by depth assignment and running propagation because both need
- * exactly the same guarded traversal.
- */
-const ancestorsOf = (
-  row: AgentRow,
-  byKey: ReadonlyMap<string, AgentRow>,
-): ReadonlyArray<AgentRow> => {
-  const chain: Array<AgentRow> = []
-  const seen = new Set<string>([rowKey(row)])
-  let current = row
-  for (;;) {
-    if (Option.isNone(current.parent)) return chain
-    const parentKey = rowKey(current.parent.value)
-    const parent = Option.fromUndefinedOr(byKey.get(parentKey))
-    // Orphan: parent not loaded. Treat the row as top level rather than hiding it.
-    if (Option.isNone(parent)) return chain
-    // Cycle guard.
-    if (seen.has(parentKey)) return chain
-    seen.add(parentKey)
-    chain.push(parent.value)
-    current = parent.value
-  }
-}
-
-/**
- * Assign tree depth from parent links, then order rows for display: by
- * section, and in each section as a tree. A root, or a row whose parent is
- * in another section, is placed by its last update, most recent first; its
- * children follow it in the order they started, as the tray lists them, so
- * a child's steps never reshuffle its siblings.
+ * Order rows for display: by section, and in each section as a tree. A root,
+ * or a row whose parent is in another section, is placed by its last update,
+ * most recent first, at depth 0; its children follow it one level deeper, in
+ * the order they started, as the tray lists them, so a child's steps never
+ * reshuffle its siblings. Depth is the nesting as drawn, so a row is never
+ * indented under a row that is not its parent.
  *
  * A child whose parent is absent from the row set is promoted to top level
  * rather than hidden — an orphan is still a real agent, and dropping it would
@@ -210,7 +185,6 @@ const ancestorsOf = (
 export const buildRowTree = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> => {
   const byKey = new Map<string, AgentRow>()
   for (const row of rows) byKey.set(rowKey(row), row)
-  const placed = rows.map((row) => ({ ...row, depth: ancestorsOf(row, byKey).length }))
 
   const byRecency = (left: AgentRow, right: AgentRow) => {
     const recency =
@@ -230,7 +204,7 @@ export const buildRowTree = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<Agent
       Option.filter((key) => byKey.get(key)?.section === row.section),
     )
   const children = new Map<string, Array<AgentRow>>()
-  for (const row of placed) {
+  for (const row of rows) {
     const parentKey = parentKeyOf(row)
     if (Option.isNone(parentKey)) continue
     children.set(parentKey.value, [...(children.get(parentKey.value) ?? []), row])
@@ -238,46 +212,24 @@ export const buildRowTree = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<Agent
 
   const ordered: Array<AgentRow> = []
   const seen = new Set<string>()
-  const visit = (row: AgentRow): void => {
+  const visit = (row: AgentRow, depth: number): void => {
     const key = rowKey(row)
     if (seen.has(key)) return
     seen.add(key)
-    ordered.push(row)
-    for (const child of (children.get(key) ?? []).toSorted(byStart)) visit(child)
+    ordered.push({ ...row, depth })
+    for (const child of (children.get(key) ?? []).toSorted(byStart)) visit(child, depth + 1)
   }
   const sectionRank = (row: AgentRow) => SECTION_ORDER[row.section]
   const bySectionThenRecency = (left: AgentRow, right: AgentRow) =>
     sectionRank(left) - sectionRank(right) || byRecency(left, right)
-  for (const root of placed
+  for (const root of rows
     .filter((row) => Option.isNone(parentKeyOf(row)))
     .toSorted(bySectionThenRecency)) {
-    visit(root)
+    visit(root, 0)
   }
   // A cycle has no root to reach it from.
-  for (const row of placed.toSorted(bySectionThenRecency)) visit(row)
+  for (const row of rows.toSorted(bySectionThenRecency)) visit(row, 0)
   return ordered.toSorted((left, right) => sectionRank(left) - sectionRank(right))
-}
-
-/**
- * A busy descendant forces every ancestor to render as running, so a collapsed
- * parent never looks idle while its children work. Cycle-guarded via
- * {@link ancestorsOf}.
- */
-export const propagateRunning = (rows: ReadonlyArray<AgentRow>): ReadonlyArray<AgentRow> => {
-  const byKey = new Map<string, AgentRow>()
-  for (const row of rows) byKey.set(rowKey(row), row)
-
-  const forced = new Set<string>()
-  for (const row of rows) {
-    if (row.section !== "running") continue
-    for (const ancestor of ancestorsOf(row, byKey)) forced.add(rowKey(ancestor))
-  }
-
-  if (forced.size === 0) return rows
-  return rows.map((row) => {
-    if (row.section === "running" || !forced.has(rowKey(row))) return row
-    return { ...row, section: "running" satisfies AgentSection }
-  })
 }
 
 /** Case-insensitive substring match over the fields a reader would search by. */
@@ -298,11 +250,15 @@ export const filterRows = (
   })
 }
 
-/** Full projection: reconcile, propagate, then order. A query filters after, with `filterRows`. */
+/**
+ * Full projection: reconcile, then order. A row's section is its own loop's
+ * state, so a parent idles in its own section while a child works, and the
+ * child is a root of the running section. A query filters after, with `filterRows`.
+ */
 export const projectAgentRows = (params: {
   readonly live: ReadonlyArray<LiveAgentRow>
   readonly durable: ReadonlyArray<DurableAgentRow>
-}): ReadonlyArray<AgentRow> => buildRowTree(propagateRunning(reconcileAgentRows(params)))
+}): ReadonlyArray<AgentRow> => buildRowTree(reconcileAgentRows(params))
 
 // ── live activity ───────────────────────────────────────────────────────────
 
@@ -385,17 +341,19 @@ export const activityText = (state: ActivityFold): Option.Option<string> =>
 
 interface AgentActivityService {
   /**
-   * Watch these loops: start a watcher for each key not watched yet, and stop
-   * the watchers of loops the runtime no longer lists. A watcher reads its
-   * loop's events for as long as the loop is listed, so each turn's start
-   * comes from the loop itself, never from a listing: the first line of a
-   * turn is never missed. Each turn's end clears its line. Only the runtime
-   * listing stops a watcher, never a caller's rows, so a filtered listing,
-   * or a TUI in another workspace, cannot blank the tray.
+   * Watch the `watch` loops: start a watcher for each key not watched yet,
+   * and stop the watchers of loops missing from `listed`, the runtime's whole
+   * listing as the caller just read it. A watcher reads its loop's events for
+   * as long as the loop is listed, so each turn's start comes from the loop
+   * itself, never from a listing: the first line of a turn is never missed.
+   * Each turn's end clears its line. Only the runtime listing stops a
+   * watcher, never a caller's filtered rows, so a filtered listing, or a TUI
+   * in another workspace, cannot blank the tray.
    */
-  readonly follow: (
-    loops: ReadonlyArray<AgentRowKey>,
-  ) => Effect.Effect<void, never, ExtensionContext>
+  readonly follow: (loops: {
+    readonly listed: ReadonlyArray<AgentRowKey>
+    readonly watch: ReadonlyArray<AgentRowKey>
+  }) => Effect.Effect<void, never, ExtensionContext>
   readonly read: (key: AgentRowKey) => Effect.Effect<Option.Option<string>>
 }
 
@@ -448,15 +406,11 @@ export const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
           // A loop the runtime no longer lists has nothing more to report.
-          // A failed listing stops nothing.
-          const listing = yield* Effect.option(ctx.Session.listActiveLoops)
-          if (Option.isSome(listing)) {
-            const listed = new Set(listing.value.map(rowKey))
-            for (const [key] of Array.from(watchers)) {
-              if (!listed.has(key)) yield* FiberMap.remove(watchers, key)
-            }
+          const listed = new Set(loops.listed.map(rowKey))
+          for (const [key] of Array.from(watchers)) {
+            if (!listed.has(key)) yield* FiberMap.remove(watchers, key)
           }
-          for (const loop of loops) {
+          for (const loop of loops.watch) {
             yield* FiberMap.run(
               watchers,
               rowKey(loop),
@@ -595,8 +549,13 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
       const activity = yield* AgentActivity
       // Every listed child is watched, working or idle, so its next turn
       // reports from its first event. A root is never in the tray. The watch
-      // set comes from every row, never from the caller's query.
-      yield* activity.follow(all.filter((row) => row.live && Option.isSome(row.parent)))
+      // set comes from every row, never from the caller's query, and the rows
+      // already carry the runtime listing: a row is live when it is listed.
+      const listed = all.filter((row) => row.live)
+      yield* activity.follow({
+        listed,
+        watch: listed.filter((row) => Option.isSome(row.parent)),
+      })
       const rows = filterRows(all, input.query ?? "")
       const lines = new Map<string, string>()
       for (const row of rows) {

@@ -9,6 +9,7 @@ import {
 } from "@gent/core/test-utils"
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, FileSystem, Option, Schema } from "effect"
+import { lineCount } from "@gent/core/protocol"
 import {
   type ActivityCall,
   ClientError,
@@ -24,7 +25,6 @@ import {
   formatGroupDuration,
   formatPreviewFooter,
   formatRowCounts,
-  lineCount,
   formatTokens,
   formatToolInput,
   formatUsageStats,

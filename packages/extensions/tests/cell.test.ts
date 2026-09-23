@@ -149,7 +149,7 @@ import {
 import { SqlClient } from "effect/unstable/sql"
 import { CompactionExtension } from "../src/compaction.js"
 
-// ── cell/cell-worker-fixture ────────────────────────────────────────────────
+// ── cell worker build ───────────────────────────────────────────────────────
 
 /** Where the direct kernel tests run their workers: this package. */
 const packageDirectory = new URL("..", import.meta.url).pathname
@@ -198,7 +198,7 @@ export const buildCellExecutable = Effect.gen(function* () {
   return CellWorker.cases.Compiled.make({ binaryPath })
 })
 
-// ── cell/cell-execution.test ────────────────────────────────────────────────
+// ── recorded cell execution ─────────────────────────────────────────────────
 
 const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)
 const testLayer = SqliteStorage.MemoryWithSql(
@@ -810,7 +810,7 @@ describe("recorded cell execution", () => {
   )
 })
 
-// ── cell/cell-process.test ──────────────────────────────────────────────────
+// ── cell worker process ─────────────────────────────────────────────────────
 
 const platformLayer = Layer.merge(BunServices.layer, BunGentPlatformLive)
 
@@ -1594,7 +1594,7 @@ describe("cell worker process", () => {
   )
 })
 
-// ── cell/cell-approval.test ─────────────────────────────────────────────────
+// ── cell approvals ──────────────────────────────────────────────────────────
 
 /**
  * A cell whose `guarded` call asks the user, beside `mark` (records a mark) and
@@ -2155,7 +2155,7 @@ describe("cell receipts", () => {
   )
 })
 
-// ── cell/cell-tool-call.test ────────────────────────────────────────────────
+// ── bound cell tool calls ───────────────────────────────────────────────────
 
 const extensionId = ExtensionId.make("cell-test")
 const runCellToolCall = (params: Parameters<typeof executeBoundCellTool>[0]) =>
@@ -2304,7 +2304,7 @@ it.effect(
     }),
 )
 
-// ── cell/cell-tool-host.test ────────────────────────────────────────────────
+// ── cell tool host ──────────────────────────────────────────────────────────
 
 const cellToolHost = {
   sessionId: SessionId.make("recorded-host-session"),
@@ -2784,7 +2784,7 @@ it.scopedLive(
   25000,
 )
 
-// ── cell/cell-context-host.test ─────────────────────────────────────────────
+// ── cell context host ───────────────────────────────────────────────────────
 
 const sessionIdContextHost = SessionId.make("context-host-session")
 const branchIdContextHost = BranchId.make("context-host-branch")
@@ -3002,7 +3002,7 @@ describe("cell context host", () => {
   )
 })
 
-// ── cell/cell-default-surface.test ──────────────────────────────────────────
+// ── shipped model surface ───────────────────────────────────────────────────
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
@@ -3297,7 +3297,7 @@ describe("shipped model surface", () => {
   )
 })
 
-// ── cell/cell-child.test ────────────────────────────────────────────────────
+// ── child cell ──────────────────────────────────────────────────────────────
 
 describe("child cell", () => {
   it.scopedLive(
@@ -3408,7 +3408,7 @@ describe("child cell", () => {
   )
 })
 
-// ── cell/cell-lifetime.test ─────────────────────────────────────────────────
+// ── branch cell lifetime ────────────────────────────────────────────────────
 
 it.scopedLive("rejects cell dispatch without a branch owner", () =>
   Effect.gen(function* () {
@@ -3748,7 +3748,7 @@ describe("branch cell lifetime", () => {
   )
 })
 
-// ── cell/cell-recovery.test ─────────────────────────────────────────────────
+// ── cell recovery ───────────────────────────────────────────────────────────
 
 /**
  * The delegate registry is one JSON array per parent branch under
@@ -4155,7 +4155,7 @@ it.scopedLive(
   15000,
 )
 
-// ── cell/code-cell-execution-storage.test ───────────────────────────────────
+// ── cell execution storage ──────────────────────────────────────────────────
 
 const code = "await tools.write({ path: 'result.txt', content: 'once' })"
 const makeFixture = Effect.fn("test.makeCellCall")(function* (suffix: string) {
@@ -4373,7 +4373,7 @@ it.scopedLive(
     }).pipe(Effect.provide(BunServices.layer)),
 )
 
-// ── cell/code-cell-tool-operation-storage.test ──────────────────────────────
+// ── cell tool operation storage ─────────────────────────────────────────────
 
 const cellOperationStorage = {
   sessionId: SessionId.make("cell-operation-session"),
@@ -4850,7 +4850,7 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
   }).pipe(Effect.provide(BunServices.layer)),
 )
 
-// ── cell/model-context-directives.test ──────────────────────────────────────
+// ── model context directives ────────────────────────────────────────────────
 
 const hasReply = (text: string) => (items: ReadonlyArray<Message>) =>
   items.some((item) => item.parts.some((part) => part.type === "text" && part.text === text))
@@ -5044,7 +5044,7 @@ describe("model context directives from a cell", () => {
   }
 })
 
-// ── cell/prompt-guidelines.test ─────────────────────────────────────────────
+// ── cell prompt guidelines ──────────────────────────────────────────────────
 
 describe("cell prompt guidelines", () => {
   it.effect("tells the model what the cell runtime exposes so it does not guess at imports", () =>
@@ -5077,7 +5077,7 @@ describe("cell prompt guidelines", () => {
   )
 })
 
-// ── cell/tool-signatures.test ───────────────────────────────────────────────
+// ── tool signatures ─────────────────────────────────────────────────────────
 
 const bracketed = tool({
   id: "must-not-run",

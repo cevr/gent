@@ -1,4 +1,4 @@
-import { Console, Effect, Match, Option, Predicate, Record, Schema } from "effect"
+import { Effect, Match, Option, Predicate, Record, Schema } from "effect"
 import {
   type AgentName,
   type Branch,
@@ -319,7 +319,6 @@ export const resolveInitialState = (input: {
 
     if (headless) {
       if (Option.isNone(promptArg) || promptArg.value.length === 0) {
-        yield* Console.error("Error: --headless requires a prompt argument")
         return yield* new AppBootstrapError({ reason: "headless-missing-prompt" })
       }
       if (Option.isSome(session)) {
@@ -327,7 +326,6 @@ export const resolveInitialState = (input: {
         const sess = yield* client.session.get({ sessionId })
         const decodedSession = Option.fromNullishOr(sess)
         if (Option.isNone(decodedSession)) {
-          yield* Console.error(`Error: session ${session.value} not found`)
           return yield* new AppBootstrapError({ sessionId, reason: "session-not-found" })
         }
         return {
@@ -350,7 +348,6 @@ export const resolveInitialState = (input: {
       const sess = yield* client.session.get({ sessionId })
       const decodedSession = Option.fromNullishOr(sess)
       if (Option.isNone(decodedSession)) {
-        yield* Console.error(`Error: session ${session.value} not found`)
         return yield* new AppBootstrapError({ sessionId, reason: "session-not-found" })
       }
       const promptText = Option.getOrUndefined(prompt)

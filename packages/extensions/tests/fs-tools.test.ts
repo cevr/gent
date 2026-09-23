@@ -9,7 +9,7 @@ import { runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 
-// ── fs-tools/read.test ──────────────────────────────────────────────────────
+// ── read tool ───────────────────────────────────────────────────────────────
 
 const ctx = testToolContext({
   sessionId: SessionId.make("test-session"),
@@ -190,7 +190,7 @@ describe("ReadTool", () => {
   )
 })
 
-// ── fs-tools/write.test ─────────────────────────────────────────────────────
+// ── write tool ──────────────────────────────────────────────────────────────
 
 describe("WriteTool", () => {
   const writeTest = it.scopedLive.layer(ToolLayer)
@@ -292,7 +292,7 @@ describe("WriteTool", () => {
   )
 })
 
-// ── fs-tools/edit.test ──────────────────────────────────────────────────────
+// ── edit tool ───────────────────────────────────────────────────────────────
 
 const editLayer = BunServices.layer
 const editTest = it.scopedLive.layer(editLayer)
@@ -624,7 +624,7 @@ describe("EditTool execution", () => {
   )
 })
 
-// ── fs-tools/grep.test ──────────────────────────────────────────────────────
+// ── grep tool ───────────────────────────────────────────────────────────────
 
 const IndexLayer = Layer.merge(BunServices.layer, Layer.provide(FileIndexLive, BunServices.layer))
 const ctxGrep = testToolContext()
@@ -868,7 +868,7 @@ describe("GrepTool", () => {
   )
 })
 
-// ── fs-tools/file-index.test ────────────────────────────────────────────────
+// ── file index ──────────────────────────────────────────────────────────────
 
 describe("grep's file listing outside a git work tree", () => {
   it.scopedLive("lists every file, dotfiles too", () =>

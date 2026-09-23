@@ -534,9 +534,10 @@ describe("buildContextLabels", () => {
     expect(labels[0]!.color).toBe(theme.error)
   })
 
-  test("a projection replaces the usage estimate with what the model saw", () => {
+  test("a projection's gauge counts the provider's input of the last step, prompt and tools included", () => {
+    // The estimate counts messages only; the provider counted 50k in all.
     const labels = contextLabels(50_000, 200_000, {
-      estimatedTokens: 84_000,
+      estimatedTokens: 1_500,
       availableInputTokens: 190_000,
       contextLimitTokens: 200_000,
       omittedMessages: 3,
@@ -544,8 +545,19 @@ describe("buildContextLabels", () => {
       handoffMessageId: MessageId.make("context-handoff:b:m"),
     })
     expect(labels.length).toBe(1)
-    expect(labels[0]!.text).toBe("ctx 42%")
+    expect(labels[0]!.text).toBe("ctx 25%")
     expect(labels[0]!.color).toBe(theme.textMuted)
+  })
+
+  test("before any step reports its input, the projection's estimate stands", () => {
+    const labels = contextLabels(0, 200_000, {
+      estimatedTokens: 84_000,
+      availableInputTokens: 190_000,
+      contextLimitTokens: 200_000,
+      omittedMessages: 3,
+      compactions: 2,
+    })
+    expect(labels[0]!.text).toBe("ctx 42%")
   })
 
   test("a projection with nothing dropped shows only the percent", () => {

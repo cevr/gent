@@ -16,7 +16,6 @@ import {
   foldActivity,
   type LiveAgentRow,
   projectAgentRows,
-  propagateRunning,
   reconcileAgentRows,
   rowKey,
   sectionOf,
@@ -31,7 +30,7 @@ import {
 } from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
 
-// ── agents-view/projection.test ─────────────────────────────────────────────
+// ── projection ──────────────────────────────────────────────────────────────
 
 const sid = (value: string) => SessionId.make(value)
 const bid = (value: string) => BranchId.make(value)
@@ -238,6 +237,33 @@ describe("agents view projection", () => {
       expect(rows).toHaveLength(2)
     })
 
+    test("a child whose parent sits in another section is a root of its own section", () => {
+      // After a restart the parent's loop is back and idle while its child is
+      // only stored. The child heads the inactive section; indented, it would
+      // read as a child of whichever row sits above it.
+      const rows = buildRowTree(
+        reconcileAgentRows({
+          live: [live({ session: "parent", branch: "b", status: "Idle" })],
+          durable: [
+            durable({ session: "parent", branch: "b", updatedAt: 10 }),
+            durable({ session: "unrelated", branch: "b", updatedAt: 30 }),
+            durable({
+              session: "child",
+              branch: "b",
+              parentSession: "parent",
+              parentBranch: "b",
+              updatedAt: 20,
+            }),
+          ],
+        }),
+      )
+      expect(rows.map((row) => [row.sessionId, row.section, row.depth])).toEqual([
+        [sid("parent"), "idle", 0],
+        [sid("unrelated"), "inactive", 0],
+        [sid("child"), "inactive", 0],
+      ])
+    })
+
     test("orders running before idle before inactive", () => {
       const rows = buildRowTree(
         reconcileAgentRows({
@@ -293,68 +319,36 @@ describe("agents view projection", () => {
     })
   })
 
-  describe("running propagation", () => {
-    test("forces an idle parent to running while a child runs", () => {
-      // A collapsed parent must not look idle while its subagent works.
-      const rows = propagateRunning(
-        reconcileAgentRows({
-          live: [
-            live({ session: "parent", branch: "b", status: "Idle" }),
-            live({ session: "child", branch: "b", status: "Running" }),
-          ],
-          durable: [
-            durable({ session: "parent", branch: "b" }),
-            durable({ session: "child", branch: "b", parentSession: "parent", parentBranch: "b" }),
-          ],
-        }),
-      )
-      expect(find(rows, "parent", "b")?.section).toBe("running")
+  describe("sections by own state", () => {
+    test("an idle middle parent sits in the idle section while its grandchild runs", () => {
+      // main → a → b. a started b and its own turn ended; only b works.
+      const rows = projectAgentRows({
+        live: [
+          live({ session: "main", branch: "b", status: "Idle" }),
+          live({ session: "a", branch: "b", status: "Idle" }),
+          live({ session: "b", branch: "b", status: "Running" }),
+        ],
+        durable: [
+          durable({ session: "main", branch: "b" }),
+          durable({ session: "a", branch: "b", parentSession: "main", parentBranch: "b" }),
+          durable({ session: "b", branch: "b", parentSession: "a", parentBranch: "b" }),
+        ],
+      })
+      expect(rows.map((row) => [row.sessionId, row.section, row.depth])).toEqual([
+        [sid("b"), "running", 0],
+        [sid("main"), "idle", 0],
+        [sid("a"), "idle", 1],
+      ])
     })
 
-    test("propagates through two levels to the grandparent", () => {
-      const rows = propagateRunning(
-        reconcileAgentRows({
-          live: [
-            live({ session: "a", branch: "b", status: "Idle" }),
-            live({ session: "b", branch: "b", status: "Idle" }),
-            live({ session: "c", branch: "b", status: "Running" }),
-          ],
-          durable: [
-            durable({ session: "a", branch: "b" }),
-            durable({ session: "b", branch: "b", parentSession: "a", parentBranch: "b" }),
-            durable({ session: "c", branch: "b", parentSession: "b", parentBranch: "b" }),
-          ],
-        }),
-      )
-      expect(find(rows, "a", "b")?.section).toBe("running")
-    })
-
-    test("leaves an idle parent idle when no descendant runs", () => {
-      const rows = propagateRunning(
-        reconcileAgentRows({
-          live: [
-            live({ session: "parent", branch: "b", status: "Idle" }),
-            live({ session: "child", branch: "b", status: "Idle" }),
-          ],
-          durable: [
-            durable({ session: "parent", branch: "b" }),
-            durable({ session: "child", branch: "b", parentSession: "parent", parentBranch: "b" }),
-          ],
-        }),
-      )
-      expect(find(rows, "parent", "b")?.section).toBe("idle")
-    })
-
-    test("terminates on a cycle", () => {
-      const rows = propagateRunning(
-        reconcileAgentRows({
-          live: [live({ session: "a", branch: "b", status: "Running" })],
-          durable: [
-            durable({ session: "a", branch: "b", parentSession: "b", parentBranch: "b" }),
-            durable({ session: "b", branch: "b", parentSession: "a", parentBranch: "b" }),
-          ],
-        }),
-      )
+    test("a parent cycle still lists every row", () => {
+      const rows = projectAgentRows({
+        live: [live({ session: "a", branch: "b", status: "Running" })],
+        durable: [
+          durable({ session: "a", branch: "b", parentSession: "b", parentBranch: "b" }),
+          durable({ session: "b", branch: "b", parentSession: "a", parentBranch: "b" }),
+        ],
+      })
       expect(rows).toHaveLength(2)
     })
   })
@@ -387,7 +381,7 @@ describe("agents view projection", () => {
   })
 
   describe("full projection", () => {
-    test("reconciles, propagates, and orders in one pass", () => {
+    test("reconciles and orders in one pass", () => {
       const rows = projectAgentRows({
         live: [
           live({ session: "parent", branch: "b", status: "Idle" }),
@@ -406,12 +400,13 @@ describe("agents view projection", () => {
           durable({ session: "gone", branch: "b", name: "old task", updatedAt: 50 }),
         ],
       })
-      expect(rows).toHaveLength(3)
-      // The idle parent was forced running by its child, so both sort first.
-      expect(rows[0]?.section).toBe("running")
-      expect(rows[1]?.section).toBe("running")
-      expect(rows[2]?.section).toBe("inactive")
-      expect(find(rows, "child", "b")?.depth).toBe(1)
+      // Each row sits in its own state's section: the working child first, as
+      // a root there, then its idle parent, then the stored row.
+      expect(rows.map((row) => [row.sessionId, row.section, row.depth])).toEqual([
+        [sid("child"), "running", 0],
+        [sid("parent"), "idle", 0],
+        [sid("gone"), "inactive", 0],
+      ])
     })
 
     test("survives an empty live catalog, as after a restart", () => {
@@ -429,9 +424,7 @@ describe("agents view projection", () => {
   })
 })
 
-// ── agents-view/agents-view-rpc.test ────────────────────────────────────────
-
-// ── agents-view/activity.test ───────────────────────────────────────────────
+// ── live activity ───────────────────────────────────────────────────────────
 
 describe("agents view live activity", () => {
   const sessionId = sid("activity-session")
@@ -553,10 +546,9 @@ const listAgents = (input: { readonly query?: string }) =>
 
 /**
  * One loop behind a scripted `Session`: `events` reads a queue the test feeds,
- * and `listActiveLoops` reports the loop with `status`, or not at all once it
- * is `None`. `checks` counts the listing reads: one per follow, one per
- * follower start and one per turn end, so a test sees whether a follower
- * still runs.
+ * and the runtime lists the loop with `status`, or not at all once it is
+ * `None`. `followWith` reads that listing once and hands it to `follow`, as a
+ * listing request does.
  */
 const scriptedLoop = Effect.gen(function* () {
   const loop = { sessionId: sid("child-session"), branchId: bid("child-branch") }
@@ -565,28 +557,25 @@ const scriptedLoop = Effect.gen(function* () {
   const base = testToolContext()
   const ctx = testLeafContext(
     testToolContext({
-      Session: {
-        ...base.Session,
-        events: () => Stream.fromQueue(events),
-        listActiveLoops: Ref.get(status).pipe(
-          Effect.map((current) =>
-            Option.toArray(
-              Option.map(current, (value) => ({ ...loop, status: Option.some(value) })),
-            ),
-          ),
-        ),
-      },
+      Session: { ...base.Session, events: () => Stream.fromQueue(events) },
     }),
   )
   const activity = yield* AgentActivity
-  const follow = activity.follow([loop]).pipe(Effect.provideService(ExtensionContext, ctx))
+  const followWith = (watch: ReadonlyArray<typeof loop>) =>
+    Ref.get(status).pipe(
+      Effect.flatMap((current) =>
+        activity.follow({ listed: Option.toArray(Option.as(current, loop)), watch }),
+      ),
+      Effect.provideService(ExtensionContext, ctx),
+    )
+  const follow = followWith([loop])
   const chunk = (text: string) =>
     Queue.offer(events, AgentEvent.cases.StreamChunk.make({ ...loop, chunk: text }))
   const turnCompleted = Queue.offer(
     events,
     AgentEvent.cases.TurnCompleted.make({ ...loop, durationMs: 1 }),
   )
-  return { loop, status, ctx, activity, follow, chunk, turnCompleted }
+  return { loop, status, activity, follow, followWith, chunk, turnCompleted }
 })
 
 describe("AgentActivity watchers", () => {
@@ -628,7 +617,7 @@ describe("AgentActivity watchers", () => {
         const script = yield* scriptedLoop
         yield* script.follow
         yield* Ref.set(script.status, Option.some("Idle"))
-        yield* script.activity.follow([]).pipe(Effect.provideService(ExtensionContext, script.ctx))
+        yield* script.followWith([])
         yield* script.chunk("Reading the loader.")
         yield* waitFor(
           script.activity.read(script.loop),
@@ -650,7 +639,7 @@ describe("AgentActivity watchers", () => {
         yield* waitFor(script.activity.read(script.loop), Option.isSome, 2_000, "the streamed line")
         // No event reads the change: only the next listing can stop it.
         yield* Ref.set(script.status, Option.none())
-        yield* script.activity.follow([]).pipe(Effect.provideService(ExtensionContext, script.ctx))
+        yield* script.followWith([])
         expect(Option.isNone(yield* script.activity.read(script.loop))).toBe(true)
       }).pipe(Effect.provide(AgentActivityLive), Effect.scoped, Effect.timeout("4 seconds")),
     6_000,
@@ -782,15 +771,10 @@ describe("AgentsViewExtension via RPC", () => {
           const rowOf = (reply: typeof ReplySchema.Type, sessionId: string) =>
             reply.rows.find((row) => row.sessionId === sessionId)
           // Only listings that hide the child, as a pane query that matches the
-          // root alone sends. The busy child forces its root into `running`.
-          const rootOnly = { query: String(harness.sessionId) }
-          const rootRunning = yield* waitFor(
-            requestRows(harness, rootOnly),
-            ({ reply }) => rowOf(reply, harness.sessionId)?.section === "running",
-            5_000,
-            "root running under its child",
-          )
-          expect(rowOf(rootRunning.reply, child.sessionId)).toBeUndefined()
+          // root alone sends.
+          const rootOnly = yield* requestRows(harness, { query: String(harness.sessionId) })
+          expect(rowOf(rootOnly.reply, harness.sessionId)).toBeDefined()
+          expect(rowOf(rootOnly.reply, child.sessionId)).toBeUndefined()
           const chunkPublished = yield* harness.client.session
             .events({ sessionId: child.sessionId, branchId: child.branchId })
             .pipe(
@@ -920,10 +904,15 @@ describe("AgentsViewExtension via RPC", () => {
           // `session.create` stores parentSessionId/parentBranchId, which is the
           // same link `delegate` writes for a subagent. Step 5's disclosure tree
           // reads nothing else, so proving depth here proves the nesting seam.
+          // Neither has a loop, so both sit in one section: a row nests only
+          // under a parent drawn in its own section.
+          const parent = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-parent",
+          })
           const child = yield* harness.client.session.create({
             cwd: "/tmp/agents-view-rpc-child",
-            parentSessionId: harness.sessionId,
-            parentBranchId: harness.branchId,
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
           })
 
           const raw = yield* harness.client.extension.request({
@@ -935,13 +924,13 @@ describe("AgentsViewExtension via RPC", () => {
           })
           const reply = yield* Schema.decodeUnknownEffect(ReplySchema)(raw)
 
-          const parentRow = reply.rows.find((row) => row.sessionId === harness.sessionId)
+          const parentRow = reply.rows.find((row) => row.sessionId === parent.sessionId)
           const childRow = reply.rows.find((row) => row.sessionId === child.sessionId)
           expect(parentRow?.depth).toBe(0)
           expect(childRow?.depth).toBe(1)
           // The tray counts a session's subtree client-side, so the link travels.
           expect(parentRow?.parentSessionId).toBeUndefined()
-          expect(childRow?.parentSessionId).toBe(harness.sessionId)
+          expect(childRow?.parentSessionId).toBe(parent.sessionId)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

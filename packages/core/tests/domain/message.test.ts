@@ -9,6 +9,7 @@ import {
   headTail,
   headTailChars,
   latestAssistantText,
+  lineCount,
   Message,
   OutputCut,
   messagePartsImages,
@@ -19,14 +20,13 @@ import {
   messageSingleText,
   projectMessagesWithToolInteractions,
   projectResponsePartsToMessageParts,
+  splitLines,
   SteerCommand,
   toolCallReceipts,
 } from "../../src/domain/message"
 import { AgentEvent, EventEnvelope, EventId } from "../../src/domain/event"
 import { Option, Predicate, Schema } from "effect"
 import * as Response from "effect/unstable/ai/Response"
-
-// ── message.test ────────────────────────────────────────────────────────────
 
 describe("steer command", () => {
   test("a stored Interrupt row still decodes", () => {
@@ -146,7 +146,7 @@ describe("message branch copies", () => {
   })
 })
 
-// ── head-tail.test ──────────────────────────────────────────────────────────
+// ── head tail ───────────────────────────────────────────────────────────────
 
 describe("tool summary", () => {
   test("a multi-line author summary keeps its first line", () => {
@@ -234,7 +234,7 @@ describe("headTailChars", () => {
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
-// ── message-part-projection.test ────────────────────────────────────────────
+// ── message part projection ─────────────────────────────────────────────────
 
 describe("message part projection", () => {
   const absent = Option.getOrUndefined(Option.none<number>())
@@ -1024,9 +1024,9 @@ describe("message part projection", () => {
     const emptied = Object.keys(texts).filter((key) => output[key] === "")
     expect(emptied.length).toBeGreaterThan(0)
     for (const key of emptied) {
-      // Two lines, a final newline: the kept tail is the empty part after it.
+      // Two lines, the second ended by a final newline: the tail starts past them.
       expect(cuts).toContainEqual(
-        OutputCut.cases.Text.make({ field: key, lines: 3, tailLine: 3, chars: 1_006 }),
+        OutputCut.cases.Text.make({ field: key, lines: 2, tailLine: 3, chars: 1_006 }),
       )
     }
     // The array is kept, whole or cut, and a cut is recorded.
@@ -1049,6 +1049,24 @@ describe("message part projection", () => {
     // The head is the start of line 1 and the tail is line 3 whole.
     expect(cut).toMatchObject({ lines: 3, tailLine: 3, headCut: true })
     expect(cut.tailCut).toBeUndefined()
+  })
+
+  test("a cut output ending in a newline counts its lines as every reader does", () => {
+    const stdout = `${Array.from({ length: 900 }, (_, index) => `${index + 1}:${"x".repeat(37)}`).join("\n")}\n`
+    const operation = projectOperation(
+      "bash",
+      { command: "seq" },
+      encodeValue({ stdout, stderr: "", exitCode: 0 }),
+    )
+    const output = Schema.decodeUnknownSync(BashOutputJson)(operation?.output)
+    const [cut] = operation?.cuts ?? []
+    expect(cut?._tag).toBe("Text")
+    if (cut?._tag !== "Text") return
+    expect(cut.lines).toBe(lineCount(stdout))
+    expect(cut.lines).toBe(900)
+    // The tail runs from `tailLine` through line 900, and the excerpt ends it with the newline.
+    const tail = splitLines(output.stdout.split("\n…\n")[1] ?? "")
+    expect(tail).toEqual(splitLines(stdout).slice(cut.tailLine - 1))
   })
 
   test("whole head and tail lines carry no part-of-a-line flag", () => {

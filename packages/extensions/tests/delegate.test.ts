@@ -43,7 +43,7 @@ import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 
-// ── delegate/harness ────────────────────────────────────────────────────────
+// ── delegate harness ────────────────────────────────────────────────────────
 
 /**
  * Every test here runs a real child through the public facade. The registry
@@ -213,7 +213,7 @@ const afterCompletion = (harness: Harness) =>
     "the child's completion woke the parent and the parent read it",
   )
 
-// ── delegate/completion ─────────────────────────────────────────────────────
+// ── child completion ────────────────────────────────────────────────────────
 
 /**
  * A child never blocks its parent. The start returns at admission, the parent
@@ -544,7 +544,7 @@ describe("a child's completion", () => {
   )
 })
 
-// ── delegate/completion-message ─────────────────────────────────────────────
+// ── child completion message ────────────────────────────────────────────────
 
 /**
  * The message a parent agent reads when a child finishes.
@@ -642,7 +642,7 @@ describe("the completion headline", () => {
   })
 })
 
-// ── delegate/parent-interrupt ───────────────────────────────────────────────
+// ── parent interrupt ────────────────────────────────────────────────────────
 
 /**
  * A parent's interrupted turn stops the children it has not heard from. Left
@@ -723,7 +723,7 @@ describe("a parent interrupt", () => {
   )
 })
 
-// ── delegate/background ─────────────────────────────────────────────────────
+// ── background starts ───────────────────────────────────────────────────────
 
 /**
  * A start nobody waits for is background delegation. The child's completion
@@ -1023,7 +1023,7 @@ describe("a start nobody waits for", () => {
   })
 })
 
-// ── delegate/pending-cap ────────────────────────────────────────────────────
+// ── pending cap ─────────────────────────────────────────────────────────────
 
 /**
  * The parent branch admits at most four unfinished children. A fifth and
@@ -1943,7 +1943,7 @@ describe("session.send", () => {
   )
 })
 
-// ── delegate/later-turns ────────────────────────────────────────────────────
+// ── child later turns ───────────────────────────────────────────────────────
 
 /**
  * Only a child's first turn returns as its completion. A child that arms a
@@ -2019,7 +2019,7 @@ describe("a child's later turn", () => {
   )
 })
 
-// ── delegate/start-turn ─────────────────────────────────────────────────────
+// ── child start turn ────────────────────────────────────────────────────────
 
 /**
  * The loop writes user-role lines inside a turn: a continuation after an

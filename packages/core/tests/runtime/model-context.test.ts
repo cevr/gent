@@ -61,8 +61,6 @@ import { baseLocalLayerWithProvider } from "../../src/test-utils/harness"
 import { type AgentEvent, EventEnvelope, EventId, EventPublisher } from "../../src/domain/event"
 import * as Response from "effect/unstable/ai/Response"
 
-// ── model-context.test ──────────────────────────────────────────────────────
-
 interface TestMessageOptional {
   metadata?: {
     readonly customType?: string
@@ -390,7 +388,7 @@ describe("projectModelContext", () => {
   })
 })
 
-// ── model-context-degrade.test ──────────────────────────────────────────────
+// ── context compaction degrade ──────────────────────────────────────────────
 
 const CONTEXT_LIMIT_TOKENS = 40_000
 const modelId = ModelId.make("test/small-window")
@@ -504,7 +502,7 @@ describe("context compaction degrade path", () => {
   )
 })
 
-// ── model-context-ledger.test ───────────────────────────────────────────────
+// ── model context ledger ────────────────────────────────────────────────────
 
 describe("model context ledger", () => {
   it.effect("a branch starts without a projection and reports the last one recorded", () =>
@@ -566,7 +564,7 @@ describe("model context ledger", () => {
   )
 })
 
-// ── model-context-window.test ───────────────────────────────────────────────
+// ── model context window ────────────────────────────────────────────────────
 
 const sessionIdModelContextWindow = SessionId.make("window-session")
 const branchIdModelContextWindow = BranchId.make("window-branch")
@@ -737,7 +735,7 @@ describe("model context window", () => {
   })
 })
 
-// ── token-estimation.test ───────────────────────────────────────────────────
+// ── token estimation ────────────────────────────────────────────────────────
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
@@ -900,7 +898,7 @@ describe("estimateTokens", () => {
   })
 })
 
-// ── agent/turn-window.test ──────────────────────────────────────────────────
+// ── turn window ─────────────────────────────────────────────────────────────
 
 const modelIdTurnWindow = ModelId.make("test/window-model")
 /** A publisher that keeps what the projection publishes, so a test can read the notice. */
@@ -1208,7 +1206,7 @@ describe("turn window projection", () => {
   )
 })
 
-// ── ../providers/ai-transcript.test ─────────────────────────────────────────
+// ── ai transcript projection ────────────────────────────────────────────────
 
 const BoundedToolResult = Schema.Struct({
   truncated: Schema.Boolean,

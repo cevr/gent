@@ -15,7 +15,7 @@ import {
   maximumCellSourceLength,
 } from "../src/cell-protocol.js"
 
-// ── cell/cell-worker.test ───────────────────────────────────────────────────
+// ── cell worker ─────────────────────────────────────────────────────────────
 
 /** A catalog that selects the named host tools, hashed by their names. */
 const catalogOf = (...names: ReadonlyArray<string>) => ({
@@ -268,7 +268,7 @@ describe("cell worker", () => {
   )
 })
 
-// ── cell/bun-cell-evaluator.test ────────────────────────────────────────────
+// ── bun cell evaluator ──────────────────────────────────────────────────────
 
 /** Cells share the test process realm, so each test clears its bindings at scope exit. */
 const makeKernel = (host: typeof CellHost.Service, ...tools: ReadonlyArray<string>) =>

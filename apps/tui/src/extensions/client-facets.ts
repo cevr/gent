@@ -19,6 +19,7 @@ import {
   type ImagePartProjection,
   type Message,
   type Session,
+  type SessionSnapshot,
   SessionId,
 } from "@gent/core/protocol"
 import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
@@ -121,8 +122,8 @@ export type ActiveExtensionSession = { readonly sessionId: SessionId; readonly b
  * streamed reads zero turns, zero cost and its resolved model.
  */
 export interface ExtensionAgentDetail {
-  /** Runtime state tag, e.g. `"Idle"` / `"Running"`. */
-  readonly status: string
+  /** What the loop is doing: its runtime state tag. */
+  readonly status: SessionSnapshot["runtime"]["_tag"]
   readonly model: string
   readonly turns: number
   readonly costUsd: number
@@ -515,13 +516,11 @@ export const makeClientContextLayer = (deps: ClientContextDeps): Layer.Layer<Cli
 /**
  * A read keyed by the session the shell is on, with the load state a pane draws.
  *
- * Two rules guard what a reply may write. The generation guard drops every
- * reply but the newest refresh's, because a filter fires one fetch per
- * keystroke and a shorter query can answer last. The key guard drops a reply
- * made for a session the shell has since left, which the generation guard
- * cannot see because a switch raises no new refresh. A dropped reply still
- * clears the load state, or a pane that lost a race would say "loading" until
- * the next refresh.
+ * One read runs at a time (`coalescedRead`): a refresh during a read runs one
+ * more read after it, so replies land in the order they were asked and a read
+ * slower than its trigger still lands. The key guard drops a reply made for a
+ * session the shell has since left. A dropped reply still clears the load
+ * state, or a pane that lost a race would say "loading" until the next read.
  *
  * With `follow`, the query reads again whenever the session or the branch
  * moves, and `value` answers `initial` until that read lands, so one session's
@@ -533,6 +532,39 @@ interface SessionQuery<A> {
   readonly error: () => Option.Option<string>
   readonly loading: () => boolean
   readonly refresh: () => void
+}
+
+/**
+ * One read at a time. A request while a read runs marks one more read, which
+ * starts when the running one ends; any further requests fold into it. Each
+ * read is built when it starts, so a queued read asks with the newest inputs.
+ */
+export const coalescedRead = (
+  cast: (effect: Effect.Effect<void>) => void,
+  read: () => Effect.Effect<void>,
+): (() => void) => {
+  let running = false
+  let again = false
+  const request = (): void => {
+    if (running) {
+      again = true
+      return
+    }
+    running = true
+    cast(
+      read().pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            running = false
+            if (!again) return
+            again = false
+            request()
+          }),
+        ),
+      ),
+    )
+  }
+  return request
 }
 
 const sameSession = (left: ActiveExtensionSession, right: ActiveExtensionSession): boolean =>
@@ -553,13 +585,11 @@ export const sessionQuery = <A>(opts: {
       const [stored, setStored] = createSignal<Option.Option<Keyed>>(Option.none())
       const [error, setError] = createSignal<Option.Option<string>>(Option.none())
       const [loading, setLoading] = createSignal(false)
-      let generation = 0
 
       const isCurrent = (session: ActiveExtensionSession): boolean =>
         Option.exists(transport.currentSession(), (now) => sameSession(now, session))
 
-      const settle = (issued: number, session: ActiveExtensionSession, write: () => void) => {
-        if (issued !== generation) return
+      const settle = (session: ActiveExtensionSession, write: () => void) => {
         setLoading(false)
         // The shell may have moved while this was out; that reply belongs to a
         // session nobody is looking at any more.
@@ -567,26 +597,27 @@ export const sessionQuery = <A>(opts: {
         write()
       }
 
-      const refresh = (): void => {
-        const captured = transport.currentSession()
-        if (Option.isNone(captured)) return
-        const session = captured.value
-        const issued = ++generation
-        setLoading(true)
-        shell.cast(
-          opts.fetch(session).pipe(
-            Effect.match({
-              onFailure: (failure) =>
-                settle(issued, session, () => setError(Option.some(failure.message))),
-              onSuccess: (value) =>
-                settle(issued, session, () => {
-                  setStored(Option.some({ session, value }))
-                  setError(Option.none())
-                }),
-            }),
-          ),
-        )
-      }
+      // The session is read when the read starts, so a read queued behind a
+      // switch asks the session the shell moved to.
+      const refresh = coalescedRead(shell.cast, () =>
+        Option.match(transport.currentSession(), {
+          onNone: () => Effect.void,
+          onSome: (session) => {
+            setLoading(true)
+            return opts.fetch(session).pipe(
+              Effect.match({
+                onFailure: (failure) =>
+                  settle(session, () => setError(Option.some(failure.message))),
+                onSuccess: (value) =>
+                  settle(session, () => {
+                    setStored(Option.some({ session, value }))
+                    setError(Option.none())
+                  }),
+              }),
+            )
+          },
+        }),
+      )
 
       // `currentSession` is the client's identity accessor, so this fires only
       // when the session or the branch moves, never for a rename or a model change.

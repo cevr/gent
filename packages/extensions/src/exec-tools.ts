@@ -18,7 +18,7 @@ import {
   Stream,
 } from "effect"
 import { SqlClient } from "effect/unstable/sql"
-import { countOf, lineCount } from "./fs-tools.js"
+import { countOf } from "./fs-tools.js"
 import {
   type BranchId,
   defineExtension,
@@ -28,6 +28,7 @@ import {
   ExtensionHost,
   ExtensionId,
   headTailChars,
+  lineCount,
   maximumModelToolResultChars,
   type SessionId,
   tool,
