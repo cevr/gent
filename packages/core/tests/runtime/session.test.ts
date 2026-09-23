@@ -578,7 +578,7 @@ describe("SessionRuntime", () => {
       )
     }),
   )
-  it.live("steer interject interrupts the active turn ahead of queued follow-ups", () =>
+  it.live("an interjection joins the running turn ahead of queued follow-ups", () =>
     Effect.gen(function* () {
       const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
         {
