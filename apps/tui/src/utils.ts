@@ -2,7 +2,7 @@ import { Effect, FileSystem, Match, Option, Path, Predicate, Random, Schema } fr
 import { type Context, useContext } from "solid-js"
 import { textWidth } from "./text-width-adapter"
 import type { GentClientRpcError } from "@gent/sdk"
-import { GentConnectionError, GentRpcError, lineCount } from "@gent/core/protocol"
+import { GentConnectionError, GentRpcError, lineCount, splitLines } from "@gent/core/protocol"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import type { ToolCall } from "./tool-renderers"
 
@@ -771,7 +771,8 @@ export const formatPreviewFooter = (hidden: number) => `… +${plural(hidden, "l
 
 /**
  * File reference parsing, expansion, and display links.
- * Supports @path/to/file.ts#10-20 syntax.
+ * Supports @path/to/file.ts#10-20 syntax, and `@"my notes.md"#10-20` for a
+ * path with whitespace or `#`.
  */
 
 interface FileRef {
@@ -785,9 +786,12 @@ interface FileRefMatch {
   readonly ref: FileRef
   readonly start: number
   readonly end: number
+  /** Written without quotes: trailing punctuation may belong to the sentence. */
+  readonly bare: boolean
 }
 
-const FILE_REF_PATTERN = /@([^\s#]+)(?:#(\d+)(?:-(\d+))?)?/g
+/** `@"quoted path"` or `@bare/path`, then an optional `#start-end` range. */
+const FILE_REF_PATTERN = /@(?:"([^"\n]+)"|([^\s#"]+))(?:#(\d+)(?:-(\d+))?)?/g
 
 export function isAbsPath(path: string): boolean {
   return path.startsWith("/")
@@ -811,19 +815,25 @@ const matchFileRefs = (text: string): FileRefMatch[] => {
   const refs: FileRefMatch[] = []
   const pattern = new RegExp(FILE_REF_PATTERN.source, "g")
   for (const match of text.matchAll(pattern)) {
-    const path = Option.fromNullishOr(match[1])
+    const quoted = Option.fromNullishOr(match[1])
+    const path = Option.orElse(quoted, () => Option.fromNullishOr(match[2]))
     if (Option.isNone(path) || path.value.length === 0) continue
 
     const ref: FileRef = { path: path.value }
-    const startLine = Option.fromNullishOr(match[2])
+    const startLine = Option.fromNullishOr(match[3])
     if (Option.isSome(startLine)) {
       ref.startLine = parseInt(startLine.value, 10)
-      const endLine = Option.fromNullishOr(match[3])
+      const endLine = Option.fromNullishOr(match[4])
       if (Option.isSome(endLine)) {
         ref.endLine = parseInt(endLine.value, 10)
       }
     }
-    refs.push({ ref, start: match.index, end: match.index + match[0].length })
+    refs.push({
+      ref,
+      start: match.index,
+      end: match.index + match[0].length,
+      bare: Option.isNone(quoted),
+    })
   }
 
   return refs
@@ -854,23 +864,29 @@ const readFileContent = (
     const fs = yield* FileSystem.FileSystem
     const bytes = yield* fs.readFile(absolutePath)
     if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return Option.none<string>()
-    let lines = new TextDecoder().decode(bytes).split("\n")
+    const text = new TextDecoder().decode(bytes)
+    // The core line rule: a final newline ends the last line and starts none.
+    let lines = splitLines(text)
+    let whole = text
 
     if (Option.isSome(startLine)) {
       const start = Math.max(0, startLine.value - 1) // Convert 1-indexed to 0-indexed
       let end = start + 1
       if (Option.isSome(endLine)) end = Math.min(lines.length, endLine.value)
       lines = lines.slice(start, end)
+      whole = lines.join("\n")
     }
 
+    const encoder = new TextEncoder()
     const kept: Array<string> = []
     let size = 0
     for (const line of lines) {
-      if (kept.length >= INLINE_MAX_LINES || size + line.length > INLINE_MAX_BYTES) break
+      const lineBytes = encoder.encode(line).length
+      if (kept.length >= INLINE_MAX_LINES || size + lineBytes > INLINE_MAX_BYTES) break
       kept.push(line)
-      size += line.length + 1
+      size += lineBytes + 1
     }
-    if (kept.length === lines.length) return Option.some(lines.join("\n"))
+    if (kept.length === lines.length) return Option.some(whole)
     return Option.some(
       `${kept.join("\n")}\n[${label} cut at ${kept.length} lines of ${lines.length}; read the rest with the read tool]`,
     )
@@ -885,7 +901,7 @@ const expandSingleRef = (ref: FileRef, cwd: string) => {
     const absolutePath = path.resolve(cwd, ref.path)
     const relativePathValue = path.relative(cwd, absolutePath)
     const content = yield* readFileContent(absolutePath, relativePathValue, startLine, endLine)
-    if (Option.isNone(content)) return Option.none()
+    if (Option.isNone(content)) return Option.none<string>()
 
     // Build range label
     let rangeLabel = relativePathValue
@@ -901,6 +917,28 @@ const expandSingleRef = (ref: FileRef, cwd: string) => {
   }).pipe(Effect.catchEager(() => Effect.succeedNone))
 }
 
+/** Punctuation a sentence puts after a reference: `see @a.ts, then (@b.ts).` */
+const TRAILING_PUNCTUATION = /[.,;:!?)\]}']+$/
+
+/**
+ * A bare reference as written, else, when that path does not expand, the
+ * path without its trailing punctuation. The block names how much of the
+ * written reference it replaces, so the punctuation stays in the text.
+ */
+const expandMatch = (match: FileRefMatch, cwd: string) =>
+  Effect.gen(function* () {
+    const whole = yield* expandSingleRef(match.ref, cwd)
+    if (Option.isSome(whole)) return Option.some({ block: whole.value, end: match.end })
+    const hasRange = Predicate.isNotUndefined(match.ref.startLine)
+    const trailing = Option.fromNullishOr(TRAILING_PUNCTUATION.exec(match.ref.path))
+    if (!match.bare || hasRange || Option.isNone(trailing)) return Option.none()
+    const punctuation = trailing.value[0]
+    const trimmed = match.ref.path.slice(0, match.ref.path.length - punctuation.length)
+    if (trimmed.length === 0) return Option.none()
+    const block = yield* expandSingleRef({ path: trimmed }, cwd)
+    return Option.map(block, (value) => ({ block: value, end: match.end - punctuation.length }))
+  })
+
 /**
  * Expand file references in text by reading file contents.
  * Each code block is spliced in at the span its reference was written at, so
@@ -915,16 +953,16 @@ export const expandFileRefs = (text: string, cwd: string) => {
   return Effect.gen(function* () {
     const expanded = yield* Effect.forEach(
       matches,
-      (match) => Effect.map(expandSingleRef(match.ref, cwd), (block) => ({ match, block })),
+      (match) => Effect.map(expandMatch(match, cwd), (expansion) => ({ match, expansion })),
       { concurrency: 16 },
     )
 
     let result = ""
     let cursor = 0
-    for (const { match, block } of expanded) {
-      if (Option.isNone(block)) continue
-      result += text.slice(cursor, match.start) + block.value
-      cursor = match.end
+    for (const { match, expansion } of expanded) {
+      if (Option.isNone(expansion)) continue
+      result += text.slice(cursor, match.start) + expansion.value.block
+      cursor = expansion.value.end
     }
     return result + text.slice(cursor)
   })
