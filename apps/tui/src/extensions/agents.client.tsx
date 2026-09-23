@@ -96,7 +96,9 @@ const nameFor = (row: AgentRowEntry): string =>
 
 /**
  * fx's subagent rows: `working · <name>`, one per running child and
- * nothing else. Past the cap the rest collapse into one count line.
+ * nothing else, with what the child is doing now when the server reports it
+ * (`· running bash`, or its last streamed line). Past the cap the rest
+ * collapse into one count line.
  */
 export const trayLines = (
   running: ReadonlyArray<AgentRowEntry>,
@@ -105,7 +107,12 @@ export const trayLines = (
   const shown = running.slice(0, TRAY_MAX_ROWS)
   const lines = shown.map((row) => ({
     pulse: true,
-    text: truncate(`working · ${nameFor(row)}`, width),
+    text: truncate(
+      [`working · ${nameFor(row)}`, ...Option.toArray(Option.fromUndefinedOr(row.activity))].join(
+        " · ",
+      ),
+      width,
+    ),
   }))
   const rest = running.length - shown.length
   if (rest > 0) lines.push({ pulse: false, text: `+${rest} more working` })

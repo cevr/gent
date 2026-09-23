@@ -863,6 +863,12 @@ describe("trayLines", () => {
       expect(trayLines(running.slice(0, 1), 18)[0]?.text).toBe("working · delegat…")
     }),
   )
+  it.live("a running child shows what it is doing now", () =>
+    Effect.sync(() => {
+      const busy = { ...child("a", "running", "root"), activity: "running bash" }
+      expect(trayLines([busy], 60)[0]?.text).toBe("working · delegate: a task · running bash")
+    }),
+  )
 })
 
 describe("Subagent tray", () => {
