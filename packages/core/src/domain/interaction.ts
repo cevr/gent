@@ -17,7 +17,11 @@ import { BranchId, InteractionRequestId, SessionId, ToolCallId } from "./ids.js"
  * keyed by requestId. The loop leaves WaitingForInteraction and runs the step
  * again — the tool re-calls approve(), takes its answer, and continues.
  *
- * No fiber blocks on a human. Interactions survive server restarts.
+ * No turn blocks on a human. Interactions survive server restarts. The one
+ * exception is an inner call of a dispatching tool (a cell): the dispatcher's
+ * source cannot run again, so that call waits for its answer in place while
+ * the other inner calls go on. Its receipt keeps the request, so a crash
+ * still resumes it by id.
  *
  * A request belongs to its owner: the tool call that asked, and which of that
  * call's asks it was. An answer goes to its owner only, never to another call
@@ -149,6 +153,17 @@ export const { encode: encodeInteractionDecision, decode: decodeInteractionDecis
 // Interaction service
 // ============================================================================
 
+/**
+ * An ask by an inner call of a dispatching tool, which waits for its answer
+ * in place. `resumeRequestId` is the request to resume after a crash; `None`
+ * asks fresh. `take` records on the owner's receipt that its call took the
+ * answer, before the request settles.
+ */
+interface OwnedAsk {
+  readonly resumeRequestId: Option.Option<InteractionRequestId>
+  readonly take: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
+}
+
 /** A session branch: the scope that shows one request at a time. */
 interface BranchRef {
   readonly sessionId: SessionId
@@ -161,8 +176,8 @@ export interface InteractionService {
     ctx: {
       sessionId: SessionId
       branchId: BranchId
-      /** Absent uses native branch replay. None starts a fresh operation. */
-      resumeRequestId?: Option.Option<InteractionRequestId>
+      /** Absent: a native ask, which parks the turn. */
+      owned?: OwnedAsk
     },
   ) => Effect.Effect<
     ApprovalDecision,
@@ -431,8 +446,8 @@ export const makeInteractionService = (
       ),
     )
 
-    /** Store and publish a request whose slot this ask has claimed, then park on it. */
-    const ask = Effect.fn("InteractionService.ask")(function* (request: {
+    /** Store and publish a request whose slot this ask has claimed. */
+    const admit = Effect.fn("InteractionService.admit")(function* (request: {
       readonly params: ApprovalRequest
       readonly paramsJson: string
       readonly requestId: InteractionRequestId
@@ -469,13 +484,19 @@ export const makeInteractionService = (
       })
       yield* signal
       yield* config.onPresent(request.requestId, request.params, request.branch)
-      // Signal the machine to park in WaitingForInteraction.
-      return yield* new InteractionPendingError({
-        requestId: request.requestId,
-        sessionId: request.branch.sessionId,
-        branchId: request.branch.branchId,
-      })
     })
+
+    /** Store and publish a claimed request, then park the turn on it. */
+    const ask = (request: Parameters<typeof admit>[0]) =>
+      admit(request).pipe(
+        Effect.andThen(
+          new InteractionPendingError({
+            requestId: request.requestId,
+            sessionId: request.branch.sessionId,
+            branchId: request.branch.branchId,
+          }),
+        ),
+      )
 
     type Next = Effect.Effect<
       Option.Option<ApprovalDecision>,
@@ -577,6 +598,10 @@ export const makeInteractionService = (
           // settling its request (a crash in between); nothing will answer it.
           if (Option.exists(open.owner, (other) => !branch.step.has(other.toolCallId)))
             return drop(current, branch, open)
+          // An owner that still runs waits for its answer in place (an inner
+          // call of a cell): the slot frees when it takes the answer.
+          if (!mine && Option.exists(open.owner, (other) => branch.running.has(other.toolCallId)))
+            return [wait, current]
           return parkBehind(current, branch, open, mine)
         }
         if (Option.isNone(open.owner) || mine) {
@@ -641,59 +666,108 @@ export const makeInteractionService = (
     })
 
     /**
-     * An inner call of a dispatching tool. Its owner keeps the request id on
-     * its own receipt, so it resumes by that id. A fresh ask needs a free slot:
-     * the owner cannot replay its source to ask later, so it is refused rather
-     * than queued, and the open request stays as it was.
+     * An inner call of a dispatching tool. The dispatcher keeps running while
+     * its call asks, so the call waits for its answer in place: other inner
+     * calls go on, and code after the call runs once it has the answer. It
+     * cannot park the turn, since the dispatcher cannot replay its source.
+     *
+     * A fresh ask waits for the slot while the open request belongs to a
+     * call that still runs; a request whose owner does not run (a native
+     * call that parked) would never free the slot, so the ask is refused.
+     * After a crash the owner resumes by the request id on its receipt.
      */
     const presentOwned = Effect.fn("InteractionService.presentOwned")(function* (
       params: ApprovalRequest,
       branchRef: BranchRef,
       owner: Option.Option<InteractionOwner>,
-      resume: Option.Option<InteractionRequestId>,
+      owned: OwnedAsk,
     ) {
       const key = contextKey(branchRef)
       const paramsJson = yield* encodeInteractionParams(params)
-      if (Option.isSome(resume)) {
-        const selected = resume.value
-        type Take = Effect.Effect<Option.Option<ApprovalDecision>, EventStoreError>
-        const take = Ref.modify(state, (current): [Take, InteractionState] => {
-          const decision = current.decisions.get(selected)
-          if (Predicate.isUndefined(decision)) {
-            const unavailable = new EventStoreError({
-              message: "Selected interaction decision is unavailable",
-            })
-            return [Effect.fail(unavailable), current]
-          }
-          const branch = branchOf(current, key)
-          const open = Option.filter(branch.open, (value) => value.requestId === selected)
-          let taken = dropDecision(current, selected)
-          if (Option.isSome(open)) taken = putBranch(taken, key, { ...branch, open: Option.none() })
-          // The answer was to another question: settle it, and ask this one.
-          if (Option.exists(open, (value) => value.paramsJson !== paramsJson))
-            return [Effect.as(settle(selected), Option.none()), taken]
-          return [Effect.as(settle(selected), Option.some(decision)), taken]
+      /** The owner takes its answer: its receipt first, then the request settles. */
+      const takeAnswer = (selected: InteractionRequestId, decision: ApprovalDecision) =>
+        Effect.gen(function* () {
+          yield* owned.take(selected)
+          yield* Ref.update(state, (current) => {
+            const branch = branchOf(current, key)
+            const taken = dropDecision(current, selected)
+            if (!Option.exists(branch.open, (value) => value.requestId === selected)) return taken
+            return putBranch(taken, key, { ...branch, open: Option.none() })
+          })
+          yield* settle(selected)
+          return decision
         })
-        const taken = yield* Effect.uninterruptible(Effect.flatten(take))
-        if (Option.isSome(taken)) return taken.value
+      if (Option.isSome(owned.resumeRequestId)) {
+        const selected = owned.resumeRequestId.value
+        const current = yield* Ref.get(state)
+        const decision = current.decisions.get(selected)
+        if (Predicate.isUndefined(decision))
+          return yield* new EventStoreError({
+            message: "Selected interaction decision is unavailable",
+          })
+        const open = Option.filter(
+          branchOf(current, key).open,
+          (value) => value.requestId === selected,
+        )
+        if (!Option.exists(open, (value) => value.paramsJson !== paramsJson))
+          return yield* Effect.uninterruptible(takeAnswer(selected, decision))
+        // The answer was to another question: settle it, and ask this one.
+        yield* Ref.update(state, (latest) => {
+          const branch = branchOf(latest, key)
+          return putBranch(dropDecision(latest, selected), key, { ...branch, open: Option.none() })
+        })
+        yield* settle(selected)
       }
       const requestId = InteractionRequestId.make(yield* platform.randomId)
-      type Claim = Effect.Effect<never, EventStoreError | InteractionPendingError>
-      const claim = Ref.modify(state, (current): [Claim, InteractionState] => {
-        const branch = branchOf(current, key)
-        if (Option.isSome(branch.open)) {
-          const busy = new EventStoreError({
-            message: "Another interaction is open on this branch",
-          })
-          return [Effect.fail(busy), current]
-        }
-        const claimed = putBranch(current, key, {
-          ...branch,
-          open: Option.some({ requestId, owner, paramsJson, admitted: false }),
-        })
-        return [ask({ params, paramsJson, requestId, owner, branch: branchRef }), claimed]
-      })
-      return yield* Effect.uninterruptible(Effect.flatten(claim))
+      type Look = Effect.Effect<boolean, EventStoreError>
+      // A claim, once made, runs to admission or release. Only waits are interruptible.
+      const claim = Effect.uninterruptibleMask((restore) =>
+        Effect.flatten(
+          Ref.modify(state, (current): [Look, InteractionState] => {
+            const branch = branchOf(current, key)
+            const wait: Look = restore(Effect.as(Deferred.await(current.changed), false))
+            if (Option.isNone(branch.open)) {
+              const claimed = putBranch(current, key, {
+                ...branch,
+                open: Option.some({ requestId, owner, paramsJson, admitted: false }),
+              })
+              const admitted = admit({ params, paramsJson, requestId, owner, branch: branchRef })
+              return [Effect.as(admitted, true), claimed]
+            }
+            const open = branch.open.value
+            if (!open.admitted) return [wait, current]
+            if (Option.exists(open.owner, (other) => branch.running.has(other.toolCallId)))
+              return [wait, current]
+            const busy = new EventStoreError({
+              message: "Another interaction is open on this branch",
+            })
+            return [Effect.fail(busy), current]
+          }),
+        ),
+      )
+      while (!(yield* claim)) {}
+      type Answer = Effect.Effect<Option.Option<ApprovalDecision>, EventStoreError>
+      const answer = Effect.uninterruptibleMask((restore) =>
+        Effect.flatten(
+          Ref.get(state).pipe(
+            Effect.map((current): Answer => {
+              const branch = branchOf(current, key)
+              if (!Option.exists(branch.open, (value) => value.requestId === requestId))
+                return Effect.fail(
+                  new EventStoreError({ message: "The interaction closed without an answer" }),
+                )
+              const decision = current.decisions.get(requestId)
+              if (Predicate.isUndefined(decision))
+                return restore(Effect.as(Deferred.await(current.changed), Option.none()))
+              return Effect.asSome(takeAnswer(requestId, decision))
+            }),
+          ),
+        ),
+      )
+      while (true) {
+        const decided = yield* answer
+        if (Option.isSome(decided)) return decided.value
+      }
     })
 
     return {
@@ -720,12 +794,9 @@ export const makeInteractionService = (
       ) {
         const branchRef = { sessionId: ctx.sessionId, branchId: ctx.branchId }
         const owner = yield* currentOwner
-        const resume = ctx.resumeRequestId
-        // A dispatching owner resumes its asks by the id on its receipt.
-        if (!Predicate.isUndefined(resume))
-          return yield* presentOwned(params, branchRef, owner, resume).pipe(
-            Effect.tapErrorTag("InteractionPendingError", () => markParked),
-          )
+        // An inner call of a dispatching tool waits for its answer in place.
+        if (!Predicate.isUndefined(ctx.owned))
+          return yield* presentOwned(params, branchRef, owner, ctx.owned)
         // A native ask outside a dispatched call has no turn to park and no
         // run to take its answer, so it is refused.
         if (Option.isNone(owner))
@@ -939,6 +1010,12 @@ export interface InteractionOwnership {
    * state that can take one.
    */
   readonly resumeRequestId: Effect.Effect<Option.Option<InteractionRequestId>, EventStoreError>
+  /**
+   * The owner's call took the answer to this request and runs on. Record it
+   * on the receipt before the request settles, so the next ask starts fresh
+   * and a crash after this point does not look for the settled request.
+   */
+  readonly take: (requestId: InteractionRequestId) => Effect.Effect<void, EventStoreError>
 }
 
 export class CurrentInteractionOwner extends Context.Service<

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect"
 import {
   InteractionStorage,
   type InteractionStorageService,
@@ -620,26 +620,77 @@ describe("Interaction Request", () => {
     }).pipe(Effect.provide(storageLive)),
   )
 
+  /** An inner call of a dispatching tool; `taken` records what its receipt took. */
+  const ownedAsk = (
+    taken: Array<InteractionRequestId>,
+    resumeRequestId: Option.Option<InteractionRequestId> = Option.none(),
+  ) => ({
+    resumeRequestId,
+    take: (requestId: InteractionRequestId) => Effect.sync(() => void taken.push(requestId)),
+  })
+
+  it.live("a dispatching owner's inner calls wait for their answers in place, one at a time", () =>
+    Effect.gen(function* () {
+      const is = yield* InteractionStorage
+      const presented = yield* Queue.unbounded<InteractionRequestId>()
+      const interaction = yield* makeInteractionService({
+        onPresent: (requestId) => Queue.offer(presented, requestId),
+        onDismiss: () => Effect.void,
+        storage: callbacksFor(is),
+      })
+      const branch = { sessionId: SessionId.make("s-inner"), branchId: BranchId.make("b-inner") }
+      yield* ensureStorageParents(branch)
+      const taken: Array<InteractionRequestId> = []
+      const inner = (text: string) =>
+        interaction.present({ text }, { ...branch, owned: ownedAsk(taken) })
+      const both = yield* asCall(
+        interaction,
+        branch,
+      )(Effect.all([inner("First?"), inner("Second?")], { concurrency: 2 })).pipe(Effect.forkChild)
+      const first = yield* Queue.take(presented)
+      // The second inner call waits for the slot; it does not refuse or park.
+      expect(yield* interaction.pendingRequestId(branch)).toBe(first)
+      yield* interaction.storeResolution(first, { approved: true, notes: "one" })
+      const second = yield* Queue.take(presented)
+      expect(second).not.toBe(first)
+      yield* interaction.storeResolution(second, { approved: false, notes: "two" })
+      const answers = yield* Fiber.join(both).pipe(Effect.timeout("2 seconds"))
+      expect(answers.map((answer) => answer.notes)).toEqual(["one", "two"])
+      expect(taken).toEqual([first, second])
+      expect(yield* is.listOpen(branch)).toEqual([])
+    }).pipe(Effect.provide(storageLive)),
+  )
+
   it.live("a dispatching owner does not take an answer to a changed question", () =>
     Effect.gen(function* () {
-      const storage = callbacksFor(yield* InteractionStorage)
+      const presented = yield* Queue.unbounded<InteractionRequestId>()
       const interaction = yield* makeInteractionService({
-        onPresent: () => Effect.void,
+        onPresent: (requestId) => Queue.offer(presented, requestId),
         onDismiss: () => Effect.void,
-        storage,
+        storage: callbacksFor(yield* InteractionStorage),
       })
       const branch = { sessionId: SessionId.make("s-owned"), branchId: BranchId.make("b-owned") }
       yield* ensureStorageParents(branch)
+      const taken: Array<InteractionRequestId> = []
       const ask = (text: string, resume: Option.Option<InteractionRequestId>) =>
         asCall(
           interaction,
           branch,
-        )(interaction.present({ text }, { ...branch, resumeRequestId: resume })).pipe(Effect.exit)
-      const first = yield* pendingId(yield* ask("Delete a.txt?", Option.none()))
+        )(interaction.present({ text }, { ...branch, owned: ownedAsk(taken, resume) })).pipe(
+          Effect.forkChild,
+        )
+      // The owner stops while its call waits, as a crash would stop it.
+      const stopped = yield* ask("Delete a.txt?", Option.none())
+      const first = yield* Queue.take(presented)
+      yield* Fiber.interrupt(stopped)
       yield* interaction.storeResolution(first, { approved: true })
-      const second = yield* pendingId(yield* ask("Delete b.txt?", Option.some(first)))
+      const resumed = yield* ask("Delete b.txt?", Option.some(first))
+      const second = yield* Queue.take(presented)
       expect(second).not.toBe(first)
       expect(yield* interaction.pendingRequestId(branch)).toBe(second)
+      yield* interaction.storeResolution(second, { approved: true, notes: "b" })
+      expect((yield* Fiber.join(resumed).pipe(Effect.timeout("2 seconds"))).notes).toBe("b")
+      expect(taken).toEqual([second])
     }).pipe(Effect.provide(storageLive)),
   )
 })

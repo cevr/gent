@@ -83,6 +83,7 @@ import {
   tool,
   type ToolCapability,
   LoadedArtifactIdentity,
+  ToolResultFailure,
 } from "@gent/core/extensions/api"
 import {
   InteractionRequestId,
@@ -1477,135 +1478,311 @@ describe("cell worker process", () => {
 
 // ── cell/cell-approval.test ─────────────────────────────────────────────────
 
+/**
+ * A cell whose `guarded` call asks the user, beside `mark` (records a mark) and
+ * `slow` (holds until the test releases it). A declined `guarded` fails, as a
+ * declined bash command does.
+ */
+const approvalCell = Effect.gen(function* () {
+  const marks = yield* Ref.make<ReadonlyArray<string>>([])
+  const asked = yield* Ref.make(0)
+  const slowStarted = yield* Deferred.make<void>()
+  const slowRelease = yield* Deferred.make<void>()
+  const slowDone = yield* Deferred.make<void>()
+  const nativeGate = yield* Deferred.make<void>()
+  const nativeAsking = yield* Deferred.make<void>()
+  const extensions: ReadonlyArray<LoadedExtension> = [
+    {
+      manifest: { id: ExtensionId.make("cell-approval") },
+      scope: "builtin",
+      sourcePath: "cell-approval",
+      artifactIdentity: LoadedArtifactIdentity.make("cell-approval-source"),
+      contributions: {
+        tools: [
+          CellTool,
+          tool({
+            id: "mark",
+            description: "Record a source effect",
+            params: Schema.String,
+            output: Schema.Boolean,
+            execute: (mark) =>
+              Ref.update(marks, (values) => [...values, mark]).pipe(Effect.as(true)),
+            summary: (mark) => `marked ${mark}`,
+          }),
+          tool({
+            id: "slow",
+            description: "Work until released",
+            params: Schema.Struct({}),
+            output: Schema.String,
+            execute: () =>
+              Deferred.completeWith(slowStarted, Effect.void).pipe(
+                Effect.andThen(Deferred.await(slowRelease)),
+                Effect.andThen(Deferred.completeWith(slowDone, Effect.void)),
+                Effect.as("slow done"),
+              ),
+          }),
+          tool({
+            id: "native",
+            description: "Ask as a call beside the cell, once released",
+            params: Schema.Struct({}),
+            output: Schema.String,
+            execute: () =>
+              Effect.gen(function* () {
+                yield* Deferred.await(nativeGate)
+                yield* Deferred.completeWith(nativeAsking, Effect.void)
+                const answer = yield* (yield* ExtensionContext).Interaction.approve({
+                  text: "Native call?",
+                })
+                return String(answer.approved)
+              }),
+          }),
+          tool({
+            id: "guarded",
+            description: "Ask before acting",
+            params: Schema.Struct({}),
+            output: Schema.String,
+            execute: () =>
+              Effect.gen(function* () {
+                yield* Ref.update(asked, (count) => count + 1)
+                const answer = yield* (yield* ExtensionContext).Interaction.approve({
+                  text: "Continue cell operation?",
+                })
+                if (!answer.approved)
+                  return yield* new ToolResultFailure({
+                    message: "declined by the user",
+                    result: "declined",
+                  })
+                return "allowed"
+              }),
+          }),
+        ],
+      },
+    },
+  ]
+  return {
+    extensions,
+    marks,
+    asked,
+    slowStarted,
+    slowRelease,
+    slowDone,
+    nativeGate,
+    nativeAsking,
+  }
+})
+
+/** Run one cell turn, answer its one dialog with `answer`, and return the cell result. */
+const runApprovalCell = (params: {
+  readonly code: string
+  readonly approved: boolean
+  readonly beforeAnswer?: (cell: Effect.Success<typeof approvalCell>) => Effect.Effect<void>
+}) =>
+  Effect.gen(function* () {
+    const cell = yield* approvalCell
+    const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+      toolCallStep("cell", { code: params.code }),
+      textStep("Cell finished"),
+    ])
+    const { client, sessionId, branchId } = yield* createRpcHarness({
+      extensions: cell.extensions,
+      providerLayer,
+      extensionInputs: [],
+      branchTools: CellBranchTools,
+      durableApproval: true,
+      agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+    })
+    yield* client.message.send({ sessionId, branchId, content: "Run a cell with approval" })
+    const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+      Stream.map((envelope) => envelope.event),
+      Stream.filter((event) => event._tag === "InteractionPresented"),
+      Stream.take(1),
+      Stream.runCollect,
+    )
+    const request = Array.from(presented)[0]
+    if (Predicate.isUndefined(request)) return yield* Effect.die("Missing approval")
+    if (Predicate.isNotUndefined(params.beforeAnswer)) yield* params.beforeAnswer(cell)
+    yield* client.interaction.respondInteraction({
+      sessionId,
+      branchId,
+      requestId: request.requestId,
+      approved: params.approved,
+    })
+    yield* client.session.events({ sessionId, branchId }).pipe(
+      Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
+      Stream.take(1),
+      Stream.runDrain,
+    )
+    const results = (yield* client.message.list({ branchId }))
+      .flatMap((message) => message.parts)
+      .filter((part) => part.type === "tool-result")
+      .filter((part) => part.name === "cell")
+    expect(results).toHaveLength(1)
+    return { result: results[0], cell }
+  })
+
 describe("cell approvals", () => {
   it.scopedLive(
-    "resumes fresh cell approvals without replaying source for allow and deny",
+    "an answered approval continues the cell, and a decline reaches the cell code",
     () =>
       Effect.gen(function* () {
         for (const approved of [true, false]) {
           yield* Effect.scoped(
             Effect.gen(function* () {
-              const marks = yield* Ref.make<ReadonlyArray<string>>([])
-              const decisions = yield* Ref.make<ReadonlyArray<boolean>>([])
-              const attempts = yield* Ref.make(0)
-              const extensions: ReadonlyArray<LoadedExtension> = [
-                {
-                  manifest: { id: ExtensionId.make("cell-approval") },
-                  scope: "builtin",
-                  sourcePath: "cell-approval",
-                  artifactIdentity: LoadedArtifactIdentity.make("cell-approval-source"),
-                  contributions: {
-                    tools: [
-                      CellTool,
-                      tool({
-                        id: "mark",
-                        description: "Record a source effect",
-                        params: Schema.String,
-                        output: Schema.Boolean,
-                        execute: (mark) =>
-                          Ref.update(marks, (values) => [...values, mark]).pipe(Effect.as(true)),
-                        summary: (mark) => `marked ${mark}`,
-                      }),
-                      tool({
-                        id: "approve",
-                        description: "Ask before recording a decision",
-                        params: Schema.Struct({}),
-                        output: Schema.Boolean,
-                        execute: () =>
-                          Effect.gen(function* () {
-                            yield* Ref.update(attempts, (count) => count + 1)
-                            const answer = yield* (yield* ExtensionContext).Interaction.approve({
-                              text: "Continue cell operation?",
-                            })
-                            yield* Ref.update(decisions, (values) => [...values, answer.approved])
-                            return answer.approved
-                          }),
-                      }),
-                    ],
-                  },
-                },
-              ]
-              const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-                toolCallStep("cell", {
-                  code: "await tools.mark('before'); await tools.approve({}); await tools.mark('after')",
-                }),
-                textStep("Cell recovery reported"),
-              ])
-              const { client, sessionId, branchId } = yield* createRpcHarness({
-                extensions,
-                providerLayer,
-                extensionInputs: [],
-                branchTools: CellBranchTools,
-                durableApproval: true,
-                agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
-              })
-              yield* client.message.send({
-                sessionId,
-                branchId,
-                content: "Run a cell with approval",
-              })
-              const presented = yield* client.session.events({ sessionId, branchId }).pipe(
-                Stream.map((envelope) => envelope.event),
-                Stream.filter((event) => event._tag === "InteractionPresented"),
-                Stream.take(1),
-                Stream.runCollect,
-              )
-              const request = Array.from(presented)[0]
-              if (Predicate.isUndefined(request)) return yield* Effect.die("Missing approval")
-              yield* client.session.watchRuntime({ sessionId, branchId }).pipe(
-                Stream.filter((runtime) => runtime._tag === "WaitingForInteraction"),
-                Stream.take(1),
-                Stream.runDrain,
-              )
-              expect(yield* Ref.get(marks)).toEqual(["before"])
-              expect(yield* Ref.get(decisions)).toEqual([])
-              yield* client.interaction.respondInteraction({
-                sessionId,
-                branchId,
-                requestId: request.requestId,
+              const { result, cell } = yield* runApprovalCell({
+                code: [
+                  "await tools.mark('before')",
+                  "let outcome",
+                  "try { outcome = await tools.guarded({}) } catch (error) { outcome = 'caught ' + error.message }",
+                  "await tools.mark('after')",
+                  "outcome",
+                ].join("\n"),
                 approved,
+                beforeAnswer: ({ marks }) =>
+                  Ref.get(marks).pipe(Effect.map((values) => expect(values).toEqual(["before"]))),
               })
-              yield* client.session.events({ sessionId, branchId }).pipe(
-                Stream.filter((envelope) => envelope.event._tag === "TurnCompleted"),
-                Stream.take(1),
-                Stream.runDrain,
-              )
-              const messages = yield* client.message.list({ branchId })
-              expect(
-                messages.some(
-                  (message) =>
-                    message.role === "assistant" &&
-                    messagePartsText(message.parts) === "Cell recovery reported",
-                ),
-              ).toBe(true)
-              const results = messages
-                .flatMap((message) => message.parts)
-                .filter((part) => part.type === "tool-result")
-                .filter((part) => part.name === "cell")
-              expect(results).toHaveLength(1)
-              expect(results[0]).toMatchObject({
-                isFailure: true,
-                // Recovered operations use the receipt shape every client decodes.
+              let outcome = "caught"
+              let guarded = "failed"
+              if (approved) {
+                outcome = "allowed"
+                guarded = "succeeded"
+              }
+              expect(result).toMatchObject({
+                isFailure: false,
                 result: {
-                  stateLost: true,
+                  display: expect.stringContaining(outcome),
                   operations: [
-                    {
-                      tool: "mark",
-                      outcome: "succeeded",
-                      toolCallId: expect.any(String),
-                      summary: "marked before",
-                    },
-                    { tool: "approve", outcome: "succeeded", toolCallId: expect.any(String) },
+                    { tool: "mark", outcome: "succeeded", summary: "marked before" },
+                    { tool: "guarded", outcome: guarded },
+                    { tool: "mark", outcome: "succeeded", summary: "marked after" },
                   ],
                 },
               })
-              expect(yield* Ref.get(marks)).toEqual(["before"])
-              expect(yield* Ref.get(decisions)).toEqual([approved])
-              // The host restarts at its approval boundary. Outer source does not restart.
-              expect(yield* Ref.get(attempts)).toBe(2)
+              expect(result).not.toMatchObject({ result: { stateLost: true } })
+              // Code after the call ran, and the call asked once: nothing ran twice.
+              expect(yield* Ref.get(cell.marks)).toEqual(["before", "after"])
+              expect(yield* Ref.get(cell.asked)).toBe(1)
             }),
           )
         }
+      }).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      ),
+    18000,
+  )
+
+  it.scopedLive(
+    "a sibling call in the same cell runs to its end while another call waits for its answer",
+    () =>
+      Effect.gen(function* () {
+        const { result, cell } = yield* runApprovalCell({
+          code: [
+            "const [slow, guarded] = await Promise.all([tools.slow({}), tools.guarded({})])",
+            "await tools.mark('after')",
+            "slow + '/' + guarded",
+          ].join("\n"),
+          approved: true,
+          // The dialog is open. The sibling still runs, and it finishes
+          // before anyone answers.
+          beforeAnswer: ({ slowStarted, slowRelease, slowDone }) =>
+            Deferred.await(slowStarted).pipe(
+              Effect.andThen(Deferred.completeWith(slowRelease, Effect.void)),
+              Effect.andThen(Deferred.await(slowDone)),
+              Effect.timeout("5 seconds"),
+              Effect.orDie,
+            ),
+        })
+        expect(result).toMatchObject({
+          isFailure: false,
+          result: {
+            display: expect.stringContaining("slow done/allowed"),
+            operations: [
+              { tool: "slow", outcome: "succeeded" },
+              { tool: "guarded", outcome: "succeeded" },
+              { tool: "mark", outcome: "succeeded", summary: "marked after" },
+            ],
+          },
+        })
+        expect(yield* Ref.get(cell.asked)).toBe(1)
+      }).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
+      ),
+    18000,
+  )
+
+  it.scopedLive(
+    "a call beside the cell that asks while the cell's question is open asks once the cell took its answer",
+    () =>
+      Effect.gen(function* () {
+        const cell = yield* approvalCell
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          multiToolCallStep(
+            { toolName: "cell", input: { code: "await tools.guarded({})" } },
+            { toolName: "native", input: {} },
+          ),
+          textStep("Both answered"),
+        ])
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          extensions: cell.extensions,
+          providerLayer,
+          extensionInputs: [],
+          branchTools: CellBranchTools,
+          durableApproval: true,
+          agents: [new AgentDefinition({ name: DEFAULT_AGENT_NAME })],
+        })
+        const dialogs = yield* Queue.unbounded<{
+          readonly requestId: InteractionRequestId
+          readonly text: string
+        }>()
+        yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.map((envelope) => envelope.event),
+          Stream.runForEach((event) => {
+            if (event._tag !== "InteractionPresented") return Effect.void
+            return Queue.offer(dialogs, { requestId: event.requestId, text: event.text })
+          }),
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "Ask in and beside a cell" })
+        const inCell = yield* Queue.take(dialogs)
+        expect(inCell.text).toBe("Continue cell operation?")
+        // The native call asks while the cell's question is open. It waits
+        // for the slot: the cell's call still runs and takes its own answer.
+        yield* Deferred.completeWith(cell.nativeGate, Effect.void)
+        yield* Deferred.await(cell.nativeAsking)
+        yield* client.interaction.respondInteraction({
+          sessionId,
+          branchId,
+          requestId: inCell.requestId,
+          approved: true,
+        })
+        const beside = yield* Queue.take(dialogs)
+        expect(beside.text).toBe("Native call?")
+        yield* client.interaction.respondInteraction({
+          sessionId,
+          branchId,
+          requestId: beside.requestId,
+          approved: true,
+        })
+        const snapshot = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) =>
+            current.runtime._tag === "Idle" &&
+            current.messages.some(
+              (message) =>
+                message.role === "assistant" && messagePartsText(message.parts) === "Both answered",
+            ),
+          5_000,
+          "the turn finished",
+        )
+        const results = snapshot.messages
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "tool-result")
+        expect(results.find((part) => part.name === "native")).toMatchObject({
+          isFailure: false,
+          result: "true",
+        })
+        expect(results.find((part) => part.name === "cell")).toMatchObject({ isFailure: false })
       }).pipe(
         Effect.timeout("15 seconds"),
         Effect.provide(Layer.merge(BunServices.layer, BunGentPlatformLive)),
@@ -1867,6 +2044,28 @@ const prepareCell = Effect.gen(function* () {
   yield* (yield* CellStorage).executions.claim(cellToolHost)
 })
 
+/**
+ * Start an inner call that asks, and lose the worker while the call waits for
+ * its answer in place, as a crash would. The operation is left waiting.
+ */
+const askThenLoseWorker = (
+  host: typeof CellOperationHost.Service,
+  request: Extract<CellResponse, { _tag: "HostCall" }>,
+  cell: typeof cellToolHost = cellToolHost,
+) =>
+  Effect.gen(function* () {
+    const asking = yield* host.call(request).pipe(Effect.forkChild)
+    const waiting = yield* waitFor(
+      (yield* CellStorage).operations.get({ cell, operationId: request.operationId }),
+      (operation) => operation.state._tag === "Waiting",
+      5_000,
+      `operation ${request.operationId} waits for its answer`,
+    )
+    yield* Fiber.interrupt(asking)
+    if (waiting.state._tag !== "Waiting") return yield* Effect.die("The operation is not waiting")
+    return { toolCallId: waiting.toolCallId, requestId: waiting.state.requestId }
+  })
+
 const currentHostParams = Effect.gen(function* () {
   const turn = yield* captureTurnTools(cellToolHost)
   return {
@@ -1962,22 +2161,19 @@ it.scopedLive(
         expect(failed.state._tag).toBe("Completed")
         if (failed.state._tag === "Completed") expect(failed.state.result.isFailure).toBe(true)
         expect(yield* Ref.get(calls)).toBe(1)
-        const pending = yield* host.call(requestToolHost("2", "approve")).pipe(Effect.flip)
-        expect(pending._tag).toBe("CellToolCallSuspended")
-        expect((yield* operations.get({ cell: cellToolHost, operationId: "2" })).state._tag).toBe(
-          "Waiting",
-        )
+        // The approval waits for its answer in place. The worker is lost
+        // while it waits, so recovery finds the operation still waiting.
+        const pending = yield* askThenLoseWorker(host, requestToolHost("2", "approve"))
         expect(yield* (yield* InteractionStorage).listOpen(cellToolHost)).toHaveLength(1)
-        if (pending._tag !== "CellToolCallSuspended") return yield* Effect.die(pending)
         const undecided = yield* recoverCellExecution(hostParams).pipe(Effect.flip)
         expect(undecided._tag).toBe("CellToolCallSuspended")
         if (undecided._tag === "CellToolCallSuspended")
-          expect(undecided.pending.requestId).toBe(pending.pending.requestId)
+          expect(undecided.pending.requestId).toBe(pending.requestId)
         expect(yield* Ref.get(approvalCalls)).toBe(1)
         const resumeParams = {
           ...hostParams,
           operationId: "2",
-          requestId: pending.pending.requestId,
+          requestId: pending.requestId,
         }
         expect(
           (yield* resumeCellToolOperation({
@@ -1987,7 +2183,7 @@ it.scopedLive(
         ).toBe("StorageError")
         expect(yield* Ref.get(approvalCalls)).toBe(1)
         const approval = yield* ApprovalService
-        yield* approval.storeResolution(pending.pending.requestId, { approved: false })
+        yield* approval.storeResolution(pending.requestId, { approved: false })
         const attempts = yield* Effect.all(
           [
             resumeCellToolOperation(resumeParams).pipe(Effect.exit),
@@ -2156,9 +2352,8 @@ it.scopedLive(
           return yield* Effect.gen(function* () {
             yield* prepareCell
             const host = yield* makeCellToolHost(yield* currentHostParams)
-            const pending = yield* host.call(requestToolHost("1", "approve")).pipe(Effect.flip)
-            if (pending._tag !== "CellToolCallSuspended") return yield* Effect.die(pending)
-            yield* (yield* ApprovalService).storeResolution(pending.pending.requestId, {
+            const pending = yield* askThenLoseWorker(host, requestToolHost("1", "approve"))
+            yield* (yield* ApprovalService).storeResolution(pending.requestId, {
               approved: true,
             })
             return pending
@@ -2173,7 +2368,7 @@ it.scopedLive(
             const result = yield* resumeCellToolOperation({
               ...hostParams,
               operationId: "1",
-              requestId: first.pending.requestId,
+              requestId: first.requestId,
             })
             expect(result.result).toBe(true)
             expect(result.id).toBe(first.toolCallId)
@@ -2181,11 +2376,11 @@ it.scopedLive(
             expect((yield* (yield* CellStorage).executions.claim(cellToolHost))._tag).toBe(
               "Incomplete",
             )
-            const pending = yield* (yield* makeCellToolHost(hostParams))
-              .call(requestToolHost("2", "approve"))
-              .pipe(Effect.flip)
-            if (pending._tag !== "CellToolCallSuspended") return yield* Effect.die(pending)
-            yield* (yield* ApprovalService).storeResolution(pending.pending.requestId, {
+            const pending = yield* askThenLoseWorker(
+              yield* makeCellToolHost(hostParams),
+              requestToolHost("2", "approve"),
+            )
+            yield* (yield* ApprovalService).storeResolution(pending.requestId, {
               approved: true,
             })
             return pending
@@ -2199,7 +2394,7 @@ it.scopedLive(
             const mismatch = yield* resumeCellToolOperation({
               ...(yield* currentHostParams),
               operationId: "2",
-              requestId: next.pending.requestId,
+              requestId: next.requestId,
             }).pipe(Effect.flip)
             expect(mismatch._tag).toBe("ToolBindingReplayError")
             if (mismatch._tag === "ToolBindingReplayError")
@@ -3473,17 +3668,16 @@ it.scopedLive(
               toolBindings: new Map([["approve", selected.value]]),
               profile: turn.profile,
             })
-            const suspended = yield* suspendedHost
-              .call(
-                CellResponse.cases.HostCall.make({
-                  cellId: "1",
-                  operationId: "1",
-                  name: "approve",
-                  input: {},
-                }),
-              )
-              .pipe(Effect.flip)
-            expect(suspended._tag).toBe("CellToolCallSuspended")
+            yield* askThenLoseWorker(
+              suspendedHost,
+              CellResponse.cases.HostCall.make({
+                cellId: "1",
+                operationId: "1",
+                name: "approve",
+                input: {},
+              }),
+              cell,
+            )
           }
           const binding = bindingOf("sibling")
           const identity = Option.flatMap(binding, (entry) => Option.fromUndefinedOr(entry.binding))
@@ -3940,7 +4134,7 @@ it.live("admits an operation once and preserves its original input, binding, and
 )
 
 it.scopedLive(
-  "publishes cell approval only after durable ownership and consumes its exact decision",
+  "publishes cell approval only after durable ownership and takes its exact decision in place",
   () =>
     Effect.gen(function* () {
       yield* fixture
@@ -3952,20 +4146,30 @@ it.scopedLive(
       const peer = { ...key, operationId: "2" }
       yield* storage.admit({ ...params, ...peer })
       yield* sql`CREATE TEMP TRIGGER require_cell_approval_owner BEFORE INSERT ON events WHEN NEW.event_tag = 'InteractionPresented' BEGIN SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM cell_tool_operations o JOIN interaction_requests r ON r.request_id = o.request_id WHERE r.request_id = json_extract(NEW.event_json, '$.requestId')) THEN RAISE(ABORT, 'approval has no operation owner') END; END`
-      const first = yield* approval
-        .present({ text: "First?" }, cellOperationStorage)
-        .pipe(
-          Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
-          Effect.flip,
+      const askAs = (owner: typeof key, text: string) =>
+        approval
+          .present({ text }, cellOperationStorage)
+          .pipe(
+            Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(owner, storage)),
+          )
+      /** The request an operation waits on, once it waits. */
+      const waitingOn = (owner: typeof key) =>
+        waitFor(
+          storage.get(owner),
+          (operation) => operation.state._tag === "Waiting",
+          5_000,
+          `operation ${owner.operationId} waits`,
+        ).pipe(
+          Effect.flatMap((operation) => {
+            if (operation.state._tag === "Waiting") return Effect.succeed(operation.state.requestId)
+            return Effect.die("The operation is not waiting")
+          }),
         )
-      if (!Schema.is(InteractionPendingError)(first)) return yield* Effect.die(first)
-      yield* approval.storeResolution(first.requestId, { approved: false, notes: "First denied" })
-      const blocked = yield* approval
-        .present({ text: "Second?" }, cellOperationStorage)
-        .pipe(
-          Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(peer, storage)),
-          Effect.flip,
-        )
+      const first = yield* askAs(key, "First?").pipe(Effect.forkChild)
+      const firstId = yield* waitingOn(key)
+      // No running call owns the open request, so the peer is refused rather
+      // than left waiting for a slot nothing would free.
+      const blocked = yield* askAs(peer, "Second?").pipe(Effect.flip)
       expect(blocked._tag).toBe("EventStoreError")
       expect((yield* storage.get(peer)).state._tag).toBe("Started")
       expect(
@@ -3973,38 +4177,22 @@ it.scopedLive(
           (event) => event.event._tag === "InteractionPresented",
         ),
       ).toHaveLength(1)
-      yield* storage.resume(key, first.requestId)
-      expect(
-        yield* approval
-          .present({ text: "First?" }, cellOperationStorage)
-          .pipe(Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage))),
-      ).toEqual({ approved: false, notes: "First denied" })
-      const second = yield* approval
-        .present({ text: "Second?" }, cellOperationStorage)
-        .pipe(
-          Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(peer, storage)),
-          Effect.flip,
-        )
-      if (!Schema.is(InteractionPendingError)(second)) return yield* Effect.die(second)
-      expect(second.requestId).not.toBe(first.requestId)
-      yield* approval.storeResolution(second.requestId, { approved: true })
-      yield* storage.resume(peer, second.requestId)
-      expect(
-        yield* approval
-          .present({ text: "Second?" }, cellOperationStorage)
-          .pipe(
-            Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(peer, storage)),
-          ),
-      ).toEqual({ approved: true })
-      expect(
-        (yield* approval
-          .present({ text: "Again?" }, cellOperationStorage)
-          .pipe(
-            Effect.provideService(CurrentInteractionOwner, cellInteractionOwner(key, storage)),
-            Effect.flip,
-          ))._tag,
-      ).toBe("EventStoreError")
+      yield* approval.storeResolution(firstId, { approved: false, notes: "First denied" })
+      expect(yield* Fiber.join(first)).toEqual({ approved: false, notes: "First denied" })
+      // The call took its answer and runs on: its receipt waits for nothing,
+      // and the answer cannot be resumed a second time.
+      expect((yield* storage.get(key)).state._tag).toBe("Started")
+      expect(Schema.is(StorageError)(yield* storage.resume(key, firstId).pipe(Effect.flip))).toBe(
+        true,
+      )
+      const second = yield* askAs(peer, "Second?").pipe(Effect.forkChild)
+      const secondId = yield* waitingOn(peer)
+      expect(secondId).not.toBe(firstId)
+      yield* approval.storeResolution(secondId, { approved: true })
+      expect(yield* Fiber.join(second)).toEqual({ approved: true })
+      expect(yield* (yield* InteractionStorage).listOpen(cellOperationStorage)).toEqual([])
     }).pipe(
+      Effect.timeout("10 seconds"),
       Effect.provide(
         createE2ELayer({
           agents: [],

@@ -185,6 +185,11 @@ interface CellToolOperationStorageService {
     key: CellToolOperationKey,
     requestId: InteractionRequestId,
   ) => Effect.Effect<CellToolOperation, StorageError>
+  /** The call took its answer and runs on: it waits for nothing now. */
+  readonly take: (
+    key: CellToolOperationKey,
+    requestId: InteractionRequestId,
+  ) => Effect.Effect<void, StorageError>
   readonly complete: (
     key: CellToolOperationKey,
     result: Prompt.ToolResultPart,
@@ -433,6 +438,22 @@ const makeToolOperationStorage = Effect.gen(function* () {
       return resumed
     }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
   })
+  const take = Effect.fn("CellToolOperationStorage.take")(function* (
+    key: CellToolOperationKey,
+    requestId: InteractionRequestId,
+  ) {
+    yield* outsideTransaction
+    return yield* Effect.gen(function* () {
+      yield* own(key)
+      yield* requireOpenCell(key)
+      const operation = yield* read(key)
+      if (!hasInteraction(operation.state) || operation.state.requestId !== requestId)
+        return yield* new StorageError({
+          message: "Cell operation is not asking this request",
+        })
+      yield* write(key, { ...operation, state: CellToolOperationState.cases.Started.make({}) })
+    }).pipe(sql.withTransaction, Effect.mapError(toolOperationStorageFailure))
+  })
   const complete = Effect.fn("CellToolOperationStorage.complete")(function* (
     key: CellToolOperationKey,
     result: Prompt.ToolResultPart,
@@ -470,6 +491,7 @@ const makeToolOperationStorage = Effect.gen(function* () {
     listForToolCall,
     suspend,
     resume,
+    take,
     complete,
   } satisfies CellToolOperationStorageService
 })
@@ -1640,9 +1662,9 @@ export const cellInteractionOwner = (
             new EventStoreError({ message: "Failed to persist interaction request", cause }),
         ),
       ),
-  // `Started` has raised no interaction yet, so a fresh one begins. `Resuming`
-  // is mid-approval and replays the id it recorded. Any other state was never
-  // admitted to ask.
+  // `Started` waits for no answer, so a fresh ask begins. `Resuming` came back
+  // from a crash mid-approval and takes the answer it recorded. Any other
+  // state was never admitted to ask.
   resumeRequestId: storage.get(key).pipe(
     Effect.mapError(
       (cause) => new EventStoreError({ message: "Cannot read the interaction owner", cause }),
@@ -1653,6 +1675,14 @@ export const cellInteractionOwner = (
       return new EventStoreError({ message: "The owning call cannot take an interaction" })
     }),
   ),
+  take: (requestId) =>
+    storage
+      .take(key, requestId)
+      .pipe(
+        Effect.mapError(
+          (cause) => new EventStoreError({ message: "Failed to record the taken answer", cause }),
+        ),
+      ),
 })
 
 // ── operation receipt ───────────────────────────────────────────────────────

@@ -523,7 +523,15 @@ One interaction primitive: `ctx.Interaction.approve({ text, metadata? })` → `{
 
 Tools that need human input call `ctx.Interaction.approve()`, which delegates to
 `ApprovalService`. The turn parks without keeping a blocked tool fiber. Cold
-replay also requires a trusted, unchanged saved tool binding. A source-only tool
+replay also requires a trusted, unchanged saved tool binding.
+
+An inner call of a dispatching tool (a cell) is the exception: its dispatcher
+cannot replay its source, so the call waits for its answer in place through the
+`InteractionOwnership` seam, and the other inner calls keep running. The turn
+stays Running while the dialog is open. A native call that asks while such a
+call's question is open waits for the slot, then asks its own question. A call
+that asks after a sibling parked with an answered question parks behind that
+answer; the sibling takes it when the step runs again. A source-only tool
 without durable identity can resume in the same loaded generation, but not after
 an unsupported restart or replacement.
 
@@ -715,12 +723,13 @@ this RPC test. It returns saved
 JSON success data or fails with the public `ToolResultFailure` type. The normal
 tool runner preserves that failure's JSON data and still supplies transcript
 identity itself. The type cannot select a call ID or tool name. Permission checks
-and preflight hooks still run before execution. The cell declaration maps worker
-suspension back to the original pending interaction for the actor. The fresh
-approval RPC test checks allow and deny through the real compiled worker. The
-host tool restarts at its approval boundary and records one decision. The outer
-source does not restart or continue after approval. Recovery returns the saved
-operation results in a failed outer result with visible worker state loss.
+and preflight hooks still run before execution. An inner call that asks waits
+for its answer in place: sibling calls keep running, and the cell code continues
+with the approved result or the declined failure. The approval RPC tests check
+allow, deny, a sibling that finishes while the dialog is open, and a native call
+beside the cell, through the real compiled worker. Only a lost worker leaves an
+operation waiting; recovery then returns the saved operation results in a
+failed outer result with visible worker state loss.
 
 The input schema in `cell.ts` accepts optional `reset: true`. Admission
 reads this flag from the stored assistant call. After a fresh claim commits, the
@@ -809,7 +818,8 @@ binding, and derived tool-call ID are immutable. Its state is Started, Waiting,
 Resuming, or Completed. Repeated admission never grants another execution.
 Resume requires the exact waiting request and a valid saved approval decision.
 It commits Resuming before tool execution; that state cannot be reclaimed after
-a crash. A unique request link prevents two operations from sharing an approval.
+a crash. A call that takes its answer (in place, or on resume) returns its
+operation to Started before the request settles, so its next ask starts fresh. A unique request link prevents two operations from sharing an approval.
 The existing interaction service still owns the request and decision. Completed
 cells cannot admit or resume more host effects. Message deletion cascades to
 these receipts. Suspension persists a new approval through InteractionStorage

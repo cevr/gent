@@ -2023,7 +2023,7 @@ const makeApprovalInteractionService: Effect.Effect<
         })
       return yield* service.present(params, {
         ...ctx,
-        resumeRequestId: yield* owner.value.resumeRequestId,
+        owned: { resumeRequestId: yield* owner.value.resumeRequestId, take: owner.value.take },
       })
     }),
   }

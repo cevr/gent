@@ -868,6 +868,7 @@ const approveThroughRejectingOwner = (params: OrderedApprovalParams) =>
       branchId: ctx.branchId,
       persist: () => Effect.fail(new EventStoreError({ message: "the owner refused the request" })),
       resumeRequestId: Effect.succeedNone,
+      take: () => Effect.void,
     }
     const exit = yield* Effect.exit(
       ctx.Interaction.approve({ text: params.text }).pipe(
@@ -1577,21 +1578,17 @@ describe("interaction.respondInteraction", () => {
         const tempDir = yield* makeTempDirectoryScoped("gent-interaction-")
         const dbPath = `${tempDir}/gent-owner.db`
         const aPresented = yield* Deferred.make<void>()
-        const cAskedAgain = yield* Deferred.make<void>()
         const extension = orderedApprovalExtension((params, attempt) =>
           Effect.gen(function* () {
-            if (params.label === "A") {
-              // After the restart, C asks before A takes its answer.
-              if (attempt > 1) yield* Deferred.await(cAskedAgain)
-              return yield* approveAs(params)
-            }
+            // After the restart, C's inner call waits for the slot while A,
+            // which still runs, takes its answer; C's owner then refuses its
+            // request, and A's answer is not touched.
+            if (params.label === "A") return yield* approveAs(params)
             if (attempt === 1) {
               yield* Deferred.await(aPresented)
               return yield* approveAs(params)
             }
-            return yield* approveThroughRejectingOwner(params).pipe(
-              Effect.ensuring(Deferred.completeWith(cAskedAgain, Effect.void)),
-            )
+            return yield* approveThroughRejectingOwner(params)
           }),
         )
         const firstProvider = yield* LanguageModelLayers.sequence([
