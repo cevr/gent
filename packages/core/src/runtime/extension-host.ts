@@ -2085,13 +2085,12 @@ export const makeExtensionHostContextProvider = (
         ),
       ).pipe(Effect.mapError(sessionError(operation)), Effect.asVoid)
 
-    const fileLockOption = yield* Effect.serviceOption(FileLockService)
-    const FileLock: ExtensionFileLockServiceApi = Option.match(fileLockOption, {
-      onNone: () => ({ withLock: (_path, effect) => effect }),
-      onSome: (fileLock) => ({ withLock: (path, effect) => fileLock.withLock(path, effect) }),
-    })
+    const fileLock = yield* facet(FileLockService, "FileLockService")
+    const FileLock: ExtensionFileLockServiceApi = {
+      withLock: (path, effect) => fileLock((service) => service.withLock(path, effect)),
+    }
 
-    const statePublisherOption = yield* Effect.serviceOption(ExtensionStatePublisher)
+    const statePublisher = yield* facet(ExtensionStatePublisher, "ExtensionStatePublisher")
 
     // An unnamed target is the run's own branch.
     const targetIn = (
@@ -2111,35 +2110,33 @@ export const makeExtensionHostContextProvider = (
       FileLock,
 
       State: ((extensionId) =>
-        Option.match(statePublisherOption, {
-          onNone: () => ({ changed: () => Effect.void }),
-          onSome: (statePublisher) =>
-            Option.match(extensionId, {
-              onNone: () => ({
-                changed: () =>
-                  Effect.fail(
-                    new ExtensionServiceError({
-                      service: "ExtensionState",
-                      operation: "changed",
-                      message: "Extension id unavailable for state change notification",
+        Option.match(extensionId, {
+          onNone: () => ({
+            changed: () =>
+              Effect.fail(
+                new ExtensionServiceError({
+                  service: "ExtensionState",
+                  operation: "changed",
+                  message: "Extension id unavailable for state change notification",
+                }),
+              ),
+          }),
+          onSome: (id) => ({
+            changed: () =>
+              statePublisher((publisher) =>
+                mapExtensionServiceError(
+                  "ExtensionState",
+                  "changed",
+                  inWorkspace(
+                    publisher.changed({
+                      extensionId: id,
+                      sessionId: runInfo.sessionId,
+                      branchId: runInfo.branchId,
                     }),
                   ),
-              }),
-              onSome: (id) => ({
-                changed: () =>
-                  mapExtensionServiceError(
-                    "ExtensionState",
-                    "changed",
-                    inWorkspace(
-                      statePublisher.changed({
-                        extensionId: id,
-                        sessionId: runInfo.sessionId,
-                        branchId: runInfo.branchId,
-                      }),
-                    ),
-                  ),
-              }),
-            }),
+                ),
+              ),
+          }),
         })) satisfies ExtensionStateFacet,
 
       Session: {

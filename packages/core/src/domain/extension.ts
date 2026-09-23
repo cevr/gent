@@ -335,8 +335,8 @@ export interface SystemPromptInput {
   readonly agent: AgentDefinition
   readonly interactive?: boolean
   /**
-   * Tools resolved for this turn. ACP-aware hooks need this to render
-   * the codemode `gent.<tool>(...)` shape into the rewritten prompt.
+   * Tools resolved for this turn, for a hook that renders them into the
+   * rewritten prompt.
    */
   readonly tools?: ReadonlyArray<ToolCapability>
   /** Admitted host tools, including tools hidden from the model by modelSet. */

@@ -682,13 +682,6 @@ interface ToolRunnerService {
   readonly capture: (params: {
     readonly toolName: string
   }) => Effect.Effect<Option.Option<ResolvedToolCapability>, never, ExtensionRegistry>
-  readonly run: (
-    toolCall: ToolCall,
-  ) => Effect.Effect<
-    Prompt.ToolResultPart,
-    InteractionPendingError,
-    CurrentExtensionHostContext | ExtensionRegistry | EventPublisher
-  >
   /** Execute the exact entry captured by a resolved turn. */
   readonly runBound: (
     toolCall: ToolCall,
@@ -1014,11 +1007,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
           const activeRegistry = yield* ExtensionRegistry
           return captureToolEntry({ ...params, activeRegistry })
         }),
-      run: Effect.fn("ToolRunner.run")(function* (toolCall) {
-        const activeRegistry = yield* ExtensionRegistry
-        const entry = captureToolEntry({ toolName: toolCall.toolName, activeRegistry })
-        return yield* runTool(toolCall, entry)
-      }),
       runBound: (toolCall, entry) => runTool(toolCall, entry),
     }),
   )
@@ -1028,7 +1016,6 @@ export class ToolRunner extends Context.Service<ToolRunner, ToolRunnerService>()
       ToolRunner,
       ToolRunner.of({
         capture: () => Effect.succeedNone,
-        run: runTestTool,
         runBound: (toolCall) => runTestTool(toolCall),
       }),
     )
@@ -1096,7 +1083,7 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
             )
         }),
       ),
-    { concurrency: Math.max(1, TOOL_CONCURRENCY) },
+    { concurrency: TOOL_CONCURRENCY },
   )
   const results: Array<Prompt.ToolResultPart> = []
   let pending = Option.none<ToolInteractionPending>()

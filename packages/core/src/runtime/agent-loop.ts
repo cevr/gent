@@ -52,6 +52,7 @@ import {
 import {
   AgentLoopQueueStorage,
   EventStorage,
+  type EventStorageError,
   type InteractionStorage,
   MessageStorage,
   SessionOperationStorage,
@@ -143,7 +144,7 @@ import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
  *
  * `terminateSession(sessionId)` marks all branches of a session as
  * terminated, blocking new operations from spawning a fresh loop
- * instance. `restoreSession(sessionId)` clears the marker.
+ * instance. `clearTerminated(workspaceId, sessionId)` clears the marker.
  *
  * Encore actor handlers run per (entityType, entityId) where entityId
  * is `(sessionId, branchId)`. This governance lives ABOVE the per-
@@ -241,7 +242,7 @@ export class AgentLoopSessionGovernance extends Context.Service<
  *
  * ## Depth
  *
- * The persisted shape lives in `domain/queue.ts` with the snapshot it projects
+ * The persisted shape lives in `domain/message.ts` with the snapshot it projects
  * to, because storage decodes it. This module is the only code that reads or
  * writes its three compartments — every other file sees verbs.
  *
@@ -1188,16 +1189,6 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
 
 // ── agent-loop.behavior ─────────────────────────────────────────────────────
 
-/**
- * Per-(sessionId, branchId) loop behavior factory.
- *
- * Built by the `AgentLoop` actor for each (sessionId, branchId). Same turn
- * flow as the public `SessionRuntime` boundary, with recursive follow-up
- * queueing supplied as an explicit callback.
- *
- * @module
- */
-
 type AgentLoopRuntimeServices =
   | SessionStorage
   | SessionOperationStorage
@@ -1530,15 +1521,24 @@ const makeAgentLoopBehavior = (
       }),
     ).pipe(Effect.ignore)
 
+    // A failed recovery read leaves the loop cold; the log names the read.
+    const recoveryReadFailed =
+      (read: string) =>
+      (error: EventStorageError): Effect.Effect<ReadonlyArray<never>> =>
+        Effect.logWarning("agent-loop.recovery-read-failed").pipe(
+          Effect.annotateLogs({ read, sessionId, branchId, error: String(error) }),
+          Effect.as([]),
+        )
+
     const hasPriorHistory = messageStorage.listMessages(branchId).pipe(
-      Effect.catchEager(() => Effect.succeed([])),
+      Effect.catchEager(recoveryReadFailed("messages")),
       Effect.map((messages) => messages.some((message) => message.sessionId === sessionId)),
     )
 
     const incompleteUserTurn = Effect.gen(function* () {
       const envelopes = yield* recoveryEvents
         .listEvents({ sessionId, branchId })
-        .pipe(Effect.catchEager(() => Effect.succeed([])))
+        .pipe(Effect.catchEager(recoveryReadFailed("events")))
       const completed = new Set(
         envelopes.flatMap(({ event }) => {
           if (event._tag === "TurnCompleted" && Predicate.isNotUndefined(event.messageId)) {
@@ -1607,15 +1607,15 @@ const makeAgentLoopBehavior = (
  *
  * **Single source of truth for routing:** an op that carries a domain payload
  * owning its own `(sessionId, branchId)` has no top-level routing fields — the
- * embedded payload IS the authority. Only `Interrupt` (no embedded payload)
- * carries explicit target fields.
+ * embedded payload IS the authority. Ops with no embedded payload
+ * (`RespondInteraction` and the branch commands) carry explicit target fields.
  *
  * **Execution id key** per op:
  * - `Submit` — `message.id` (live-only)
  * - `SubmitDurable` — `message.id` (persisted; actor owns request idempotency)
  * - `QueueFollowUp` — `message.id` (live-only)
  * - `Steer` — `commandId` (persisted; actor owns request idempotency)
- * - `Interrupt` / `RespondInteraction` — durable persisted command key
+ * - `RespondInteraction` — `requestId` (persisted)
  *
  * Schemas reuse gent's existing domain (`Message`, `RunSpec`,
  * `SteerCommand`) rather than introducing a parallel envelope shape.
@@ -2450,8 +2450,6 @@ const buildAgentLoopActorHandlers = (config: {
       ),
     })
   })
-
-export { AgentLoop } from "../domain/agent-loop.js"
 
 export const AgentLoopLiveActor = (config: {
   readonly baseSections: ReadonlyArray<PromptSection>

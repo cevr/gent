@@ -32,8 +32,6 @@ import {
 } from "../../src/domain/ids"
 import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import {
-  AgentLoop,
-  AgentLoop as AgentLoopActor,
   AgentLoopSessionGovernance,
   type AgentLoopState,
   AgentLoopTestActor,
@@ -197,6 +195,8 @@ import {
 } from "../../src/runtime/tools"
 import { AllBuiltinAgents } from "../../../extensions/tests/helpers/builtin-agents"
 import {
+  AgentLoop,
+  AgentLoop as AgentLoopActor,
   AgentLoopError,
   buildIdleState,
   buildRunningState,
@@ -1057,6 +1057,41 @@ describe("max turn steps", () => {
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEvents(alwaysToolCalls, eventsRef, [echoTool])))
     }),
+  )
+
+  /**
+   * A continuation asks the model for one more step. On the last step of the
+   * budget no step follows, so the instruction would stay in the transcript
+   * with no answer after it.
+   */
+  it.live("the last budgeted step writes no continuation it cannot answer", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        {
+          parts: [
+            finishPart({ finishReason: "stop", usage: { inputTokens: 10, outputTokens: 0 } }),
+          ],
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(agentLoop, userMessage("answer once"), {
+          runSpec: makeRunSpec({ overrides: { maxSteps: 1 } }),
+        })
+
+        const messageStorage = yield* MessageStorage
+        const stored = yield* messageStorage.listMessages(branchId)
+        expect(stored.some((message) => message.metadata?.customType === "continuation")).toBe(
+          false,
+        )
+        const events = yield* Ref.get(eventsRef)
+        const turnCompleted = events.filter((event) => event._tag === "TurnCompleted")
+        expect(turnCompleted.length).toBeGreaterThan(0)
+        expect(turnCompleted.every((event) => event.unanswered === true)).toBe(true)
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
   )
 
   /**

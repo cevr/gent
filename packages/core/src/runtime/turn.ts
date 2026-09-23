@@ -1279,12 +1279,8 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   const selectedNames = new Set(tools.map((tool) => String(getToolId(tool))))
   const toolBindings = new Map([...hostToolBindings].filter(([name]) => selectedNames.has(name)))
 
-  // Build tool-aware prompt, then run through explicit prompt slots.
-  // We hand the slot layer both the compiled `basePrompt` (for append-only
-  // rewrites) AND the structured `sections` (for slots
-  // that need to swap or strip a section by id, e.g. codemode replacing
-  // `tool-list` / `tool-guidelines` rather than appending a contradicting
-  // surface).
+  // Build the tool-aware prompt, then run it through the systemPrompt hooks,
+  // which receive the compiled `basePrompt`.
   const sections = buildTurnPromptSections(
     params.baseSections,
     effectiveAgent,
@@ -1299,9 +1295,16 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     tools,
     hostTools,
   })
+  // A failed read runs the turn on the agent's defaults; the log says so, since
+  // the model the turn uses then differs from the one the session names.
   const session = yield* sessionStorage.getSession(params.sessionId).pipe(
     Effect.map(Option.fromUndefinedOr),
-    Effect.orElseSucceed(() => Option.none()),
+    Effect.catchEager((error) =>
+      Effect.logWarning("turn.session-settings-unreadable").pipe(
+        Effect.annotateLogs({ sessionId: params.sessionId, error: String(error) }),
+        Effect.as(Option.none<SessionSettingsSource>()),
+      ),
+    ),
   )
   // The session's own settings win over the agent definition and config.
   const settings = resolveSessionSettings(
@@ -1769,7 +1772,7 @@ const MAX_STEPS_INSTRUCTION =
   "You have reached the maximum number of steps for this turn, so tools are now disabled. Do not attempt another tool call. Reply with text only: say that the step limit stopped you, summarise what you established, and name what is still unfinished."
 
 const TRUNCATED_RESPONSE_INSTRUCTION =
-  "Your previous step hit the output limit before it finished, so its tool call was discarded. Retry in smaller steps: make one shorter tool call now and continue after its result."
+  "Your previous step hit the output limit before it finished. Text it wrote is saved above; a tool call it was writing was discarded. Continue in smaller steps: resume the text where it stopped without repeating it, or make one shorter tool call now and continue after its result."
 
 export const TurnOutcome = Schema.TaggedUnion({
   Done: {},
@@ -2824,8 +2827,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
 
       const maxSteps = Math.min(resolved.agent.maxSteps ?? MAX_TURN_STEPS, MAX_TURN_STEPS)
       if (params.step > maxSteps) {
-        // Only reachable when the final step said nothing at all: it ran with
-        // tools disabled, so it had no way to ask for another. Leaving the
+        // Only reachable when the final step still returned a tool call: it ran
+        // with tools disabled, and the calls it made ran anyway. Leaving the
         // flags false publishes a `TurnCompleted` no caller can tell from a
         // reply, and `headless-runner.ts` reads exactly that flag to pick its
         // exit code, so `gent -H` would exit 0 having printed nothing.
@@ -2889,9 +2892,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
       const { collected, outcome } = attempt.success
       // Whatever the model did produce stays; a durable instruction follows it
-      // and the same turn runs one more step. Once the budget is spent, stop.
-      const continueOr = (instruction: string, otherwise: StepResult) =>
-        continueWithinTurn({
+      // and the same turn runs one more step. Once the continuations are spent,
+      // or on the last step the budget allows, stop: no step would answer it.
+      const continueOr = (instruction: string, otherwise: StepResult) => {
+        if (finalStep) return Effect.succeed(otherwise)
+        return continueWithinTurn({
           messageId: params.state.message.id,
           step: params.step,
           instruction,
@@ -2901,6 +2906,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             return otherwise
           }),
         )
+      }
       const runTools = Effect.gen(function* () {
         const interactionSignal = yield* executeTools({
           hostToolBindings: resolved.hostToolBindings,

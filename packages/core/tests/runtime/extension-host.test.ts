@@ -181,6 +181,28 @@ describe("ambient extension host context", () => {
     }),
   )
 
+  it.live("an unwired file lock or state facet reports its absence, not a pass-through", () =>
+    Effect.gen(function* () {
+      const ctx = yield* ambientContext
+      const ran = yield* Ref.make(false)
+      const lockExit = yield* Effect.exit(ctx.FileLock.withLock("/tmp/a", Ref.set(ran, true)))
+      const stateExit = yield* Effect.exit(
+        ctx.State(Option.some(ExtensionId.make("probe"))).changed(),
+      )
+
+      expect(yield* Ref.get(ran)).toBe(false)
+      const expectAbsent = (exit: Exit.Exit<unknown, unknown>, name: string) => {
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.hasDies(exit.cause)).toBe(true)
+          expect(exit.cause.toString()).toContain(`${name} not available`)
+        }
+      }
+      expectAbsent(lockExit, "FileLockService")
+      expectAbsent(stateExit, "ExtensionStatePublisher")
+    }),
+  )
+
   it.live("uses the real service once its Tag is in scope", () =>
     Effect.gen(function* () {
       const ctx = yield* ambientContext
