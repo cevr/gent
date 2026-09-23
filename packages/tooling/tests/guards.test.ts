@@ -27,6 +27,7 @@ import {
   HOOK_FILE,
   isSteeringFile,
   type PackageJson,
+  workspaceManifests,
   RETIRED_SURFACES,
 } from "../src/guards"
 import { scanTrackedTexts } from "../src/check-guardrails"
@@ -2466,10 +2467,44 @@ const x: Api.ToolCapability = Api.tool({})`,
   })
 })
 
+/** Every workspace manifest in the shape the rows allow. */
+const VALID_MANIFESTS: ReadonlyArray<readonly [string, PackageJson]> = [
+  [
+    "packages/core/package.json",
+    {
+      exports: {
+        "./extensions/api": "./src/extensions/api.ts",
+        "./extensions/branch-tools": "./src/extensions/branch-tools.ts",
+        "./host": "./src/host.ts",
+        "./protocol": "./src/protocol.ts",
+        "./test-utils": "./src/test-utils/index.ts",
+      },
+    },
+  ],
+  [
+    "packages/extensions/package.json",
+    { private: true, exports: { ".": "./src/index.ts", "./client": "./src/client.ts" } },
+  ],
+  ["packages/sdk/package.json", { exports: { ".": "./src/index.ts" } }],
+  ["apps/tui/package.json", { exports: { "./extensions": "./src/extensions.ts" } }],
+  ["apps/server/package.json", {}],
+  ["packages/e2e/package.json", { private: true }],
+  ["packages/tooling/package.json", { private: true }],
+  ["examples/package.json", { private: true }],
+]
+
+/** The workspace with `changes` laid over the valid manifests, less the `removed` ones. */
 const packageSurface = (
-  entries: ReadonlyArray<readonly [string, PackageJson]>,
-  paths: Readonly<Record<string, ReadonlyArray<string>>>,
-) => findPackageSurfaceFindings(new Map(entries), { compilerOptions: { paths } })
+  changes: ReadonlyArray<readonly [string, PackageJson]>,
+  options: {
+    readonly paths?: Readonly<Record<string, ReadonlyArray<string>>>
+    readonly removed?: ReadonlyArray<string>
+  } = {},
+) => {
+  const manifests = new Map<string, PackageJson>([...VALID_MANIFESTS, ...changes])
+  for (const file of options.removed ?? []) manifests.delete(file)
+  return findPackageSurfaceFindings(manifests, { compilerOptions: { paths: options.paths ?? {} } })
+}
 
 /** The file and the key a package surface finding names, as `<file> <key>`. */
 const pathOf = (finding: { readonly file: string; readonly message: string }): string =>
@@ -2547,128 +2582,63 @@ describe("chained entry points", () => {
 })
 
 describe("package entry points", () => {
-  test("allows explicit extension and protocol exports", () => {
-    expect(
-      packageSurface(
-        [
-          [
-            "packages/core/package.json",
-            {
-              exports: {
-                "./extensions/api": "./src/extensions/api.ts",
-                "./host": "./src/host.ts",
-                "./protocol": "./src/protocol.ts",
-                "./test-utils": "./src/test-utils/index.ts",
-              },
-            },
-          ],
-        ],
-        {
-          "@gent/core/extensions/api": ["./packages/core/src/extensions/api.ts"],
-          "@gent/core/protocol": ["./packages/core/src/protocol.ts"],
-          "@gent/core/host": ["./packages/core/src/host.ts"],
-          "@gent/core/test-utils": ["./packages/core/src/test-utils/index.ts"],
-        },
-      ),
-    ).toEqual([])
+  const coreExports = VALID_MANIFESTS[0]![1].exports
+
+  test("every workspace package in the shape its row allows is clean", () => {
+    expect(packageSurface([])).toEqual([])
   })
 
   test("the TUI exposes only its client-extension entry", () => {
-    const findings = packageSurface(
-      [
+    expect(
+      packageSurface([
         [
           "apps/tui/package.json",
+          { exports: { "./extensions": "./src/extensions.ts", "./client": "./src/client.tsx" } },
+        ],
+      ]).map(pathOf),
+    ).toEqual(['apps/tui/package.json exports["./client"]'])
+  })
+
+  test("flags a public internal core export", () => {
+    expect(
+      packageSurface([
+        [
+          "packages/core/package.json",
+          { exports: { ...coreExports, "./domain/ids": "./src/domain/ids.ts" } },
+        ],
+      ]).map(pathOf),
+    ).toEqual(['packages/core/package.json exports["./domain/ids"]'])
+  })
+
+  test("rejects a protocol wildcard", () => {
+    expect(
+      packageSurface([
+        [
+          "packages/core/package.json",
+          { exports: { ...coreExports, "./protocol/*": "./src/*.ts" } },
+        ],
+      ]).map(pathOf),
+    ).toEqual(['packages/core/package.json exports["./protocol/*"]'])
+  })
+
+  test("an entry point the row names but the manifest does not export is reported", () => {
+    const { "./host": _host, ...withoutHost } = coreExports ?? {}
+    expect(
+      messages(packageSurface([["packages/core/package.json", { exports: withoutHost }]])),
+    ).toEqual([expect.stringContaining('exports["./host"] is missing')])
+  })
+
+  test("flags extension implementation subpaths and a public extensions package", () => {
+    expect(
+      packageSurface([
+        [
+          "packages/extensions/package.json",
           {
-            exports: { "./extensions": "./src/extensions.ts", "./client": "./src/client.tsx" },
+            private: false,
+            exports: { ".": "./src/index.ts", "./todo-storage": "./src/todo-storage.ts" },
           },
         ],
-      ],
-      {
-        "@gent/tui/extensions": ["./apps/tui/src/extensions.ts"],
-        "@gent/tui/client": ["./apps/tui/src/client.tsx"],
-      },
-    )
-    expect(findings.map(pathOf)).toEqual([
-      'apps/tui/package.json exports["./client"]',
-      'tsconfig.json compilerOptions.paths["@gent/tui/client"]',
-    ])
-  })
-
-  test("flags public internal core exports and tsconfig aliases", () => {
-    expect(
-      packageSurface(
-        [
-          [
-            "packages/core/package.json",
-            {
-              exports: {
-                "./extensions/api": "./src/extensions/api.ts",
-                "./domain/ids": "./src/domain/ids.ts",
-              },
-            },
-          ],
-        ],
-        { "@gent/core/domain/ids": ["./packages/core/src/domain/ids.ts"] },
-      ).map(pathOf),
-    ).toEqual([
-      'packages/core/package.json exports["./domain/ids"]',
-      'tsconfig.json compilerOptions.paths["@gent/core/domain/ids"]',
-    ])
-  })
-
-  test("rejects protocol wildcards and unknown core paths", () => {
-    expect(
-      packageSurface(
-        [["packages/core/package.json", { exports: { "./protocol/*": "./src/*.ts" } }]],
-        {
-          "@gent/core/protocol/*": ["./packages/core/src/*"],
-          "@gent/core/unknown": ["./packages/core/src/domain/ids.ts"],
-        },
-      ).map(pathOf),
-    ).toEqual([
-      'packages/core/package.json exports["./protocol/*"]',
-      'tsconfig.json compilerOptions.paths["@gent/core/protocol/*"]',
-      'tsconfig.json compilerOptions.paths["@gent/core/unknown"]',
-    ])
-  })
-
-  test("allows only root composition and client contracts for extensions", () => {
-    expect(
-      packageSurface(
-        [
-          [
-            "packages/extensions/package.json",
-            {
-              private: true,
-              exports: {
-                ".": "./src/index.ts",
-                "./client": "./src/client.ts",
-              },
-            },
-          ],
-        ],
-        {
-          "@gent/extensions": ["./packages/extensions/src/index.ts"],
-          "@gent/extensions/client": ["./packages/extensions/src/client.ts"],
-        },
-      ),
-    ).toEqual([])
-  })
-
-  test("flags extension implementation subpaths", () => {
-    expect(
-      packageSurface(
-        [
-          [
-            "packages/extensions/package.json",
-            {
-              private: false,
-              exports: { ".": "./src/index.ts", "./todo-storage": "./src/todo-storage.ts" },
-            },
-          ],
-        ],
-        { "@gent/extensions/todo-storage": ["./packages/extensions/src/todo-storage.ts"] },
-      ),
+      ]),
     ).toEqual([
       {
         file: "packages/extensions/package.json",
@@ -2682,33 +2652,22 @@ describe("package entry points", () => {
           'exports["./todo-storage"]: @gent/extensions may only expose its supported entry points: ., ./client',
       },
       {
-        file: "tsconfig.json",
+        file: "packages/extensions/package.json",
         line: 1,
         message:
-          'compilerOptions.paths["@gent/extensions/todo-storage"]: Do not give TypeScript a public-looking @gent/extensions path for an internal module',
+          'exports["./client"] is missing: the package-surface row for @gent/extensions names it; export it, or drop it from the row',
       },
     ])
   })
 
-  test("allows only the root client contract export for the sdk", () => {
-    expect(
-      packageSurface([["packages/sdk/package.json", { exports: { ".": "./src/index.ts" } }]], {
-        "@gent/sdk": ["./packages/sdk/src/index.ts"],
-      }),
-    ).toEqual([])
-  })
-
   test("flags internal sdk subpath exports", () => {
     expect(
-      packageSurface(
+      packageSurface([
         [
-          [
-            "packages/sdk/package.json",
-            { exports: { ".": "./src/index.ts", "./rpcs": "./src/rpcs.ts" } },
-          ],
+          "packages/sdk/package.json",
+          { exports: { ".": "./src/index.ts", "./rpcs": "./src/rpcs.ts" } },
         ],
-        {},
-      ),
+      ]),
     ).toEqual([
       {
         file: "packages/sdk/package.json",
@@ -2716,6 +2675,73 @@ describe("package entry points", () => {
         message: 'exports["./rpcs"]: @gent/sdk may only expose its supported entry points: .',
       },
     ])
+  })
+
+  test("a leaf package that gains an exports map is reported", () => {
+    for (const file of [
+      "packages/e2e/package.json",
+      "packages/tooling/package.json",
+      "apps/server/package.json",
+      "examples/package.json",
+    ]) {
+      expect(
+        messages(packageSurface([[file, { private: true, exports: { ".": "./src/index.ts" } }]])),
+        file,
+      ).toEqual([expect.stringContaining("may only expose its supported entry points: none")])
+    }
+  })
+
+  test("a workspace package with no row is reported", () => {
+    expect(
+      packageSurface([["packages/new/package.json", { exports: { ".": "./src/index.ts" } }]]),
+    ).toEqual([
+      {
+        file: "packages/new/package.json",
+        line: 1,
+        message:
+          "a workspace package with no package-surface row in guards.ts; add one naming its entry points (none for a leaf)",
+      },
+    ])
+  })
+
+  test("a row with no workspace package is reported", () => {
+    expect(messages(packageSurface([], { removed: ["examples/package.json"] }))).toEqual([
+      "package-surface row examples/package.json names no workspace package; drop the row",
+    ])
+  })
+
+  test("any tsconfig path alias is reported: packages resolve through exports", () => {
+    expect(
+      packageSurface([], {
+        paths: {
+          "@gent/core/protocol": ["./packages/core/src/protocol.ts"],
+          "@gent/core/domain/ids": ["./packages/core/src/domain/ids.ts"],
+        },
+      }).map(pathOf),
+    ).toEqual([
+      'tsconfig.json compilerOptions.paths["@gent/core/protocol"]',
+      'tsconfig.json compilerOptions.paths["@gent/core/domain/ids"]',
+    ])
+  })
+})
+
+describe("workspace manifests", () => {
+  test("each workspace pattern names the manifests one level under it, and no deeper", () => {
+    expect(
+      workspaceManifests(
+        ["packages/*", "apps/*", "examples"],
+        [
+          "package.json",
+          "packages/core/package.json",
+          "packages/core/src/index.ts",
+          "packages/tooling/fixtures/package.json",
+          "apps/tui/package.json",
+          "examples/package.json",
+          "examples/extensions/package.json",
+          "testbeds/gamut/fixture/package.json",
+        ],
+      ),
+    ).toEqual(["packages/core/package.json", "apps/tui/package.json", "examples/package.json"])
   })
 })
 
