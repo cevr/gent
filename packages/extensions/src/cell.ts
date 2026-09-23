@@ -2614,15 +2614,6 @@ const cellToolCallRecovery = Layer.effect(
 // ── storage ─────────────────────────────────────────────────────────────────
 
 /**
- * The cell's storage layers, assembled as one unit.
- *
- * Core's SQLite assembler builds the kernel's tables and takes any extra
- * repositories as a parameter. This is the cell's contribution to that call:
- * the three tables it owns, wired against the same SQL client, so core never
- * names them.
- */
-
-/**
  * The tables the cell owns.
  *
  * Ids continue core's chain rather than starting a new one: one migration
@@ -2676,16 +2667,21 @@ const cellMigrations: FeatureMigrations = {
   }),
 }
 
+/** What the cell's storage installs. Core merges it without naming it. */
+type CellStorageTags = CellStorage | RetainedBindings | ToolCallRecoveryService
+
 /**
- * Build the cell's repositories over an existing SQL client.
+ * The cell's storage layers, assembled as one unit.
+ *
+ * Core's SQLite assembler builds the kernel's tables and takes any extra
+ * repositories as a parameter. This is the cell's contribution to that call:
+ * the three tables it owns, wired against the same SQL client, so core never
+ * names them.
  *
  * `interactionStorage` is passed in rather than rebuilt: operation receipts
  * and interaction records must share one instance, or a suspended approval
  * would be written to a store nothing reads back.
  */
-/** What the cell's storage installs. Core merges it without naming it. */
-type CellStorageTags = CellStorage | RetainedBindings | ToolCallRecoveryService
-
 const cellStorageLayer = <E, R>(
   base: Layer.Layer<SqlClient.SqlClient, E, R>,
   interactionStorage: Layer.Layer<InteractionStorage, E, R>,
@@ -2797,7 +2793,7 @@ const CELL_WORK = `# Working in the cell
 - The cell is your persistent control environment. Keep intermediate values in named variables, inspect and transform outputs, and write small helpers. Use it for loops, parsing, and state; call host tools for effects.
 - You solve tasks by writing and running TypeScript in the cell, observing results, and iterating. Batch independent work inside one cell; iterate between cells.
 - Example: \`const run = await tools.bash({ command: "bun test", timeout: 600000 }); const lines = (run.stdout + run.stderr).split("\\n"); const failing = lines.filter((l) => l.includes("(fail)")); ({ exit: run.exitCode, total: failing.length, sample: failing.slice(0, 5) })\` returns the outcome and a sample; lines stays bound for the next cell.
-- To find files, prefer tools.grep({ pattern }) over a raw directory walk: it honours .gitignore and caches the listing.`
+- To find files, prefer tools.grep({ pattern }) over a raw directory walk: it honours .gitignore.`
 
 // ── tool signatures ─────────────────────────────────────────────────────────
 

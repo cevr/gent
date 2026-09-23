@@ -44,7 +44,7 @@ export const ForkView = Schema.Struct({
   branchId: BranchId,
   name: Schema.String,
   turns: Schema.Array(ForkTurn),
-  /** The fork's loop holds a turn; a follow-up waits for it. */
+  /** The fork's loop holds a turn; `btw.ask` refuses a follow-up until it ends. */
   replying: Schema.Boolean,
   error: Schema.optional(Schema.String),
 })
@@ -363,7 +363,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
   Ask: request({
     id: "btw.ask",
     description:
-      "Ask the fork opened from this branch a follow-up; it waits for a reply in progress",
+      "Ask the fork opened from this branch a follow-up; refused while the fork is still replying",
     input: AskInput,
     output: Schema.Struct({ asked: Schema.Boolean }),
     execute: Effect.fn("BtwRpc.Ask")(function* (input: AskInput) {
