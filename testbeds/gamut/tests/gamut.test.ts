@@ -12,6 +12,7 @@ import {
   rosterBlock,
   shellQuote,
   stateFileFor,
+  testSummary,
   type GamutState,
 } from "../gamut"
 
@@ -186,5 +187,13 @@ describe("gamut open turns", () => {
       ["parent", "MessageReceived"],
     ])
     expect(openTurnSessions(db)).toEqual(["parent"])
+  })
+})
+
+describe("gamut status", () => {
+  test("reads the bun test summary through its colour", () => {
+    const coloured = "\u001b[0m\u001b[32m 17 pass\u001b[0m\n\u001b[0m\u001b[2m 0 fail\u001b[0m\n"
+    expect(testSummary(coloured)).toBe("17 pass, 0 fail")
+    expect(testSummary("no summary")).toBe("? pass, ? fail")
   })
 })
