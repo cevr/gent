@@ -113,8 +113,8 @@ export type AuthInfo = Schema.Schema.Type<typeof AuthInfo>
 
 export const AuthApi = AuthInfo.cases.Api
 export type AuthApi = typeof AuthInfo.cases.Api.Type
-export const AuthOauth = AuthInfo.cases.Oauth
-export type AuthOauth = typeof AuthInfo.cases.Oauth.Type
+const AuthOauth = AuthInfo.cases.Oauth
+type AuthOauth = typeof AuthInfo.cases.Oauth.Type
 
 const AuthType = Schema.Literals(["api", "oauth"])
 type AuthType = typeof AuthType.Type

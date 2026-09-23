@@ -1123,7 +1123,7 @@ export const resolveSessionSettings = (
   ),
 })
 
-export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function* (params: {
+const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function* (params: {
   branchId: BranchId
   sessionId: SessionId
   baseSections: ReadonlyArray<PromptSection>
@@ -1293,7 +1293,7 @@ type ModelTurnSource = {
   ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R | EventPublisher>
 }
 
-export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
+const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
   messageId: MessageId
   step: number
   /**
@@ -1597,7 +1597,7 @@ const computeStreamEndedCost: (params: {
  * Policy (continue, stop, run tools) matches on this; nothing else inspects
  * the response parts, and the tag travels on the step's `StreamEnded` event.
  */
-export const StepOutcome = Schema.TaggedUnion({
+const StepOutcome = Schema.TaggedUnion({
   Interrupted: {},
   /** The stream failed; `partialOutput` says whether observable output was saved first. */
   Failed: { partialOutput: Schema.Boolean },
@@ -1606,7 +1606,7 @@ export const StepOutcome = Schema.TaggedUnion({
   /** No tool calls: an answer, nothing at all, or output cut off at the limit. */
   Answered: { empty: Schema.Boolean, truncated: Schema.Boolean },
 })
-export type StepOutcome = Schema.Schema.Type<typeof StepOutcome>
+type StepOutcome = Schema.Schema.Type<typeof StepOutcome>
 
 export const classifyStep = (collected: CollectedTurnResponse): StepOutcome => {
   const observable = collected.responseParts.some(isObservableModelOutputPart)
