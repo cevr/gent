@@ -320,9 +320,10 @@ const SendSessionTool = tool({
       return yield* new SendSessionError({ message: `No session ${targetId}` })
     }
     // A child reports to the branch that owns it, not to whichever branch
-    // the person has open on the parent now.
+    // the person has open on the parent now, whether it names "parent" or
+    // the parent's id.
     const branchId = Option.fromUndefinedOr(sender.parentBranchId).pipe(
-      Option.filter(() => params.to === "parent"),
+      Option.filter(() => targetId === sender.parentSessionId),
       Option.getOrElse(() => receiver.activeBranchId),
     )
     const relation = relationOf(sender, receiver)

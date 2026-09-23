@@ -1689,56 +1689,64 @@ describe("a forked child", () => {
 })
 
 describe("session.send", () => {
-  it.live("a child's message to its parent lands on the branch that owns the child", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const report = "CHILD-REPORT: done"
-        const providerLayer = LanguageModelLayers.testStream((options) => {
-          const texts = promptTexts(options.prompt)
-          if (texts.some((text) => text.includes("report upward"))) {
-            if (!promptToolCallIds(options.prompt).includes("send-up")) {
-              return Effect.succeed(
-                toolStep("session.send", { to: "parent", message: report }, "send-up"),
-              )
+  // The child's task names its parent's id, so a model may address it by id.
+  const addresses: ReadonlyArray<readonly [string, (parent: string) => string]> = [
+    ["parent", () => "parent"],
+    ["the parent's id", (parent) => parent],
+  ]
+  for (const [addressed, address] of addresses)
+    it.live(`a child's message to ${addressed} lands on the branch that owns the child`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const report = "CHILD-REPORT: done"
+          const parentId = yield* Deferred.make<string>()
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts.some((text) => text.includes("report upward"))) {
+              if (!promptToolCallIds(options.prompt).includes("send-up")) {
+                return Deferred.await(parentId).pipe(
+                  Effect.map((to) => toolStep("session.send", { to, message: report }, "send-up")),
+                )
+              }
+              return Effect.succeed(reply("sent"))
             }
-            return Effect.succeed(reply("sent"))
-          }
-          return Effect.succeed(reply("ack"))
-        })
-        const harness = yield* harnessWithHome(providerLayer)
-        const { client, sessionId, branchId } = harness
-        const child = yield* client.session.create({
-          cwd: "/tmp",
-          parentSessionId: sessionId,
-          parentBranchId: branchId,
-        })
-        // The person moves the parent to another branch while the child works.
-        const other = yield* client.branch.create({ sessionId, name: "elsewhere" })
-        yield* client.branch.switch({
-          sessionId,
-          fromBranchId: branchId,
-          toBranchId: other.branchId,
-        })
-        yield* client.message.send({ ...child, content: "report upward" })
-        const owning = yield* waitFor(
-          client.session.getSnapshot({ sessionId, branchId }),
-          (current) =>
-            current.runtime._tag === "Idle" &&
-            sessionMessages(current.messages).some((message) =>
-              messageTexts([message]).some((text) => text.includes(report)),
-            ),
-          5_000,
-          "the report reached the branch that owns the child",
-        )
-        expect(sessionMessages(owning.messages)).toHaveLength(1)
-        const elsewhere = yield* client.session.getSnapshot({
-          sessionId,
-          branchId: other.branchId,
-        })
-        expect(sessionMessages(elsewhere.messages)).toHaveLength(0)
-      }).pipe(Effect.timeout("8 seconds")),
-    ),
-  )
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* Deferred.succeed(parentId, address(sessionId))
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          // The person moves the parent to another branch while the child works.
+          const other = yield* client.branch.create({ sessionId, name: "elsewhere" })
+          yield* client.branch.switch({
+            sessionId,
+            fromBranchId: branchId,
+            toBranchId: other.branchId,
+          })
+          yield* client.message.send({ ...child, content: "report upward" })
+          const owning = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              sessionMessages(current.messages).some((message) =>
+                messageTexts([message]).some((text) => text.includes(report)),
+              ),
+            5_000,
+            "the report reached the branch that owns the child",
+          )
+          expect(sessionMessages(owning.messages)).toHaveLength(1)
+          const elsewhere = yield* client.session.getSnapshot({
+            sessionId,
+            branchId: other.branchId,
+          })
+          expect(sessionMessages(elsewhere.messages)).toHaveLength(0)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    )
 
   it.live("a parent's message reaches a running child's next model step", () =>
     Effect.scoped(
