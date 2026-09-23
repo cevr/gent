@@ -743,7 +743,8 @@ const findResultForToolCall = (
 
 /** What a branch's tool receipts add to its messages: durations, and the calls each cell admitted. */
 interface ToolCallReceipts {
-  readonly durations: ReadonlyMap<ToolCallId, number>
+  /** Keyed by `callKey`, like operations: a provider can reuse a call id across steps. */
+  readonly durations: ReadonlyMap<string, number>
   /** Keyed by `callKey` of the admitting cell, in start order. */
   readonly operations: ReadonlyMap<string, ReadonlyArray<ToolOperation>>
 }
@@ -816,26 +817,28 @@ const admitOperation = (
 }
 
 export const toolCallReceipts = (events: ReadonlyArray<EventEnvelope>): ToolCallReceipts => {
-  const started = new Map<ToolCallId, number>()
-  const durations = new Map<ToolCallId, number>()
+  const started = new Map<string, number>()
+  const durations = new Map<string, number>()
   const operations = new Map<string, Array<ToolOperation>>()
   const slots = new Map<string, OperationSlot>()
   for (const envelope of events) {
     const event = envelope.event
     if (event._tag === "ToolCallStarted") {
-      started.set(event.toolCallId, envelope.createdAt)
+      started.set(
+        callKey(Option.fromUndefinedOr(event.assistantMessageId), event.toolCallId),
+        envelope.createdAt,
+      )
       admitOperation(event, operations, slots)
       continue
     }
     if (event._tag !== "ToolCallSucceeded" && event._tag !== "ToolCallFailed") continue
-    const startedAt = started.get(event.toolCallId)
+    const key = callKey(Option.fromUndefinedOr(event.assistantMessageId), event.toolCallId)
+    const startedAt = started.get(key)
     const durationMs = Option.getOrUndefined(
       Option.map(Option.fromUndefinedOr(startedAt), (at) => Math.max(0, envelope.createdAt - at)),
     )
-    if (Predicate.isNotUndefined(durationMs)) durations.set(event.toolCallId, durationMs)
-    const position = slots.get(
-      callKey(Option.fromUndefinedOr(event.assistantMessageId), event.toolCallId),
-    )
+    if (Predicate.isNotUndefined(durationMs)) durations.set(key, durationMs)
+    const position = slots.get(key)
     if (Predicate.isUndefined(position)) continue
     const siblings = operations.get(position.parent)
     const current = siblings?.[position.index]
@@ -898,7 +901,12 @@ const messagePartsToolInteractions = (
       input: toolCall.input,
       summary: Option.getOrUndefined(Option.map(result, (value) => value.summary)),
       output: Option.getOrUndefined(Option.map(result, (value) => value.output)),
-      durationMs: receipts.durations.get(id),
+      durationMs: Option.getOrUndefined(
+        Option.orElse(
+          Option.fromUndefinedOr(receipts.durations.get(callKey(Option.some(messageId), id))),
+          () => Option.fromUndefinedOr(receipts.durations.get(callKey(Option.none(), id))),
+        ),
+      ),
       ...Option.match(operations, {
         onNone: () => ({}),
         onSome: (value) => ({ operations: value }),
