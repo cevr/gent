@@ -8,13 +8,14 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # The build targets darwin-arm64 only (apps/tui/scripts/build.ts, the gent-cell compile).
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.1
+          bun-version-file: package.json
 
       - name: Install
         run: bun install --frozen-lockfile
