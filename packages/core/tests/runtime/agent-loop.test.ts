@@ -2157,7 +2157,10 @@ const memoryQueueStorage = Layer.effect(
 
 const makeHarness = (
   initial: { state: LoopState; queue: LoopQueueState },
-  options: { readonly answered?: ReadonlySet<InteractionRequestId> } = {},
+  options: {
+    readonly answered?: ReadonlySet<InteractionRequestId>
+    readonly sessionAgent?: Effect.Effect<AgentName, AgentLoopError>
+  } = {},
 ) =>
   Effect.gen(function* () {
     const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
@@ -2181,6 +2184,7 @@ const makeHarness = (
     const sideMutationSemaphore = yield* Semaphore.make(1)
     const turnInterruption = yield* makeTurnInterruption
     const answered = options.answered ?? new Set<InteractionRequestId>()
+    const failedTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const worker = makeAgentLoopWorker<never, never>({
       sessionId,
       branchId,
@@ -2192,7 +2196,8 @@ const makeHarness = (
       interruptToolWork: Effect.void,
       inbox,
       admissionGateRef: gateRef,
-      recordTurnFailure: () => Effect.void,
+      recordTurnFailure: (_cause, messageId) =>
+        Ref.update(failedTurns, (ids) => [...ids, String(messageId)]),
       publishEvent: () => Effect.void,
       interactionAnswered: (requestId) => Effect.succeed(answered.has(requestId)),
       runTurn: (state) =>
@@ -2202,7 +2207,7 @@ const makeHarness = (
           yield* Ref.update(interruptedTurns, (all) => [...all, interrupted])
           return TurnOutcome.cases.Done.make({})
         }),
-      sessionAgent: Effect.succeed(DEFAULT_AGENT_NAME),
+      sessionAgent: options.sessionAgent ?? Effect.succeed(DEFAULT_AGENT_NAME),
     })
     const phase = inbox.phase
     const queue = TxSubscriptionRef.get(loopRef).pipe(Effect.map((s) => s.queue))
@@ -2213,6 +2218,7 @@ const makeHarness = (
       queue,
       setPhase,
       ranTurns,
+      failedTurns,
       interruptedTurns,
       turnWorkerQueue,
       gateRef,
@@ -2227,6 +2233,44 @@ const waitForEmptyWorkerQueue = (queue: TxQueue.TxQueue<RunningState>): Effect.E
       return Effect.yieldNow.pipe(Effect.andThen(waitForEmptyWorkerQueue(queue)))
     }),
   )
+
+describe("a turn whose agent cannot be read", () => {
+  it.live("fails that turn, releases its admission, and the worker lives on", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("first")
+      const second = queuedItem("second")
+      const initial = admitted(first, [])
+      const reads = yield* Ref.make(0)
+      const harness = yield* makeHarness(initial, {
+        // The first read fails, as a busy database or an undecodable admission does.
+        sessionAgent: Ref.getAndUpdate(reads, (count) => count + 1).pipe(
+          Effect.flatMap((count) => {
+            if (count === 0) return Effect.fail(new AgentLoopError({ message: "database busy" }))
+            return Effect.succeed(DEFAULT_AGENT_NAME)
+          }),
+        ),
+      })
+      yield* TxQueue.offer(harness.turnWorkerQueue, initial.state)
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      const settle = <A>(read: Effect.Effect<A>, until: (value: A) => boolean) =>
+        read.pipe(
+          Effect.repeat({ until, schedule: Schedule.spaced("5 millis") }),
+          Effect.timeout("2 seconds"),
+        )
+      yield* settle(Ref.get(harness.failedTurns), (ids) => ids.length > 0)
+      yield* settle(harness.phase, (phase) => phase._tag === "Idle")
+      expect(yield* Ref.get(harness.failedTurns)).toEqual(["first"])
+      expect(yield* Ref.get(harness.ranTurns)).toEqual([])
+      expect((yield* harness.queue).inFlight).toBeUndefined()
+      expect(Option.isNone((yield* Ref.get(harness.gateRef)).started)).toBe(true)
+      // The same worker runs the next turn.
+      yield* TxQueue.offer(harness.turnWorkerQueue, buildRunningState(second, { startedAtMs: 1 }))
+      yield* settle(Ref.get(harness.ranTurns), (ids) => ids.length > 0)
+      expect(yield* Ref.get(harness.ranTurns)).toEqual(["second"])
+      yield* Fiber.interrupt(loop)
+    }),
+  )
+})
 
 describe("a turn parked on an interaction", () => {
   const requestId = InteractionRequestId.make("req-parked")
