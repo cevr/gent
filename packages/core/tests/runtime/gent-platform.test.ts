@@ -270,6 +270,40 @@ describe("writeFileAtomic", () => {
     }),
   )
 
+  // A crash skips every finalizer, so a staged directory would stay in the user's tree.
+  const renamed: Array<string> = []
+  /** The platform file system, recording each rename's source. */
+  const recordingFs = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (fs) =>
+      FileSystem.FileSystem.of({
+        ...fs,
+        rename: (from, to) => {
+          renamed.push(from)
+          return fs.rename(from, to)
+        },
+      }),
+    ),
+  )
+
+  atomicTest("stages a sibling file, never a directory, and removes it when the write fails", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped()
+      renamed.length = 0
+      yield* writeFileAtomic(`${dir}/state.json`, "saved")
+      // A directory cannot be replaced by a file, so this rename fails.
+      yield* fs.makeDirectory(`${dir}/busy/inner`, { recursive: true })
+      const failed = yield* writeFileAtomic(`${dir}/busy`, "x").pipe(Effect.flip)
+      expect(failed._tag).toBe("PlatformError")
+      // A crash skips every finalizer, so a staged directory would stay in the user's tree.
+      expect(renamed.map((from) => path.dirname(from))).toEqual([dir, dir])
+      expect((yield* fs.readDirectory(dir)).toSorted()).toEqual(["busy", "state.json"])
+      expect(yield* fs.readFileString(`${dir}/state.json`)).toBe("saved")
+    }).pipe(Effect.provide(recordingFs)),
+  )
+
   const modeOf = (fs: FileSystem.FileSystem, file: string) =>
     fs.stat(file).pipe(Effect.map((info) => info.mode & 0o777))
 
