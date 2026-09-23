@@ -57,7 +57,6 @@ export {
   AgentName,
   DEFAULT_AGENT_NAME,
   DriverRef,
-  ExternalDriverRef,
   makeRunSpec,
   type RunSpec,
   RunSpecSchema,
@@ -68,13 +67,7 @@ export {
   type SystemPromptInput,
   type TurnAfterInput,
 } from "../domain/extension.js"
-export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
-export {
-  DEFAULT_RETRY_POLICY,
-  ExternalToolRunner,
-  ProviderAuthError,
-  TurnError,
-} from "../domain/driver.js"
+export { DEFAULT_RETRY_POLICY, ProviderAuthError } from "../domain/driver.js"
 export { type ApprovalDecision, InteractionPendingError } from "../domain/interaction.js"
 export type {
   ModelDriverContribution,

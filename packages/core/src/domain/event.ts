@@ -71,7 +71,11 @@ export type Question = typeof QuestionSchema.Type
 export const EventId = Schema.Finite.pipe(branded("EventId"))
 export type EventId = typeof EventId.Type
 
-/** Tags of `StepOutcome` (`runtime/turn.ts`), as they travel on `StreamEnded`. */
+/**
+ * Tags of `StepOutcome` (`runtime/turn.ts`), as they travel on `StreamEnded`.
+ * `External` is retired with the external turn executors; stored events can
+ * still carry it, so it stays decodable.
+ */
 const StepOutcomeTag = Schema.Literals([
   "Interrupted",
   "Failed",

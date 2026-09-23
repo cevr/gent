@@ -110,7 +110,6 @@ import {
   type SessionRuntimeError,
 } from "../runtime/session.js"
 import { CurrentWorkspaceId, workspaceIdForCwd, WorkspaceRpcMiddleware } from "./workspace-rpc.js"
-import type { DriverRef } from "../domain/agent.js"
 import {
   Auth,
   AuthApi,
@@ -1042,21 +1041,6 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
 // Handler helpers (yield Tags inside; no service-bag threading)
 // ============================================================================
 
-const invalidateExternalDriversFor = (
-  prev: Option.Option<DriverRef>,
-  next: Option.Option<DriverRef>,
-) =>
-  Effect.gen(function* () {
-    const { externalDrivers } = (yield* ExtensionRegistry).getResolved()
-    const ids = new Set<string>()
-    if (Option.isSome(prev) && prev.value._tag === "External") ids.add(prev.value.id)
-    if (Option.isSome(next) && next.value._tag === "External") ids.add(next.value.id)
-    for (const id of ids) {
-      const driver = externalDrivers.get(id)
-      if (!Predicate.isUndefined(driver)) yield* driver.invalidate
-    }
-  })
-
 type BranchPayload = { readonly branchId: BranchId }
 type OptionalSessionPayload = { readonly sessionId?: SessionId }
 type SessionIdPayload = { readonly sessionId: SessionId }
@@ -1298,21 +1282,10 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.gen(function* () {
           const config = yield* configService.get()
           const resolved = extensionRegistry.getResolved()
-          const models = [...resolved.modelDrivers.values()]
-          const externals = [...resolved.externalDrivers.values()]
           const agents = [...resolved.agents.values()]
-          const drivers = [
-            ...models.map((driver) =>
-              DriverInfo.cases.Model.make({
-                id: driver.id,
-              }),
-            ),
-            ...externals.map((driver) =>
-              DriverInfo.cases.External.make({
-                id: driver.id,
-              }),
-            ),
-          ]
+          const drivers = [...resolved.modelDrivers.values()].map((driver) =>
+            DriverInfo.make({ id: driver.id }),
+          )
           const overrides = Option.getOrElse(
             Option.fromUndefinedOr(config.driverOverrides),
             () => ({}),
@@ -1327,7 +1300,7 @@ const RpcHandlers = GentRpcs.toLayer(
       "driver.set": ({ agentName, driver }: SetDriverOverrideInput) =>
         Effect.gen(function* () {
           const resolved = extensionRegistry.getResolved()
-          if (driver._tag === "Model" && !Predicate.isUndefined(driver.id)) {
+          if (!Predicate.isUndefined(driver.id)) {
             const found = resolved.modelDrivers.get(driver.id)
             if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({
@@ -1335,35 +1308,14 @@ const RpcHandlers = GentRpcs.toLayer(
               })
             }
           }
-          if (driver._tag === "External") {
-            const found = resolved.externalDrivers.get(driver.id)
-            if (Predicate.isUndefined(found)) {
-              return yield* new NotFoundError({
-                message: `Unknown external driver "${driver.id}"`,
-              })
-            }
-          }
-
-          const prevConfig = yield* configService.get()
-          const prevOverride = prevConfig.driverOverrides?.[agentName]
           yield* configService.setDriverOverride(agentName, driver)
-          yield* invalidateExternalDriversFor(
-            Option.fromUndefinedOr(prevOverride),
-            Option.some(driver),
-          )
         }),
 
       "driver.clear": ({ agentName }: ClearDriverOverrideInput) =>
-        Effect.gen(function* () {
-          const prevConfig = yield* configService.get()
-          const prevOverride = prevConfig.driverOverrides?.[agentName]
-          yield* configService.clearDriverOverride(agentName)
-          yield* invalidateExternalDriversFor(Option.fromUndefinedOr(prevOverride), Option.none())
-        }),
+        configService.clearDriverOverride(agentName),
 
       "auth.listProviders": ({ agentName, sessionId }: ListAuthProvidersPayload) =>
         Effect.gen(function* () {
-          let cwd = Option.none<string>()
           if (!Predicate.isUndefined(sessionId)) {
             const session = yield* sessionStorage.getSession(SessionId.make(sessionId))
             if (Predicate.isUndefined(session)) {
@@ -1371,16 +1323,9 @@ const RpcHandlers = GentRpcs.toLayer(
                 message: "Session not found",
               })
             }
-            cwd = Option.fromUndefinedOr(session.cwd)
-          }
-          const config = yield* configService.get(Option.getOrUndefined(cwd))
-          const providerScope = {
-            agentName,
-            sessionId,
-            driverOverrides: config.driverOverrides,
           }
           return yield* authGuard
-            .listProviders(providerScope)
+            .listProviders({ agentName })
             .pipe(Effect.mapError((error) => authPersistenceError("read", "*", error)))
         }),
 

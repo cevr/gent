@@ -281,7 +281,7 @@ export const resolveStoredToolBinding = Effect.fn("ToolBinding.resolveStored")(f
 })
 
 /**
- * Resolve replay authority for native, external, and direct tool adapters.
+ * Resolve replay authority for native and direct tool adapters.
  * Durable rows take precedence. A missing row can use only a same-process
  * capability that never had a durable identity.
  * Callers own result persistence and interaction policy.

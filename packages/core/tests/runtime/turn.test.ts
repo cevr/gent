@@ -12,7 +12,6 @@ import {
   type ActiveStreamHandle,
   classifyStep,
   type CollectedTurnResponse,
-  collectExternalTurnResponse,
   collectFailedModelTurnResponse,
   collectModelTurnResponse,
   collectNormalizedResponse,
@@ -22,7 +21,6 @@ import {
   signalActiveStreamInterrupt,
 } from "../../src/runtime/turn"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
-import type { TurnError } from "../../src/domain/driver"
 import { ProviderError } from "../../src/domain/errors"
 import { finishPart, textDeltaPart, toolCallPart } from "../../src/runtime/provider"
 import {
@@ -98,7 +96,6 @@ describe("agent turn response collectors", () => {
       ],
       streamFailed: false,
       interrupted: false,
-      driverKind: "model",
     })
 
     expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["text"])
@@ -121,7 +118,6 @@ describe("agent turn response collectors", () => {
       ],
       streamFailed: false,
       interrupted: false,
-      driverKind: "model",
     })
     const codec = Schema.fromJsonString(UsageSchema)
     const encoded = Schema.encodeSync(codec)(
@@ -195,131 +191,6 @@ describe("agent turn response collectors", () => {
     }),
   )
 
-  it.scopedLive("external collector preserves tool names and usage in projected parts", () =>
-    Effect.gen(function* () {
-      const activeStream = yield* makeActiveStream(false)
-      const { events, layer } = yield* captureEvents()
-      const toolCallId = ToolCallId.make("collector-tool")
-
-      const collected = yield* collectExternalTurnResponse({
-        ...streamAddress,
-        turnStream: Stream.fromIterable([
-          Response.makePart("tool-call", {
-            id: toolCallId,
-            name: "probe",
-            params: { value: "x" },
-            providerExecuted: false,
-          }),
-          Response.makePart("tool-result", {
-            id: toolCallId,
-            name: "probe",
-            result: { ok: true },
-            encodedResult: { ok: true },
-            isFailure: false,
-            providerExecuted: false,
-            preliminary: false,
-          }),
-          finishPart({
-            finishReason: "stop",
-            usage: { inputTokens: 7, outputTokens: 11 },
-          }),
-        ]),
-        sessionId,
-        branchId,
-        activeStream,
-        formatStreamError: (error: TurnError) => error.message,
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-
-      expect(collected.messageProjection.assistant.map((part) => part.type)).toEqual(["tool-call"])
-      expect(
-        collected.messageProjection.tool.flatMap((part) => {
-          if (part.type === "tool-result") {
-            return [part.name]
-          }
-          return []
-        }),
-      ).toEqual(["probe"])
-      expect(collected.messageProjection.usage).toEqual({ inputTokens: 7, outputTokens: 11 })
-      const published = yield* Ref.get(events)
-      expect(published.map((event) => event._tag)).toEqual(["ToolCallStarted", "ToolCallSucceeded"])
-      const started = published.find((event) => event._tag === "ToolCallStarted")
-      expect(started).toEqual(
-        expect.objectContaining({
-          input: { value: "x" },
-          assistantMessageId: streamAddress.assistantMessageId,
-        }),
-      )
-      const succeeded = published.find((event) => event._tag === "ToolCallSucceeded")
-      expect(succeeded).toEqual(
-        expect.objectContaining({
-          summary: '{"ok":true}',
-          output: '{\n  "ok": true\n}',
-          assistantMessageId: streamAddress.assistantMessageId,
-        }),
-      )
-    }),
-  )
-
-  it.scopedLive(
-    "external collector de-duplicates durable tool-start events by response part id",
-    () =>
-      Effect.gen(function* () {
-        const activeStream = yield* makeActiveStream(false)
-        const { events, layer } = yield* captureEvents()
-        const toolCallId = ToolCallId.make("collector-dup")
-        const toolCallPart = Response.makePart("tool-call", {
-          id: toolCallId,
-          name: "probe",
-          params: {},
-          providerExecuted: false,
-        })
-
-        yield* collectExternalTurnResponse({
-          ...streamAddress,
-          turnStream: Stream.fromIterable([toolCallPart, toolCallPart]),
-          sessionId,
-          branchId,
-          activeStream,
-          formatStreamError: (error: TurnError) => error.message,
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer))
-
-        expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallStarted"])
-      }),
-  )
-
-  it.scopedLive(
-    "external collector de-duplicates final tool-result events by response part id",
-    () =>
-      Effect.gen(function* () {
-        const activeStream = yield* makeActiveStream(false)
-        const { events, layer } = yield* captureEvents()
-        const toolCallId = ToolCallId.make("collector-result-dup")
-        const toolResultPart = Response.makePart("tool-result", {
-          id: toolCallId,
-          name: "probe",
-          result: { ok: true },
-          encodedResult: { ok: true },
-          isFailure: false,
-          providerExecuted: false,
-          preliminary: false,
-        })
-
-        yield* collectExternalTurnResponse({
-          ...streamAddress,
-          turnStream: Stream.fromIterable([toolResultPart, toolResultPart]),
-          sessionId,
-          branchId,
-          activeStream,
-          formatStreamError: (error: TurnError) => error.message,
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer))
-
-        expect((yield* Ref.get(events)).map((event) => event._tag)).toEqual(["ToolCallSucceeded"])
-      }),
-  )
-
   it.scopedLive("model collector keeps partial output when post-output stream fails", () =>
     Effect.gen(function* () {
       const activeStream = yield* makeActiveStream(false)
@@ -350,13 +221,12 @@ describe("agent turn response collectors", () => {
 
 const collected = (
   responseParts: ReadonlyArray<Response.AnyPart>,
-  flags: Partial<Pick<CollectedTurnResponse, "interrupted" | "streamFailed" | "driverKind">> = {},
+  flags: Partial<Pick<CollectedTurnResponse, "interrupted" | "streamFailed">> = {},
 ): CollectedTurnResponse => ({
   responseParts,
   messageProjection: { assistant: [], tool: [] },
   interrupted: false,
   streamFailed: false,
-  driverKind: "model",
   ...flags,
 })
 
@@ -377,11 +247,6 @@ describe("classifyStep", () => {
       _tag: "Failed",
       partialOutput: true,
     })
-  })
-
-  test("an external driver step is External even when it carries tool calls", () => {
-    const outcome = classifyStep(collected([toolCallPart("echo", {})], { driverKind: "external" }))
-    expect(outcome._tag).toBe("External")
   })
 
   test("tool calls are counted", () => {

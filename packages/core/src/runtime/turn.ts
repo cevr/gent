@@ -67,7 +67,7 @@ import {
   provideCurrentHostCtx,
 } from "./extension-host.js"
 import type * as Response from "effect/unstable/ai/Response"
-import { ExternalToolRunner, type ProviderAuthError, TurnError } from "../domain/driver.js"
+import type { ProviderAuthError } from "../domain/driver.js"
 import {
   type AgentEvent,
   ErrorOccurred,
@@ -80,14 +80,12 @@ import {
   StreamEnded,
   StreamStarted,
   ToolCallFailed,
-  ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
   type Usage,
 } from "../domain/event.js"
-import { InteractionPendingError } from "../domain/interaction.js"
 import { causeMessage, omitUndefined } from "../domain/guards.js"
-import { ProviderError, type StorageError } from "../domain/errors.js"
+import { ProviderError } from "../domain/errors.js"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   emptyTurnRecord,
@@ -107,7 +105,6 @@ import {
   attachToolBindingIdentity,
   compileToolPolicy,
   convertTools,
-  CurrentToolCall,
   executeToolCalls,
   processLocalReplayBindingKey,
   processLocalReplayResultKey,
@@ -119,7 +116,6 @@ import {
   ToolCallRecoveryOutcome,
   ToolCallRecoveryService,
   ToolInteractionPending,
-  ToolRunner,
   type TurnInterruption,
 } from "./tools.js"
 import { ConfigService } from "./config.js"
@@ -152,7 +148,6 @@ import {
   projectModelContext,
   toPrompt,
 } from "./model-context.js"
-import { SqlClient } from "effect/unstable/sql"
 import { GentPlatform } from "./gent-platform.js"
 import type { LoopInbox } from "./agent-loop.js"
 
@@ -365,7 +360,6 @@ export interface CollectedTurnResponse {
   readonly messageProjection: TurnResponseMessages
   readonly interrupted: boolean
   readonly streamFailed: boolean
-  readonly driverKind: "model" | "external"
 }
 
 const publishEventOrDie = (event: AgentEvent) =>
@@ -378,7 +372,6 @@ export const collectNormalizedResponse = (params: {
   responseParts: ReadonlyArray<Response.AnyPart>
   streamFailed: boolean
   interrupted: boolean
-  driverKind: "model" | "external"
 }): CollectedTurnResponse => {
   const normalized = normalizeResponseParts(params.responseParts)
   const messages = projectResponsePartsToMessageParts(normalized)
@@ -397,7 +390,6 @@ export const collectNormalizedResponse = (params: {
     },
     interrupted: params.interrupted,
     streamFailed: params.streamFailed,
-    driverKind: params.driverKind,
   }
 }
 
@@ -510,7 +502,6 @@ export const collectModelTurnResponse = (params: {
       responseParts,
       streamFailed,
       interrupted,
-      driverKind: "model",
     })
   })
 
@@ -537,141 +528,6 @@ export const collectFailedModelTurnResponse = (params: {
       responseParts: [],
       streamFailed: !interrupted,
       interrupted,
-      driverKind: "model",
-    })
-  })
-
-const publishExternalStreamChunk = (params: {
-  sessionId: SessionId
-  branchId: BranchId
-  chunk: string
-}) =>
-  publishEventOrDie(
-    EventStreamChunk.make({
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      chunk: params.chunk,
-    }),
-  )
-
-const publishExternalToolCallStarted = (params: {
-  sessionId: SessionId
-  branchId: BranchId
-  assistantMessageId: MessageId
-  part: Extract<Response.AnyPart, { readonly type: "tool-call" }>
-}) =>
-  publishEventOrDie(
-    ToolCallStarted.make({
-      sessionId: params.sessionId,
-      branchId: params.branchId,
-      assistantMessageId: params.assistantMessageId,
-      toolCallId: ToolCallId.make(params.part.id),
-      toolName: params.part.name,
-      input: params.part.params,
-    }),
-  )
-
-const publishExternalToolResult = (params: {
-  sessionId: SessionId
-  branchId: BranchId
-  assistantMessageId: MessageId
-  part: Extract<Response.AnyPart, { readonly type: "tool-result" }>
-}) => {
-  const fields = {
-    sessionId: params.sessionId,
-    branchId: params.branchId,
-    assistantMessageId: params.assistantMessageId,
-    toolCallId: ToolCallId.make(params.part.id),
-    toolName: params.part.name,
-    summary: summarizeOutput(params.part.encodedResult),
-    output: stringifyOutput(params.part.encodedResult),
-    resultJson: encodeToolOutput(params.part.encodedResult),
-  }
-  if (params.part.isFailure) return publishEventOrDie(ToolCallFailed.make(fields))
-  return publishEventOrDie(ToolCallSucceeded.make(fields))
-}
-
-const collectExternalResponsePart = (params: {
-  sessionId: SessionId
-  branchId: BranchId
-  assistantMessageId: MessageId
-  part: Response.AnyPart
-  publishedToolCallIds: Set<string>
-  publishedToolResultIds: Set<string>
-}) => {
-  switch (params.part.type) {
-    case "text":
-      return publishExternalStreamChunk({ ...params, chunk: params.part.text })
-    case "text-delta":
-      return publishExternalStreamChunk({ ...params, chunk: params.part.delta })
-    case "tool-call":
-      if (params.publishedToolCallIds.has(params.part.id)) return Effect.void
-      params.publishedToolCallIds.add(params.part.id)
-      return publishExternalToolCallStarted({ ...params, part: params.part })
-    case "tool-result":
-      if (params.part.preliminary === true) return Effect.void
-      if (params.publishedToolResultIds.has(params.part.id)) return Effect.void
-      params.publishedToolResultIds.add(params.part.id)
-      return publishExternalToolResult({ ...params, part: params.part })
-    default:
-      return Effect.void
-  }
-}
-
-export const collectExternalTurnResponse = <R>(params: {
-  messageId: MessageId
-  /** The assistant message that receives this step's provider-executed tool calls. */
-  assistantMessageId: MessageId
-  step: number
-  turnStream: Stream.Stream<Response.AnyPart, TurnError | InteractionPendingError, R>
-  sessionId: SessionId
-  branchId: BranchId
-  activeStream: ActiveStreamHandle
-  formatStreamError: (streamError: TurnError) => string
-}) =>
-  Effect.gen(function* () {
-    const responseParts: Response.AnyPart[] = []
-    const publishedToolCallIds = new Set<string>()
-    const publishedToolResultIds = new Set<string>()
-
-    const streamFailed = yield* Stream.runForEach(
-      params.turnStream.pipe(Stream.interruptWhen(Deferred.await(params.activeStream.interrupted))),
-      (part) =>
-        Effect.gen(function* () {
-          if (part.type === "error") {
-            return yield* new TurnError({
-              message: causeMessage(part.error),
-              cause: part.error,
-            })
-          }
-          responseParts.push(part)
-          yield* collectExternalResponsePart({
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            assistantMessageId: params.assistantMessageId,
-            part,
-            publishedToolCallIds,
-            publishedToolResultIds,
-          })
-        }),
-    ).pipe(
-      Effect.as(false),
-      Effect.catchTag("TurnError", (streamError) =>
-        Effect.gen(function* () {
-          const interrupted = yield* wasInterrupted(params.activeStream)
-          if (interrupted) return false
-          yield* reportStreamFailure(params, streamError, "stream error, persisting partial output")
-          return true
-        }),
-      ),
-    )
-
-    const interrupted = yield* wasInterrupted(params.activeStream)
-    return collectNormalizedResponse({
-      responseParts,
-      streamFailed,
-      interrupted,
-      driverKind: "external",
     })
   })
 
@@ -1324,7 +1180,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
 // ── turn-source ─────────────────────────────────────────────────────────────
 
 /**
- * Where a turn's parts come from: the model stream or an external driver.
+ * Where a turn's parts come from: the model stream.
  *
  * `resolveTurnSource` projects the model context, applies the pending
  * context directive, and hands back a stream plus the collector that turns
@@ -1349,26 +1205,11 @@ const toolCallsFromResponseParts = (
   })
 
 type ModelTurnSource = {
-  readonly driverKind: "model"
-  readonly driverId?: string
   readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
   ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R | EventPublisher>
-}
-
-type ExternalTurnSource = {
-  readonly driverKind: "external"
-  readonly driverId?: string
-  readonly stream: Stream.Stream<Response.AnyPart, TurnError | InteractionPendingError>
-  readonly formatStreamError: (streamError: TurnError) => string
-  readonly collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
-}
-
-type ExternalToolPersistence = {
-  readonly assistantMessageId: MessageId
-  readonly toolResultMessageId: MessageId
 }
 
 export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
@@ -1384,18 +1225,8 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   sessionId: SessionId
   branchId: BranchId
   activeStream: ActiveStreamHandle
-  randomId: Effect.Effect<string>
-  persistExternalToolCall: (
-    toolCall: Prompt.ToolCallPart,
-  ) => Effect.Effect<
-    ExternalToolPersistence,
-    StorageError | TurnError,
-    EventPublisher | EventStorage | MessageStorage | ToolCallBindingStorage
-  >
 }) {
   const extensionRegistry = yield* ExtensionRegistry
-  const drivers = extensionRegistry.getResolved()
-  const hostCtx = yield* CurrentExtensionHostContext
   const publishEventOrDie = (event: ErrorOccurred | ProviderRetrying) =>
     Effect.gen(function* () {
       const eventPublisher = yield* EventPublisher
@@ -1426,109 +1257,6 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
           ),
         ),
   })
-  const resolvedDriver = resolved.driver
-  if (Predicate.isNotUndefined(resolvedDriver) && resolvedDriver._tag === "External") {
-    if (Predicate.isNotUndefined(resolved.agent.maxModelAttempts)) {
-      return yield* new ProviderError({
-        message: "A model-attempt budget does not support external drivers",
-        model: resolved.modelId,
-      })
-    }
-    const executor = Option.fromUndefinedOr(drivers.externalDrivers.get(resolvedDriver.id)).pipe(
-      Option.flatMap((value) => Option.fromUndefinedOr(value.executor)),
-    )
-    if (Option.isNone(executor)) {
-      yield* publishEventOrDie(
-        ErrorOccurred.make({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          error: `External driver "${resolvedDriver.id}" not found`,
-        }),
-      )
-      // oxlint-disable-next-line effect/noNullish -- A missing external executor is an expected resolution miss after the error event is published.
-      return undefined
-    }
-
-    // The executor calls back from its own context, so the tool run and its
-    // persistence carry the services they need from here.
-    const toolRunner = yield* ToolRunner
-    const extensionRegistry = yield* ExtensionRegistry
-    const eventPublisher = yield* EventPublisher
-    const eventStorage = yield* EventStorage
-    const messageStorage = yield* MessageStorage
-    const toolBindingStorage = yield* ToolCallBindingStorage
-    const sql = yield* SqlClient.SqlClient
-    const externalToolRunner = ExternalToolRunner.of({
-      runTool: (toolName, args) =>
-        Effect.gen(function* () {
-          const toolCallId = ToolCallId.make(yield* params.randomId)
-          const persistence = yield* params
-            .persistExternalToolCall(
-              Prompt.toolCallPart({
-                id: toolCallId,
-                name: toolName,
-                params: args,
-                providerExecuted: false,
-              }),
-            )
-            .pipe(Effect.catchTag("StorageError", Effect.die))
-          const result = yield* toolRunner
-            .runBound(
-              { toolCallId, toolName, input: args },
-              Option.fromUndefinedOr(resolved.toolBindings.get(toolName)),
-            )
-            .pipe(
-              provideCurrentHostCtx(hostCtx),
-              Effect.provideService(ExtensionRegistry, extensionRegistry),
-              Effect.provideService(EventPublisher, eventPublisher),
-              Effect.provideService(CurrentToolCall, {
-                toolBindings: resolved.toolBindings,
-                sessionId: params.sessionId,
-                branchId: params.branchId,
-                assistantMessageId: persistence.assistantMessageId,
-                toolCallId,
-              }),
-            )
-          yield* persistMessageParts({
-            role: "tool",
-            sessionId: params.sessionId,
-            branchId: params.branchId,
-            messageId: persistence.toolResultMessageId,
-            parts: [result],
-          }).pipe(Effect.orDie)
-          return result
-        }).pipe(
-          Effect.provideService(MessageStorage, messageStorage),
-          Effect.provideService(ToolCallBindingStorage, toolBindingStorage),
-          Effect.provideService(EventPublisher, eventPublisher),
-          Effect.provideService(EventStorage, eventStorage),
-          Effect.provideService(SqlClient.SqlClient, sql),
-        ),
-    })
-
-    return {
-      driverKind: "external",
-      driverId: resolvedDriver.id,
-      stream: executor.value
-        .executeTurn({
-          sessionId: params.sessionId,
-          branchId: params.branchId,
-          agent: resolved.agent,
-          messages: resolved.messages,
-          tools: resolved.tools,
-          systemPrompt: resolved.systemPrompt,
-          cwd: hostCtx.cwd,
-          abortSignal: params.activeStream.abortSignal,
-          hostCtx,
-        })
-        .pipe(Stream.provideService(ExternalToolRunner, externalToolRunner)),
-      // oxlint-disable-next-line effect/noUnknownParameters -- External driver errors cross an untyped executor boundary.
-      formatStreamError: (streamError: unknown) =>
-        `External turn executor error: ${causeMessage(streamError)}`,
-      collect: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
-    } satisfies ExternalTurnSource
-  }
-
   const modelResolver = yield* ModelResolver
   const resolveAdmittedModel = Effect.fn("TurnHelpers.resolveAdmittedModel")(function* (
     request: ResolveModelRequest,
@@ -1686,7 +1414,6 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
   )
 
   return {
-    driverKind: "model",
     stream: rawStream.pipe(
       Stream.mapError(
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
@@ -1787,11 +1514,6 @@ export const StepOutcome = Schema.TaggedUnion({
   Interrupted: {},
   /** The stream failed; `partialOutput` says whether observable output was saved first. */
   Failed: { partialOutput: Schema.Boolean },
-  /**
-   * The external driver ran the whole step, tools included. `empty` says the
-   * driver finished without producing anything observable.
-   */
-  External: { empty: Schema.Boolean },
   /** The model asked for tools; the response parts carry them. */
   ToolCalls: { count: Schema.Int },
   /** No tool calls: an answer, nothing at all, or output cut off at the limit. */
@@ -1803,9 +1525,6 @@ export const classifyStep = (collected: CollectedTurnResponse): StepOutcome => {
   const observable = collected.responseParts.some(isObservableModelOutputPart)
   if (collected.interrupted) return StepOutcome.cases.Interrupted.make({})
   if (collected.streamFailed) return StepOutcome.cases.Failed.make({ partialOutput: observable })
-  if (collected.driverKind === "external") {
-    return StepOutcome.cases.External.make({ empty: !observable })
-  }
   const count = toolCallsFromResponseParts(collected.responseParts).length
   if (count > 0) return StepOutcome.cases.ToolCalls.make({ count })
   return StepOutcome.cases.Answered.make({
@@ -2191,8 +1910,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           ),
         )
 
-      let nextExternalStep = params.step
-
       const source = yield* resolveTurnSource({
         messageId: params.messageId,
         step: params.step,
@@ -2201,41 +1918,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         activeStream: params.activeStream,
-        randomId: platform.randomId,
-        persistExternalToolCall: (toolCall) => {
-          const step = nextExternalStep
-          if (step > MAX_TURN_STEPS) {
-            return Effect.fail(
-              new TurnError({
-                message: `External turn exceeded the ${MAX_TURN_STEPS} tool step limit`,
-              }),
-            )
-          }
-          nextExternalStep += 1
-          const at = stepAddress(params.messageId, step)
-          return persistAssistantPartsWithBindingsAt(at, [toolCall]).pipe(
-            Effect.as({
-              assistantMessageId: at.assistant,
-              toolResultMessageId: at.toolResult,
-            } satisfies ExternalToolPersistence),
-            Effect.orDie,
-          )
-        },
       })
-
-      if (Predicate.isUndefined(source)) {
-        let driverKind: "model" | "external" = "model"
-        const driver = params.resolved.driver
-        if (Predicate.isNotUndefined(driver) && driver._tag === "External") driverKind = "external"
-        const collected: CollectedTurnResponse = {
-          responseParts: [],
-          messageProjection: { assistant: [], tool: [] },
-          interrupted: false,
-          streamFailed: true,
-          driverKind,
-        }
-        return { collected, outcome: classifyStep(collected) }
-      }
 
       const eventPublisher = yield* EventPublisher
       const publishEventOrDie = (event: StreamStarted | StreamEnded) =>
@@ -2253,47 +1936,26 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       yield* Effect.logInfo("turn-stream.start").pipe(
         Effect.annotateLogs({
           agent: params.resolved.currentTurnAgent,
-          driverKind: source.driverKind,
           model: params.resolved.modelId,
-          driverId: source.driverId,
         }),
       )
 
-      let collected: CollectedTurnResponse
-      if (source.driverKind === "model") {
-        collected = yield* source.collect(
-          collectModelTurnResponse({
-            messageId: params.messageId,
-            step: params.step,
-            turnStream: source.stream,
-            sessionId: scope.sessionId,
-            branchId: scope.branchId,
-            modelId: params.resolved.modelId,
-            activeStream: params.activeStream,
-            formatStreamError: source.formatStreamError,
-          }),
-        )
-      } else {
-        collected = yield* source.collect(
-          collectExternalTurnResponse({
-            messageId: params.messageId,
-            assistantMessageId: stepAddress(params.messageId, params.step).assistant,
-            step: params.step,
-            turnStream: source.stream,
-            sessionId: scope.sessionId,
-            branchId: scope.branchId,
-            activeStream: params.activeStream,
-            formatStreamError: source.formatStreamError,
-          }),
-        )
-      }
+      const collected = yield* source.collect(
+        collectModelTurnResponse({
+          messageId: params.messageId,
+          step: params.step,
+          turnStream: source.stream,
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          modelId: params.resolved.modelId,
+          activeStream: params.activeStream,
+          formatStreamError: source.formatStreamError,
+        }),
+      )
 
       const outcome = classifyStep(collected)
-      let responseStep = params.step
-      if (source.driverKind === "external") responseStep = nextExternalStep
-      // The step whose messages carry this response. An external driver settles
-      // its own tool steps as it goes, so its response lands past `params.step`.
-      const responseAddress = stepAddress(params.messageId, responseStep)
+      // The step whose messages carry this response.
+      const responseAddress = stepAddress(params.messageId, params.step)
       const assistantParts = collected.messageProjection.assistant
       const toolParts = collected.messageProjection.tool
 
@@ -2324,7 +1986,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         const toolCallCount = toolCallsFromResponseParts(collected.responseParts).length
         yield* Effect.logInfo("stream.end").pipe(
           Effect.annotateLogs({
-            driverKind: source.driverKind,
             outcome: outcome._tag,
             inputTokens,
             outputTokens,
@@ -2343,7 +2004,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
         yield* openTurnStep({
           messageId: params.messageId,
-          step: responseStep,
+          step: params.step,
           toolCalls: stepToolCalls,
         })
         yield* persistMessageParts({
@@ -2356,7 +2017,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         // A step the model answered owns no unsettled call; a tool step is
         // closed by `executeTools` once its results commit.
         if (stepToolCalls.length === 0) {
-          yield* closeTurnStep({ messageId: params.messageId, step: responseStep })
+          yield* closeTurnStep({ messageId: params.messageId, step: params.step })
         }
       })
 
@@ -2396,7 +2057,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             assistantMessageId: responseAddress.assistant,
             parts: [...toolParts, ...unrun],
           })
-          yield* closeTurnStep({ messageId: params.messageId, step: responseStep })
+          yield* closeTurnStep({ messageId: params.messageId, step: params.step })
         })
 
       yield* Match.type<StepOutcome>().pipe(
@@ -2417,7 +2078,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             }),
           // The failure already ended the stream where it broke; keep what arrived.
           Failed: () => persistCutStep("StreamFailed"),
-          External: () => settleStep,
           ToolCalls: () => settleStep,
           Answered: () => settleStep,
         }),
@@ -2912,7 +2572,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         return stop({ interrupted: true })
       }
 
-      const attempt = yield* Effect.scoped(
+      const { collected, outcome } = yield* Effect.scoped(
         Effect.gen(function* () {
           const activeStream = yield* makeActiveStreamHandle
           yield* Ref.set(scope.activeStreamRef, Option.some(activeStream))
@@ -2924,22 +2584,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             activeStream,
           })
         }).pipe(Effect.ensuring(Ref.set(scope.activeStreamRef, Option.none()))),
-      ).pipe(
-        Effect.map(Result.succeed),
-        Effect.catchIf(Schema.is(InteractionPendingError), (pending) =>
-          Effect.succeed(Result.fail(pending)),
-        ),
       )
-      if (Result.isFailure(attempt)) {
-        return StepResult.cases.Interaction.make({
-          outcome: TurnOutcome.cases.InteractionRequested.make({
-            pendingRequestId: attempt.failure.requestId,
-            pendingToolCallId: "external",
-            currentTurnAgent,
-          }),
-        })
-      }
-      const { collected, outcome } = attempt.success
       // Whatever the model did produce stays; a durable instruction follows it
       // and the same turn runs one more step. Once the budget is spent, stop.
       const continueOr = (instruction: string, otherwise: StepResult) =>
@@ -2979,10 +2624,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             if (!partialOutput) return Effect.succeed(stop({ streamFailed: true }))
             return continueOr(CONTINUATION_INSTRUCTION, stop({ streamFailed: true }))
           },
-          // An external driver that finished without observable output answered
-          // nothing. Leaving the flags false publishes a `TurnCompleted` that
-          // reads like a reply, and `headless-runner.ts:122` exits 0 on it.
-          External: ({ empty }) => Effect.succeed(stop({ unanswered: empty })),
           // A step with nothing observable answered nothing; one cut off at the
           // output limit lost what it was writing. Re-prompt rather than report
           // the fragment as the reply; once continuations are spent, say so.

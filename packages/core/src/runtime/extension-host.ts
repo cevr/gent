@@ -85,7 +85,6 @@ import { causeMessage, omitUndefined } from "../domain/guards.js"
 import {
   DriverError,
   DriverFailureId,
-  type ExternalDriverContribution,
   type ModelDriverContribution,
   type ProviderAuthError,
   type ProviderAuthInfo,
@@ -510,7 +509,6 @@ interface ResolvedExtensions {
   readonly rpcRegistry: CompiledRpcRegistry
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
-  readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
   readonly slashCommands: ReadonlyArray<SlashCommand>
   readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -792,11 +790,6 @@ export const resolveExtensions = (
     (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.modelDrivers), () => []),
     (d) => d.id,
   )
-  const externalDrivers = compileBucket(
-    sorted,
-    (e) => Option.getOrElse(Option.fromUndefinedOr(e.contributions.externalDrivers), () => []),
-    (d) => d.id,
-  )
 
   const slashCommands = compileSlashCommands(capabilityWinners)
 
@@ -811,7 +804,6 @@ export const resolveExtensions = (
     rpcRegistry,
     agents,
     modelDrivers,
-    externalDrivers,
     slashCommands,
     extensionHooks,
     extensions: sorted,
@@ -824,7 +816,7 @@ export const resolveExtensions = (
 
 /**
  * The resolved extensions one profile runs with: tools, requests, agents,
- * model and external drivers, and hooks. A turn reads the registry of its own
+ * model drivers, and hooks. A turn reads the registry of its own
  * profile, so a cwd-scoped extension's drivers and tools reach only its turns.
  */
 export interface ExtensionRegistryService {
@@ -1383,11 +1375,6 @@ const collectValidationFailures = (
     (cs) => cs.modelDrivers ?? [],
     (driver) => Option.some(driver.id),
     "model driver",
-  )
-  collectScopedCollisions(
-    (cs) => cs.externalDrivers ?? [],
-    (driver) => Option.some(driver.id),
-    "external driver",
   )
 
   return failures

@@ -94,75 +94,71 @@ export const ReasoningEffort = Schema.Literals([
 export type ReasoningEffort = typeof ReasoningEffort.Type
 export const isReasoningEffort = Schema.is(ReasoningEffort)
 
-// Agent driver — discriminated reference into the resolved extension drivers.
+// Agent driver — a reference to a registered model driver.
 //
 // Optional: when omitted, the loop resolves a model driver from the agent's
-// model id (`provider/model` parses out the driver id). Specify
-// `{ _tag: "External", id }` to route through an `ExternalDriverContribution`
-// (e.g. ACP agents) instead of a model provider.
+// model id (`provider/model` parses out the driver id).
 
-const ModelDriverRefStruct = Schema.TaggedStruct("Model", {
+export const DriverRef = Schema.TaggedStruct("Model", {
   /** Optional model-driver id override. When omitted, the loop derives it
    *  from the agent's model id segment. */
   id: Schema.optional(Schema.String),
 })
-const ExternalDriverRefStruct = Schema.TaggedStruct("External", {
-  /** External driver id — must match a registered
-   *  `ExternalDriverContribution.id`. */
-  id: Schema.String,
-})
-
-export const DriverRef = Schema.Union([ModelDriverRefStruct, ExternalDriverRefStruct]).pipe(
-  Schema.toTaggedUnion("_tag"),
-)
-export type DriverRef = Schema.Schema.Type<typeof DriverRef>
-
-// Per-variant aliases — same TaggedStruct identity, convenience names.
-export const ModelDriverRef = DriverRef.cases.Model
-export type ModelDriverRef = typeof DriverRef.cases.Model.Type
-export const ExternalDriverRef = DriverRef.cases.External
-export type ExternalDriverRef = typeof DriverRef.cases.External.Type
+export type DriverRef = typeof DriverRef.Type
 
 /**
- * `DriverRef` as it may appear on disk. A `.gent/config.json` written before
- * the variant keys became PascalCase holds `{ "_tag": "external" }`, and
- * `UserConfig` rejects it — which fails the decode of the *whole* file, not
- * just this field. `ConfigService.readConfigOrEmpty` maps any such failure to
- * an empty config and the next `set()` writes that empty config back, so an
- * unmigrated tag silently discards the user's other settings.
+ * A driver override as it may appear in `.gent/config.json`. Two retired
+ * shapes can still be on disk, and neither may fail the decode: `UserConfig`
+ * rejecting one field fails the whole file, and `ConfigService` then serves
+ * an empty config.
  *
- * Decoding accepts both spellings; encoding emits only PascalCase, so a config
- * is migrated in place the first time gent saves it.
+ * - `{ "_tag": "model" }`: written before the variant keys became
+ *   PascalCase. It decodes to the PascalCase ref; the next save rewrites it.
+ * - `{ "_tag": "External", "id" }` (or `"external"`): an override that routed
+ *   an agent through an external turn executor (ACP). Those drivers are
+ *   removed, so the override decodes as absent and the agent falls back to
+ *   its default model; `ConfigService` logs a warning once per file.
  */
-const LegacyModelDriverRefStruct = Schema.TaggedStruct("model", {
+const LegacyModelDriverRef = Schema.TaggedStruct("model", {
   id: Schema.optional(Schema.String),
 })
-const LegacyExternalDriverRefStruct = Schema.TaggedStruct("external", { id: Schema.String })
+const RetiredExternalDriverRef = Schema.Union([
+  Schema.TaggedStruct("External", { id: Schema.String }),
+  Schema.TaggedStruct("external", { id: Schema.String }),
+])
+const StoredDriverRef = Schema.Union([DriverRef, LegacyModelDriverRef, RetiredExternalDriverRef])
+type StoredDriverRef = typeof StoredDriverRef.Type
 
-type LegacyDriverRef =
-  | typeof LegacyModelDriverRefStruct.Type
-  | typeof LegacyExternalDriverRefStruct.Type
+/** True for a stored override whose external driver no longer exists. */
+export const isRetiredDriverRef = Schema.is(RetiredExternalDriverRef)
 
-const canonicalDriverRef = (ref: DriverRef | LegacyDriverRef): DriverRef => {
-  if (ref._tag === "model") {
-    return Option.match(Option.fromUndefinedOr(ref.id), {
-      onNone: () => ModelDriverRefStruct.make({}),
-      onSome: (id) => ModelDriverRefStruct.make({ id }),
-    })
-  }
-  if (ref._tag === "external") return ExternalDriverRefStruct.make({ id: ref.id })
-  return ref
+const liveDriverRef = (ref: StoredDriverRef): Option.Option<DriverRef> => {
+  if (ref._tag === "Model") return Option.some(ref)
+  if (ref._tag !== "model") return Option.none()
+  return Option.some(
+    Option.match(Option.fromUndefinedOr(ref.id), {
+      onNone: () => DriverRef.make({}),
+      onSome: (id) => DriverRef.make({ id }),
+    }),
+  )
 }
 
-export const DriverRefFromConfig = Schema.Union([
-  ModelDriverRefStruct,
-  ExternalDriverRefStruct,
-  LegacyModelDriverRefStruct,
-  LegacyExternalDriverRefStruct,
-]).pipe(
-  Schema.decodeTo(DriverRef, {
-    decode: SchemaGetter.transform(canonicalDriverRef),
-    encode: SchemaGetter.transform((ref: DriverRef): DriverRef => ref),
+const liveDriverOverrides = (stored: Readonly<Record<AgentName, StoredDriverRef>>) =>
+  Object.fromEntries(
+    Object.entries(stored).flatMap(([agent, ref]) =>
+      Option.toArray(Option.map(liveDriverRef(ref), (live): [string, DriverRef] => [agent, live])),
+    ),
+  )
+
+/** The `driverOverrides` config field: decodes every stored shape, encodes only live refs. */
+export const DriverOverridesFromConfig = Schema.Record(AgentName, StoredDriverRef).pipe(
+  Schema.decodeTo(Schema.Record(AgentName, DriverRef), {
+    decode: SchemaGetter.transform(liveDriverOverrides),
+    encode: SchemaGetter.transform(
+      (
+        live: Readonly<Record<AgentName, DriverRef>>,
+      ): Readonly<Record<AgentName, StoredDriverRef>> => live,
+    ),
   }),
 )
 
@@ -276,10 +272,7 @@ export const effectiveModelDriver = (
   modelId: ModelId,
 ): EffectiveModelDriver => {
   const parsed = parseModelId(modelId)
-  const override = Option.flatMap(driver, (ref) => {
-    if (ref._tag !== "Model") return Option.none()
-    return Option.fromUndefinedOr(ref.id)
-  })
+  const override = Option.flatMap(driver, (ref) => Option.fromUndefinedOr(ref.id))
   return Option.match(override, {
     onNone: () => ({
       driverId: Option.map(parsed, ([provider]) => provider),

@@ -4,13 +4,7 @@ import { Predicate, Clock, Duration, Effect, Layer, Option, Ref, Schema, Stream 
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 import { AgentLoopError, entityIdOf, type SessionRuntimeState } from "../../src/domain/agent-loop"
-import {
-  AgentDefinition,
-  AgentName,
-  ExternalDriverRef,
-  ModelId,
-  type RunSpec,
-} from "../../src/domain/agent"
+import { AgentDefinition, AgentName, ModelId, type RunSpec } from "../../src/domain/agent"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopSessionGovernance,
@@ -67,7 +61,6 @@ import {
   ExtensionId,
   MessageId,
 } from "../../src/domain/ids"
-import type { TurnStreamPart } from "../../src/domain/driver"
 import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 // ============================================================================
 // Shared helpers
@@ -457,64 +450,6 @@ export const makeLayerWithEventPublisher = (
     Layer.provideMerge(
       Layer.mergeAll(deps, providedEventPublisherLayer, AgentLoopSessionGovernance.Live),
     ),
-  )
-}
-export const parityExternalAgent = AgentDefinition.make({
-  name: AgentName.make("test-external-parity"),
-  driver: ExternalDriverRef.make({ id: "test-parity-driver" }),
-})
-export const makeExternalLayerWithEvents = (
-  responseParts: ReadonlyArray<TurnStreamPart>,
-  eventsRef: Ref.Ref<AgentEvent[]>,
-) => {
-  const resolved = resolveExtensions([
-    {
-      manifest: { id: ExtensionId.make("agents") },
-      scope: "builtin",
-      sourcePath: "test",
-      contributions: {
-        agents: AllBuiltinAgents,
-      },
-    },
-    {
-      manifest: { id: ExtensionId.make("external-parity") },
-      scope: "builtin",
-      sourcePath: "test",
-      contributions: {
-        agents: [parityExternalAgent],
-        externalDrivers: [
-          {
-            id: "test-parity-driver",
-            executor: {
-              executeTurn: () => Stream.fromIterable(responseParts),
-            },
-            invalidate: Effect.void,
-          },
-        ],
-      },
-    },
-  ])
-  const registryLayer = ExtensionRegistry.fromResolved(resolved)
-  const providerLayer = LanguageModelLayers.testStream(() =>
-    Effect.succeed(Stream.fromIterable([finishPart({ finishReason: "stop" })])),
-  )
-  const deps = Layer.mergeAll(
-    SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
-    providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
-    registryLayer,
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
-    ConfigService.Test(),
-    makeCountingEventStore(eventsRef),
-    ToolRunner.Test(),
-    ApprovalService.Test(),
-    BunServices.layer,
-    ModelRegistry.Test(),
-    GentPlatform.Test(),
-  )
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
-  return AgentLoopTestActor({ baseSections: [] }).pipe(
-    Layer.provideMerge(Layer.mergeAll(deps, eventPublisherLayer, AgentLoopSessionGovernance.Live)),
   )
 }
 /** A `waitFor` deadline expiring. Typed so a timeout fails its own test. */

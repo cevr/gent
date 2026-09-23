@@ -2619,22 +2619,13 @@ export const CellExtension = defineExtension({
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
         const ctx = yield* ExtensionContext
-        if (
-          ctx.turn?.agent.driver?._tag === "External" ||
-          ctx.turn?.agent.deniedTools?.includes("cell")
-        ) {
-          return {}
-        }
+        if (ctx.turn?.agent.deniedTools?.includes("cell") === true) return {}
         return { toolPolicy: { include: ["cell"], modelSet: ["cell"] } }
       }),
     )
     yield* host.on("systemPrompt", (input) =>
       Effect.gen(function* () {
-        if (
-          input.agent.driver?._tag === "External" ||
-          input.tools?.length !== 1 ||
-          !input.tools.some((tool) => getToolId(tool) === "cell")
-        ) {
+        if (input.tools?.length !== 1 || !input.tools.some((tool) => getToolId(tool) === "cell")) {
           return input.basePrompt
         }
         const entries = yield* Effect.forEach(

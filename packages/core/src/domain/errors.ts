@@ -27,8 +27,7 @@ export class InvalidStateError extends Schema.TaggedError<InvalidStateError>()(
 
 // ── provider-error ──────────────────────────────────────────────────────────
 
-// Referenced by `domain/driver.ts`'s `TurnExecutor` failure channel. Model
-// resolution imports the same class from here.
+// A model call that failed. The turn and model resolution raise it.
 export class ProviderError extends Schema.TaggedError<ProviderError>()("ProviderError", {
   message: Schema.String,
   model: Schema.String,
