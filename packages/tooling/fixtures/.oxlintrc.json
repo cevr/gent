@@ -6,10 +6,12 @@
     "perf": "off"
   },
   "plugins": [],
-  "jsPlugins": ["../../../lint/gent-rules.ts"],
+  "jsPlugins": ["../src/gent-rules.ts"],
   "rules": {
+    "gent/no-positional-log-error": "error",
     "gent/no-runpromise-outside-boundary": "error",
     "gent/core-entry-boundary": "error",
+    "gent/declared-workspace-imports": "error",
     "gent/no-define-extension-throw": "error",
     "gent/no-dynamic-imports": "error",
     "gent/no-promise-control-flow-in-tests": "error",

@@ -122,11 +122,7 @@ describe("message search index removal", () => {
         )
         const stored = yield* sessions.getSession(sessionId)
         expect(stored?.id).toBe(sessionId)
-      }).pipe(
-        Effect.provideService(CurrentWorkspaceId, WORKSPACE),
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer under test.
-        Effect.provide(storage),
-      )
+      }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(storage))
     }),
   )
 })
@@ -233,7 +229,6 @@ describe("session admission", () => {
             VALUES (${history}, ${branch(history)}, ${laterTurn}, 1, 0, '[]', ${newJson}, 2)`
           yield* sql`UPDATE sessions SET admission_json = NULL`
           yield* sql`DELETE FROM gent_storage_migrations WHERE name = 'session_admission'`
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer under test.
         }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(storage))
 
         yield* Effect.gen(function* () {
@@ -256,7 +251,6 @@ describe("session admission", () => {
           expect((yield* sessions.getSession(history))?.admission).toEqual({
             agent: AgentName.make("new"),
           })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the storage layer under test.
         }).pipe(Effect.provideService(CurrentWorkspaceId, WORKSPACE), Effect.provide(storage))
       }),
   )

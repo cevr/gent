@@ -377,7 +377,6 @@ describe("getBranchTree helper", () => {
         [ORPHAN_ID, 1],
       ])
       const tree = yield* getBranchTree(SESSION_ID).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(branchStorageLayer(branches, counts)),
       )
       // Assert exact equality against the pure builder. A regression
@@ -406,7 +405,6 @@ describe("getBranchTree helper", () => {
           countMessagesByBranches: () => Effect.succeed(new Map<BranchId, number>()),
         }),
       )
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const exit = yield* Effect.exit(getBranchTree(SESSION_ID).pipe(Effect.provide(layer)))
       expect(exit._tag).toBe("Failure")
       if (exit._tag !== "Failure") return
@@ -429,7 +427,6 @@ describe("getBranchTree helper", () => {
           countMessagesByBranches: () => Effect.fail(failure),
         }),
       )
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const exit = yield* Effect.exit(getBranchTree(SESSION_ID).pipe(Effect.provide(layer)))
       expect(exit._tag).toBe("Failure")
       if (exit._tag !== "Failure") return
@@ -2580,14 +2577,11 @@ describe("requestId idempotency", () => {
         return yield* mutations.createSession({ cwd: "/tmp/ttl", requestId: "req-ttl-1" })
       })
 
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const first = yield* create.pipe(Effect.provide(layer))
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       const second = yield* create.pipe(Effect.provide(layer))
       const sessions = yield* Effect.gen(function* () {
         const storage = yield* SessionStorage
         return yield* storage.listSessions
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       expect(second.sessionId).toBe(first.sessionId)
@@ -2733,7 +2727,6 @@ describe("requestId idempotency", () => {
             requestId: "req-create-restart",
             initialPrompt: "stored prompt",
           })
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(makeLayer(true))),
       )
       expect(firstExit._tag).toBe("Failure")
@@ -2745,13 +2738,11 @@ describe("requestId idempotency", () => {
           requestId: "req-create-restart",
           initialPrompt: "retry prompt should not win",
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(false)))
 
       const sessions = yield* Effect.gen(function* () {
         const storage = yield* SessionStorage
         return yield* storage.listSessions
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayer(false)))
 
       expect(sessions).toHaveLength(1)
@@ -2781,7 +2772,6 @@ describe("requestId idempotency", () => {
           branchId,
           now: FIXED_NOW,
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       const first = yield* Effect.gen(function* () {
@@ -2791,7 +2781,6 @@ describe("requestId idempotency", () => {
           name: "durable branch",
           requestId: "req-create-branch-restart",
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       const second = yield* Effect.gen(function* () {
@@ -2801,13 +2790,11 @@ describe("requestId idempotency", () => {
           name: "retry name should not win",
           requestId: "req-create-branch-restart",
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       const branches = yield* Effect.gen(function* () {
         const storage = yield* BranchStorage
         return yield* storage.listBranches(sessionId)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       expect(second.branchId).toBe(first.branchId)
@@ -2839,7 +2826,6 @@ describe("requestId idempotency", () => {
         yield* branches.createBranch(
           new Branch({ id: toBranchId, sessionId, createdAt: FIXED_NOW }),
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       yield* Effect.gen(function* () {
@@ -2850,13 +2836,11 @@ describe("requestId idempotency", () => {
           toBranchId,
           requestId: "req-switch-branch-restart",
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient
         yield* sql`DELETE FROM branches WHERE id = ${fromBranchId}`
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       yield* Effect.gen(function* () {
@@ -2867,13 +2851,11 @@ describe("requestId idempotency", () => {
           toBranchId,
           requestId: "req-switch-branch-restart",
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       const session = yield* Effect.gen(function* () {
         const sessions = yield* SessionStorage
         return yield* sessions.getSession(sessionId)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       expect(session?.activeBranchId).toBe(toBranchId)
@@ -2912,7 +2894,6 @@ describe("requestId idempotency", () => {
             createdAt: FIXED_NOW,
           }),
         )
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       const first = yield* Effect.gen(function* () {
@@ -2924,13 +2905,11 @@ describe("requestId idempotency", () => {
           name: "fork",
           requestId: "req-fork-branch-restart",
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(layer))
 
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient
         yield* sql`DELETE FROM messages WHERE branch_id = ${branchId}`
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       const second = yield* Effect.gen(function* () {
@@ -2942,13 +2921,11 @@ describe("requestId idempotency", () => {
           name: "retry fork should not allocate",
           requestId: "req-fork-branch-restart",
         })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       const branches = yield* Effect.gen(function* () {
         const storage = yield* BranchStorage
         return yield* storage.listBranches(sessionId)
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makePersistentSessionMutationsLayer(dbPath)))
 
       expect(second.branchId).toBe(first.branchId)

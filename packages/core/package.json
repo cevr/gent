@@ -4,12 +4,9 @@
   "type": "module",
   "exports": {
     "./extensions/api": "./src/extensions/api.ts",
-    "./extensions/api.js": "./src/extensions/api.ts",
     "./extensions/branch-tools": "./src/extensions/branch-tools.ts",
-    "./extensions/branch-tools.js": "./src/extensions/branch-tools.ts",
     "./host": "./src/host.ts",
     "./protocol": "./src/protocol.ts",
-    "./protocol.js": "./src/protocol.ts",
     "./test-utils": "./src/test-utils/index.ts"
   },
   "scripts": {
