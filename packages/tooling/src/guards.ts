@@ -414,12 +414,76 @@ const namesIdentity = (line: string, encoder: string): boolean =>
       name.split(/(?=[A-Z])|_/).some((segment) => IDENTITY_WORDS.has(segment.toLowerCase())),
   )
 
+/** A `…Fingerprint(...)` projection, which returns its fields in a fixed order. */
+const FINGERPRINT_CALL = /^[a-z][\w$]*Fingerprint\([^()]*\)$/
+
+/** One element of a fixed-order projection: a field access, a primitive, or a fingerprint call. */
+const PROJECTION_ELEMENT =
+  /^(?:[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+|"[^"]*"|'[^']*'|-?\d+(?:\.\d+)?|true|false|null|undefined)$/
+
+const OPENERS = "([{"
+const CLOSERS = ")]}"
+
 /**
- * An argument that already names its fields in a fixed order: an array literal,
- * or a `…Fingerprint(...)` projection that returns one. That is the fix this
- * guard asks for, so it is not reported.
+ * `text` cut at each top-level `separator`, with brackets and quotes respected.
+ * A top-level closer ends the scan: it matches an opener before `text`, and
+ * `closedAt` holds its index. An unclosed scan keeps the rest as the last part.
  */
-const FIXED_ORDER_ARGUMENT = /^\s*(?:\[|[a-z][\w$]*Fingerprint\()/
+interface TopLevelSplit {
+  readonly parts: ReadonlyArray<string>
+  readonly closedAt: Option.Option<number>
+}
+
+const splitTopLevel = (text: string, separator: string): TopLevelSplit => {
+  const parts: string[] = []
+  let depth = 0
+  let quote = Option.none<string>()
+  let start = 0
+  for (const [index, char] of text.split("").entries()) {
+    if (Option.isSome(quote)) {
+      if (char === quote.value) quote = Option.none()
+      continue
+    }
+    if (char === '"' || char === "'" || char === "`") quote = Option.some(char)
+    else if (OPENERS.includes(char)) depth += 1
+    else if (CLOSERS.includes(char)) {
+      if (depth === 0) {
+        parts.push(text.slice(start, index))
+        return { parts, closedAt: Option.some(index) }
+      }
+      depth -= 1
+    } else if (char === separator && depth === 0) {
+      parts.push(text.slice(start, index))
+      start = index + 1
+    }
+  }
+  parts.push(text.slice(start))
+  return { parts, closedAt: Option.none() }
+}
+
+/**
+ * Whether an encoder argument already names its fields in a fixed order: a
+ * fingerprint call, or an array literal of field accesses, primitives, and
+ * fingerprint calls. That is the fix this guard asks for, so it is not
+ * reported. `[item]` still carries a whole object and is reported.
+ */
+const isFixedOrderArgument = (argument: string): boolean => {
+  const trimmed = argument.trim()
+  if (FINGERPRINT_CALL.test(trimmed)) return true
+  if (!trimmed.startsWith("[")) return false
+  const inner = splitTopLevel(trimmed.slice(1), ",")
+  if (Option.isNone(inner.closedAt) || inner.closedAt.value !== trimmed.length - 2) return false
+  const elements = inner.parts.map((part) => part.trim())
+  if (elements.at(-1) === "") elements.pop()
+  return (
+    elements.length > 0 &&
+    elements.every((element) => PROJECTION_ELEMENT.test(element) || FINGERPRINT_CALL.test(element))
+  )
+}
+
+/** The argument text of the call whose `(` ends just before `from`; unclosed calls return the rest. */
+const callArgument = (line: string, from: number): string =>
+  splitTopLevel(line.slice(from), ",").parts.join(",")
 
 /** A binding whose initializer is a whole-object JSON encoder. */
 const ENCODER_BINDING =
@@ -446,14 +510,18 @@ export const findIdentityEncodes = (
   if (encoders.length === 0) return []
 
   const findings: IdentityEncodeFinding[] = []
-  const callPattern = new RegExp(`\\b(${encoders.join("|")})\\(`)
+  const callPattern = new RegExp(`\\b(${encoders.join("|")})\\(`, "g")
   for (const [index, line] of lines.entries()) {
-    const call = Option.fromNullishOr(callPattern.exec(line))
-    if (Option.isNone(call)) continue
-    const name = Option.getOrElse(Option.fromNullishOr(call.value[1]), () => "")
     // The binding itself is a declaration, not a use.
     if (ENCODER_BINDING.test(line)) continue
-    if (FIXED_ORDER_ARGUMENT.test(line.slice(call.value.index + call.value[0].length))) continue
+    // Each call is judged alone: a safe encode on the line does not excuse another.
+    const unsafe = Option.fromNullishOr(
+      [...line.matchAll(callPattern)].find(
+        (call) => !isFixedOrderArgument(callArgument(line, call.index + call[0].length)),
+      ),
+    )
+    if (Option.isNone(unsafe)) continue
+    const name = Option.getOrElse(Option.fromNullishOr(unsafe.value[1]), () => "")
     if (!COMPARED.test(line) && !namesIdentity(line, name)) continue
     findings.push({
       file,
@@ -836,12 +904,32 @@ const preCommitBlock = (text: string): string => {
   return rest.slice(0, end).join("\n")
 }
 
+/** A job's `run:` entry; a comment line never matches. */
+const RUN_ENTRY = /^\s*(?:-\s+)?run:\s*(.*)$/
+
+/** The commands a `run:` value executes, with its trailing comment and quotes removed. */
+const runCommands = (value: string): ReadonlyArray<string> =>
+  value
+    .replace(/\s+#.*$/, "")
+    .replace(/^(["'])(.*)\1$/, "$2")
+    .split(/&&|\|\||;/)
+    .map((command) => command.trim())
+
+/** Whether a `pre-commit` job runs the guards command as one of its steps. */
+const runsGuards = (block: string): boolean =>
+  block.split("\n").some((line) =>
+    Option.match(Option.fromNullishOr(RUN_ENTRY.exec(line)?.[1]), {
+      onNone: () => false,
+      onSome: (value) => runCommands(value).includes(GUARD_COMMAND),
+    }),
+  )
+
 export const findHookWithoutGuards = (
   file: string,
   text: string,
 ): ReadonlyArray<HookRunsGuardsFinding> => {
   if (file !== HOOK_FILE) return []
-  if (preCommitBlock(text).includes(GUARD_COMMAND)) return []
+  if (runsGuards(preCommitBlock(text))) return []
   return [
     {
       file,

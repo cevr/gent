@@ -414,6 +414,28 @@ describe("identity encode guard", () => {
       identityLines(file, "const toolIdentity = (c: ToolCall) => encodeJson(toolFingerprint(c))"),
     ).toEqual([])
     expect(identityLines(file, "const identity = encodeJson([call.id, call.status])")).toEqual([])
+    expect(
+      identityLines(file, 'const identity = encodeJson(["tool", 1, true, call?.id, null])'),
+    ).toEqual([])
+    expect(
+      identityLines(file, "const key = encodeJson([s._tag, toolFingerprint(s.toolCall)])"),
+    ).toEqual([])
+  })
+
+  test("reports an array literal that carries a whole object", () => {
+    const file = "apps/tui/src/message-list.tsx"
+    expect(identityLines(file, "const identity = encodeJson([item])")).toEqual([2])
+    expect(identityLines(file, "const identity = encodeJson([item.id, { a: 1 }])")).toEqual([2])
+    expect(identityLines(file, "const identity = encodeJson([item.id, rest(item)])")).toEqual([2])
+  })
+
+  test("checks each encode on a line, so a safe one does not hide an unsafe one", () => {
+    const file = "packages/core/src/runtime/turn.ts"
+    expect(identityLines(file, "if (encodeJson([a.id]) === encodeJson(b)) return")).toEqual([2])
+    expect(
+      identityLines(file, "if (encodeJson(aFingerprint(a)) === encodeJson(b)) return"),
+    ).toEqual([2])
+    expect(identityLines(file, "if (encodeJson([a.id]) === encodeJson([b.id])) return")).toEqual([])
   })
 
   test("scans shipped source only", () => {
@@ -645,6 +667,20 @@ describe("pre-commit hook runs the guards", () => {
         ["pre-commit:", "  jobs:", ...LINT, "pre-push:", ...GUARDS].join("\n"),
       ),
     ).toHaveLength(1)
+  })
+
+  test("a comment that names the guards command does not count", () => {
+    const comment = ["    # Run bun run guards before committing."]
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...comment, ...LINT))).toHaveLength(1)
+    const trailing = ["    - name: lint", "      run: bun run lint:fix # then bun run guards"]
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...trailing))).toHaveLength(1)
+    const named = ["    - name: bun run guards", "      run: bun run lint:fix"]
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...named))).toHaveLength(1)
+  })
+
+  test("accepts the guards command as one step of a compound run", () => {
+    const chained = ["    - name: checks", "      run: bun run guards && bun run lint:fix"]
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...chained))).toEqual([])
   })
 
   test("leaves every other file alone", () => {
