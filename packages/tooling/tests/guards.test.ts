@@ -806,12 +806,15 @@ describe("a defined rule must be enabled", () => {
 })
 
 describe("a read variable must have a writer", () => {
+  const none: ReadonlyMap<string, string> = new Map()
+
   test("a variable something in the tree sets is silent", () => {
     const findings = findReadersWithoutWriters(
       new Map([
         ["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_CHILD_ID"))\n`],
         ["packages/sdk/src/spawn.ts", `const env = { GENT_CHILD_ID: id }\n`],
       ]),
+      none,
     )
     expect(findings).toEqual([])
   })
@@ -820,31 +823,84 @@ describe("a read variable must have a writer", () => {
     // GENT_TRACE_ID outlived its writer and kept an unreachable branch alive.
     const findings = findReadersWithoutWriters(
       new Map([["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`]]),
+      none,
     )
     expect(messages(findings)).toEqual([
       expect.stringContaining("`GENT_ORPHAN` is read but nothing in the tree sets it"),
     ])
   })
 
-  test("a variable a person sets by hand is allowed, with its reason", () => {
+  test("every reader shape is seen: the name last, broken across lines, or behind a helper", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        [
+          "packages/sdk/src/reader.ts",
+          [
+            `const mode = Config.literals(["a", "b"], "GENT_PROBE_B")`,
+            `const level = Config.literals(NAMES,`,
+            `  "GENT_PROBE_C",`,
+            `)`,
+            `const dir = optionalEnv("GENT_PROBE_D")`,
+            `const link = process.env["GENT_PROBE_E"] === "1"`,
+          ].join("\n"),
+        ],
+      ]),
+      none,
+    )
+    expect(findings.map((finding) => [finding.line, finding.message.split("`")[1]])).toEqual([
+      [1, "GENT_PROBE_B"],
+      [3, "GENT_PROBE_C"],
+      [5, "GENT_PROBE_D"],
+      [6, "GENT_PROBE_E"],
+    ])
+  })
+
+  test("a comment that shows how to set a variable, or a message naming it, is not a writer", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        [
+          "packages/sdk/src/reader.ts",
+          [
+            `// run with GENT_PROBE_F=1 to enable`,
+            `Config.string("GENT_PROBE_F")`,
+            "fail(`invalid GENT_PROBE_F: ${reason}`)",
+          ].join("\n"),
+        ],
+      ]),
+      none,
+    )
+    expect(messages(findings)).toEqual([expect.stringContaining("`GENT_PROBE_F`")])
+  })
+
+  test("a variable the operator sets is allowed, with its reason", () => {
     const findings = findReadersWithoutWriters(
       new Map([["packages/sdk/src/logger.ts", `Config.option(Config.string("GENT_LOG_LEVEL"))\n`]]),
+      new Map([["GENT_LOG_LEVEL", "a developer sets this by hand"]]),
     )
     expect(findings).toEqual([])
   })
 
-  test("only a test sets it, so the production reader is still reported", () => {
-    // A test that sets a variable proves the reader works, not that anything
-    // in production supplies it.
+  test("only test support sets it, so the production reader is still reported", () => {
+    // A test, the e2e fixtures, or the core harness setting a variable proves
+    // the reader works, not that anything in production supplies it.
     const findings = findReadersWithoutWriters(
       new Map([
         ["packages/sdk/src/reader.ts", `Config.option(Config.string("GENT_TEST_ONLY"))\n`],
         ["packages/sdk/tests/reader.test.ts", `const env = { GENT_TEST_ONLY: "1" }\n`],
+        ["packages/e2e/src/pty-fixture.ts", `const env = { GENT_TEST_ONLY: "1" }\n`],
+        ["packages/core/src/test-utils/harness.ts", `env["GENT_TEST_ONLY"] = "1"\n`],
       ]),
+      none,
     )
-    expect(messages(findings)).toEqual([
-      expect.stringContaining("`GENT_TEST_ONLY` is read but nothing in the tree sets it"),
-    ])
+    expect(findings.map((finding) => finding.file)).toEqual(["packages/sdk/src/reader.ts"])
+  })
+
+  test("a test that names a variable is not a reader", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([["packages/sdk/tests/reader.test.ts", `expect(e).toContain("GENT_NAMED")\n`]]),
+      none,
+    )
+    expect(findings).toEqual([])
   })
 
   test("every reader of one dead variable is reported, not just the first", () => {
@@ -853,10 +909,28 @@ describe("a read variable must have a writer", () => {
         ["packages/sdk/src/a.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`],
         ["packages/sdk/src/b.ts", `Config.option(Config.string("GENT_ORPHAN"))\n`],
       ]),
+      none,
     )
     expect(findings.map((finding) => finding.file)).toEqual([
       "packages/sdk/src/a.ts",
       "packages/sdk/src/b.ts",
+    ])
+  })
+
+  test("an operator entry nothing reads, or that production sets, is reported", () => {
+    const findings = findReadersWithoutWriters(
+      new Map([
+        ["packages/sdk/src/reader.ts", `Config.string("GENT_SET_HERE")\n`],
+        ["packages/sdk/src/spawn.ts", `const env = { GENT_SET_HERE: "1" }\n`],
+      ]),
+      new Map([
+        ["GENT_UNREAD", "nobody"],
+        ["GENT_SET_HERE", "nobody"],
+      ]),
+    )
+    expect(messages(findings)).toEqual([
+      expect.stringContaining("`GENT_UNREAD` is allowed as operator-set, but nothing reads it"),
+      expect.stringContaining("`GENT_SET_HERE` is allowed as operator-set, but the tree sets it"),
     ])
   })
 })

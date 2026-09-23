@@ -1,5 +1,24 @@
 import { Option, Schema } from "effect"
 
+/** This file: the guards name what they look for, so several scans skip it. */
+const GUARDS_FILE = "packages/tooling/src/guards.ts"
+
+/** A comment or a string literal, read left to right so a `//` inside a string stays a string. */
+const COMMENT_OR_STRING =
+  /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g
+
+const blankKeepingLines = (text: string): string => text.replace(/[^\n]/g, " ")
+
+const isComment = (token: string): boolean => token.startsWith("/")
+
+const blankComment = (token: string): string => {
+  if (isComment(token)) return blankKeepingLines(token)
+  return token
+}
+
+/** The text with comments blanked, line count preserved. */
+const withoutComments = (text: string): string => text.replace(COMMENT_OR_STRING, blankComment)
+
 // ── a lint directive names its rules ────────────────────────────────────────
 
 export interface BlanketDisableFinding {
@@ -503,7 +522,7 @@ export const findIdentityEncodes = (
   text: string,
 ): ReadonlyArray<IdentityEncodeFinding> => {
   if (!SHIPPED_SOURCE.test(file)) return []
-  if (file === "packages/tooling/src/guards.ts") return []
+  if (file === GUARDS_FILE) return []
 
   const lines = text.split("\n")
   const encoders: string[] = []
@@ -1090,8 +1109,9 @@ export const findUnenabledPluginRules = (
 // ---------------------------------------------------------------------------
 
 /**
- * Variables a person or an external launcher supplies, so the tree holds no
- * writer for them by design. Each entry says who sets it.
+ * Variables a person or an external launcher supplies, so production holds no
+ * writer for them by design. Each entry says who sets it. The table is checked
+ * too: an entry nothing reads, or one production sets after all, is reported.
  */
 const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_LOG_LEVEL", "a developer sets this by hand to raise log verbosity"],
@@ -1104,75 +1124,88 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_IDLE_TIMEOUT_MS", "the launcher of a shared server sets its idle window"],
 ])
 
-/** `Config.string("GENT_NAME")` and friends -- the shapes that read a variable. */
-const READER = /Config\.[a-zA-Z]+\(\s*["'](GENT_[A-Z0-9_]+)["']/g
+/**
+ * A quoted name is a read wherever it sits -- `Config.string("GENT_X")`, the
+ * last argument of `Config.literals([...], "GENT_X")` on its own line, or
+ * `optionalEnv("GENT_X")` -- unless it is in a writer position.
+ */
+const QUOTED_NAME = /["'](GENT_[A-Z0-9_]+)["'](?!\s*:|\]\s*=(?!=))/g
 
-/** Setting a variable: an env record literal, or an assignment into one. */
-const WRITER = /["']?(GENT_[A-Z0-9_]+)["']?\s*[:=]\s*[^=]/g
+/**
+ * Setting a variable: a quoted record key or index (`{ "GENT_X": v }`,
+ * `env["GENT_X"] = v`), a bare record key at the start of an entry
+ * (`{ GENT_X: v }`), or an assignment (`GENT_X=1` in a command). A name
+ * followed by a colon mid-sentence, as in an error message, sets nothing.
+ */
+const WRITER =
+  /["'](GENT_[A-Z0-9_]+)["']\]?\s*[:=](?!=)|(?:^|[{,])\s*(GENT_[A-Z0-9_]+)\s*:|\b(GENT_[A-Z0-9_]+)\s*=(?!=)/g
 
 interface VariableUse {
   readonly file: string
   readonly line: number
 }
 
-/** Where each `GENT_*` variable is read, and which ones anything sets. */
-export interface GentVariableUses {
-  readonly readers: ReadonlyMap<string, ReadonlyArray<VariableUse>>
-  readonly writers: ReadonlySet<string>
-}
-
 const isTestFile = (file: string): boolean =>
   /\.test\.[cm]?[jt]sx?$/.test(file) || /(?:^|\/)tests\//.test(file)
 
-/** The names one line reads through `Config.*("GENT_...")`. */
-const readsOn = (line: string): ReadonlyArray<string> =>
-  [...line.matchAll(READER)].flatMap((match) => Option.toArray(Option.fromNullishOr(match[1])))
+/**
+ * Test support: the tests, the e2e fixtures, the core harness, the lint
+ * fixtures and the testbeds, which launch gent the way an operator does. A
+ * write there proves a reader works, not that production supplies
+ * the variable, and a name there is an assertion, not a read.
+ */
+const isTestSupport = (file: string): boolean =>
+  isTestFile(file) ||
+  file.startsWith("packages/e2e/") ||
+  file.startsWith("testbeds/") ||
+  file.includes("/test-utils/") ||
+  file.includes("/fixtures/")
 
-/** The names one line sets, as an env record entry or an assignment. */
-const writesOn = (line: string): ReadonlyArray<string> => {
-  // The read shape also matches the write shape on a `Config.string(...)` line,
-  // so a line that reads is never counted as a line that writes.
-  if (line.includes("Config.")) return []
-  return [...line.matchAll(WRITER)].flatMap((match) =>
-    Option.toArray(Option.fromNullishOr(match[1])),
+/** The name each match captured, in whichever alternative captured it. */
+const namesMatching = (line: string, pattern: RegExp): ReadonlyArray<string> =>
+  [...line.matchAll(pattern)].flatMap((match) =>
+    Option.toArray(Option.firstSomeOf(match.slice(1).map((name) => Option.fromNullishOr(name)))),
   )
-}
 
-/** Every `GENT_*` read and write in the tree, by variable name. */
-export const collectGentVariableUses = (
-  sourceTexts: ReadonlyMap<string, string>,
-): GentVariableUses => {
+/** Where each `GENT_*` variable is read in production, and which ones production sets. */
+const collectGentVariableUses = (sourceTexts: ReadonlyMap<string, string>) => {
   const readers = new Map<string, Array<VariableUse>>()
   const writers = new Set<string>()
   for (const [file, text] of sourceTexts) {
-    // This finder and its fixtures name variables to describe the finder
-    // itself. Neither file is a call site, so neither is scanned.
-    if (file.startsWith("packages/tooling/src/guards")) continue
-    if (file.startsWith("packages/tooling/tests/guards")) continue
-    // A test may set a variable to drive a reader; that proves the reader
-    // works, not that anything in production supplies it.
-    const skipWrites = isTestFile(file)
-    for (const [index, line] of text.split("\n").entries()) {
-      for (const name of readsOn(line)) {
+    // This finder names variables to describe itself; it is not a call site.
+    if (file === GUARDS_FILE || isTestSupport(file)) continue
+    // A comment that shows `GENT_X=1` documents a variable; it sets nothing.
+    for (const [index, line] of withoutComments(text).split("\n").entries()) {
+      for (const name of namesMatching(line, QUOTED_NAME)) {
         const found = readers.get(name) ?? []
         found.push({ file, line: index + 1 })
         readers.set(name, found)
       }
-      if (skipWrites) continue
-      for (const name of writesOn(line)) writers.add(name)
+      for (const name of namesMatching(line, WRITER)) writers.add(name)
     }
   }
   return { readers, writers }
 }
 
+/** The line of an `EXTERNALLY_SET` entry in this file, for a finding that points at it. */
+const externallySetLine = (sourceTexts: ReadonlyMap<string, string>, name: string): number =>
+  Option.getOrElse(Option.fromNullishOr(sourceTexts.get(GUARDS_FILE)), () => "")
+    .split("\n")
+    .findIndex((line) => line.includes(`["${name}",`)) + 1
+
 export const findReadersWithoutWriters = (
   sourceTexts: ReadonlyMap<string, string>,
+  externallySet: ReadonlyMap<string, string> = EXTERNALLY_SET,
 ): ReadonlyArray<LintConfigFinding> => {
   const { readers, writers } = collectGentVariableUses(sourceTexts)
+  const staleReason = (name: string): Option.Option<string> => {
+    if (!readers.has(name)) return Option.some("nothing reads it")
+    if (writers.has(name)) return Option.some("the tree sets it")
+    return Option.none()
+  }
   const findings: Array<LintConfigFinding> = []
   for (const [name, uses] of readers) {
-    if (writers.has(name)) continue
-    if (EXTERNALLY_SET.has(name)) continue
+    if (writers.has(name) || externallySet.has(name)) continue
     for (const use of uses) {
       findings.push({
         file: use.file,
@@ -1180,6 +1213,15 @@ export const findReadersWithoutWriters = (
         message: `\`${name}\` is read but nothing in the tree sets it; delete the reader, or record who sets it in EXTERNALLY_SET`,
       })
     }
+  }
+  for (const name of externallySet.keys()) {
+    const stale = staleReason(name)
+    if (Option.isNone(stale)) continue
+    findings.push({
+      file: GUARDS_FILE,
+      line: externallySetLine(sourceTexts, name),
+      message: `\`${name}\` is allowed as operator-set, but ${stale.value}; drop the EXTERNALLY_SET entry`,
+    })
   }
   return findings
 }
@@ -1200,7 +1242,7 @@ interface BannedPattern {
 const sourceFile = (file: string): boolean =>
   /^(?:packages|apps|examples\/extensions)\//.test(file) &&
   /\.(?:[cm]?[jt]sx?)$/.test(file) &&
-  file !== "packages/tooling/src/guards.ts" &&
+  file !== GUARDS_FILE &&
   !file.includes("/tests/") &&
   !file.includes("/fixtures/") &&
   !file.includes("/dist/")
@@ -1577,7 +1619,7 @@ const SHIPPED_AND_TESTS = /^(?:packages|apps)\/(?!tooling\/)[^/]+\/(?:src|tests)
 
 const inRetiredScope = (file: string, scope: RetiredSurface["scope"]): boolean => {
   if (scope === "shipped") return activeSourceFile(file)
-  return SHIPPED_AND_TESTS.test(file) && file !== "packages/tooling/src/guards.ts"
+  return SHIPPED_AND_TESTS.test(file) && file !== GUARDS_FILE
 }
 
 const importedModule = (line: string): Option.Option<string> =>
@@ -2012,10 +2054,7 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
  * `@effect-diagnostics` in a pattern, a table entry or a message, so scanning
  * them reports the description of a suppression instead of a suppression.
  */
-const DESCRIBES_THE_MARKER = new Set([
-  "packages/tooling/src/guards.ts",
-  "packages/tooling/tests/guards.test.ts",
-])
+const DESCRIBES_THE_MARKER = new Set([GUARDS_FILE, "packages/tooling/tests/guards.test.ts"])
 
 const approvedSuppression = (file: string, text: string): boolean =>
   approvedSuppressionEntries.some(
