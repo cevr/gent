@@ -6,6 +6,7 @@ import {
   ExtensionId,
   type Question,
   tool,
+  writeFileAtomic,
 } from "@gent/core/extensions/api"
 
 // Test seam: only tests read these exports. AskUserTool, PromptTool and
@@ -205,7 +206,7 @@ export const PromptTool = tool({
     const path = pathService.resolve(ctx.cwd, ".gent", "prompts", `${slug}-${seed}.md`)
     const text = withTitle(title, params.content)
     yield* fs.makeDirectory(pathService.dirname(path), { recursive: true })
-    yield* fs.writeFileString(path, text)
+    yield* writeFileAtomic(path, text)
 
     const decision = yield* ctx.Interaction.approve({
       text,
@@ -216,7 +217,7 @@ export const PromptTool = tool({
 
     const submitted = Option.fromUndefinedOr(decision.editedContent)
     if (Option.isSome(submitted)) {
-      yield* fs.writeFileString(path, submitted.value)
+      yield* writeFileAtomic(path, submitted.value)
       return { mode: "review", decision: "edit", path, content: submitted.value }
     }
     const edited = yield* fs
