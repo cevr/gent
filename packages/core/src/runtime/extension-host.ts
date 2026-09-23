@@ -1081,10 +1081,21 @@ export interface DiscoveredExtension {
   readonly sourcePath: string
 }
 
-interface SkippedExtension {
-  readonly path: string
-  readonly scope: ExtensionScope
-  readonly error: string
+/**
+ * A file that never produced an extension has no manifest to read, so its id
+ * comes from its path: the file name, or the directory name for an `index`
+ * entry. That id also lets `disabledExtensions` silence it.
+ */
+const importFailure = (
+  path: Path.Path,
+  sourcePath: string,
+  scope: ExtensionScope,
+  error: string,
+): FailedExtension => {
+  const parsed = path.parse(sourcePath)
+  let name = parsed.name
+  if (name === "index") name = path.basename(parsed.dir)
+  return { manifest: { id: ExtensionId.make(name) }, scope, sourcePath, phase: "load", error }
 }
 
 /** Discover and load extensions from all configured directories. Per-file isolation — one broken file does not suppress siblings. */
@@ -1092,12 +1103,13 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
   readonly userDir: string // ~/.gent/extensions
   readonly projectDir: string // .gent/extensions
 }) {
+  const path = yield* Path.Path
   const userPaths = yield* discoverDir(opts.userDir)
   const projectPaths = yield* discoverDir(opts.projectDir)
   const projectTrusted = yield* isProjectExtensionDirectoryTrusted(opts)
 
   const loaded: DiscoveredExtension[] = []
-  const skipped: SkippedExtension[] = []
+  const failed: FailedExtension[] = []
 
   /** Load one scope's files; a broken file is skipped, its siblings still load. */
   const loadScope = Effect.fn("ExtensionLoader.loadScope")(function* (
@@ -1111,8 +1123,8 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
         continue
       }
       const error = result.failure.message
-      skipped.push({ path: filePath, scope, error })
-      yield* Effect.logWarning("extension.load.skipped").pipe(
+      failed.push(importFailure(path, filePath, scope, error))
+      yield* Effect.logWarning("extension.load.failed").pipe(
         Effect.annotateLogs({ path: filePath, scope, error }),
       )
     }
@@ -1127,14 +1139,14 @@ export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions"
     const error =
       "Project code is not trusted. Add its canonical root to trustedProjects in the user config."
     for (const filePath of projectPaths) {
-      skipped.push({ path: filePath, scope: "project", error })
+      failed.push(importFailure(path, filePath, "project", error))
       yield* Effect.logWarning("extension.load.untrusted").pipe(
         Effect.annotateLogs({ path: filePath, error }),
       )
     }
   }
 
-  return { loaded, skipped }
+  return { loaded, failed }
 })
 
 /** Run extension setup and produce LoadedExtension. Catches defects from malformed setup functions. */
@@ -1497,20 +1509,11 @@ export const loadRuntimeProfileDeclarations = (
       Effect.catchEager((error) =>
         Effect.logWarning("runtime-profile.extension.discovery.failed").pipe(
           Effect.annotateLogs({ error: String(error), cwd: canonicalCwd }),
-          Effect.as({ loaded: [], skipped: [] }),
+          Effect.as({ loaded: [], failed: [] }),
         ),
       ),
     )
-
-    if (discovery.skipped.length > 0) {
-      yield* Effect.logWarning("runtime-profile.extension.discovery.summary").pipe(
-        Effect.annotateLogs({
-          loaded: String(discovery.loaded.length),
-          skipped: String(discovery.skipped.length),
-          cwd: canonicalCwd,
-        }),
-      )
-    }
+    const importFailed = discovery.failed.filter((ext) => !disabledSet.has(ext.manifest.id))
 
     // 3. Setup builtin + external extensions
     const setup = yield* setupExtensions({
@@ -1531,7 +1534,7 @@ export const loadRuntimeProfileDeclarations = (
     const extensionDeclarations = yield* validateLoadedExtensions(setup.active)
     const declarations: ExtensionActivationResult = {
       active: extensionDeclarations.active,
-      failed: [...setup.failed, ...extensionDeclarations.failed],
+      failed: [...importFailed, ...setup.failed, ...extensionDeclarations.failed],
     }
     // 5. Build the base prompt section: core writes the environment
     const isGitRepo = yield* fs

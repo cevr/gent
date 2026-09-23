@@ -22,7 +22,7 @@ import {
   SessionId,
 } from "@gent/core/protocol"
 import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
-import type { CapabilityRef, DriverRef } from "@gent/core/extensions/api"
+import { omitUndefined, type CapabilityRef, type DriverRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -247,9 +247,16 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
     shellRead(payload, "session.thread", (client) => client.session.thread({ sessionId })),
   listMessages: (branchId) =>
     shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
-  driverList: shellRead(payload, "driver.list", (client) => client.driver.list()),
+  // Drivers belong to the active session's profile: its project drivers count.
+  driverList: Effect.suspend(() =>
+    shellRead(payload, "driver.list", (client) =>
+      client.driver.list(activeSessionPayload(payload)),
+    ),
+  ),
   driverSet: (input) =>
-    shellRead(payload, "driver.set", (client) => client.driver.set(input)).pipe(Effect.asVoid),
+    shellRead(payload, "driver.set", (client) =>
+      client.driver.set({ ...input, ...activeSessionPayload(payload) }),
+    ).pipe(Effect.asVoid),
   driverClear: (input) =>
     shellRead(payload, "driver.clear", (client) => client.driver.clear(input)).pipe(Effect.asVoid),
 })
@@ -335,6 +342,14 @@ const requestExtensionAt = <Input, Output>(
   })
 
 /** One shell RPC read, with its failure named by the RPC it came from. */
+/** `{ sessionId }` of the active session, or `{}` before one exists. */
+const activeSessionPayload = (transport: ClientShellTransport) =>
+  omitUndefined({
+    sessionId: Option.getOrUndefined(
+      Option.map(transport.currentSession(), (session) => session.sessionId),
+    ),
+  })
+
 const shellRead = <A>(
   transport: ClientShellTransport,
   tag: string,

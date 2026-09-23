@@ -257,7 +257,8 @@ export interface LoadedExtension {
   readonly contributions: ExtensionContributions
 }
 
-export type FailedExtensionPhase = "setup" | "validation" | "startup"
+/** `load` is a file that never became an extension: no import, no export, or untrusted. */
+export type FailedExtensionPhase = "load" | "setup" | "validation" | "startup"
 
 export interface FailedExtension {
   readonly manifest: ExtensionManifest

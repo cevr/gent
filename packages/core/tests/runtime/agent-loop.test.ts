@@ -4445,6 +4445,43 @@ describe("interaction", () => {
       )
     }),
   )
+  it.live("an interrupt during a parked interaction gives the parked call a result", () =>
+    Effect.gen(function* () {
+      const callCount = yield* Ref.make(0)
+      const resolution = yield* Deferred.make<void>()
+      const tool = makeInteractionTool(callCount, resolution)
+      const layer = makeLiveToolLayer(makeInteractionProviderLayer(), [tool])
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLoop = yield* makeAgentLoopService
+          const message = makeIntMessage("interrupt parked call")
+          const fiber = yield* Effect.forkChild(runAgentLoop(agentLoop, message))
+          yield* waitForPhase(
+            agentLoop,
+            { sessionId: intSessionId, branchId: intBranchId },
+            "WaitingForInteraction",
+          )
+          yield* steerAgentLoop({
+            _tag: "Cancel",
+            sessionId: intSessionId,
+            branchId: intBranchId,
+            requestId: "req-interrupt-parked-call",
+          })
+          yield* Fiber.join(fiber)
+          const results = yield* (yield* MessageStorage).getMessage(
+            toolResultMessageIdForTurn(message.id, 1),
+          )
+          expect(results?.parts).toEqual([
+            expect.objectContaining({ type: "tool-result", id: "tc-1", isFailure: true }),
+          ])
+          // The branch still projects: a later turn runs to an answer.
+          yield* runAgentLoop(agentLoop, makeIntMessage("after the interrupt"))
+          expect(yield* Ref.get(callCount)).toBe(1)
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        }).pipe(Effect.provide(layer), Effect.timeout("4 seconds")),
+      )
+    }),
+  )
   it.live("respondInteraction is no-op when not in WaitingForInteraction", () =>
     Effect.gen(function* () {
       const providerLayer = LanguageModelLayers.testStream(() =>
@@ -5475,6 +5512,80 @@ describe("streaming", () => {
         expect(assistant).toBeUndefined()
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
+    }),
+  )
+  it.live("a waiting caller is not failed by an earlier turn's failure", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("foreign-failure-session")
+      const branchId = BranchId.make("foreign-failure-branch")
+      const first = makeMessage(sessionId, branchId, "first fails")
+      const second = makeMessage(sessionId, branchId, "second waits")
+      const firstStarted = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      let streamCalls = 0
+      const providerLayer = LanguageModelLayers.testStream(() => {
+        streamCalls += 1
+        const parts = Stream.fromIterable([
+          textDeltaPart("ok"),
+          finishPart({ finishReason: "stop" }),
+        ])
+        if (streamCalls > 1) return Effect.succeed(parts)
+        return Effect.succeed(
+          Stream.fromEffect(
+            Effect.gen(function* () {
+              // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(gate)
+            }),
+          ).pipe(Stream.flatMap(() => parts)),
+        )
+      })
+      const failFirstAssistant = Layer.succeed(
+        EventPublisher,
+        EventPublisher.of({
+          append: (event: AgentEvent) => {
+            if (
+              event._tag === "MessageReceived" &&
+              event.message.id === assistantMessageIdForTurn(first.id, 1)
+            ) {
+              return Effect.fail(new EventStoreError({ message: "append failed" }))
+            }
+            return Effect.gen(function* () {
+              return EventEnvelope.make({
+                id: EventId.make(0),
+                event,
+                createdAt: yield* Clock.currentTimeMillis,
+              })
+            })
+          },
+          deliver: () => Effect.void,
+          publish: () => Effect.void,
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const firstFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, first)))
+        yield* Deferred.await(firstStarted)
+        const secondFiber = yield* Effect.forkChild(Effect.exit(runAgentLoop(agentLoop, second)))
+        yield* waitForOption(
+          () =>
+            agentLoop
+              .getQueue({ sessionId, branchId })
+              .pipe(Effect.map(Option.liftPredicate((queue) => queue.followUp.length === 1))),
+          "second message queued",
+        )
+        // oxlint-disable-next-line effect/noNullish -- Deferred<void> requires the void completion value.
+        yield* Deferred.succeed(gate, undefined)
+        const firstExit = yield* Fiber.join(firstFiber)
+        const secondExit = yield* Fiber.join(secondFiber)
+        expect(firstExit._tag).toBe("Failure")
+        expect(secondExit._tag).toBe("Success")
+        expect(streamCalls).toBe(2)
+      }).pipe(
+        Effect.timeout("4 seconds"),
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(makeLayerWithEventPublisher(providerLayer, failFirstAssistant)),
+      )
     }),
   )
   it.live("rolls back turn duration when TurnCompleted append fails", () =>

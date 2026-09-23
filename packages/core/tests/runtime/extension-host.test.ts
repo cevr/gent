@@ -2167,7 +2167,7 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       yield* fs.writeFileString(path.join(projectDir, "../config.json"), grant)
       const denied = yield* discoverExtensions({ userDir, projectDir })
       expect(denied.loaded).toHaveLength(0)
-      expect(denied.skipped[0]?.error).toContain("not trusted")
+      expect(denied.failed[0]?.error).toContain("not trusted")
       expect(yield* fs.exists(marker)).toBe(false)
       yield* fs.writeFileString(path.join(userDir, "../config.json"), grant)
       const allowed = yield* discoverExtensions({ userDir, projectDir })
@@ -2463,9 +2463,9 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
       // None of the malformed files load — they hit `loadExtensionFile`'s
       // `candidates.length === 0` branch via the `isGentExtension` guard.
       expect(result.loaded).toHaveLength(0)
-      expect(result.skipped.length).toBeGreaterThanOrEqual(4)
+      expect(result.failed.length).toBeGreaterThanOrEqual(4)
       for (const target of [fnSetupPath, objectSetupPath, nullSetupPath, validPath]) {
-        const entry = result.skipped.find((s) => s.path === target)
+        const entry = result.failed.find((s) => s.sourcePath === target)
         expect(entry).toBeDefined()
         expect(entry?.error).toContain("No GentExtension found")
       }

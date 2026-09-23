@@ -1765,15 +1765,13 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
 const computeStreamEndedCost: (params: {
   modelId: ModelId
   usage: Option.Option<{ inputTokens: number; outputTokens: number }>
-}) => Effect.Effect<Option.Option<number>, never, ModelRegistry> = Effect.fn(
+}) => Effect.Effect<Option.Option<number>, never, ModelRegistry | ExtensionRegistry> = Effect.fn(
   "TurnHelpers.computeStreamEndedCost",
 )(function* (params) {
   if (Option.isNone(params.usage)) return Option.none()
   const modelRegistry = yield* ModelRegistry
-  const pricing = yield* modelRegistry.list.pipe(
-    Effect.map((models) =>
-      Option.fromUndefinedOr(models.find((m) => m.id === params.modelId)?.pricing),
-    ),
+  const pricing = yield* modelRegistry.get(params.modelId).pipe(
+    Effect.map(Option.flatMap((model) => Option.fromUndefinedOr(model.pricing))),
     Effect.catchEager(() => Effect.succeedNone),
   )
   if (Option.isNone(pricing)) return Option.none()
@@ -2672,13 +2670,52 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly currentTurnAgent: AgentNameType
       readonly turnProfile: AgentLoopTurnProfile
     }) {
-      if (params.interrupted) {
-        return { step: 0, interaction: Option.none() }
-      }
-
       const position = yield* resolveTurnPosition(params.messageId)
       const lastCompletedStep = position.step
       const pendingStep = position.step + 1
+
+      // An interrupt that lands while a step waits on its tools (a parked
+      // interaction) still owes every call of that step a result: the
+      // projection rejects a call with none. Results the step already has are
+      // kept; the rest say the interrupt stopped them.
+      if (params.interrupted) {
+        if (Option.isNone(position.pendingAssistant)) {
+          return { step: lastCompletedStep, interaction: Option.none() }
+        }
+        const address = stepAddress(params.messageId, pendingStep)
+        const known = new Map(
+          yield* processLocalReplay.getResults(
+            processLocalReplayResultKey({
+              sessionId: scope.sessionId,
+              branchId: scope.branchId,
+              toolResultMessageId: address.toolResult,
+            }),
+          ),
+        )
+        const parts = position.pendingToolCalls.map(
+          (call) =>
+            known.get(call.id) ??
+            Prompt.toolResultPart({
+              id: call.id,
+              name: call.name,
+              isFailure: true,
+              providerExecuted: false,
+              result: {
+                error: "The tool did not finish: the turn was interrupted.",
+                reason: "Interrupted",
+              },
+            }),
+        )
+        yield* recordToolOutcome({
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          toolResultMessageId: address.toolResult,
+          assistantMessageId: position.pendingAssistant.value.id,
+          parts,
+        })
+        yield* closeTurnStep({ messageId: params.messageId, step: pendingStep })
+        return { step: pendingStep, interaction: Option.none() }
+      }
       if (Option.isNone(position.pendingAssistant)) {
         return { step: lastCompletedStep, interaction: Option.none() }
       }
