@@ -821,27 +821,50 @@ export function parseFileRefs(text: string): FileRef[] {
 }
 
 /**
- * Read file content, optionally extracting line range
+ * The most text a composer insert puts inline: `!cmd` output and an `@file`
+ * both stop at this many lines or characters, whichever comes first.
+ */
+export const INLINE_MAX_LINES = 2000
+export const INLINE_MAX_BYTES = 50 * 1024
+
+/** ripgrep's rule, as grep keeps it: a NUL byte in the first 8 KB marks a file binary. */
+const BINARY_PROBE_BYTES = 8192
+
+/**
+ * Read file content, optionally extracting line range. A binary file is not
+ * read into the prompt (`None`), and text past the inline cap is cut at a
+ * line with a note that names what was left out.
  */
 const readFileContent = (
   absolutePath: string,
+  label: string,
   startLine: Option.Option<number>,
   endLine: Option.Option<number>,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const content = yield* fs.readFileString(absolutePath, "utf-8")
+    const bytes = yield* fs.readFile(absolutePath)
+    if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) return Option.none<string>()
+    let lines = new TextDecoder().decode(bytes).split("\n")
 
-    if (Option.isNone(startLine)) {
-      return content
+    if (Option.isSome(startLine)) {
+      const start = Math.max(0, startLine.value - 1) // Convert 1-indexed to 0-indexed
+      let end = start + 1
+      if (Option.isSome(endLine)) end = Math.min(lines.length, endLine.value)
+      lines = lines.slice(start, end)
     }
 
-    const lines = content.split("\n")
-    const start = Math.max(0, startLine.value - 1) // Convert 1-indexed to 0-indexed
-    let end = start + 1
-    if (Option.isSome(endLine)) end = Math.min(lines.length, endLine.value)
-
-    return lines.slice(start, end).join("\n")
+    const kept: Array<string> = []
+    let size = 0
+    for (const line of lines) {
+      if (kept.length >= INLINE_MAX_LINES || size + line.length > INLINE_MAX_BYTES) break
+      kept.push(line)
+      size += line.length + 1
+    }
+    if (kept.length === lines.length) return Option.some(lines.join("\n"))
+    return Option.some(
+      `${kept.join("\n")}\n[${label} cut at ${kept.length} lines of ${lines.length}; read the rest with the read tool]`,
+    )
   })
 
 const expandSingleRef = (ref: FileRef, cwd: string) => {
@@ -852,7 +875,8 @@ const expandSingleRef = (ref: FileRef, cwd: string) => {
     const path = yield* Path.Path
     const absolutePath = path.resolve(cwd, ref.path)
     const relativePathValue = path.relative(cwd, absolutePath)
-    const content = yield* readFileContent(absolutePath, startLine, endLine)
+    const content = yield* readFileContent(absolutePath, relativePathValue, startLine, endLine)
+    if (Option.isNone(content)) return Option.none()
 
     // Build the original match string
     let matchStr = `@${ref.path}`
@@ -873,7 +897,7 @@ const expandSingleRef = (ref: FileRef, cwd: string) => {
     }
 
     // Build code block
-    const codeBlock = `\`\`\`${rangeLabel}\n${content}\n\`\`\``
+    const codeBlock = `\`\`\`${rangeLabel}\n${content.value}\n\`\`\``
     return Option.some({ matchStr, codeBlock })
   }).pipe(Effect.catchEager(() => Effect.succeedNone))
 }
