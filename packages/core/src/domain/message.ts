@@ -117,8 +117,9 @@ export class ToolInteraction extends Schema.Class<ToolInteraction>("ToolInteract
    * The calls a cell admitted, from the branch's tool receipts. Wire only,
    * never stored. Each carries what its collapsed row draws: its scalar
    * input fields within a size budget, the summary, and a bounded output
-   * (top-level scalars, strings cut to their first and last lines). Absent when the branch has no
-   * receipts for them, as on a fork, which copies messages but not events.
+   * (top-level scalars, each string whole within 2 KB, else its head and
+   * tail). Absent when the branch has no receipts for them, as on a fork,
+   * which copies messages but not events.
    */
   operations: Schema.optional(Schema.Array(ToolOperation)),
 }) {}
@@ -760,10 +761,7 @@ const callKey = (assistantMessageId: Option.Option<MessageId>, toolCallId: strin
 /** Characters of string input one projected operation carries, across its fields. */
 const OPERATION_INPUT_BUDGET = 4_096
 
-/** Lines a projected output string keeps: the first and the last six. */
-const OPERATION_OUTPUT_LINES = 12
-
-/** Characters a projected output string keeps, for output with very long lines. */
+/** Characters a projected output string keeps; a longer one keeps its head and tail. */
 const OPERATION_OUTPUT_CHARS = 2_048
 
 /**
@@ -803,10 +801,13 @@ const boundedInput = (input: unknown): BoundedInput => {
   return kept
 }
 
-/** A long output string as a collapsed row reads it: its first and last lines, bounded by size. */
-const boundedText = (text: string): string =>
-  headTailChars(formatHeadTail(text.split("\n"), OPERATION_OUTPUT_LINES), OPERATION_OUTPUT_CHARS)
-    .text
+/**
+ * An output string as a collapsed row reads it: whole within
+ * `OPERATION_OUTPUT_CHARS`, else its head and tail. Only size bounds it: a
+ * row renderer numbers and counts the lines it is given, so a small output
+ * cut by line count would draw differently after a reload than live.
+ */
+const boundedText = (text: string): string => headTailChars(text, OPERATION_OUTPUT_CHARS).text
 
 /**
  * An operation's output as its collapsed row reads it. A JSON object keeps its

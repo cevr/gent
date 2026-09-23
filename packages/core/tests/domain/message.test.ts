@@ -678,9 +678,9 @@ describe("message part projection", () => {
     // A failed command still reads as failed after a reload.
     expect(bashOutput.exitCode).toBe(1)
     expect(bashOutput.stderr).toBe("1 fail")
-    // Its output keeps the first and last lines.
-    expect(bashOutput.stdout.split("\n").slice(0, 6)).toEqual(stdout.split("\n").slice(0, 6))
-    expect(bashOutput.stdout.split("\n").slice(-6)).toEqual(stdout.split("\n").slice(-6))
+    // Output within the size bound is kept whole: a cut would renumber the
+    // lines the row draws, so the reloaded row would differ from the live one.
+    expect(bashOutput.stdout).toBe(stdout)
     // The edit keeps the whole strings its diff is built from, and its path.
     expect(editOp?.input).toEqual(editInput)
   })
