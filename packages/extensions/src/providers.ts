@@ -53,17 +53,18 @@ import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
  * and refreshes when nothing usable remains. `SynchronizedRef.modifyEffect`
  * makes concurrent stale calls share one refresh.
  *
- * A refreshed credential is written back through `authInfo.persist`.
- * When that write fails the credential is kept as `PendingPersist`: the
- * caller sees the failure, the rotated refresh token survives, and the
- * next `getFresh` retries the write before serving anything.
+ * A provider whose auth store is its only copy passes `writeBack`: a
+ * refreshed credential is written there. When that write fails the
+ * credential is kept as `PendingPersist`: the caller sees the failure,
+ * the rotated refresh token survives, and the next `getFresh` retries the
+ * write before serving anything.
  *
  * `invalidate` marks the cell so the next `getFresh` skips the cache
  * but keeps the held credential — its refresh token is the only copy a
  * provider without a keychain has.
  *
- * Providers own their Tag, credential schema, IO, and the three hooks
- * (`read`, `refresh`, `toPersisted`); this module owns the cache.
+ * Providers own their credential schema, IO, and the hooks (`read`,
+ * `refresh`, `writeBack`); this module owns the cache.
  */
 
 const CREDENTIAL_CACHE_TTL_MS = 30_000
@@ -150,12 +151,20 @@ export interface CredentialCache<C> {
 
 type PersistedCredentials = Parameters<NonNullable<ProviderAuthInfo["persist"]>>[0]
 
+/** Write refreshed credentials through `authInfo.persist`, when the store gave one. */
+export const writeBackTo = <C>(
+  authInfo: ProviderAuthInfo,
+  toPersisted: (creds: C) => PersistedCredentials,
+): Option.Option<(creds: C) => Effect.Effect<void, ProviderAuthError>> =>
+  Option.fromNullishOr(authInfo.persist).pipe(
+    Option.map((write) => (creds: C) => write(toPersisted(creds))),
+  )
+
 interface CredentialCacheConfig<C> {
   /** Provider name used in persist failure messages. */
   readonly label: string
   readonly credentials: Schema.Schema<C>
   readonly cellRef: CredentialCacheCellRef<C>
-  readonly authInfo: Option.Option<ProviderAuthInfo>
   /** Credentials placed in the cell at build time when it is still empty. */
   readonly seed: Option.Option<C>
   readonly expiresAt: (creds: C) => number
@@ -167,7 +176,12 @@ interface CredentialCacheConfig<C> {
   readonly read: (cached: Option.Option<C>) => Effect.Effect<Option.Option<C>>
   /** Obtain new credentials. Receives the held credential (its refresh token is the most recently rotated one). */
   readonly refresh: (held: Option.Option<C>) => Effect.Effect<C, CredentialFailure>
-  readonly toPersisted: (creds: C) => PersistedCredentials
+  /**
+   * Durable write of a refreshed credential; none when nothing reads it
+   * back. A provider whose refresh writes its own source of truth (the
+   * Claude Code keychain) passes none.
+   */
+  readonly writeBack: Option.Option<(creds: C) => Effect.Effect<void, ProviderAuthError>>
 }
 
 export const makeCredentialCache = <C>(
@@ -188,11 +202,8 @@ export const makeCredentialCache = <C>(
     })
 
     const persist = (creds: C): Effect.Effect<void, ProviderAuthError> => {
-      const write = config.authInfo.pipe(
-        Option.flatMap((info) => Option.fromNullishOr(info.persist)),
-      )
-      if (Option.isNone(write)) return Effect.void
-      return write.value(config.toPersisted(creds)).pipe(
+      if (Option.isNone(config.writeBack)) return Effect.void
+      return config.writeBack.value(creds).pipe(
         Effect.catchDefect((cause) => {
           let message = String(cause)
           if (cause instanceof Error) message = cause.message

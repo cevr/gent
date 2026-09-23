@@ -63,6 +63,7 @@ import {
   recoverUnauthorized,
   replaceHeldCredential,
   withHeaders,
+  writeBackTo,
 } from "./providers.js"
 import {
   OpenAiClient as OpenAiResponsesClient,
@@ -935,7 +936,6 @@ const build = (
     label: "OpenAI",
     credentials: OpenAICredentials,
     cellRef,
-    authInfo: Option.some(authInfo),
     seed: seedFromAuthInfo(authInfo),
     expiresAt: (creds) => creds.expires,
     read: (cached) => Effect.succeed(cached),
@@ -962,12 +962,12 @@ const build = (
         })),
       )
     },
-    toPersisted: (creds) => ({
+    writeBack: writeBackTo(authInfo, (creds: OpenAICredentials) => ({
       access: creds.access,
       refresh: creds.refresh,
       expires: creds.expires,
       accountId: Option.getOrUndefined(creds.accountId),
-    }),
+    })),
   }).pipe(Effect.map(OpenAICredentialService.of))
 
 // ── codex transform ─────────────────────────────────────────────────────────

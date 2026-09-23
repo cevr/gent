@@ -29,7 +29,6 @@ import {
   isRecordArray,
   type ModelDriverContribution,
   ProviderAuthError,
-  type ProviderAuthInfo,
   type ProviderAuthorizationResult,
   type ProviderHints,
   runProcess,
@@ -1195,11 +1194,11 @@ export class AnthropicCredentialService extends Context.Service<
   CredentialCache<ClaudeCredentials>
 >()("@gent/extensions/src/anthropic/AnthropicCredentialService") {
   /** Test-friendly variant — accepts the IO seam so tests can drive read/refresh deterministically. */
-  static layerFromIO = (io: AnthropicCredentialIO, authInfo?: ProviderAuthInfo) =>
+  static layerFromIO = (io: AnthropicCredentialIO) =>
     Layer.effect(
       AnthropicCredentialService,
       SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL).pipe(
-        Effect.flatMap((cellRef) => build(cellRef, io, authInfo)),
+        Effect.flatMap((cellRef) => build(cellRef, io)),
       ),
     )
 }
@@ -1207,10 +1206,9 @@ export class AnthropicCredentialService extends Context.Service<
 /** The production credential cache over the Claude Code keychain and the real platform. */
 const buildLiveCredentialCache = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
-  authInfo: ProviderAuthInfo,
   platform: AnthropicPlatformApi,
 ): Effect.Effect<CredentialCache<ClaudeCredentials>> =>
-  Effect.suspend(() => build(cellRef, realIO, authInfo)).pipe(
+  Effect.suspend(() => build(cellRef, realIO)).pipe(
     // @effect-diagnostics-next-line strictEffectProvide:off
     Effect.provide(Layer.merge(BunServices.layer, Layer.succeed(AnthropicPlatform, platform))),
   )
@@ -1221,16 +1219,14 @@ const CLAUDE_SIGN_IN_HINT = "Run `claude` to sign in again, then choose Claude C
 const build = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
   io: AnthropicCredentialIO,
-  authInfo?: ProviderAuthInfo,
 ): Effect.Effect<CredentialCache<ClaudeCredentials>, never, AnthropicCredentialIORequirements> =>
   Effect.gen(function* () {
     const ioContext = yield* Effect.context<AnthropicCredentialIORequirements>()
     const read = io.read.pipe(Effect.provideContext(ioContext))
-    const cache = yield* makeCredentialCache({
+    const cache = yield* makeCredentialCache<ClaudeCredentials>({
       label: "Anthropic",
       credentials: ClaudeCredentials,
       cellRef,
-      authInfo: Option.fromNullishOr(authInfo),
       seed: Option.none(),
       expiresAt: (creds) => creds.expiresAt,
       // A keychain miss surfaces as ProviderAuthError; swallowing it
@@ -1257,11 +1253,10 @@ const build = (
             message: `Claude Code credentials are expired. ${CLAUDE_SIGN_IN_HINT}`,
           })
         }),
-      toPersisted: (creds) => ({
-        access: creds.accessToken,
-        refresh: creds.refreshToken,
-        expires: creds.expiresAt,
-      }),
+      // The keychain is the source of truth, and the refresh writes it.
+      // The stored `oauth` entry only selects this path; nothing reads its
+      // tokens, so a refresh is not written there.
+      writeBack: Option.none(),
     })
     return AnthropicCredentialService.of(cache)
   })
@@ -2252,7 +2247,7 @@ export const buildAnthropicModelDriver = (
       // the extension-closure-owned cells, so cross-request beta learning
       // and credential reuse survive. The credentials are checked before
       // the layer exists, so an expired sign-in fails with its own message.
-      const creds = yield* buildLiveCredentialCache(credentialCellRef, auth.value, platform)
+      const creds = yield* buildLiveCredentialCache(credentialCellRef, platform)
       yield* checkCredentials(creds)
       return AiModel.make(
         "anthropic",

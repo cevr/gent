@@ -1336,26 +1336,6 @@ const makeIO = (state: IOState): AnthropicCredentialIO => ({
   read: Effect.suspend(() => state.readResult()),
   refresh: () => Effect.suspend(() => state.refreshResult()),
 })
-interface PersistState {
-  lastWritten: Option.Option<{
-    access: string
-    refresh: string
-    expires: number
-  }>
-  failNext: boolean
-}
-const makeAuthInfo = (state: PersistState): ProviderAuthInfo => ({
-  type: "oauth",
-  persist: (updated) =>
-    Effect.suspend(() => {
-      if (state.failNext) {
-        state.failNext = false
-        return Effect.die(new Error("simulated persist failure"))
-      }
-      state.lastWritten = Option.some(updated)
-      return Effect.void
-    }),
-})
 // TestClock starts at time 0, so all expiresAt values are absolute offsets.
 const FAR_FUTURE = 10 * 60 * 1000 // expiresAt = 10 minutes from t=0
 const COMPLETE = Option.getOrUndefined(Option.none<void>())
@@ -1437,8 +1417,7 @@ describe("AnthropicCredentialService — refresh on stale", () => {
             return fresh
           }),
       }
-      const persistState: PersistState = { lastWritten: Option.none(), failNext: false }
-      const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
+      const layer = credLayer(makeIO(state))
       yield* runWithTestClock(
         Effect.gen(function* () {
           const svc = yield* AnthropicCredentialService
@@ -1454,36 +1433,27 @@ describe("AnthropicCredentialService — refresh on stale", () => {
           expect(results[0].accessToken).toBe("fresh-access")
           expect(results[1].accessToken).toBe("fresh-access")
           expect(refreshCount).toBe(1)
-          expect(Option.map(persistState.lastWritten, (value) => value.access)).toEqual(
-            Option.some("fresh-access"),
-          )
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
     }),
   )
-  it.live("expiring-soon creds trigger refresh; refreshed creds returned + persisted", () =>
+  it.live("expiring-soon creds trigger refresh; refreshed creds returned", () =>
     Effect.gen(function* () {
-      // Outcome assertions: returned creds are the refreshed ones (not
-      // the stale ones), and persist saw the new credential. Both are
-      // observable via the public surface (return value + persist
-      // recording its argument) — no internal call counter needed.
+      // Outcome assertion: the returned creds are the refreshed ones, not
+      // the stale ones.
       const stale = makeCreds("stale", 30000) // 30s — inside the 60s freshness margin
       const fresh = makeCreds("fresh", FAR_FUTURE)
       const state: IOState = {
         readResult: () => Effect.succeed(stale),
         refreshResult: () => Effect.succeed(fresh),
       }
-      const persistState: PersistState = { lastWritten: Option.none(), failNext: false }
-      const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
+      const layer = credLayer(makeIO(state))
       yield* runWithTestClock(
         Effect.gen(function* () {
           const svc = yield* AnthropicCredentialService
           const result = yield* svc.getFresh
           expect(result.accessToken).toBe("fresh-access")
-          expect(Option.map(persistState.lastWritten, (value) => value.access)).toEqual(
-            Option.some("fresh-access"),
-          )
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
@@ -1558,68 +1528,6 @@ describe("AnthropicCredentialService — invalidate", () => {
           const after = yield* svc.getFresh
           expect(before.accessToken).toBe("k1-access")
           expect(after.accessToken).toBe("k2-access")
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer)),
-      )
-    }),
-  )
-})
-describe("AnthropicCredentialService — durable persist failure", () => {
-  it.live("write-back failure surfaces ProviderAuthError", () =>
-    Effect.gen(function* () {
-      const stale = makeCreds("stale", 30000)
-      const fresh = makeCreds("fresh", FAR_FUTURE)
-      const state: IOState = {
-        readResult: () => Effect.succeed(stale),
-        refreshResult: () => Effect.succeed(fresh),
-      }
-      const persistState: PersistState = { lastWritten: Option.none(), failNext: true }
-      const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
-      const result = yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* AnthropicCredentialService
-          return yield* Effect.exit(svc.getFresh)
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(layer)),
-      )
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        const errOpt = Cause.findErrorOption(result.cause)
-        expect(Option.isSome(errOpt)).toBe(true)
-        if (Option.isSome(errOpt)) {
-          expect(errOpt.value.message).toContain(
-            "Failed to persist refreshed Anthropic credentials",
-          )
-        }
-      }
-      expect(Option.isNone(persistState.lastWritten)).toBe(true)
-    }),
-  )
-  it.live("failed write-back is retried on the next getFresh without a second refresh", () =>
-    Effect.gen(function* () {
-      const stale = makeCreds("stale", 30000)
-      const fresh = makeCreds("fresh", FAR_FUTURE)
-      let refreshCount = 0
-      const state: IOState = {
-        readResult: () => Effect.succeed(stale),
-        refreshResult: () => {
-          refreshCount += 1
-          return Effect.succeed(fresh)
-        },
-      }
-      const persistState: PersistState = { lastWritten: Option.none(), failNext: true }
-      const layer = credLayer(makeIO(state), makeAuthInfo(persistState))
-      yield* runWithTestClock(
-        Effect.gen(function* () {
-          const svc = yield* AnthropicCredentialService
-          const failure = yield* Effect.exit(svc.getFresh)
-          expect(failure._tag).toBe("Failure")
-          const retry = yield* svc.getFresh
-          expect(retry.accessToken).toBe("fresh-access")
-          expect(refreshCount).toBe(1)
-          expect(Option.map(persistState.lastWritten, (value) => value.access)).toEqual(
-            Option.some("fresh-access"),
-          )
           // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         }).pipe(Effect.provide(layer)),
       )
@@ -2779,6 +2687,69 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
         .map((request) => /refresh_token=([^&]*)/.exec(request.body ?? "")?.[1])
       expect(refreshTokens).toEqual(["keychain-refresh", "held-refresh"])
       expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer held-new-access")
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+})
+describe("buildAnthropicModelDriver — refresh writes only the keychain", () => {
+  it.live("a refresh serves the request and never writes the gent auth store", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      yield* fs.makeDirectory(path.join(home, ".claude"))
+      yield* fs.writeFileString(
+        path.join(home, ".claude", ".credentials.json"),
+        encodeExternalJson({
+          claudeAiOauth: {
+            accessToken: "keychain-access",
+            refreshToken: "keychain-refresh",
+            expiresAt: 0,
+          },
+        }),
+      )
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const betaCellRef = yield* Ref.make<BetaCacheCell>(EMPTY_BETA_CELL)
+      const driver = buildAnthropicModelDriverLive(
+        credentialCellRef,
+        betaCellRef,
+        Option.none(),
+        AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+        testCatalogSource(),
+      )
+      const fetchState = makeFakeFetchState()
+      const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+        if (!request.url.endsWith("/v1/oauth/token")) return anthropicHappyResponse()
+        return {
+          status: 200,
+          body: encodeExternalJson({
+            access_token: "refreshed-access",
+            refresh_token: "refreshed-refresh",
+            expires_in: 3600,
+          }),
+        }
+      })
+      // Nothing reads the stored Claude Code tokens: a store that cannot be
+      // written must not fail a refresh that worked.
+      let storeWrites = 0
+      const authInfo: ProviderAuthInfo = {
+        type: "oauth",
+        persist: () =>
+          Effect.suspend(() => {
+            storeWrites += 1
+            return Effect.die(new Error("auth store unavailable"))
+          }),
+      }
+      const model = yield* driver
+        .resolveModel("claude-opus-4-6", authInfo)
+        // oxlint-disable-next-line effect/noInlineProvide -- The fake token endpoint is this operation's HTTP boundary.
+        .pipe(Effect.provide(fetchLayer))
+      yield* runOne(model, fetchState)
+
+      expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer refreshed-access")
+      expect(storeWrites).toBe(0)
+      const keychain = yield* fs.readFileString(path.join(home, ".claude", ".credentials.json"))
+      expect(keychain).toContain("refreshed-refresh")
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 })
