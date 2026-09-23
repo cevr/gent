@@ -3,7 +3,7 @@ import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path } from "eff
 import { BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { EditTool, FileIndexLive, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
+import { EditTool, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
 import { runProcess } from "@gent/core/extensions/api"
 import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
@@ -626,7 +626,7 @@ describe("EditTool execution", () => {
 
 // ── grep tool ───────────────────────────────────────────────────────────────
 
-const IndexLayer = Layer.merge(BunServices.layer, Layer.provide(FileIndexLive, BunServices.layer))
+const IndexLayer = BunServices.layer
 const ctxGrep = testToolContext()
 
 /**
@@ -1339,8 +1339,7 @@ const layerWithSpawner = (
       })
     }),
   ).pipe(Layer.provide(BunServices.layer))
-  const platform = Layer.merge(BunServices.layer, spawner)
-  return Layer.merge(platform, Layer.provide(FileIndexLive, platform))
+  return Layer.merge(BunServices.layer, spawner)
 }
 
 /** gent started by a hook: its environment names another repository. */
