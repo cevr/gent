@@ -481,6 +481,33 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
       expect(result.failures.map((failure) => failure.id)).toEqual(["@test/broken"])
     }),
   )
+  it.live("a setup that never ends becomes a failure and the others still load", () =>
+    Effect.gen(function* () {
+      const good: ExtensionClientModule = {
+        id: "@test/good-beside-hung",
+        setup: Effect.succeed(
+          autocompleteContribution({
+            prefix: "!",
+            title: "good",
+            items: () => [{ id: "good", label: "good" }],
+          }),
+        ),
+      }
+      const hung: ExtensionClientModule = { id: "@test/hung", setup: Effect.never }
+      const result = yield* Effect.promise(() =>
+        loadTuiExtensions({
+          builtins: [good, hung],
+          userDir: "/tmp/u-hung-setup",
+          projectDir: "/tmp/p-hung-setup",
+          loadTimeout: "50 millis",
+          runtime,
+        }),
+      )
+      expect(result.autocompleteItems.map((c) => c.prefix)).toContain("!")
+      expect(result.failures.map((failure) => failure.id)).toEqual(["@test/hung"])
+      expect(result.failures[0]?.reason).toContain("setup timed out")
+    }).pipe(Effect.timeout("5 seconds")),
+  )
   // Regression lock — discovered (not pre-imported) modules with an
   // Effect-valued `setup` must pass `importExtension`'s shape validator.
   // Rejecting Effect values silently drops the entire discovered population.
