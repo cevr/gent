@@ -26,6 +26,7 @@ import {
   type OxlintReport,
   type OxlintRun,
 } from "../src/fixture-runner"
+import gentRules from "../src/gent-rules"
 
 const filterByFile = (report: OxlintReport, fixtureFile: string): ReadonlyArray<Diagnostic> =>
   report.diagnostics.filter((d) => d.filename === fixtureFile)
@@ -68,11 +69,6 @@ const readTypeScriptConfig = (relativePath: string) =>
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(TypeScriptConfig))),
   )
 
-const LIVE_RULES_REQUIRING_FIXTURES = [
-  "gent/no-runpromise-outside-boundary",
-  "gent/no-define-extension-throw",
-] satisfies ReadonlyArray<string>
-
 interface RuleCase {
   readonly rule: string
   readonly invalid: string
@@ -87,6 +83,13 @@ interface RuleCase {
 }
 
 const CASES: ReadonlyArray<RuleCase> = [
+  {
+    rule: "gent/no-positional-log-error",
+    invalid: "no-positional-log-error.invalid.ts",
+    valid: "no-positional-log-error.valid.ts",
+    // logWarning and logError, each with an error as a positional argument
+    expectedCount: 2,
+  },
   {
     rule: "gent/no-runpromise-outside-boundary",
     invalid: "no-runpromise-outside-boundary.invalid.ts",
@@ -357,17 +360,13 @@ effectDescribe("custom lint rules", () => {
     }),
   )
 
-  it.live("live custom rules have positive and negative fixtures", () =>
+  it.live("every rule the plugin defines has a positive and a negative fixture", () =>
     Effect.gen(function* () {
-      const rules = new Map(CASES.map((c) => [c.rule, c]))
-      for (const rule of LIVE_RULES_REQUIRING_FIXTURES) {
-        const ruleCase = Option.fromNullishOr(rules.get(rule))
-        expect(Option.isSome(ruleCase)).toBeTrue()
-        if (Option.isSome(ruleCase)) {
-          expect(ruleCase.value.invalid).toMatch(/\.invalid/)
-          expect(ruleCase.value.valid).toMatch(/\.valid|boundary|platform-bun/)
-        }
-      }
+      const covered = new Set(CASES.map((c) => c.rule))
+      const uncovered = Object.keys(gentRules.rules)
+        .map((name) => `gent/${name}`)
+        .filter((rule) => !covered.has(rule))
+      expect(uncovered).toEqual([])
       yield* Effect.void
     }),
   )

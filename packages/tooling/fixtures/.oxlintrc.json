@@ -8,6 +8,7 @@
   "plugins": [],
   "jsPlugins": ["../src/gent-rules.ts"],
   "rules": {
+    "gent/no-positional-log-error": "error",
     "gent/no-runpromise-outside-boundary": "error",
     "gent/core-entry-boundary": "error",
     "gent/declared-workspace-imports": "error",
