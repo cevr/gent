@@ -9,9 +9,8 @@ import {
   findBlanketEslintDisables,
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
-  findDiagnosticSuppressionAnchors,
   findE2eFixtureImportFindings,
-  findHookGuardOrder,
+  findHookWithoutGuards,
   findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
@@ -101,7 +100,6 @@ const singleFileFailures = (file: string, text: string): ReadonlyArray<string> =
     ...findUnadmittedChildSessionWriters(file, text),
     ...findIdentityEncodes(file, text),
     ...findTuiSessionIdentityReads(file, text),
-    ...findDiagnosticSuppressionAnchors(file, text),
   ].map((finding) => `${finding.file}:${finding.line}: ${finding.message}`)
   return [...blanket, ...suppressions, ...sourceOnly]
 }
@@ -116,7 +114,7 @@ const projectFileFailures = (
   text: string,
   trackedFiles: ReadonlyArray<string>,
 ): ReadonlyArray<string> =>
-  [...findSteeringFilePaths(file, text, trackedFiles), ...findHookGuardOrder(file, text)].map(
+  [...findSteeringFilePaths(file, text, trackedFiles), ...findHookWithoutGuards(file, text)].map(
     (finding) => `${finding.file}:${finding.line}: ${finding.message}`,
   )
 

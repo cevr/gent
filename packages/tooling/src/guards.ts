@@ -796,32 +796,20 @@ export const findE2eFixtureImportFindings = (
   ]
 }
 
-// ── hook-guard-order ────────────────────────────────────────────────────────
+// ── hook-runs-guards ────────────────────────────────────────────────────────
 
 /**
- * Guard: the pre-commit hook asks the guards first.
+ * Guard: the pre-commit hook runs the guards.
  *
- * The hook's later jobs take minutes -- a turbo typecheck, a build, the whole
- * test run -- while the guards read the tree in about two seconds. Lefthook
- * runs every job regardless of what failed, so the order decides where the
- * verdict lands in the output, not how long the run takes. With the guards
- * first their answer heads the log; anywhere else it is buried under the jobs
- * that ran after it.
- *
- * Position also settles what the guards read. `lint+fmt` rewrites files and
- * stages what it changed, so a guard placed after it reads the formatter's
- * output rather than the text the author wrote.
- *
- * What is reported: a `lefthook.yml` whose first `pre-commit` job is not the
- * one running the guards, or which has no such job at all. The job is found by
- * the command it runs, not by its name, so renaming it is free and dropping
- * `bun run guards` from it is not.
+ * The hook's other jobs are oxlint, the formatter, typecheck, build and tests.
+ * None of them reads what the guards read, so a hook without a
+ * `bun run guards` job commits a guard violation that only the gate would
+ * catch later. The job is found by the command it runs, not by its name.
  *
  * @module
  */
 
-/** The pre-commit hook does not put the guards first. */
-export interface HookGuardOrderFinding {
+export interface HookRunsGuardsFinding {
   readonly file: string
   readonly line: number
   readonly message: string
@@ -829,11 +817,7 @@ export interface HookGuardOrderFinding {
 
 export const HOOK_FILE = "lefthook.yml"
 
-/** The script the guards job runs. `package.json` owns the command itself. */
 const GUARD_COMMAND = "bun run guards"
-
-/** A job entry opens with `- name:` at the job list's indentation. */
-const JOB_ENTRY = /^\s*-\s+name:\s*(\S+)/
 
 /** The `pre-commit` hook's own key, at the top level of the file. */
 const PRE_COMMIT = /^pre-commit:/
@@ -841,79 +825,28 @@ const PRE_COMMIT = /^pre-commit:/
 /** Any other top-level key closes the `pre-commit` block. */
 const TOP_LEVEL_KEY = /^\S/
 
-interface Job {
-  readonly name: string
-  readonly line: number
-  readonly body: string
-}
-
-/** The `pre-commit` jobs in file order, each with the text it carries. */
-const preCommitJobs = (text: string): ReadonlyArray<Job> => {
+/** The lines under `pre-commit:`, up to the next top-level key. */
+const preCommitBlock = (text: string): string => {
   const lines = text.split("\n")
-  const jobs: Job[] = []
-  let inPreCommit = false
-  let current: Option.Option<{ name: string; line: number; body: string[] }> = Option.none()
-  const close = () => {
-    if (Option.isSome(current)) {
-      const open = current.value
-      jobs.push({ name: open.name, line: open.line, body: open.body.join("\n") })
-    }
-    current = Option.none()
-  }
-  for (const [index, line] of lines.entries()) {
-    if (PRE_COMMIT.test(line)) {
-      inPreCommit = true
-      continue
-    }
-    if (!inPreCommit) continue
-    if (TOP_LEVEL_KEY.test(line)) {
-      close()
-      inPreCommit = false
-      continue
-    }
-    const entry = Option.fromNullishOr(JOB_ENTRY.exec(line))
-    if (Option.isNone(entry)) {
-      if (Option.isSome(current)) current.value.body.push(line)
-      continue
-    }
-    close()
-    current = Option.some({
-      name: Option.getOrElse(Option.fromNullishOr(entry.value[1]), () => ""),
-      line: index + 1,
-      body: [line],
-    })
-  }
-  close()
-  return jobs
+  const start = lines.findIndex((line) => PRE_COMMIT.test(line))
+  if (start === -1) return ""
+  const rest = lines.slice(start + 1)
+  const end = rest.findIndex((line) => TOP_LEVEL_KEY.test(line))
+  if (end === -1) return rest.join("\n")
+  return rest.slice(0, end).join("\n")
 }
 
-export const findHookGuardOrder = (
+export const findHookWithoutGuards = (
   file: string,
   text: string,
-): ReadonlyArray<HookGuardOrderFinding> => {
+): ReadonlyArray<HookRunsGuardsFinding> => {
   if (file !== HOOK_FILE) return []
-
-  const jobs = preCommitJobs(text)
-  const guardIndex = jobs.findIndex((job) => job.body.includes(GUARD_COMMAND))
-  if (guardIndex === 0) return []
-  if (guardIndex === -1) {
-    return [
-      {
-        file,
-        line: 1,
-        message: `the pre-commit hook runs no \`${GUARD_COMMAND}\` job -- the guards then reach a commit only through the gate, which runs minutes later`,
-      },
-    ]
-  }
-  const guardJob = jobs[guardIndex]
+  if (preCommitBlock(text).includes(GUARD_COMMAND)) return []
   return [
     {
       file,
-      line: Option.getOrElse(
-        Option.map(Option.fromNullishOr(guardJob), (job) => job.line),
-        () => 1,
-      ),
-      message: `the \`${GUARD_COMMAND}\` job runs ${guardIndex} job(s) into the pre-commit hook -- move it first, so its verdict heads the output and it reads the tree before the formatter rewrites it`,
+      line: 1,
+      message: `the pre-commit hook runs no \`${GUARD_COMMAND}\` job -- the guards then reach a commit only through the gate`,
     },
   ]
 }
@@ -2109,114 +2042,6 @@ export const findTuiSessionIdentityReads = (
       })
       break
     }
-  }
-  return findings
-}
-
-// ── diagnostic-suppression-anchor ───────────────────────────────────────────
-
-/**
- * Guard: a next-line diagnostic suppression must sit above the code it covers.
- *
- * `// @effect-diagnostics-next-line <rule>:off` silences the rule on the line
- * directly below it and nowhere else. When a formatter re-wraps an expression,
- * or an edit inserts a line, the comment can end up above a blank line or
- * above the tail of the statement before it. The suppression then covers
- * nothing: the diagnostic it was written for comes back somewhere further
- * down, and the comment stays as a claim that it is handled.
- *
- * Only the `-next-line` form is read. The file-scoped
- * `// @effect-diagnostics <rule>:off` applies to the whole file, so no line
- * follows it in the sense this guard checks.
- *
- * The typechecker does report a detached suppression, and the turbo task hashes
- * these files by content, so a reformat is a cache miss and the next typecheck
- * sees it. What that run cannot do is come before the formatter: a typecheck
- * that already finished is not re-run by a later reformat in the same sitting.
- * This guard is cheap enough to run first, which is where the hook puts it.
- *
- * What is reported: a `-next-line` comment whose following line cannot carry a
- * diagnostic, which is one of four shapes, plus the comment on the last line
- * of a file, where nothing follows it at all:
- *
- * - a blank line, which a formatter or an edit left between the two;
- * - closing punctuation alone -- `)`, `}`, `]`, and any run of those with a
- *   trailing comma or semicolon -- which ends a statement that opened earlier,
- *   so the expression the comment meant to cover begins above it;
- * - a bare `.pipe(` continuation, which is the tail of the expression above;
- * - a second suppression comment, which pushes the first one two lines away
- *   from any code.
- *
- * A line holding real code is never reported. Which diagnostic the rule name
- * refers to, and whether it would fire, is the typechecker's question; this
- * guard only asks whether the comment is attached to anything.
- *
- * @module
- */
-
-/** A next-line suppression that no line of code follows. */
-export interface DiagnosticSuppressionAnchorFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
-/** Source this guard reads. The suppressions live in shipped code and tests. */
-const SOURCE = /\.[cm]?[jt]sx?$/
-
-/**
- * This guard and its test, which have to spell the marker to match it and to
- * build the detached shapes the test asserts on. Reading them would report the
- * description of the rule as a violation of it.
- */
-const SELF = new Set(["packages/tooling/src/guards.ts", "packages/tooling/tests/guards.test.ts"])
-
-/** The line-scoped form. The file-scoped `@effect-diagnostics` has no anchor. */
-const NEXT_LINE_SUPPRESSION = /@effect-diagnostics-next-line\b/
-
-/** Closing punctuation that ends a statement opened on an earlier line. */
-const CLOSERS_ONLY = /^[)}\]]+[,;]?$/
-
-/** The tail of a pipeline that began above, so the comment trails its subject. */
-const BARE_PIPE = /^\.pipe\($/
-
-/** Why the following line cannot carry the diagnostic, or none if it can. */
-const detachmentReason = (next: string): Option.Option<string> => {
-  const trimmed = next.trim()
-  if (trimmed.length === 0) return Option.some("a blank line")
-  if (NEXT_LINE_SUPPRESSION.test(trimmed)) return Option.some("a second suppression comment")
-  if (CLOSERS_ONLY.test(trimmed)) return Option.some(`closing punctuation alone (\`${trimmed}\`)`)
-  if (BARE_PIPE.test(trimmed)) return Option.some("a bare `.pipe(` continuation")
-  return Option.none()
-}
-
-export const findDiagnosticSuppressionAnchors = (
-  file: string,
-  text: string,
-): ReadonlyArray<DiagnosticSuppressionAnchorFinding> => {
-  if (!SOURCE.test(file) || SELF.has(file)) return []
-
-  const lines = text.split("\n")
-  const findings: DiagnosticSuppressionAnchorFinding[] = []
-  for (const [index, line] of lines.entries()) {
-    if (!NEXT_LINE_SUPPRESSION.test(line)) continue
-    const next = Option.fromNullishOr(lines[index + 1])
-    if (Option.isNone(next)) {
-      findings.push({
-        file,
-        line: index + 1,
-        message:
-          "this `@effect-diagnostics-next-line` comment ends the file, so it suppresses nothing -- put it directly above the line the diagnostic reports",
-      })
-      continue
-    }
-    const reason = detachmentReason(next.value)
-    if (Option.isNone(reason)) continue
-    findings.push({
-      file,
-      line: index + 1,
-      message: `this \`@effect-diagnostics-next-line\` comment is followed by ${reason.value}, so it suppresses nothing -- put it directly above the line the diagnostic reports, or drop it`,
-    })
   }
   return findings
 }

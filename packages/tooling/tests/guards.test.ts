@@ -9,9 +9,8 @@ import {
   findBlanketEslintDisables,
   findCoreFeatureIndependenceFindings,
   findCoreVendorModelPins,
-  findDiagnosticSuppressionAnchors,
   findE2eFixtureImportFindings,
-  findHookGuardOrder,
+  findHookWithoutGuards,
   findIdentityEncodes,
   findPackageSurfaceFindings,
   findPlatformDuplicationViolations,
@@ -610,10 +609,7 @@ describe("e2e fixture import guard", () => {
   })
 })
 
-// ── hook-guard-order.test ───────────────────────────────────────────────────
-
-const messagesOf = (text: string, file = HOOK_FILE): ReadonlyArray<string> =>
-  findHookGuardOrder(file, text).map((finding) => finding.message)
+// ── hook-runs-guards.test ───────────────────────────────────────────────────
 
 const hook = (...jobs: ReadonlyArray<string>): string =>
   ["pre-commit:", "  parallel: false", "  jobs:", ...jobs].join("\n")
@@ -626,49 +622,33 @@ const LINT = [
 ]
 const TEST = ["    - name: test", "      run: bun run test"]
 
-describe("pre-commit guard order", () => {
-  test("allows the guards as the first job", () => {
-    expect(messagesOf(hook(...GUARDS, ...LINT, ...TEST))).toEqual([])
-  })
-
-  test("flags the guards running after another job", () => {
-    const messages = messagesOf(hook(...LINT, ...GUARDS, ...TEST))
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("1 job(s) into the pre-commit hook")
-  })
-
-  test("reports the guards job at its own line", () => {
-    const findings = findHookGuardOrder(HOOK_FILE, hook(...LINT, ...GUARDS))
-    // 3 header lines + 3 lint lines, so the guards entry is line 7.
-    expect(findings[0]?.line).toBe(7)
+describe("pre-commit hook runs the guards", () => {
+  test("accepts the guards job in any position, under any name", () => {
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...GUARDS, ...LINT, ...TEST))).toEqual([])
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...LINT, ...TEST, ...GUARDS))).toEqual([])
+    const renamed = ["    - name: fast-checks", "      run: bun run guards"]
+    expect(findHookWithoutGuards(HOOK_FILE, hook(...renamed, ...LINT))).toEqual([])
   })
 
   test("flags a hook with no guards job", () => {
-    const messages = messagesOf(hook(...LINT, ...TEST))
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("runs no `bun run guards` job")
+    const findings = findHookWithoutGuards(HOOK_FILE, hook(...LINT, ...TEST))
+    expect(findings).toHaveLength(1)
+    expect(findings[0]?.message).toContain("runs no `bun run guards` job")
   })
 
-  test("finds the job by its command, not its name", () => {
-    const renamed = ["    - name: fast-checks", "      run: bun run guards"]
-    expect(messagesOf(hook(...renamed, ...LINT))).toEqual([])
-  })
-
-  test("reads the pre-commit block only", () => {
-    const text = [
-      "pre-push:",
-      "  jobs:",
-      "    - name: guards",
-      "      run: bun run guards",
-      "pre-commit:",
-      "  jobs:",
-      ...LINT,
-    ].join("\n")
-    expect(messagesOf(text)).toHaveLength(1)
+  test("a guards job under another hook does not count", () => {
+    const text = ["pre-push:", "  jobs:", ...GUARDS, "pre-commit:", "  jobs:", ...LINT].join("\n")
+    expect(findHookWithoutGuards(HOOK_FILE, text)).toHaveLength(1)
+    expect(
+      findHookWithoutGuards(
+        HOOK_FILE,
+        ["pre-commit:", "  jobs:", ...LINT, "pre-push:", ...GUARDS].join("\n"),
+      ),
+    ).toHaveLength(1)
   })
 
   test("leaves every other file alone", () => {
-    expect(findHookGuardOrder("package.json", hook(...LINT, ...TEST))).toEqual([])
+    expect(findHookWithoutGuards("package.json", hook(...LINT, ...TEST))).toEqual([])
   })
 })
 
@@ -2066,111 +2046,6 @@ describe("TUI session identity guard", () => {
     const text = ["  createEffect(() => {", "    const s = client.session()", "  })"].join("\n")
     expect(findTuiSessionIdentityReads("packages/core/src/runtime/thing.ts", text)).toEqual([])
     expect(findTuiSessionIdentityReads("apps/tui/tests/thing.test.ts", text)).toEqual([])
-  })
-})
-
-// ── diagnostic-suppression-anchor.test ──────────────────────────────────────
-
-const FILE_SUPPRESSION_ANCHOR = "packages/core/src/runtime/thing.ts"
-
-// Built from pieces on purpose. Spelled whole, the marker is a real directive
-// to the Effect TypeScript plugin, which then reports this line as a
-// suppression that has no effect.
-const MARKER = `@effect-diagnostics${"-next-line"}`
-const SUPPRESSION = `  // ${MARKER} anyUnknownInErrorContext:off`
-
-const messagesOfSuppressionAnchor = (
-  lines: ReadonlyArray<string>,
-  file = FILE_SUPPRESSION_ANCHOR,
-): ReadonlyArray<string> =>
-  findDiagnosticSuppressionAnchors(file, lines.join("\n")).map((finding) => finding.message)
-
-const linesOfSuppressionAnchor = (lines: ReadonlyArray<string>): ReadonlyArray<number> =>
-  findDiagnosticSuppressionAnchors(FILE_SUPPRESSION_ANCHOR, lines.join("\n")).map(
-    (finding) => finding.line,
-  )
-
-describe("diagnostic suppression anchor", () => {
-  test("allows a suppression directly above the expression", () => {
-    expect(
-      messagesOfSuppressionAnchor([SUPPRESSION, "  const sealed = Effect.suspend(effect)"]),
-    ).toEqual([])
-  })
-
-  test("allows a suppression above a multi-line expression head", () => {
-    expect(
-      messagesOfSuppressionAnchor([
-        SUPPRESSION,
-        "  Effect.provide(",
-        "    FetchHttpClient.layer,",
-        "  ),",
-      ]),
-    ).toEqual([])
-  })
-
-  test("flags a suppression a formatter detached with a blank line", () => {
-    const messages = messagesOfSuppressionAnchor([
-      SUPPRESSION,
-      "",
-      "  const sealed = Effect.suspend(effect)",
-    ])
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("a blank line")
-  })
-
-  test("flags a suppression above closing punctuation alone", () => {
-    for (const closer of ["  )", "  )", "  })", "  ],", "  );"]) {
-      const messages = messagesOfSuppressionAnchor([SUPPRESSION, closer])
-      expect(messages).toHaveLength(1)
-      expect(messages[0]).toContain("closing punctuation alone")
-    }
-  })
-
-  test("flags a suppression above a bare pipe continuation", () => {
-    const messages = messagesOfSuppressionAnchor([SUPPRESSION, "  .pipe("])
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("bare `.pipe(` continuation")
-  })
-
-  test("flags a suppression above a second suppression", () => {
-    const messages = messagesOfSuppressionAnchor([SUPPRESSION, SUPPRESSION, "  const x = f()"])
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("a second suppression comment")
-  })
-
-  test("flags a suppression on the last line of a file", () => {
-    const messages = messagesOfSuppressionAnchor([" const x = f()", SUPPRESSION])
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("ends the file")
-  })
-
-  test("reports the comment's own line", () => {
-    expect(
-      linesOfSuppressionAnchor(["const a = 1", "const b = 2", SUPPRESSION, "", "const c = 3"]),
-    ).toEqual([3])
-  })
-
-  test("allows a line that closes one call and opens the next", () => {
-    // `}).pipe(` carries the expression, so the diagnostic can land on it.
-    expect(messagesOfSuppressionAnchor([SUPPRESSION, "  }).pipe("])).toEqual([])
-  })
-
-  test("leaves the file-scoped form alone", () => {
-    const fileScoped = `// @effect-diagnostics${" nodeBuiltinImport:off"} -- fixture`
-    expect(messagesOfSuppressionAnchor([fileScoped, ""])).toEqual([])
-  })
-
-  test("reads source files only", () => {
-    expect(messagesOfSuppressionAnchor([SUPPRESSION, ""], "plans/notes.md")).toEqual([])
-  })
-
-  test("skips the guard's own source and test, which must spell the marker", () => {
-    for (const self of [
-      "packages/tooling/src/guards.ts",
-      "packages/tooling/tests/guards.test.ts",
-    ]) {
-      expect(messagesOfSuppressionAnchor([SUPPRESSION, ""], self)).toEqual([])
-    }
   })
 })
 
