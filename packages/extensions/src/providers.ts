@@ -591,6 +591,25 @@ export const postOAuthForm = (
     ),
   )
 
+// ── reasoning effort ────────────────────────────────────────────────────────
+
+/**
+ * The effort a request names for a hint: the lowest level the model accepts
+ * at or above `level`, else the highest it accepts. `order` ranks every level
+ * lowest first; `accepts` is the model's own list, in the same order. A model
+ * that accepts nothing gets none.
+ */
+export const effortAtOrAbove = <Level extends string>(
+  order: ReadonlyArray<Level>,
+  accepts: ReadonlyArray<Level>,
+  level: Level,
+): Option.Option<Level> => {
+  const rank = order.indexOf(level)
+  return Option.fromUndefinedOr(accepts.find((each) => order.indexOf(each) >= rank)).pipe(
+    Option.orElse(() => Option.fromUndefinedOr(accepts.at(-1))),
+  )
+}
+
 // ── models.dev catalog ──────────────────────────────────────────────────────
 
 /**

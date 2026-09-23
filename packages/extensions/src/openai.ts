@@ -52,6 +52,7 @@ import {
   checkCredentials,
   CredentialRefreshUnavailable,
   driverListModels,
+  effortAtOrAbove,
   EMPTY_CREDENTIAL_CELL,
   explainCredentialFailure,
   freshCredentials,
@@ -1298,12 +1299,10 @@ const openAiReasoningEffort = (
     return Option.none()
   }
   return Schema.decodeUnknownOption(OpenAiReasoningEffort)(hint).pipe(
-    Option.map((effort) => {
+    Option.flatMap((effort) => {
       const family = OPENAI_ACCEPTED_EFFORTS.find((entry) => entry.pattern.test(modelName))
-      if (Predicate.isUndefined(family)) return effort
-      const rank = OPENAI_EFFORT_ORDER.indexOf(effort)
-      const atOrAbove = family.accepts.find((level) => OPENAI_EFFORT_ORDER.indexOf(level) >= rank)
-      return atOrAbove ?? family.accepts[family.accepts.length - 1] ?? effort
+      if (Predicate.isUndefined(family)) return Option.some(effort)
+      return effortAtOrAbove(OPENAI_EFFORT_ORDER, family.accepts, effort)
     }),
   )
 }
