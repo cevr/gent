@@ -59,6 +59,19 @@ type PathMatcher = (path: string) => boolean
 /** The walk stops with an error past this many files; the caller narrows `path`. */
 const FALLBACK_MAX_FILES = 100_000
 
+const tooManyFiles = (cwd: string) =>
+  new FileListingError({
+    message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
+    cwd,
+  })
+
+/**
+ * A relative path that climbs out of its base. `..cache` is a name inside the
+ * base; only `..` itself or a `../` step leaves it.
+ */
+const leavesBase = (path: Path.Path, relative: string): boolean =>
+  relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+
 /** One `.gitignore` line. */
 interface IgnoreRule {
   /** Directory of the `.gitignore`, relative to the search root ("" for the root). */
@@ -267,7 +280,7 @@ const walkFiles = (params: {
       const { cwd } = params
       let root = params.root
       let fromRoot = path.relative(root, cwd)
-      if (fromRoot.startsWith("..") || path.isAbsolute(fromRoot)) {
+      if (leavesBase(path, fromRoot)) {
         root = cwd
         fromRoot = ""
       }
@@ -322,10 +335,7 @@ const walkFiles = (params: {
             }
 
             if (files.length >= FALLBACK_MAX_FILES) {
-              return yield* new FileListingError({
-                message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
-                cwd,
-              })
+              return yield* tooManyFiles(cwd)
             }
             files.push({ path: absPath, relativePath })
           }
@@ -340,13 +350,6 @@ const walkFiles = (params: {
 
 // ── Inside a git work tree: git decides the listing ──
 
-/**
- * Git lists the files itself, so every exclude source applies as git applies
- * it: the `.gitignore` files above the search root, `.git/info/exclude` and
- * `core.excludesFile`. Tracked files are listed even when a pattern matches
- * them, as git treats them. A nested repository or a submodule is listed by
- * its own git, with its own rules. `None` outside a work tree or without git.
- */
 /**
  * A hook or `rebase -x` exports `GIT_DIR` and its kin for its own repository;
  * the listing asks the repository that holds `cwd`.
@@ -409,10 +412,7 @@ const gitLsFiles = (
       }),
     )
     if (onDisk > FALLBACK_MAX_FILES) {
-      return yield* new FileListingError({
-        message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
-        cwd,
-      })
+      return yield* tooManyFiles(cwd)
     }
     if ((yield* handle.exitCode) !== 0) return Option.none<GitNames>()
     const decoder = new TextDecoder("utf-8", { fatal: true })
@@ -451,6 +451,13 @@ const gitLsFiles = (
     ),
   )
 
+/**
+ * Git lists the files itself, so every exclude source applies as git applies
+ * it: the `.gitignore` files above the search root, `.git/info/exclude` and
+ * `core.excludesFile`. Tracked files are listed even when a pattern matches
+ * them, as git treats them. A nested repository or a submodule is listed by
+ * its own git, with its own rules. `None` outside a work tree or without git.
+ */
 const listGitFiles: (
   cwd: string,
 ) => Effect.Effect<
@@ -506,10 +513,7 @@ const listGitFiles: (
   )
   const files = nested.flat()
   if (files.length > FALLBACK_MAX_FILES) {
-    return yield* new FileListingError({
-      message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
-      cwd,
-    })
+    return yield* tooManyFiles(cwd)
   }
   return Option.some({ files, unreadable })
 })
@@ -1528,7 +1532,7 @@ export const GrepTool = tool({
       // A target inside the session cwd reads the session's ignore rules from its root.
       const fromCwd = path.relative(ctx.cwd, basePath)
       let root = basePath
-      if (!fromCwd.startsWith("..") && !path.isAbsolute(fromCwd)) root = ctx.cwd
+      if (!leavesBase(path, fromCwd)) root = ctx.cwd
       const listing = yield* listFiles({ root, cwd: basePath }).pipe(
         Effect.mapError(
           (cause) =>

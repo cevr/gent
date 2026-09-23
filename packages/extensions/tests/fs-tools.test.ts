@@ -862,6 +862,24 @@ describe("GrepTool", () => {
     }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
   )
 
+  it.scopedLive("a target whose name starts with two dots keeps the session's ignore rules", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${tmpDir}/.gitignore`, "*.log\n")
+      yield* fs.makeDirectory(`${tmpDir}/..cache`)
+      yield* fs.writeFileString(`${tmpDir}/..cache/a.log`, "const foo = 0")
+      yield* fs.writeFileString(`${tmpDir}/..cache/b.ts`, "const foo = 1")
+
+      const result = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "foo", path: `${tmpDir}/..cache` },
+        testToolContext({ cwd: tmpDir }),
+      )
+      expect(result.matches.map((match) => match.file)).toEqual([`${tmpDir}/..cache/b.ts`])
+    }).pipe(Effect.provide(IndexLayer), Effect.timeout("8 seconds")),
+  )
+
   it.scopedLive("a file with a NUL byte in its first 8 KB is binary and skipped", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
