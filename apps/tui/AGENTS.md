@@ -162,7 +162,7 @@ Special prefixes at input start trigger different modes:
 - Submit executes command, output shown in chat
 - ESC or backspace at empty input exits shell mode
 - Runs in the session's cwd; a spawn failure (the cwd is gone) restores the command and shows the error
-- Large output (>2000 lines or 50KB) truncated, full saved to `~/tool-output/`
+- Large output (>2000 lines or 50KB) truncated, full saved to `shell-output/` in the data directory (`GENT_DATA_DIR`, else `~/.gent`)
 
 ### File References
 

@@ -1,4 +1,5 @@
 import { type ProcessError, runProcess } from "@gent/core/extensions/api"
+import { dataPaths } from "@gent/sdk"
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { homedir } from "os"
@@ -77,9 +78,12 @@ import type { ActiveInteraction, ApprovalResult } from "@gent/core/protocol"
  * nothing the reader ran is lost to the cap.
  */
 
-/** Spill files live beside the rest of the gent data, not in a temp directory. */
-export const shellOutputDirectory = (home: string = homedir()): string =>
-  `${home}/.gent/shell-output`
+/**
+ * Spill files live beside the rest of the gent data, not in a temp directory.
+ * A run with its own `GENT_DATA_DIR` keeps them there, off the real home.
+ */
+export const shellOutputDirectory = (home: string = homedir()): Effect.Effect<string> =>
+  Effect.map(dataPaths(home), ({ dataDir }) => `${dataDir}/shell-output`)
 
 /**
  * Execute a shell command, capped at INLINE_MAX_LINES lines and INLINE_MAX_BYTES bytes.
@@ -128,7 +132,7 @@ const saveFullOutput = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const directory = shellOutputDirectory()
+    const directory = yield* shellOutputDirectory()
     yield* fs.makeDirectory(directory, { recursive: true })
     const now = yield* DateTime.nowAsDate
     const stamp = now.toISOString().replaceAll(":", "-").replaceAll(".", "-")

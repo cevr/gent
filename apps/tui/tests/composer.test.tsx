@@ -10,7 +10,7 @@ import {
   isLargePaste,
   shellOutputDirectory,
 } from "../src/composer"
-import { Deferred, Effect, FileSystem, Layer, Option } from "effect"
+import { ConfigProvider, Deferred, Effect, FileSystem, Layer, Option } from "effect"
 import { type ActiveInteraction, BranchId, dateFromMillis, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
@@ -178,15 +178,23 @@ describe("executeShell", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const testDir = yield* fs.makeTempDirectoryScoped()
+      const dataDir = yield* fs.makeTempDirectoryScoped()
       const lineCount = 2500
-      const result = yield* executeShell(`seq 1 ${lineCount} | sed 's/^/line /'`, testDir)
+      // A run with its own data directory spills there, not into the real home.
+      const inDataDir = Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromEnvRecord({ GENT_DATA_DIR: dataDir }),
+      )
+      const result = yield* executeShell(`seq 1 ${lineCount} | sed 's/^/line /'`, testDir).pipe(
+        inDataDir,
+      )
       expect(result.truncated).toBe(true)
 
       // The reader is handed a path, not just a stump of the output.
       const savedPath = yield* Effect.fromOption(result.savedPath)
-      // The spill lives under the gent data directory, not under /tmp/gent.
-      expect(savedPath.startsWith(shellOutputDirectory())).toBe(true)
-      expect(savedPath).not.toContain("/tmp/gent")
+      const directory = yield* shellOutputDirectory().pipe(inDataDir)
+      expect(directory).toBe(`${dataDir}/shell-output`)
+      expect(savedPath.startsWith(directory)).toBe(true)
 
       const saved = yield* fs.readFileString(savedPath)
       // The whole output survives: the head the cap kept and the tail it cut.
