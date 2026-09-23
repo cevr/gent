@@ -238,6 +238,33 @@ describe("agents view projection", () => {
       expect(rows).toHaveLength(2)
     })
 
+    test("a child whose parent sits in another section is a root of its own section", () => {
+      // After a restart the parent's loop is back and idle while its child is
+      // only stored. The child heads the inactive section; indented, it would
+      // read as a child of whichever row sits above it.
+      const rows = buildRowTree(
+        reconcileAgentRows({
+          live: [live({ session: "parent", branch: "b", status: "Idle" })],
+          durable: [
+            durable({ session: "parent", branch: "b", updatedAt: 10 }),
+            durable({ session: "unrelated", branch: "b", updatedAt: 30 }),
+            durable({
+              session: "child",
+              branch: "b",
+              parentSession: "parent",
+              parentBranch: "b",
+              updatedAt: 20,
+            }),
+          ],
+        }),
+      )
+      expect(rows.map((row) => [row.sessionId, row.section, row.depth])).toEqual([
+        [sid("parent"), "idle", 0],
+        [sid("unrelated"), "inactive", 0],
+        [sid("child"), "inactive", 0],
+      ])
+    })
+
     test("orders running before idle before inactive", () => {
       const rows = buildRowTree(
         reconcileAgentRows({
@@ -551,10 +578,9 @@ const listAgents = (input: { readonly query?: string }) =>
 
 /**
  * One loop behind a scripted `Session`: `events` reads a queue the test feeds,
- * and `listActiveLoops` reports the loop with `status`, or not at all once it
- * is `None`. `checks` counts the listing reads: one per follow, one per
- * follower start and one per turn end, so a test sees whether a follower
- * still runs.
+ * and the runtime lists the loop with `status`, or not at all once it is
+ * `None`. `followWith` reads that listing once and hands it to `follow`, as a
+ * listing request does.
  */
 const scriptedLoop = Effect.gen(function* () {
   const loop = { sessionId: sid("child-session"), branchId: bid("child-branch") }
@@ -563,28 +589,25 @@ const scriptedLoop = Effect.gen(function* () {
   const base = testToolContext()
   const ctx = testLeafContext(
     testToolContext({
-      Session: {
-        ...base.Session,
-        events: () => Stream.fromQueue(events),
-        listActiveLoops: Ref.get(status).pipe(
-          Effect.map((current) =>
-            Option.toArray(
-              Option.map(current, (value) => ({ ...loop, status: Option.some(value) })),
-            ),
-          ),
-        ),
-      },
+      Session: { ...base.Session, events: () => Stream.fromQueue(events) },
     }),
   )
   const activity = yield* AgentActivity
-  const follow = activity.follow([loop]).pipe(Effect.provideService(ExtensionContext, ctx))
+  const followWith = (watch: ReadonlyArray<typeof loop>) =>
+    Ref.get(status).pipe(
+      Effect.flatMap((current) =>
+        activity.follow({ listed: Option.toArray(Option.as(current, loop)), watch }),
+      ),
+      Effect.provideService(ExtensionContext, ctx),
+    )
+  const follow = followWith([loop])
   const chunk = (text: string) =>
     Queue.offer(events, AgentEvent.cases.StreamChunk.make({ ...loop, chunk: text }))
   const turnCompleted = Queue.offer(
     events,
     AgentEvent.cases.TurnCompleted.make({ ...loop, durationMs: 1 }),
   )
-  return { loop, status, ctx, activity, follow, chunk, turnCompleted }
+  return { loop, status, activity, follow, followWith, chunk, turnCompleted }
 })
 
 describe("AgentActivity watchers", () => {
@@ -626,7 +649,7 @@ describe("AgentActivity watchers", () => {
         const script = yield* scriptedLoop
         yield* script.follow
         yield* Ref.set(script.status, Option.some("Idle"))
-        yield* script.activity.follow([]).pipe(Effect.provideService(ExtensionContext, script.ctx))
+        yield* script.followWith([])
         yield* script.chunk("Reading the loader.")
         yield* waitFor(
           script.activity.read(script.loop),
@@ -648,7 +671,7 @@ describe("AgentActivity watchers", () => {
         yield* waitFor(script.activity.read(script.loop), Option.isSome, 2_000, "the streamed line")
         // No event reads the change: only the next listing can stop it.
         yield* Ref.set(script.status, Option.none())
-        yield* script.activity.follow([]).pipe(Effect.provideService(ExtensionContext, script.ctx))
+        yield* script.followWith([])
         expect(Option.isNone(yield* script.activity.read(script.loop))).toBe(true)
       }).pipe(Effect.provide(AgentActivityLive), Effect.scoped, Effect.timeout("4 seconds")),
     6_000,
@@ -918,10 +941,15 @@ describe("AgentsViewExtension via RPC", () => {
           // `session.create` stores parentSessionId/parentBranchId, which is the
           // same link `delegate` writes for a subagent. Step 5's disclosure tree
           // reads nothing else, so proving depth here proves the nesting seam.
+          // Neither has a loop, so both sit in one section: a row nests only
+          // under a parent drawn in its own section.
+          const parent = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-parent",
+          })
           const child = yield* harness.client.session.create({
             cwd: "/tmp/agents-view-rpc-child",
-            parentSessionId: harness.sessionId,
-            parentBranchId: harness.branchId,
+            parentSessionId: parent.sessionId,
+            parentBranchId: parent.branchId,
           })
 
           const raw = yield* harness.client.extension.request({
@@ -933,13 +961,13 @@ describe("AgentsViewExtension via RPC", () => {
           })
           const reply = yield* Schema.decodeUnknownEffect(ReplySchema)(raw)
 
-          const parentRow = reply.rows.find((row) => row.sessionId === harness.sessionId)
+          const parentRow = reply.rows.find((row) => row.sessionId === parent.sessionId)
           const childRow = reply.rows.find((row) => row.sessionId === child.sessionId)
           expect(parentRow?.depth).toBe(0)
           expect(childRow?.depth).toBe(1)
           // The tray counts a session's subtree client-side, so the link travels.
           expect(parentRow?.parentSessionId).toBeUndefined()
-          expect(childRow?.parentSessionId).toBe(harness.sessionId)
+          expect(childRow?.parentSessionId).toBe(parent.sessionId)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
