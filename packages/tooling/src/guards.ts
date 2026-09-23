@@ -1,7 +1,7 @@
 import { Option, Schema } from "effect"
 // A write or a caller in test support proves a reader works, not that
-// production supplies it; the lint rule reads the same definition.
-import { isTestSupport } from "./gent-rules"
+// production supplies it; the lint rules read the same definitions.
+import { isTestCode, isTestHarness, isTestSupport } from "./gent-rules"
 
 /** What every guard reports: a place in a file, and what is wrong there. */
 export interface Finding {
@@ -626,11 +626,9 @@ export const findIdentityEncodes = (file: string, text: string): ReadonlyArray<F
 /** Every seam family core declares now lives in one file; each scan is anchored on its own interface name. */
 const SEAM_DECLARATION_FILE = "packages/core/src/domain/extension.ts"
 
-/** Files that may fill a seam: shipped extensions and the apps, never tests. */
+/** Files that may fill a seam: shipped extensions and the apps, never test support. */
 const isAdapterSource = (file: string): boolean =>
-  (file.startsWith("packages/extensions/src/") || file.startsWith("apps/")) &&
-  !file.includes("/tests/") &&
-  !/\.test\.[cm]?[jt]sx?$/.test(file)
+  (file.startsWith("packages/extensions/src/") || file.startsWith("apps/")) && !isTestSupport(file)
 
 /**
  * Reads the member names of a single interface or object-literal body.
@@ -1269,13 +1267,12 @@ export const findReadersWithoutWriters = (
 
 // ── no code duplicates an Effect platform service ───────────────────────────
 
-/** Shipped source under `packages/` and `apps/`: not tests, fixtures or build output. */
+/** Shipped source under `packages/` and `apps/`: not test support, not build output. */
 const shippedSourceFile = (file: string): boolean =>
   /^(?:packages|apps)\//.test(file) &&
   /\.(?:[cm]?[jt]sx?)$/.test(file) &&
   file !== GUARDS_FILE &&
-  !file.includes("/tests/") &&
-  !file.includes("/fixtures/") &&
+  !isTestSupport(file) &&
   !file.includes("/dist/")
 
 const PLATFORM_LAYER = /\b(?:BunPlatformLive|BunGentPlatformLive)\b/
@@ -1341,9 +1338,10 @@ interface RetiredSurface {
   readonly on: "line" | "import" | "path"
   readonly match: RegExp
   /**
-   * `shipped`: source under `packages/` and `apps/`, not tests or fixtures.
-   * `shipped-and-tests`: also the `tests/` trees, where a test that builds the
-   * retired layer again is the same regrowth; the tooling package is out.
+   * `shipped`: shipped source and the test harness, not the tests. A test may
+   * name a retired surface to assert it is gone.
+   * `shipped-and-tests`: also the tests, where a test that builds the retired
+   * layer again is the same regrowth; the tooling package is out.
    */
   readonly scope: "shipped" | "shipped-and-tests"
   readonly message: string
@@ -1646,7 +1644,8 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
   },
 ]
 
-const SHIPPED_AND_TESTS = /^(?:packages|apps)\/(?!tooling\/)[^/]+\/(?:src|tests)\//
+/** Source under `packages/` and `apps/` but the tooling package, which names the rows. */
+const RETIRED_SOURCE = /^(?:packages|apps)\/(?!tooling\/).+\.[cm]?[jt]sx?$/
 
 /**
  * The prose the retired rows read: the steering files, a package's own
@@ -1660,8 +1659,10 @@ export const isRetiredSurfaceProse = (file: string): boolean => RETIRED_PROSE.te
 
 const inRetiredScope = (file: string, row: RetiredSurface): boolean => {
   if (isRetiredSurfaceProse(file)) return row.on === "line"
-  if (row.scope === "shipped") return shippedSourceFile(file)
-  return SHIPPED_AND_TESTS.test(file) && file !== GUARDS_FILE
+  if (!RETIRED_SOURCE.test(file) || file.includes("/dist/")) return false
+  // The harness ships no product, but it is where a removed test layer grows back.
+  if (row.scope === "shipped") return shippedSourceFile(file) || isTestHarness(file)
+  return shippedSourceFile(file) || isTestCode(file)
 }
 
 const importedModule = (line: string): Option.Option<string> =>

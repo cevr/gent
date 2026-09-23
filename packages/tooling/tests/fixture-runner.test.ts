@@ -18,7 +18,7 @@
  * @module
  */
 
-import { expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { BunServices } from "@effect/platform-bun"
 import { Effect, Exit, FileSystem, Option, Path, Schema } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
@@ -28,7 +28,7 @@ import {
   type OxlintReport,
   type OxlintRun,
 } from "../src/fixture-runner"
-import gentRules from "../src/gent-rules"
+import gentRules, { isTest, isTestCode, isTestHarness, isTestSupport } from "../src/gent-rules"
 
 const filterByFile = (report: OxlintReport, fixtureFile: string): ReadonlyArray<Diagnostic> =>
   report.diagnostics.filter((d) => d.filename === fixtureFile)
@@ -212,6 +212,13 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 3,
   },
   {
+    rule: "gent/no-promise-control-flow-in-tests",
+    invalid: "apps/tui/integration/promise-helpers.invalid.ts",
+    valid: [],
+    // An integration helper is test code: one `.then`
+    expectedCount: 1,
+  },
+  {
     rule: "gent/no-bun-outside-adapter",
     invalid: "no-bun-outside-adapter.invalid.ts",
     // valid file lives at `runtime/gent-platform-bun.ts` — the canonical
@@ -272,6 +279,14 @@ const CASES: ReadonlyArray<RuleCase> = [
     valid: ["no-sleep.valid.test.ts"],
     // 4 unguarded sleeps + 1 malformed-carveout sleep
     expectedCount: 5,
+  },
+  {
+    rule: "gent/no-sleep",
+    invalid: "packages/core/src/test-utils/no-sleep.invalid.ts",
+    // A shipped `-boundary` file is product code, not a test's boundary
+    valid: ["packages/sdk/src/no-sleep-valid-boundary.ts"],
+    // The harness is test code: one sleep
+    expectedCount: 1,
   },
   {
     rule: "gent/no-die-in-test-helpers",
@@ -409,4 +424,42 @@ effectDescribe("custom lint rules", () => {
       expect(oxlintConfig).not.toContain("gent/all-errors-are-tagged")
     }).pipe(Effect.provide(BunServices.layer)),
   )
+})
+
+// ── what is a test ──────────────────────────────────────────────────────────
+
+describe("what is a test", () => {
+  const kinds = (file: string) => ({
+    test: isTest(file),
+    harness: isTestHarness(file),
+    code: isTestCode(file),
+    support: isTestSupport(file),
+  })
+  const aTest = { test: true, harness: false, code: true, support: true }
+  const harness = { test: false, harness: true, code: true, support: true }
+  const supportOnly = { test: false, harness: false, code: false, support: true }
+  const product = { test: false, harness: false, code: false, support: false }
+
+  test("a test file, a tests tree and an integration tree are tests", () => {
+    expect(kinds("packages/core/tests/runtime/agent-loop.test.ts")).toEqual(aTest)
+    expect(kinds("apps/tui/tests/helpers-boundary.ts")).toEqual(aTest)
+    expect(kinds("apps/tui/integration/helpers.ts")).toEqual(aTest)
+    expect(kinds("/Users/x/gent/apps/tui/integration/helpers.ts")).toEqual(aTest)
+  })
+
+  test("the e2e package and core test-utils are the harness", () => {
+    expect(kinds("packages/e2e/src/pty-fixture.ts")).toEqual(harness)
+    expect(kinds("packages/core/src/test-utils/language-model.ts")).toEqual(harness)
+  })
+
+  test("testbeds and lint fixtures are support but not test code", () => {
+    expect(kinds("testbeds/gamut/gamut.ts")).toEqual(supportOnly)
+    expect(kinds("packages/tooling/fixtures/no-sleep.valid.ts")).toEqual(supportOnly)
+  })
+
+  test("a shipped boundary file is product code", () => {
+    expect(kinds("apps/tui/src/extensions/loader-boundary.ts")).toEqual(product)
+    expect(kinds("packages/sdk/src/runtime-boundary.ts")).toEqual(product)
+    expect(kinds("packages/core/src/runtime/agent-loop.ts")).toEqual(product)
+  })
 })
