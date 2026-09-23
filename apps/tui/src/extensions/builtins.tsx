@@ -26,20 +26,28 @@ import {
   ClientWorkspace,
   defineClientExtension,
   interactionRendererContribution,
+  messageRendererContribution,
   rendererContribution,
   sessionQuery,
   widgetContribution,
 } from "./client-facets.js"
 import { truncate, truncatePath } from "../utils"
+import { CollapsedRow, UserRow } from "../ui"
+import { textWidth } from "../text-width-adapter"
 import { BunSocket } from "@effect/platform-bun"
 import { createEffect, createRoot, Show } from "solid-js"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/protocol"
 import { ref } from "@gent/core/extensions/api"
 import {
+  GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,
   GoalRpc,
   type GoalSnapshot,
   remainingTokens,
+  SESSION_MESSAGE_TYPE,
+  SESSION_TOOLS_EXTENSION_ID,
+  SessionMessageDetails,
+  sessionMessageBody,
   SkillsRpc,
 } from "@gent/extensions/client.js"
 import { useTheme } from "../theme"
@@ -555,7 +563,8 @@ export const builtinDriver = defineClientExtension("@gent/driver-ui", {
  *
  * Reads the branch goal through `GoalRpc.Get` and refreshes on
  * `ExtensionStateChanged` pulses for `@gent/goal`. Renders one bottom-right
- * border label while a goal is pending on the current branch.
+ * border label while a goal is pending on the current branch, and collapses
+ * each goal continuation message to one line.
  */
 
 const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
@@ -574,25 +583,90 @@ const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
       }),
     )
 
-    return borderLabelContribution({
-      position: "bottom-right",
-      priority: 40,
-      produce: () => {
-        const goal = snapshot.value().pipe(
-          Option.flatMap((value) => Option.fromUndefinedOr(value.goal)),
-          Option.filter((value) => value.status !== "complete"),
-        )
-        if (Option.isNone(goal)) return []
-        const parts = [`goal ${goal.value.status}`, `${goal.value.continuationsUsed}↻`]
-        Option.map(remainingTokens(goal.value), (remaining) => {
-          parts.push(`${remaining} left`)
-        })
-        let color: "info" | "warning" = "info"
-        if (goal.value.status !== "active") color = "warning"
-        return [{ text: parts.join(" · "), color }]
-      },
-    })
+    return clientContributions(
+      messageRendererContribution(GOAL_CONTEXT_MESSAGE_TYPE, () => (
+        <CollapsedRow label="↻ goal continuation" />
+      )),
+      borderLabelContribution({
+        position: "bottom-right",
+        priority: 40,
+        produce: () => {
+          const goal = snapshot.value().pipe(
+            Option.flatMap((value) => Option.fromUndefinedOr(value.goal)),
+            Option.filter((value) => value.status !== "complete"),
+          )
+          if (Option.isNone(goal)) return []
+          const parts = [`goal ${goal.value.status}`, `${goal.value.continuationsUsed}↻`]
+          Option.map(remainingTokens(goal.value), (remaining) => {
+            parts.push(`${remaining} left`)
+          })
+          let color: "info" | "warning" = "info"
+          if (goal.value.status !== "active") color = "warning"
+          return [{ text: parts.join(" · "), color }]
+        },
+      }),
+    )
   }),
+})
+
+// ── session message row ─────────────────────────────────────────────────────
+
+/** A message from another session names its sender on a line of its own. */
+const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDetails)
+
+/** The sender line fits the id: an auto-named child carries its whole task in the name. */
+const SENDER_NAME_MAX_COLUMNS = 32
+
+const graphemes = new Intl.Segmenter([], { granularity: "grapheme" })
+
+/** Cuts by terminal columns and whole graphemes, so a wide or combined character is never split. */
+const shortName = (name: string): string => {
+  const flat = name.replace(/\s+/g, " ").trim()
+  if (textWidth(flat) <= SENDER_NAME_MAX_COLUMNS) return flat
+  let kept = ""
+  for (const { segment } of graphemes.segment(flat)) {
+    if (textWidth(kept + segment) > SENDER_NAME_MAX_COLUMNS - 1) break
+    kept += segment
+  }
+  return `${kept.trimEnd()}…`
+}
+
+/** Who wrote a sent message: the relation, the cut name, and the short session id. */
+const senderLine = ({ from }: SessionMessageDetails): string => {
+  const who = Option.liftPredicate(from.relation, (relation) => relation !== "session").pipe(
+    Option.map((relation) => `your ${relation}`),
+    Option.getOrElse(() => "session"),
+  )
+  const name = Option.fromUndefinedOr(from.name).pipe(
+    Option.map((value) => ` "${shortName(value)}"`),
+    Option.getOrElse(() => ""),
+  )
+  return `» from ${who}${name} · ${from.sessionId.slice(0, 8)}`
+}
+
+/**
+ * The model reads the header `sessionMessageText` writes, then the text. The
+ * row puts the sender in its own muted line and `sessionMessageBody` removes
+ * the header, old rows included, so blank lines in a name or body stay whole.
+ * Details that do not decode draw the plain row.
+ */
+const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID, {
+  setup: Effect.succeed(
+    messageRendererContribution(SESSION_MESSAGE_TYPE, (props) => (
+      <Show
+        when={Option.getOrUndefined(decodeSessionMessageDetails(props.details))}
+        fallback={<UserRow {...props} />}
+      >
+        {(details) => (
+          <UserRow
+            {...props}
+            header={senderLine(details())}
+            content={sessionMessageBody(details().from, props.content)}
+          />
+        )}
+      </Show>
+    )),
+  ),
 })
 
 // ── connection widget ───────────────────────────────────────────────────────
@@ -776,6 +850,7 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinWake,
   builtinHerdr,
   builtinInteractions,
+  builtinSessionMessages,
   builtinSkills,
   builtinThreadView,
   builtinTools,

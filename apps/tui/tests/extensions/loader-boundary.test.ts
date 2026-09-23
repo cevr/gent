@@ -20,6 +20,9 @@ import {
   type ClientTransportDefinition,
   type ExtensionClientModule,
   interactionRendererContribution,
+  type MessageRenderer,
+  messageRendererContribution,
+  type MessageRowProps,
   NoActiveSessionError,
   rendererContribution,
   type WidgetComponent,
@@ -80,7 +83,12 @@ const widget =
   (label: string): WidgetComponent =>
   () =>
     label
+const row =
+  (label: string): MessageRenderer =>
+  (_props: MessageRowProps) =>
+    label
 const absent = Option.getOrUndefined(Option.none())
+const rowProps: MessageRowProps = { content: "", images: [], interjection: false, details: {} }
 const toolProps: ToolRendererProps = {
   toolCall: {
     id: "test-tool-call",
@@ -222,6 +230,27 @@ describe("resolveTuiExtensions", () => {
     if (Option.isNone(defaultRenderer) || Option.isNone(askRenderer)) return
     expect(defaultRenderer.value(interactionProps)).toBe("default")
     expect(askRenderer.value(interactionProps)).toBe("project-ask")
+  })
+
+  test("message renderers key by exact custom type; a higher scope replaces, a same-scope claim is dropped", () => {
+    const resolved = resolveTuiExtensions([
+      make("a-goal", "builtin", messageRendererContribution("goal-context", row("builtin"))),
+      make("b-goal", "builtin", messageRendererContribution("goal-context", row("rival"))),
+      make("user-goal", "user", messageRendererContribution("goal-context", row("user"))),
+      make("user-wake", "user", messageRendererContribution("wake", row("wake"))),
+    ])
+
+    const goal = Option.fromNullishOr(resolved.messageRenderers.get("goal-context"))
+    expect(Option.map(goal, (render) => render(rowProps))).toEqual(Option.some("user"))
+    expect(resolved.messageRenderers.has("Goal-Context")).toBe(false)
+    expect([...resolved.messageRenderers.keys()]).toEqual(["goal-context", "wake"])
+    expect(resolved.failures).toEqual([
+      {
+        id: "b-goal",
+        reason:
+          'message renderer "goal-context" is already claimed by "/test/a-goal" in scope "builtin"',
+      },
+    ])
   })
 
   test("border labels remain collected and priority sorted", () => {

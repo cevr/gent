@@ -172,12 +172,13 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup        |
 | `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup   |
 | `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command               |
-| `@gent/goal`                              | `builtins.tsx`           | Goal widget                           |
+| `@gent/goal`                              | `builtins.tsx`           | Goal label, goal continuation row     |
+| `@gent/session-tools`                     | `builtins.tsx`           | Sender row for `session.send`         |
 | `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter               |
 | `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane and tray                  |
 | `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                      |
 | `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                        |
-| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray                       |
+| `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row       |
 
 Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions
 
@@ -190,6 +191,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
 - Extensions have no overlays. A pane is a `below-input` widget that the extension opens and closes with its own signal (agents, thread, btw). A pane that takes typed text reads keys through `useScopedKeyboard`, as the agents filter and the btw ask line do: an `<input>` would take the terminal's focus from the composer, and the composer would not get it back.
 - `useExtensionUI()` provides the resolved contributions, the load `failures`, and `clientRuntime`; widgets read the session from `ClientTransport.currentSession()`
+- **Message rows**: `messageRendererContribution(customType, component)` draws the user-role messages whose `metadata.customType` matches exactly. The component composes `UserRow` or `CollapsedRow` from `src/ui.tsx`. `message-list.tsx` names only the runtime's own kinds (`context-window`, `model-change`), and full detail draws every message as the plain row
 - Border labels support 4 positions: `top-left`, `top-right`, `bottom-left`, `bottom-right`
 - `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups
 - `ClientWorkspace.cwd` / `ClientWorkspace.home` for workspace-relative operations

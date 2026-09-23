@@ -1007,6 +1007,7 @@ Other notes:
 - `@gent/herdr` is a built-in client extension. It reports that UI activity through Herdr's local socket when `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are present. It sends ordered reports with the session ID and releases its authority on exit. The shared server and child agents do not own this reporter.
 - `useExtensionUI()` exposes reactive `sessionId()`, `branchId()`, and `clientRuntime` for widgets that need imperative access from the render layer.
 - Widgets are zero-prop components that self-source from context hooks.
+- An extension draws its own transcript rows with `messageRendererContribution`, keyed by the message's `metadata.customType`. The core transcript names only the runtime's own kinds and falls back to the plain row.
 
 ### Extension State
 

@@ -9,6 +9,7 @@ import {
   type ClientShellTransportDefinition,
   type ClientWorkspaceDefinition,
   type InteractionRendererComponent,
+  type MessageRenderer,
   makeClientActivityLayer,
   makeClientLifecycleLayer,
   makeClientShellLayer,
@@ -105,6 +106,8 @@ export const makeClientRuntime = (deps: ClientRuntimeDeps): ClientRuntime =>
 interface ExtensionUIContextValue {
   readonly setActivityProvider: (provider: () => ClientActivitySnapshot) => void
   readonly renderers: Accessor<Map<string, ToolRenderer>>
+  /** Message-row renderers by `metadata.customType`. */
+  readonly messageRenderers: Accessor<Map<string, MessageRenderer>>
   readonly widgets: Accessor<ReadonlyArray<ResolvedWidget>>
   /**
    * Every command the reader can run: the session's own, the client
@@ -128,6 +131,7 @@ interface ExtensionUIContextValue {
 
 const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   renderers: new Map(),
+  messageRenderers: new Map(),
   widgets: [],
   commandSources: [],
   interactionRenderers: new Map(),
@@ -334,6 +338,7 @@ export function ExtensionUIProvider(props: { children: JSX.Element; scope?: Scop
     <ExtensionUIContext.Provider
       value={{
         renderers: () => resolved().renderers,
+        messageRenderers: () => resolved().messageRenderers,
         widgets: () => resolved().widgets,
         commands: () => resolvedCommands().commands,
         setSessionCommands,

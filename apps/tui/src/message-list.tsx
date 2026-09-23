@@ -17,9 +17,11 @@ import {
 import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
 import { useTheme } from "./theme"
 import {
+  CollapsedRow,
   formatToolCallIdentity,
   ToolCallIdentityProvider,
   ToolFrameBody,
+  UserRow,
   useSpinnerClock,
 } from "./ui"
 import {
@@ -42,13 +44,12 @@ import type { ScrollBoxRenderable, ScrollbackSurface, SyntaxStyle } from "@opent
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { GenericToolRenderer, type ToolCall } from "./tool-renderers"
 import { useExtensionUI } from "./extensions/host"
+import type { MessageRenderer, MessageRowProps } from "./extensions/client-facets"
 import type { ImageInfo } from "@gent/sdk"
 import type { ChildSessionEntry } from "./client"
 import { replaceMermaidBlocks } from "./mermaid"
 import type { DisclosureLevel } from "./session"
-import { SessionMessageDetails, sessionMessageBody, WakeDetails } from "@gent/extensions/client.js"
 import { insert, RendererContext, useRenderer } from "@opentui/solid"
-import { textWidth } from "./text-width-adapter"
 
 // ── reasoning text ──────────────────────────────────────────────────────────
 
@@ -231,58 +232,6 @@ const HandoffDetails = Schema.Struct({
 type HandoffDetails = typeof HandoffDetails.Type
 const decodeHandoffDetails = Schema.decodeUnknownOption(HandoffDetails)
 
-/** A fired wake shows what fired and the note the model left itself, not the full line. */
-const decodeWakeDetails = Schema.decodeUnknownOption(WakeDetails)
-
-/** A message from another session names its sender on a line of its own. */
-const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDetails)
-
-/** The sender line fits the id: an auto-named child carries its whole task in the name. */
-const SENDER_NAME_MAX_COLUMNS = 32
-
-const graphemes = new Intl.Segmenter([], { granularity: "grapheme" })
-
-/** Cuts by terminal columns and whole graphemes, so a wide or combined character is never split. */
-const shortName = (name: string): string => {
-  const flat = name.replace(/\s+/g, " ").trim()
-  if (textWidth(flat) <= SENDER_NAME_MAX_COLUMNS) return flat
-  let kept = ""
-  for (const { segment } of graphemes.segment(flat)) {
-    if (textWidth(kept + segment) > SENDER_NAME_MAX_COLUMNS - 1) break
-    kept += segment
-  }
-  return `${kept.trimEnd()}…`
-}
-
-/** One sent message as the reader sees it: who wrote it, then the text. */
-interface SessionMessageView {
-  readonly sender: string
-  readonly body: string
-}
-
-/**
- * The model reads the header `sessionMessageText` writes, then the text. The
- * row puts the sender in its own muted line and `sessionMessageBody` removes
- * the header, old rows included, so blank lines in a name or body stay whole.
- */
-const sessionMessageView = (
-  { from }: SessionMessageDetails,
-  content: string,
-): SessionMessageView => {
-  const who = Option.liftPredicate(from.relation, (relation) => relation !== "session").pipe(
-    Option.map((relation) => `your ${relation}`),
-    Option.getOrElse(() => "session"),
-  )
-  const name = Option.fromUndefinedOr(from.name).pipe(
-    Option.map((value) => ` "${shortName(value)}"`),
-    Option.getOrElse(() => ""),
-  )
-  return {
-    sender: `» from ${who}${name} · ${from.sessionId.slice(0, 8)}`,
-    body: sessionMessageBody(from, content),
-  }
-}
-
 const PREVIEW_LINES = 20
 
 const liveOutcome = (status: ToolCall["status"]): ActivityOperation["outcome"] => {
@@ -402,30 +351,14 @@ const isMessageItem = Predicate.or(
   Predicate.isTagged("interjection-message"),
 )
 
-/** Harness-authored user messages collapse to one line unless full detail is on. */
-const collapsedUserLabel = (
-  customType: string,
-  handoff: Option.Option<HandoffDetails>,
-  wake: Option.Option<WakeDetails>,
-): Option.Option<string> => {
-  if (customType === "goal-context") return Option.some("↻ goal continuation")
-  if (customType === "context-window") return Option.some(windowLabel(handoff))
-  if (customType === "model-change") return Option.some("⇄ model changed")
-  if (customType === "wake") return Option.some(wakeLabel(wake))
-  return Option.none()
-}
-
-const wakeLabel = (wake: Option.Option<WakeDetails>): string =>
-  Option.match(wake, {
-    onNone: () => "◷ alarm fired",
-    onSome: (value) => `${wakeHead(value)} · ${value.note}`,
-  })
-
-const wakeHead = (value: WakeDetails): string => {
-  if (value.outcome === "fired") return "◷ alarm fired"
-  if (value.outcome === "timed-out") return "◉ monitor timed out"
-  return "◉ monitor matched"
-}
+/** The runtime's own user-role messages collapse to one line; an extension draws its own kinds. */
+const runtimeRows = new Map<string, MessageRenderer>([
+  [
+    "context-window",
+    (props) => <CollapsedRow label={windowLabel(decodeHandoffDetails(props.details))} />,
+  ],
+  ["model-change", () => <CollapsedRow label="⇄ model changed" />],
+])
 
 /** A handoff names what it summarized; a bare window says only that history left the view. */
 const windowLabel = (handoff: Option.Option<HandoffDetails>): string =>
@@ -438,106 +371,24 @@ const windowLabel = (handoff: Option.Option<HandoffDetails>): string =>
     }),
   )
 
-function UserMessage(props: {
-  content: string
-  images: ImageInfo[]
-  interjection: boolean
-  pendingMode?: "queued" | "steer"
-  customType?: string
-  details?: unknown
-  fullDetail: boolean
-}) {
-  const { theme } = useTheme()
-  const collapsedLabel = () =>
+function UserMessage(props: MessageRowProps & { customType?: string; fullDetail: boolean }) {
+  const ext = useExtensionUI()
+  /** An extension's renderer first, then the runtime's; full detail draws every message plain. */
+  const renderer = () =>
     Option.fromUndefinedOr(props.customType).pipe(
+      Option.filter(() => !props.fullDetail),
       Option.flatMap((customType) =>
-        collapsedUserLabel(
-          customType,
-          decodeHandoffDetails(props.details),
-          decodeWakeDetails(props.details),
+        Option.orElse(Option.fromUndefinedOr(ext.messageRenderers().get(customType)), () =>
+          Option.fromUndefinedOr(runtimeRows.get(customType)),
         ),
       ),
-      Option.filter(() => !props.fullDetail),
     )
-  const sessionMessage = () =>
-    Option.fromUndefinedOr(props.customType).pipe(
-      Option.filter((customType) => customType === "session-message" && !props.fullDetail),
-      Option.flatMap(() => decodeSessionMessageDetails(props.details)),
-      Option.map((details) => sessionMessageView(details, props.content)),
-    )
-  const shownContent = () =>
-    Option.match(sessionMessage(), {
-      onNone: () => props.content,
-      onSome: (view) => view.body,
-    })
-  const textColor = () => {
-    if (props.interjection) return theme.warning
-    return theme.text
-  }
-  const label = () => props.pendingMode
-  const labelColor = () => {
-    if (props.interjection) return theme.warning
-    return theme.textMuted
-  }
-  const railColor = () => {
-    if (props.interjection) return theme.warning
-    return theme.primary
-  }
   const hasContent = () => props.content.length > 0 || props.images.length > 0
 
   return (
     <Show when={hasContent()}>
-      <Show
-        when={Option.getOrUndefined(collapsedLabel())}
-        fallback={
-          <box
-            marginTop={1}
-            paddingLeft={1}
-            paddingRight={1}
-            flexDirection="column"
-            border={["left"]}
-            borderStyle="heavy"
-            borderColor={railColor()}
-          >
-            <Show when={props.images.length > 0}>
-              <For each={props.images}>
-                {(img) => (
-                  <text style={{ fg: theme.info }}>
-                    [Image: {img.mediaType.replace("image/", "")}]
-                  </text>
-                )}
-              </For>
-            </Show>
-            <Show when={props.content.length > 0}>
-              <box flexDirection="column">
-                <Show when={Option.getOrUndefined(sessionMessage())}>
-                  {(view) => <text style={{ fg: theme.textMuted }}>{view().sender}</text>}
-                </Show>
-                <Show when={label()}>
-                  {(value) => (
-                    <text>
-                      <span style={{ fg: labelColor(), bold: true }}>[{value()}]</span>
-                    </text>
-                  )}
-                </Show>
-                <text style={{ fg: textColor() }}>
-                  <span style={{ bold: true }}>{shownContent()}</span>
-                </text>
-              </box>
-            </Show>
-          </box>
-        }
-      >
-        {(label) => (
-          <box marginTop={1} flexDirection="row">
-            <text width={1} flexShrink={0} style={{ fg: theme.textMuted }}>
-              ┃
-            </text>
-            <text paddingLeft={1} style={{ fg: theme.textMuted }}>
-              {label()}
-            </text>
-          </box>
-        )}
+      <Show when={Option.getOrUndefined(renderer())} keyed fallback={<UserRow {...props} />}>
+        {(Row) => <Row {...props} />}
       </Show>
     </Show>
   )

@@ -19,6 +19,7 @@ import {
   type ClientRuntime,
   type ClientRuntimeServices,
   type InteractionRendererComponent,
+  type MessageRenderer,
   type WidgetComponent,
   type WidgetSlot,
 } from "./client-facets.js"
@@ -124,8 +125,8 @@ const discoverTuiExtensions = (opts: {
  * id order; when two claim one key, the first keeps it and the later
  * contribution is dropped and recorded in `failures`. Nothing else is lost.
  *
- * Keyed buckets (renderers by tool name, widgets by id,
- * interaction renderers by metadata type) go through `resolveKeyed`. Commands
+ * Keyed buckets (renderers by tool name, message renderers by custom type,
+ * widgets by id, interaction renderers by metadata type) go through `resolveKeyed`. Commands
  * are passed on as sources: the host adds the session's and the server's and
  * resolves them all under `resolveCommands`. Border labels and autocomplete
  * sources are collected in scope order.
@@ -160,6 +161,8 @@ export interface ResolvedBorderLabel {
 
 export interface ResolvedTuiExtensions {
   readonly renderers: Map<string, ToolRenderer>
+  /** Keyed by `metadata.customType`, matched exactly. */
+  readonly messageRenderers: Map<string, MessageRenderer>
   readonly widgets: ReadonlyArray<ResolvedWidget>
   /** Each extension's commands, in scope order; `resolveCommands` decides the owners. */
   readonly commandSources: ReadonlyArray<CommandSource>
@@ -375,6 +378,13 @@ export const resolveTuiExtensions = (
       })),
     ),
   )
+  const messageRenderers = resolveKeyed(sorted, failures, "message renderer", (contributions) =>
+    itemsOrEmpty(contributions.messageRenderers).map((contribution) => ({
+      key: contribution.customType,
+      value: contribution.component,
+      name: contribution.customType,
+    })),
+  )
   const widgets = resolveKeyed(sorted, failures, "widget", (contributions) =>
     itemsOrEmpty(contributions.widgets).map((contribution) => ({
       key: contribution.id,
@@ -395,6 +405,7 @@ export const resolveTuiExtensions = (
   )
   return {
     renderers,
+    messageRenderers,
     widgets: byPriority([...widgets.values()]),
     commandSources: sorted.map((ext) => ({
       id: ext.id,

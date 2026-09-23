@@ -20,7 +20,7 @@ import {
   type Session,
   SessionId,
 } from "@gent/core/protocol"
-import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
+import type { GentClientRpcError, GentNamespacedClient, GentRuntime, ImageInfo } from "@gent/sdk"
 import type { CapabilityRef, DriverRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
@@ -614,9 +614,10 @@ export const sessionQuery = <A>(opts: {
 // Adding a new facet means adding an explicit field and resolver path, not
 // another stringly runtime tag table. Per-bucket conflict rules are preserved
 // by the resolver:
-//   - renderers, widgets, interaction renderers: keyed by tool name, widget
-//     id and metadataType; the highest scope wins, and inside one scope the
-//     first claim keeps the key. Widgets sort by priority.
+//   - renderers, message renderers, widgets, interaction renderers: keyed by
+//     tool name, message custom type, widget id and metadataType; the highest
+//     scope wins, and inside one scope the first claim keeps the key. Widgets
+//     sort by priority.
 //   - commands: the same rule by id, slash and keybind, applied by the host's
 //     `resolveCommands` over the session's, the extensions' and the server's
 //   - border labels: collected (no winner), sorted by priority
@@ -631,6 +632,21 @@ export interface InteractionRendererProps {
   readonly resolve: (result: ApprovalResult) => void
 }
 
+/**
+ * One user-role message a harness or an extension wrote, as its row draws it.
+ * The transcript picks the renderer by the message's `metadata.customType`;
+ * with full detail on, every message draws the plain row instead.
+ */
+export interface MessageRowProps {
+  readonly content: string
+  readonly images: ReadonlyArray<ImageInfo>
+  readonly interjection: boolean
+  readonly pendingMode?: "queued" | "steer"
+  /** The message's `metadata.details`, for the renderer to decode. */
+  readonly details: unknown
+}
+
+export type MessageRenderer = (props: MessageRowProps) => JSX.Element
 export type WidgetComponent = () => JSX.Element
 export type InteractionRendererComponent = (props: InteractionRendererProps) => JSX.Element
 
@@ -662,6 +678,12 @@ type AutocompleteItemsEffect = Effect.Effect<
 interface RendererContribution {
   readonly toolNames: ReadonlyArray<string>
   readonly component: ToolRenderer
+}
+
+interface MessageRendererContribution {
+  /** Matches `metadata.customType` exactly. */
+  readonly customType: string
+  readonly component: MessageRenderer
 }
 
 interface WidgetContribution {
@@ -722,6 +744,7 @@ export interface AutocompleteContribution {
 
 export interface ClientContributions {
   readonly renderers?: ReadonlyArray<RendererContribution>
+  readonly messageRenderers?: ReadonlyArray<MessageRendererContribution>
   readonly widgets?: ReadonlyArray<WidgetContribution>
   readonly commands?: ReadonlyArray<Command>
   readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
@@ -755,6 +778,7 @@ export const clientContributions = (
 
   for (const part of parts) {
     out.renderers = append(out.renderers, part.renderers)
+    out.messageRenderers = append(out.messageRenderers, part.messageRenderers)
     out.widgets = append(out.widgets, part.widgets)
     out.commands = append(out.commands, part.commands)
     out.interactionRenderers = append(out.interactionRenderers, part.interactionRenderers)
@@ -771,6 +795,11 @@ export const rendererContribution = (
   toolNames: ReadonlyArray<string>,
   component: ToolRenderer,
 ): ClientContributions => ({ renderers: [{ toolNames, component }] })
+
+export const messageRendererContribution = (
+  customType: string,
+  component: MessageRenderer,
+): ClientContributions => ({ messageRenderers: [{ customType, component }] })
 
 export const widgetContribution = (opts: {
   readonly id: string

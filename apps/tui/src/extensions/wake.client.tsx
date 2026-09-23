@@ -1,21 +1,24 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, Effect, Match, Option, Schedule } from "effect"
+import { DateTime, Effect, Match, Option, Schedule, Schema } from "effect"
 import { For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
 import {
   WAKE_EXTENSION_ID,
+  WAKE_MESSAGE_TYPE,
+  WakeDetails,
   type WakeEntryType,
   type WakePendingType,
   WakeRpc,
 } from "@gent/extensions/client.js"
 import { useTheme } from "../theme"
 import { useTerminalDimensions } from "../terminal"
-import { useSpinnerClock } from "../ui"
+import { CollapsedRow, useSpinnerClock } from "../ui"
 import {
   clientContributions,
   ClientLifecycle,
   ClientTransport,
   defineClientExtension,
+  messageRendererContribution,
   sessionQuery,
   widgetContribution,
 } from "./client-facets.js"
@@ -154,6 +157,23 @@ export function WakeTray(props: {
   )
 }
 
+// ── fired row ──
+
+/** A fired wake shows what fired and the note the model left itself, not the full line. */
+const decodeWakeDetails = Schema.decodeUnknownOption(WakeDetails)
+
+const wakeHead = (value: WakeDetails): string => {
+  if (value.outcome === "fired") return `${ALARM_GLYPH} alarm fired`
+  if (value.outcome === "timed-out") return `${MONITOR_GLYPH} monitor timed out`
+  return `${MONITOR_GLYPH} monitor matched`
+}
+
+const wakeLabel = (wake: Option.Option<WakeDetails>): string =>
+  Option.match(wake, {
+    onNone: () => `${ALARM_GLYPH} alarm fired`,
+    onSome: (value) => `${wakeHead(value)} · ${value.note}`,
+  })
+
 const REFRESH_EVENTS: ReadonlySet<string> = new Set([
   "ToolCallStarted",
   "MessageReceived",
@@ -190,6 +210,9 @@ export default defineClientExtension(WAKE_EXTENSION_ID, {
     )
 
     return clientContributions(
+      messageRendererContribution(WAKE_MESSAGE_TYPE, (props) => (
+        <CollapsedRow label={wakeLabel(decodeWakeDetails(props.details))} />
+      )),
       widgetContribution({
         id: "wake.tray",
         slot: "below-input",

@@ -162,7 +162,10 @@ class SendSessionError extends Schema.TaggedError<SendSessionError>()("SendSessi
   message: Schema.String,
 }) {}
 
-const SESSION_MESSAGE_TYPE = "session-message"
+export const SESSION_TOOLS_EXTENSION_ID = "@gent/session-tools"
+
+/** `metadata.customType` on the interjection `session.send` lands on the receiver. */
+export const SESSION_MESSAGE_TYPE = "session-message"
 
 /** The sender, as the receiving client sees it. */
 export const SessionMessageDetails = Schema.Struct({
@@ -319,7 +322,11 @@ const SendSessionTool = tool({
       branchId: receiver.activeBranchId,
       requestId: RequestId.make(`session-send:${ctx.toolCallId}`),
       content: sessionMessageText({ from, message }),
-      metadata: { customType: SESSION_MESSAGE_TYPE, extensionId: "@gent/session-tools", details },
+      metadata: {
+        customType: SESSION_MESSAGE_TYPE,
+        extensionId: SESSION_TOOLS_EXTENSION_ID,
+        details,
+      },
       // The receiver may be idle; a parked message nobody reads is a lost question.
       wake: true,
     }).pipe(
@@ -332,7 +339,7 @@ const SendSessionTool = tool({
 // ── extension ───────────────────────────────────────────────────────────────
 
 export const SessionToolsExtension = defineExtension({
-  id: "@gent/session-tools",
+  id: SESSION_TOOLS_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("tool", ReadSessionTool, RenameSessionTool, SendSessionTool)
