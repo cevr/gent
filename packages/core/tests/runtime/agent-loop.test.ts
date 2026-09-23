@@ -1029,7 +1029,7 @@ describe("empty final step", () => {
  * `runTurn` bounds a turn at `MAX_TURN_STEPS` so a model that asks for tools
  * forever cannot run without end. That exit left `interrupted`, `streamFailed`
  * and `unanswered` all false, so the turn published a `TurnCompleted` that
- * reads exactly like an ordinary reply. `headless-runner.ts:122` picks its exit
+ * reads exactly like an ordinary reply. `apps/tui/src/headless.ts` picks its exit
  * code from `event.unanswered !== true`, so `gent -H` against a looping model
  * exited 0 having printed no answer at all.
  *

@@ -2758,7 +2758,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       if (params.step > maxSteps) {
         // The final step refuses its tool calls and stops, so only a resume
         // past the budget lands here. Leaving the flags false publishes a `TurnCompleted` no caller can tell from a
-        // reply, and `headless-runner.ts` reads exactly that flag to pick its
+        // reply, and `apps/tui/src/headless.ts` reads exactly that flag to pick its
         // exit code, so `gent -H` would exit 0 having printed nothing.
         yield* Effect.logWarning("turn.max-steps-exceeded").pipe(
           Effect.annotateLogs({ step: params.step, max: maxSteps }),
