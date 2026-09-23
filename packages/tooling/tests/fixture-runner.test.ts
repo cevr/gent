@@ -95,16 +95,62 @@ const CASES: ReadonlyArray<RuleCase> = [
     expectedCount: 9,
   },
   {
-    rule: "gent/no-extension-internal-imports",
-    invalid: "packages/extensions/src/no-extension-internal-imports.invalid.ts",
-    valid: "packages/extensions/src/no-extension-internal-imports.valid.ts",
-    expectedCount: 8,
+    // A shipped extension reads only the two authoring entries.
+    rule: "gent/core-entry-boundary",
+    invalid: "packages/extensions/src/core-entry-boundary.invalid.ts",
+    valid: "packages/extensions/src/core-entry-boundary.valid.ts",
+    // protocol, host, test-utils, a core path, two relative paths that resolve
+    // into core source, a re-export, an export-all of host, and a dynamic import
+    expectedCount: 9,
   },
   {
-    rule: "gent/no-extension-internal-imports",
-    invalid: "apps/tui/src/extensions/protocol-imports.invalid.ts",
-    valid: "apps/tui/src/extensions/protocol-imports.valid.ts",
+    // A client extension also reads protocol; the loader is host code.
+    rule: "gent/core-entry-boundary",
+    invalid: "apps/tui/src/extensions/core-entry-boundary.invalid.ts",
+    valid: "apps/tui/src/extensions/loader-boundary.ts",
+    // a protocol subpath, host, test-utils, a relative path to core's host,
+    // a core re-export, a dynamic import
+    expectedCount: 6,
+  },
+  {
+    // A reference extension is held to the same two entries.
+    rule: "gent/core-entry-boundary",
+    invalid: "examples/extensions/core-entry-boundary.invalid.ts",
+    valid: "examples/extensions/core-entry-boundary.valid.ts",
+    // core source, host, test-utils
     expectedCount: 3,
+  },
+  {
+    // Product code never reads the test entry; tests may.
+    rule: "gent/core-entry-boundary",
+    invalid: "packages/sdk/src/core-entry-boundary.invalid.ts",
+    valid: "packages/sdk/tests/core-entry-boundary.valid.ts",
+    // an import and a re-export of test-utils, and a relative path that
+    // resolves into core's test-utils; the host import is allowed
+    expectedCount: 3,
+  },
+  {
+    // A test outside core reads core through its entries, never its source.
+    rule: "gent/core-entry-boundary",
+    invalid: "packages/extensions/tests/core-entry-boundary.invalid.ts",
+    valid: "packages/extensions/tests/core-entry-boundary.valid.ts",
+    // an import and a re-export that resolve into core source
+    expectedCount: 2,
+  },
+  {
+    // Core product code reaches the harness by relative path; still rejected.
+    rule: "gent/core-entry-boundary",
+    invalid: "packages/core/src/runtime/core-entry-boundary.invalid.ts",
+    valid: "packages/core/src/runtime/core-entry-boundary.valid.ts",
+    // an import and a re-export that resolve into core's test-utils
+    expectedCount: 2,
+  },
+  {
+    // The harness itself reads its sibling files and core internals.
+    rule: "gent/core-entry-boundary",
+    invalid: "packages/core/src/runtime/core-entry-boundary.invalid.ts",
+    valid: "packages/core/src/test-utils/core-entry-boundary.valid.ts",
+    expectedCount: 2,
   },
   {
     rule: "gent/no-define-extension-throw",
@@ -136,8 +182,29 @@ const CASES: ReadonlyArray<RuleCase> = [
     // valid file lives at `runtime/gent-platform-bun.ts` — the canonical
     // GentPlatform live impl. That path is the only allowlist entry.
     valid: "runtime/gent-platform-bun.ts",
-    // 5 Bun.* member expressions + 3 process host probes
-    expectedCount: 8,
+    // 5 Bun.* member expressions + 4 process host probes + 3 os host facts
+    expectedCount: 12,
+  },
+  {
+    rule: "gent/no-bun-outside-adapter",
+    invalid: "runtime/retired-adapter.ts",
+    valid: "runtime/fallback-adapter.ts",
+    // Bun.Glob and Bun.randomUUIDv7, banned even in an adapter
+    expectedCount: 2,
+  },
+  {
+    rule: "gent/no-bun-outside-adapter",
+    invalid: "packages/sdk/src/host-facts.invalid.ts",
+    valid: "packages/sdk/src/host-facts.valid.ts",
+    // process.platform, process.pid, Bun.spawn: the SDK is not exempt
+    expectedCount: 3,
+  },
+  {
+    rule: "gent/no-bun-outside-adapter",
+    invalid: "apps/server/src/main.ts",
+    valid: "apps/server/src/launch.valid.ts",
+    // process.execPath: the server launcher is not exempt
+    expectedCount: 1,
   },
   {
     rule: "gent/no-hand-rolled-tagged-union",
@@ -164,8 +231,11 @@ const CASES: ReadonlyArray<RuleCase> = [
     rule: "gent/no-with-wrapper-call",
     invalid: "no-with-wrapper-call.invalid.ts",
     valid: "no-with-wrapper-call.valid.ts",
-    // Direct withX(innerCall()) + higher-order withX(...)(innerCall())
-    expectedCount: 2,
+    // Calls: withX(innerCall()), withX(...)(innerCall()), withX(innerCall(), arg),
+    // withX(arrow), withX(arg, function). Definitions: an Effect parameter,
+    // a curried Effect parameter, a callback parameter, and an Effect parameter
+    // inside Effect.fn and inside Effect.fnUntraced.
+    expectedCount: 10,
   },
   {
     rule: "gent/no-inert-it",
@@ -247,14 +317,6 @@ effectDescribe("custom lint rules", () => {
       const [, validRun] = yield* loadRuns
       expect(validRun.exitCode).toBe(0)
       expect(validRun.report.diagnostics.length).toBe(0)
-    }),
-  )
-
-  it.live("gent/no-bun-outside-adapter allows adapter files", () =>
-    Effect.gen(function* () {
-      const run = yield* runOxlint(["runtime/fallback-adapter.ts"])
-      expect(run.exitCode).toBe(0)
-      expect(countViolations(run.report.diagnostics, "gent/no-bun-outside-adapter")).toBe(0)
     }),
   )
 

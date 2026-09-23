@@ -10,7 +10,7 @@ import {
   serverLock,
   type ServerLockStatus,
 } from "@gent/sdk"
-import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
+import type { GentPlatform } from "@gent/core/host"
 import { Command, Flag } from "effect/unstable/cli"
 
 // ── local health report ─────────────────────────────────────────────────────

@@ -4,8 +4,10 @@ export {
   AgentName,
   DEFAULT_AGENT_NAME,
   ExternalDriverRef,
+  DEFAULT_MODEL_ID,
   ModelDriverRef,
   ReasoningEffort,
+  resolveAgentModel,
   type RunSpec,
   RunSpecSchema,
 } from "./domain/agent.js"
@@ -14,10 +16,19 @@ export {
   type ActiveInteraction,
   AgentEvent,
   EventEnvelope,
+  EventStoreError,
   type ApprovalResult,
+  ErrorOccurred,
+  EventId,
   InteractionPresented,
+  MessageReceived,
   type QuestionOption,
   QuestionSchema,
+  StreamEnded,
+  StreamStarted,
+  ToolCallStarted,
+  ToolCallSucceeded,
+  TurnCompleted,
 } from "./domain/event.js"
 export {
   type ExtensionScope,
@@ -34,9 +45,14 @@ export {
   ProjectedMessage,
   Session,
   ToolInteraction,
+  SteerCommand,
   assistantMessageIdForTurn,
   dateFromMillis,
+  formatHeadTail,
+  headTail,
   projectMessage,
+  projectMessagesWithToolInteractions,
+  toolResultMessageIdForTurn,
 } from "./domain/message.js"
 export {
   type ImagePartProjection,
@@ -46,7 +62,11 @@ export {
 } from "./domain/message.js"
 export { Model, ModelId, ProviderId } from "./domain/agent.js"
 export { QueueEntryInfo, QueueSnapshot, emptyQueueSnapshot } from "./domain/message.js"
-export { type ModelContextMetrics } from "./domain/agent-loop.js"
+export { type ModelContextMetrics, type SessionRuntimeState } from "./domain/agent-loop.js"
+export { DriverError, DriverFailureId } from "./domain/driver.js"
+export { SessionRuntimeError } from "./runtime/session.js"
+export { CONTEXT_WINDOW_MESSAGE_TYPE, windowDetails } from "./runtime/model-context.js"
+export { NotFoundError, ProviderError, StorageError } from "./domain/errors.js"
 export { GentRpcError } from "./server/rpc.js"
 export { type GentClientRpcError, type GentRpcClient, GentRpcs } from "./server/rpc.js"
 export {
@@ -60,5 +80,4 @@ export {
   GentConnectionError,
   type GentLifecycle,
   SessionSnapshot,
-  type SteerCommand,
 } from "./server/rpc.js"

@@ -50,7 +50,6 @@
         "@effect/platform-bun": "catalog:",
         "@ff-labs/fff-bun": "catalog:",
         "@gent/core": "workspace:*",
-        "@gent/core-internal": "workspace:*",
         "@gent/extensions": "workspace:*",
         "@gent/sdk": "workspace:*",
         "@opentui/core": "^0.5.11",
@@ -72,7 +71,6 @@
       "name": "@gent/core",
       "version": "0.0.0",
       "dependencies": {
-        "@gent/core-internal": "workspace:*",
         "effect-encore": "catalog:",
         "effect-machine": "catalog:",
         "effect-wide-event": "catalog:",
@@ -85,22 +83,11 @@
         "effect-bun-test": "catalog:",
       },
     },
-    "packages/core-internal": {
-      "name": "@gent/core-internal",
-      "version": "0.0.0",
-      "peerDependencies": {
-        "@effect/platform-bun": "catalog:",
-        "@effect/sql-pg": "catalog:",
-        "@effect/sql-sqlite-bun": "catalog:",
-        "effect": "catalog:",
-        "effect-bun-test": "catalog:",
-      },
-    },
     "packages/e2e": {
       "name": "@gent/e2e",
       "version": "0.0.0",
       "dependencies": {
-        "@gent/core-internal": "workspace:*",
+        "@gent/core": "workspace:*",
         "@gent/sdk": "workspace:*",
       },
       "devDependencies": {
@@ -122,7 +109,6 @@
         "@effect/ai-openai-compat": "catalog:",
         "@ff-labs/fff-bun": "catalog:",
         "@gent/core": "workspace:*",
-        "@gent/core-internal": "workspace:*",
         "effect-encore": "catalog:",
         "picomatch": "catalog:",
       },
@@ -138,7 +124,6 @@
         "@effect/opentelemetry": "4.0.0-rc.112",
         "@effect/platform-bun": "catalog:",
         "@gent/core": "workspace:*",
-        "@gent/core-internal": "workspace:*",
         "@gent/extensions": "workspace:*",
         "@opentelemetry/api": "^1.9",
         "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
@@ -303,8 +288,6 @@
     "@ff-labs/fff-bun": ["@ff-labs/fff-bun@0.10.6", "", { "optionalDependencies": { "@ff-labs/fff-bin-android-arm64": "0.10.6", "@ff-labs/fff-bin-darwin-arm64": "0.10.6", "@ff-labs/fff-bin-darwin-x64": "0.10.6", "@ff-labs/fff-bin-linux-arm64-gnu": "0.10.6", "@ff-labs/fff-bin-linux-arm64-musl": "0.10.6", "@ff-labs/fff-bin-linux-x64-gnu": "0.10.6", "@ff-labs/fff-bin-linux-x64-musl": "0.10.6", "@ff-labs/fff-bin-win32-arm64": "0.10.6", "@ff-labs/fff-bin-win32-x64": "0.10.6" }, "os": [ "!aix", "!sunos", "!freebsd", "!openbsd", ], "cpu": [ "x64", "arm64", ] }, "sha512-ShRbXQ9kSIYom5IRpq6d0DE0RUWKIbXhtERPu3q5UN7387IO4gpSYNeBo85IEqD1yqgq86KyKeFJcAliY7RGNg=="],
 
     "@gent/core": ["@gent/core@workspace:packages/core"],
-
-    "@gent/core-internal": ["@gent/core-internal@workspace:packages/core-internal"],
 
     "@gent/e2e": ["@gent/e2e@workspace:packages/e2e"],
 

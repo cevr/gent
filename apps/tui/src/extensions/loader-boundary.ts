@@ -5,10 +5,7 @@ import {
   isClientFile,
   SCOPE_PRECEDENCE,
 } from "@gent/core/protocol"
-import {
-  isProjectExtensionDirectoryTrusted,
-  readDisabledExtensions,
-} from "@gent/core-internal/runtime/config"
+import { isProjectExtensionDirectoryTrusted, readDisabledExtensions } from "@gent/core/host"
 import {
   type AnyExtensionClientModule,
   type AutocompleteContribution,

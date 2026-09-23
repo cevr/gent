@@ -5,9 +5,11 @@ import { onMount } from "solid-js"
 import { App, resolveInteractiveBootstrap } from "../src/app"
 import { type ClientContextValue, useClient } from "../src/client"
 import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness-boundary"
-import { baseLocalLayerWithProvider as _baseLocalLayerWithProvider } from "@gent/core-internal/test-utils/index.js"
+import {
+  baseLocalLayerWithProvider as _baseLocalLayerWithProvider,
+  LanguageModelLayers,
+} from "@gent/core/test-utils"
 import { AllBuiltinAgents } from "../../../packages/extensions/tests/helpers/builtin-agents.js"
-import { LanguageModelLayers } from "@gent/core-internal/test-utils/language-model.js"
 import { Gent } from "@gent/sdk"
 import { waitForFrame, repoRoot } from "./helpers"
 const baseLocalLayerWithProvider = (p: Parameters<typeof _baseLocalLayerWithProvider>[0]) =>

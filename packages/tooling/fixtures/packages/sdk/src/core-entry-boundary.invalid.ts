@@ -1,0 +1,6 @@
+import { GentPlatform } from "@gent/core/host"
+import { LanguageModelLayers } from "@gent/core/test-utils"
+export { waitFor } from "@gent/core/test-utils"
+import { createRpcHarness } from "../../core/src/test-utils/index.ts"
+
+export const values = [GentPlatform, LanguageModelLayers, createRpcHarness]

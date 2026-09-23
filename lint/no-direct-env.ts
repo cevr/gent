@@ -3,9 +3,9 @@
  *
  * Rules:
  * - no-positional-log-error: flags Effect.logWarning("msg", error) (use annotateLogs)
- * - no-extension-internal-imports: keeps extension code on the public
- *   @gent/core/extensions/api surface and off @gent/core internals, with
- *   narrow builtin platform exceptions.
+ * - core-entry-boundary: extensions read only the authoring entries of
+ *   @gent/core (plus protocol for TUI client extensions), and product code
+ *   never reads @gent/core/test-utils.
  * - no-promise-control-flow-in-tests: bans new `try/finally`, `async`,
  *   `await`, and Promise chains in test files.
  *   Test resources should live in Effect scopes (`Effect.scoped`,
@@ -30,9 +30,10 @@
  * - no-sleep: bans `.sleep(...)` calls in test files. Opt out per-site with
  *   `// gent/no-sleep: allow <reason>` (retries, debounce probes, real-clock
  *   timing tests, deliberate fiber-pacing pauses in PTY/server fixtures).
- * - no-with-wrapper-call: bans `withX(otherCall(...))` and
- *   `withX(...)(otherCall(...))` wrapper-call style; pipe the inner Effect/value
- *   through the adapter instead.
+ * - no-with-wrapper-call: bans `withX(otherCall(...))`,
+ *   `withX(...)(otherCall(...))`, and `withX(callback)` wrapper-call style, and
+ *   `withX` helpers that take an Effect or a callback (the last two outside
+ *   `tests/`); pipe the inner Effect/value through the adapter instead.
  * - no-inert-it: bans a bare `it(...)` call where `it` came from
  *   `effect-bun-test`. That `it` is an object, not a function, so the call
  *   throws during module load and the file registers no tests at all.
@@ -106,6 +107,39 @@ const isTestFilename = (filename: string): boolean =>
 
 const isTestBoundaryFilename = (filename: string): boolean => /-boundary\.tsx?$/.test(filename)
 
+const isExtensionFilename = (filename: string): boolean => {
+  if (/\/extensions\/(?:api|branch-tools)\.ts$/.test(filename)) return false
+  if (filename.endsWith("apps/tui/src/extensions/loader-boundary.ts")) return false
+  return /(?:packages\/core\/src\/extensions|packages\/extensions\/src|apps\/tui\/src\/extensions|examples\/extensions)\//.test(
+    filename,
+  )
+}
+
+/** Core source, and the harness inside it, as seen in a resolved absolute path. */
+const CORE_SOURCE_PATH = /\/packages\/core\/src\//
+const TEST_UTILS_PATH = /\/packages\/core\/src\/test-utils\//
+const AUTHORING_ENTRY = /^@gent\/core\/extensions\/(?:api|branch-tools)(?:\.js)?$/
+const PROTOCOL_ENTRY = /^@gent\/core\/protocol(?:\.js)?$/
+const TEST_UTILS_ENTRY = /^@gent\/core\/test-utils(?:\/|$)/
+
+/** The module specifier of an import, re-export, or dynamic import. */
+const importSourceOf = (node: AstNode): string | undefined => {
+  const source = getNodeField(node, "source")
+  if (source === undefined) return undefined
+  return getStringField(source, "value")
+}
+
+/** The absolute path a relative specifier names, or undefined for a package specifier. */
+const resolvedRelativeSource = (filename: string, source: string): string | undefined => {
+  if (!source.startsWith("./") && !source.startsWith("../")) return undefined
+  const segments = filename.replaceAll("\\", "/").split("/").slice(0, -1)
+  for (const part of source.split("/")) {
+    if (part === "..") segments.pop()
+    if (part !== ".." && part !== "." && part !== "") segments.push(part)
+  }
+  return segments.join("/")
+}
+
 const PROMISE_CHAIN_METHODS = new Set(["then", "catch", "finally"])
 const PROMISE_STATIC_METHODS = new Set(["all", "allSettled", "any", "race", "resolve", "reject"])
 
@@ -147,6 +181,65 @@ const runPromiseMethodName = (node: AstNode): string | undefined => {
   return name !== undefined && RUN_PROMISE_METHODS.has(name) ? name : undefined
 }
 
+/**
+ * The files that may touch `Bun.*` and host facts directly. Fixtures sit under
+ * `packages/tooling/fixtures/` and run through the rule, so only the canonical
+ * platform file and adapter names exempt one there.
+ */
+const platformBoundaryFilename = (filename: string): boolean => {
+  if (/\/runtime\/gent-platform-bun\.ts$/.test(filename)) return true
+  if (/-adapter\.tsx?$/.test(filename)) return true
+  if (/\/packages\/tooling\/fixtures\//.test(filename)) return false
+  return /\/(?:scripts|packages\/tooling|packages\/e2e|tests)\/|\.test\.tsx?$/.test(filename)
+}
+
+const HOST_PROCESS_MEMBERS = new Set(["execPath", "kill", "platform", "pid"])
+const HOST_OS_MEMBERS = new Set(["hostname", "homedir", "release"])
+
+/** `object.property` for an identifier-rooted member expression. */
+const hostMember = (
+  node: AstNode,
+): { readonly object: string; readonly property: string | undefined } | undefined => {
+  const object = getNodeField(node, "object")
+  if (object?.type !== "Identifier") return undefined
+  const objectName = getStringField(object, "name")
+  if (objectName === undefined) return undefined
+  const prop = getNodeField(node, "property")
+  let property: string | undefined
+  if (prop?.type === "Identifier") property = getStringField(prop, "name")
+  else if (prop?.type === "StringLiteral") property = getStringField(prop, "value")
+  return { object: objectName, property }
+}
+
+const retiredBunMessage = (
+  member: { readonly object: string; readonly property: string | undefined },
+  platformImpl: boolean,
+): string | undefined => {
+  if (member.object !== "Bun") return undefined
+  if (member.property === "Glob") {
+    return "`Bun.Glob` fallback is deleted; use the FileIndex service."
+  }
+  if (member.property === "randomUUIDv7" && !platformImpl) {
+    return "`Bun.randomUUIDv7` is adapter-only; use `GentPlatform.randomId`."
+  }
+  return undefined
+}
+
+const hostMemberMessage = (member: {
+  readonly object: string
+  readonly property: string | undefined
+}): string | undefined => {
+  const suffix = member.property !== undefined ? `.${member.property}` : ""
+  if (member.object === "Bun") {
+    return `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). Bun APIs are allowed only in adapter, build script, tooling, and test harness boundaries.`
+  }
+  const hostFact =
+    (member.object === "process" && HOST_PROCESS_MEMBERS.has(member.property ?? "")) ||
+    (member.object === "os" && HOST_OS_MEMBERS.has(member.property ?? ""))
+  if (!hostFact) return undefined
+  return `\`${member.object}${suffix}\` is not allowed here. Route host process and OS facts through \`GentPlatform\` or an adapter-local Effect service.`
+}
+
 const isRunPromiseReference = (node: AstNode): boolean => runPromiseMethodName(node) !== undefined
 
 const wrapperFunctionName = (node: AstNode | undefined): string | undefined => {
@@ -177,19 +270,111 @@ const unaryCallExpressionArg = (node: AstNode): AstNode | undefined => {
   return arg?.type === "CallExpression" ? arg : undefined
 }
 
-const withWrapperCallName = (node: AstNode): string | undefined => {
-  if (node.type !== "CallExpression") return undefined
-  const callee = getNodeField(node, "callee")
-  const directName = wrapperFunctionName(callee)
-  // `withWideEvent(boundaryFactory(...))` is an adapter factory used inside
-  // `.pipe(...)`, not a wrapper around the Effect being transformed.
-  if (directName !== undefined && directName !== "withWideEvent" && unaryCallExpressionArg(node)) {
-    return directName
-  }
+const isFunctionNode = (node: AstNode | undefined): boolean =>
+  node?.type === "ArrowFunctionExpression" || node?.type === "FunctionExpression"
 
+/** True when `node` is a direct argument of a `.pipe(...)` call: an adapter factory, not a wrapper. */
+const isPipeArgument = (node: AstNode): boolean => {
+  const parent = getNodeField(node, "parent")
+  if (parent?.type !== "CallExpression") return false
+  const callee = getNodeField(parent, "callee")
+  if (callee?.type !== "MemberExpression") return false
+  const prop = getNodeField(callee, "property")
+  return prop?.type === "Identifier" && getStringField(prop, "name") === "pipe"
+}
+
+type WrapperCallKind = "invocation" | "callback"
+
+/**
+ * The wrapper kind of a `withX` call: `withX(innerCall(), ...)` and
+ * `withX(...)(innerCall())` wrap an invocation; `withX(..., callback)` wraps a
+ * callback. `withWideEvent(boundary(...))` and any `withX(...)` passed straight
+ * to `.pipe(...)` are adapter factories, not wrappers.
+ */
+const withWrapperCall = (
+  node: AstNode,
+): { readonly name: string; readonly kind: WrapperCallKind } | undefined => {
+  if (node.type !== "CallExpression" || isPipeArgument(node)) return undefined
+  const callee = getNodeField(node, "callee")
+  const args = callExpressionArgs(node)
+  const directName = wrapperFunctionName(callee)
+  if (directName !== undefined && directName !== "withWideEvent") {
+    if (args[0]?.type === "CallExpression") return { name: directName, kind: "invocation" }
+    if (callee?.type === "Identifier" && args.some(isFunctionNode)) {
+      return { name: directName, kind: "callback" }
+    }
+  }
   if (callee?.type !== "CallExpression") return undefined
   const higherOrderName = wrapperFunctionName(getNodeField(callee, "callee"))
-  if (higherOrderName !== undefined && unaryCallExpressionArg(node)) return higherOrderName
+  if (higherOrderName !== undefined && unaryCallExpressionArg(node)) {
+    return { name: higherOrderName, kind: "invocation" }
+  }
+  return undefined
+}
+
+const isEffectTypeAnnotation = (annotation: AstNode | undefined): boolean => {
+  const type = annotation === undefined ? undefined : getNodeField(annotation, "typeAnnotation")
+  if (type?.type !== "TSTypeReference") return false
+  const typeName = getNodeField(type, "typeName")
+  if (typeName?.type !== "TSQualifiedName") return false
+  const left = getNodeField(typeName, "left")
+  const right = getNodeField(typeName, "right")
+  return (
+    getStringField(left ?? typeName, "name") === "Effect" &&
+    getStringField(right ?? typeName, "name") === "Effect"
+  )
+}
+
+const isCallbackTypeAnnotation = (annotation: AstNode | undefined): boolean => {
+  const type = annotation === undefined ? undefined : getNodeField(annotation, "typeAnnotation")
+  return type?.type === "TSFunctionType"
+}
+
+/** The parameters of a function and of every function its body returns directly (curried form). */
+const curriedParams = (fn: AstNode | undefined): ReadonlyArray<ReadonlyArray<AstNode>> => {
+  const levels: Array<ReadonlyArray<AstNode>> = []
+  let current = fn
+  while (current !== undefined && isFunctionNode(current)) {
+    levels.push(getNodeArrayField(current, "params") ?? [])
+    current = getNodeField(current, "body")
+  }
+  return levels
+}
+
+const EFFECT_FN_NAMES = new Set(["fn", "fnUntraced"])
+
+const isEffectFnCallee = (callee: AstNode | undefined): boolean => {
+  if (callee?.type !== "MemberExpression") return false
+  const object = getNodeField(callee, "object")
+  const property = getNodeField(callee, "property")
+  return (
+    object?.type === "Identifier" &&
+    getStringField(object, "name") === "Effect" &&
+    EFFECT_FN_NAMES.has(getStringField(property ?? callee, "name") ?? "")
+  )
+}
+
+/**
+ * The function a definition runs. `Effect.fn(body)`, `Effect.fn("name")(body)`,
+ * and the `fnUntraced` forms yield their generator body; anything else yields itself.
+ */
+const definitionFunction = (init: AstNode | undefined): AstNode | undefined => {
+  if (init?.type !== "CallExpression") return init
+  const callee = getNodeField(init, "callee")
+  const traced =
+    isEffectFnCallee(callee) ||
+    (callee?.type === "CallExpression" && isEffectFnCallee(getNodeField(callee, "callee")))
+  if (!traced) return init
+  return callExpressionArgs(init).find(isFunctionNode)
+}
+
+/** Why a `withX` definition is a wrapper helper, or undefined when it is not one. */
+const withWrapperDefinitionKind = (fn: AstNode | undefined): "effect" | "callback" | undefined => {
+  const levels = curriedParams(definitionFunction(fn))
+  const annotations = (params: ReadonlyArray<AstNode>) =>
+    params.map((param) => getNodeField(param, "typeAnnotation"))
+  if (levels.some((params) => annotations(params).some(isEffectTypeAnnotation))) return "effect"
+  if (annotations(levels[0] ?? []).some(isCallbackTypeAnnotation)) return "callback"
   return undefined
 }
 
@@ -298,119 +483,80 @@ const plugin: Plugin = {
   },
   rules: {
     /**
-     * Enforces the extension boundary contract.
+     * States who may read which `@gent/core` entry point.
      *
-     * Public extension-facing code may import from:
-     *   - `./api.js` or `../api.js` (relative to extension file in core)
-     *   - `@gent/core/extensions/api` (package path, for extracted extensions)
-     *   - `effect-machine`, `effect`, `@effect/*` (peer deps)
-     *   - Sibling extension files (relative `./` or `../` within extensions/src/)
+     * Core exposes one entry per audience: `extensions/api` and
+     * `extensions/branch-tools` for extensions, `protocol` for clients,
+     * `host` for the processes that compose a server, and `test-utils` for
+     * tests. Two boundaries follow:
      *
-     * Public-looking @gent/core internals are always forbidden:
-     *   - `@gent/core/domain/*`, `@gent/core/runtime/*`, `@gent/core/storage/*`,
-     *     `@gent/core/server/*`, `@gent/core/providers/*`
-     *   - Relative paths that escape into domain/, runtime/, storage/, etc.
+     * - An extension (`packages/extensions/src/`, `packages/core/src/extensions/`,
+     *   `examples/extensions/`, and the TUI's `apps/tui/src/extensions/`) reads
+     *   only the two authoring entries; a TUI client extension also reads
+     *   `protocol`. A shipped extension is never more privileged than a user
+     *   extension, so `host`, `test-utils`, any other `@gent/core` path, and a
+     *   relative path that resolves into `packages/core/src/` are all rejected.
+     * - Product code (anything that is not a test file, `packages/e2e/`, or the
+     *   harness in `packages/core/src/test-utils/`) never reads `test-utils`,
+     *   by package specifier or by a relative path that resolves into it.
+     * - Nothing outside `packages/core/`, tests included, reads core source by
+     *   a relative path; it goes through the entry that publishes the name.
      *
-     * `@gent/core-internal/*` is forbidden for public extension implementations,
-     * except the narrow builtin platform boundary imports. Builtins are just the
-     * starting extension set, not a privileged API lane for domain/runtime
-     * services.
-     *
-     * Applies to: packages/core/src/extensions/**, packages/extensions/src/**,
-     * and apps/tui/src/extensions/**
-     * Exempt: extensions/api.ts (the builder implementation)
+     * Exempt: the two authoring entries themselves, which assemble the public
+     * API from core internals, and the TUI's client extension loader, which is
+     * host code that reads the user's disabled list and trust settings.
      */
-    "no-extension-internal-imports": {
+    "core-entry-boundary": {
       create(context) {
         const filename = context.filename
+        const extensionFile = isExtensionFilename(filename)
+        const productFile =
+          !isTestFilename(filename) && !/\/packages\/(?:e2e|core\/src\/test-utils)\//.test(filename)
+        const outsideCore = !/\/packages\/core\//.test(filename)
+        if (!extensionFile && !productFile && !outsideCore) return {}
+        const tuiExtension = filename.includes("apps/tui/src/extensions/")
 
-        // Scope: only extension implementation files
-        const inCoreExtensions = filename.includes("packages/core/src/extensions/")
-        const inExtensionsPackage = filename.includes("packages/extensions/src/")
-        const inTuiExtensions = filename.includes("apps/tui/src/extensions/")
-        if (!inCoreExtensions && !inExtensionsPackage && !inTuiExtensions) return {}
-
-        // Exempt: the public bridge implementations. They live inside
-        // `packages/core/src/extensions/` but ARE the re-export surfaces other
-        // extensions consume, so they need to reach into core internals to
-        // assemble the public API. `api.ts` serves extensions that use the
-        // loop; `branch-tools.ts` serves the feature that implements a loop
-        // seam.
-        if (
-          filename.endsWith("/extensions/api.ts") ||
-          filename.endsWith("/extensions/branch-tools.ts")
-        ) {
-          return {}
+        const extensionMessage = (
+          source: string,
+          resolved: string | undefined,
+        ): string | undefined => {
+          if (resolved !== undefined && CORE_SOURCE_PATH.test(resolved)) {
+            return `Extensions must import from "@gent/core/extensions/api", not core source by relative path. Forbidden: "${source}"`
+          }
+          if (!source.startsWith("@gent/core/")) return undefined
+          if (AUTHORING_ENTRY.test(source)) return undefined
+          if (tuiExtension && PROTOCOL_ENTRY.test(source)) return undefined
+          return `Extensions must import from "@gent/core/extensions/api" or "@gent/core/extensions/branch-tools". Forbidden: "${source}"`
         }
 
-        // Relative imports that escape into core internals
-        const INTERNAL_RELATIVE =
-          /^\.\.?\/(\.\.\/)*(?:domain|runtime|storage|server|providers|core\/src)\//
-
-        // Allowed @gent/core subpaths (everything else is forbidden).
-        // Two authoring entry points: `api` for extensions that use the loop,
-        // `branch-tools` for the rarer feature that implements a loop seam.
-        const ALLOWED_PACKAGE = /^@gent\/core\/extensions\/(?:api|branch-tools)(?:\.js)?$/
-        const ALLOWED_CLIENT_PROTOCOL = /^@gent\/core\/protocol(?:\.js)?$/
-        const ALLOWED_BUILTIN_INTERNAL_PACKAGE =
-          /^@gent\/core-internal\/runtime\/gent-platform(?:-bun)?(?:\.js)?$/
-
-        const reportForbiddenSource = (node: AstNode, source: string) => {
-          if (INTERNAL_RELATIVE.test(source)) {
-            context.report({
-              message: `Extensions must import from the public API (./api.js), not core internals. Forbidden: "${source}"`,
-              node,
-            })
-            return
+        const report = (node: AstNode) => {
+          const source = importSourceOf(node)
+          if (source === undefined) return
+          const resolved = resolvedRelativeSource(filename, source)
+          const readsTestUtils =
+            TEST_UTILS_ENTRY.test(source) ||
+            (resolved !== undefined && TEST_UTILS_PATH.test(resolved))
+          let message: string | undefined
+          if (extensionFile) message = extensionMessage(source, resolved)
+          if (message === undefined && productFile && readsTestUtils) {
+            message = `Product code must not import the test entry. Forbidden: "${source}"`
           }
-
           if (
-            source.startsWith("@gent/core-internal") &&
-            (inCoreExtensions || inExtensionsPackage) &&
-            !(inExtensionsPackage && ALLOWED_BUILTIN_INTERNAL_PACKAGE.test(source))
+            message === undefined &&
+            outsideCore &&
+            resolved !== undefined &&
+            CORE_SOURCE_PATH.test(resolved)
           ) {
-            context.report({
-              message: `Extensions must import from "@gent/core/extensions/api", not @gent/core-internal. Forbidden: "${source}"`,
-              node,
-            })
-            return
+            message = `Code outside core reads it through "@gent/core/<entry>", not its source. Forbidden: "${source}"`
           }
-
-          if (
-            source.startsWith("@gent/core/") &&
-            !ALLOWED_PACKAGE.test(source) &&
-            !(inTuiExtensions && ALLOWED_CLIENT_PROTOCOL.test(source))
-          ) {
-            context.report({
-              message: `Extensions must import from "@gent/core/extensions/api", not internal paths. Forbidden: "${source}"`,
-              node,
-            })
-          }
-        }
-
-        const sourceValue = (node: AstNode): string | undefined => {
-          const source = getNodeField(node, "source")
-          if (source === undefined) return undefined
-          return getStringField(source, "value")
+          if (message !== undefined) context.report({ message, node })
         }
 
         return {
-          ImportDeclaration(node) {
-            const source = sourceValue(node)
-            if (source !== undefined) reportForbiddenSource(node, source)
-          },
-          ExportNamedDeclaration(node) {
-            const source = sourceValue(node)
-            if (source !== undefined) reportForbiddenSource(node, source)
-          },
-          ExportAllDeclaration(node) {
-            const source = sourceValue(node)
-            if (source !== undefined) reportForbiddenSource(node, source)
-          },
-          ImportExpression(node) {
-            const source = sourceValue(node)
-            if (source !== undefined) reportForbiddenSource(node, source)
-          },
+          ImportDeclaration: report,
+          ExportNamedDeclaration: report,
+          ExportAllDeclaration: report,
+          ImportExpression: report,
         }
       },
     },
@@ -443,22 +589,75 @@ const plugin: Plugin = {
     },
 
     /**
-     * Flags `withX(otherCall(...))` and `withX(...)(otherCall(...))`.
+     * Flags `withX` wrapper style, in calls and in definitions.
      *
-     * The wrapper form hides the value/function being transformed behind the
-     * adapter. Prefer `otherCall(...).pipe(withX)` or `otherCall(...).pipe(withX(...))`
-     * so the transformation order reads left-to-right.
+     * - `withX(otherCall(...))`, `withX(otherCall(...), arg)`, and
+     *   `withX(...)(otherCall(...))` hide the value being transformed behind
+     *   the adapter. Prefer `otherCall(...).pipe(withX)` so the transformation
+     *   order reads left-to-right.
+     * - `withX(callback)` and `withX(arg, callback)` invert control. Expose an
+     *   Effect value or provider and continue with `.pipe(...)`.
+     * - A `withX` definition that takes an `Effect.Effect` parameter (at any
+     *   curried level, and inside `Effect.fn` or `Effect.fnUntraced`) or a
+     *   callback parameter is the helper those calls need.
+     *
+     * The callback and definition checks skip `tests/`, where a local `withX`
+     * fixture helper is allowed.
+     *
+     * A `withX(...)` passed straight to `.pipe(...)` is an adapter factory,
+     * and `withWideEvent(boundary)` is the wide-event library's adapter.
      */
     "no-with-wrapper-call": {
       create(context) {
-        return {
-          CallExpression(node) {
-            const name = withWrapperCallName(node)
-            if (name === undefined) return
+        // Callback calls and helper definitions are product-code rules; a test
+        // may keep a local `withX` fixture helper.
+        const inTests = /\/tests\//.test(context.filename)
+        const reportDefinition = (
+          name: string | undefined,
+          fn: AstNode | undefined,
+          node: AstNode,
+        ) => {
+          if (inTests || name === undefined || !/^with[A-Z]/.test(name)) return
+          const kind = withWrapperDefinitionKind(fn)
+          if (kind === "effect") {
             context.report({
-              message: `Avoid \`${name}(...innerCall)\` wrapper style. Pipe the inner call through \`${name}\` instead.`,
+              message: `\`${name}(effect, ...)\` wrapper helpers are banned; expose a pipeable provider and call it from \`.pipe(...)\`.`,
               node,
             })
+          }
+          if (kind === "callback") {
+            context.report({
+              message: `\`${name}(callback)\` wrapper helpers are banned; expose an Effect value or provider and continue with \`.pipe(...)\`.`,
+              node,
+            })
+          }
+        }
+        return {
+          CallExpression(node) {
+            const call = withWrapperCall(node)
+            if (call === undefined) return
+            if (call.kind === "invocation") {
+              context.report({
+                message: `Avoid \`${call.name}(...innerCall)\` wrapper style. Pipe the inner call through \`${call.name}\` instead.`,
+                node,
+              })
+              return
+            }
+            if (inTests) return
+            context.report({
+              message: `Avoid \`${call.name}(callback)\` wrapper style. Expose an Effect value or provider and continue with \`.pipe(...)\`.`,
+              node,
+            })
+          },
+          VariableDeclarator(node) {
+            const id = getNodeField(node, "id")
+            const name = id?.type === "Identifier" ? getStringField(id, "name") : undefined
+            reportDefinition(name, getNodeField(node, "init"), node)
+          },
+          FunctionDeclaration(node) {
+            const id = getNodeField(node, "id")
+            const name = id === undefined ? undefined : getStringField(id, "name")
+            reportDefinition(name, { ...node, type: "FunctionExpression" }, node)
           },
         }
       },
@@ -807,12 +1006,13 @@ const plugin: Plugin = {
     },
 
     /**
-     * Bans `Bun.*` references everywhere except platform adapter,
-     * entrypoint, tooling, and test harness boundaries. The `Bun` global is
-     * a platform-specific runtime API; product code must route through
-     * Effect platform services (`GentPlatform`, `FileSystem`,
-     * `ChildProcess`, `KeyValueStore`, `Config`) so the runtime is
-     * portable and the I/O boundary is explicit.
+     * Bans `Bun.*` references and host process and OS facts everywhere except
+     * platform adapter, build script, tooling, and test harness boundaries.
+     * The `Bun` global is a platform-specific runtime API, and `process.pid`,
+     * `process.platform`, `os.hostname()` and the rest are host facts; product
+     * code routes both through Effect platform services (`GentPlatform`,
+     * `FileSystem`, `ChildProcess`, `KeyValueStore`, `Config`) so the runtime
+     * is portable and the I/O boundary is explicit.
      *
      * Exempt by filename:
      *   - `runtime/gent-platform-bun.ts` (the GentPlatform live impl)
@@ -820,58 +1020,31 @@ const plugin: Plugin = {
      *   - `**\/scripts/**` (build/dev entrypoints)
      *   - `**\/packages/tooling/**` (CI helpers)
      *   - `**\/packages/e2e/**` (test infrastructure spawning real processes)
-     *   - `**\/packages/sdk/**` (supervisor primitives talk to Bun.spawn directly)
-     *   - `**\/main.ts` (process entrypoints)
      *   - `*.test.ts` and files under `tests/`
+     *
+     * Two retired APIs are banned even inside those exemptions, outside
+     * `tests/`: `Bun.Glob` (the FileIndex service replaced it) and
+     * `Bun.randomUUIDv7` (only `runtime/gent-platform-bun.ts` may call it;
+     * everyone else uses `GentPlatform.randomId`).
      */
     "no-bun-outside-adapter": {
       create(context) {
         const filename = context.filename
-        // Fixtures must run through the rule even though they sit under
-        // `packages/tooling/fixtures/` — they exist precisely to verify rule
-        // behavior. Exclude that subtree from the tooling allowlist below.
-        const inFixtures = /\/packages\/tooling\/fixtures\//.test(filename)
-        if (!inFixtures) {
-          if (/\/runtime\/gent-platform-bun\.ts$/.test(filename)) return {}
-          if (/-adapter\.tsx?$/.test(filename)) return {}
-          if (/\/scripts\//.test(filename)) return {}
-          if (/\/packages\/tooling\//.test(filename)) return {}
-          if (/\/packages\/e2e\//.test(filename)) return {}
-          if (/\/packages\/sdk\//.test(filename)) return {}
-          if (/\/main\.ts$/.test(filename)) return {}
-          if (/\/tests\//.test(filename)) return {}
-          if (/\.test\.tsx?$/.test(filename)) return {}
-        } else {
-          // Inside fixtures: only the canonical platform file is exempted,
-          // so valid-adapter fixtures must use exact adapter filenames.
-          if (/\/runtime\/gent-platform-bun\.ts$/.test(filename)) return {}
-          if (/-adapter\.tsx?$/.test(filename)) return {}
-        }
+        const platformImpl = /\/runtime\/gent-platform-bun\.ts$/.test(filename)
+        const inTests = /\/tests\//.test(filename)
         return {
           MemberExpression(node) {
             if (!isAstNode(node)) return
-            const object = getNodeField(node, "object")
-            if (object?.type !== "Identifier") return
-            const prop = getNodeField(node, "property")
-            let propName: string | undefined
-            if (prop?.type === "Identifier") propName = getStringField(prop, "name")
-            else if (prop?.type === "StringLiteral") propName = getStringField(prop, "value")
-            const objectName = getStringField(object, "name")
-            if (objectName === "process") {
-              if (propName !== "execPath" && propName !== "kill" && propName !== "platform") return
-              const suffix = propName !== undefined ? `.${propName}` : ""
-              context.report({
-                message: `\`process${suffix}\` is not allowed here. Route host process and OS access through \`GentPlatform\` or an adapter-local Effect service.`,
-                node,
-              })
+            const member = hostMember(node)
+            if (member === undefined) return
+            const retired = retiredBunMessage(member, platformImpl)
+            if (retired !== undefined && !inTests) {
+              context.report({ message: retired, node })
               return
             }
-            if (objectName !== "Bun") return
-            const suffix = propName !== undefined ? `.${propName}` : ""
-            context.report({
-              message: `\`Bun${suffix}\` is not allowed here. Route platform I/O through an Effect service (e.g., \`GentPlatform\`, \`FileSystem\`, \`ChildProcess\`, \`KeyValueStore\`, \`Config\`). Bun APIs are allowed only in adapter, entrypoint, tooling, and test harness boundaries.`,
-              node,
-            })
+            if (platformBoundaryFilename(filename)) return
+            const message = hostMemberMessage(member)
+            if (message !== undefined) context.report({ message, node })
           },
         }
       },

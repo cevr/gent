@@ -15,8 +15,7 @@ import {
   rowKey,
   sectionOf,
 } from "../src/agents-view.js"
-import { LanguageModelLayers, textStep } from "@gent/core-internal/test-utils/language-model"
-import { createRpcHarness } from "@gent/core-internal/test-utils/index"
+import { LanguageModelLayers, textStep, createRpcHarness } from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
 
 // ── agents-view/projection.test ─────────────────────────────────────────────

@@ -26,7 +26,7 @@ import {
   testHostFacts,
   testToolContext,
   ensureStorageParents,
-} from "../../src/test-utils/index"
+} from "../../src/test-utils/harness"
 import { BunChildProcessSpawner, BunCrypto, BunFileSystem, BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive, BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import {
@@ -94,12 +94,8 @@ import type {
 } from "../../src/domain/driver"
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
 import * as Response from "effect/unstable/ai/Response"
-import {
-  finishPart,
-  LanguageModelLayers,
-  textStep,
-  waitFor,
-} from "../../src/test-utils/language-model"
+import { finishPart, ModelRegistry, ModelResolver } from "../../src/runtime/provider"
+import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
   AgentName,
@@ -136,7 +132,6 @@ import {
 } from "../../src/domain/extension"
 import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/unstable/cluster"
-import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
 import { AgentEvent, EventPublisher, EventPublisherLive, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"

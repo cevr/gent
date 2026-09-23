@@ -5,6 +5,7 @@ import {
   dateFromMillis,
   Message,
   responseUsage,
+  toolResultMessageIdForTurn,
 } from "../../src/domain/message"
 import * as Response from "effect/unstable/ai/Response"
 import {
@@ -19,12 +20,11 @@ import {
   persistMessageReceived,
   recordToolOutcome,
   signalActiveStreamInterrupt,
-  toolResultMessageIdForTurn,
 } from "../../src/runtime/turn"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
 import type { TurnError } from "../../src/domain/driver"
 import { ProviderError } from "../../src/domain/errors"
-import { finishPart, textDeltaPart, toolCallPart } from "../../src/test-utils/language-model"
+import { finishPart, textDeltaPart, toolCallPart } from "../../src/runtime/provider"
 import {
   type AgentEvent,
   EventEnvelope,
@@ -39,7 +39,7 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import { EventStorage, MessageStorage, SqliteStorage } from "../../src/storage/storage"
 import { EventStoreLive } from "../../src/runtime/session"
 import { noBranchTools } from "../../src/runtime/tools"
-import { ensureStorageParents } from "../../src/test-utils/index"
+import { ensureStorageParents } from "../../src/test-utils/harness"
 
 // ── agent-turn-response.test ────────────────────────────────────────────────
 

@@ -10,7 +10,7 @@ import {
   type GentLifecycle,
   type GentRpcClient,
 } from "@gent/core/protocol"
-import { RpcHandlersLive } from "@gent/core-internal/server/server.js"
+import { RpcHandlersLive, workspaceHeadersForCwd } from "@gent/core/host"
 import {
   awaitServerShutdown,
   resolveServer,
@@ -20,7 +20,6 @@ import {
   type GentServer,
   type GentServerOptions,
 } from "./server.js"
-import { workspaceHeadersForCwd } from "@gent/core-internal/server/workspace-rpc.js"
 // `runtime-boundary.ts` owns the Effect→Promise edge for `GentRuntime.run`.
 import { makeGentRuntime as makeRuntime, type GentRuntime } from "./runtime-boundary.js"
 

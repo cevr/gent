@@ -17,36 +17,87 @@ import {
   Stream,
 } from "effect"
 import { ChildProcess } from "effect/unstable/process"
-import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import { RuntimeEnvironment } from "@gent/core-internal/runtime/config.js"
-import { SessionRuntime } from "@gent/core-internal/runtime/session.js"
+import { GentPlatform, BranchStorage, MessageStorage, SessionStorage } from "@gent/core/host"
+import {
+  type LoadedExtension,
+  captureTurnTools,
+  createE2ELayer,
+  plantInFlightTurn,
+  plantToolCallBinding,
+  provideToolDispatch,
+  recordInteractionDecision,
+  runtimeHostContext,
+  staticToolBinding,
+  storedEvents,
+  createRpcHarness,
+  ensureStorageParents,
+  runToolWithCtx,
+  testToolContext,
+  finishPart,
+  LanguageModelLayers,
+  multiToolCallStep,
+  type SequenceStep,
+  textDeltaPart,
+  textStep,
+  toolCallPart,
+  toolCallStep,
+  waitFor,
+  ApprovalService,
+  RuntimeEnvironment,
+  BunGentPlatformLive,
+  SqliteStorage,
+  EventPublisherLive,
+  EventStore,
+  CurrentWorkspaceId,
+  WorkspaceId,
+} from "@gent/core/test-utils"
 import { BunServices } from "@effect/platform-bun"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   BranchId,
-  ExtensionId,
-  InteractionRequestId,
   MessageId,
-  RequestId,
   SessionId,
   ToolCallId,
-  ToolId,
-} from "@gent/core-internal/domain/ids.js"
-import {
-  CurrentInteractionOwner,
-  encodeInteractionDecision,
-  InteractionPendingError,
-  InteractionRequestRecord,
-} from "@gent/core-internal/domain/interaction.js"
-import {
   assistantMessageIdForTurn,
   Branch,
   dateFromMillis,
   Message,
-  messageSingleText,
   Session,
   SteerCommand,
-} from "@gent/core-internal/domain/message.js"
+  AgentDefinition,
+  AgentName,
+  DEFAULT_AGENT_NAME,
+  ExternalDriverRef,
+  CONTEXT_WINDOW_MESSAGE_TYPE,
+  messagePartsText,
+  toolResultMessageIdForTurn,
+  windowDetails,
+} from "@gent/core/protocol"
+import {
+  ExtensionId,
+  RequestId,
+  InteractionPendingError,
+  defineExtension,
+  ExtensionContext,
+  ExtensionHost,
+  ExternalToolRunner,
+  tool,
+  type ToolCapability,
+  LoadedArtifactIdentity,
+  type TurnExecutor,
+} from "@gent/core/extensions/api"
+import {
+  InteractionRequestId,
+  CurrentInteractionOwner,
+  InteractionRequestRecord,
+  InteractionStorage,
+  CurrentToolCall,
+  type ResolvedToolCapability,
+  ToolRunner,
+  ModelContextLedger,
+  StorageError,
+  getToolMetadata,
+} from "@gent/core/extensions/branch-tools"
 import {
   CellBranchTools,
   CellExecution,
@@ -83,82 +134,7 @@ import {
   CellRequest,
   CellResponse,
 } from "../src/cell-protocol.js"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
-import {
-  AgentLoopQueueStorage,
-  BranchStorage,
-  EventStorage,
-  InteractionStorage,
-  MessageStorage,
-  SessionStorage,
-  SqliteStorage,
-  ToolCallBindingStorage,
-} from "@gent/core-internal/storage/storage.js"
-import {
-  defineExtension,
-  ExtensionContext,
-  ExtensionHost,
-  tool,
-  type ToolCapability,
-} from "@gent/core/extensions/api"
-import {
-  AgentDefinition,
-  AgentName,
-  DEFAULT_AGENT_NAME,
-  ExternalDriverRef,
-} from "@gent/core-internal/domain/agent.js"
-import {
-  LoadedArtifactIdentity,
-  type LoadedExtension,
-} from "@gent/core-internal/domain/extension.js"
-import {
-  createE2ELayer,
-  createRpcHarness,
-  ensureStorageParents,
-  runToolWithCtx,
-  testHostFacts,
-  testToolContext,
-} from "@gent/core-internal/test-utils/index.js"
-import {
-  finishPart,
-  LanguageModelLayers,
-  multiToolCallStep,
-  type SequenceStep,
-  textDeltaPart,
-  textStep,
-  toolCallPart,
-  toolCallStep,
-  waitFor,
-} from "@gent/core-internal/test-utils/language-model.js"
-import { EventPublisherLive, EventStore } from "@gent/core-internal/domain/event.js"
-import {
-  captureCurrentToolBinding,
-  CurrentToolCall,
-  type ResolvedToolCapability,
-  ToolRunner,
-} from "@gent/core-internal/runtime/tools.js"
-import {
-  ExtensionRegistry,
-  provideCurrentHostCtx,
-  resolveExtensions,
-} from "../../core/src/runtime/extension-host.js"
-import {
-  ApprovalService,
-  makeExtensionHostContextProvider,
-  SessionProfileCache,
-} from "@gent/core-internal/runtime/extension-host.js"
-import {
-  CONTEXT_WINDOW_MESSAGE_TYPE,
-  ModelContextLedger,
-  windowDetails,
-} from "@gent/core-internal/runtime/model-context.js"
-import {
-  buildTurnPromptSections,
-  runAgentLoopTurnProfile,
-  toolResultMessageIdForTurn,
-} from "@gent/core-internal/runtime/turn.js"
 import { shippedPreset } from "./helpers/test-preset.js"
-import { ExternalToolRunner, type TurnExecutor } from "@gent/core-internal/domain/driver.js"
 import {
   ChildAgentHandle,
   CancelChild,
@@ -169,14 +145,6 @@ import {
 } from "../src/delegate.js"
 import { Gent } from "@gent/sdk"
 import { SqlClient } from "effect/unstable/sql"
-import { CurrentWorkspaceId, WorkspaceId } from "@gent/core-internal/server/workspace-rpc.js"
-import { StorageError } from "@gent/core-internal/domain/errors.js"
-import {
-  ToolBindingIdentity,
-  ToolBindingSource,
-  ToolSchemaRevision,
-  ToolSourceRevision,
-} from "@gent/core-internal/domain/capability.js"
 import { CompactionExtension } from "../src/compaction.js"
 
 // ── cell/cell-worker-fixture ────────────────────────────────────────────────
@@ -1494,7 +1462,7 @@ describe("cell approvals", () => {
                 messages.some(
                   (message) =>
                     message.role === "assistant" &&
-                    messageSingleText(message.parts) === "Cell recovery reported",
+                    messagePartsText(message.parts) === "Cell recovery reported",
                 ),
               ).toBe(true)
               const results = messages
@@ -1573,21 +1541,21 @@ it.scopedLive("uses the exact selected capability and still enforces the input s
       output: Schema.String,
       execute: () => Effect.die("Must not resolve the replacement by name"),
     })
-    const registry = ExtensionRegistry.fromResolved(
-      resolveExtensions([
+    const dispatch = provideToolDispatch({
+      extensions: [
         {
           manifest: { id: extensionId },
           scope: "builtin",
           sourcePath: "cell-test",
           contributions: { tools: [replacement] },
         },
-      ]),
-    )
+      ],
+      host,
+    })
     const binding: Option.Option<ResolvedToolCapability> = Option.some({
       extensionId,
       capability: selected,
     })
-    const layer = Layer.mergeAll(base, registry)
     yield* Effect.gen(function* () {
       expect(yield* runCellToolCall({ request: requestToolCall, toolCallId, binding })).toBe(
         "selected:hello",
@@ -1612,7 +1580,7 @@ it.scopedLive("uses the exact selected capability and still enforces the input s
       expect(missing._tag).toBe("CellEvaluationError")
       if (missing._tag === "CellEvaluationError") expect(missing.message).toContain("Unknown tool")
       expect(yield* Ref.get(calls)).toBe(1)
-    }).pipe(provideCurrentHostCtx(host), Effect.provideContext(yield* Layer.build(layer)))
+    }).pipe(dispatch, Effect.provideContext(yield* Layer.build(base)))
   }),
 )
 
@@ -1630,25 +1598,22 @@ it.scopedLive("preserves the pending request and host operation identity", () =>
       output: Schema.String,
       execute: () => Effect.fail(pending),
     })
-    const registry = ExtensionRegistry.fromResolved(
-      resolveExtensions([
+    const dispatch = provideToolDispatch({
+      extensions: [
         {
           manifest: { id: extensionId },
           scope: "builtin",
           sourcePath: "cell-test",
           contributions: { tools: [selected] },
         },
-      ]),
-    )
+      ],
+      host,
+    })
     const result = yield* runCellToolCall({
       request: requestToolCall,
       toolCallId,
       binding: Option.some({ extensionId, capability: selected }),
-    }).pipe(
-      provideCurrentHostCtx(host),
-      Effect.provideContext(yield* Layer.build(Layer.mergeAll(base, registry))),
-      Effect.flip,
-    )
+    }).pipe(dispatch, Effect.provideContext(yield* Layer.build(base)), Effect.flip)
     expect(result).toMatchObject({
       _tag: "CellToolCallSuspended",
       operationId: requestToolCall.operationId,
@@ -1723,30 +1688,11 @@ const prepareCell = Effect.gen(function* () {
 })
 
 const currentHostParams = Effect.gen(function* () {
-  const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
-  const hostProvider = yield* makeExtensionHostContextProvider({
-    host: testHostFacts().host,
-  })
-  const turnProfile = {
-    turnGenerationId: profile.generationId,
-    turnExtensionRegistry: profile.registryService,
-    turnBaseSections: profile.baseSections,
-    turnHostCtx: hostProvider.forRun(cellToolHost),
-  }
-  const toolBindings = yield* runAgentLoopTurnProfile(turnProfile)(
-    Effect.gen(function* () {
-      const bindings = new Map<string, ResolvedToolCapability>()
-      for (const name of profile.registryService.getResolved().modelCapabilities.keys()) {
-        const binding = yield* captureCurrentToolBinding(name)
-        if (Option.isSome(binding)) bindings.set(name, binding.value)
-      }
-      return bindings
-    }),
-  )
+  const turn = yield* captureTurnTools(cellToolHost)
   return {
     cell: cellToolHost,
-    profile: turnProfile,
-    toolBindings,
+    profile: turn.profile,
+    toolBindings: turn.toolBindings,
     ledger: yield* ModelContextLedger.make,
   }
 })
@@ -2312,7 +2258,7 @@ describe("shipped model surface", () => {
           (all) =>
             all.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "done",
+                message.role === "assistant" && messagePartsText(message.parts) === "done",
             ),
           10_000,
           "assistant reply done",
@@ -2354,7 +2300,7 @@ describe("shipped model surface", () => {
             (messages) =>
               messages.some(
                 (message) =>
-                  message.role === "assistant" && messageSingleText(message.parts) === reply,
+                  message.role === "assistant" && messagePartsText(message.parts) === reply,
               ),
             10_000,
             `assistant reply ${reply}`,
@@ -2445,7 +2391,7 @@ describe("shipped model surface", () => {
           (list) =>
             list.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "joined",
+                message.role === "assistant" && messagePartsText(message.parts) === "joined",
             ),
           10_000,
           "assistant reply joined",
@@ -2520,7 +2466,7 @@ describe("shipped model surface", () => {
           (list) =>
             list.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "scoped",
+                message.role === "assistant" && messagePartsText(message.parts) === "scoped",
             ),
           10_000,
           "assistant reply scoped",
@@ -2612,7 +2558,7 @@ describe("external driver cell dispatch", () => {
           (list) =>
             list.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "21,22",
+                message.role === "assistant" && messagePartsText(message.parts) === "21,22",
             ),
           6_000,
           "external reply from cell results",
@@ -2707,7 +2653,7 @@ describe("child cell", () => {
           client.message.list({ branchId }),
           (items) =>
             items.some(
-              (item) => item.role === "assistant" && messageSingleText(item.parts) === "done",
+              (item) => item.role === "assistant" && messagePartsText(item.parts) === "done",
             ),
           12_000,
           "the parent read the child's completion",
@@ -2721,7 +2667,7 @@ describe("child cell", () => {
           (item) => item.metadata?.customType === "child-completion",
         )
         expect(completion).toBeDefined()
-        expect(messageSingleText(completion?.parts ?? [])).toContain("child says 2")
+        expect(messagePartsText(completion?.parts ?? [])).toContain("child says 2")
 
         const sessions = yield* client.session.list()
         const child = sessions.find((session) => session.parentSessionId === sessionId)
@@ -2891,12 +2837,12 @@ describe("branch cell lifetime", () => {
           const messages = yield* waitFor(client.message.list({ branchId }), (items) => {
             if (turn.send)
               return items.some(
-                (item) => item.role === "user" && messageSingleText(item.parts) === content,
+                (item) => item.role === "user" && messagePartsText(item.parts) === content,
               )
             return items.filter(isCompletion).length >= completions
           })
           let user = messages.find(
-            (item) => item.role === "user" && messageSingleText(item.parts) === content,
+            (item) => item.role === "user" && messagePartsText(item.parts) === content,
           )
           if (!turn.send) user = messages.filter(isCompletion).at(completions - 1)
           if (Predicate.isUndefined(user)) return yield* Effect.die("Missing parent message")
@@ -2919,8 +2865,8 @@ describe("branch cell lifetime", () => {
           (item) => item.metadata?.customType === "child-completion",
         )
         expect(notices).toHaveLength(2)
-        expect(messageSingleText(notices[0]?.parts ?? [])).toContain("interrupted")
-        expect(messageSingleText(notices[1]?.parts ?? [])).toContain("verified child result")
+        expect(messagePartsText(notices[0]?.parts ?? [])).toContain("interrupted")
+        expect(messagePartsText(notices[1]?.parts ?? [])).toContain("verified child result")
         const saved = yield* Effect.fromOption(yield* Ref.get(handle))
         const childMessages = yield* client.message.list({ branchId: saved.branchId })
         expect(childMessages.filter((message) => message.role === "user")).toHaveLength(1)
@@ -3007,12 +2953,11 @@ describe("branch cell lifetime", () => {
                 (messages) =>
                   messages.some(
                     (message) =>
-                      message.role === "user" && messageSingleText(message.parts) === content,
+                      message.role === "user" && messagePartsText(message.parts) === content,
                   ),
               )
               const user = messages.find(
-                (message) =>
-                  message.role === "user" && messageSingleText(message.parts) === content,
+                (message) => message.role === "user" && messagePartsText(message.parts) === content,
               )
               if (Predicate.isUndefined(user)) return yield* Effect.die("Missing submitted message")
               if (index === 5) {
@@ -3109,18 +3054,8 @@ const delegateToolContext = Effect.fn("test.delegateToolContext")(function* (par
 }) {
   // Outside a loop the facade has no session control, so the cancellation the
   // tool steers would die. The runtime is the same door the loop opens.
-  const runtime = yield* SessionRuntime
-  const provider = yield* makeExtensionHostContextProvider({
-    host: testHostFacts().host,
-    sessionControl: {
-      queueFollowUp: (input) => runtime.queueFollowUp(input),
-      dequeueFollowUp: (input) => runtime.dequeueFollowUp(input),
-      send: (input) => runtime.sendUserMessage(input),
-      steer: (command) => runtime.steer(command),
-    },
-  })
   return {
-    ...provider.forRun({ ...parent, sessionCwd: "/tmp" }),
+    ...(yield* runtimeHostContext({ ...parent, sessionCwd: "/tmp" })),
     extensionId: ExtensionId.make("cell-recovery"),
     toolCallId: ToolCallId.make("delegate-cancel-call"),
   }
@@ -3308,9 +3243,10 @@ it.scopedLive(
           const cells = (yield* CellStorage).executions
           if (state !== "unadmitted" && state !== "revoked") yield* cells.claim(cell)
           if (state === "completed") yield* cells.complete(cell, savedResult)
-          const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
+          const turn = yield* captureTurnTools(cell)
+          const bindingOf = (name: string) => Option.fromUndefinedOr(turn.toolBindings.get(name))
           if (state === "unknown-child") {
-            const selected = yield* captureCurrentToolBinding("delegate.start")
+            const selected = bindingOf("delegate.start")
             const identity = Option.flatMap(selected, (entry) =>
               Option.fromUndefinedOr(entry.binding),
             )
@@ -3343,29 +3279,21 @@ it.scopedLive(
             ])
           }
           if (state === "unadmitted" || state === "revoked") {
-            const captured = yield* captureCurrentToolBinding("cell")
+            const captured = bindingOf("cell")
             const identity = Option.flatMap(captured, (entry) =>
               Option.fromUndefinedOr(entry.binding),
             )
             if (Option.isNone(identity)) return yield* Effect.die("Missing outer cell binding")
-            yield* (yield* ToolCallBindingStorage).save({ ...cell, binding: identity.value })
+            yield* plantToolCallBinding({ ...cell, binding: identity.value })
           }
           if (state === "waiting") {
-            const host = yield* makeExtensionHostContextProvider({
-              host: testHostFacts().host,
-            })
-            const selected = yield* captureCurrentToolBinding("approve")
+            const selected = bindingOf("approve")
             if (Option.isNone(selected)) return yield* Effect.die("Missing approval binding")
             const suspendedHost = yield* makeCellToolHost({
               cell,
               ledger: yield* ModelContextLedger.make,
               toolBindings: new Map([["approve", selected.value]]),
-              profile: {
-                turnGenerationId: profile.generationId,
-                turnExtensionRegistry: profile.registryService,
-                turnBaseSections: profile.baseSections,
-                turnHostCtx: host.forRun(cell),
-              },
+              profile: turn.profile,
             })
             const suspended = yield* suspendedHost
               .call(
@@ -3379,21 +3307,17 @@ it.scopedLive(
               .pipe(Effect.flip)
             expect(suspended._tag).toBe("CellToolCallSuspended")
           }
-          const binding = yield* captureCurrentToolBinding("sibling")
+          const binding = bindingOf("sibling")
           const identity = Option.flatMap(binding, (entry) => Option.fromUndefinedOr(entry.binding))
           if (Option.isNone(identity)) return yield* Effect.die("Missing sibling binding")
-          yield* (yield* ToolCallBindingStorage).save({
+          yield* plantToolCallBinding({
             sessionId,
             branchId,
             assistantMessageId,
             toolCallId: ToolCallId.make("native-sibling"),
             binding: identity.value,
           })
-          yield* (yield* AgentLoopQueueStorage).putQueueState(sessionId, branchId, {
-            steering: [],
-            followUp: [],
-            inFlight: { message: user },
-          })
+          yield* plantInFlightTurn({ sessionId, branchId, message: user })
         }).pipe(
           Effect.provideContext(context),
           Effect.provideService(CurrentWorkspaceId, workspaceId),
@@ -3433,7 +3357,7 @@ it.scopedLive(
         expect(
           messages.some(
             (message) =>
-              message.role === "assistant" && messageSingleText(message.parts) === "Recovered",
+              message.role === "assistant" && messagePartsText(message.parts) === "Recovered",
           ),
         ).toBe(true)
         const results = messages.find(
@@ -3736,14 +3660,13 @@ const cellOperationStorage = {
   toolCallId: ToolCallId.make("cell-outer-call"),
 }
 const key = { cell: cellOperationStorage, operationId: "1" }
-const binding = ToolBindingIdentity.make({
-  toolId: ToolId.make("write"),
-  extensionId: ExtensionId.make("files"),
-  source: ToolBindingSource.cases.Static.make({
-    sourceRevision: ToolSourceRevision.make("source-1"),
-  }),
-  schemaRevision: ToolSchemaRevision.make("schema-1"),
-})
+const bindingFields = {
+  toolId: "write",
+  extensionId: "files",
+  sourceRevision: "source-1",
+  schemaRevision: "schema-1",
+}
+const binding = staticToolBinding(bindingFields)
 const params = { ...key, binding, input: { path: "file.txt", content: "once" } }
 const requestId = InteractionRequestId.make("cell-request")
 const fixture = Effect.gen(function* () {
@@ -3805,10 +3728,7 @@ it.live("admits an operation once and preserves its original input, binding, and
         yield* storage
           .admit({
             ...params,
-            binding: ToolBindingIdentity.make({
-              ...binding,
-              schemaRevision: ToolSchemaRevision.make("schema-2"),
-            }),
+            binding: staticToolBinding({ ...bindingFields, schemaRevision: "schema-2" }),
           })
           .pipe(Effect.flip),
       ),
@@ -3851,7 +3771,6 @@ it.scopedLive(
       yield* (yield* CellStorage).executions.claim(cellOperationStorage)
       const storage = (yield* CellStorage).operations
       const approval = yield* ApprovalService
-      const events = yield* EventStorage
       const sql = yield* SqlClient.SqlClient
       yield* storage.admit(params)
       const peer = { ...key, operationId: "2" }
@@ -3874,7 +3793,7 @@ it.scopedLive(
       expect(blocked._tag).toBe("EventStoreError")
       expect((yield* storage.get(peer)).state._tag).toBe("Started")
       expect(
-        (yield* events.listEvents(cellOperationStorage)).filter(
+        (yield* storedEvents(cellOperationStorage)).filter(
           (event) => event.event._tag === "InteractionPresented",
         ),
       ).toHaveLength(1)
@@ -3984,10 +3903,7 @@ it.live(
             ),
         ),
       ).toBe(true)
-      yield* (yield* InteractionStorage).decide(
-        requestId,
-        yield* encodeInteractionDecision({ approved: true }),
-      )
+      yield* recordInteractionDecision(requestId, { approved: true })
       const resumed = yield* storage.resume(key, requestId)
       yield* storage.complete(
         key,
@@ -4043,7 +3959,7 @@ it.live("binds a decision to one waiting operation and grants one resume attempt
     )
     expect((yield* storage.get(key)).state._tag).toBe("Waiting")
     const decision = { approved: false, notes: "Do not write" }
-    yield* interactions.decide(requestId, yield* encodeInteractionDecision(decision))
+    yield* recordInteractionDecision(requestId, decision)
     const resumed = yield* storage.resume(key, requestId)
     expect(resumed.state).toEqual({ _tag: "Resuming", requestId, decision })
     expect(resumed.toolCallId).toBe(first.operation.toolCallId)
@@ -4105,8 +4021,7 @@ it.live("does not admit external work inside a caller transaction or after cell 
     ).toBe(true)
     expect((yield* storage.admit(params)).admitted).toBe(true)
     yield* storage.suspend(key, requestOperationStorage)
-    const interactions = yield* InteractionStorage
-    yield* interactions.decide(requestId, yield* encodeInteractionDecision({ approved: true }))
+    yield* recordInteractionDecision(requestId, { approved: true })
     expect(
       Schema.is(StorageError)(
         yield* storage.resume(key, requestId).pipe(sql.withTransaction, Effect.flip),
@@ -4155,10 +4070,7 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
           const storage = (yield* CellStorage).operations
           yield* storage.admit(params)
           yield* storage.suspend(key, requestOperationStorage)
-          yield* (yield* InteractionStorage).decide(
-            requestId,
-            yield* encodeInteractionDecision({ approved: true }),
-          )
+          yield* recordInteractionDecision(requestId, { approved: true })
         }).pipe(Effect.provideContext(context))
       }),
     )
@@ -4400,47 +4312,22 @@ describe("model context directives from a cell", () => {
   }
 })
 
-// ── cell/turn-prompt-sections.test ──────────────────────────────────────────
+// ── cell/prompt-guidelines.test ─────────────────────────────────────────────
 
-const read = tool({
-  id: "read",
-  description: "Read a file from disk.",
-  promptSnippet: "Read a file",
-  params: Schema.Struct({ path: Schema.String }),
-  output: Schema.String,
-  execute: () => Effect.succeed(""),
-})
-const write = tool({
-  id: "write",
-  description: "Write a file to disk.",
-  params: Schema.Struct({ path: Schema.String, content: Schema.String }),
-  output: Schema.Boolean,
-  execute: () => Effect.succeed(true),
-})
-const agent = new AgentDefinition({ name: DEFAULT_AGENT_NAME })
-
-describe("turn prompt sections", () => {
+describe("cell prompt guidelines", () => {
   it.effect("tells the model what the cell runtime exposes so it does not guess at imports", () =>
     Effect.sync(() => {
-      const sections = buildTurnPromptSections([], agent, [CellTool], [])
-      const guidelines = sections.find((section) => section.id === "tool-guidelines")
-      expect(guidelines?.content).toContain(
-        "- The cell is a full Bun process in the working directory with your user's privileges; nothing is sandboxed. Bun (Bun.file, Bun.write, Bun.$, Bun.spawn), bun:sqlite, fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory are all available.",
+      const guidelines = (getToolMetadata(CellTool).promptGuidelines ?? []).join("\n")
+      expect(guidelines).toContain(
+        "The cell is a full Bun process in the working directory with your user's privileges; nothing is sandboxed. Bun (Bun.file, Bun.write, Bun.$, Bun.spawn), bun:sqlite, fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory are all available.",
       )
-      expect(guidelines?.content).toContain(
-        "- Shell that changes state (git, installs, deletes, network writes) goes through tools.bash({ command })",
+      expect(guidelines).toContain(
+        "Shell that changes state (git, installs, deletes, network writes) goes through tools.bash({ command })",
       )
-      expect(guidelines?.content).toContain("- Return a summary, not the data.")
-      expect(guidelines?.content).toContain(
-        "- console output, process.stdout and process.stderr writes, and inherited output of spawned processes return with the cell result",
+      expect(guidelines).toContain("Return a summary, not the data.")
+      expect(guidelines).toContain(
+        "console output, process.stdout and process.stderr writes, and inherited output of spawned processes return with the cell result",
       )
-    }),
-  )
-
-  it.effect("adds no catalog section when the model surface was not narrowed to the cell", () =>
-    Effect.sync(() => {
-      const sections = buildTurnPromptSections([], agent, [read, write], [])
-      expect(sections.find((section) => section.id === "cell-catalog")).toBeUndefined()
     }),
   )
 })

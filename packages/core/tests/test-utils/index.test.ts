@@ -6,7 +6,7 @@ import {
   createE2ELayer,
   ensureStorageParents,
   type E2ELayerConfig,
-} from "../../src/test-utils/index"
+} from "../../src/test-utils/harness"
 import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { SessionStorage, type SessionStorageService } from "../../src/storage/storage"
 import { ExtensionRegistry } from "../../src/runtime/extension-host"

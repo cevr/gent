@@ -1,7 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { DateTime, Effect, FileSystem, Option, Path, Predicate, Schedule, Schema } from "effect"
 import { AgentEvent, BranchId, SessionId } from "@gent/core/protocol"
-import { InteractionRequestId } from "@gent/core-internal/domain/ids"
+import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import {
   type AnyExtensionClientModule,
   autocompleteContribution,

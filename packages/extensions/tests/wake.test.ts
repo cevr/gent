@@ -16,7 +16,6 @@ import {
 } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { BunServices } from "@effect/platform-bun"
-import { RuntimeEnvironment } from "@gent/core-internal/runtime/config"
 import {
   finishPart,
   LanguageModelLayers,
@@ -26,13 +25,12 @@ import {
   toolCallPart,
   toolCallStep,
   waitFor,
-} from "@gent/core-internal/test-utils/language-model"
-import {
   createRpcHarness,
   runToolWithCtx,
   testLeafContext,
   testToolContext,
-} from "@gent/core-internal/test-utils/index"
+  RuntimeEnvironment,
+} from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   CancelTool,
@@ -52,12 +50,12 @@ import {
   WakeTool,
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
-import { BranchId, RequestId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
-import { SteerCommand } from "@gent/core-internal/domain/message"
+import { BranchId, SessionId, ToolCallId, SteerCommand } from "@gent/core/protocol"
 import {
+  RequestId,
   ExtensionContext,
   type ExtensionContextService,
-} from "@gent/core-internal/domain/extension"
+} from "@gent/core/extensions/api"
 
 // ── wake/wake.test ──────────────────────────────────────────────────────────
 

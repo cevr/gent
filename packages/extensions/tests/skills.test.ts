@@ -14,8 +14,12 @@ import {
 import { BunServices } from "@effect/platform-bun"
 import { narrowR } from "../../core/tests/helpers/effect"
 import { ref } from "@gent/core/extensions/api"
-import { LanguageModelLayers, textStep } from "@gent/core-internal/test-utils/language-model"
-import { collectTestContributions, createRpcHarness } from "@gent/core-internal/test-utils/index"
+import {
+  LanguageModelLayers,
+  textStep,
+  collectTestContributions,
+  createRpcHarness,
+} from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
 
 // ── skills/skills.test ──────────────────────────────────────────────────────

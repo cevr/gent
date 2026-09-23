@@ -35,6 +35,8 @@ import {
   ProviderAuth,
   retryProviderCall,
   ModelRegistry,
+  finishPart,
+  toolCallPart,
 } from "../../src/runtime/provider"
 import { BunServices } from "@effect/platform-bun"
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
@@ -54,7 +56,7 @@ import { BranchId, ExtensionId, MessageId, SessionId, ToolCallId } from "../../s
 import { failingLanguageModel, makeLanguageModel } from "../helpers/failing-language-model"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { tool, type ToolCapability } from "@gent/core/extensions/api"
-import { finishPart, LanguageModelLayers, toolCallPart } from "../../src/test-utils/language-model"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import { convertTools } from "../../src/runtime/tools"
 import { toPrompt } from "../../src/runtime/model-context"
 import { dateFromMillis, Message } from "../../src/domain/message"

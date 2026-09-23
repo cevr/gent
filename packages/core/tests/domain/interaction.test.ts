@@ -5,7 +5,7 @@ import {
   type InteractionStorageService,
   SqliteStorage,
 } from "../../src/storage/storage"
-import { ensureStorageParents } from "../../src/test-utils/index"
+import { ensureStorageParents } from "../../src/test-utils/harness"
 import { EventStoreError } from "../../src/domain/event"
 import {
   decodeInteractionParams,

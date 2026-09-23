@@ -30,7 +30,7 @@ import {
 import { RuntimeEnvironment } from "../../src/runtime/config"
 import { type AgentEvent, EventPublisher, type ToolCallStarted } from "../../src/domain/event"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { createRpcHarness, testToolContext } from "../../src/test-utils/index"
+import { createRpcHarness, testToolContext } from "../../src/test-utils/harness"
 import {
   BranchId,
   ExtensionId,

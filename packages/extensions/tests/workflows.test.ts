@@ -10,8 +10,8 @@ import {
   type SequenceStep,
   textStep,
   toolCallStep,
-} from "@gent/core-internal/test-utils/language-model"
-import { createRpcHarness } from "@gent/core-internal/test-utils/index"
+  createRpcHarness,
+} from "@gent/core/test-utils"
 import { WORKFLOWS_EXTENSION_ID } from "../src/workflows.js"
 import { e2ePreset } from "./helpers/test-preset"
 

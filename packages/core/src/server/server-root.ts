@@ -13,13 +13,6 @@ import {
   type ServerIdentityApi,
 } from "./server.js"
 
-/**
- * A root names where its state lives when it names the root. Re-exported here
- * so a server entrypoint takes both from `server-root` and never reaches into
- * the dependency graph directly.
- */
-export { StateLocation } from "./server.js"
-
 import { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"
 
 type BuiltRpcHandlers = Layer.Success<typeof RpcHandlersLive>

@@ -6,13 +6,11 @@ import {
   textDeltaPart,
   textStep,
   waitFor,
-} from "@gent/core-internal/test-utils/language-model"
-import {
   createRpcHarness,
   runToolWithCtx,
   testToolContext,
-} from "@gent/core-internal/test-utils/index"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+} from "@gent/core/test-utils"
+import { BranchId, SessionId, ToolCallId } from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset"
 import {
   continuationPrompt,

@@ -122,7 +122,6 @@ const projectFileFailures = (
 const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* () {
   const packageJsonPaths = [
     "packages/core/package.json",
-    "packages/core-internal/package.json",
     "packages/extensions/package.json",
     "packages/sdk/package.json",
   ]

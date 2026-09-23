@@ -35,7 +35,7 @@ import {
   renderWithProviders,
 } from "./render-harness-boundary"
 import { onMount } from "solid-js"
-import { ProviderAuthError } from "@gent/core-internal/domain/driver"
+import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { runEffectBoundary } from "./run-effect-boundary"

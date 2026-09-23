@@ -1,7 +1,13 @@
 /** @jsxImportSource @opentui/solid */
-import { DateTime, Effect, Option, Schema } from "effect"
+import { DateTime, Effect, Option } from "effect"
 import { createSignal, Show } from "solid-js"
-import type { BranchId, Message, Session, SessionId } from "@gent/core/protocol"
+import {
+  type BranchId,
+  type Message,
+  type Session,
+  type SessionId,
+  windowDetails,
+} from "@gent/core/protocol"
 import {
   ChromePanel,
   decoration,
@@ -45,20 +51,8 @@ import {
 
 const THREAD_VIEW_EXTENSION_ID = "@gent/thread-view"
 
-const CONTEXT_WINDOW_MESSAGE_TYPE = "context-window"
-
-/** The marker details the pane reads; the loop owns the full schema. */
-const WindowDetails = Schema.Struct({
-  keepFromMessageId: Schema.String,
-  summarized: Schema.optional(Schema.Struct({ count: Schema.Natural })),
-})
-type WindowDetails = typeof WindowDetails.Type
-const decodeWindowDetails = Schema.decodeUnknownOption(WindowDetails)
-
-const windowDetailsOf = (message: Message): Option.Option<WindowDetails> => {
-  if (message.metadata?.customType !== CONTEXT_WINDOW_MESSAGE_TYPE) return Option.none()
-  return decodeWindowDetails(message.metadata.details)
-}
+/** The marker details the pane reads; the loop owns the schema and the parse. */
+type WindowDetails = Option.Option.Value<ReturnType<typeof windowDetails>>
 
 /** One context window on one branch: what the model saw between two handoffs. */
 export interface ThreadWindow {
@@ -152,7 +146,7 @@ const cutsOf = (
 ): ReadonlyArray<Cut> =>
   markers
     .flatMap((marker) =>
-      Option.match(windowDetailsOf(marker), {
+      Option.match(windowDetails(marker), {
         onNone: () => [],
         onSome: (details) => {
           const at = body.findIndex((message) => message.id === details.keepFromMessageId)
@@ -216,8 +210,8 @@ export const windowsOf = (
   branchId: BranchId,
   messages: ReadonlyArray<Message>,
 ): ReadonlyArray<ThreadWindow> => {
-  const markers = messages.filter((message) => Option.isSome(windowDetailsOf(message)))
-  const body = messages.filter((message) => Option.isNone(windowDetailsOf(message)))
+  const markers = messages.filter((message) => Option.isSome(windowDetails(message)))
+  const body = messages.filter((message) => Option.isNone(windowDetails(message)))
   const cuts = cutsOf(body, markers)
   const windows: Array<ThreadWindow> = []
   let start = 0

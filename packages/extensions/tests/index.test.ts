@@ -7,8 +7,8 @@ import { homedir } from "node:os"
 import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
 import { shippedPreset } from "./helpers/test-preset.js"
-import { GentPlatform } from "../../core/src/runtime/gent-platform"
-import { setupExtension } from "../../core/src/runtime/extension-host"
+import { GentPlatform } from "@gent/core/host"
+import { collectTestContributions } from "@gent/core/test-utils"
 
 // ── starting-extensions.test ────────────────────────────────────────────────
 
@@ -33,13 +33,12 @@ describe("builtin tool schemas", () => {
         const failures: string[] = []
 
         for (const extension of shippedPreset.extensionInputs) {
-          const loaded = yield* setupExtension(
-            { extension, scope: "builtin", sourcePath: "builtin" },
-            process.cwd(),
+          const contributions = yield* collectTestContributions(extension.setup, {
+            cwd: process.cwd(),
             home,
-          )
+          })
 
-          for (const tool of loaded.contributions.tools ?? []) {
+          for (const tool of contributions.tools ?? []) {
             const failure = yield* Effect.try({
               try: () => toCodecAnthropic(tool.parametersSchema),
               catch: (cause) => String(cause),
@@ -57,7 +56,7 @@ describe("builtin tool schemas", () => {
               }),
             )
             if (Option.isSome(failure)) {
-              failures.push(`${loaded.manifest.id}/${getToolId(tool)}: ${failure.value}`)
+              failures.push(`${extension.manifest.id}/${getToolId(tool)}: ${failure.value}`)
             }
           }
         }

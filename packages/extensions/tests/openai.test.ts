@@ -46,8 +46,8 @@ import {
   type FakeFetchState,
   makeFakeFetchState,
   oneGenerate,
-} from "@gent/core-internal/test-utils/language-model"
-import { SessionId } from "@gent/core-internal/domain/ids"
+} from "@gent/core/test-utils"
+import { SessionId } from "@gent/core/protocol"
 
 // ── openai/openai-credential-service.test ───────────────────────────────────
 

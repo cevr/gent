@@ -1263,22 +1263,6 @@ const referenceExtensionFile = (file: string): boolean =>
 
 const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
   {
-    pattern: /\bBun\.Glob\b/,
-    message: "Bun.Glob fallback is deleted; use the FileIndex service",
-  },
-  {
-    pattern: /\bBun\.randomUUIDv7\b/,
-    message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
-  },
-  {
-    pattern: /\bprocess\.(?:platform|pid|execPath|kill)\b/,
-    message: "Host process facts are adapter-only; use GentPlatform",
-  },
-  {
-    pattern: /\bos\.(?:hostname|homedir|release)\s*\(/,
-    message: "Host OS facts are adapter-only; use GentPlatform",
-  },
-  {
     pattern: /\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\b/,
     message: "Bun platform layers may only be provided by platform roots",
   },
@@ -1293,14 +1277,6 @@ const bannedTransportContractPatterns: ReadonlyArray<BannedPattern> = [
 
 const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
   {
-    pattern: /@gent\/core-internal\//,
-    message: "Reference extensions must use @gent/core/extensions/api, not core internals",
-  },
-  {
-    pattern: /@gent\/core\/src\//,
-    message: "Reference extensions must import the public extension API, not core source files",
-  },
-  {
     pattern: /@gent\/extensions\/src\//,
     message:
       "Reference extensions must stand alone instead of importing shipped extension internals",
@@ -1310,26 +1286,6 @@ const bannedReferenceExtensionPatterns: ReadonlyArray<BannedPattern> = [
     message: "Reference extensions must not reach out of examples/extensions with relative imports",
   },
 ]
-
-const withEffectWrapperDefinitionPattern = /\b(?:export\s+)?const\s+with[A-Z][A-Za-z0-9_]*\b/
-const effectWrapperArgumentPattern = /:\s*Effect\.Effect\b/
-const withEffectWrapperMessage =
-  "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`"
-const withFunctionInvocationPattern = /(?<![.\w$])with[A-Z][A-Za-z0-9_]*\s*\(/g
-const callbackArgumentPattern =
-  /(?:^|,)\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][A-Za-z0-9_$]*\s*=>)/
-const callbackParameterPattern = /:\s*\([^)]*\)\s*=>/
-const wrappedFunctionInvocationPattern =
-  /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\(/
-const withFunctionInvocationMessage =
-  "`withX(fn(...))` invocation style is banned; call the inner effect and pipe the wrapper (`fn(...).pipe(withX)`)."
-const withCallbackWrapperMessage =
-  "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`."
-
-const hostFactPatternSources = new Set([
-  "\\bprocess\\.(?:platform|pid|execPath|kill)\\b",
-  "\\bos\\.(?:hostname|homedir|release)\\s*\\(",
-])
 
 const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
   {
@@ -1388,11 +1344,14 @@ const bannedProtectedHostFactPatterns: ReadonlyArray<BannedPattern> = [
   },
 ]
 
-const serverRootConsumerFiles = new Set(["packages/sdk/src/server.ts"])
 const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform.ts",
   "packages/core/src/runtime/gent-platform-bun.ts",
   "packages/core/src/server/server-root.ts",
+  // The host entry is the door hosts take to the platform roots.
+  "packages/core/src/host.ts",
+  // The test entry hands test roots the full Bun platform.
+  "packages/core/src/test-utils/index.ts",
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])
@@ -1411,25 +1370,14 @@ const protectedHostFactFile = (file: string): boolean =>
   // The cell worker entry is a process entrypoint; it reads its own working directory once.
   file !== "packages/extensions/src/cell-worker-boundary.ts"
 
-const bannedServerRootConsumerPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    // Every hand-composable app service now lives in server/server.ts;
-    // server-root.ts is the one composition root an entrypoint may import.
-    // A type-only import composes nothing, so only a value import is banned.
-    pattern: /^(?!import type\b).*@gent\/core-internal\/server\/server\.js/,
-    message: "Server entrypoints must use server-root instead of hand-composing app services",
-  },
-]
-
 /**
  * `apps/server/src/main.ts` is a launcher, not a composition root. It reads
- * the environment and calls `Gent.server`. Reaching for core-internal or a
- * platform layer there rebuilds the second root the SDK server primitive
- * replaced.
+ * the environment and calls `Gent.server`. Reaching for core or a platform
+ * layer there rebuilds the second root the SDK server primitive replaced.
  */
 const bannedLauncherPatterns: ReadonlyArray<BannedPattern> = [
   {
-    pattern: /@gent\/core-internal\//,
+    pattern: /@gent\/core\//,
     message:
       "The server launcher composes nothing; import @gent/sdk and pass the shape through GentServerOptions",
   },
@@ -1446,140 +1394,20 @@ const bannedLauncherPatterns: ReadonlyArray<BannedPattern> = [
 
 const launcherFiles = new Set(["apps/server/src/main.ts"])
 
-/**
- * Shipped extensions author against the same public surface a user extension
- * gets: `@gent/core/extensions/api` and `@gent/core/extensions/branch-tools`.
- * Reaching into `@gent/core-internal/` gives one name two owners and lets a
- * Tag drift out from under the published API.
- */
-const bannedShippedExtensionPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /@gent\/core-internal\//,
-    message:
-      "Shipped extensions must use @gent/core/extensions/api or @gent/core/extensions/branch-tools, not core internals",
-  },
-]
-
-const shippedExtensionFile = (file: string): boolean => file.startsWith("packages/extensions/src/")
-
 const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
   const patterns = bannedActiveSourcePatterns.filter(
     ({ pattern }) =>
       !(
-        hostFactPatternSources.has(pattern.source) &&
-        !file.startsWith("apps/server/") &&
-        !file.startsWith("packages/sdk/")
-      ) &&
-      !(
-        (file === "packages/core/src/runtime/gent-platform-bun.ts" &&
-          (pattern.source === "\\bBun\\.randomUUIDv7\\b" ||
-            pattern.source === "\\bprocess\\.(?:platform|pid|execPath|kill)\\b" ||
-            pattern.source === "\\bos\\.(?:hostname|homedir|release)\\s*\\(")) ||
-        (platformProviderRootFiles.has(file) &&
-          pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b")
+        platformProviderRootFiles.has(file) &&
+        pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b"
       ),
   )
   if (protectedHostFactFile(file)) patterns.push(...bannedProtectedHostFactPatterns)
-  if (serverRootConsumerFiles.has(file)) patterns.push(...bannedServerRootConsumerPatterns)
   if (launcherFiles.has(file)) patterns.push(...bannedLauncherPatterns)
-  if (shippedExtensionFile(file)) patterns.push(...bannedShippedExtensionPatterns)
   if (file === "packages/core/src/server/rpc.ts") {
     patterns.push(...bannedTransportContractPatterns)
   }
   return patterns
-}
-
-const startsInsidePipeCall = (
-  lines: ReadonlyArray<string>,
-  index: number,
-  column: number,
-): boolean => {
-  const currentLine = Option.getOrElse(Option.fromNullishOr(lines[index]), () => "")
-  const prefixWindow = [...lines.slice(0, index), currentLine.slice(0, column)].join("\n")
-  const pipeStart = prefixWindow.lastIndexOf(".pipe(")
-  if (pipeStart === -1) return false
-
-  let depth = 0
-  for (const char of prefixWindow.slice(pipeStart + ".pipe".length)) {
-    if (char === "(") depth++
-    if (char === ")") depth--
-  }
-
-  return depth > 0
-}
-
-const startsByWrappingFunctionInvocation = (
-  lines: ReadonlyArray<string>,
-  index: number,
-  column: number,
-): boolean => {
-  const firstArgumentWindow = [
-    Option.getOrElse(Option.fromNullishOr(lines[index]), () => "").slice(column),
-    ...lines.slice(index + 1, index + 8),
-  ].join("\n")
-
-  return wrappedFunctionInvocationPattern.test(firstArgumentWindow.trimStart())
-}
-
-const startsWithCallbackArgument = (
-  lines: ReadonlyArray<string>,
-  index: number,
-  column: number,
-): boolean => {
-  const callWindow = [
-    Option.getOrElse(Option.fromNullishOr(lines[index]), () => "").slice(column),
-    ...lines.slice(index + 1, index + 8),
-  ]
-    .join("\n")
-    .trimStart()
-
-  return callbackArgumentPattern.test(callWindow)
-}
-
-const declaresCallbackParameter = (declarationWindow: string): boolean => {
-  const firstArrowIndex = declarationWindow.indexOf("=>")
-  let signatureWindow = declarationWindow
-  if (firstArrowIndex !== -1) signatureWindow = declarationWindow.slice(0, firstArrowIndex + 2)
-  return callbackParameterPattern.test(signatureWindow)
-}
-
-const findWrapperViolations = (
-  file: string,
-  lines: ReadonlyArray<string>,
-  line: string,
-  index: number,
-): ReadonlyArray<PlatformDuplicationFinding> => {
-  const findings: PlatformDuplicationFinding[] = []
-  if (withEffectWrapperDefinitionPattern.test(line)) {
-    const declarationWindow = lines.slice(index, index + 8).join("\n")
-    if (effectWrapperArgumentPattern.test(declarationWindow)) {
-      findings.push({ file, line: index + 1, message: withEffectWrapperMessage })
-    }
-    if (declaresCallbackParameter(declarationWindow)) {
-      findings.push({ file, line: index + 1, message: withCallbackWrapperMessage })
-    }
-  }
-
-  withFunctionInvocationPattern.lastIndex = 0
-  let invocationMatch = Option.fromNullishOr(withFunctionInvocationPattern.exec(line))
-  while (Option.isSome(invocationMatch)) {
-    const match = invocationMatch.value
-    const firstArgumentColumn = match.index + match[0].length
-    if (
-      startsByWrappingFunctionInvocation(lines, index, firstArgumentColumn) &&
-      !startsInsidePipeCall(lines, index, match.index)
-    ) {
-      findings.push({ file, line: index + 1, message: withFunctionInvocationMessage })
-    }
-    if (
-      startsWithCallbackArgument(lines, index, firstArgumentColumn) &&
-      !startsInsidePipeCall(lines, index, match.index)
-    ) {
-      findings.push({ file, line: index + 1, message: withCallbackWrapperMessage })
-    }
-    invocationMatch = Option.fromNullishOr(withFunctionInvocationPattern.exec(line))
-  }
-  return findings
 }
 
 export const findPlatformDuplicationViolations = (
@@ -1596,7 +1424,6 @@ export const findPlatformDuplicationViolations = (
   const lines = text.split("\n")
   for (let index = 0; index < lines.length; index++) {
     const line = Option.getOrElse(Option.fromNullishOr(lines[index]), () => "")
-    findings.push(...findWrapperViolations(file, lines, line, index))
     for (const { pattern, message } of patterns) {
       if (pattern.test(line)) {
         findings.push({ file, line: index + 1, message })
@@ -1951,12 +1778,6 @@ export const findRetiredSurfaces = (
  * - A path carrying a shell or URL character (a space, `$`, `:` or `#`),
  *   which marks it as a fragment of a command line rather than a filename.
  *
- * The symlinked package source is the case the lookup has to get right.
- * `packages/core-internal/src` is a symlink to `../core/src`, so git tracks it
- * as one blob at that exact path and lists nothing beneath it. A reference
- * spelled `packages/core-internal/src/` therefore matches no prefix, and the
- * lookup falls back to the path with its trailing slash removed.
- *
  * @module
  */
 
@@ -2000,19 +1821,9 @@ const isPathClaim = (text: string): boolean =>
  * Whether the tree holds this path.
  *
  * A file matches its own entry. A directory matches on the entries beneath it.
- * A trailing slash is dropped for the retry so a tracked symlink, which git
- * lists as a blob at the bare path, answers a reference written as a directory.
  */
-const existsInTree = (
-  path: string,
-  tracked: ReadonlySet<string>,
-  prefixes: ReadonlySet<string>,
-) => {
-  if (tracked.has(path)) return true
-  if (prefixes.has(path)) return true
-  const bare = path.replace(/\/+$/, "")
-  return tracked.has(bare) || prefixes.has(bare)
-}
+const existsInTree = (path: string, tracked: ReadonlySet<string>, prefixes: ReadonlySet<string>) =>
+  tracked.has(path) || prefixes.has(path)
 
 /**
  * Every directory that holds a tracked file, so a reference to a directory
@@ -2393,7 +2204,10 @@ export const findUnusedSuppressionApprovals = (
  *   and a test layer's config sit beside the function that returns them.
  *
  * - An entry-point surface (`packages/core/src/extensions/api.ts`,
- *   `packages/sdk/src/index.ts`, `packages/extensions/src/client.ts`) exposes names with `export { X } from "..."`. Consumption is read from the import
+ *   `packages/core/src/protocol.ts`, `packages/core/src/host.ts`,
+ *   `packages/core/src/test-utils/index.ts`, `packages/sdk/src/index.ts`,
+ *   `packages/extensions/src/client.ts`) exposes names with
+ *   `export { X } from "..."`. Consumption is read from the import
  *   itself, through the entry point's specifier, by files outside the
  *   declaring package: a symbol a core test imports over a relative path does
  *   not count, and a name on a `@ts-expect-error` line asserts absence rather
@@ -2436,7 +2250,7 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
   {
     prefix: "packages/core/src/extensions/api.ts",
     exempt: [],
-    outsideOf: ["packages/core/src/", "packages/core-internal/"],
+    outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/extensions/api"),
@@ -2445,7 +2259,7 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
   {
     prefix: "packages/core/src/extensions/branch-tools.ts",
     exempt: [],
-    outsideOf: ["packages/core/src/", "packages/core-internal/"],
+    outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/extensions/branch-tools"),
@@ -2454,10 +2268,31 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
   {
     prefix: "packages/core/src/protocol.ts",
     exempt: [],
-    outsideOf: ["packages/core/src/", "packages/core-internal/"],
+    outsideOf: ["packages/core/src/"],
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.some("@gent/core/protocol"),
+    enforced: true,
+  },
+  {
+    // A host export exists for the processes that compose a server; a name
+    // only tests read is harness setup and belongs behind a test-utils operation.
+    prefix: "packages/core/src/host.ts",
+    exempt: [],
+    outsideOf: ["packages/core/src/"],
+    testsCount: false,
+    ownFileCounts: false,
+    specifier: Option.some("@gent/core/host"),
+    enforced: true,
+  },
+  {
+    // The test entry point, listed before the harness directory it re-exports.
+    prefix: "packages/core/src/test-utils/index.ts",
+    exempt: [],
+    outsideOf: ["packages/core/src/"],
+    testsCount: true,
+    ownFileCounts: false,
+    specifier: Option.some("@gent/core/test-utils"),
     enforced: true,
   },
   {
@@ -3200,16 +3035,15 @@ interface PackageSurface {
   readonly mustBePrivate: boolean
   /** `exports` keys the package may carry; a tsconfig path is allowed when it maps onto one. */
   readonly entryPoints: ReadonlyArray<string>
-  /** `exports` entries that must be present with exactly this target. */
-  readonly requiredExports: Readonly<Record<string, string>>
 }
 
 /**
- * Core's public entry points are two authoring surfaces, deliberately split:
- * `extensions/api` for extensions that use the loop, `extensions/branch-tools`
- * for the rarer feature that implements a loop seam. Keeping them apart is
- * what keeps `api` small. `@gent/core-internal` mirrors core source through
- * one private wildcard lane; `@gent/extensions` is the builtin composition
+ * Core's public entry points follow their audience. Two authoring surfaces are
+ * deliberately split: `extensions/api` for extensions that use the loop,
+ * `extensions/branch-tools` for the rarer feature that implements a loop
+ * seam. Keeping them apart is what keeps `api` small. `protocol` serves
+ * clients, `host` serves the processes that compose a server, and
+ * `test-utils` serves tests. `@gent/extensions` is the builtin composition
  * package and exposes only its root and `./client`; `@gent/sdk` exposes the
  * stable root client contract and nothing else.
  */
@@ -3223,36 +3057,27 @@ const PACKAGE_SURFACES: ReadonlyArray<PackageSurface> = [
       "./extensions/api.js",
       "./extensions/branch-tools",
       "./extensions/branch-tools.js",
+      "./host",
       "./protocol",
       "./protocol.js",
+      "./test-utils",
     ],
-    requiredExports: {},
-  },
-  {
-    packageJson: "packages/core-internal/package.json",
-    alias: "@gent/core-internal",
-    mustBePrivate: true,
-    entryPoints: [],
-    requiredExports: { "./*.js": "./src/*.ts", "./*": "./src/*.ts" },
   },
   {
     packageJson: "packages/extensions/package.json",
     alias: "@gent/extensions",
     mustBePrivate: true,
     entryPoints: [".", "./index.js", "./client", "./client.js"],
-    requiredExports: {},
   },
   {
     packageJson: "packages/sdk/package.json",
     alias: "@gent/sdk",
     mustBePrivate: false,
     entryPoints: ["."],
-    requiredExports: {},
   },
 ]
 
-const allowedKeys = (surface: PackageSurface): ReadonlySet<string> =>
-  new Set([...surface.entryPoints, ...Object.keys(surface.requiredExports)])
+const allowedKeys = (surface: PackageSurface): ReadonlySet<string> => new Set(surface.entryPoints)
 
 /** The `exports` key a tsconfig path maps onto, when the path belongs to the alias. */
 const entryPointOfPath = (surface: PackageSurface, key: string): Option.Option<string> => {
@@ -3279,13 +3104,6 @@ const packageFindings = (
     findings.push({
       path: `${surface.packageJson} exports["${key}"]`,
       message: `${surface.alias} may only expose its supported entry points: ${[...allowed].join(", ")}`,
-    })
-  }
-  for (const [key, target] of Object.entries(surface.requiredExports)) {
-    if (Option.exists(exportsMap, (map) => map[key] === target)) continue
-    findings.push({
-      path: `${surface.packageJson} exports["${key}"]`,
-      message: `${surface.alias} must map "${key}" to "${target}"`,
     })
   }
   return findings

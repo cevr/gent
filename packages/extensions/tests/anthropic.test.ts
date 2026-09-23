@@ -49,7 +49,13 @@ import {
 import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
-import { testHostFacts } from "@gent/core-internal/test-utils/index"
+import {
+  testHostFacts,
+  fakeFetchLayer,
+  type FakeFetchState,
+  makeFakeFetchState,
+  oneGenerate,
+} from "@gent/core/test-utils"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import {
@@ -67,12 +73,6 @@ import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import { createHash } from "node:crypto"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
-import {
-  fakeFetchLayer,
-  type FakeFetchState,
-  makeFakeFetchState,
-  oneGenerate,
-} from "@gent/core-internal/test-utils/language-model"
 
 // ── anthropic/anthropic-keychain.test ───────────────────────────────────────
 

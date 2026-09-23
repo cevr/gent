@@ -35,7 +35,7 @@ import {
   textStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { createE2ELayer } from "../../src/test-utils/index"
+import { createE2ELayer } from "../../src/test-utils/harness"
 import { Gent } from "@gent/sdk"
 import {
   messagePartsText,

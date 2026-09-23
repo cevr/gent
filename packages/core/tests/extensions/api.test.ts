@@ -27,7 +27,7 @@ import {
   CurrentExtensionHostContext,
   resolveExtensions,
 } from "../../src/runtime/extension-host"
-import { collectTestContributions, testExtensionHostContext } from "../../src/test-utils/index"
+import { collectTestContributions, testExtensionHostContext } from "../../src/test-utils/harness"
 import * as AiTool from "effect/unstable/ai/Tool"
 import { builtinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
@@ -98,7 +98,7 @@ describe("extension authoring reference", () => {
       const path = yield* Path.Path
       const source = yield* fs.readFileString(yield* path.fromFileUrl(sessionNotesSourceUrl))
       expect(source).toContain('from "@gent/core/extensions/api"')
-      expect(source).not.toContain("@gent/core-internal")
+      expect(source).not.toContain("@gent/core/host")
       expect(source).not.toContain("@gent/core/src")
     }).pipe(Effect.provide(BunServices.layer)),
   )

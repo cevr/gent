@@ -69,8 +69,13 @@ export {
   type TurnAfterInput,
 } from "../domain/extension.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
-export { DEFAULT_RETRY_POLICY, ProviderAuthError, TurnError } from "../domain/driver.js"
-export { InteractionPendingError } from "../domain/interaction.js"
+export {
+  DEFAULT_RETRY_POLICY,
+  ExternalToolRunner,
+  ProviderAuthError,
+  TurnError,
+} from "../domain/driver.js"
+export { type ApprovalDecision, InteractionPendingError } from "../domain/interaction.js"
 export type {
   ModelDriverContribution,
   ProviderAuthInfo,

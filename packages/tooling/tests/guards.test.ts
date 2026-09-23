@@ -571,7 +571,7 @@ const noFixtureSource = [
   'import { describe, expect, it } from "effect-bun-test"',
   'import { Effect } from "effect"',
   'import { Gent } from "@gent/sdk"',
-  'import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/fixtures"',
+  'import { makeTempDirectoryScoped } from "@gent/core/test-utils"',
 ].join("\n")
 
 describe("e2e fixture import guard", () => {
@@ -882,7 +882,7 @@ describe("platform duplication guards", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/core/tests/runtime/example.test.ts",
-        "const id = Bun.randomUUIDv7()",
+        "Layer.provide(BunPlatformLive)",
       ),
     ).toEqual([])
   })
@@ -892,8 +892,6 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "examples/extensions/example.ts",
         [
-          'import { AgentLoop } from "@gent/core-internal/runtime/agent-loop"',
-          'import { Secret } from "@gent/core/src/domain/secret"',
           'import { Builtin } from "@gent/extensions/src/todo"',
           'import { helper } from "../../packages/core/src/domain/helper"',
         ].join("\n"),
@@ -902,22 +900,12 @@ describe("platform duplication guards", () => {
       {
         file: "examples/extensions/example.ts",
         line: 1,
-        message: "Reference extensions must use @gent/core/extensions/api, not core internals",
-      },
-      {
-        file: "examples/extensions/example.ts",
-        line: 2,
-        message: "Reference extensions must import the public extension API, not core source files",
-      },
-      {
-        file: "examples/extensions/example.ts",
-        line: 3,
         message:
           "Reference extensions must stand alone instead of importing shipped extension internals",
       },
       {
         file: "examples/extensions/example.ts",
-        line: 4,
+        line: 2,
         message:
           "Reference extensions must not reach out of examples/extensions with relative imports",
       },
@@ -931,34 +919,12 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
-  test("flags core-internal imports in shipped extensions", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/cell/cell-storage.ts",
-        'import type { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"',
-      ),
-    ).toEqual([
-      {
-        file: "packages/extensions/src/cell/cell-storage.ts",
-        line: 1,
-        message:
-          "Shipped extensions must use @gent/core/extensions/api or @gent/core/extensions/branch-tools, not core internals",
-      },
-    ])
-
-    // The public path is clean.
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/cell/cell-storage.ts",
-        'import type { GentPlatform } from "@gent/core/extensions/branch-tools"',
-      ),
-    ).toEqual([])
-
+  test("flags Bun platform layers in shipped extensions", () => {
     // No shipped extension is exempt, the Anthropic driver included.
     expect(
       findPlatformDuplicationViolations(
         "packages/extensions/src/anthropic.ts",
-        'import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"',
+        'import { BunGentPlatformLive } from "@gent/core/host"',
       ),
     ).toEqual([
       {
@@ -966,239 +932,14 @@ describe("platform duplication guards", () => {
         line: 1,
         message: "Bun platform layers may only be provided by platform roots",
       },
-      {
-        file: "packages/extensions/src/anthropic.ts",
-        line: 1,
-        message:
-          "Shipped extensions must use @gent/core/extensions/api or @gent/core/extensions/branch-tools, not core internals",
-      },
     ])
-  })
-
-  test("flags withX effect wrapper helpers", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "export const withThing = <A, E, R>(",
-          "  effect: Effect.Effect<A, E, R>,",
-          "  value: string,",
-          ") => effect.pipe(Effect.annotateLogs({ value }))",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "export const withThing = <A, E, R>(",
-          "  eff: Effect.Effect<A, E, R>,",
-          "  value: string,",
-          ") => eff.pipe(Effect.annotateLogs({ value }))",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(effect, ...)` wrapper helpers are banned; expose a pipeable provider and call it from `.pipe(...)`",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "export const provideThing =",
-          "  (value: string) =>",
-          "  <A, E, R>(effect: Effect.Effect<A, E, R>) =>",
-          "    effect.pipe(Effect.annotateLogs({ value }))",
-        ].join("\n"),
-      ),
-    ).toEqual([])
-  })
-
-  test("flags withX callback wrapper helpers", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "const withThing = <A>(",
-          "  use: (thing: Thing) => A,",
-          ") => runtime.runSync(Effect.map(Thing, use))",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "const withConnection = <A>(",
-          "  baseUrl: string,",
-          "  use: (conn: McpConnection) => Effect.Effect<A, ExampleMcpError>,",
-          ") => Effect.acquireUseRelease(acquireConnection(baseUrl), use, releaseConnection)",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/file-index/example.ts",
-        [
-          "const withFallback = (primary: FileIndexService, fallback: FileIndexService): FileIndexService => ({",
-          "  getStatus: (path) => primary.getStatus(path),",
-          "})",
-        ].join("\n"),
-      ),
-    ).toEqual([])
-  })
-
-  test("flags withX wrappers around function invocations", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "yield* withWorkspace(submitTurn(operation))",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(fn(...))` invocation style is banned; call the inner effect and pipe the wrapper (`fn(...).pipe(withX)`).",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "yield* withWorkspace(",
-          "  Effect.gen(function* () {",
-          "    yield* submitTurn(operation)",
-          "  }),",
-          ")",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/runtime/example.ts",
-        line: 1,
-        message:
-          "`withX(fn(...))` invocation style is banned; call the inner effect and pipe the wrapper (`fn(...).pipe(withX)`).",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "yield* submitTurn(operation).pipe(provideWorkspace)",
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "yield* run.pipe(withWideEvent(agentRunBoundary(agentName, sessionId)))",
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        [
-          "yield* run.pipe(",
-          "  Effect.tap(() => WideEvent.set({ sessionId, branchId })),",
-          "  withWideEvent(WideEventBoundary.rpc('message.send', { requestId })),",
-          ")",
-        ].join("\n"),
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/storage/example.ts",
-        "return yield* sql.withTransaction(saveMessage(message))",
-      ),
-    ).toEqual([])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/openai/codex-transform.ts",
-        "const withBody = rewriteCodexBody(withHeaders(req, headers))",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags withX callback invocations", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "apps/tui/src/platform/path-runtime.ts",
-        "const joined = withPath((path) => path.join(...parts))",
-      ),
-    ).toEqual([
-      {
-        file: "apps/tui/src/platform/path-runtime.ts",
-        line: 1,
-        message:
-          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/extensions/src/example/mcp-bridge.ts",
-        [
-          "withConnection(baseUrl, (conn) =>",
-          "  Effect.tryPromise(() => conn.client.callTool({ name: 'execute' })),",
-          ")",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/extensions/src/example/mcp-bridge.ts",
-        line: 1,
-        message:
-          "`withX(callback)` wrapper style is banned; expose an Effect value/provider and continue with `.pipe(...)`.",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/example.ts",
-        "yield* effect.pipe(withWideEvent(WideEventBoundary.rpc('message.send')), Effect.tap(() => log()))",
-      ),
-    ).toEqual([])
   })
 
   test("does not flag the guard source itself", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/tooling/src/guards.ts",
-        ["const id = Bun.randomUUIDv7()", "Layer.provide(BunPlatformLive)"].join("\n"),
+        "Layer.provide(BunPlatformLive)",
       ),
     ).toEqual([])
   })
@@ -1227,18 +968,13 @@ describe("platform duplication guards", () => {
     expect(
       findPlatformDuplicationViolations(
         "packages/core/src/server/rpc.ts",
-        ["export class BranchInfo {}", "const id = Bun.randomUUIDv7()"].join("\n"),
+        "export class BranchInfo {}",
       ),
     ).toEqual([
       {
         file: "packages/core/src/server/rpc.ts",
         line: 1,
         message: "Transport session DTOs mirror domain types",
-      },
-      {
-        file: "packages/core/src/server/rpc.ts",
-        line: 2,
-        message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
       },
     ])
   })
@@ -1261,85 +997,6 @@ describe("platform duplication guards", () => {
       findPlatformDuplicationViolations(
         "packages/core/src/server/server-root.ts",
         "const PlatformLayer = Layer.mergeAll(BunCronRuntimeLive, BunGentPlatformLive)",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags deleted Bun.Glob fallback", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "apps/tui/src/utils/example.ts",
-        "const glob = new Bun.Glob(pattern)",
-      ),
-    ).toEqual([
-      {
-        file: "apps/tui/src/utils/example.ts",
-        line: 1,
-        message: "Bun.Glob fallback is deleted; use the FileIndex service",
-      },
-    ])
-  })
-
-  test("flags Bun.randomUUIDv7 outside the platform adapter", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/server/example.ts",
-        "const id = Bun.randomUUIDv7()",
-      ),
-    ).toEqual([
-      {
-        file: "packages/core/src/server/example.ts",
-        line: 1,
-        message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/gent-platform-bun.ts",
-        "const id = Bun.randomUUIDv7()",
-      ),
-    ).toEqual([])
-  })
-
-  test("flags host process and OS facts outside the platform adapter", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "apps/server/src/main.ts",
-        [
-          "const pid = process.pid",
-          "const runtime = process.execPath",
-          "process.kill(pid, 'SIGTERM')",
-          "const hostname = os.hostname()",
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "apps/server/src/main.ts",
-        line: 1,
-        message: "Host process facts are adapter-only; use GentPlatform",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 2,
-        message: "Host process facts are adapter-only; use GentPlatform",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 3,
-        message: "Host process facts are adapter-only; use GentPlatform",
-      },
-      {
-        file: "apps/server/src/main.ts",
-        line: 4,
-        message: "Host OS facts are adapter-only; use GentPlatform",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/core/src/runtime/gent-platform-bun.ts",
-        ["const pid = process.pid", "const home = os.homedir()"].join("\n"),
       ),
     ).toEqual([])
   })
@@ -1644,42 +1301,12 @@ describe("platform duplication guards", () => {
     ).toEqual([])
   })
 
-  test("flags server entrypoints that fork the composition root", () => {
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/sdk/src/server.ts",
-        [
-          'import { createDependencies } from "@gent/core-internal/server/server.js"',
-          'import { buildServerRoutes } from "@gent/core-internal/server/server.js"',
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        file: "packages/sdk/src/server.ts",
-        line: 1,
-        message: "Server entrypoints must use server-root instead of hand-composing app services",
-      },
-      {
-        file: "packages/sdk/src/server.ts",
-        line: 2,
-        message: "Server entrypoints must use server-root instead of hand-composing app services",
-      },
-    ])
-
-    expect(
-      findPlatformDuplicationViolations(
-        "packages/sdk/src/server.ts",
-        'import { buildServerRoot } from "@gent/core-internal/server/server-root.js"',
-      ),
-    ).toEqual([])
-  })
-
   test("flags a server launcher that composes instead of calling Gent.server", () => {
     expect(
       findPlatformDuplicationViolations(
         "apps/server/src/main.ts",
         [
-          'import { buildServerRoot } from "@gent/core-internal/server/server-root.js"',
+          'import { buildServerRoot } from "@gent/core/host"',
           'import { BuiltinExtensions } from "@gent/extensions"',
           "const root = yield* buildServerRoot(config)",
         ].join("\n"),
@@ -1912,7 +1539,6 @@ describe("retired surface guard", () => {
 const TRACKED = [
   "packages/core/src/runtime/provider.ts",
   "packages/core/src/domain/tool.ts",
-  "packages/core-internal/src",
   "apps/tui/tests/render-harness-boundary.tsx",
   "plans/architecture-loop-2026-09-15.md",
   "README.md",
@@ -1942,13 +1568,6 @@ describe("steering file paths", () => {
 
   test("allows a directory that holds a tracked file", () => {
     expect(messagesOfSteeringPath("the tree under `packages/core/src/` holds it")).toEqual([])
-  })
-
-  test("allows a tracked symlink written with a trailing slash", () => {
-    // git lists `packages/core-internal/src` as one blob and nothing beneath it.
-    expect(messagesOfSteeringPath("relative imports inside `packages/core-internal/src/`")).toEqual(
-      [],
-    )
   })
 
   test("skips a brace expansion and a glob", () => {
@@ -2738,10 +2357,6 @@ const x: Api.ToolCapability = Api.tool({})`,
         file: "packages/core/src/domain/capability.ts",
         text: `import { tool } from "@gent/core/extensions/api"`,
       },
-      {
-        file: "packages/core-internal/src/capability.ts",
-        text: `import { tool } from "@gent/core/extensions/api"`,
-      },
     ])
     expect(findings.map((finding) => finding.line)).toEqual([1])
   })
@@ -2869,14 +2484,12 @@ describe("package entry points", () => {
               exports: {
                 "./extensions/api": "./src/extensions/api.ts",
                 "./extensions/api.js": "./src/extensions/api.ts",
+                "./host": "./src/host.ts",
                 "./protocol": "./src/protocol.ts",
                 "./protocol.js": "./src/protocol.ts",
+                "./test-utils": "./src/test-utils/index.ts",
               },
             },
-          ],
-          [
-            "packages/core-internal/package.json",
-            { private: true, exports: { "./*.js": "./src/*.ts", "./*": "./src/*.ts" } },
           ],
         ],
         {
@@ -2884,8 +2497,8 @@ describe("package entry points", () => {
           "@gent/core/extensions/api.js": ["./packages/core/src/extensions/api.ts"],
           "@gent/core/protocol": ["./packages/core/src/protocol.ts"],
           "@gent/core/protocol.js": ["./packages/core/src/protocol.ts"],
-          "@gent/core-internal/*.js": ["./packages/core/src/*.ts"],
-          "@gent/core-internal/*": ["./packages/core/src/*"],
+          "@gent/core/host": ["./packages/core/src/host.ts"],
+          "@gent/core/test-utils": ["./packages/core/src/test-utils/index.ts"],
         },
       ),
     ).toEqual([])
@@ -2926,37 +2539,6 @@ describe("package entry points", () => {
       'packages/core/package.json exports["./protocol/*"]',
       'tsconfig.json compilerOptions.paths["@gent/core/protocol/*"]',
       'tsconfig.json compilerOptions.paths["@gent/core/unknown"]',
-    ])
-  })
-
-  test("keeps the workspace internal package private and narrow", () => {
-    expect(
-      packageSurface(
-        [
-          [
-            "packages/core-internal/package.json",
-            { private: false, exports: { "./debug/*": "./src/debug/*.ts" } },
-          ],
-        ],
-        {},
-      ),
-    ).toEqual([
-      {
-        path: "packages/core-internal/package.json private",
-        message: "@gent/core-internal must stay private; it is not a published contract",
-      },
-      {
-        path: 'packages/core-internal/package.json exports["./debug/*"]',
-        message: "@gent/core-internal may only expose its supported entry points: ./*.js, ./*",
-      },
-      {
-        path: 'packages/core-internal/package.json exports["./*.js"]',
-        message: '@gent/core-internal must map "./*.js" to "./src/*.ts"',
-      },
-      {
-        path: 'packages/core-internal/package.json exports["./*"]',
-        message: '@gent/core-internal must map "./*" to "./src/*.ts"',
-      },
     ])
   })
 

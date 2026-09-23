@@ -27,8 +27,8 @@ import {
   type MessagePart,
   SessionId,
   ToolCallId,
+  projectMessagesWithToolInteractions,
 } from "@gent/core/protocol"
-import { projectMessagesWithToolInteractions } from "@gent/core-internal/domain/message"
 import { type SessionMessageDetails, sessionMessageText } from "@gent/extensions/client.js"
 import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"

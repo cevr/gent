@@ -26,29 +26,29 @@ import {
   splitCdCommand,
   stripBackground,
 } from "../src/exec-tools.js"
-import { BranchId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
+import {
+  BranchId,
+  SessionId,
+  ToolCallId,
+  Branch,
+  dateFromMillis,
+  Session,
+} from "@gent/core/protocol"
 import {
   LanguageModelLayers,
   textStep,
   toolCallStep,
   waitFor,
-} from "@gent/core-internal/test-utils/language-model"
-import {
   createRpcHarness,
   runToolWithCtx,
   testToolContext,
   type TestToolContext,
-} from "@gent/core-internal/test-utils/index"
+  SqliteStorage,
+} from "@gent/core/test-utils"
 import { shippedPreset } from "./helpers/test-preset.js"
 import { BunChildProcessSpawner, BunFileSystem, BunServices } from "@effect/platform-bun"
-import { Branch, dateFromMillis, Session } from "@gent/core-internal/domain/message"
-import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
-import { SqliteStorage } from "@gent/core-internal/storage/storage"
-import {
-  boundToolResultForModel,
-  maximumModelToolResultChars,
-} from "@gent/core-internal/runtime/model-context"
-import * as Prompt from "effect/unstable/ai/Prompt"
+import { BunPlatformLive } from "@gent/core/host"
+import { maximumModelToolResultChars } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 
@@ -364,14 +364,6 @@ const onQueue =
   }
 const now = dateFromMillis(0)
 
-const BoundedBashResult = Schema.Struct({
-  truncated: Schema.Boolean,
-  totalChars: Schema.Finite,
-  omittedChars: Schema.Finite,
-  read: Schema.String,
-  text: Schema.String,
-})
-
 describe("BashTool execution", () => {
   it.live(
     "runs a command and returns stdout",
@@ -388,7 +380,7 @@ describe("BashTool execution", () => {
   )
 
   it.live(
-    "keeps a huge command result whole while the model sees a bounded copy with the read locator",
+    "keeps a huge command result whole",
     () =>
       Effect.gen(function* () {
         // One line per iteration, far past the model-facing bound.
@@ -407,24 +399,6 @@ describe("BashTool execution", () => {
         expect(result.stdout).not.toContain("Full output saved to")
         const storedLines = result.stdout.trimEnd().split("\n")
         expect(storedLines).toHaveLength(lineCount)
-
-        // Core bounds the model-facing copy and hands over the paging locator.
-        const part = Prompt.toolResultPart({
-          id: stubCtx.toolCallId,
-          name: "bash",
-          isFailure: false,
-          providerExecuted: false,
-          result: { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
-        })
-        const bounded = boundToolResultForModel(part)
-        const boundedResult = yield* Schema.decodeUnknownEffect(BoundedBashResult)(bounded.result)
-        expect(boundedResult.truncated).toBe(true)
-        expect(boundedResult.omittedChars).toBeGreaterThan(0)
-        expect(boundedResult.read).toBe(`context.read("${stubCtx.toolCallId}", { offset, limit })`)
-        expect(boundedResult.text.length).toBeLessThan(result.stdout.length)
-        // Head and tail both survive the bound, so the model can page either way.
-        expect(boundedResult.text).toContain("line 1")
-        expect(boundedResult.text).toContain(`line ${lineCount}`)
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Effect, Fiber, FileSystem, Path, Stream } from "effect"
-import { compileSystemPrompt } from "@gent/core-internal/domain/capability.js"
-import { BunFileSystem, BunServices } from "@effect/platform-bun"
-import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   finishPart,
   LanguageModelLayers,
@@ -10,12 +7,12 @@ import {
   textDeltaPart,
   toolCallStep,
   waitFor,
-} from "@gent/core-internal/test-utils/language-model.js"
-import {
   createRpcHarness,
   testLeafContext,
   testToolContext,
-} from "@gent/core-internal/test-utils/index.js"
+} from "@gent/core/test-utils"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import * as Prompt from "effect/unstable/ai/Prompt"
 import { ExtensionContext } from "@gent/core/extensions/api"
 import {
   basePromptSections,
@@ -64,7 +61,7 @@ describe("agents extension", () => {
         "boundaries",
       ])
       expect(basePromptSections.every((section) => section.priority < 60)).toBe(true)
-      const compiled = compileSystemPrompt(basePromptSections)
+      const compiled = basePromptSections.map((section) => section.content).join("\n\n")
       expect(compiled).toContain("You are Gent, a general purpose agent.")
       expect(compiled).toContain("Sessions talk with session.send")
       expect(compiled).toContain("Never revert changes you did not make.")

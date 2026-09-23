@@ -22,7 +22,7 @@ import {
   SqliteStorage,
   StorageError,
 } from "../../src/storage/storage"
-import { createE2ELayer } from "../../src/test-utils/index"
+import { createE2ELayer } from "../../src/test-utils/harness"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 

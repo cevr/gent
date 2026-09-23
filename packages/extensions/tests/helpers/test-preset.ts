@@ -7,7 +7,7 @@ import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 export { ModelContextCompactorLive } from "../../src/compaction.js"
 import { CELL_EXTENSION_ID } from "../../src/cell.js"
 import { AllBuiltinAgents } from "./builtin-agents.js"
-import type { E2ELayerConfig } from "@gent/core-internal/test-utils/index"
+import type { E2ELayerConfig } from "@gent/core/test-utils"
 
 /**
  * The shipped composition: every builtin extension, and the branch-tool

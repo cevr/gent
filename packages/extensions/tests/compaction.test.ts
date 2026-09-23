@@ -3,22 +3,28 @@ import { Cause, Effect, Exit, Fiber, Layer, Option, Predicate, Schema, Stream } 
 import { LanguageModel } from "effect/unstable/ai"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
-import { BranchId, MessageId, RequestId, SessionId } from "@gent/core-internal/domain/ids.js"
-import { dateFromMillis, Message } from "@gent/core-internal/domain/message.js"
-import { ModelId } from "@gent/core-internal/domain/agent.js"
+import {
+  BranchId,
+  MessageId,
+  SessionId,
+  dateFromMillis,
+  Message,
+  ModelId,
+} from "@gent/core/protocol"
+import { RequestId } from "@gent/core/extensions/api"
 import {
   finishPart,
   LanguageModelLayers,
   textDeltaPart,
   waitFor,
-} from "@gent/core-internal/test-utils/language-model.js"
+  createRpcHarness,
+} from "@gent/core/test-utils"
 import {
   estimateTextTokens,
-  estimateTokens,
   ModelCompactionError,
   ModelContextBudget,
   ModelContextCompactor,
-} from "@gent/core-internal/runtime/model-context.js"
+} from "@gent/core/extensions/branch-tools"
 import {
   compactModelContext,
   MODEL_COMPACTION_OUTPUT_TOKENS,
@@ -27,7 +33,6 @@ import {
   RetainedBindings,
   selectSummarySource,
 } from "../src/compaction.js"
-import { createRpcHarness } from "@gent/core-internal/test-utils/index.js"
 import { e2ePreset } from "./helpers/test-preset.js"
 
 // ── compaction/model-compaction.test ────────────────────────────────────────
@@ -297,20 +302,16 @@ describe("context handoff", () => {
   )
 
   it.scopedLive("the summary bound uses the projection's token estimate", () => {
-    // The projection budgets the kept window with `estimateTokens`; the
-    // compaction bound must land on the same boundary, or a summary the
-    // projection counts as in-budget is refused as oversize.
+    // The bound is `estimateTextTokens`, which core holds equal to the
+    // projection's estimate of a one-text message; the summary at that bound
+    // is accepted and one character more is refused.
     const attempt = (layer: Layer.Layer<LanguageModel.LanguageModel>) =>
       Effect.exit(compact()).pipe(Effect.provide(layer), Effect.map(failureOf))
     return Effect.gen(function* () {
       const atBound = "x".repeat(MODEL_COMPACTION_OUTPUT_TOKENS * 4)
       const overBound = `${atBound}x`
-      const projected = (text: string) =>
-        estimateTokens([textMessage("summary", "assistant", text, 1)])
-      expect(projected(atBound)).toBe(MODEL_COMPACTION_OUTPUT_TOKENS)
-      expect(estimateTextTokens(atBound)).toBe(projected(atBound))
-      expect(projected(overBound)).toBe(MODEL_COMPACTION_OUTPUT_TOKENS + 1)
-      expect(estimateTextTokens(overBound)).toBe(projected(overBound))
+      expect(estimateTextTokens(atBound)).toBe(MODEL_COMPACTION_OUTPUT_TOKENS)
+      expect(estimateTextTokens(overBound)).toBe(MODEL_COMPACTION_OUTPUT_TOKENS + 1)
 
       const accepted = yield* attempt(summaryProvider(atBound))
       expect(Option.isNone(accepted)).toBe(true)

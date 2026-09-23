@@ -4,7 +4,7 @@ import { TestClock } from "effect/testing"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { WebSearchTool } from "../src/network-tools.js"
-import { runToolWithCtx, testToolContext } from "@gent/core-internal/test-utils/index"
+import { runToolWithCtx, testToolContext } from "@gent/core/test-utils"
 
 // ── network-tools/websearch.test ────────────────────────────────────────────
 

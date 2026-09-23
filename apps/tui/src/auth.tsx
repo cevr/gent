@@ -8,7 +8,7 @@ import {
 } from "@gent/core/protocol"
 import { createEffect, createSignal, on, Show } from "solid-js"
 import { usePaste } from "@opentui/solid"
-import { omitUndefined } from "@gent/core-internal/domain/guards.js"
+import { omitUndefined } from "@gent/core/extensions/api"
 import { LinkOpener } from "./os"
 import { useTheme } from "./theme"
 import { useClient, useRuntime } from "./client"

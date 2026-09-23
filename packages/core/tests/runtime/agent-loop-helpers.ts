@@ -16,7 +16,12 @@ import {
   AgentLoopSessionGovernance,
   AgentLoopTestActor,
 } from "../../src/runtime/agent-loop"
-import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
+import {
+  ModelRegistry,
+  ModelResolver,
+  finishPart,
+  type LanguageModelStreamPart,
+} from "../../src/runtime/provider"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   ApprovalService,
@@ -25,11 +30,7 @@ import {
 } from "../../src/runtime/extension-host"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { noBranchTools, ToolRunner } from "../../src/runtime/tools"
-import {
-  finishPart,
-  LanguageModelLayers,
-  type LanguageModelStreamPart,
-} from "../../src/test-utils/language-model"
+import { LanguageModelLayers } from "../../src/test-utils/language-model"
 import {
   dateFromMillis,
   Message,
@@ -53,9 +54,19 @@ import {
   SqliteStorage,
   type StorageError,
 } from "../../src/storage/storage"
-import { RecordingEventStore, SequenceRecorder, ensureStorageParents } from "../../src/test-utils"
-import type { BranchId, InteractionRequestId, SessionId } from "../../src/domain/ids"
-import { ActorCommandId, ExtensionId, MessageId } from "../../src/domain/ids"
+import {
+  RecordingEventStore,
+  SequenceRecorder,
+  ensureStorageParents,
+} from "../../src/test-utils/harness"
+import {
+  type BranchId,
+  type InteractionRequestId,
+  type SessionId,
+  ActorCommandId,
+  ExtensionId,
+  MessageId,
+} from "../../src/domain/ids"
 import type { TurnStreamPart } from "../../src/domain/driver"
 import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 // ============================================================================

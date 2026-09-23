@@ -7,13 +7,13 @@ import {
   type ProviderAuthInfo,
   ProviderId,
 } from "@gent/core/extensions/api"
-import { collectTestContributions } from "@gent/core-internal/test-utils/index"
 import {
+  collectTestContributions,
   type FakeFetchState,
   makeFakeFetchState,
   makeTempDirectoryScoped,
   oneGenerate,
-} from "@gent/core-internal/test-utils/language-model"
+} from "@gent/core/test-utils"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { BunFileSystem } from "@effect/platform-bun"
 import {

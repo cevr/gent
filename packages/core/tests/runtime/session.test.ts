@@ -29,11 +29,16 @@ import { SingleRunner } from "effect/unstable/cluster"
 import { Branch, dateFromMillis, type QueueSnapshot, Session } from "../../src/domain/message"
 import {
   finishPart,
-  LanguageModelLayers,
   type LanguageModelStreamPart,
   textDeltaPart,
-  textStep,
   toolCallPart,
+  ModelRegistry,
+  ModelResolver,
+  TEST_MODEL_CONTEXT_LIMIT_TOKENS,
+} from "../../src/runtime/provider"
+import {
+  LanguageModelLayers,
+  textStep,
   toolCallStep,
   waitFor,
 } from "../../src/test-utils/language-model"
@@ -46,7 +51,7 @@ import {
   ensureStorageParents,
   RecordingEventStore,
   SequenceRecorder,
-} from "../../src/test-utils/index"
+} from "../../src/test-utils/harness"
 import {
   defineExtension,
   defineResource,
@@ -56,11 +61,6 @@ import {
   tool,
   type ToolCapability,
 } from "@gent/core/extensions/api"
-import {
-  ModelRegistry,
-  ModelResolver,
-  TEST_MODEL_CONTEXT_LIMIT_TOKENS,
-} from "../../src/runtime/provider"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import {
   ApprovalService,

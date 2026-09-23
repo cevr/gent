@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect"
+import { Effect, FileSystem, Option, Path, Random, Schema, Semaphore } from "effect"
 import type { AutocompleteItem } from "./extensions/client-facets.js"
 
 // ── autocomplete frecency model ─────────────────────────────────────────────
@@ -253,11 +253,14 @@ export const writeFrecencyStore = (
     // Write beside the target, then rename onto it. `rename` within one
     // directory is atomic on every filesystem the TUI runs on, so a reader
     // opening the file sees either the whole previous store or the whole new
-    // one — never the half-written JSON that a direct overwrite exposes. The
-    // pid names the temp file because a second `gent` may be writing its own
-    // at the same instant, and two writers sharing one temp path would
-    // corrupt each other rather than merely race.
-    const temp = `${paths.file}.${process.pid}.tmp`
+    // one — never the half-written JSON that a direct overwrite exposes. A
+    // random suffix names the temp file because a second `gent` may be
+    // writing its own at the same instant, and two writers sharing one temp
+    // path would corrupt each other rather than merely race. The default
+    // `Random` draws from `Math.random`, so two processes do not share a
+    // sequence, and the store keeps its `FileSystem | Path` requirements.
+    const suffix = yield* Random.nextIntBetween(0, Number.MAX_SAFE_INTEGER)
+    const temp = `${paths.file}.${suffix.toString(36)}.tmp`
     yield* fs.writeFileString(temp, encodeStore(store))
     yield* Effect.onError(fs.rename(temp, paths.file), () =>
       fs.remove(temp, { force: true }).pipe(Effect.ignoreCause),

@@ -1,4 +1,4 @@
-import { runProcess } from "@gent/core-internal/runtime/gent-platform"
+import { runProcess } from "@gent/core/extensions/api"
 import { DateTime, Effect, FileSystem, Option, Path, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import { homedir } from "os"

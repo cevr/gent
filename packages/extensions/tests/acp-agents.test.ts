@@ -13,8 +13,7 @@ import {
 } from "effect"
 import { BunChildProcessSpawner, BunFileSystem } from "@effect/platform-bun"
 import { describe, expect, it, yieldFibers } from "effect-bun-test"
-import { setupExtensions } from "@gent/core-internal/runtime/extension-host.js"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
+import { collectTestContributions, BunGentPlatformLive } from "@gent/core/test-utils"
 import {
   ACP_PROTOCOL_AGENTS,
   AcpAgentsExtension,
@@ -172,22 +171,12 @@ const stubSessionManager = (disposeAll: Effect.Effect<void>): AcpSessionManager 
   disposeAll,
 })
 
-const activate = (extension: typeof AcpAgentsExtension) =>
-  setupExtensions({
-    extensions: [{ extension, scope: "builtin", sourcePath: "builtin" }],
-    cwd: "/tmp",
-    home: "/tmp",
-    disabled: new Set(),
-  })
+const activate = (extension: typeof AcpAgentsExtension) => collectTestContributions(extension.setup)
 
 describe("acp agents extension", () => {
   it.live("registers one external driver per configured ACP agent", () =>
     Effect.gen(function* () {
-      const result = yield* activate(AcpAgentsExtension)
-      expect(result.failed).toHaveLength(0)
-      expect(result.active).toHaveLength(1)
-
-      const contributions = result.active[0]!.contributions
+      const contributions = yield* activate(AcpAgentsExtension)
       const driverIds = (contributions.externalDrivers ?? []).map((driver) => driver.id).sort()
       const expected = Object.keys(ACP_PROTOCOL_AGENTS)
         .map((name) => `acp-${name}`)
@@ -198,7 +187,7 @@ describe("acp agents extension", () => {
 
   it.live("every agent routes to a driver the extension actually registered", () =>
     Effect.gen(function* () {
-      const contributions = (yield* activate(AcpAgentsExtension)).active[0]!.contributions
+      const contributions = yield* activate(AcpAgentsExtension)
       const driverIds = new Set((contributions.externalDrivers ?? []).map((driver) => driver.id))
       const agents = contributions.agents ?? []
       expect(agents.length).toBeGreaterThan(0)
@@ -219,7 +208,7 @@ describe("acp agents extension", () => {
       const extension = makeAcpAgentsExtension({
         makeAcpSessionManager: Effect.succeed(stubSessionManager(Effect.void)),
       })
-      const contributions = (yield* activate(extension)).active[0]!.contributions
+      const contributions = yield* activate(extension)
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
       // Subprocesses outlive a branch, so the finalizer must be process-scoped;

@@ -5,7 +5,6 @@
 **/node_modules/
 **/*.d.ts
 **/scripts/
-packages/core-internal/src/
 packages/tooling/fixtures/
 apps/tui/tests/.tmp-*/
 # Testbeds are driver scripts and the apps they drive, not shipped runtime.

@@ -3,7 +3,6 @@ import {
   Cause,
   Clock,
   Deferred,
-  Duration,
   Effect,
   Layer,
   Option,
@@ -22,14 +21,19 @@ import * as os from "node:os"
 // oxlint-disable-next-line effect/noNodeBuiltinImport -- This synchronous fixture adapter builds worker paths before the child runtime starts.
 import * as path from "node:path"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
-import * as AiError from "effect/unstable/ai/AiError"
-import type * as AiTool from "effect/unstable/ai/Tool"
-import type * as AiToolkit from "effect/unstable/ai/Toolkit"
-import * as Prompt from "effect/unstable/ai/Prompt"
-import * as Response from "effect/unstable/ai/Response"
+import type * as AiError from "effect/unstable/ai/AiError"
 import { ToolCallId } from "../domain/ids.js"
 import { ProviderError } from "../domain/errors.js"
-import { CurrentResolveModelAssertion } from "../runtime/provider.js"
+import {
+  aiError,
+  CurrentResolveModelAssertion,
+  finishPart,
+  type LanguageModelStreamPart,
+  makeLanguageModelLayer,
+  ScriptedLanguageModel,
+  textDeltaPart,
+  toolCallPart,
+} from "../runtime/provider.js"
 
 // ── fake-fetch ──────────────────────────────────────────────────────────────
 
@@ -205,7 +209,7 @@ export const createWorkerEnv = (root: string, providerMode?: string): Record<str
 }
 
 class WaitForError extends Schema.TaggedError<WaitForError>()(
-  "@gent/core-internal/test-utils/fixtures/WaitForError",
+  "@gent/core/src/test-utils/language-model/WaitForError",
   { message: Schema.String },
 ) {}
 
@@ -244,10 +248,6 @@ export const waitFor = <A, R = never>(
 
 // ── language-model ──────────────────────────────────────────────────────────
 
-type LanguageModelToolMap = Record<string, AiTool.Any>
-export type LanguageModelStreamPart<Tools extends LanguageModelToolMap = LanguageModelToolMap> =
-  Response.StreamPart<Tools>
-
 interface SignalLanguageModelControls {
   readonly emitNext: Effect.Effect<void>
   readonly emitAll: Effect.Effect<void>
@@ -271,182 +271,6 @@ interface SequenceLanguageModelControls {
   readonly assertDone: Effect.Effect<void>
 }
 
-let _streamPartIdCounter = 0
-const makeStreamPartId = (prefix: string) => `${prefix}-${++_streamPartIdCounter}`
-
-export const textDeltaPart = (
-  text: string,
-  id = makeStreamPartId("text"),
-): LanguageModelStreamPart => Response.makePart("text-delta", { id, delta: text })
-
-export const toolCallPart = (
-  toolName: string,
-  // oxlint-disable-next-line effect/noUnknownParameters -- Tool arguments enter the Effect AI codec as unknown JSON data.
-  input: unknown,
-  options?: { toolCallId?: ToolCallId },
-): LanguageModelStreamPart =>
-  Response.makePart("tool-call", {
-    id: options?.toolCallId ?? ToolCallId.make(makeStreamPartId("tool")),
-    name: toolName,
-    params: input,
-    providerExecuted: false,
-  })
-
-export const reasoningDeltaPart = (
-  text: string,
-  id = makeStreamPartId("reasoning"),
-): LanguageModelStreamPart => Response.makePart("reasoning-delta", { id, delta: text })
-
-export const finishPart = (params: {
-  finishReason: Response.FinishReason
-  usage?: { inputTokens: number; outputTokens: number }
-}): LanguageModelStreamPart =>
-  Response.makePart("finish", {
-    reason: params.finishReason,
-    usage: new Response.Usage({
-      inputTokens: {
-        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
-        uncached: undefined,
-        total: params.usage?.inputTokens,
-        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
-        cacheRead: undefined,
-        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
-        cacheWrite: undefined,
-      },
-      outputTokens: {
-        total: params.usage?.outputTokens,
-        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
-        text: undefined,
-        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
-        reasoning: undefined,
-      },
-    }),
-    // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent response in this wire fixture.
-    response: undefined,
-  })
-
-const makeEncodingToolkit = <Tools extends Record<string, AiTool.Any>>(
-  tools: Tools,
-): AiToolkit.WithHandler<Tools> => ({
-  tools,
-  handle: (name) =>
-    Effect.fail(
-      AiError.make({
-        module: "LanguageModelLayers",
-        method: "makeEncodingToolkit.handle",
-        reason: new AiError.ToolConfigurationError({
-          toolName: String(name),
-          description: "language model response encoding does not execute tool handlers",
-        }),
-      }),
-    ),
-})
-
-const toolkitFromProviderOptions = (
-  options: ProviderOptions,
-): AiToolkit.WithHandler<LanguageModelToolMap> => {
-  const toolsRecord: LanguageModelToolMap = {}
-  for (const tool of options.tools) {
-    toolsRecord[tool.name] = tool
-  }
-  return makeEncodingToolkit(toolsRecord)
-}
-
-const encodePart = (
-  options: ProviderOptions,
-  part: Response.Part<LanguageModelToolMap>,
-): Response.PartEncoded =>
-  Schema.encodeUnknownSync(Response.Part(toolkitFromProviderOptions(options)))(part)
-
-const encodeStreamPart = (
-  options: ProviderOptions,
-  part: LanguageModelStreamPart,
-): Response.StreamPartEncoded =>
-  Schema.encodeUnknownSync(Response.StreamPart(toolkitFromProviderOptions(options)))(part)
-
-const aiError = (method: string, message: string) =>
-  AiError.make({
-    module: "LanguageModelLayers",
-    method,
-    reason: new AiError.UnknownError({ description: message }),
-  })
-
-const extractLatestUserText = (promptInput: Prompt.RawInput): string => {
-  const latest = [...Prompt.make(promptInput).content]
-    .reverse()
-    .find((message) => message.role === "user")
-  if (Predicate.isUndefined(latest)) return ""
-  return latest.content
-    .filter((part): part is Prompt.TextPart => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-}
-
-const retryBudgetFor = (text: string): number => {
-  if (text.trim().length === 0) return 0
-  const hash = [...text].reduce((total, ch) => total + ch.charCodeAt(0), 0)
-  if (hash % 3 === 0) return 2
-  if (hash % 2 === 0) return 1
-  return 0
-}
-
-const buildReply = (latestUserText: string): string => {
-  const lineCount = latestUserText.split("\n").filter((line) => line.trim().length > 0).length
-  if (lineCount > 1) {
-    return [
-      "cowork processed a merged queued turn.",
-      `Received ${lineCount} lines in one message block.`,
-      `Tail: ${latestUserText.split("\n").at(-1) ?? latestUserText}`,
-    ].join(" ")
-  }
-
-  return [
-    "cowork debug response.",
-    `Latest user message: ${latestUserText || "(empty)"}.`,
-    "This turn is flowing through the real agent loop with a scripted language model.",
-  ].join(" ")
-}
-
-const makeReplyStream = (latestUserText: string, reply: string, delayMs = 0) => {
-  const parts = reply.split(/(?<=[.!?])\s+/).filter((chunk) => chunk.length > 0)
-  const stream = Stream.fromIterable([
-    ...parts.map((text) => textDeltaPart(`${text} `)),
-    finishPart({
-      finishReason: "stop",
-      usage: {
-        inputTokens: Math.max(1, Math.ceil(latestUserText.length / 4)),
-        outputTokens: Math.max(1, Math.ceil(reply.length / 4)),
-      },
-    }),
-  ])
-
-  if (delayMs <= 0) return stream
-
-  return stream.pipe(
-    Stream.flatMap((chunk) =>
-      Stream.fromEffect(Effect.sleep(Duration.millis(delayMs)).pipe(Effect.as(chunk))),
-    ),
-  )
-}
-
-const makeLanguageModelLayer = (params: {
-  readonly streamText: (
-    options: ProviderOptions,
-  ) => Stream.Stream<LanguageModelStreamPart, AiError.AiError>
-  readonly generateText: (options: ProviderOptions) => Effect.Effect<string, AiError.AiError>
-}): Layer.Layer<LanguageModel.LanguageModel> =>
-  Layer.effect(
-    LanguageModel.LanguageModel,
-    LanguageModel.make({
-      generateText: (options) =>
-        params
-          .generateText(options)
-          .pipe(Effect.map((text) => [encodePart(options, Response.makePart("text", { text }))])),
-      streamText: (options) =>
-        params.streamText(options).pipe(Stream.map((part) => encodeStreamPart(options, part))),
-    }),
-  )
-
 const testStream = (
   stream: (
     options: ProviderOptions,
@@ -456,53 +280,6 @@ const testStream = (
     streamText: (options) => stream(options).pipe(Stream.unwrap),
     generateText: () => Effect.succeed("test response"),
   })
-
-const debug = (options?: { delayMs?: number; retries?: boolean }) => {
-  const delayMs = options?.delayMs ?? 0
-  const retries = options?.retries ?? delayMs === 0
-  const attempts = new Map<string, number>()
-
-  return makeLanguageModelLayer({
-    streamText: (modelOptions) =>
-      Effect.suspend(() => {
-        const latestUserText = extractLatestUserText(modelOptions.prompt)
-        const seen = attempts.get(latestUserText) ?? 0
-        let retryBudget = 0
-        if (retries) retryBudget = retryBudgetFor(latestUserText)
-
-        if (seen < retryBudget) {
-          attempts.set(latestUserText, seen + 1)
-          return Effect.fail(aiError("Debug.streamText", "Rate limit exceeded (429)"))
-        }
-
-        attempts.delete(latestUserText)
-        return Effect.succeed(makeReplyStream(latestUserText, buildReply(latestUserText), delayMs))
-      }).pipe(Stream.unwrap),
-    generateText: () => Effect.succeed("debug scenario"),
-  })
-}
-
-/**
- * A model that finishes every step having produced nothing — no text, no
- * tool calls. Real providers are trained not to do this on request, so a
- * live prompt cannot reproduce the unanswered turn; this layer can, in a
- * real process, through `Gent.provider.mock({ empty: true })`.
- */
-let emptyCache = Option.none<Layer.Layer<LanguageModel.LanguageModel>>()
-const empty = () => {
-  if (Option.isNone(emptyCache)) {
-    const layer = makeLanguageModelLayer({
-      streamText: () =>
-        Stream.make(
-          finishPart({ finishReason: "stop", usage: { inputTokens: 1, outputTokens: 0 } }),
-        ),
-      generateText: () => Effect.succeed(""),
-    })
-    emptyCache = Option.some(layer)
-    return layer
-  }
-  return emptyCache.value
-}
 
 let failingCache = Option.none<Layer.Layer<LanguageModel.LanguageModel>>()
 const failing = () => {
@@ -668,9 +445,9 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
 
 export const LanguageModelLayers = {
   testStream,
-  debug,
+  debug: ScriptedLanguageModel.debug,
   get empty() {
-    return empty()
+    return ScriptedLanguageModel.empty
   },
   get failing() {
     return failing()

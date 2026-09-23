@@ -6,7 +6,7 @@ import { Headers } from "effect/unstable/http"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
-import { createE2ELayer } from "../../src/test-utils/index"
+import { createE2ELayer } from "../../src/test-utils/harness"
 import { GentRpcs } from "../../src/server/rpc"
 import { RpcHandlersLive } from "../../src/server/server"
 import {
