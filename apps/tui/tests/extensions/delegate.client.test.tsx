@@ -222,6 +222,20 @@ describe("child-completion row", () => {
     }),
   )
 
+  it.live("a long call summary keeps to one row", () =>
+    Effect.gen(function* () {
+      const frame = yield* loadedFrame([
+        completion({
+          ...fullDetails,
+          tools: [{ name: "read", summary: `LONG-${"x".repeat(150)}-TAIL`, status: "completed" }],
+          toolCount: 1,
+        }),
+      ])
+      expect(frame).toContain("✓ read LONG-")
+      expect(frame).not.toContain("-TAIL")
+    }),
+  )
+
   it.live("names how the child's turn ended badly", () =>
     Effect.gen(function* () {
       const frame = yield* loadedFrame([

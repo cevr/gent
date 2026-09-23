@@ -155,7 +155,8 @@ function ChildToolTree(props: { details: CompletionDetails }) {
       </Show>
       <For each={[...tools()]}>
         {(tool, index) => (
-          <text style={{ fg: theme.textMuted }}>
+          // One row per call: a cell receipt's summary can be a long output head.
+          <text style={{ fg: theme.textMuted }} wrapMode="none">
             {connector(index())} <span style={{ fg: icon(tool).color }}>{icon(tool).glyph}</span>{" "}
             {tool.name}
             {summary(tool)}
