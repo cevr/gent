@@ -565,9 +565,13 @@ const makeSessionMutationsService: Effect.Effect<
         message: `Parent session not found: ${parentSessionId}`,
       })
     }
-    yield* admitChildSessionDepth(parentSessionId).pipe(
-      Effect.provideService(RelationshipStorage, relationshipStorage),
-    )
+    // A handoff continues the parent's thread at the parent's spawn depth;
+    // only a spawn adds a level.
+    if (input.continueThread !== true) {
+      yield* admitChildSessionDepth(parentSessionId).pipe(
+        Effect.provideService(RelationshipStorage, relationshipStorage),
+      )
+    }
     if (!Predicate.isUndefined(input.parentBranchId)) {
       const parentBranch = yield* branchStorage.getBranch(input.parentBranchId)
       if (Predicate.isUndefined(parentBranch) || parentBranch.sessionId !== parentSessionId) {

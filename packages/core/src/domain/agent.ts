@@ -319,11 +319,12 @@ export const makeRunSpec = (input: RunSpec = {}): RunSpec => omitUndefined(input
 // Agent run depth
 
 /**
- * Maximum session nesting depth. Derived from the persisted parent chain; root
- * depth is 0, and a parent at depth 3 cannot get another child. Enforced in one
- * place, `admitChildSessionDepth` (`runtime/session.ts`), which the one child
- * writer calls: `SessionMutations.createSession` (a create with a
- * `parentSessionId`).
+ * Maximum session spawn depth. Derived from the persisted parent chain, where
+ * only spawn edges count (a handoff keeps its parent's thread and depth); root
+ * depth is 0, and a parent at depth 3 cannot spawn another child. Enforced in
+ * one place, `admitChildSessionDepth` (`runtime/session.ts`), which the one
+ * child writer calls: `SessionMutations.createSession` (a create with a
+ * `parentSessionId` and no `continueThread`).
  */
 export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
 
