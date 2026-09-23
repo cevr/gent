@@ -12,6 +12,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Layer,
   Option,
@@ -133,6 +134,8 @@ const withFilesPopup = <A>(
     ) => Effect.Effect<ReadonlyArray<AutocompleteItem>, never, ClientRuntimeServices>
     readonly reads: () => number
   }) => Effect.Effect<A, never, ClientRuntimeServices>,
+  /** Holds every listing read until it opens. */
+  gate: Effect.Effect<void> = Effect.void,
 ) => {
   let reads = 0
   return provideClientServices(
@@ -152,8 +155,7 @@ const withFilesPopup = <A>(
       requestEffect: () =>
         Effect.sync(() => {
           reads++
-          return paths
-        }),
+        }).pipe(Effect.andThen(gate), Effect.as(paths)),
     },
   )
 }
@@ -204,6 +206,35 @@ describe("files popup", () => {
       )
       expect(reads).toBe(2)
     }),
+  )
+
+  filesTest("typing before the first listing arrives waits for that listing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const open = yield* Deferred.make<void>()
+      const reads = yield* withFilesPopup(
+        ["src/a.ts", "src/b.ts"],
+        home,
+        (popup) =>
+          Effect.gen(function* () {
+            const typed = yield* Effect.forkChild(
+              Effect.all([popup.items(""), popup.items("s"), popup.items("sa")], {
+                concurrency: "unbounded",
+              }),
+            )
+            yield* Effect.yieldNow
+            yield* Deferred.succeed(open, void 0)
+            const [top, one, two] = yield* Fiber.join(typed)
+            expect(top.map((item) => item.id)).toEqual(["src/"])
+            expect(one.length).toBe(2)
+            expect(two.map((item) => item.id)).toEqual(["src/a.ts"])
+            return popup.reads()
+          }),
+        Deferred.await(open),
+      )
+      expect(reads).toBe(1)
+    }).pipe(Effect.timeout("4 seconds")),
   )
 })
 

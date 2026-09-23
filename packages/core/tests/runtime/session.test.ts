@@ -25,7 +25,15 @@ import {
 } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { SingleRunner } from "effect/unstable/cluster"
-import { Branch, dateFromMillis, type QueueSnapshot, Session } from "../../src/domain/message"
+import {
+  Branch,
+  dateFromMillis,
+  Message,
+  type QueueSnapshot,
+  Session,
+} from "../../src/domain/message"
+import { followUpMessageIdForSource } from "../../src/domain/agent-loop"
+import { CurrentWorkspaceId } from "../../src/server/workspace-rpc"
 import {
   finishPart,
   type LanguageModelStreamPart,
@@ -597,6 +605,63 @@ describe("SessionRuntime", () => {
         expect(messages.filter((message) => message.role === "assistant")).toHaveLength(2)
         expect(yield* controls.callCount).toBe(2)
         yield* controls.assertDone
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+      }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
+    }),
+  )
+  it.scopedLive("a follow-up source whose turn settled before a restart does not run again", () =>
+    Effect.gen(function* () {
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        textStep("answered the next wake"),
+        textStep("answered the replay"),
+      ])
+      const layer = makeRuntimeLayer(providerLayer)
+      yield* Effect.gen(function* () {
+        const sessionRuntime = yield* SessionRuntime
+        const messageStorage = yield* MessageStorage
+        const workspaceId = yield* CurrentWorkspaceId
+        const { sessionId, branchId } = yield* createSessionBranch
+        // A previous host ran the wake's turn to its end, then died before the
+        // extension forgot its row: this process starts with the settled message.
+        yield* messageStorage.createMessage(
+          Message.cases.regular.make({
+            id: followUpMessageIdForSource({
+              workspaceId,
+              sessionId,
+              branchId,
+              sourceId: "alarm-1",
+            }),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: "wake alarm-1" })],
+            createdAt: dateFromMillis(1_767_225_600_000),
+            turnDurationMs: 5,
+          }),
+        )
+        const wake = (sourceId: string) =>
+          sessionRuntime.queueFollowUp({
+            sessionId,
+            branchId,
+            sourceId,
+            content: `wake ${sourceId}`,
+            wake: true,
+          })
+        yield* wake("alarm-1")
+        yield* wake("alarm-2")
+        const nextId = followUpMessageIdForSource({
+          workspaceId,
+          sessionId,
+          branchId,
+          sourceId: "alarm-2",
+        })
+        yield* waitFor(
+          messageStorage.getMessage(nextId),
+          (message) => Predicate.isNotUndefined(message?.turnDurationMs),
+          5000,
+          "the next wake settled",
+        )
+        expect(yield* controls.callCount).toBe(1)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),

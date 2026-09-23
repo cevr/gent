@@ -2108,6 +2108,8 @@ const buildAgentLoopActorHandlers = (config: {
     ) {
       yield* markWrite
       const item = yield* buildFollowUpItem(input)
+      // A settled message id is not a new turn: a replayed follow-up is a no-op.
+      if (yield* turnAlreadyCompleted(item.message.id)) return
       yield* handle.inbox.admit(item, { queueOnly: true })
       if (yield* shouldWake(handle, input)) {
         yield* Ref.set(wakeRequested, true)
@@ -2123,6 +2125,8 @@ const buildAgentLoopActorHandlers = (config: {
     ) {
       const wasAlreadyWarm = yield* markWrite
       const item = yield* buildFollowUpItem(input)
+      // A settled message id is not a new turn: a replayed follow-up is a no-op.
+      if (yield* turnAlreadyCompleted(item.message.id)) return
       yield* reserveAndStart(handle, item, { queueOnly: !wasAlreadyWarm })
       if (!wasAlreadyWarm && (yield* shouldWake(handle, input))) {
         yield* startNextQueuedTurnIfIdle(handle)

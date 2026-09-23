@@ -141,7 +141,9 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
     const storeServices = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
     const forkStoreWrite = Effect.runForkWith(storeServices)
     let listing = Option.none<ReadonlyArray<string>>()
-    const readListing = transport.request(ref(FilesRpc.List), {}).pipe(
+    // One read at a time: keys typed while a listing is on its way wait for it.
+    let pending = Option.none<Fiber.Fiber<ReadonlyArray<string>>>()
+    const fetchListing = transport.request(ref(FilesRpc.List), {}).pipe(
       Effect.tap((paths) =>
         Effect.sync(() => {
           listing = Option.some(paths)
@@ -149,6 +151,18 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
       ),
       Effect.orElseSucceed((): ReadonlyArray<string> => []),
     )
+    const readListing = Effect.gen(function* () {
+      if (Option.isSome(pending)) return yield* Fiber.join(pending.value)
+      const fiber = yield* Effect.forkDetach(fetchListing)
+      pending = Option.some(fiber)
+      return yield* Fiber.join(fiber).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (Option.contains(pending, fiber)) pending = Option.none()
+          }),
+        ),
+      )
+    })
     return autocompleteContribution({
       prefix: "@",
       title: "Files",

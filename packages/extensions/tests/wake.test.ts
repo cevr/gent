@@ -345,7 +345,7 @@ describe("wake", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const home = yield* makeTempDirectoryScoped("wake-refire-")
-          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
             textStep("hello again"),
             textStep("checked the build as the alarm asked"),
             textStep("still here"),
@@ -384,10 +384,20 @@ describe("wake", () => {
           const settled = yield* waitFor(
             client.session.getSnapshot({ sessionId, branchId }),
             (current) =>
-              current.runtime._tag === "Idle" && current.messages.at(-1)?.role === "assistant",
+              current.runtime._tag === "Idle" && answered(current.messages, "still here"),
             8_000,
             "the second turn settled",
           )
+          // A replayed wake would run its settled message again, after this turn.
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" && current.runtime.queue.followUp.length === 0,
+            8_000,
+            "the queue drained",
+          )
+          // One model call per turn: the first ask, the wake, the second ask.
+          expect(yield* controls.callCount).toBe(3)
           const wakes = settled.messages.filter(
             (message) =>
               message.role === "user" && message.metadata?.customType === WAKE_MESSAGE_TYPE,
