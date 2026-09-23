@@ -37,6 +37,7 @@ import {
   ExtensionId,
   type ExtensionServiceError,
   headTailChars,
+  isRuntimeUserMessage,
   latestAssistantText,
   type Message,
   makeRunSpec,
@@ -116,8 +117,6 @@ export const DelegateEntry = Schema.Struct({
    * start is sent, so a start that crashed in between is re-sent.
    */
   submitted: Schema.Boolean,
-  /** The run spec the start was admitted with; a re-sent start uses it again. */
-  runSpec: Schema.optionalKey(RunSpecSchema),
   completed: Schema.optionalKey(ChildOutcome),
   /** The parent has the completion: the message is on the parent branch, or the parent stopped the child. */
   delivered: Schema.Boolean,
@@ -223,44 +222,39 @@ export const childOutcomeWords = (outcome: ChildOutcome): string => {
   return `ended (${failures.join(", ")})`
 }
 
-/** The child branch's messages, from the session detail. */
 /**
- * The messages of the child's start turn. A forked child's branch begins
- * with a copy of the parent's window; those rows are the parent's reply and
- * calls, never the child's. A later turn (a wake, a queued message) that ran
- * before a recovered delivery is not the start turn either: the slice ends at
- * the next regular user message or the next message that began a turn.
+ * The messages of the child's start turn: the start message and every
+ * message up to the next one that opened a turn. A forked child's branch
+ * begins with a copy of the parent's window; those rows are the parent's,
+ * never the child's. The loop's own user-role lines inside the turn (a
+ * continuation, the max-steps instruction, a model-change notice, a
+ * compaction marker) and a message joined into the running turn open no
+ * turn, so the slice reads past them to the child's answer. A later turn (a
+ * wake, a queued message, an interjection that woke the child) opens with a
+ * user message of its own, and the slice ends there.
  */
+export const startTurnMessages = <
+  M extends { readonly id: MessageId } & Parameters<typeof isRuntimeUserMessage>[0],
+>(
+  messages: ReadonlyArray<M>,
+  startId: MessageId,
+): ReadonlyArray<M> => {
+  const start = messages.findIndex((message) => message.id === startId)
+  if (start === -1) return []
+  const end = messages
+    .slice(start + 1)
+    .findIndex((message) => message.role === "user" && !isRuntimeUserMessage(message))
+  if (end === -1) return messages.slice(start)
+  return messages.slice(start, start + 1 + end)
+}
+
+/** The child branch's start-turn messages, from the session detail. */
 const childMessages = (entry: DelegateEntry) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const startId = startMessageId(entry.requestId)
     const detail = yield* ctx.Session.getDetail(entry.sessionId)
     const branch = detail.branches.find((current) => current.branch.id === entry.branchId)
-    const messages = branch?.messages ?? []
-    const start = messages.findIndex((message) => message.id === startId)
-    if (start === -1) return []
-    const laterTurns = yield* ctx.Session.events({
-      sessionId: entry.sessionId,
-      branchId: entry.branchId,
-    }).pipe(
-      Stream.takeUntil(isSynchronized),
-      Stream.filter(isTurnCompleted),
-      Stream.map((event) => event.messageId),
-      Stream.filter(
-        (messageId): messageId is MessageId =>
-          Predicate.isNotUndefined(messageId) && messageId !== startId,
-      ),
-      Stream.runCollect,
-      Effect.map((ids) => new Set<MessageId>(ids)),
-    )
-    const after = messages.slice(start + 1)
-    const end = after.findIndex(
-      (message) =>
-        (message._tag === "regular" && message.role === "user") || laterTurns.has(message.id),
-    )
-    if (end === -1) return messages.slice(start)
-    return messages.slice(start, start + 1 + end)
+    return startTurnMessages(branch?.messages ?? [], startMessageId(entry.requestId))
   })
 
 const childName = (prompt: string) => `${DELEGATE_AGENT_NAME}: ${prompt.slice(0, 60)}`
@@ -462,15 +456,18 @@ const CHILD_TASK_PREFIX = "Task from your parent session "
 /**
  * The child's first message names where the task came from. Without it a
  * child reads a bare instruction after its system prompt and can take its
- * own task for an injection. It also says how a later turn reports: only the
- * turn that takes the task returns as the completion, and a wake, a monitor
- * or a goal starts turns nobody waits for. The first message stays in every
- * later turn's context, whichever agent runs that turn.
+ * own task for an injection. It also says where results go. The reply that
+ * ends this turn is the result: it returns as the completion, and a child
+ * told only that "a later result goes through session.send" sent this turn's
+ * result that way too, so the parent read every result twice. Only a later
+ * turn (a wake, a monitor, a goal) that nobody waits for reports with
+ * session.send. The first message stays in every later turn's context,
+ * whichever agent runs that turn.
  */
 export const childTaskText = (parentSessionId: SessionId, prompt: string): string =>
   [
-    `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply to this task returns to the parent as your completion; ask it with session.send if you are blocked.`,
-    `End this turn once the task is done or handed to a wake, a monitor or a goal; do not wait for them. A later turn's result reaches your parent only through session.send with to "parent", so send each one there.`,
+    `${CHILD_TASK_PREFIX}${parentSessionId}. Your final reply in this turn is your result: it returns to the parent as your completion by itself, so do not also send it with session.send. Use session.send in this turn only to ask the parent when you are blocked.`,
+    `End this turn once the task is done or handed to a wake, a monitor or a goal; do not wait for them. A later turn started by one of them returns nothing by itself: send that turn's result with session.send to "parent".`,
     "",
     prompt,
   ].join("\n")
@@ -634,7 +631,7 @@ interface AdmitParams {
   /** The tool call that owns the child. The same id admits the same child once. */
   readonly requestId?: RequestId
   readonly toolCallId?: ToolCallId
-  /** `overrides`, `parentToolCallId`. */
+  /** The child's run overrides; the child's admission keeps them for every turn. */
   readonly runSpec?: RunSpec
 }
 
@@ -677,10 +674,6 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
             message: `Parent branch already has ${MAX_PENDING_CHILDREN} unfinished children`,
           })
         }
-        const runSpec = makeRunSpec({
-          ...params.runSpec,
-          ...Record.filter({ parentToolCallId: params.toolCallId }, Predicate.isNotUndefined),
-        })
         // The child is its agent for every turn it runs, not only this one.
         const child = yield* ctx.Session.create({
           name: childName(params.prompt),
@@ -689,7 +682,7 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           admission: {
             agent: DELEGATE_AGENT_NAME,
             interactive: false,
-            runSpec: childRunSpec(runSpec),
+            runSpec: childRunSpec(makeRunSpec(params.runSpec)),
           },
           ...Record.filter(
             { requestId: params.requestId, historyBranchId: params.historyBranchId },
@@ -705,7 +698,6 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
           agentName: DELEGATE_AGENT_NAME,
           prompt: params.prompt,
           ...Record.filter({ toolCallId: params.toolCallId }, Predicate.isNotUndefined),
-          runSpec,
           private: false,
           submitted: false,
           delivered: false,

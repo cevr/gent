@@ -23,7 +23,6 @@ import {
 } from "../../src/domain/agent"
 import { ConfigService, RuntimeEnvironment, UserConfig } from "../../src/runtime/config"
 import { test } from "bun:test"
-import { ToolCallId } from "../../src/domain/ids"
 
 // ── config-service.test ─────────────────────────────────────────────────────
 
@@ -861,17 +860,10 @@ describe("configured driver override routing", () => {
 // ── execution-overrides.test ────────────────────────────────────────────────
 
 /**
- * RunSpec threading tests.
- *
- * Verifies the run-spec JSON contract used by the headless CLI.
- *
- * Public message.send runSpec behavior is covered by
- * tests/server/message-send.test.ts.
+ * The run-spec JSON a session's stored admission carries.
  */
 
-// ── Tests ──
-
-describe("run spec CLI serialization", () => {
+describe("stored run spec", () => {
   const codec = Schema.fromJsonString(RunSpecSchema)
 
   test("round-trips through JSON encode/decode", () => {
@@ -883,7 +875,6 @@ describe("run spec CLI serialization", () => {
         reasoningEffort: "high",
         systemPromptAddendum: "Be concise.",
       },
-      parentToolCallId: ToolCallId.make("tc-abc-123"),
     } satisfies Schema.Schema.Type<typeof RunSpecSchema>
 
     const json = Schema.encodeSync(codec)(runSpec)
@@ -893,11 +884,11 @@ describe("run spec CLI serialization", () => {
     expect(decoded).toEqual(runSpec)
   })
 
-  test("round-trips with minimal runSpec", () => {
-    const runSpec = { parentToolCallId: ToolCallId.make("tc-only") }
-    const json = Schema.encodeSync(codec)(runSpec)
-    const decoded = Schema.decodeSync(codec)(json)
-    expect(decoded.parentToolCallId).toBe(ToolCallId.make("tc-only"))
+  test("a row that still carries the dropped parentToolCallId decodes", () => {
+    const decoded = Schema.decodeSync(codec)(
+      '{"overrides":{"maxModelAttempts":32},"parentToolCallId":"tc-old"}',
+    )
+    expect(decoded).toEqual({ overrides: { maxModelAttempts: 32 } })
   })
 
   test("round-trips empty runSpec", () => {
