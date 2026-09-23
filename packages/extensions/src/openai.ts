@@ -1288,17 +1288,15 @@ const OPENAI_ACCEPTED_EFFORTS: ReadonlyArray<{
  * The effort a request sends for a gent reasoning hint: the lowest value the
  * model accepts at or above the hint, else its highest. OpenAI runs a
  * reasoning model at its default effort when the request names none, so a
- * hint of "none" still names the model's lowest effort. A model without
- * reasoning gets no effort.
+ * hint of "none" still names the model's lowest effort. A model the catalog
+ * says does not reason gets no effort.
  */
 const openAiReasoningEffort = (
   modelName: string,
-  hint: ProviderHints["reasoning"],
+  hints: ProviderHints,
 ): Option.Option<OpenAiReasoningEffort> => {
-  if (/^(gpt-3|gpt-4|chatgpt-)/.test(modelName) || modelName.endsWith("-chat-latest")) {
-    return Option.none()
-  }
-  return Schema.decodeUnknownOption(OpenAiReasoningEffort)(hint).pipe(
+  if (hints.supportsReasoning === false) return Option.none()
+  return Schema.decodeUnknownOption(OpenAiReasoningEffort)(hints.reasoning).pipe(
     Option.flatMap((effort) => {
       const family = OPENAI_ACCEPTED_EFFORTS.find((entry) => entry.pattern.test(modelName))
       if (Predicate.isUndefined(family)) return Option.some(effort)
@@ -1319,7 +1317,7 @@ const buildOpenAiResponsesConfig = (
     if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
     const temperature = Option.fromNullishOr(hints.value.temperature)
     if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-    const reasoning = openAiReasoningEffort(modelName, hints.value.reasoning)
+    const reasoning = openAiReasoningEffort(modelName, hints.value)
     if (Option.isSome(reasoning)) {
       config = {
         ...config,
@@ -1446,7 +1444,7 @@ export const buildOpenAIModelDriver = (
 
       if (Option.isSome(apiKey)) {
         const config = buildOpenAiCompatConfig(Option.fromNullishOr(hints))
-        const reasoning = openAiReasoningEffort(modelName, hints?.reasoning)
+        const reasoning = openAiReasoningEffort(modelName, hints ?? {})
         return makeApiKeyOpenAIResolution(
           modelName,
           {

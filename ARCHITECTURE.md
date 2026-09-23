@@ -246,12 +246,16 @@ validates declarations, and loads the core prompt sections. It does not build
 Resource layers. Trusted setup can still perform its own effects; this is not a
 sandbox boundary.
 
-`SessionProfileCache` builds one profile per (workspace, cwd, effective
-`disabledExtensions` list). Each resolve reads the config as it is now, so an
-edit to the list reaches the next turn and the next session without a restart;
-a list seen before finds the profile it built, and a superseded profile stays
-open until the server closes, because a turn that resolved it may still run on
-it. It builds every
+`SessionProfileCache` builds one profile per (workspace, cwd, set of
+extensions the config leaves active or failed). Each resolve reads the config as
+it is now, so an edit to `disabledExtensions` reaches the next turn and the next
+session without a restart; a list that leaves the same extensions, such as one
+that names an unknown id, finds the profile already built. `resolve` takes a
+lease in the caller's scope: a turn and an extension request hold it until they
+end, a branch loop holds it while its branch Resources live, and a query holds
+it for its read. The newest profile of a (workspace, cwd) stays cached; a
+superseded one closes its scope, and with it its process resources, when its
+last lease is released. It builds every
 extension's process-scope resources in resolution order, each in its own child
 scope, and reports an extension whose layer fails as failed at the startup
 phase. `buildSessionProfile` then stages the `ExtensionRegistry` and the base

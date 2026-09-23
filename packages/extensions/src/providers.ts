@@ -653,6 +653,7 @@ const ModelsDevModel = Schema.Struct({
   release_date: Schema.optional(Schema.String),
   /** False for embedding, image and other models the agent loop cannot drive. */
   tool_call: Schema.optional(Schema.Boolean),
+  reasoning: Schema.optional(Schema.Boolean),
 })
 type ModelsDevModel = typeof ModelsDevModel.Type
 const decodeModelsDevModel = Schema.decodeUnknownOption(ModelsDevModel)
@@ -735,6 +736,7 @@ const parseModelsDev = (data: Schema.Json): ReadonlyArray<Model> => {
             contextLength: Option.getOrUndefined(contextLength),
             pricing: Option.getOrUndefined(pricing),
             releaseDate: Option.getOrUndefined(releaseDate),
+            reasoning: modelValue.reasoning,
           }),
         }),
       )

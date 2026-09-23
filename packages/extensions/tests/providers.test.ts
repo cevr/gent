@@ -168,6 +168,13 @@ const remotePayload = {
         limit: { context: 400_000 },
         release_date: "2026-07-24",
         tool_call: true,
+        reasoning: true,
+      },
+      "gpt-4o": {
+        name: "GPT-4o",
+        limit: { context: 128_000 },
+        tool_call: true,
+        reasoning: false,
       },
       "text-embedding-3-small": {
         name: "text-embedding-3-small",
@@ -342,6 +349,27 @@ describe("models.dev catalog", () => {
       const decoded = yield* Schema.decodeEffect(StampedCacheJson)(written)
       expect(decoded.models.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
       expect(written.includes('"openai":{"models"')).toBe(false)
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  // The driver sends a reasoning effort only to a model that reasons; the
+  // catalog, not a name pattern, says which ones do.
+  it.scopedLive("each model carries the reasoning flag models.dev gives it", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("reasoning")
+      const calls = yield* Ref.make(0)
+
+      const models = yield* modelsDevCatalog(home).pipe(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the HTTP stub for this operation.
+        Effect.provide(countingHttpLayer(calls, encodeAnyJson(remotePayload))),
+      )
+      const reasoningOf = (id: string) =>
+        models.find((model) => model.id === ModelId.make(id))?.reasoning
+
+      expect(reasoningOf("openai/gpt-5.4")).toBe(true)
+      expect(reasoningOf("openai/gpt-4o")).toBe(false)
+      // models.dev names no flag: the catalog does not guess one.
+      expect(reasoningOf("anthropic/claude-opus-5")).toBeUndefined()
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -571,7 +599,10 @@ describe("models.dev catalog", () => {
       const [openai, anthropic] = yield* Fiber.join(both).pipe(Effect.timeout(5_000))
 
       expect(yield* Ref.get(calls)).toBe(1)
-      expect(openai.map((model) => model.id)).toEqual([ModelId.make("openai/gpt-5.4")])
+      expect(openai.map((model) => model.id)).toEqual([
+        ModelId.make("openai/gpt-5.4"),
+        ModelId.make("openai/gpt-4o"),
+      ])
       expect(anthropic.map((model) => model.id)).toEqual([ModelId.make("anthropic/claude-opus-5")])
     }).pipe(Effect.provide(platformLayer)),
   )
