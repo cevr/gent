@@ -65,6 +65,7 @@ export interface DurableAgentRow {
   readonly name: Option.Option<string>
   readonly cwd: Option.Option<string>
   readonly parent: Option.Option<AgentRowKey>
+  readonly createdAt: number
   readonly updatedAt: number
   /** Spawned beside its parent's work (a delegate child or a `/btw` fork), not a handoff. */
   readonly sideThread: boolean
@@ -78,6 +79,8 @@ export interface AgentRow {
   readonly status: Option.Option<string>
   readonly name: Option.Option<string>
   readonly cwd: Option.Option<string>
+  /** When the session was created: a stable order for rows that change on every read. */
+  readonly createdAt: Option.Option<number>
   readonly updatedAt: Option.Option<number>
   readonly parent: Option.Option<AgentRowKey>
   /** True when the loop is materialized right now. */
@@ -159,6 +162,7 @@ export const reconcileAgentRows = (params: {
       status: Option.flatMap(live, (row) => row.status),
       name: Option.flatMap(durable, (row) => row.name),
       cwd: Option.flatMap(durable, (row) => row.cwd),
+      createdAt: Option.map(durable, (row) => row.createdAt),
       updatedAt: Option.map(durable, (row) => row.updatedAt),
       parent: Option.flatMap(durable, (row) => row.parent),
       live: Option.isSome(live),
@@ -258,17 +262,11 @@ export const filterRows = (
   })
 }
 
-/** Full projection: reconcile, propagate, then order. */
+/** Full projection: reconcile, propagate, then order. A query filters after, with `filterRows`. */
 export const projectAgentRows = (params: {
   readonly live: ReadonlyArray<LiveAgentRow>
   readonly durable: ReadonlyArray<DurableAgentRow>
-  readonly query?: string
-}): ReadonlyArray<AgentRow> => {
-  const reconciled = reconcileAgentRows(params)
-  const propagated = propagateRunning(reconciled)
-  const tree = buildRowTree(propagated)
-  return filterRows(tree, params.query ?? "")
-}
+}): ReadonlyArray<AgentRow> => buildRowTree(propagateRunning(reconcileAgentRows(params)))
 
 // ── live activity ───────────────────────────────────────────────────────────
 
@@ -323,8 +321,10 @@ export const activityText = (state: ActivityFold): Option.Option<string> =>
 
 interface AgentActivityService {
   /**
-   * Follow exactly these loops: start a follower for a new key and stop the
-   * followers, and forget the activity, of keys no longer listed.
+   * Follow these loops: start a follower for each key not followed yet. A
+   * follower owns its lifetime: it ends, and forgets its activity, when the
+   * loop's turn completes. No caller stops another caller's followers, so a
+   * filtered listing, or a TUI in another workspace, cannot blank the tray.
    */
   readonly follow: (
     loops: ReadonlyArray<AgentRowKey>,
@@ -358,13 +358,23 @@ const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
         const ctx = yield* ExtensionContext
         const key = rowKey(loop)
         // From now: the fold needs only what the loop does next, so a
-        // follower never replays the child's whole history.
+        // follower never replays the child's whole history. The turn's end
+        // ends the follower; the next listing that sees the loop working
+        // starts a new one.
         yield* ctx.Session.events({ ...loop, from: "now" }).pipe(
+          Stream.takeUntil((event) => event._tag === "TurnCompleted"),
           Stream.runForEach((event) => setFold(key, (fold) => foldActivity(fold, event))),
           Effect.catchCause((cause) =>
             Effect.logWarning("agents-view.activity.follow-failed").pipe(
               Effect.annotateLogs({ sessionId: loop.sessionId, error: String(cause) }),
             ),
+          ),
+          Effect.ensuring(
+            Ref.update(folds, (all) => {
+              const next = new Map(all)
+              next.delete(key)
+              return next
+            }),
           ),
         )
       })
@@ -373,15 +383,6 @@ const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
           const wanted = new Map(loops.map((loop) => [rowKey(loop), loop]))
-          for (const key of [...followers].map(([followed]) => followed)) {
-            if (wanted.has(key)) continue
-            yield* FiberMap.remove(followers, key)
-            yield* Ref.update(folds, (all) => {
-              const next = new Map(all)
-              next.delete(key)
-              return next
-            })
-          }
           for (const [key, loop] of wanted) {
             yield* FiberMap.run(
               followers,
@@ -431,6 +432,7 @@ export const AgentRowEntry = Schema.Struct({
   status: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.Finite),
   updatedAt: Schema.optional(Schema.Finite),
   live: Schema.Boolean,
   depth: Schema.Finite,
@@ -453,13 +455,13 @@ const ListAgentsOutput = Schema.Struct({
 })
 
 /**
- * Join the live loop enumeration against durable session storage.
+ * Join the live loop enumeration against durable session storage, unfiltered.
  *
  * Neither catalog is sufficient alone: the live one is empty after a restart,
  * and the durable one cannot say what is running. `projectAgentRows` above
  * reconciles the two.
  */
-const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string) {
+const collectRows = Effect.fn("AgentsView.collectRows")(function* () {
   const ctx = yield* ExtensionContext
 
   // A catalog read that fails is a host defect, not something the caller can
@@ -492,6 +494,7 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string
         name: Option.fromUndefinedOr(session.name),
         cwd: Option.fromUndefinedOr(session.cwd),
         parent,
+        createdAt: session.createdAt.getTime(),
         updatedAt: session.updatedAt.getTime(),
         // A handoff joins its parent's thread. A delegate child or a `/btw` fork
         // has a parent and is the session its own thread is named after.
@@ -503,7 +506,7 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string
     ]
   })
 
-  return projectAgentRows({ live, durable, query })
+  return projectAgentRows({ live, durable })
 })
 
 export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
@@ -515,14 +518,16 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
     input: ListAgentsInput,
     output: ListAgentsOutput,
     execute: Effect.fn("AgentsViewRpc.ListAgents")(function* (input) {
-      const rows = yield* collectRows(input.query ?? "")
+      const all = yield* collectRows()
       const activity = yield* AgentActivity
       // Only the rows the tray draws are followed: running children. A root
       // is never in the tray, and a parent forced into `running` by a busy
-      // child has nothing of its own to report.
+      // child has nothing of its own to report. The follow set comes from
+      // every row, never from the caller's query.
       yield* activity.follow(
-        rows.filter((row) => row.live && isWorking(row.status) && Option.isSome(row.parent)),
+        all.filter((row) => row.live && isWorking(row.status) && Option.isSome(row.parent)),
       )
+      const rows = filterRows(all, input.query ?? "")
       const lines = new Map<string, string>()
       for (const row of rows) {
         const line = yield* activity.read(row)
@@ -536,6 +541,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
           status: Option.getOrUndefined(row.status),
           name: Option.getOrUndefined(row.name),
           cwd: Option.getOrUndefined(row.cwd),
+          createdAt: Option.getOrUndefined(row.createdAt),
           updatedAt: Option.getOrUndefined(row.updatedAt),
           live: row.live,
           depth: row.depth,

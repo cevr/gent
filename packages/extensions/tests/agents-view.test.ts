@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Fiber, Option, Predicate, Schema, Stream } from "effect"
 import { BranchId, ref, SessionId, ToolCallId } from "@gent/core/extensions/api"
 import { AgentEvent } from "@gent/core/protocol"
 import {
@@ -56,6 +56,7 @@ const durable = (overrides: {
       branchId: bid(parentBranch),
     })),
   ),
+  createdAt: 0,
   updatedAt: overrides.updatedAt ?? 0,
   sideThread: overrides.sideThread ?? false,
 })
@@ -348,7 +349,7 @@ describe("agents view projection", () => {
   })
 
   describe("full projection", () => {
-    test("reconciles, propagates, orders, and filters in one pass", () => {
+    test("reconciles, propagates, and orders in one pass", () => {
       const rows = projectAgentRows({
         live: [
           live({ session: "parent", branch: "b", status: "Idle" }),
@@ -591,6 +592,77 @@ describe("AgentsViewExtension via RPC", () => {
             "child idle",
           )
           expect(rowOf(idle.reply, child.sessionId)?.activity).toBeUndefined()
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a filtered listing keeps the activity of the children it hides",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.signal(
+            "Reading the loader. Checking the tests.",
+          )
+          const harness = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: "/tmp/agents-view-rpc-filter",
+          })
+          const child = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-filter",
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+          })
+          yield* harness.client.message.send({
+            sessionId: child.sessionId,
+            branchId: child.branchId,
+            content: "look at the loader",
+          })
+          yield* controls.waitForStreamStart
+          const rowOf = (reply: typeof ReplySchema.Type, sessionId: string) =>
+            reply.rows.find((row) => row.sessionId === sessionId)
+          // Only listings that hide the child, as a pane query that matches the
+          // root alone sends. The busy child forces its root into `running`.
+          const rootOnly = { query: String(harness.sessionId) }
+          const rootRunning = yield* waitFor(
+            requestRows(harness, rootOnly),
+            ({ reply }) => rowOf(reply, harness.sessionId)?.section === "running",
+            5_000,
+            "root running under its child",
+          )
+          expect(rowOf(rootRunning.reply, child.sessionId)).toBeUndefined()
+          const chunkPublished = yield* harness.client.session
+            .events({ sessionId: child.sessionId, branchId: child.branchId })
+            .pipe(
+              Stream.filter((envelope) => envelope.event._tag === "StreamChunk"),
+              Stream.runHead,
+              Effect.forkScoped,
+            )
+          yield* controls.emitNext
+          // The line is on the branch before the tray first reads without a
+          // query: a follower started only now would never see it.
+          yield* Fiber.join(chunkPublished)
+          // The hidden child was followed all along, so the tray's first
+          // unfiltered read sees the line it streamed.
+          const shown = yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => Predicate.isNotUndefined(rowOf(reply, child.sessionId)?.activity),
+            3_000,
+            "activity of the hidden child",
+          ).pipe(Effect.option)
+          expect(
+            Option.getOrUndefined(
+              Option.map(shown, ({ reply }) => rowOf(reply, child.sessionId)?.activity),
+            ),
+          ).toBe("Reading the loader.")
+          // A query that hides every row leaves the follower in place.
+          const filtered = yield* requestRows(harness, { query: "no-such-agent-anywhere" })
+          expect(filtered.reply.rows).toHaveLength(0)
+          const after = yield* requestRows(harness, {})
+          expect(rowOf(after.reply, child.sessionId)?.activity).toBe("Reading the loader.")
+          yield* controls.emitAll
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

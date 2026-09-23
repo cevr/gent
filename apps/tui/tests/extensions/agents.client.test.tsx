@@ -863,6 +863,25 @@ describe("trayLines", () => {
       expect(trayLines(running.slice(0, 1), 18)[0]?.text).toBe("working · delegat…")
     }),
   )
+  it.live("children keep their start order while their updates reorder the listing", () =>
+    Effect.sync(() => {
+      const started = (id: string, createdAt: number, updatedAt: number) => ({
+        ...child(id, "running", "root"),
+        createdAt,
+        updatedAt,
+      })
+      // Two polls of the same three children; each step bumps `updatedAt`.
+      const first = [started("b", 2, 30), started("a", 1, 20), started("c", 3, 10)]
+      const second = [started("c", 3, 50), started("b", 2, 40), started("a", 1, 35)]
+      const expected = [
+        "working · delegate: a task",
+        "working · delegate: b task",
+        "working · delegate: c task",
+      ]
+      expect(trayLines(first, 60).map((line) => line.text)).toEqual(expected)
+      expect(trayLines(second, 60).map((line) => line.text)).toEqual(expected)
+    }),
+  )
   it.live("a running child shows what it is doing now", () =>
     Effect.sync(() => {
       const busy = { ...child("a", "running", "root"), activity: "running bash" }
@@ -929,6 +948,44 @@ describe("Subagent tray", () => {
       yield* Effect.promise(() =>
         waitForRenderedFrame(setup, () => !renderFrame(setup).includes("working"), "tray hidden"),
       )
+    }),
+  )
+
+  it.live("the hint stays on the row when a child's name is wide", () =>
+    Effect.gen(function* () {
+      const wide = [
+        root("root", "idle"),
+        { ...child("wide", "running", "root"), name: "日本語のタスク" },
+      ]
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <SubagentTray
+              controller={{
+                rows: () => wide,
+                current: () =>
+                  Option.some({
+                    sessionId: SessionId.make("root"),
+                    branchId: BranchId.make("root-branch"),
+                  }),
+                error: () => Option.none(),
+                loading: () => false,
+                refresh: () => {},
+                reload: () => {},
+                detail: () => Option.none(),
+                select: () => {},
+                open: () => false,
+              }}
+            />
+          ),
+          { width: 80, height: 10 },
+        ),
+      )
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (next) => next.includes("working"), "wide tray"),
+      )
+      // Padding counts display columns: each of these characters takes two.
+      expect(frame).toContain("^t agents")
     }),
   )
 

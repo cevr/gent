@@ -118,11 +118,25 @@ const trayText = (row: AgentRowEntry, width: number): string => {
   )
 }
 
+/**
+ * Rows in the order their sessions were created. The listing orders by last
+ * update, which a working child changes on every step, so a tray in listing
+ * order reshuffles on each poll.
+ */
+const inStartOrder = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<AgentRowEntry> =>
+  rows.toSorted((left, right) => {
+    const byStart = (left.createdAt ?? 0) - (right.createdAt ?? 0)
+    if (byStart !== 0) return byStart
+    return `${left.sessionId}:${left.branchId}`.localeCompare(
+      `${right.sessionId}:${right.branchId}`,
+    )
+  })
+
 export const trayLines = (
   running: ReadonlyArray<AgentRowEntry>,
   width: number,
 ): ReadonlyArray<{ readonly pulse: boolean; readonly text: string }> => {
-  const shown = running.slice(0, TRAY_MAX_ROWS)
+  const shown = inStartOrder(running).slice(0, TRAY_MAX_ROWS)
   const lines = shown.map((row) => ({
     pulse: true,
     text: trayText(row, width),
@@ -148,8 +162,8 @@ export function SubagentTray(props: { controller: AgentsController }) {
     ),
   )
   // Two columns of padding, the pulse and its space, and the hint on the first line.
-  const textWidth = () => Math.max(8, dimensions().width - 4 - TRAY_HINT.length - 2)
-  const lines = () => trayLines(running(), textWidth())
+  const rowWidth = () => Math.max(8, dimensions().width - 4 - textWidth(TRAY_HINT) - 2)
+  const lines = () => trayLines(running(), rowWidth())
   const glyph = (pulse: boolean): string => {
     if (pulse) return workingIconFrame(tick())
     return " "
@@ -164,7 +178,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
               <span style={{ fg: theme.textMuted }}>{line.text}</span>
               <Show when={index() === 0}>
                 <span style={{ fg: theme.textMuted }}>
-                  {`${" ".repeat(Math.max(1, textWidth() - line.text.length + 2))}${TRAY_HINT}`}
+                  {`${" ".repeat(Math.max(1, rowWidth() - textWidth(line.text) + 2))}${TRAY_HINT}`}
                 </span>
               </Show>
             </text>
