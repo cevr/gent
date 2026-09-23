@@ -337,12 +337,16 @@ export const makeAgentsController = (
       }),
     )
     // A child's own turns raise no event in this session, so while the pane is
-    // open or the tray has children the listing is re-read on a slow clock.
-    // The read is a registry lookup per loop, cheap enough to poll.
+    // open or a descendant has a live loop the listing is re-read on a slow
+    // clock. Stored children alone never change on their own: a delegate pulse
+    // announces a new or woken one, so the tray stops polling for them.
     yield* lifecycle.scoped(
       Effect.forkScoped(
         Effect.sync(() => {
-          if (open() || subtreeRows(listing.value(), transport.currentSession()).length > 0) tick()
+          const watching = subtreeRows(listing.value(), transport.currentSession()).some(
+            (row) => row.live,
+          )
+          if (open() || watching) tick()
         }).pipe(Effect.repeat(Schedule.spaced(POLL_EVERY))),
       ),
     )
