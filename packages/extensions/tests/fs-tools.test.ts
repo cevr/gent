@@ -371,6 +371,20 @@ describe("findMatch", () => {
     expect(Option.isNone(findMatch("a\n\nb", "   "))).toBe(true)
     expect(Option.isNone(findMatch("a\n\n\nb", " \n "))).toBe(true)
   })
+  test("a normalized search matches inside a line", () => {
+    const match = Option.getOrThrow(findMatch('const s = "hello"', "\u201Chello\u201D"))
+    expect(match.strategy).toBe("normalized")
+    expect(match.ranges).toEqual([{ start: 10, end: 17 }])
+  })
+  test("a normalized match across lines keeps the trailing whitespace it spans", () => {
+    const content = "x = \u201Chi\u201D  \nnext line"
+    const match = Option.getOrThrow(findMatch(content, 'x = "hi"\nnext'))
+    expect(match.ranges).toEqual([{ start: 0, end: 15 }])
+  })
+  test("a normalized search that ends a line takes the line's trailing whitespace", () => {
+    const match = Option.getOrThrow(findMatch("a \u201Cq\u201D   \nb", '"q"'))
+    expect(match.ranges).toEqual([{ start: 2, end: 8 }])
+  })
   test("a whitespace run that exists in the file still matches exactly", () => {
     expect(Option.getOrThrow(findMatch("a\tb", "\t")).strategy).toBe("exact")
   })

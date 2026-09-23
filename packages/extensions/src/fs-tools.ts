@@ -758,19 +758,48 @@ export function unescapeStr(s: string): string {
   return s.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r").replace(/\\\\/g, "\\")
 }
 
+/** Look-alike characters the normalized match reads as ASCII. */
+const NORMALIZED_CHARACTERS = new Map([
+  ["\u201C", '"'],
+  ["\u201D", '"'],
+  ["\u2018", "'"],
+  ["\u2019", "'"],
+  ["\u2014", "-"],
+  ["\u00A0", " "],
+])
+
+interface NormalizedText {
+  readonly text: string
+  readonly offsets: ReadonlyArray<number>
+}
+
+/**
+ * Drop trailing whitespace per line and map look-alike characters to ASCII.
+ * `offsets[i]` is the source offset of the normalized character at `i`, so a
+ * match in the normalized text maps back to the source.
+ */
+const normalizeWithOffsets = (s: string): NormalizedText => {
+  let text = ""
+  const offsets: Array<number> = []
+  let lineStart = 0
+  for (const line of s.split("\n")) {
+    const kept = line.replace(/[ \t]+$/, "")
+    for (let index = 0; index < kept.length; index++) {
+      const char = kept.charAt(index)
+      text += NORMALIZED_CHARACTERS.get(char) ?? char
+      offsets.push(lineStart + index)
+    }
+    lineStart += line.length + 1
+    if (lineStart <= s.length) {
+      text += "\n"
+      offsets.push(lineStart - 1)
+    }
+  }
+  return { text, offsets }
+}
+
 export function normalizeWhitespace(s: string): string {
-  return (
-    s
-      // Trailing whitespace per line
-      .replace(/[ \t]+$/gm, "")
-      // Unicode quotes → ASCII
-      .replace(/[\u201C\u201D]/g, '"')
-      .replace(/[\u2018\u2019]/g, "'")
-      // Em-dash → hyphen
-      .replace(/\u2014/g, "-")
-      // NBSP → space
-      .replace(/\u00A0/g, " ")
-  )
+  return normalizeWithOffsets(s).text
 }
 
 type MatchStrategy = "exact" | "unescaped" | "normalized"
@@ -800,29 +829,26 @@ const literalRanges = (content: string, search: string): MatchRange[] => {
 }
 
 const findNormalizedMatch = (content: string, search: string): Option.Option<MatchResult> => {
-  const normalizedContent = normalizeWhitespace(content)
+  const normalized = normalizeWithOffsets(content)
   const normalizedSearch = normalizeWhitespace(search)
   // A whitespace-only search normalizes to blank lines, which every blank line matches.
   if (normalizedSearch.trim() === "") return Option.none()
-  if (normalizedSearch === search && normalizedContent === content) return Option.none()
-  if (!normalizedContent.includes(normalizedSearch)) return Option.none()
+  if (normalizedSearch === search && normalized.text === content) return Option.none()
 
-  const lines = content.split("\n")
-  const lineStarts: number[] = []
-  let offset = 0
-  for (const line of lines) {
-    lineStarts.push(offset)
-    offset += line.length + 1
+  const sourceStart = (index: number) => normalized.offsets[index] ?? content.length
+  // A match that ends a line also takes the trailing whitespace the
+  // normalization dropped there, so the edit leaves no stray blanks.
+  const sourceEnd = (index: number) => {
+    const end = sourceStart(index - 1) + 1
+    if (index < normalized.text.length && normalized.text.charAt(index) !== "\n") return end
+    const lineEnd = content.indexOf("\n", end)
+    if (lineEnd === -1) return content.length
+    return lineEnd
   }
-  const searchLines = normalizedSearch.split("\n")
-  const ranges: MatchRange[] = []
-  for (let index = 0; index + searchLines.length <= lines.length; index++) {
-    const matchString = lines.slice(index, index + searchLines.length).join("\n")
-    if (normalizeWhitespace(matchString) !== normalizedSearch) continue
-    const start = lineStarts[index] ?? 0
-    ranges.push({ start, end: start + matchString.length })
-    index += searchLines.length - 1
-  }
+  const ranges = literalRanges(normalized.text, normalizedSearch).map((range) => ({
+    start: sourceStart(range.start),
+    end: sourceEnd(range.end),
+  }))
   const strategy: MatchStrategy = "normalized"
   return Option.map(Arr.head(ranges), (first) => ({ strategy, index: first.start, ranges }))
 }
