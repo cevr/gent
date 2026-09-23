@@ -268,6 +268,60 @@ describe("Agents pane refresh while open", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.scopedLive(
+    "a running row's detail is read on each poll while its listing row stays the same",
+    () =>
+      Effect.gen(function* () {
+        let listings = 0
+        let detailReads = 0
+        // A turn that stays running between its steps: the listing row does not move.
+        const listed = (): ReadonlyArray<AgentRowEntry> => [
+          {
+            ...row("child"),
+            section: "running",
+            status: "Running",
+            updatedAt: 1,
+            parentSessionId: parentKey.sessionId,
+          },
+        ]
+        const pane = makePaneSlot()
+        pane.open("agents.pane")
+        const clock = yield* TestClock.make()
+        const controller = yield* provideClientServices(
+          makeAgentsController(
+            () =>
+              Effect.sync(() => {
+                listings += 1
+                return listed()
+              }),
+            () =>
+              Effect.sync(() => {
+                detailReads += 1
+                return { ...detail(1), status: "Running", costUsd: detailReads / 100 }
+              }),
+          ).pipe(Effect.provideService(Clock.Clock, clock)),
+          { currentSession: () => Option.some(parentKey), shell: { pane } },
+        )
+        controller.refresh("")
+        yield* waitUntil(() => controller.rows().length === 1, "first listing")
+        controller.select(Option.some(listed()[0] ?? row("child")))
+        yield* waitUntil(() => Option.isSome(controller.detail()), "first detail")
+        const firstReads = detailReads
+
+        // Each poll reads the detail again; the cost the pane shows follows it.
+        yield* waitUntilAdvancing(
+          clock.adjust(POLL),
+          () => detailReads >= firstReads + 3,
+          "a detail read per poll",
+        )
+        yield* waitUntil(
+          () => Option.exists(controller.detail(), (shown) => shown.costUsd === detailReads / 100),
+          "the latest cost",
+        )
+        expect(listings).toBeGreaterThanOrEqual(4)
+      }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("a read slower than the poll still lands, and only one read runs at a time", () =>
     Effect.gen(function* () {
       let status: "Running" | "Idle" = "Running"

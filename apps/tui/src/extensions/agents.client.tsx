@@ -269,16 +269,17 @@ export const makeAgentsController = (
       }),
     )
 
-    // The detail is a whole session snapshot, so a listing reply reads it
-    // again only when it shows the selected row moved: its status or its
-    // `updatedAt`.
+    // The detail is a whole session snapshot. A running loop's cost moves
+    // between the steps of one turn while its listing row stays the same, so
+    // each listing reply reads a running row's detail again. A row that is not
+    // running changes only when its status or `updatedAt` moves.
     const detailAfterListing = (rows: ReadonlyArray<AgentRowEntry>): void => {
       if (Option.isNone(selected)) return
       const key = selected.value
       const now = rows.find((entry) => entry.live && sameKey(entry, key))
       if (Predicate.isUndefined(now)) return
       const stamp = progressStamp(now)
-      if (stamp === readStamp) return
+      if (now.section !== "running" && stamp === readStamp) return
       readStamp = stamp
       readDetail()
     }

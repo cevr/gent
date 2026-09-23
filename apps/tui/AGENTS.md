@@ -129,12 +129,18 @@ Priority: headless → session → continue → prompt → home
 
 A headless run has no user, so it declines every interaction its turn presents,
 with notes that name `--approve-all`. `--approve-all` approves them all, the
-destructive-command guard's asks included. The run prints only live events (it
-skips a resumed session's history) and settles on `TurnCompleted`; an
-`ErrorOccurred` notice alone does not end it. It exits 1 when the turn ended
-unanswered, or with an error and no answer text. A failed turn phase publishes
-no `TurnCompleted`: the run detects it when the loop goes idle after an error
-and the stored events since the run began hold no `TurnCompleted`.
+destructive-command guard's asks included. The run follows only its own turn:
+the live events from the `MessageReceived` of the prompt it sent (the first
+client-sent user message with the prompt's text after the send) to the
+`TurnCompleted` that names that message. A resumed session's history and an
+older turn still running on the branch are not printed and do not settle it. An
+`ErrorOccurred` alone does not end the run. It exits 1 when the turn ended
+unanswered, or with an error and no answer text; an error marked
+`notice: true` (a compaction fallback) is only a warning. The client status
+also ignores a notice. A failed turn phase
+publishes no `TurnCompleted`; the send fails then, and that ends the run. The
+run's end owns stderr: a failed run prints one line, an answered run prints one
+`Warning:` line for each notice.
 
 ## Input Prefixes
 
