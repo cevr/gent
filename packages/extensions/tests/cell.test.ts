@@ -207,6 +207,12 @@ const sessionId = SessionId.make("cell-execution-session")
 const branchId = BranchId.make("cell-execution-branch")
 const now = dateFromMillis(1_767_225_600_000)
 
+/** A worker the test never launches: the cell settles before it needs one. */
+const unusedWorker = CellWorker.cases.Script.make({
+  runtimePath: "/nonexistent/bun",
+  scriptPath: "/nonexistent/worker.js",
+})
+
 /** A catalog that selects the named host tools, hashed by their names. */
 const hostCatalog = (...names: ReadonlyArray<string>) => ({
   hash: names.join(","),
@@ -380,6 +386,159 @@ describe("recorded cell execution", () => {
             yield* (yield* CellStorage).executions.get({ ...late, sessionId, branchId }),
           ),
         ).toBe(true)
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "a cell stopped between its claim and its start records that it did not start",
+    () =>
+      Effect.gen(function* () {
+        const [late] = yield* setupCalls(["await tools.mark({})"])
+        if (!late) return yield* Effect.die("Missing test cell")
+        const claimed = yield* Deferred.make<boolean>()
+        const proceed = yield* Deferred.make<boolean>()
+        const real = yield* CellStorage
+        // The claim commits, then the loop stops before evaluation starts.
+        const gated = CellStorage.of({
+          ...real,
+          executions: {
+            ...real.executions,
+            claim: (address) =>
+              real.executions.claim(address).pipe(
+                Effect.tap(() => Deferred.succeed(claimed, true)),
+                Effect.tap(() => Deferred.await(proceed)),
+              ),
+          },
+        })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({
+              worker: unusedWorker,
+              cwd: packageDirectory,
+              sessionId,
+              branchId,
+            }).pipe(Layer.provide(Layer.succeed(CellStorage, gated))),
+          ),
+          CellExecution,
+        )
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("mark"),
+          call: () => Effect.die("A cell that never started made a host call"),
+        })
+        const running = yield* cells
+          .run(late)
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.forkScoped)
+        yield* Deferred.await(claimed)
+        const stopping = yield* cells.stop.pipe(Effect.forkScoped({ startImmediately: true }))
+        yield* Deferred.succeed(proceed, true)
+        yield* Fiber.join(stopping)
+        expect(Exit.hasInterrupts(yield* Fiber.await(running))).toBe(true)
+        // Recovery reads this record: the cell did not start, not a lost worker.
+        expect(
+          yield* (yield* CellStorage).executions.get({ ...late, sessionId, branchId }),
+        ).toMatchObject(
+          Option.some({
+            _tag: "Completed",
+            result: {
+              isFailure: true,
+              result: { message: "Cell did not start because execution was cancelled." },
+            },
+          }),
+        )
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "a cell admitted again with no result says what its recorded operations did",
+    () =>
+      Effect.gen(function* () {
+        const [cell] = yield* setupCalls(["await tools.write({})"])
+        if (!cell) return yield* Effect.die("Missing test cell")
+        const address = { ...cell, sessionId, branchId }
+        const storage = yield* CellStorage
+        yield* storage.executions.claim(address)
+        // Two operations started and recorded no result before the run was lost.
+        yield* Effect.forEach(["1", "2"], (operationId) =>
+          storage.operations.admit({
+            cell: address,
+            operationId,
+            binding: staticToolBinding({
+              toolId: "write",
+              extensionId: "files",
+              sourceRevision: "source-1",
+              schemaRevision: "schema-1",
+            }),
+            input: { operationId },
+          }),
+        )
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({
+              worker: unusedWorker,
+              cwd: packageDirectory,
+              sessionId,
+              branchId,
+            }),
+          ),
+          CellExecution,
+        )
+        const host = CellOperationHost.of({ call: () => Effect.die("No host calls expected") })
+        const incomplete = yield* cells
+          .run(cell)
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+        expect(incomplete).toMatchObject({
+          _tag: "CellExecutionIncomplete",
+          message:
+            "The cell has no recorded result. 2 operations ran with no recorded result; their effects may have occurred. Its source was not replayed.",
+        })
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "a cancelled cell whose operation list cannot be read still records its cancel",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [cell] = yield* setupCalls(["await tools.wait({})"])
+        if (!cell) return yield* Effect.die("Missing test cell")
+        const started = yield* Deferred.make<boolean>()
+        const real = yield* CellStorage
+        const broken = CellStorage.of({
+          ...real,
+          operations: {
+            ...real.operations,
+            listForToolCall: () =>
+              Effect.fail(new StorageError({ message: "operation list unavailable" })),
+          },
+        })
+        const cells = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }).pipe(
+              Layer.provide(Layer.succeed(CellStorage, broken)),
+            ),
+          ),
+          CellExecution,
+        )
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("wait"),
+          call: () => Deferred.succeed(started, true).pipe(Effect.andThen(Effect.never)),
+        })
+        const running = yield* cells
+          .run(cell)
+          .pipe(Effect.provideService(CellOperationHost, host), Effect.forkScoped)
+        yield* Deferred.await(started)
+        yield* cells.cancel
+        const cancelled = yield* Fiber.join(running)
+        expect(cancelled).toMatchObject({
+          isFailure: true,
+          result: { reason: "cancelled", message: "Cell cancelled. Its source was not replayed." },
+        })
+        expect(
+          yield* (yield* CellStorage).executions.get({ ...cell, sessionId, branchId }),
+        ).toMatchObject(Option.some({ _tag: "Completed", result: cancelled }))
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
   )
