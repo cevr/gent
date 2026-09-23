@@ -437,165 +437,6 @@ export const findIdentityEncodes = (
   return findings
 }
 
-// ── core-process-runner ─────────────────────────────────────────────────────
-
-/**
- * Guard: the `ProcessRunner` service stays removed.
- *
- * Running a child process is a free function, `runProcess` in
- * `packages/core/src/runtime/gent-platform.ts`, over `ChildProcessSpawner`. The
- * Tag that wrapped it added a second name for the same capability: every
- * requirement union that carried `ProcessRunner` already carried the spawner,
- * and the only real read re-provided the spawner it had just taken out. A file
- * that names `ProcessRunner` again is that wrapper growing back.
- *
- * @module
- */
-
-/** A source file that names the removed process-runner service. */
-export interface ProcessRunnerFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
-/** Every name the removed service owned. */
-export const REMOVED_IDENTIFIERS: ReadonlyArray<string> = [
-  "ProcessRunner",
-  "ProcessRunnerLive",
-  "ProcessRunnerService",
-  "makeProcessRunner",
-]
-
-/**
- * Source and tests under `packages/` and `apps/`, not docs and not plans.
- * `packages/tooling/` is excluded: this guard and its fixtures name the
- * removed surfaces on purpose.
- */
-const SCANNED_SOURCE = /^(?:packages|apps)\/(?!tooling\/)[^/]+\/(?:src|tests)\//
-
-/** `InProcessRunner` is a live agent-runner layer and keeps its name. */
-const identifierPattern = (name: string) => new RegExp(`(?<![A-Za-z0-9_$])${name}(?![A-Za-z0-9_$])`)
-
-/**
- * Find every line under `packages/` or `apps/` that names a removed
- * process-runner surface. Tests are scanned too: a test that builds the layer
- * again is the same regrowth as shipped code that yields the Tag.
- */
-export const findProcessRunnerFindings = (
-  file: string,
-  text: string,
-): ReadonlyArray<ProcessRunnerFinding> => {
-  if (!SCANNED_SOURCE.test(file)) return []
-  const findings: Array<ProcessRunnerFinding> = []
-  for (const [index, line] of text.split("\n").entries()) {
-    const name = Option.fromNullishOr(
-      REMOVED_IDENTIFIERS.find((candidate) => identifierPattern(candidate).test(line)),
-    )
-    if (Option.isNone(name)) continue
-    findings.push({
-      file,
-      line: index + 1,
-      message: `names "${name.value}", a surface of the removed process-runner service; call runProcess from runtime/gent-platform.ts and take ChildProcessSpawner in the requirement union`,
-    })
-  }
-  return findings
-}
-
-// ── core-retired-reconciler ─────────────────────────────────────────────────
-
-/**
- * Guard: the resource reconciler stays removed.
- *
- * A profile builds once per cwd into a scope that closes with the server
- * (`runtime/session-profile.ts`). The graph host that reconciled resource
- * plans, leases, generations and revisions behind a refresh entry point had
- * no shipped caller and was deleted in `282cf346` and `5a89367e`. A file that
- * names one of its surfaces again is that machinery growing back.
- *
- * @module
- */
-
-/** A shipped source file that names a retired reconciler surface. */
-export interface RetiredReconcilerFinding {
-  readonly file: string
-  readonly line: number
-  readonly message: string
-}
-
-/** Identifiers the reconciler owned. None has a live definition. */
-export const RETIRED_IDENTIFIERS: ReadonlyArray<string> = [
-  "ResourceGraphHost",
-  "ResourceGraphPublication",
-  "ResourceLeases",
-  "ResourceGenerationId",
-  "ResourceDescriptor",
-  "ResourceRevision",
-  "planResourceGraph",
-  "diffResourceGraph",
-  "LiveAgentLoopTurnProfile",
-  "runAgentLoopTurnProfileOrLegacy",
-]
-
-/** Module basenames the reconciler lived in. */
-export const RETIRED_MODULES: ReadonlyArray<string> = [
-  "resource-graph",
-  "resource-graph-host",
-  "resource-leases",
-  "resource-lifecycle",
-  "live-profile",
-]
-
-const RECONCILER_SHIPPED_SOURCE = /^(?:packages\/(?:core|extensions|sdk)\/src|apps\/[^/]+\/src)\//
-
-const wordIdentifierPattern = (name: string) => new RegExp(`\\b${name}\\b`)
-
-const retiredModuleIn = (specifier: string): Option.Option<string> =>
-  Option.flatMap(Option.fromNullishOr(specifier.split("/").at(-1)), (last) => {
-    const basename = last.replace(/\.[cm]?[jt]sx?$/, "")
-    return Option.fromNullishOr(RETIRED_MODULES.find((module) => module === basename))
-  })
-
-/**
- * Find every line in a shipped source file that names a retired reconciler
- * identifier or imports a retired module. Tests and docs are not scanned: a
- * test may quote history, and this guard is a lock on shipped code.
- */
-export const findRetiredReconcilerFindings = (
-  file: string,
-  text: string,
-): ReadonlyArray<RetiredReconcilerFinding> => {
-  if (!RECONCILER_SHIPPED_SOURCE.test(file)) return []
-  if (file === "packages/tooling/src/guards.ts") return []
-  const findings: Array<RetiredReconcilerFinding> = []
-  for (const [index, line] of text.split("\n").entries()) {
-    const module = Option.flatMap(
-      Option.flatMap(Option.fromNullishOr(IMPORT_PATTERN.exec(line)), (match) =>
-        Option.fromNullishOr(match[1]),
-      ),
-      retiredModuleIn,
-    )
-    if (Option.isSome(module)) {
-      findings.push({
-        file,
-        line: index + 1,
-        message: `imports the retired "${module.value}" module; a profile builds its resources once per cwd in runtime/session-profile.ts, so put new resource behavior inside that scoped build`,
-      })
-      continue
-    }
-    const name = Option.fromNullishOr(
-      RETIRED_IDENTIFIERS.find((candidate) => wordIdentifierPattern(candidate).test(line)),
-    )
-    if (Option.isNone(name)) continue
-    findings.push({
-      file,
-      line: index + 1,
-      message: `names "${name.value}", a surface of the removed resource reconciler; a profile builds its resources once per cwd in runtime/session-profile.ts, so put new resource behavior inside that scoped build`,
-    })
-  }
-  return findings
-}
-
 // ── core-unadapted-seams ────────────────────────────────────────────────────
 
 /**
@@ -1374,97 +1215,12 @@ const referenceExtensionFile = (file: string): boolean =>
 
 const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
   {
-    pattern: /\bExtensionRuntime\b/,
-    message: "ExtensionRuntime marker service is deleted; use explicit services",
-  },
-  {
-    pattern: /\bExtensionTurnControl\b/,
-    message: "ExtensionTurnControl mailbox is deleted; use the session runtime protocol",
-  },
-  {
-    pattern: /\bTurnEvent(?:Usage)?\b/,
-    message: "TurnEvent duplicates Effect AI response parts",
-  },
-  {
-    pattern: /\bsubTagLayers\s*\(/,
-    message: "Storage subtag adapter is deleted; use SqliteStorage composition roots",
-  },
-  {
-    pattern: /\bctx\.extension\b/,
-    message: "In-process extension RPC is deleted; yield services or use public transport",
-  },
-  {
-    pattern: /\btyped RPC helpers\b/,
-    message: "Host contexts no longer expose typed RPC helpers",
-  },
-  {
-    pattern: /\bGentSpan\b/,
-    message: "GentSpan tracer is deleted; use @effect/opentelemetry via Tracer service",
-  },
-  {
-    pattern: /\bresetIncompatibleStorageSchema\b/,
-    message: "Destructive schema reset is deleted; use SqliteMigrator migrations",
-  },
-  {
-    pattern: /\bLiveFile\b/,
-    message: "LiveFile JSON KV pattern is deleted; use KeyValueStore.layerFileSystem",
-  },
-  {
-    pattern: /\bEventStore\.Live\s*=\s*EventStore\.Memory\b/,
-    message:
-      "EventStore.Live = EventStore.Memory alias is deleted; resolve EventStore explicitly per persistence mode",
-  },
-  {
-    pattern: /\b(?:loopsRef|mutationSemaphoresRef|LoopDriverEvent|LoopHandle)\b/,
-    message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
-  },
-  {
-    pattern:
-      /\b(?:eraseLayer|restoreErasedLayer|ServerProfile|CwdProfile|EphemeralProfile|ServerProfileService|brandServerScope|brandCwdScope|brandEphemeralScope)\b/,
-    message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
-  },
-  {
-    pattern: /\b(?:sdkBoundary|runSdkBoundary|SdkBoundary)\b/,
-    message: "The SdkBoundary brand is deleted; keep Promise edges in a *-boundary.ts file",
-  },
-  {
-    pattern: /\bGENT_(?:TRACE_ID|PARENT_SPAN_ID)\b/,
-    message:
-      "The subprocess trace handoff is deleted with its supervisor; nothing sets these variables",
-  },
-  {
-    pattern: /\b(?:positiveIntegerOr|tcpPortOr|knownModeOr|LaunchConfigError)\b/,
-    message: "Hand-written launch decoders are deleted; read the environment through LaunchConfig",
-  },
-  {
-    pattern: /\b(?:Any)?(?:Query|Capability)Contribution\b/,
-    message:
-      "Query/Capability contribution authoring is deleted; extensions contribute tools and requests",
-  },
-  {
-    pattern: /\bProvider\.(?:Sequence|Signal|Debug|Failing)\b/,
-    message:
-      "Provider test statics are deleted outside language-model test utilities; use LanguageModelLayers",
-  },
-  {
-    pattern: /\b(?:findOpenPort|WORKER_HOST)\b/,
-    message: "Worker port preallocation is deleted; use server-selected ports",
-  },
-  {
     pattern: /\bBun\.Glob\b/,
     message: "Bun.Glob fallback is deleted; use the FileIndex service",
   },
   {
-    pattern: /\bWorkerLifecycleState\b/,
-    message: "WorkerLifecycleState is deleted; use the server lifecycle contract",
-  },
-  {
     pattern: /\bBun\.randomUUIDv7\b/,
     message: "Bun.randomUUIDv7 is adapter-only; use GentPlatform.randomId",
-  },
-  {
-    pattern: /\breactions\s*:/,
-    message: "Extension lifecycle authoring uses hooks; the reactions bucket is deleted",
   },
   {
     pattern: /\bprocess\.(?:platform|pid|execPath|kill)\b/,
@@ -1477,25 +1233,6 @@ const bannedActiveSourcePatterns: ReadonlyArray<BannedPattern> = [
   {
     pattern: /\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\b/,
     message: "Bun platform layers may only be provided by platform roots",
-  },
-]
-
-const bannedPathPatterns: ReadonlyArray<BannedPattern> = [
-  {
-    pattern: /^packages\/core\/src\/server\/rpcs\/actor\.ts$/,
-    message: "Public actor RPC surface is deleted; use product RPCs",
-  },
-  {
-    pattern: /^packages\/core\/src\/domain\/auth-(?:storage|store|method)\.ts$/,
-    message: "Legacy auth domain module is deleted; use domain/auth",
-  },
-  {
-    pattern: /^packages\/core\/src\/runtime\/(?:composer|scope-brands)\.ts$/,
-    message: "Legacy runtime composer modules are deleted; use owner-local layer composition",
-  },
-  {
-    pattern: /^packages\/sdk\/src\/(?:server-registry|worker-http)\.ts$/,
-    message: "SDK worker registry/http split is deleted; use server lock and server entrypoints",
   },
 ]
 
@@ -1692,8 +1429,6 @@ const patternsForFile = (file: string): ReadonlyArray<BannedPattern> => {
           (pattern.source === "\\bBun\\.randomUUIDv7\\b" ||
             pattern.source === "\\bprocess\\.(?:platform|pid|execPath|kill)\\b" ||
             pattern.source === "\\bos\\.(?:hostname|homedir|release)\\s*\\(")) ||
-        (file === "packages/core/src/test-utils/language-model.ts" &&
-          pattern.source === "\\bProvider\\.(?:Sequence|Signal|Debug|Failing)\\b") ||
         (platformProviderRootFiles.has(file) &&
           pattern.source === "\\b(?:BunPlatformLive|BunGentPlatformLive|BunCronRuntimeLive)\\b")
       ),
@@ -1809,12 +1544,6 @@ export const findPlatformDuplicationViolations = (
 
   if (!sourceFile(file)) return findings
 
-  for (const pathPattern of bannedPathPatterns) {
-    if (pathPattern.pattern.test(file)) {
-      findings.push({ file, line: 1, message: pathPattern.message })
-    }
-  }
-
   const patterns: BannedPattern[] = []
   if (activeSourceFile(file)) patterns.push(...patternsForFile(file))
   if (referenceExtensionFile(file)) patterns.push(...bannedReferenceExtensionPatterns)
@@ -1829,6 +1558,295 @@ export const findPlatformDuplicationViolations = (
     }
   }
 
+  return findings
+}
+
+// ── retired-surfaces ────────────────────────────────────────────────────────
+
+/**
+ * Guard: a deleted surface stays deleted.
+ *
+ * Each row names what was removed and what replaced it. A row matches a source
+ * line, an import specifier's module basename, or the file path itself. The
+ * guard source is exempt: the table names every retired surface on purpose.
+ *
+ * @module
+ */
+
+export interface RetiredSurfaceFinding {
+  readonly file: string
+  readonly line: number
+  readonly message: string
+}
+
+interface RetiredSurface {
+  /** `line`: a source line; `import`: an imported module's basename; `path`: the file path. */
+  readonly on: "line" | "import" | "path"
+  readonly match: RegExp
+  /**
+   * `shipped`: source under `packages/` and `apps/`, not tests or fixtures.
+   * `shipped-and-tests`: also the `tests/` trees, where a test that builds the
+   * retired layer again is the same regrowth; the tooling package is out.
+   */
+  readonly scope: "shipped" | "shipped-and-tests"
+  readonly message: string
+}
+
+/** Whole identifiers only: `InProcessRunner` does not match `ProcessRunner`. */
+const identifiers = (...names: ReadonlyArray<string>): RegExp =>
+  new RegExp(`(?<![A-Za-z0-9_$])(?:${names.join("|")})(?![A-Za-z0-9_$])`)
+
+const modules = (...names: ReadonlyArray<string>): RegExp => new RegExp(`^(?:${names.join("|")})$`)
+
+const RECONCILER_MESSAGE =
+  "the resource reconciler is removed; a profile builds its resources once per cwd in runtime/extension-host.ts, so put new resource behavior inside that scoped build"
+
+export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
+  {
+    on: "line",
+    match: identifiers(
+      "ProcessRunner",
+      "ProcessRunnerLive",
+      "ProcessRunnerService",
+      "makeProcessRunner",
+    ),
+    scope: "shipped-and-tests",
+    message:
+      "the process-runner service is removed; call runProcess from runtime/gent-platform.ts and take ChildProcessSpawner in the requirement union",
+  },
+  {
+    on: "line",
+    match: identifiers(
+      "ResourceGraphHost",
+      "ResourceGraphPublication",
+      "ResourceLeases",
+      "ResourceGenerationId",
+      "ResourceDescriptor",
+      "ResourceRevision",
+      "planResourceGraph",
+      "diffResourceGraph",
+      "LiveAgentLoopTurnProfile",
+      "runAgentLoopTurnProfileOrLegacy",
+    ),
+    scope: "shipped",
+    message: RECONCILER_MESSAGE,
+  },
+  {
+    on: "import",
+    match: modules(
+      "resource-graph",
+      "resource-graph-host",
+      "resource-leases",
+      "resource-lifecycle",
+      "live-profile",
+    ),
+    scope: "shipped",
+    message: RECONCILER_MESSAGE,
+  },
+  {
+    on: "line",
+    match: identifiers("ExtensionRuntime"),
+    scope: "shipped",
+    message: "ExtensionRuntime marker service is deleted; use explicit services",
+  },
+  {
+    on: "line",
+    match: identifiers("ExtensionTurnControl"),
+    scope: "shipped",
+    message: "ExtensionTurnControl mailbox is deleted; use the session runtime protocol",
+  },
+  {
+    on: "line",
+    match: identifiers("TurnEvent", "TurnEventUsage"),
+    scope: "shipped",
+    message: "TurnEvent duplicates Effect AI response parts",
+  },
+  {
+    on: "line",
+    match: /\bsubTagLayers\s*\(/,
+    scope: "shipped",
+    message: "Storage subtag adapter is deleted; use SqliteStorage composition roots",
+  },
+  {
+    on: "line",
+    match: /\bctx\.extension\b/,
+    scope: "shipped",
+    message: "In-process extension RPC is deleted; yield services or use public transport",
+  },
+  {
+    on: "line",
+    match: /\btyped RPC helpers\b/,
+    scope: "shipped",
+    message: "Host contexts no longer expose typed RPC helpers",
+  },
+  {
+    on: "line",
+    match: identifiers("GentSpan"),
+    scope: "shipped",
+    message: "GentSpan tracer is deleted; use @effect/opentelemetry via Tracer service",
+  },
+  {
+    on: "line",
+    match: identifiers("resetIncompatibleStorageSchema"),
+    scope: "shipped",
+    message: "Destructive schema reset is deleted; use SqliteMigrator migrations",
+  },
+  {
+    on: "line",
+    match: identifiers("LiveFile"),
+    scope: "shipped",
+    message: "LiveFile JSON KV pattern is deleted; use KeyValueStore.layerFileSystem",
+  },
+  {
+    on: "line",
+    match: /\bEventStore\.Live\s*=\s*EventStore\.Memory\b/,
+    scope: "shipped",
+    message:
+      "EventStore.Live = EventStore.Memory alias is deleted; resolve EventStore explicitly per persistence mode",
+  },
+  {
+    on: "line",
+    match: identifiers("loopsRef", "mutationSemaphoresRef", "LoopDriverEvent", "LoopHandle"),
+    scope: "shipped",
+    message: "Legacy agent-loop dispatch infrastructure is deleted; use AgentLoop actor state",
+  },
+  {
+    on: "line",
+    match: identifiers(
+      "eraseLayer",
+      "restoreErasedLayer",
+      "ServerProfile",
+      "CwdProfile",
+      "EphemeralProfile",
+      "ServerProfileService",
+      "brandServerScope",
+      "brandCwdScope",
+      "brandEphemeralScope",
+    ),
+    scope: "shipped",
+    message: "Legacy runtime composer scope brands are deleted; compose layers at the owner",
+  },
+  {
+    on: "line",
+    match: identifiers("sdkBoundary", "runSdkBoundary", "SdkBoundary"),
+    scope: "shipped",
+    message: "The SdkBoundary brand is deleted; keep Promise edges in a *-boundary.ts file",
+  },
+  {
+    on: "line",
+    match: identifiers("GENT_TRACE_ID", "GENT_PARENT_SPAN_ID"),
+    scope: "shipped",
+    message:
+      "The subprocess trace handoff is deleted with its supervisor; nothing sets these variables",
+  },
+  {
+    on: "line",
+    match: identifiers("positiveIntegerOr", "tcpPortOr", "knownModeOr", "LaunchConfigError"),
+    scope: "shipped",
+    message: "Hand-written launch decoders are deleted; read the environment through LaunchConfig",
+  },
+  {
+    on: "line",
+    match: /\b(?:Any)?(?:Query|Capability)Contribution\b/,
+    scope: "shipped",
+    message:
+      "Query/Capability contribution authoring is deleted; extensions contribute tools and requests",
+  },
+  {
+    on: "line",
+    match: /\bProvider\.(?:Sequence|Signal|Debug|Failing)\b/,
+    scope: "shipped",
+    message: "Provider test statics are deleted; use LanguageModelLayers",
+  },
+  {
+    on: "line",
+    match: identifiers("findOpenPort", "WORKER_HOST"),
+    scope: "shipped",
+    message: "Worker port preallocation is deleted; use server-selected ports",
+  },
+  {
+    on: "line",
+    match: identifiers("WorkerLifecycleState"),
+    scope: "shipped",
+    message: "WorkerLifecycleState is deleted; use the server lifecycle contract",
+  },
+  {
+    on: "line",
+    match: /\breactions\s*:/,
+    scope: "shipped",
+    message: "Extension lifecycle authoring uses hooks; the reactions bucket is deleted",
+  },
+  {
+    on: "path",
+    match: /^packages\/core\/src\/server\/rpcs\/actor\.ts$/,
+    scope: "shipped",
+    message: "Public actor RPC surface is deleted; use product RPCs",
+  },
+  {
+    on: "path",
+    match: /^packages\/core\/src\/domain\/auth-(?:storage|store|method)\.ts$/,
+    scope: "shipped",
+    message: "Legacy auth domain module is deleted; use domain/auth",
+  },
+  {
+    on: "path",
+    match: /^packages\/core\/src\/runtime\/(?:composer|scope-brands)\.ts$/,
+    scope: "shipped",
+    message: "Legacy runtime composer modules are deleted; use owner-local layer composition",
+  },
+  {
+    on: "path",
+    match: /^packages\/sdk\/src\/(?:server-registry|worker-http)\.ts$/,
+    scope: "shipped",
+    message: "SDK worker registry/http split is deleted; use server lock and server entrypoints",
+  },
+]
+
+const SHIPPED_AND_TESTS = /^(?:packages|apps)\/(?!tooling\/)[^/]+\/(?:src|tests)\//
+
+const inRetiredScope = (file: string, scope: RetiredSurface["scope"]): boolean => {
+  if (scope === "shipped") return activeSourceFile(file)
+  return SHIPPED_AND_TESTS.test(file) && file !== "packages/tooling/src/guards.ts"
+}
+
+const importedModule = (line: string): Option.Option<string> =>
+  Option.flatMap(
+    Option.flatMap(Option.fromNullishOr(IMPORT_PATTERN.exec(line)), (match) =>
+      Option.fromNullishOr(match[1]),
+    ),
+    (specifier) =>
+      Option.map(Option.fromNullishOr(specifier.split("/").at(-1)), (last) =>
+        last.replace(/\.[cm]?[jt]sx?$/, ""),
+      ),
+  )
+
+/** What a row reads on one line: the line itself, its import's module, or nothing. */
+const subjectOf = (row: RetiredSurface, line: string): Option.Option<string> => {
+  if (row.on === "line") return Option.some(line)
+  if (row.on === "import") return importedModule(line)
+  return Option.none()
+}
+
+/** Every line, import, or path in `file` that brings back a retired surface. */
+export const findRetiredSurfaces = (
+  file: string,
+  text: string,
+): ReadonlyArray<RetiredSurfaceFinding> => {
+  const rows = RETIRED_SURFACES.filter((row) => inRetiredScope(file, row.scope))
+  if (rows.length === 0) return []
+  const findings: Array<RetiredSurfaceFinding> = []
+  for (const row of rows) {
+    if (row.on === "path" && row.match.test(file))
+      findings.push({ file, line: 1, message: row.message })
+  }
+  for (const [index, line] of text.split("\n").entries()) {
+    for (const row of rows) {
+      const subject = subjectOf(row, line)
+      const hit = Option.flatMap(subject, (value) => Option.fromNullishOr(row.match.exec(value)))
+      if (Option.isNone(hit)) continue
+      findings.push({ file, line: index + 1, message: `"${hit.value[0]}": ${row.message}` })
+    }
+  }
   return findings
 }
 
