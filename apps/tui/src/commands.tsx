@@ -183,7 +183,6 @@ export function CommandProvider(props: CommandProviderProps) {
 
 interface SlashCommandResult {
   handled: boolean
-  // eslint-disable-next-line effect/noNullish -- command results omit an error on success.
   error?: string
 }
 

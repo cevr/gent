@@ -1640,7 +1640,6 @@ interface SessionProfileCacheConfig {
   readonly platform: string
   readonly shell?: string
   readonly osVersion?: string
-  readonly disabledExtensions?: ReadonlyArray<string>
   readonly extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /**
    * A failed extension stops the profile build instead of leaving the rest
@@ -1667,23 +1666,14 @@ export interface SessionProfileCacheService {
 
 const cacheKey = (workspaceId: WorkspaceId, cwd: string): string => `${workspaceId}\u0000${cwd}`
 
+/** The profile inputs with the merged user and project config's disabled list. */
 const effectiveInputs = (
   inputs: RuntimeProfileInputs,
   config: UserConfig,
-): RuntimeProfileInputs => {
-  const configDisabled = Option.getOrElse(
-    Option.fromUndefinedOr(config.disabledExtensions),
-    () => [],
-  )
-  const explicitDisabled = Option.getOrElse(
-    Option.fromUndefinedOr(inputs.disabledExtensions),
-    () => [],
-  )
-  return {
-    ...inputs,
-    disabledExtensions: [...explicitDisabled, ...configDisabled],
-  }
-}
+): RuntimeProfileInputs => ({
+  ...inputs,
+  disabledExtensions: Option.getOrElse(Option.fromUndefinedOr(config.disabledExtensions), () => []),
+})
 
 interface StartedProcessResources {
   readonly active: ReadonlyArray<LoadedExtension>
@@ -1792,7 +1782,6 @@ export class SessionProfileCache extends Context.Service<
           shell: config.shell,
           osVersion: config.osVersion,
           extensions: config.extensions,
-          disabledExtensions: config.disabledExtensions,
         })
 
         const buildProfile = (cwd: string) =>

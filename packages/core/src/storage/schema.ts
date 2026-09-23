@@ -427,7 +427,6 @@ const agentLoopQueueMigration = Effect.gen(function* () {
   `)
 })
 
-// oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
 // The driver wraps the SQLiteError in an SqlError whose message is generic;
 // the "duplicate column name" text lives on the cause.
 // oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
@@ -442,7 +441,6 @@ const isAlreadyAppliedSqliteError = (error: unknown) =>
   sqliteMessageIncludes(error, "duplicate column name") ||
   sqliteMessageIncludes(error, "already exists")
 
-// oxlint-disable-next-line effect/noUnknownParameters -- SQLite drivers expose unknown failure causes.
 const ignoreAlreadyAppliedSqliteError =
   (migration: string, operation: string) =>
   <E, R>(effect: Effect.Effect<void, E, R>): Effect.Effect<void, E, R> =>

@@ -548,20 +548,22 @@ describe("toolArgSummary", () => {
     expect(toolArgSummary("grep", {})).toBe("")
   })
 
-  test("delegate: todo", () => {
-    expect(toolArgSummary("delegate", { todo: "find the bug" })).toBe("find the bug")
-    expect(toolArgSummary("delegate", {})).toBe("")
+  test("delegate.start: todo", () => {
+    expect(toolArgSummary("delegate.start", { todo: "find the bug" })).toBe("find the bug")
+    expect(toolArgSummary("delegate.start", {})).toBe("")
   })
 
-  test("delegate: truncates long todo text within its 40-column budget", () => {
+  test("delegate.start: truncates long todo text within its 40-column budget", () => {
     const longTodo = "a".repeat(60)
-    const result = toolArgSummary("delegate", { todo: longTodo })
+    const result = toolArgSummary("delegate.start", { todo: longTodo })
     expect(result).toBe(`${"a".repeat(39)}…`)
     expect(Bun.stringWidth(result)).toBe(40)
   })
 
-  test("read_session: goal", () => {
-    expect(toolArgSummary("read_session", { goal: "find the fix" })).toBe("find the fix")
+  test("read_session: session id", () => {
+    expect(toolArgSummary("read_session", { sessionId: "019debug1-session" })).toBe(
+      "019debug1-session",
+    )
   })
 
   test("handoff: reason", () => {
@@ -705,8 +707,9 @@ describe("formatToolInput", () => {
   })
 
   test("grep uses cwd fallback when no path", () => {
-    const result = formatToolInput("grep", { pattern: "error" }, "/my/project")
-    expect(result).toContain("/error/ in")
+    expect(formatToolInput("grep", { pattern: "error" }, "/my/project")).toBe(
+      "/error/ in /my/project",
+    )
   })
 
   test("returns empty for grep without pattern", () => {
@@ -731,8 +734,8 @@ describe("formatToolInput", () => {
     expect(formatToolInput("grep", { pattern: {}, path: "/foo" })).toBe("")
   })
 
-  test("formats delegate with correct fields", () => {
-    expect(formatToolInput("delegate", { todo: "find the bug" })).toBe("find the bug")
+  test("formats delegate.start with its todo", () => {
+    expect(formatToolInput("delegate.start", { todo: "find the bug" })).toBe("find the bug")
   })
 
   test("read supports file_path field", () => {

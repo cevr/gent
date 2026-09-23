@@ -6,7 +6,6 @@ import { describe, expect, it } from "effect-bun-test"
 import { Effect, Exit, Random, Scope } from "effect"
 import { Gent } from "@gent/sdk"
 import { makeTempDirectoryScoped } from "@gent/core-internal/test-utils/language-model"
-import { toTestFailure } from "./test-failure-boundary"
 import {
   killProcess,
   spawnServer,
@@ -59,7 +58,7 @@ describe("server lifecycle", () => {
 
           const bundle = yield* Gent.client(url)
           yield* bundle.runtime.lifecycle.waitForReady
-          const status = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
+          const status = yield* bundle.client.runtime.status()
 
           expect(status.pid).toBe(proc.pid)
           expect(status.uptime).toBeGreaterThan(0)
@@ -117,7 +116,7 @@ describe("server lifecycle", () => {
           )
           yield* bundle.runtime.lifecycle.waitForReady
 
-          const status = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
+          const status = yield* bundle.client.runtime.status()
           expect(status.connectionCount).toBeGreaterThanOrEqual(1)
 
           // gent/no-sleep: allow real-clock idle-timeout exercise — verifies eviction has not fired before deadline
@@ -159,7 +158,7 @@ describe("server lifecycle", () => {
           const states: Array<ReturnType<typeof bundle.runtime.lifecycle.getState>["_tag"]> = []
           bundle.runtime.lifecycle.subscribe((s) => states.push(s._tag))
 
-          const status1 = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
+          const status1 = yield* bundle.client.runtime.status()
           expect(status1.connectionCount).toBeGreaterThanOrEqual(1)
           expect(states).toContain("Connected")
 
@@ -177,7 +176,7 @@ describe("server lifecycle", () => {
           )
           expect(reconnected).toBe(true)
 
-          const status2 = yield* bundle.client.runtime.status().pipe(Effect.mapError(toTestFailure))
+          const status2 = yield* bundle.client.runtime.status()
           expect(status2.connectionCount).toBeGreaterThanOrEqual(1)
 
           yield* Scope.close(clientScope, Exit.void)

@@ -286,7 +286,6 @@ const makeNativeService = (
           let pageIndex = 0
           let totalFiles = 0
 
-          // eslint-disable-next-line no-constant-condition -- cursor loop exits on empty page or backend error
           while (true) {
             const result = finderEntry.finder.fileSearch("", { pageSize, pageIndex })
             if (!result.ok) {
