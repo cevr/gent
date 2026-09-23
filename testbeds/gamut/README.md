@@ -13,7 +13,7 @@ bun run gamut list                  # the presets and the models each one pins
 bun run gamut up sol-luna           # fresh scratch run in a new herdr pane
 bun run gamut up mixed --prompt ./my-prompt.md --no-build
 bun run gamut read 80               # the pane tail
-bun run gamut wait                  # block until the pane is idle and no session in the run's data.db has an open turn
+bun run gamut wait                  # block until a turn has run, no session in the run's data.db has an open turn, and the pane shows no busy row
 bun run gamut send "also run typecheck"   # types into the TUI composer, then Enter
 bun run gamut interrupt             # one Ctrl-C
 bun run gamut status                # what the run actually did (below)
@@ -21,7 +21,8 @@ bun run gamut restart               # quit and resume the same session
 bun run gamut down                  # quit, close the pane, remove the scratch dir
 ```
 
-`up` copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
+`up` first checks that herdr has a current pane, and stops with one line if
+not. It then copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
 repo, installs it, writes the preset into `work/.gent/config.json` and the
 roster block in `work/AGENTS.md`, builds `apps/tui/bin/gent` from **this**
 checkout, and launches it in a fresh pane. The run is recorded in

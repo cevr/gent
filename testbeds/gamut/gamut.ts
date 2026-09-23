@@ -207,6 +207,43 @@ export const paneIdFromSplit = (stdout: string): string => {
  */
 export const shellQuote = (argument: string): string => `'${argument.replaceAll("'", `'\\''`)}'`
 
+/**
+ * The one line to show for a failed command. herdr answers a failed CLI call
+ * with `{"error":{"message":...}}`; other commands say why on
+ * stderr, so its last non-empty line wins, then stdout's.
+ */
+export const failureText = (stdout: string, stderr: string): string => {
+  for (const text of [stdout, stderr]) {
+    try {
+      const parsed: unknown = JSON.parse(text.trim())
+      const message = (parsed as { error?: { message?: unknown } }).error?.message
+      if (typeof message === "string") return message
+    } catch {
+      // Not a herdr JSON reply.
+    }
+  }
+  const lastLine = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "")
+      .at(-1)
+  return lastLine(stderr) ?? lastLine(stdout) ?? "no output"
+}
+
+/**
+ * Fail before any copy or build when there is no herdr pane to split. `up`
+ * splits the current pane, so the check is the same question herdr answers
+ * for `--current`: is a server running, and is this shell inside one of its
+ * panes.
+ */
+const requireHerdrPane = async (): Promise<void> => {
+  const probe = await $`herdr pane current`.quiet().nothrow()
+  if (probe.exitCode === 0) return
+  const reason = failureText(probe.stdout.toString(), probe.stderr.toString())
+  throw new Error(`herdr has no current pane (${reason}); start herdr, then rerun from a pane`)
+}
+
 /** Ctrl-C as the raw byte. `send-keys` does not deliver Ctrl chords. */
 const CTRL_C = "\x03"
 
@@ -242,8 +279,32 @@ const up = async (presetName: string, promptArg: string | undefined, build: bool
   if (existsSync(STATE_FILE)) {
     throw new Error(`a gamut run is already up (${STATE_FILE}). Run: bun run gamut down`)
   }
+  await requireHerdrPane()
 
   const root = join(tmpdir(), `gent-gamut-${Date.now()}`)
+  // Until the state file names `root`, `down` cannot find it: a failed `up`
+  // removes it here instead.
+  try {
+    await prepareAndLaunch(presetName, preset, promptArg, build, root)
+  } catch (error) {
+    if (!existsSync(STATE_FILE)) await removeTree(root)
+    throw error
+  }
+}
+
+/** `trash` is this machine's guardrail for deletes; fall back when absent. */
+const removeTree = async (path: string): Promise<void> => {
+  const trashed = await $`trash ${path}`.quiet().nothrow()
+  if (trashed.exitCode !== 0) rmSync(path, { recursive: true, force: true })
+}
+
+const prepareAndLaunch = async (
+  presetName: string,
+  preset: Preset,
+  promptArg: string | undefined,
+  build: boolean,
+  root: string,
+) => {
   const work = join(root, "work")
   const data = join(root, "data")
   mkdirSync(work, { recursive: true })
@@ -284,11 +345,10 @@ const up = async (presetName: string, promptArg: string | undefined, build: bool
   const prompt = promptArg === undefined ? DEFAULT_PROMPT : await resolvePrompt(promptArg)
 
   // GENT_DATA_DIR redirects `data.db`. Auth does NOT follow it: the auth store
-  // resolves from `${home}/.gent/auth` (server/dependencies.ts), so the real
+  // resolves from `${home}/.gent/auth` (server/server.ts), so the real
   // provider credentials keep working while the database stays isolated.
   // Split down, not right: a right split of an already split pane leaves the
-  // TUI about 55 columns wide, the status line drops its first item (the
-  // `idle` word), and `wait` never settles.
+  // TUI about 55 columns wide and the status line drops its leading items.
   const split =
     await $`herdr pane split --current --direction down --cwd ${work} --env GENT_DATA_DIR=${data}`.text()
   const pane = paneIdFromSplit(split)
@@ -416,30 +476,23 @@ const interrupt = async () => {
   await $`herdr pane send-text ${state.pane} ${CTRL_C}`.quiet()
 }
 
-const read = async (lines: string) => {
+const read = async (lines: number) => {
   const state = await readState()
   console.log(await $`herdr pane read ${state.pane} --lines ${lines}`.text())
 }
 
 /**
- * Whether the pane shows a finished run: the status line reads idle and the
- * agents tray lists no working child. The prompt text is echoed in the
- * transcript, so matching on a word the reply should contain proves nothing.
+ * What the run's own events say: whether any turn has started, and which
+ * sessions have a turn that has not ended. A turn ends with `TurnCompleted`,
+ * or with `ErrorOccurred` when it fails. The pane shows the agents tray only
+ * while it is on screen, so a child still working can be invisible there;
+ * the events are the record.
  */
-export const isSettled = (paneText: string): boolean => {
-  const lines = paneText.split("\n").map((line) => line.trim())
-  return (
-    lines.some((line) => line.startsWith("idle ·")) &&
-    !lines.some((line) => / working · /.test(line))
-  )
+export interface RunRecord {
+  readonly started: boolean
+  readonly open: ReadonlyArray<string>
 }
 
-/**
- * Sessions whose newest turn has not ended. The pane shows the agents tray
- * only while it is on screen, so a child still working can be invisible
- * there; the run's own events are the record. A turn ends with
- * `TurnCompleted`, or with `ErrorOccurred` when it fails.
- */
 export const openTurnSessions = (db: Database): ReadonlyArray<string> =>
   (
     db
@@ -451,31 +504,63 @@ export const openTurnSessions = (db: Database): ReadonlyArray<string> =>
       .all() as Array<{ session_id: string }>
   ).map((row) => row.session_id)
 
-const openTurnsIn = (dataDir: string): ReadonlyArray<string> => {
+export const runRecord = (db: Database): RunRecord => ({
+  started:
+    db.query(`SELECT 1 FROM events WHERE event_tag = 'MessageReceived' LIMIT 1`).get() !== null,
+  open: openTurnSessions(db),
+})
+
+const runRecordIn = (dataDir: string): RunRecord => {
   const dbPath = join(dataDir, "data.db")
-  if (!existsSync(dbPath)) return []
+  if (!existsSync(dbPath)) return { started: false, open: [] }
   const db = new Database(dbPath, { readonly: true })
   try {
-    return openTurnSessions(db)
+    return runRecord(db)
   } finally {
     db.close()
   }
 }
 
-const wait = async (timeoutSeconds: string) => {
+/**
+ * Whether the run is finished: a turn has started, every turn has ended, and
+ * the pane shows no busy row. The footer is only a hint: its first slot
+ * shows `idle`, `ready`, a held error or an extension notice
+ * (`apps/tui/src/app.tsx`, `phaseLabels`), and the error and notice texts
+ * are free text, so the footer cannot say idle on its own. The prompt text is
+ * echoed in the transcript, so matching on a word the reply should contain
+ * proves nothing either.
+ */
+export const isSettled = (paneText: string, record: RunRecord): boolean => {
+  const lines = paneText.split("\n").map((line) => line.trim())
+  const busy = lines.some((line) => / working · /.test(line) || /^Generating\b/.test(line))
+  return record.started && record.open.length === 0 && !busy
+}
+
+/** A positive whole count (seconds, lines) from the command line; anything else is refused. */
+export const parseCount = (name: string, value: string): number => {
+  const count = Number(value)
+  if (!/^\d+$/.test(value) || count <= 0) {
+    throw new Error(`${name} must be a positive whole number, got ${JSON.stringify(value)}`)
+  }
+  return count
+}
+
+const wait = async (timeoutSeconds: number) => {
   const state = await readState()
-  const deadline = Date.now() + Number(timeoutSeconds) * 1000
+  const deadline = Date.now() + timeoutSeconds * 1000
   let settledReads = 0
-  let open: ReadonlyArray<string> = []
+  let record: RunRecord = { started: false, open: [] }
   while (Date.now() < deadline) {
     const text = await $`herdr pane read ${state.pane} --lines 12`.text()
-    open = openTurnsIn(state.data)
-    settledReads = isSettled(text) && open.length === 0 ? settledReads + 1 : 0
-    // Two reads in a row: a background child's result starts a new turn by itself.
+    record = runRecordIn(state.data)
+    settledReads = isSettled(text, record) ? settledReads + 1 : 0
+    // Two reads in a row: a background child's result starts a new turn by
+    // itself, and a message just sent may not be stored yet.
     if (settledReads >= 2) return
     await Bun.sleep(3000)
   }
-  console.error(`not settled after ${timeoutSeconds}s; open turns: ${open.join(", ") || "none"}`)
+  const turns = record.started ? `open turns: ${record.open.join(", ") || "none"}` : "no turn started"
+  console.error(`not settled after ${timeoutSeconds}s; ${turns}`)
   process.exitCode = 1
 }
 
@@ -490,9 +575,7 @@ const down = async () => {
   const state = await readState()
   await quitTui(state)
   await $`herdr pane close ${state.pane}`.quiet().nothrow()
-  // `trash` is this machine's guardrail for deletes; fall back when absent.
-  const trashed = await $`trash ${state.root}`.quiet().nothrow()
-  if (trashed.exitCode !== 0) rmSync(state.root, { recursive: true, force: true })
+  await removeTree(state.root)
   rmSync(STATE_FILE, { force: true })
   console.log(`closed ${state.pane}, removed ${state.root}`)
 }
@@ -534,9 +617,9 @@ const main = async (argv: ReadonlyArray<string>): Promise<void> => {
     case "interrupt":
       return interrupt()
     case "read":
-      return read(rest[0] ?? "60")
+      return read(parseCount("read lines", rest[0] ?? "60"))
     case "wait":
-      return wait(rest[0] ?? "600")
+      return wait(parseCount("wait seconds", rest[0] ?? "600"))
     case "status":
       return status()
     case "restart":
@@ -550,4 +633,22 @@ const main = async (argv: ReadonlyArray<string>): Promise<void> => {
   }
 }
 
-if (import.meta.main) await main(process.argv.slice(2))
+/**
+ * One line per failure. A failed herdr, git or bun call throws a `ShellError`
+ * whose default print is a source frame and a stack; the reader needs the
+ * exit code and what the command said.
+ */
+export const failureLine = (error: unknown): string => {
+  if (error instanceof $.ShellError) {
+    const said = failureText(error.stdout.toString(), error.stderr.toString())
+    return `gamut: a command failed (exit ${error.exitCode}): ${said}`
+  }
+  return `gamut: ${error instanceof Error ? error.message : String(error)}`
+}
+
+if (import.meta.main) {
+  await main(process.argv.slice(2)).catch((error: unknown) => {
+    console.error(failureLine(error))
+    process.exitCode = 1
+  })
+}
