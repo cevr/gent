@@ -2924,24 +2924,45 @@ const killsHard = (args: ReadonlyArray<string>) =>
   })
 
 /**
- * A word that drops, truncates or deletes: DELETE, DROP or TRUNCATE in any
- * case. No statement is parsed: a comment, a string, a body or a WHERE does
- * not change the answer, so `DELETE … WHERE id = 1` and `SELECT 'drop'` ask
- * too. A short option's value may be attached to its letters (`-cDELETE …`).
+ * A word that deletes, drops or truncates, or that builds and runs SQL the
+ * guard cannot see (`PREPARE`, `EXECUTE`, `EXEC`, `sp_executesql`, a `DO`
+ * block), in any case. No statement is parsed: a comment, a string, a body
+ * or a WHERE does not change the answer, so `DELETE … WHERE id = 1` and
+ * `SELECT 'drop'` ask too.
  */
-const SQL_DESTRUCTIVE = /\b(delete|drop|truncate)\b/i
-const ATTACHED_SQL_DESTRUCTIVE = /^-[A-Za-z]+?(delete|drop|truncate)\b/i
+const SQL_DESTRUCTIVE =
+  /\b(delete|drop|truncate|prepare|execute|exec|sp_executesql)\b|\b(do)\s+(?:\$|e?')/i
+
+/** A client command that runs a file: psql `\i`, `\ir`, `\include`; MySQL `\.`, `source`; SQLite `.read`. */
+const SQL_FILE_COMMAND =
+  /\\(?:i|ir|include|include_relative|\.)\s|(?:^|[;\n])\s*(?:source|\.read)\s/i
+
+/** `text`, and each text after a letter of its leading short option cluster (`-XcDELETE`). */
+const sqlTexts = (text: string): ReadonlyArray<string> => {
+  const letters = /^-[A-Za-z]+/.exec(text)?.[0].length ?? 0
+  return [text, ...Array.from({ length: Math.max(letters - 2, 0) }, (_, at) => text.slice(at + 2))]
+}
 
 /**
- * A SQL client whose text holds a destructive word: any argument, option
- * values as written (`--command=…`, `-e …`), or its readable input.
+ * A SQL client whose SQL the guard cannot see asks: a file it runs (`-f`,
+ * `--file`, `-init`, a client file command, a `<` redirect) or input the
+ * guard cannot read. Else it asks when its text holds a word of
+ * `SQL_DESTRUCTIVE`: any argument, option values as written, or its
+ * readable input.
  */
-const sqlRisk: CommandRisk = ({ texts, invocation }) => {
-  const input = segmentInputs(invocation.segment).scripts.map((word) => word.text)
-  return Arr.findFirst([...texts, ...input], (text) =>
-    Option.flatMap(
-      Option.fromNullishOr(SQL_DESTRUCTIVE.exec(text) ?? ATTACHED_SQL_DESTRUCTIVE.exec(text)),
-      ([, word = ""]) => destructive(`SQL ${word.toUpperCase()}`),
+const sqlRisk: CommandRisk = ({ texts, parsed, invocation: { segment } }) => {
+  const input = segmentInputs(segment)
+  const sql = [...texts, ...input.scripts.map((word) => word.text)].flatMap(sqlTexts)
+  const fromFile =
+    hasShort(parsed, "f") ||
+    hasLong(parsed, "file", "init") ||
+    segment.reads.length > 0 ||
+    input.unreadable.length > 0 ||
+    sql.some((text) => SQL_FILE_COMMAND.test(text))
+  if (fromFile) return destructive("SQL the guard cannot read: a file or unreadable input")
+  return Arr.findFirst(sql, (text) =>
+    Option.flatMap(Option.fromNullishOr(SQL_DESTRUCTIVE.exec(text)), ([, word, block]) =>
+      destructive(`SQL ${(word ?? block ?? "").toUpperCase()}`),
     ),
   )
 }
@@ -3341,7 +3362,31 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         "dd (raw disk write)",
       ),
     ),
-    ...each(["psql", "mysql", "mariadb", "sqlite3", "duckdb"], risky(sqlRisk)),
+    // The options that take a value, so that one is not read as `-f` or `--file`.
+    psql: spec(
+      options(
+        "cdfhLoOpPTUv",
+        "command dbname file host log-file output port pset username variable set",
+      ),
+      [],
+      sqlRisk,
+    ),
+    ...each(
+      ["mysql", "mariadb"],
+      spec(
+        { ...options("eDhPSu", "execute database host port socket user"), attached: "p" },
+        [],
+        sqlRisk,
+      ),
+    ),
+    ...each(
+      ["sqlite3", "duckdb"],
+      spec(
+        { long: names("cmd init separator newline nullvalue c s f"), singleDash: true },
+        [],
+        sqlRisk,
+      ),
+    ),
   }),
 )
 

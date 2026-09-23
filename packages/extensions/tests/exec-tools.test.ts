@@ -1793,6 +1793,50 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("SQL from a file or unreadable input, and SQL that builds and runs SQL, asks", () => {
+    const f = "/nonexistent/gent-probe-x/q.sql"
+    const db = "/nonexistent/gent-probe-x/db"
+    for (const command of [
+      // A file the guard does not open.
+      `sqlite3 ${db} '.read ${f}'`,
+      `sqlite3 ${db} -cmd '.read ${f}'`,
+      `psql -f ${f}`,
+      `psql --file=${f}`,
+      `psql -Xf ${f}`,
+      `psql -c '\\i ${f}'`,
+      `psql -c '\\ir ${f}'`,
+      `mysql -e 'source ${f}'`,
+      `mysql -e '\\. ${f}'`,
+      `duckdb -init ${f} ${db}`,
+      `duckdb -f ${f}`,
+      `psql < ${f}`,
+      `mysql app < ${f}`,
+      `echo '.read ${f}' | sqlite3 ${db}`,
+      // Input the guard cannot read.
+      `cat ${f} | sqlite3 ${db}`,
+      `cat ${f} | psql`,
+      // SQL that builds and runs SQL.
+      `mysql -e "SET @s=0x44454c455445; PREPARE q FROM @s; EXECUTE q"`,
+      "psql -c 'EXECUTE p'",
+      "psql -cEXECUTE",
+      `mysql -e "EXEC sp_executesql N'SELECT 1'"`,
+      "psql -c 'DO $$ BEGIN PERFORM 1; END $$'",
+      `psql -c "DO 'BEGIN PERFORM 1; END'"`,
+      "psql -c \"DO E'BEGIN PERFORM 1; END'\"",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "psql -d app -h localhost -p 5432 -c 'select 1'",
+      "psql -c 'INSERT INTO t VALUES (1) ON CONFLICT DO NOTHING'",
+      "mysql -h localhost -u me -pfoo -e 'SHOW TABLES'",
+      `sqlite3 -separator , ${db} 'select 1'`,
+      "psql -c 'SELECT source FROM t'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("package runners, fd -x, SQL drops, gh deletes and git config from the environment are read", () => {
     for (const command of [
       "npm x -- rm -rf x",
