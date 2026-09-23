@@ -2066,8 +2066,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       // parts persisted with their bindings.
       const settleStep = Effect.gen(function* () {
         const usage = Option.fromUndefinedOr(collected.messageProjection.usage)
+        // Priced by the catalog id, the same one the context window reads: a
+        // driver override routes `provider/model` to `driver/model`.
         const streamEndedCost = yield* computeStreamEndedCost({
-          modelId: params.resolved.modelId,
+          modelId: params.resolved.modelDriver.contextModelId,
           usage,
         })
         yield* publishEventOrDie(
