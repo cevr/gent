@@ -137,3 +137,34 @@ export const provideClientServices = <A>(
     Effect.sync(() => makeClientExtensionRuntime(opts)),
     (runtime) => Effect.promise(() => runtime.dispose()),
   ).pipe(Effect.flatMap((runtime) => Effect.promise(() => runtime.runPromise(effect))))
+
+/**
+ * The Promise edge for a held library call, such as fff's `waitForScan`.
+ * `hold(call)` returns a Promise that says `started`, waits for `release`,
+ * then runs `call`, so a test can act while a caller awaits it. It runs with
+ * the caller's own services instead of starting a runtime beside them.
+ */
+export interface PromiseHold {
+  /** Completes once a held call is waiting. */
+  readonly started: Effect.Effect<void>
+  /** Lets the held call run. */
+  readonly release: Effect.Effect<void>
+  readonly hold: <A>(call: () => Promise<A>) => Promise<A>
+}
+
+export const makePromiseHold: Effect.Effect<PromiseHold> = Effect.gen(function* () {
+  const started = yield* Deferred.make<void>()
+  const gate = yield* Deferred.make<void>()
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>())
+  return {
+    started: Deferred.await(started),
+    release: Deferred.succeed(gate, void 0).pipe(Effect.asVoid),
+    hold: (call) =>
+      runPromise(
+        Deferred.succeed(started, void 0).pipe(
+          Effect.andThen(Deferred.await(gate)),
+          Effect.andThen(Effect.promise(call)),
+        ),
+      ),
+  }
+})

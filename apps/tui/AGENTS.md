@@ -166,8 +166,10 @@ Special prefixes at input start trigger different modes:
 ### Refused submissions
 
 - A submit leaves the composer before it is sent. A send the server refuses, or a `!cmd` that cannot spawn, comes back to the draft of the branch it was sent from, with its reason (`ComposerRefusals` in `session.tsx`)
+- A `!cmd` that ran but whose output the server refused comes back as that output, a plain message, and the reason says the command ran. Enter sends the output; it never runs the command again
+- A lost connection is not a refusal: the send may have landed. It retries four times under its first request id (`SEND_RETRY` in `utils.ts`, shared with the startup prompt and the headless send's predicate), and the text comes back only after the last try
 - None is lost: refused texts come back in send order, ahead of what the reader has typed since. A draft of refused commands only stays in shell mode; a mixed draft writes each command with its `!`
-- A refusal for a session the reader has left waits there: its text joins that branch's kept draft, and its reason (`client.setErrorIn`) shows when the reader returns. The session in view shows neither
+- A refusal for a session the reader has left waits there: its text joins that branch's kept draft, and its reason (`client.setErrorIn`) shows when the reader returns. The session in view shows neither. A reason for the session in view shows at once; until that session's snapshot is in, it is also held, so the snapshot (which writes the status) shows it again
 - Large output (>2000 lines or 50KB) truncated, full saved to `shell-output/` in the data directory (`GENT_DATA_DIR`, else `~/.gent`)
 
 ### File References
@@ -215,7 +217,10 @@ Client extensions author against one public entry, `@gent/tui/extensions`
 contribution constructors, `sessionQuery` and the rendering kit. A shipped
 client extension imports the TUI through that entry and nothing else, so a user
 `*.client.ts(x)` file reaches everything a shipped one does; a loader test
-fails on a shipped file that imports past it. Only the builtin roster in
+fails on a shipped file that imports past it. A shipped client reads the
+server extension it views through `@gent/extensions/client`, which the loader
+binds for a user file too; a second loader test fails on a `@gent/*` import in
+a shipped client that a user file cannot resolve. Only the builtin roster in
 `builtins.tsx` names its sibling `*.client` modules.
 
 Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`, which discovers, loads and resolves contributions

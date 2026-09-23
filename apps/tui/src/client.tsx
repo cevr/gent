@@ -44,6 +44,7 @@ import {
   type GentNamespacedClient,
   type Message,
   type QueueSnapshot,
+  type SessionSettings,
   type SessionSnapshot,
   type SteerCommand,
 } from "@gent/core/protocol"
@@ -58,7 +59,7 @@ import {
 } from "solid-js"
 import { createStore } from "solid-js/store"
 import { omitUndefined } from "@gent/core/extensions/api"
-import { formatError, randomId, type UiError, useRequiredContext } from "./utils"
+import { formatError, randomId, SEND_RETRY, type UiError, useRequiredContext } from "./utils"
 import { useWorkspace } from "./workspace"
 
 // ── client logging ──────────────────────────────────────────────────────────
@@ -213,14 +214,6 @@ export interface Session {
    */
   // eslint-disable-next-line effect/noNullish -- a switch by id carries no cwd until the session is read.
   readonly cwd: string | undefined
-}
-
-/** The session's mutable settings, always carried whole. */
-export interface SessionSettings {
-  // eslint-disable-next-line effect/noNullish -- an unset model falls back to the agent's.
-  readonly modelId: ModelId | undefined
-  // eslint-disable-next-line effect/noNullish -- an unset level falls back to the agent's.
-  readonly reasoningLevel: ReasoningEffort | undefined
 }
 
 export const sessionSettings = (session: Session): SessionSettings => ({
@@ -830,6 +823,15 @@ export function ClientProvider(props: ClientProviderProps) {
   const [extensionHealth, setExtensionHealth] =
     createSignal<ExtensionHealthSnapshot>(EMPTY_EXTENSION_HEALTH)
 
+  // Errors a session earned before its snapshot was in, shown when the
+  // snapshot lands: the snapshot writes the status and would overwrite them.
+  // That covers a session the reader left and the one just switched to.
+  const heldErrors = new Map<string, string>()
+  const identityKey = (identity: SessionIdentity) =>
+    `${identity.sessionId}\u0000${identity.branchId}`
+  // The identity whose snapshot has landed since the last session change.
+  let snapshotIn = Option.none<string>()
+
   /**
    * Drop everything the previous session left behind.
    *
@@ -853,6 +855,7 @@ export function ClientProvider(props: ClientProviderProps) {
       resolvedReasoningLevel: Option.none(),
     })
     setSessionMetrics(EMPTY_SESSION_METRICS)
+    snapshotIn = Option.none()
     setNoticeState(Option.none())
     clearConnectionIssue()
     if (input.clearExtensionHealth) setExtensionHealth(EMPTY_EXTENSION_HEALTH)
@@ -948,12 +951,6 @@ export function ClientProvider(props: ClientProviderProps) {
     }
   }
 
-  // Errors a session earned while another was in view, shown when its
-  // snapshot lands on return: the snapshot would otherwise overwrite them.
-  const heldErrors = new Map<string, string>()
-  const identityKey = (identity: SessionIdentity) =>
-    `${identity.sessionId}\u0000${identity.branchId}`
-
   const applySessionSnapshot = (snapshot: SessionSnapshot): void => {
     const currentSession = sessionOption()
     if (Option.isSome(currentSession)) {
@@ -1003,6 +1000,7 @@ export function ClientProvider(props: ClientProviderProps) {
     })
     setSessionMetrics(metricsOf(snapshot))
     const key = identityKey(snapshot)
+    snapshotIn = Option.some(key)
     const held = Option.fromUndefinedOr(heldErrors.get(key))
     if (Option.isSome(held)) {
       heldErrors.delete(key)
@@ -1397,12 +1395,13 @@ export function ClientProvider(props: ClientProviderProps) {
         modelStore.driverIds.includes(model.provider),
       ),
     setErrorIn: (target, error) => {
+      const key = identityKey(target)
       const inView = Option.exists(sessionOption(), (current) => sameIdentity(current, target))
-      if (inView) {
-        agentValue.setError(error)
-        return
-      }
-      heldErrors.set(identityKey(target), error)
+      // The session in view shows it now; until its snapshot is in, the
+      // error is also held, so the snapshot shows it again over its status.
+      if (inView) agentValue.setError(error)
+      if (inView && Option.contains(snapshotIn, key)) return
+      heldErrors.set(key, error)
     },
     setError: (error) => {
       const nextError = Option.fromNullishOr(error)
@@ -1425,12 +1424,14 @@ export function ClientProvider(props: ClientProviderProps) {
     sendMessage: Effect.fn("TUI.sendMessage")(function* (s, content) {
       const requestId = yield* randomId
       log.info("sendMessage", { sessionId: s.sessionId, branchId: s.branchId, requestId })
-      yield* client.message.send({
-        sessionId: s.sessionId,
-        branchId: s.branchId,
-        content,
-        requestId,
-      })
+      yield* client.message
+        .send({
+          sessionId: s.sessionId,
+          branchId: s.branchId,
+          content,
+          requestId,
+        })
+        .pipe(Effect.retry(SEND_RETRY))
     }),
     steer: Effect.fn("TUI.steer")(function* (s, command) {
       const requestId = yield* randomId
@@ -1440,7 +1441,7 @@ export function ClientProvider(props: ClientProviderProps) {
         branchId: s.branchId,
         requestId,
       }
-      yield* client.steer.command({ command: fullCommand })
+      yield* client.steer.command({ command: fullCommand }).pipe(Effect.retry(SEND_RETRY))
     }),
   }
 

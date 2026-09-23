@@ -1,4 +1,14 @@
-import { Effect, FileSystem, Match, Option, Path, Predicate, Random, Schema } from "effect"
+import {
+  Effect,
+  FileSystem,
+  Match,
+  Option,
+  Path,
+  Predicate,
+  Random,
+  Schedule,
+  Schema,
+} from "effect"
 import { type Context, useContext } from "solid-js"
 import { textWidth } from "./text-width-adapter"
 import {
@@ -185,6 +195,49 @@ export const ClientError = (message: string): ClientError => ({
 })
 
 export type UiError = GentClientRpcError | ClientError
+
+/**
+ * The `RpcClientError` reasons that mean the bytes did not make the round
+ * trip: a socket that failed or closed, an HTTP transport failure, a worker
+ * that could not take or give the message. A protocol defect (a frame that
+ * does not decode) and an HTTP status, decode or encode error are answers,
+ * and another try gets the same one.
+ */
+const TRANSPORT_REASONS: ReadonlySet<string> = new Set([
+  "SocketReadError",
+  "SocketWriteError",
+  "SocketOpenError",
+  "SocketCloseError",
+  "WorkerSendError",
+  "WorkerReceiveError",
+])
+
+const isTransportReason = (reason: RpcClientError["reason"]): boolean => {
+  if (reason._tag === "HttpError") return reason.kind === "TransportError"
+  return TRANSPORT_REASONS.has(reason._tag)
+}
+
+/**
+ * A failure of the connection, not an answer from the server: the request
+ * may have landed and only its reply was lost.
+ */
+export const isConnectionLoss = (error: UiError): boolean => {
+  if (Predicate.isTagged(error, "@gent/core/GentConnectionError")) return true
+  if (error._tag !== "RpcClientError") return false
+  return isTransportReason(error.reason)
+}
+
+/**
+ * How a send retries a lost connection: four more tries from 200 ms. Every
+ * try carries the first request id, so a try that landed with a lost reply
+ * does not run the message a second time. An answer from the server (a
+ * refusal) is final at once.
+ */
+export const SEND_RETRY = {
+  schedule: Schedule.exponential("200 millis"),
+  times: 4,
+  while: isConnectionLoss,
+}
 
 export const formatError = (error: UiError): string => {
   switch (error._tag) {

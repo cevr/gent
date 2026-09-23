@@ -104,8 +104,8 @@ export function getFileTag(path: string): string {
 
 /**
  * fff ranks the `@` popup: fuzzy distance, filename hits, and its own
- * frecency of which files this reader picks for which query. It scans the
- * session's directory once per directory and keeps its databases under
+ * frecency of which files this reader picks for which query. The popup keeps
+ * one finder, for the session's directory, and keeps fff's databases under
  * `~/.gent/fff`.
  *
  * fff honors `.gitignore` but not every exclude rule the model's own listing
@@ -262,37 +262,46 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     type FinderClaim = Deferred.Deferred<FinderEntry, FileFinderUnavailableError | FileFinderError>
-    // One finder per directory. A key claims the directory before its first
-    // wait, so keys typed while the first listing is out join that creation.
-    const finders = new Map<string, FinderClaim>()
-    // The finders fff created, by directory, destroyed with the client runtime.
-    const ready = new Map<string, FinderEntry>()
+    // One finder, for the directory the popup ranks now: each holds an index
+    // and a watcher. A key claims the directory before its first wait, so keys
+    // typed while the first listing is out join that creation. A key in
+    // another directory replaces it and destroys the finder it held; fff
+    // answers a destroyed finder with an error, so a key still ranking there
+    // falls back to the listing.
+    let held = Option.none<{ readonly cwd: string; readonly claim: FinderClaim }>()
+    // The finder fff created for the held directory.
+    let ready = Option.none<{ readonly cwd: string; readonly entry: FinderEntry }>()
     let closed = false
+    const release = () => {
+      Option.map(ready, (current) => current.entry.finder.destroy())
+      ready = Option.none()
+      held = Option.none()
+    }
     yield* lifecycle.scoped(
       Effect.addFinalizer(() =>
         Effect.sync(() => {
           closed = true
-          for (const entry of ready.values()) entry.finder.destroy()
-          ready.clear()
-          finders.clear()
+          release()
         }),
       ),
     )
+    const holds = (claim: FinderClaim) => Option.exists(held, (current) => current.claim === claim)
     const createClaimed = (cwd: string, claim: FinderClaim) =>
       Effect.ignore(fs.makeDirectory(dbDir, { recursive: true })).pipe(
         Effect.andThen(createFinder(cwd, dbDir)),
         Effect.tap((entry) =>
           Effect.sync(() => {
-            // A finder that lands after teardown has no owner left to destroy it.
-            if (closed) entry.finder.destroy()
-            else ready.set(cwd, entry)
+            // A finder that lands after teardown, or after a key moved to
+            // another directory, has no owner left to destroy it.
+            if (closed || !holds(claim)) entry.finder.destroy()
+            else ready = Option.some({ cwd, entry })
           }),
         ),
         Effect.exit,
         Effect.tap((exit) =>
           Effect.sync(() => {
             // A failed creation lets the next key try again.
-            if (Exit.isFailure(exit) && finders.get(cwd) === claim) finders.delete(cwd)
+            if (Exit.isFailure(exit) && holds(claim)) held = Option.none()
           }),
         ),
         Effect.flatMap((exit) => Deferred.done(claim, exit)),
@@ -301,10 +310,11 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
       )
     const finderFor = (cwd: string) =>
       Effect.suspend(() => {
-        const existing = Option.fromUndefinedOr(finders.get(cwd))
-        if (Option.isSome(existing)) return Deferred.await(existing.value)
+        const existing = Option.filter(held, (current) => current.cwd === cwd)
+        if (Option.isSome(existing)) return Deferred.await(existing.value.claim)
+        release()
         const claim: FinderClaim = Deferred.makeUnsafe()
-        finders.set(cwd, claim)
+        held = Option.some({ cwd, claim })
         return createClaimed(cwd, claim).pipe(Effect.andThen(Deferred.await(claim)))
       }).pipe(Effect.withSpan("FilesPopup.finderFor"))
     // The directory the last ranking used, for recording the pick against it.
@@ -437,10 +447,12 @@ export const builtinFiles = defineClientExtension("@gent/files-ui", {
         if (id.endsWith("/")) return
         if (Option.isNone(rankedIn)) return
         const cwd = rankedIn.value
-        const entry = Option.fromUndefinedOr(ready.get(cwd))
+        const entry = Option.filter(ready, (current) => current.cwd === cwd)
         // fff resolves a relative path against the process's directory, not
         // the finder's, so the pick names the session's file absolutely.
-        if (Option.isSome(entry)) entry.value.finder.trackQuery(filter, path.resolve(cwd, id))
+        if (Option.isSome(entry)) {
+          entry.value.entry.finder.trackQuery(filter, path.resolve(cwd, id))
+        }
       },
     })
   }),

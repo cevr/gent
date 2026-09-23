@@ -1941,6 +1941,19 @@ describe("the TUI app surface", () => {
       ]),
     ).toEqual([])
   })
+  // Nothing outside the app imports it, so a same-named identifier in another
+  // package is its own binding, never a read of the TUI's export.
+  test("a same-named identifier outside the app does not keep a TUI name alive", () => {
+    const findings = findingsFor([
+      { file: TUI_FILE, text: `export const waitFor = 1\n` },
+      {
+        file: "packages/core/tests/runtime/loop.test.ts",
+        text: `import { waitFor } from "../../src/test-utils/harness"\nvoid waitFor\n`,
+      },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([1])
+    expect(findings[0]?.message).toContain("`waitFor`")
+  })
 })
 
 describe("the server app surface", () => {

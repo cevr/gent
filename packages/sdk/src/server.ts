@@ -128,7 +128,8 @@ export const resolveLogDir: Effect.Effect<string> = Effect.map(
 
 /**
  * Build fingerprint — identifies gent executable/source version.
- * Used by server identity and SDK registry for version-aware restarts.
+ * Used by the server identity and the data-directory lock, so a client attaches
+ * only to a server of its own build.
  */
 
 /** True when execPath is a compiled gent binary, not a generic runtime like bun. */
@@ -812,7 +813,7 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
  *
  * Two server topologies:
  * - owned: in-process handler context + HTTP listener (primary client gets direct RPC)
- * - attached: existing server found via registry (client connects via WS)
+ * - attached: the server that holds the data directory's lock (client connects via WS)
  */
 
 // ── Types ──
@@ -1170,7 +1171,7 @@ const resolveServerInternal = (
     const stateSpec = options.state ?? state.sqlite()
     const providerSpec = options.provider ?? provider.live()
 
-    // Memory state has nothing to share: owned outright, no registry.
+    // Memory state has nothing to share: owned outright, no lock.
     if (stateSpec._tag === "Memory") {
       return yield* buildOwnedServer(options, stateSpec, providerSpec)
     }

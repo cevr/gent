@@ -2174,6 +2174,11 @@ interface ScannedSurface {
   readonly ownFileCounts: boolean
   /** The import specifier an entry point is consumed through; `None` for a module surface. */
   readonly specifier: Option.Option<string>
+  /**
+   * A leaf app: nothing outside it imports it, so only a file under this
+   * prefix can read its names. A same-named identifier elsewhere is its own.
+   */
+  readonly leafOf?: string
 }
 
 const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
@@ -2294,6 +2299,7 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
+    leafOf: "apps/tui/",
   },
   {
     // The server app is a launcher and a leaf: it reads the environment and
@@ -2304,6 +2310,7 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
     testsCount: true,
     ownFileCounts: false,
     specifier: Option.none(),
+    leafOf: "apps/server/",
   },
 ]
 
@@ -2780,6 +2787,13 @@ const mayConsume = (file: string, surface: ScannedSurface): boolean =>
   (surface.testsCount || !isTestSupport(file)) &&
   !surface.outsideOf.some((prefix) => file.startsWith(prefix))
 
+/** Whether the file sits where a leaf app's names can be read: inside the app. */
+const withinLeaf = (file: string, surface: ScannedSurface): boolean =>
+  Option.match(Option.fromUndefinedOr(surface.leafOf), {
+    onNone: () => true,
+    onSome: (leaf) => file.startsWith(leaf),
+  })
+
 const messageFor = (file: string, declaration: Declaration): string =>
   Option.match(declaration.surface.specifier, {
     onNone: () => {
@@ -2884,6 +2898,7 @@ export const findUnconsumedExports = (
     const targets = importTargetsOf(file)
     for (const [candidate, facts] of factsByFile) {
       if (!mayConsume(candidate, declaration.surface)) continue
+      if (!withinLeaf(candidate, declaration.surface)) continue
       // The file being measured never vouches for its own export; whether its
       // own references count at all is the `ownFileCounts` rule below.
       if (candidate === file && Option.isNone(declaration.surface.specifier)) continue

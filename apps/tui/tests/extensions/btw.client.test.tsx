@@ -255,6 +255,37 @@ describe("fork pane", () => {
       expect(Option.isNone(controller.fork())).toBe(true)
     }),
   )
+
+  // The reader switched away while the question went out. The pane of the
+  // session in view cannot show the failure, so the shell says it out loud,
+  // with the question, and nothing is dropped silently.
+  it.scopedLive("an ask that fails after a switch is reported with its question", () =>
+    Effect.gen(function* () {
+      const first = { sessionId: SessionId.make("s1"), branchId: BranchId.make("s1-branch") }
+      const second = { sessionId: SessionId.make("s2"), branchId: BranchId.make("s2-branch") }
+      const [current, setCurrent] = createSignal(first)
+      const queue = makeCastQueue()
+      const notices: Array<string> = []
+      const controller = yield* provideClientServices(
+        makeForkPane({
+          fork: () => Effect.fail({ message: "model unavailable" }),
+          ask: () => Effect.void,
+          progress: () => Effect.succeedNone,
+        }),
+        {
+          currentSession: () => Option.some(current()),
+          shell: { cast: queue.cast, notify: (message) => notices.push(message) },
+        },
+      )
+      yield* queue.drain
+      controller.ask("why is the sky blue?")
+      setCurrent(second)
+      yield* queue.drain
+      expect(notices).toHaveLength(1)
+      expect(notices[0]).toContain("why is the sky blue?")
+      expect(notices[0]).toContain("model unavailable")
+    }),
+  )
 })
 
 describe("fork pane across a session switch", () => {

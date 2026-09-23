@@ -454,7 +454,7 @@ export const sessions = Command.make(
       Flag.optional,
     ),
     isolate: Flag.boolean("isolate").pipe(
-      Flag.withDescription("Run with an in-process server (no data-directory server, no registry)"),
+      Flag.withDescription("Keep state in memory: no data-directory database or lock"),
       Flag.withDefault(false),
     ),
   },
