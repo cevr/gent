@@ -188,6 +188,12 @@ export const CONTEXT_WINDOW_MESSAGE_TYPE: RuntimeUserMessageType = "context-wind
 /** The durable line the loop writes when a branch's model changes between steps. */
 export const MODEL_CHANGE_MESSAGE_TYPE: RuntimeUserMessageType = "model-change"
 
+/** What a model-change notice announced; the next boundary compares against it. */
+const ModelChangeDetails = Schema.TaggedStruct(MODEL_CHANGE_MESSAGE_TYPE, {
+  nextModelId: ModelId,
+})
+const isModelChangeDetails = Schema.is(ModelChangeDetails)
+
 /**
  * A user-role line the model reads when the step it is about to run uses
  * another model than the branch's last settled step, so attribution of the
@@ -218,8 +224,19 @@ export const modelChangeNotice = (params: {
       }),
     ],
     createdAt: params.createdAt,
-    metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
+    metadata: {
+      customType: MODEL_CHANGE_MESSAGE_TYPE,
+      details: ModelChangeDetails.make({ nextModelId: params.nextModelId }),
+    },
   })
+
+/** The model a notice announced. Notices written before this detail existed announce nothing. */
+export const announcedModel = (message: Message): Option.Option<ModelId> => {
+  if (message.metadata?.customType !== MODEL_CHANGE_MESSAGE_TYPE) return Option.none()
+  const details = message.metadata.details
+  if (!isModelChangeDetails(details)) return Option.none()
+  return Option.some(details.nextModelId)
+}
 
 /** The history a handoff marker summarizes; every message in it stays durable and readable by id. */
 const ContextHandoffSummary = Schema.Struct({

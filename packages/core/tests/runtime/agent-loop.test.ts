@@ -3140,6 +3140,63 @@ describe("model-change notice", () => {
   )
 
   it.scopedLive(
+    "a step on the new model that breaks does not make the next step announce the switch again",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            const call = yield* Ref.updateAndGet(calls, (count) => count + 1)
+            // The first step on the new model breaks after partial output.
+            if (call === 2) {
+              return Stream.concat(
+                Stream.fromIterable([textDeltaPart("partial")] satisfies LanguageModelStreamPart[]),
+                Stream.fail(
+                  AiError.make({
+                    module: "Test",
+                    method: "streamText",
+                    reason: new AiError.UnknownError({ description: "connection reset" }),
+                  }),
+                ),
+              )
+            }
+            return Stream.fromIterable([
+              textDeltaPart(`reply ${call}`),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        const answered = (reply: string) =>
+          waitFor(
+            client.message.list({ branchId }),
+            (current) =>
+              current.some((message) =>
+                message.parts.some((part) => part.type === "text" && part.text === reply),
+              ),
+            10_000,
+            reply,
+          )
+        yield* client.message.send({ sessionId, branchId, content: "first" })
+        yield* answered("reply 1")
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: ModelId.make("custom/next-model"),
+          reasoningLevel: Option.getOrUndefined(Option.none()),
+        })
+        yield* client.message.send({ sessionId, branchId, content: "second" })
+        const messages = yield* answered("reply 3")
+        expect(
+          messages.filter((message) => message.metadata?.customType === "model-change"),
+        ).toHaveLength(1)
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
     "a model switch that overflows the window keeps the user's new prompt, not only the notice",
     () =>
       Effect.gen(function* () {

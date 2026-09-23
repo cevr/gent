@@ -139,6 +139,7 @@ import {
   ModelContextCapabilityFailure,
   ModelContextLedger,
   ModelContextProjectionError,
+  announcedModel,
   modelChangeNotice,
   projectContextWindow,
   projectModelContext,
@@ -1648,35 +1649,38 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const eventStorage = yield* EventStorage
 
     /**
-     * The model the branch's last settled step actually ran on, derived from
-     * its `StreamEnded`. The step boundary compares it with the model the
-     * next step resolves; where the settings event sits in the log does not
-     * matter. The cursor only bounds the read to the events since the last
-     * settled step it saw; the value is always re-derived from the log.
+     * The model the branch last ran on or was told it continues with: a
+     * settled step's `StreamEnded`, or a model-change notice's announced
+     * model, whichever the log holds last. The step boundary compares it with
+     * the model the next step resolves; where the settings event sits in the
+     * log does not matter. A notice counts because the model reads it on every
+     * later step: a step on the new model that breaks, or a resend after an
+     * interrupt, does not need the switch announced again. The cursor only
+     * bounds the read to the events since the last one it saw; the value is
+     * always re-derived from the log.
      */
-    const settledStepModel = ({ event }: EventEnvelope): Option.Option<ModelIdType> => {
-      if (event._tag !== "StreamEnded") return Option.none()
-      return Option.fromUndefinedOr(event.model)
+    const knownStepModel = ({ event }: EventEnvelope): Option.Option<ModelIdType> => {
+      if (event._tag === "StreamEnded") return Option.fromUndefinedOr(event.model)
+      if (event._tag === "MessageReceived") return announcedModel(event.message)
+      return Option.none()
     }
-    const lastSettledStep = yield* Ref.make<{
+    const lastKnownStep = yield* Ref.make<{
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
     }>({ cursor: 0, model: Option.none() })
-    const lastSettledModel = Effect.gen(function* () {
-      const known = yield* Ref.get(lastSettledStep)
+    const lastKnownModel = Effect.gen(function* () {
+      const known = yield* Ref.get(lastKnownStep)
       const events = yield* eventStorage.listEvents({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         afterId: known.cursor,
       })
-      const settledIndex = events.findLastIndex((envelope) =>
-        Option.isSome(settledStepModel(envelope)),
-      )
-      const current = Option.match(Option.fromUndefinedOr(events[settledIndex]), {
+      const knownIndex = events.findLastIndex((envelope) => Option.isSome(knownStepModel(envelope)))
+      const current = Option.match(Option.fromUndefinedOr(events[knownIndex]), {
         onNone: () => known,
-        onSome: (envelope) => ({ cursor: envelope.id, model: settledStepModel(envelope) }),
+        onSome: (envelope) => ({ cursor: envelope.id, model: knownStepModel(envelope) }),
       })
-      yield* Ref.set(lastSettledStep, current)
+      yield* Ref.set(lastKnownStep, current)
       return current.model
     })
     const clearProcessLocalReplayBindings = (assistantMessageId: string) =>
@@ -2702,7 +2706,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const overridesModel =
         Predicate.isNotUndefined(params.state.agentOverride) ||
         Predicate.isNotUndefined(params.state.runSpec?.overrides?.modelId)
-      const previousModel = yield* lastSettledModel.pipe(
+      const previousModel = yield* lastKnownModel.pipe(
         Effect.catch((cause) =>
           Effect.logWarning("turn.model-change-read-failed").pipe(
             Effect.annotateLogs({ error: String(cause) }),
