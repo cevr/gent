@@ -13,6 +13,8 @@ import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   renderMessageParts,
   renderSessionTree,
+  sessionMessageBody,
+  sessionMessageText,
   SessionToolsExtension,
 } from "../src/session-tools.js"
 import {
@@ -249,4 +251,21 @@ describe("Session tools via model turn", () => {
       ),
     10_000,
   )
+})
+
+describe("session message header", () => {
+  const from = { sessionId: SessionId.make("child-1"), relation: "child" }
+
+  test("a child's message says it is not the completion, before and after it", () => {
+    const text = sessionMessageText({ from, message: "CI is green" })
+    expect(text).toContain("child-completion message; this message is not one")
+    expect(text).not.toContain("still running")
+    expect(sessionMessageBody(from, text)).toBe("CI is green")
+  })
+
+  test("a stored row with the earlier status line still shows only its body", () => {
+    const stored =
+      "Message from your child (session child-1):\nYour child is still running. This is not its completion; that arrives as a separate message.\n\nCI is green"
+    expect(sessionMessageBody(from, stored)).toBe("CI is green")
+  })
 })

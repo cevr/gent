@@ -1353,7 +1353,7 @@ describe("session.send", () => {
         expect(asked?.metadata?.details).toMatchObject({ from: { relation: "child" } })
         expect(messageTexts([asked!])[0]).toContain("Message from your child")
         // A question mid-turn must not read as the child being done.
-        expect(messageTexts([asked!])[0]).toContain("This is not its completion")
+        expect(messageTexts([asked!])[0]).toContain("this message is not one")
         // The question was a turn of its own: the parent's last user text before the answer.
         const texts = messageTexts(snapshot.messages)
         expect(texts.indexOf(texts.find((t) => t.includes(question))!)).toBeLessThan(
@@ -1511,6 +1511,11 @@ describe("a child's later turn", () => {
           expect(snapshot.messages.indexOf(completion!)).toBeLessThan(
             snapshot.messages.indexOf(later!),
           )
+          // The completion already landed: the later message must not promise one.
+          const laterText = messageTexts([later!])[0] ?? ""
+          expect(laterText).not.toContain("still running")
+          expect(laterText).not.toContain("arrives as a separate message")
+          expect(laterText).toContain("child-completion message; this message is not one")
           expect(completionMessages(snapshot.messages)).toHaveLength(1)
         }).pipe(Effect.timeout("8 seconds")),
       ),
