@@ -550,6 +550,42 @@ describe("Composer renderer", () => {
       expect(renderFrame(setup)).not.toContain("┃ hi")
     }),
   )
+  // A large paste becomes a placeholder where the caret is. The draft around
+  // it stays whole, so submit sends the text before the caret, the paste, and
+  // the text after the caret, in that order.
+  it.live("a large paste in the middle of the draft sends the exact text", () =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <TestComposer onSubmit={(content) => submitted.push(content)} />),
+      )
+      const pasted = "one\ntwo\nthree\nfour\nfive"
+      yield* Effect.promise(() => setup.mockInput.typeText("hello world"))
+      for (let i = 0; i < 5; i++) setup.mockInput.pressArrow("left")
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(pasted))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(renderFrame(setup)).toContain("hello [Pasted ~5 lines #paste-1]world")
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(submitted).toEqual([`hello ${pasted}world`])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("a large paste over a selection replaces it and sends the exact text", () =>
+    Effect.gen(function* () {
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <TestComposer onSubmit={(content) => submitted.push(content)} />),
+      )
+      const pasted = "one\ntwo\nthree\nfour\nfive"
+      yield* Effect.promise(() => setup.mockInput.typeText("hello world"))
+      for (let i = 0; i < 5; i++) setup.mockInput.pressArrow("left", { shift: true })
+      yield* Effect.promise(() => setup.mockInput.pasteBracketedText(pasted))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressKey("RETURN")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(submitted).toEqual([`hello ${pasted}`])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("suspended composer blocks enter submission", () =>
     Effect.gen(function* () {
       const submitted: string[] = []

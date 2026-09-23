@@ -52,7 +52,13 @@ import type {
 import { PromptRenderer } from "./interaction-renderers"
 import { runAutocompleteContributions } from "./extensions/loader-boundary"
 import { ghostCompletion } from "./autocomplete"
-import { SyntaxStyle, type TextareaRenderable } from "@opentui/core"
+import {
+  decodePasteBytes,
+  type PasteEvent,
+  stripAnsiSequences,
+  SyntaxStyle,
+  type TextareaRenderable,
+} from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { isSlashCommandName, parseSlashCommand, useCommand } from "./commands"
 import { useEnv, useWorkspace } from "./workspace"
@@ -672,6 +678,20 @@ function useComposerController(): ComposerController {
     focusTextarea()
   }
 
+  /**
+   * A large paste becomes a placeholder at the caret. The paste event carries
+   * the pasted text, and the textarea's own insert puts the placeholder where
+   * the paste would have gone: at the caret, over any selection. Reading the
+   * paste back from the changed draft cannot tell where it landed.
+   */
+  const handlePaste = (event: PasteEvent) => {
+    if (Option.isNone(inputRef)) return
+    const pasted = stripAnsiSequences(decodePasteBytes(event.bytes))
+    if (!isLargePaste(pasted)) return
+    event.preventDefault()
+    inputRef.value.insertText(paste.createPlaceholder(pasted))
+  }
+
   const handleContentChange = () => {
     const value = Option.getOrElse(
       Option.map(inputRef, (renderable) => renderable.plainText),
@@ -682,19 +702,6 @@ function useComposerController(): ComposerController {
     // after RestoreDraft (e.g. autocomplete selection triggers replaceText
     // which fires onContentChange, but we already closed autocomplete)
     if (value === previousValue) return
-    if (value.length > previousValue.length && Option.isSome(inputRef)) {
-      const inserted = value.slice(previousValue.length)
-      if (isLargePaste(inserted)) {
-        const placeholder = paste.createPlaceholder(inserted)
-        const nextValue = previousValue + placeholder
-        inputRef.value.replaceText(nextValue)
-        inputRef.value.cursorOffset = nextValue.length
-        sc.onComposerInteraction(
-          ComposerInteractionEvent.cases.RestoreDraft.make({ text: nextValue }),
-        )
-        return
-      }
-    }
     sc.onComposerInteraction(ComposerInteractionEvent.cases.DraftChanged.make({ text: value }))
 
     // Prune tokens that are no longer in the text, then re-apply highlights
@@ -1032,6 +1039,7 @@ function useComposerController(): ComposerController {
       inputRef = Option.fromNullishOr(renderable)
       if (Option.isSome(inputRef)) {
         inputRef.value.onContentChange = handleContentChange
+        inputRef.value.onPaste = handlePaste
         inputRef.value.syntaxStyle = tokenStyle
       }
     },
