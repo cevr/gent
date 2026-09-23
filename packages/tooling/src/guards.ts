@@ -2615,6 +2615,16 @@ const namespaceMembersIn = (
       })
     }
   }
+  // `const { beta, gamma: g } = TU` reads each key off the namespace.
+  const kept = lines.filter((_, index) => !skip.has(index + 1)).join("\n")
+  const destructure = new RegExp(`\\b(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${alias}\\b`, "g")
+  for (const match of kept.matchAll(destructure)) {
+    const inner = Option.getOrElse(Option.fromNullishOr(match[1]), () => "")
+    for (const part of inner.split(",")) {
+      const key = Option.fromNullishOr(/^\s*([A-Za-z_$][\w$]*)/.exec(part)?.[1])
+      if (Option.isSome(key)) found.push(key.value)
+    }
+  }
   return found
 }
 
@@ -2889,6 +2899,9 @@ const isNamesake = (
   // A file that imports from the declaring module reads it, under an alias or
   // a namespace if not by name, whatever it binds beside the import.
   if (targets.some((target) => facts.importsByTarget.has(target))) return false
+  // An entry import names the declaration, whatever local alias it binds; a
+  // local namesake beside `import { zeta as _zeta }` does not undo that read.
+  if ([...facts.imported.values()].some((names) => names.has(declaration.name))) return false
   return declaredIn.has(candidate) || facts.localNames.has(declaration.name)
 }
 
