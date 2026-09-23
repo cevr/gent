@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it } from "effect-bun-test"
 import { Clock, Deferred, Effect, Option } from "effect"
+import { TestClock } from "effect/testing"
 import { createSignal } from "solid-js"
 import { BranchId, dateFromMillis, Session, SessionId } from "@gent/core/protocol"
 import { type AgentRowEntry, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
@@ -14,7 +15,7 @@ import {
 import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
 import { usePickerGeometry } from "../../src/ui"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
-import { waitForFrame, waitUntil } from "../helpers-boundary"
+import { waitForFrame, waitUntil, waitUntilAdvancing } from "../helpers-boundary"
 import {
   makeClientTestTransport,
   makePaneSlot,
@@ -169,6 +170,8 @@ describe("Agents pane refresh while open", () => {
     sessionId: SessionId.make("parent"),
     branchId: BranchId.make("parent-branch"),
   }
+  /** One poll period of the controller, on a clock the test moves. */
+  const POLL = "2 seconds"
 
   it.scopedLive("a child that finishes while the pane is open is read again, with its detail", () =>
     Effect.gen(function* () {
@@ -187,12 +190,12 @@ describe("Agents pane refresh while open", () => {
       ]
       const pane = makePaneSlot()
       pane.open("agents.pane")
+      const clock = yield* TestClock.make()
       const controller = yield* provideClientServices(
         makeAgentsController(
           () => Effect.sync(listed),
           () => Effect.sync(() => ({ ...detail(turns), status })),
-          "20 millis",
-        ),
+        ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => Option.some(parentKey), shell: { pane } },
       )
       controller.refresh("")
@@ -205,7 +208,8 @@ describe("Agents pane refresh while open", () => {
 
       status = "Idle"
       turns = 1
-      yield* waitUntil(
+      yield* waitUntilAdvancing(
+        clock.adjust(POLL),
         () => controller.rows().every((entry) => entry.status === "Idle"),
         "listing after the child finished",
       )
@@ -220,6 +224,50 @@ describe("Agents pane refresh while open", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  it.scopedLive("the selected detail is read again only when its listing row moved", () =>
+    Effect.gen(function* () {
+      let updatedAt = 1
+      let listings = 0
+      let detailReads = 0
+      const listed = (): ReadonlyArray<AgentRowEntry> => [
+        { ...row("child"), status: "Idle", updatedAt, parentSessionId: parentKey.sessionId },
+      ]
+      const pane = makePaneSlot()
+      pane.open("agents.pane")
+      const clock = yield* TestClock.make()
+      const controller = yield* provideClientServices(
+        makeAgentsController(
+          () =>
+            Effect.sync(() => {
+              listings += 1
+              return listed()
+            }),
+          () =>
+            Effect.sync(() => {
+              detailReads += 1
+              return detail(detailReads)
+            }),
+        ).pipe(Effect.provideService(Clock.Clock, clock)),
+        { currentSession: () => Option.some(parentKey), shell: { pane } },
+      )
+      controller.refresh("")
+      yield* waitUntil(() => controller.rows().length === 1, "first listing")
+      controller.select(Option.some(listed()[0] ?? row("child")))
+      yield* waitUntil(() => Option.isSome(controller.detail()), "first detail")
+
+      // Polls whose listing shows the row as it was read ask nothing more.
+      yield* waitUntilAdvancing(clock.adjust(POLL), () => listings >= 4, "three polls")
+      expect(detailReads).toBe(1)
+
+      // A step moves the row's `updatedAt`; the next listing reads the detail again.
+      updatedAt = 2
+      yield* waitUntilAdvancing(clock.adjust(POLL), () => detailReads === 2, "detail after a step")
+      const settled = listings
+      yield* waitUntilAdvancing(clock.adjust(POLL), () => listings >= settled + 3, "later polls")
+      expect(detailReads).toBe(2)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   it.scopedLive("a read slower than the poll still lands, and only one read runs at a time", () =>
     Effect.gen(function* () {
       let status: "Running" | "Idle" = "Running"
@@ -230,7 +278,9 @@ describe("Agents pane refresh while open", () => {
       const listed = (): ReadonlyArray<AgentRowEntry> => [
         { ...row("child"), status, parentSessionId: parentKey.sessionId },
       ]
-      // Each read takes several poll periods.
+      const clock = yield* TestClock.make()
+      // Each read takes several poll periods: the test moves the poll clock
+      // while a read, on the live clock, is still out.
       const slow = <A,>(read: () => A, count: (delta: number) => number) =>
         Effect.acquireUseRelease(
           Effect.sync(() => count(1)),
@@ -257,8 +307,7 @@ describe("Agents pane refresh while open", () => {
                 return detailInFlight
               },
             ),
-          "20 millis",
-        ),
+        ).pipe(Effect.provideService(Clock.Clock, clock)),
         { currentSession: () => Option.some(parentKey), shell: { pane } },
       )
       controller.refresh("")
@@ -269,11 +318,13 @@ describe("Agents pane refresh while open", () => {
         "child detail running",
       )
       status = "Idle"
-      yield* waitUntil(
+      yield* waitUntilAdvancing(
+        clock.adjust(POLL),
         () => controller.rows().every((entry) => entry.status === "Idle"),
         "listing after the child finished",
       )
-      yield* waitUntil(
+      yield* waitUntilAdvancing(
+        clock.adjust(POLL),
         () => Option.exists(controller.detail(), (value) => value.status === "Idle"),
         "detail after the child finished",
       )
@@ -291,6 +342,8 @@ describe("Agents pane refresh while open", () => {
           (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void
         >()
         const pane = makePaneSlot()
+        // The poll clock never moves in this test: only the pulse reads.
+        const clock = yield* TestClock.make()
         const controller = yield* provideClientServices(
           makeAgentsController(
             (query) => {
@@ -298,9 +351,7 @@ describe("Agents pane refresh while open", () => {
               return Effect.succeed([])
             },
             () => Effect.never,
-            // No poll in this test: only the pulse reads.
-            "1 hour",
-          ),
+          ).pipe(Effect.provideService(Clock.Clock, clock)),
           {
             currentSession: () => Option.some(parentKey),
             shell: { pane },
