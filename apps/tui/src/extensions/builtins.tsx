@@ -16,30 +16,34 @@ import {
   type AnyExtensionClientModule,
   autocompleteContribution,
   borderLabelContribution,
-  ClientActivity,
   type ClientActivitySnapshot,
   clientCommandContribution,
   clientContributions,
-  ClientLifecycle,
-  ClientShell,
-  ClientTransport,
-  ClientWorkspace,
+  ClientContext,
   defineClientExtension,
   interactionRendererContribution,
+  messageRendererContribution,
   rendererContribution,
   sessionQuery,
   widgetContribution,
 } from "./client-facets.js"
 import { truncate, truncatePath } from "../utils"
+import { CollapsedRow, UserRow } from "../ui"
+import { textWidth } from "../text-width-adapter"
 import { BunSocket } from "@effect/platform-bun"
 import { createEffect, createRoot, Show } from "solid-js"
 import { AgentName, ExternalDriverRef, ModelDriverRef } from "@gent/core/protocol"
 import { ref } from "@gent/core/extensions/api"
 import {
+  GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,
   GoalRpc,
   type GoalSnapshot,
   remainingTokens,
+  SESSION_MESSAGE_TYPE,
+  SESSION_TOOLS_EXTENSION_ID,
+  SessionMessageDetails,
+  sessionMessageBody,
   SkillsRpc,
 } from "@gent/extensions/client.js"
 import { useTheme } from "../theme"
@@ -235,7 +239,7 @@ export const trackSelection = (cwd: string, query: string, filePath: string): vo
 /**
  * Files autocomplete (`@`) — Effect-typed setup.
  *
- * Yields `ClientWorkspace` for cwd/home and `FileSystem.FileSystem` for the
+ * Yields `ClientContext.workspace` for cwd/home and `FileSystem.FileSystem` for the
  * empty-filter top-level directory listing. Non-empty filter goes through
  * the FFF-backed `searchFiles` Effect; there is no glob fallback.
  *
@@ -258,7 +262,7 @@ const formatMatch = (f: { path: string; name: string }) => {
 
 const builtinFiles = defineClientExtension("@gent/files-ui", {
   setup: Effect.gen(function* () {
-    const workspace = yield* ClientWorkspace
+    const { workspace } = yield* ClientContext
     const fs = yield* FileSystem.FileSystem
     const dbDir = `${workspace.home}/.gent/fff`
     yield* Effect.ignore(fs.makeDirectory(dbDir, { recursive: true }))
@@ -464,9 +468,8 @@ export const builtinHerdr = defineClientExtension("@gent/herdr", {
   setup: Effect.gen(function* () {
     const target = yield* herdrEnvironment.pipe(Effect.orDie)
     if (Option.isNone(target)) return clientContributions()
-    const activity = yield* ClientActivity
+    const { activity, lifecycle } = yield* ClientContext
     const read = activity.snapshot
-    const lifecycle = yield* ClientLifecycle
     const reporter = yield* lifecycle.scoped(makeHerdrReporter(target.value))
     createRoot((dispose) => {
       createEffect(() => reporter.report(read()))
@@ -486,7 +489,7 @@ export const builtinHerdr = defineClientExtension("@gent/herdr", {
  *   - `/driver` (no args)             → usage hint
  *
  * Validation lives server-side: `driver.set` rejects unknown driver ids. The
- * usage hint and every failure go to the footer through `ClientShell.notify`;
+ * usage hint and every failure go to the footer through `shell.notify`;
  * a change that lands reports nothing.
  *
  * This contribution is delivered by a core builtin (not by the
@@ -503,8 +506,7 @@ const driverRef = (entry: { readonly _tag: string; readonly id: string }) => {
 
 export const builtinDriver = defineClientExtension("@gent/driver-ui", {
   setup: Effect.gen(function* () {
-    const shell = yield* ClientShell
-    const transport = yield* ClientTransport
+    const { shell, transport } = yield* ClientContext
     const notify = (message: string) => Effect.sync(() => shell.notify(message))
 
     const clearDriver = (agentName: AgentName) =>
@@ -555,13 +557,13 @@ export const builtinDriver = defineClientExtension("@gent/driver-ui", {
  *
  * Reads the branch goal through `GoalRpc.Get` and refreshes on
  * `ExtensionStateChanged` pulses for `@gent/goal`. Renders one bottom-right
- * border label while a goal is pending on the current branch.
+ * border label while a goal is pending on the current branch, and collapses
+ * each goal continuation message to one line.
  */
 
 const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
   setup: Effect.gen(function* () {
-    const transport = yield* ClientTransport
-    const lifecycle = yield* ClientLifecycle
+    const { transport, lifecycle } = yield* ClientContext
 
     const snapshot = yield* sessionQuery({
       initial: Option.none<GoalSnapshot>(),
@@ -574,25 +576,90 @@ const builtinGoal = defineClientExtension(GOAL_EXTENSION_ID, {
       }),
     )
 
-    return borderLabelContribution({
-      position: "bottom-right",
-      priority: 40,
-      produce: () => {
-        const goal = snapshot.value().pipe(
-          Option.flatMap((value) => Option.fromUndefinedOr(value.goal)),
-          Option.filter((value) => value.status !== "complete"),
-        )
-        if (Option.isNone(goal)) return []
-        const parts = [`goal ${goal.value.status}`, `${goal.value.continuationsUsed}↻`]
-        Option.map(remainingTokens(goal.value), (remaining) => {
-          parts.push(`${remaining} left`)
-        })
-        let color: "info" | "warning" = "info"
-        if (goal.value.status !== "active") color = "warning"
-        return [{ text: parts.join(" · "), color }]
-      },
-    })
+    return clientContributions(
+      messageRendererContribution(GOAL_CONTEXT_MESSAGE_TYPE, () => (
+        <CollapsedRow label="↻ goal continuation" />
+      )),
+      borderLabelContribution({
+        position: "bottom-right",
+        priority: 40,
+        produce: () => {
+          const goal = snapshot.value().pipe(
+            Option.flatMap((value) => Option.fromUndefinedOr(value.goal)),
+            Option.filter((value) => value.status !== "complete"),
+          )
+          if (Option.isNone(goal)) return []
+          const parts = [`goal ${goal.value.status}`, `${goal.value.continuationsUsed}↻`]
+          Option.map(remainingTokens(goal.value), (remaining) => {
+            parts.push(`${remaining} left`)
+          })
+          let color: "info" | "warning" = "info"
+          if (goal.value.status !== "active") color = "warning"
+          return [{ text: parts.join(" · "), color }]
+        },
+      }),
+    )
   }),
+})
+
+// ── session message row ─────────────────────────────────────────────────────
+
+/** A message from another session names its sender on a line of its own. */
+const decodeSessionMessageDetails = Schema.decodeUnknownOption(SessionMessageDetails)
+
+/** The sender line fits the id: an auto-named child carries its whole task in the name. */
+const SENDER_NAME_MAX_COLUMNS = 32
+
+const graphemes = new Intl.Segmenter([], { granularity: "grapheme" })
+
+/** Cuts by terminal columns and whole graphemes, so a wide or combined character is never split. */
+const shortName = (name: string): string => {
+  const flat = name.replace(/\s+/g, " ").trim()
+  if (textWidth(flat) <= SENDER_NAME_MAX_COLUMNS) return flat
+  let kept = ""
+  for (const { segment } of graphemes.segment(flat)) {
+    if (textWidth(kept + segment) > SENDER_NAME_MAX_COLUMNS - 1) break
+    kept += segment
+  }
+  return `${kept.trimEnd()}…`
+}
+
+/** Who wrote a sent message: the relation, the cut name, and the short session id. */
+const senderLine = ({ from }: SessionMessageDetails): string => {
+  const who = Option.liftPredicate(from.relation, (relation) => relation !== "session").pipe(
+    Option.map((relation) => `your ${relation}`),
+    Option.getOrElse(() => "session"),
+  )
+  const name = Option.fromUndefinedOr(from.name).pipe(
+    Option.map((value) => ` "${shortName(value)}"`),
+    Option.getOrElse(() => ""),
+  )
+  return `» from ${who}${name} · ${from.sessionId.slice(0, 8)}`
+}
+
+/**
+ * The model reads the header `sessionMessageText` writes, then the text. The
+ * row puts the sender in its own muted line and `sessionMessageBody` removes
+ * the header, old rows included, so blank lines in a name or body stay whole.
+ * Details that do not decode draw the plain row.
+ */
+const builtinSessionMessages = defineClientExtension(SESSION_TOOLS_EXTENSION_ID, {
+  setup: Effect.succeed(
+    messageRendererContribution(SESSION_MESSAGE_TYPE, (props) => (
+      <Show
+        when={Option.getOrUndefined(decodeSessionMessageDetails(props.details))}
+        fallback={<UserRow {...props} />}
+      >
+        {(details) => (
+          <UserRow
+            {...props}
+            header={senderLine(details())}
+            content={sessionMessageBody(details().from, props.content)}
+          />
+        )}
+      </Show>
+    )),
+  ),
 })
 
 // ── connection widget ───────────────────────────────────────────────────────
@@ -708,7 +775,7 @@ const builtinConnection = defineClientExtension("@gent/connection", {
 
 const builtinSkills = defineClientExtension("@gent/skills-ui", {
   setup: Effect.gen(function* () {
-    const workspace = yield* ClientWorkspace
+    const { workspace } = yield* ClientContext
     // The store's reads and writes need `FileSystem` and `Path`. `onSelect`
     // is a plain sync callback from the composer with no Effect context of
     // its own, so the setup captures the services once and forks the write
@@ -729,7 +796,7 @@ const builtinSkills = defineClientExtension("@gent/skills-ui", {
       // is cheap and picks written by another `gent` process are seen too.
       items: (filter: string) =>
         Effect.gen(function* () {
-          const transport = yield* ClientTransport
+          const { transport } = yield* ClientContext
           const skills = yield* transport.request(ref(SkillsRpc.ListSkills), {})
           const store = yield* readFrecencyStore(workspace.home)
           const lookup = frecencyLookup(
@@ -776,6 +843,7 @@ export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinWake,
   builtinHerdr,
   builtinInteractions,
+  builtinSessionMessages,
   builtinSkills,
   builtinThreadView,
   builtinTools,

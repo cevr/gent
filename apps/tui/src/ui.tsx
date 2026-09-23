@@ -17,6 +17,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { useTheme } from "./theme"
+import type { MessageRowProps } from "./extensions/client-facets"
 
 // ── spinner clock ───────────────────────────────────────────────────────────
 
@@ -1013,6 +1014,82 @@ export function ToolFrame(props: ToolFrameProps) {
           </box>
         </Show>
       </Show>
+    </box>
+  )
+}
+
+// ── message rows ────────────────────────────────────────────────────────────
+
+/**
+ * The rows a user-role message draws: the plain rail row, and the one-line
+ * row a harness message collapses to. The transcript draws them by default,
+ * and a message renderer composes them for its own custom type.
+ */
+
+/** The rail row: images, the pending label, then the text; `header` is a muted line above it. */
+export function UserRow(props: MessageRowProps & { readonly header?: string }) {
+  const { theme } = useTheme()
+  const textColor = () => {
+    if (props.interjection) return theme.warning
+    return theme.text
+  }
+  const labelColor = () => {
+    if (props.interjection) return theme.warning
+    return theme.textMuted
+  }
+  const railColor = () => {
+    if (props.interjection) return theme.warning
+    return theme.primary
+  }
+  return (
+    <box
+      marginTop={1}
+      paddingLeft={1}
+      paddingRight={1}
+      flexDirection="column"
+      border={["left"]}
+      borderStyle="heavy"
+      borderColor={railColor()}
+    >
+      <Show when={props.images.length > 0}>
+        <For each={props.images}>
+          {(img) => (
+            <text style={{ fg: theme.info }}>[Image: {img.mediaType.replace("image/", "")}]</text>
+          )}
+        </For>
+      </Show>
+      <Show when={props.content.length > 0}>
+        <box flexDirection="column">
+          <Show when={props.header}>
+            {(header) => <text style={{ fg: theme.textMuted }}>{header()}</text>}
+          </Show>
+          <Show when={props.pendingMode}>
+            {(value) => (
+              <text>
+                <span style={{ fg: labelColor(), bold: true }}>[{value()}]</span>
+              </text>
+            )}
+          </Show>
+          <text style={{ fg: textColor() }}>
+            <span style={{ bold: true }}>{props.content}</span>
+          </text>
+        </box>
+      </Show>
+    </box>
+  )
+}
+
+/** One muted line behind the rail glyph, in place of the whole message. */
+export function CollapsedRow(props: { readonly label: string }) {
+  const { theme } = useTheme()
+  return (
+    <box marginTop={1} flexDirection="row">
+      <text width={1} flexShrink={0} style={{ fg: theme.textMuted }}>
+        ┃
+      </text>
+      <text paddingLeft={1} style={{ fg: theme.textMuted }}>
+        {props.label}
+      </text>
     </box>
   )
 }

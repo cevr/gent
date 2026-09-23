@@ -39,6 +39,8 @@ import { renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
+import { builtinClientModules } from "../src/extensions/builtins"
+import { clientContributions, defineClientExtension } from "../src/extensions/client-facets"
 
 // ── message-list.test ───────────────────────────────────────────────────────
 
@@ -604,6 +606,40 @@ function RegisteredToolMessageLists(props: { items: SessionItem[]; fullDetail?: 
   )
 }
 
+/** The transcript once the builtin client extensions, and so their message rows, have loaded. */
+function LoadedMessageList(props: { items: SessionItem[]; fullDetail?: boolean }) {
+  const extensionUI = useExtensionUI()
+  return (
+    <Show
+      when={extensionUI.messageRenderers().size > 0}
+      fallback={<text>loading message renderers</text>}
+    >
+      <MessageList
+        items={props.items}
+        disclosure="collapsed"
+        fullDetail={props.fullDetail}
+        syntaxStyle={syntaxStyle}
+        streaming={false}
+      />
+    </Show>
+  )
+}
+
+/** Render the loaded transcript and return its first frame past the load. */
+const renderLoaded = (items: SessionItem[], fullDetail?: boolean) =>
+  Effect.gen(function* () {
+    const setup = yield* Effect.promise(() =>
+      renderWithProviders(() => <LoadedMessageList items={items} fullDetail={fullDetail} />),
+    )
+    return yield* Effect.promise(() =>
+      waitForRenderedFrame(
+        setup,
+        (frame) => !frame.includes("loading message renderers"),
+        "message renderers",
+      ),
+    )
+  })
+
 describe("FX transcript treatment", () => {
   it.live("shows information excluded from model context in the transcript", () =>
     Effect.gen(function* () {
@@ -758,6 +794,83 @@ describe("FX transcript treatment", () => {
     )
   }
 
+  it.live(
+    "native history holds rows until client extensions load, then commits them rendered",
+    () =>
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void>()
+        const held = defineClientExtension("@test/held-load", {
+          setup: Deferred.await(release).pipe(Effect.as(clientContributions())),
+        })
+        const savedText: string[] = []
+        const goalMessage: ListMessage = {
+          ...userMessage("regular-message", "goal-held", "RAW-GOAL-TEXT keep going.", "queued"),
+          pendingMode: absent,
+          metadata: { customType: "goal-context", extensionId: "@gent/goal" },
+        }
+        const items: SessionItem[] = [
+          goalMessage,
+          ...Array.from({ length: 6 }, (_, index) =>
+            userMessage(
+              "regular-message",
+              `filler-${index}`,
+              `filler ${index}\nsecond line\nthird line`,
+              "queued",
+            ),
+          ),
+        ]
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => {
+              const renderer = useRenderer()
+              const capture = (event: CliRendererExternalOutputEvent) => {
+                savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+              }
+              renderer.on("external_output", capture)
+              onCleanup(() => renderer.off("external_output", capture))
+              return (
+                <NativeTranscript
+                  items={items}
+                  streaming={false}
+                  footerHeight={3}
+                  expanded={false}
+                  disclosure="collapsed"
+                  displayRevision={0}
+                  overlayOpen={false}
+                  renderItems={(visible) => (
+                    <MessageList
+                      items={visible}
+                      disclosure="collapsed"
+                      syntaxStyle={syntaxStyle}
+                      streaming={false}
+                    />
+                  )}
+                >
+                  <box />
+                </NativeTranscript>
+              )
+            },
+            { width: 60, height: 14, builtins: [...builtinClientModules, held] },
+          ),
+        )
+        // Held: the live view overflows, but nothing may reach scrollback yet.
+        for (let pass = 0; pass < 20; pass++) {
+          yield* Effect.promise(() => setup.flush())
+          yield* Effect.yieldNow
+        }
+        expect(savedText.join("")).toBe("")
+        yield* Deferred.complete(release, Effect.void)
+        yield* Effect.promise(() =>
+          waitForRenderedFrame(
+            setup,
+            () => savedText.join("").includes("goal continuation"),
+            "goal row in scrollback",
+          ),
+        )
+        expect(savedText.join("")).not.toContain("RAW-GOAL-TEXT")
+      }),
+  )
+
   it.live("goal continuations collapse to one line until full detail is on", () =>
     Effect.gen(function* () {
       const goalMessage: ListMessage = {
@@ -770,31 +883,12 @@ describe("FX transcript treatment", () => {
         pendingMode: absent,
         metadata: { customType: "goal-context", extensionId: "@gent/goal" },
       }
-      const collapsed = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={[goalMessage]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
-      const collapsedFrame = renderFrame(collapsed)
+      const collapsedFrame = yield* renderLoaded([goalMessage])
       expect(collapsedFrame).toContain("goal continuation")
       expect(collapsedFrame).not.toContain("Continue working")
-      const expanded = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={[goalMessage]}
-            disclosure="collapsed"
-            fullDetail={true}
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
-      expect(renderFrame(expanded)).toContain("Continue working")
+      const expandedFrame = yield* renderLoaded([goalMessage], true)
+      expect(expandedFrame).toContain("Continue working")
+      expect(expandedFrame).not.toContain("goal continuation")
     }),
   )
 
@@ -814,31 +908,12 @@ describe("FX transcript treatment", () => {
           details: { outcome: "fired", note: "Run bun test and report." },
         },
       }
-      const collapsed = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={[wakeMessage]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
-      const collapsedFrame = renderFrame(collapsed)
+      const collapsedFrame = yield* renderLoaded([wakeMessage])
       expect(collapsedFrame).toContain("alarm fired · Run bun test and report.")
       expect(collapsedFrame).not.toContain("fired at 2026")
-      const expanded = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={[wakeMessage]}
-            disclosure="collapsed"
-            fullDetail={true}
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
-      expect(renderFrame(expanded)).toContain("fired at 2026")
+      const expandedFrame = yield* renderLoaded([wakeMessage], true)
+      expect(expandedFrame).toContain("fired at 2026")
+      expect(expandedFrame).not.toContain("alarm fired ·")
     }),
   )
 
@@ -860,35 +935,15 @@ describe("FX transcript treatment", () => {
           },
         },
       }
-      const shown = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={[sent]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
-      const frame = renderFrame(shown)
+      const frame = yield* renderLoaded([sent])
       // A blank line in the name or the body leaves the header strip whole.
       expect(frame).toContain('» from your parent "auth refactor" · 0199aabb')
       expect(frame).toContain("Use the v2 token route.")
       expect(frame).toContain("Then rerun the suite.")
       expect(frame).not.toContain("Message from your parent")
       expect(frame).not.toContain("(session 0199aabbccdd)")
-      const expanded = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={[sent]}
-            disclosure="collapsed"
-            fullDetail={true}
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
-      expect(renderFrame(expanded)).toContain("Message from your parent")
+      const expandedFrame = yield* renderLoaded([sent], true)
+      expect(expandedFrame).toContain("Message from your parent")
     }),
   )
 
@@ -913,17 +968,7 @@ describe("FX transcript treatment", () => {
           details: { from },
         },
       }
-      const shown = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={[sent]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
-      const frame = renderFrame(shown)
+      const frame = yield* renderLoaded([sent])
       expect(frame).toContain('» from your child "delegate: Use session.send with…" · 01a0ca0c')
       expect(frame).toContain("hello from the child")
       // The status line is for the model; the row already says who is writing.
@@ -953,17 +998,7 @@ describe("FX transcript treatment", () => {
           details: { from },
         },
       }
-      const shown = yield* Effect.promise(() =>
-        renderWithProviders(() => (
-          <MessageList
-            items={[sent]}
-            disclosure="collapsed"
-            syntaxStyle={syntaxStyle}
-            streaming={false}
-          />
-        )),
-      )
-      const frame = renderFrame(shown)
+      const frame = yield* renderLoaded([sent])
       expect(frame).toContain("old question")
       expect(frame).not.toContain("Message from your child")
       // Wide characters count two columns: 15 of them fit before the ellipsis, and the id stays on the line.

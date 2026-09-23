@@ -21,9 +21,7 @@ import { ref } from "@gent/core/extensions/api"
 import {
   clientCommandContribution,
   clientContributions,
-  ClientLifecycle,
-  ClientShell,
-  ClientTransport,
+  ClientContext,
   defineClientExtension,
   type ActiveExtensionSession,
   type ExtensionAgentDetail,
@@ -211,10 +209,9 @@ export const makeAgentsController = (
   fetchDetail: (
     key: Pick<AgentRowEntry, "sessionId" | "branchId">,
   ) => Effect.Effect<ExtensionAgentDetail, { readonly message: string }>,
-): Effect.Effect<AgentsController, never, ClientTransport | ClientShell | ClientLifecycle> =>
+): Effect.Effect<AgentsController, never, ClientContext> =>
   Effect.gen(function* () {
-    const transport = yield* ClientTransport
-    const shell = yield* ClientShell
+    const { transport, shell } = yield* ClientContext
     // The pane refetches across session switches (on `current()` changing and on
     // a 2 s poll), so the session query owns the guard that drops a reply for the
     // session the shell already left.
@@ -578,9 +575,7 @@ export function AgentsPane(props: {
 
 export default defineClientExtension(AGENTS_VIEW_EXTENSION_ID, {
   setup: Effect.gen(function* () {
-    const transport = yield* ClientTransport
-    const shell = yield* ClientShell
-    const lifecycle = yield* ClientLifecycle
+    const { transport, shell, lifecycle } = yield* ClientContext
 
     const controller = yield* makeAgentsController(
       (query) =>
