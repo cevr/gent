@@ -32,6 +32,7 @@ import {
   PACKAGE_SURFACE_MANIFESTS,
   type PackageJson,
 } from "./guards"
+import gentRules from "./gent-rules"
 
 const trackedFileNames = Effect.promise(() =>
   Bun.$`git ls-files --cached --others --exclude-standard`.text(),
@@ -81,7 +82,7 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
   const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
   return [
     ...findUnmatchedOverrideGlobs(OXLINT_CONFIG, configText, config, trackedFiles),
-    ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, rootRules),
+    ...findUnenabledPluginRules(LINT_PLUGIN, pluginText, Object.keys(gentRules.rules), rootRules),
   ]
 })
 

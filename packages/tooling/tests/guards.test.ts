@@ -113,6 +113,17 @@ describe("blanket eslint disable checker", () => {
       ),
     ).toEqual([])
   })
+
+  test("a file named like a fixture outside a fixtures directory is not exempt", () => {
+    const block = `/* ${directive} @typescript-eslint/no-unsafe-type-assertion -- probe */`
+    expect(
+      [
+        "packages/tooling/src/fixture-runner.ts",
+        "packages/e2e/src/pty-fixture.ts",
+        "packages/sdk/src/fixtures.ts",
+      ].map((file) => findBannedEslintDisableBlocks(file, block).length),
+    ).toEqual([1, 1, 1])
+  })
 })
 
 // ── alias test layers ───────────────────────────────────────────────────────
@@ -792,11 +803,13 @@ describe("a defined rule must be enabled", () => {
       create() {},
     },
   }`
+  const defined = ["no-sleep", "no-make-unsafe"]
 
   test("a rule the root config enables is silent", () => {
     const findings = findUnenabledPluginRules(
       PLUGIN,
       plugin,
+      defined,
       new Set(["gent/no-sleep", "gent/no-make-unsafe"]),
     )
     expect(findings).toEqual([])
@@ -805,15 +818,30 @@ describe("a defined rule must be enabled", () => {
   test("a rule the root config never enables is reported", () => {
     // no-make-unsafe shipped unenabled, and could not be enabled at all:
     // seven live makeUnsafe calls would have failed it.
-    const findings = findUnenabledPluginRules(PLUGIN, plugin, new Set(["gent/no-sleep"]))
+    const findings = findUnenabledPluginRules(PLUGIN, plugin, defined, new Set(["gent/no-sleep"]))
     expect(messages(findings)).toEqual([
       expect.stringContaining("`gent/no-make-unsafe` is defined but the root config never enables"),
     ])
   })
 
   test("the finding points at the line the rule is defined on", () => {
-    const findings = findUnenabledPluginRules(PLUGIN, plugin, new Set(["gent/no-sleep"]))
+    const findings = findUnenabledPluginRules(PLUGIN, plugin, defined, new Set(["gent/no-sleep"]))
     expect(findings.map((finding) => finding.line)).toEqual([5])
+  })
+
+  test("the rule set comes from the plugin object, not from how its text is indented", () => {
+    // The text scrape read only a four-space `"name": {` key; a reformat
+    // would have hidden every rule from the guard.
+    const reformatted = `rules: { "no-sleep": { create() {} }, "no-make-unsafe": { create() {} } }`
+    const findings = findUnenabledPluginRules(
+      PLUGIN,
+      reformatted,
+      defined,
+      new Set(["gent/no-sleep"]),
+    )
+    expect(findings.map((finding) => [finding.line, finding.message.split("`")[1]])).toEqual([
+      [1, "gent/no-make-unsafe"],
+    ])
   })
 })
 

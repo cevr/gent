@@ -114,7 +114,8 @@ const blanketDisableDirective =
 
 const blockDisableDirective = /(?:\/\*|\/\/)\s*(?:es|ox)lint-disable(?:\s|$)/
 
-const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)(?:\/|\.|\b)/
+/** A file inside a fixture directory; a basename such as `fixture-runner.ts` is not one. */
+const fixtureFilePattern = /(?:^|\/)(?:fixtures?|__fixtures__)\//
 
 const isExplicitFixtureFile = (file: string): boolean => fixtureFilePattern.test(file)
 
@@ -1061,30 +1062,28 @@ export const findUnmatchedOverrideGlobs = (
 // (b) A plugin rule the root config never enables
 // ---------------------------------------------------------------------------
 
-/** `"<name>": {` inside the plugin's `rules` object literal. */
-const RULE_KEY = /^\s{4}"([a-z0-9-]+)":\s*\{/
+/** The line a rule's `"<name>":` key sits on in the plugin text, for a finding that points at it. */
+const lineOfRule = (pluginText: string, rule: string): number =>
+  Math.max(1, pluginText.split("\n").findIndex((line) => line.includes(`"${rule}":`)) + 1)
 
+/**
+ * `ruleNames` is `Object.keys(plugin.rules)` of the loaded plugin, so the set
+ * does not depend on how the plugin text is formatted; the text only places
+ * the finding.
+ */
 export const findUnenabledPluginRules = (
   pluginFile: string,
   pluginText: string,
+  ruleNames: ReadonlyArray<string>,
   rootRules: ReadonlySet<string>,
-): ReadonlyArray<Finding> => {
-  const findings: Array<Finding> = []
-  for (const [index, line] of pluginText.split("\n").entries()) {
-    const name = Option.flatMap(Option.fromNullishOr(RULE_KEY.exec(line)), (match) =>
-      Option.fromNullishOr(match[1]),
-    )
-    if (Option.isNone(name)) continue
-    const rule = name.value
-    if (rootRules.has(`gent/${rule}`)) continue
-    findings.push({
+): ReadonlyArray<Finding> =>
+  ruleNames
+    .filter((rule) => !rootRules.has(`gent/${rule}`))
+    .map((rule) => ({
       file: pluginFile,
-      line: index + 1,
+      line: lineOfRule(pluginText, rule),
       message: `lint rule \`gent/${rule}\` is defined but the root config never enables it; enable it, or delete the rule and its fixtures`,
-    })
-  }
-  return findings
-}
+    }))
 
 // ---------------------------------------------------------------------------
 // (c) A GENT_* variable with a reader but nothing to set it
