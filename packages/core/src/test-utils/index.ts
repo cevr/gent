@@ -39,7 +39,6 @@ export {
   ToolSchemaRevision,
   ToolSourceRevision,
 } from "../domain/capability.js"
-export { ExternalToolRunner } from "../domain/driver.js"
 export { type LoadedExtension } from "../domain/extension.js"
 export { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
 export { messageSingleText } from "../domain/message.js"
@@ -58,4 +57,4 @@ export {
 } from "../runtime/model-context.js"
 export { SessionRuntime } from "../runtime/session.js"
 export { captureCurrentToolBinding } from "../runtime/tools.js"
-export { buildTurnPromptSections, toolResultMessageIdForTurn } from "../runtime/turn.js"
+export { toolResultMessageIdForTurn } from "../runtime/turn.js"
