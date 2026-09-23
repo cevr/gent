@@ -6,6 +6,7 @@ import { buildSyntaxStyle, useTheme } from "./theme"
 import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
 import { formatHeadTail, headTail } from "@gent/core/protocol"
 import {
+  CellOperationReceipts,
   decodeToolOutput,
   decodeToolOutputOption,
   describeCellCode,
@@ -334,12 +335,6 @@ function BashToolRenderer(props: ToolRendererProps) {
  * Expanded: code, receipts, full display, bindings, and failure detail
  */
 
-const OperationReceipt = Schema.Struct({
-  tool: Schema.String,
-  outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
-  summary: Schema.String,
-})
-
 /** Success and failure results share one lenient shape; every field is optional. */
 const CellOutputSchema = Schema.Struct({
   _tag: Schema.optional(Schema.String),
@@ -389,16 +384,10 @@ function CellToolRenderer(props: ToolRendererProps) {
     Option.getOrElse(Option.fromNullishOr(props.toolCall.operations), () => []),
   )
   const receipts = createMemo((): ReadonlyArray<OperationLine> =>
-    Option.match(
-      decodeToolOutputOption(
-        Schema.Struct({ operations: Schema.optional(Schema.Array(OperationReceipt)) }),
-        props.toolCall.output,
-      ),
-      {
-        onNone: () => [],
-        onSome: (value) => value.operations ?? [],
-      },
-    ),
+    Option.match(decodeToolOutputOption(CellOperationReceipts, props.toolCall.output), {
+      onNone: () => [],
+      onSome: (value) => value.operations ?? [],
+    }),
   )
 
   const failure = createMemo(() =>
