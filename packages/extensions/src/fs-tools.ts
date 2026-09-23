@@ -18,6 +18,7 @@ import {
   ExtensionContext,
   ExtensionHost,
   runProcess,
+  splitLines,
   tool,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
@@ -614,15 +615,6 @@ const ReadResult = Schema.Struct({
   /** The 1-indexed line to pass as `offset` to continue. Absent when the read reached the end. */
   nextOffset: Schema.optional(Schema.Finite),
 })
-
-/** The lines of a text. A trailing newline ends the last line; it does not start one. */
-const splitLines = (text: string): Array<string> => {
-  if (text.length === 0) return []
-  return text.replace(/\n$/, "").split("\n")
-}
-
-/** How many lines a text holds, by the `splitLines` rule. */
-export const lineCount = (text: string): number => splitLines(text).length
 
 /** `1 line`, `3 lines`: the counted noun of a one-line tool summary. */
 export const countOf = (count: number, noun: string, plural = `${noun}s`): string => {
