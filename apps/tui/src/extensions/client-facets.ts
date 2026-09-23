@@ -32,11 +32,11 @@ import type { RGBA } from "@opentui/core"
 // ── effect boundary ─────────────────────────────────────────────────────────
 
 /**
- * ClientEffect — the Effect-typed authoring surface for TUI client extensions.
+ * The Effect-typed authoring surface for TUI client extensions.
  *
  * Extension setup reads dependencies from `ClientDeps` and returns
- * `ClientContributions` through an Effect, with errors surfaced
- * on the typed `ClientSetupError` channel.
+ * `ClientContributions` through an Effect. A setup that dies is recorded as
+ * that extension's load failure; the rest still load.
  *
  * The runtime accepts only the Effect setup shape.
  *
@@ -53,15 +53,6 @@ import type { RGBA } from "@opentui/core"
  * `GentRuntime`) live downstream of `@gent/core`.
  */
 
-// ── Errors ────────────────────────────────────────────────────────────────
-
-/** Failure surfaced from a client extension's `setup` Effect. */
-export class ClientSetupError extends Schema.TaggedError<ClientSetupError>()("ClientSetupError", {
-  extensionId: Schema.String,
-  message: Schema.String,
-  cause: Schema.optional(Schema.Unknown),
-}) {}
-
 // ── Dependencies ──────────────────────────────────────────────────────────
 
 /**
@@ -72,21 +63,6 @@ export class ClientSetupError extends Schema.TaggedError<ClientSetupError>()("Cl
  * extension that yields it declares a wider `R`.
  */
 type ClientDeps = FileSystem.FileSystem | Path.Path
-
-// ── ClientEffect ──────────────────────────────────────────────────────────
-
-/**
- * An Effect that returns a value, may fail with `ClientSetupError`, and may
- * read from any subset of services its runtime provides. `R` defaults to
- * `ClientDeps` — the floor — so a setup that only needs `FileSystem`/`Path`
- * compiles without ceremony. An extension that yields `ClientContext` widens
- * `R` itself; the loader's runtime provides it.
- */
-export type ClientEffect<Value, Error = ClientSetupError, Services = ClientDeps> = Effect.Effect<
-  Value,
-  Error,
-  Services
->
 
 // ── activity facet ──────────────────────────────────────────────────────────
 
@@ -900,12 +876,13 @@ export const autocompleteContribution = (opts: AutocompleteContribution): Client
  * A client extension's setup is an Effect that yields its dependencies
  * from the per-provider TUI runtime — `ClientDeps` (FileSystem | Path) by
  * default, widened to `ClientContext` when the extension yields it; the
- * per-provider `ManagedRuntime` provides it. Errors flow on the typed
- * `ClientSetupError` channel.
+ * per-provider `ManagedRuntime` provides it. The setup handles its own
+ * failures; one that dies anyway is that extension's load failure, since the
+ * loader catches the whole cause and names it, and the rest still load.
  */
-type ExtensionClientSetup<Services extends ClientRuntimeServices = ClientDeps> = ClientEffect<
+type ExtensionClientSetup<Services extends ClientRuntimeServices = ClientDeps> = Effect.Effect<
   ClientContributions,
-  ClientSetupError,
+  never,
   Services
 >
 

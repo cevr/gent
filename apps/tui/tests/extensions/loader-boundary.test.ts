@@ -10,9 +10,7 @@ import {
   clientCommandContribution,
   clientContributions,
   type ClientContributions,
-  type ClientEffect,
   type ClientRuntime,
-  ClientSetupError,
   ClientContext,
   type ClientShellTransport,
   type ClientTransport,
@@ -465,19 +463,20 @@ export default {
 
   it.live("Effect setup is run through the runtime; FileSystem is provided", () =>
     Effect.gen(function* () {
-      const fxSetup: ClientEffect<ClientContributions> = Effect.gen(function* () {
-        // Prove we can reach a FileSystem from the runtime.
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
-        // Touch both services so unused imports don't get optimized away.
-        expect(Predicate.isFunction(fs.readFileString)).toBe(true)
-        expect(Predicate.isFunction(path.join)).toBe(true)
-        return autocompleteContribution({
-          prefix: "!",
-          title: "effect",
-          items: () => [{ id: "y", label: "y" }],
+      const fxSetup: Effect.Effect<ClientContributions, never, FileSystem.FileSystem | Path.Path> =
+        Effect.gen(function* () {
+          // Prove we can reach a FileSystem from the runtime.
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          // Touch both services so unused imports don't get optimized away.
+          expect(Predicate.isFunction(fs.readFileString)).toBe(true)
+          expect(Predicate.isFunction(path.join)).toBe(true)
+          return autocompleteContribution({
+            prefix: "!",
+            title: "effect",
+            items: () => [{ id: "y", label: "y" }],
+          })
         })
-      })
       const ext: ExtensionClientModule = { id: "@test/effect", setup: fxSetup }
       const result = yield* loadTuiExtensions({
         builtins: [ext],
@@ -502,12 +501,7 @@ export default {
       }
       const broken: ExtensionClientModule = {
         id: "@test/broken",
-        setup: Effect.fail(
-          new ClientSetupError({
-            extensionId: "@test/broken",
-            message: "setup failed",
-          }),
-        ),
+        setup: Effect.die("setup failed"),
       }
       const result = yield* loadTuiExtensions({
         builtins: [good, broken],
