@@ -109,15 +109,13 @@ import {
   ToolRunner,
   type TurnInterruption,
 } from "./tools.js"
-import { turnBoundary, withWideEvent } from "./wide-event-boundary.js"
+import { withWideEvent } from "effect-wide-event"
 import { Entity, Sharding, ShardingConfig } from "effect/unstable/cluster"
 import type { SqlClient } from "effect/unstable/sql"
 import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import {
   buildResourceLayer,
   type CurrentExtensionHostContext,
-  DriverRegistry,
-  ExtensionHostContextProvider,
   ExtensionRegistry,
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
@@ -125,7 +123,7 @@ import {
   SessionProfileCache,
   type SessionProfileCacheService,
 } from "./extension-host.js"
-import type { ConfigService } from "./config.js"
+import type { ConfigService, RuntimeEnvironment } from "./config.js"
 import type {
   CapabilityError,
   CapabilityNotFoundError,
@@ -209,12 +207,8 @@ export class AgentLoopSessionGovernance extends Context.Service<
  *
  * One module owns admission, follow-up batching, steering, the durable
  * checkpoint, the wake decision, and the question "does this loop still hold
- * that message". Before this module those six concerns were split across the
- * actor, the behavior, the pure state algebra, and the turn executor, and the
- * queue representation — `steering`, `followUp`, `inFlight` — was read
- * directly by all four. Both peers that implement durable steering give it a
- * module of its own: opencode `packages/core/src/session/inbox.ts` and codex
- * `codex-rs/core/src/session/input_queue.rs`.
+ * that message". No other module reads the queue representation —
+ * `steering`, `followUp`, `inFlight`.
  *
  * ## The interface
  *
@@ -918,7 +912,7 @@ export const makeLoopInbox = (
     } satisfies LoopInbox
   })
 
-// ── agent-loop.worker ───────────────────────────────────────────────────────
+// ── worker ──────────────────────────────────────────────────────────────────
 
 type AgentLoopWorkerContext<E = never, R = never> = {
   readonly sessionId: SessionId
@@ -1063,13 +1057,12 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
       yield* scope.runTurn(startState).pipe(
         Effect.annotateLogs({ sessionId: scope.sessionId, branchId: scope.branchId }),
         Effect.withSpan("AgentLoop.turn"),
-        withWideEvent(
-          turnBoundary(
-            scope.sessionId,
-            scope.branchId,
-            startState.agentOverride ?? DEFAULT_AGENT_NAME,
-          ),
-        ),
+        withWideEvent({
+          service: "agent-loop",
+          method: "turn",
+          actor: startState.agentOverride ?? DEFAULT_AGENT_NAME,
+          envelope: { sessionId: scope.sessionId, branchId: scope.branchId },
+        }),
         Effect.matchCauseEffect({
           onFailure: (cause) => failTurnWorker(cause).pipe(scope.interruptSemaphore.withPermits(1)),
           onSuccess: (outcome) =>
@@ -1332,7 +1325,6 @@ const makeAgentLoopBehavior = (
   | SqlClient.SqlClient
   | ModelResolver
   | ExtensionRegistry
-  | DriverRegistry
   | EventPublisher
   | ToolRunner
   | ProcessLocalToolReplay
@@ -1341,13 +1333,13 @@ const makeAgentLoopBehavior = (
   | ModelRegistry
   | ChildProcessSpawner
   | GentPlatform
+  | RuntimeEnvironment
   | FileSystem.FileSystem
   | Path.Path
 > =>
   Effect.gen(function* () {
     yield* ModelResolver
     const extensionRegistry = yield* ExtensionRegistry
-    const driverRegistry = yield* DriverRegistry
     const eventPublisher = yield* EventPublisher
     yield* ToolCallBindingStorage
     yield* TurnRecordStorage
@@ -1394,7 +1386,6 @@ const makeAgentLoopBehavior = (
       target.sessionId === sessionId && target.branchId === branchId
 
     const hostProvider = yield* makeExtensionHostContextProvider({
-      extensionRegistry,
       host,
       sessionControl: {
         queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> => {
@@ -1416,11 +1407,9 @@ const makeAgentLoopBehavior = (
         sessionId,
         branchId,
         profileCache,
-        defaults: {
-          driverRegistry,
-          baseSections,
-        },
-      }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider)),
+        hostProvider,
+        defaults: { baseSections },
+      }).pipe(Effect.provideService(ExtensionRegistry, extensionRegistry)),
     )
 
     const loopScope = yield* Effect.scope
@@ -1589,7 +1578,7 @@ const makeAgentLoopBehavior = (
     } satisfies AgentLoopBehavior
   })
 
-// ── agent-loop.actor ────────────────────────────────────────────────────────
+// ── actor ───────────────────────────────────────────────────────────────────
 
 /**
  * `AgentLoop` as `Actor.fromEntity`.
@@ -2451,8 +2440,8 @@ export const AgentLoopLiveActor = (config: {
       Effect.map((build) =>
         Actor.toLayer(AgentLoop, build, {
           // Long-lived turn execution is owned by AgentLoopBehavior's worker queue.
-          // `concurrency: "unbounded"` keeps short ops (RecordToolResult,
-          // RespondInteraction, Steer) from waiting on unrelated mailbox handlers.
+          // `concurrency: "unbounded"` keeps short ops (RespondInteraction,
+          // Steer) from waiting on unrelated mailbox handlers.
           concurrency: "unbounded",
         }),
       ),

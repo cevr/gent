@@ -50,13 +50,12 @@ import {
 import {
   CellBranchTools,
   CellExecution,
-  CellExecutionStorage,
+  CellStorage,
   CellExtension,
   cellInteractionOwner,
   CellOperationHost,
   CellTool,
   CellToolCallSuspended,
-  CellToolOperationStorage,
   cellToolResultValue,
   dispatchCell,
   executeBoundCellTool,
@@ -1599,19 +1598,17 @@ const prepareCell = Effect.gen(function* () {
       ],
     }),
   )
-  yield* (yield* CellExecutionStorage).claim(cellToolHost)
+  yield* (yield* CellStorage).executions.claim(cellToolHost)
 })
 
 const currentHostParams = Effect.gen(function* () {
   const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
   const hostProvider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
-    extensionRegistry: profile.registryService,
   })
   const turnProfile = {
     turnGenerationId: profile.generationId,
     turnExtensionRegistry: profile.registryService,
-    turnDriverRegistry: profile.driverRegistryService,
     turnBaseSections: profile.baseSections,
     turnHostCtx: hostProvider.forRun(cellToolHost),
   }
@@ -1713,7 +1710,7 @@ it.scopedLive(
         })
         expect((yield* host.call(invalid).pipe(Effect.flip))._tag).toBe("CellEvaluationError")
         expect((yield* host.call(invalid).pipe(Effect.flip))._tag).toBe("CellEvaluationError")
-        const operations = yield* CellToolOperationStorage
+        const operations = (yield* CellStorage).operations
         const failed = yield* operations.get({ cell: cellToolHost, operationId: "invalid" })
         expect(failed.state._tag).toBe("Completed")
         if (failed.state._tag === "Completed") expect(failed.state.result.isFailure).toBe(true)
@@ -1765,7 +1762,7 @@ it.scopedLive(
           "StorageError",
         )
         expect(yield* Ref.get(approvalCalls)).toBe(2)
-        expect((yield* (yield* CellExecutionStorage).claim(cellToolHost))._tag).toBe("Incomplete")
+        expect((yield* (yield* CellStorage).executions.claim(cellToolHost))._tag).toBe("Incomplete")
         const running = yield* host.call(requestToolHost("3", "interrupt")).pipe(Effect.forkScoped)
         yield* Deferred.await(started)
         yield* Fiber.interrupt(running)
@@ -1866,7 +1863,7 @@ it.scopedLive(
             expect(result.result).toBe(true)
             expect(result.id).toBe(first.toolCallId)
             expect(yield* Ref.get(calls)).toBe(2)
-            expect((yield* (yield* CellExecutionStorage).claim(cellToolHost))._tag).toBe(
+            expect((yield* (yield* CellStorage).executions.claim(cellToolHost))._tag).toBe(
               "Incomplete",
             )
             const pending = yield* (yield* makeCellToolHost(hostParams))
@@ -1893,7 +1890,7 @@ it.scopedLive(
             if (mismatch._tag === "ToolBindingReplayError")
               expect(mismatch.reason).toBe("SourceMismatch")
             expect(
-              (yield* (yield* CellToolOperationStorage).get({
+              (yield* (yield* CellStorage).operations.get({
                 cell: cellToolHost,
                 operationId: "2",
               })).state._tag,
@@ -1912,7 +1909,7 @@ it.scopedLive(
             expect(recovered.result).toMatchObject({ stateLost: true })
             expect(yield* Ref.get(calls)).toBe(4)
             expect(
-              (yield* (yield* CellToolOperationStorage).listForToolCall(cellToolHost)).map(
+              (yield* (yield* CellStorage).operations.listForToolCall(cellToolHost)).map(
                 ({ operation }) => operation.state._tag,
               ),
             ).toEqual(["Completed", "Completed"])
@@ -2698,7 +2695,7 @@ describe("branch cell lifetime", () => {
           },
           {
             send: false,
-            code: "const h = await tools.call('child-handle', {_tag: 'get'}); const reply = await tools.call('read_session', {sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.call('delegate.list', {}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.extracted === false && reply.content.includes('verified child result')",
+            code: "const h = await tools.call('child-handle', {_tag: 'get'}); const reply = await tools.call('read_session', {sessionId: h.sessionId, branchId: h.branchId}); const kids = await tools.call('delegate.list', {}); kids.length === 2 && kids.every((kid) => kid.completed) && reply.messageCount > 0 && reply.content.includes('verified child result')",
           },
         ]
         const steps = turns.flatMap<SequenceStep>((turn, index) => [
@@ -2938,7 +2935,7 @@ describe("branch cell lifetime", () => {
                 if (Predicate.isUndefined(pid)) return yield* Effect.die("Missing active worker")
                 yield* client.steer.command({
                   command: SteerCommand.make({
-                    _tag: "Interrupt",
+                    _tag: "Cancel",
                     sessionId,
                     branchId: targetBranch,
                     requestId: RequestId.make(yield* platform.randomId),
@@ -3024,13 +3021,11 @@ const delegateToolContext = Effect.fn("test.delegateToolContext")(function* (par
   readonly sessionId: SessionId
   readonly branchId: BranchId
 }) {
-  const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
   // Outside a loop the facade has no session control, so the cancellation the
   // tool steers would die. The runtime is the same door the loop opens.
   const runtime = yield* SessionRuntime
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
-    extensionRegistry: profile.registryService,
     sessionControl: {
       queueFollowUp: (input) => runtime.queueFollowUp(input),
       dequeueFollowUp: (input) => runtime.dequeueFollowUp(input),
@@ -3224,7 +3219,7 @@ it.scopedLive(
               ],
             }),
           )
-          const cells = yield* CellExecutionStorage
+          const cells = (yield* CellStorage).executions
           if (state !== "unadmitted" && state !== "revoked") yield* cells.claim(cell)
           if (state === "completed") yield* cells.complete(cell, savedResult)
           const profile = yield* (yield* SessionProfileCache).resolve("/tmp")
@@ -3235,7 +3230,7 @@ it.scopedLive(
             )
             if (Option.isNone(identity)) return yield* Effect.die("Missing child start binding")
             const prompt = "Admitted before the worker was lost"
-            const admitted = yield* (yield* CellToolOperationStorage).admit({
+            const admitted = yield* (yield* CellStorage).operations.admit({
               cell,
               operationId: "unknown-child-start",
               binding: identity.value,
@@ -3272,7 +3267,6 @@ it.scopedLive(
           if (state === "waiting") {
             const host = yield* makeExtensionHostContextProvider({
               host: testHostFacts().host,
-              extensionRegistry: profile.registryService,
             })
             const selected = yield* captureCurrentToolBinding("approve")
             if (Option.isNone(selected)) return yield* Effect.die("Missing approval binding")
@@ -3283,7 +3277,6 @@ it.scopedLive(
               profile: {
                 turnGenerationId: profile.generationId,
                 turnExtensionRegistry: profile.registryService,
-                turnDriverRegistry: profile.driverRegistryService,
                 turnBaseSections: profile.baseSections,
                 turnHostCtx: host.forRun(cell),
               },
@@ -3472,7 +3465,7 @@ const makeFixture = Effect.fn("test.makeCellCall")(function* (suffix: string) {
 it.live("admits a cell once under concurrent claims and retains its first result", () =>
   Effect.gen(function* () {
     const address = yield* makeFixture("concurrent")
-    const storage = yield* CellExecutionStorage
+    const storage = (yield* CellStorage).executions
     expect(yield* storage.get(address)).toEqual(Option.none())
     const claims = yield* Effect.all(
       Array.from({ length: 8 }, () => storage.claim(address)),
@@ -3505,7 +3498,7 @@ it.live("admits a cell once under concurrent claims and retains its first result
 it.live("denies cross-workspace and cross-branch claims and completions", () =>
   Effect.gen(function* () {
     const address = yield* makeFixture("ownership")
-    const storage = yield* CellExecutionStorage
+    const storage = (yield* CellStorage).executions
     const result = Prompt.toolResultPart({
       id: address.toolCallId,
       name: "cell",
@@ -3552,7 +3545,7 @@ it.live("denies cross-workspace and cross-branch claims and completions", () =>
 it.live("rejects unclaimed and mismatched results and removes receipts with the message", () =>
   Effect.gen(function* () {
     const address = yield* makeFixture("integrity")
-    const storage = yield* CellExecutionStorage
+    const storage = (yield* CellStorage).executions
     const sql = yield* SqlClient.SqlClient
     const result = Prompt.toolResultPart({
       id: address.toolCallId,
@@ -3589,7 +3582,7 @@ it.live("rejects unclaimed and mismatched results and removes receipts with the 
 it.live("rejects admission inside a caller transaction before granting execution", () =>
   Effect.gen(function* () {
     const address = yield* makeFixture("transaction")
-    const storage = yield* CellExecutionStorage
+    const storage = (yield* CellStorage).executions
     const sql = yield* SqlClient.SqlClient
     const rejected = yield* storage.claim(address).pipe(sql.withTransaction, Effect.flip)
     expect(Schema.is(StorageError)(rejected)).toBe(true)
@@ -3615,7 +3608,7 @@ it.scopedLive(
         Effect.gen(function* () {
           const context = yield* Layer.build(storageLayer)
           return yield* Effect.gen(function* () {
-            const storage = yield* CellExecutionStorage
+            const storage = (yield* CellStorage).executions
             const interrupted = yield* makeFixture("interrupted")
             const completed = yield* makeFixture("completed")
             yield* storage.claim(interrupted)
@@ -3636,7 +3629,7 @@ it.scopedLive(
         Effect.gen(function* () {
           const context = yield* Layer.build(storageLayer)
           return yield* Effect.gen(function* () {
-            const storage = yield* CellExecutionStorage
+            const storage = (yield* CellStorage).executions
             expect(yield* storage.claim(first.interrupted)).toEqual({ _tag: "Incomplete" })
             expect(yield* storage.claim(first.completed)).toEqual({
               _tag: "Completed",
@@ -3700,8 +3693,8 @@ const requestOperationStorage = InteractionRequestRecord.make({
 it.live("admits an operation once and preserves its original input, binding, and result", () =>
   Effect.gen(function* () {
     yield* fixture
-    const outer = yield* CellExecutionStorage
-    const storage = yield* CellToolOperationStorage
+    const outer = (yield* CellStorage).executions
+    const storage = (yield* CellStorage).operations
     expect(Schema.is(StorageError)(yield* storage.admit(params).pipe(Effect.flip))).toBe(true)
     yield* outer.claim(cellOperationStorage)
     const claims = yield* Effect.all(
@@ -3769,8 +3762,8 @@ it.scopedLive(
   () =>
     Effect.gen(function* () {
       yield* fixture
-      yield* (yield* CellExecutionStorage).claim(cellOperationStorage)
-      const storage = yield* CellToolOperationStorage
+      yield* (yield* CellStorage).executions.claim(cellOperationStorage)
+      const storage = (yield* CellStorage).operations
       const approval = yield* ApprovalService
       const events = yield* EventStorage
       const sql = yield* SqlClient.SqlClient
@@ -3846,8 +3839,8 @@ it.scopedLive(
 it.live("never leaves an approval behind when its operation link fails", () =>
   Effect.gen(function* () {
     yield* fixture
-    yield* (yield* CellExecutionStorage).claim(cellOperationStorage)
-    const storage = yield* CellToolOperationStorage
+    yield* (yield* CellStorage).executions.claim(cellOperationStorage)
+    const storage = (yield* CellStorage).operations
     const interactions = yield* InteractionStorage
     const sql = yield* SqlClient.SqlClient
     yield* storage.admit(params)
@@ -3879,8 +3872,8 @@ it.live(
   () =>
     Effect.gen(function* () {
       yield* fixture
-      yield* (yield* CellExecutionStorage).claim(cellOperationStorage)
-      const storage = yield* CellToolOperationStorage
+      yield* (yield* CellStorage).executions.claim(cellOperationStorage)
+      const storage = (yield* CellStorage).operations
       expect(yield* storage.listForToolCall(cellOperationStorage)).toEqual([])
       yield* storage.admit(params)
       yield* storage.suspend(key, requestOperationStorage)
@@ -3937,8 +3930,8 @@ it.live(
 it.live("binds a decision to one waiting operation and grants one resume attempt", () =>
   Effect.gen(function* () {
     yield* fixture
-    yield* (yield* CellExecutionStorage).claim(cellOperationStorage)
-    const storage = yield* CellToolOperationStorage
+    yield* (yield* CellStorage).executions.claim(cellOperationStorage)
+    const storage = (yield* CellStorage).operations
     const interactions = yield* InteractionStorage
     const first = yield* storage.admit(params)
     const peer = { ...params, operationId: "2" }
@@ -3983,8 +3976,8 @@ it.live(
   () =>
     Effect.gen(function* () {
       yield* fixture
-      yield* (yield* CellExecutionStorage).claim(cellOperationStorage)
-      const storage = yield* CellToolOperationStorage
+      yield* (yield* CellStorage).executions.claim(cellOperationStorage)
+      const storage = (yield* CellStorage).operations
       const sql = yield* SqlClient.SqlClient
       yield* storage.admit(params)
       const hidden = yield* storage
@@ -4017,9 +4010,9 @@ it.live(
 it.live("does not admit external work inside a caller transaction or after cell completion", () =>
   Effect.gen(function* () {
     yield* fixture
-    const outer = yield* CellExecutionStorage
+    const outer = (yield* CellStorage).executions
     yield* outer.claim(cellOperationStorage)
-    const storage = yield* CellToolOperationStorage
+    const storage = (yield* CellStorage).operations
     const sql = yield* SqlClient.SqlClient
     expect(
       Schema.is(StorageError)(yield* storage.admit(params).pipe(sql.withTransaction, Effect.flip)),
@@ -4072,8 +4065,8 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
         const context = yield* Layer.build(layer)
         yield* Effect.gen(function* () {
           yield* fixture
-          yield* (yield* CellExecutionStorage).claim(cellOperationStorage)
-          const storage = yield* CellToolOperationStorage
+          yield* (yield* CellStorage).executions.claim(cellOperationStorage)
+          const storage = (yield* CellStorage).operations
           yield* storage.admit(params)
           yield* storage.suspend(key, requestOperationStorage)
           yield* (yield* InteractionStorage).decide(
@@ -4087,7 +4080,7 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
       Effect.gen(function* () {
         const context = yield* Layer.build(layer)
         return yield* Effect.gen(function* () {
-          const storage = yield* CellToolOperationStorage
+          const storage = (yield* CellStorage).operations
           expect((yield* storage.get(key)).state).toEqual({ _tag: "Waiting", requestId })
           expect(
             (yield* storage.listForToolCall(cellOperationStorage)).map(
@@ -4108,7 +4101,7 @@ it.scopedLive("retains approval ownership and prevents a second resume after dat
       Effect.gen(function* () {
         const context = yield* Layer.build(layer)
         yield* Effect.gen(function* () {
-          const storage = yield* CellToolOperationStorage
+          const storage = (yield* CellStorage).operations
           const existing = yield* storage.admit(params)
           expect(existing.admitted).toBe(false)
           expect(existing.operation.toolCallId).toBe(resumedId)
@@ -4308,7 +4301,7 @@ describe("model context directives from a cell", () => {
           yield* Deferred.await(scheduled)
           yield* client.steer.command({
             command: SteerCommand.make({
-              _tag: "Interrupt",
+              _tag: "Cancel",
               sessionId,
               branchId,
               requestId: RequestId.make("interrupt-context-directive"),

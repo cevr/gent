@@ -24,15 +24,9 @@ import { e2ePreset } from "./helpers/test-preset"
 const sid = (value: string) => SessionId.make(value)
 const bid = (value: string) => BranchId.make(value)
 
-const live = (overrides: {
-  session: string
-  branch: string
-  agent?: string
-  status?: string
-}): LiveAgentRow => ({
+const live = (overrides: { session: string; branch: string; status?: string }): LiveAgentRow => ({
   sessionId: sid(overrides.session),
   branchId: bid(overrides.branch),
-  agent: overrides.agent ?? "main",
   status: Option.some(overrides.status ?? "Running"),
 })
 
@@ -110,7 +104,7 @@ describe("agents view projection", () => {
   describe("reconciliation", () => {
     test("merges a live and durable row for the same loop into one row", () => {
       const rows = reconcileAgentRows({
-        live: [live({ session: "s1", branch: "b1", agent: "main", status: "Running" })],
+        live: [live({ session: "s1", branch: "b1", status: "Running" })],
         durable: [durable({ session: "s1", branch: "b1", name: "my task", cwd: "/repo" })],
       })
       expect(rows).toHaveLength(1)
@@ -118,7 +112,6 @@ describe("agents view projection", () => {
       expect(row?.live).toBe(true)
       expect(row?.section).toBe("running")
       // Live supplies status; durable supplies the fields the registry lacks.
-      expect(row?.agent).toEqual(Option.some("main"))
       expect(row?.name).toEqual(Option.some("my task"))
       expect(row?.cwd).toEqual(Option.some("/repo"))
     })
@@ -325,7 +318,7 @@ describe("agents view projection", () => {
   describe("search", () => {
     const rows = buildRowTree(
       reconcileAgentRows({
-        live: [live({ session: "s1", branch: "b1", agent: "main" })],
+        live: [live({ session: "s1", branch: "b1" })],
         durable: [durable({ session: "s1", branch: "b1", name: "Fix the parser", cwd: "/repo" })],
       }),
     )
@@ -339,9 +332,8 @@ describe("agents view projection", () => {
       expect(filterRows(rows, "PARSER")).toHaveLength(1)
     })
 
-    test("matches on cwd, agent, and ids", () => {
+    test("matches on cwd and ids", () => {
       expect(filterRows(rows, "/repo")).toHaveLength(1)
-      expect(filterRows(rows, "main")).toHaveLength(1)
       expect(filterRows(rows, "s1")).toHaveLength(1)
     })
 
@@ -442,7 +434,7 @@ const listAgents = (input: { readonly query?: string }) =>
       input,
     })
     const reply = yield* Schema.decodeUnknownEffect(ReplySchema)(raw)
-    return { reply, harness, sessionId: harness.sessionId, branchId: harness.branchId }
+    return { raw, reply, harness, sessionId: harness.sessionId, branchId: harness.branchId }
   })
 
 describe("AgentsViewExtension via RPC", () => {
@@ -464,6 +456,23 @@ describe("AgentsViewExtension via RPC", () => {
           expect(row!.live).toBe(true)
           expect(row!.status).toBe("Idle")
           expect(row!.section).toBe("idle")
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a live row names no agent, because the loop enumeration carries none",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { raw, sessionId } = yield* listAgents({})
+          const rows = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ rows: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)) }),
+          )(raw)
+          const row = rows.rows.find((candidate) => candidate["sessionId"] === sessionId)
+          expect(row?.["live"]).toBe(true)
+          expect(Object.keys(row ?? {})).not.toContain("agent")
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

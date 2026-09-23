@@ -564,14 +564,10 @@ export const AgentLoop = Actor.fromEntity(
       error: AgentLoopError,
       id: branchTarget,
     },
-    // Branch-local shutdown. Used by session terminate sweeps to close a
-    // single branch's loop resources from inside the entity's own scope.
     /**
-     * `TerminateBranch` shuts down a single branch's loop. Distinct from
-     * generic `Interrupt` (which only flushes pending mailbox items) because
-     * session termination semantically closes branch resources and must run
-     * inside the entity's own scope. Used by `AgentLoopSessionGovernance`-driven
-     * `terminateSession` sweeps.
+     * `TerminateBranch` shuts down a single branch's loop inside the entity's
+     * own scope, so the branch's resources close there. The
+     * `AgentLoopSessionGovernance`-driven `terminateSession` sweep sends it.
      */
     TerminateBranch: {
       payload: BranchCommandFields,

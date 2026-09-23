@@ -13,6 +13,7 @@
 import { describe, expect, test } from "bun:test"
 import { Context, Effect, Layer, Schema } from "effect"
 import type * as PublicExtensionApi from "@gent/core/extensions/api"
+import type { AnyExtensionHook } from "../../src/domain/extension.js"
 import {
   CapabilityError,
   defineExtension,
@@ -326,7 +327,7 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("removed hook slots are not part of the public hooks bag", () => {
-    type HookKind = PublicExtensionApi.AnyExtensionHook["kind"]
+    type HookKind = AnyExtensionHook["kind"]
     // @ts-expect-error — messageInput hook was removed; mutations belong in tools/requests
     const messageInput: HookKind = "messageInput"
     // @ts-expect-error — contextMessages hook was removed; turnProjection composes prompt context
@@ -359,10 +360,7 @@ describe("Effect-purity locks (compile-time)", () => {
   })
 
   test("hook handler field shape is locked to handler-only", () => {
-    type TurnAfterSlot = Extract<
-      PublicExtensionApi.AnyExtensionHook,
-      { readonly kind: "turnAfter" }
-    >
+    type TurnAfterSlot = Extract<AnyExtensionHook, { readonly kind: "turnAfter" }>
     // @ts-expect-error — failureMode field was removed; runtime always isolates hook failures
     type _FailureMode = TurnAfterSlot["hook"]["failureMode"]
     expect(true).toBe(true)
@@ -566,7 +564,8 @@ describe("Effect-purity locks (compile-time)", () => {
       const platform = host.host.osInfo.platform
       const home = host.host.homeDirectory
       const cwd = host.cwd
-      const source = host.source
+      // @ts-expect-error — setup does not see its source path
+      void host.source
       void host.Process.parentEnv
       void host.Process.runProcess
       // @ts-expect-error — host facts do not carry the parent process env
@@ -581,7 +580,7 @@ describe("Effect-purity locks (compile-time)", () => {
       void host.Process.isPortFree
       // @ts-expect-error — liveness probes are not an extension authority
       void host.Process.isPidAlive
-      return `${platform}:${home.length}:${cwd}:${source}`
+      return `${platform}:${home.length}:${cwd}`
     })
     void setup
     expect(true).toBe(true)
@@ -631,7 +630,7 @@ describe("Effect-purity locks (compile-time)", () => {
     expect(true).toBe(true)
   })
 
-  test("extension hooks and lifecycle hooks reject Promise handlers", () => {
+  test("extension hooks and resource layers reject Promise values", () => {
     // gent/no-sleep: allow source a `Promise<void>` value purely for type-level assignability check below
     const promiseVoid = Bun.sleep(0) // oxlint-disable-line effect/noGlobals -- This host call creates a Promise solely for the compile-time rejection lock.
     defineExtension({
@@ -643,18 +642,10 @@ describe("Effect-purity locks (compile-time)", () => {
       }),
     })
     defineResource({
-      id: "test/extension-surface-locks/start-promise",
+      id: "test/extension-surface-locks/layer-promise",
       scope: "process",
-      layer: Layer.empty,
-      // @ts-expect-error — Promise must not be assignable to Effect Resource.start
-      start: promiseVoid,
-    })
-    defineResource({
-      id: "test/extension-surface-locks/stop-promise",
-      scope: "process",
-      layer: Layer.empty,
-      // @ts-expect-error — Promise must not be assignable to Effect Resource.stop
-      stop: promiseVoid,
+      // @ts-expect-error — Promise must not be assignable to a Resource layer
+      layer: promiseVoid,
     })
     expect(true).toBe(true)
   })
@@ -684,8 +675,6 @@ describe("Effect-purity locks (compile-time)", () => {
             layer: Layer.succeed(ReadOnlyService, {
               read: Effect.succeed(""),
             } satisfies ReadOnlyApi),
-            start: Effect.void,
-            stop: Effect.void,
           }),
         )
       }),

@@ -5,14 +5,12 @@ import {
   ExtensionContext,
   ExtensionHost,
   headTailChars,
-  makeRunSpec,
   type Message,
   messagePartsDisplayText,
   RequestId,
   SessionId,
   tool,
 } from "@gent/core/extensions/api"
-import { runChild } from "./delegate.js"
 
 // ── read-session ────────────────────────────────────────────────────────────
 
@@ -34,11 +32,6 @@ const ReadSessionParams = Schema.Struct({
       description: "Target branch ID (defaults to first branch)",
     }),
   ),
-  goal: Schema.optionalKey(
-    Schema.String.annotate({
-      description: "What to extract — AI sub-agent filters for relevance",
-    }),
-  ),
 })
 
 // Read Session Result
@@ -46,9 +39,6 @@ const ReadSessionParams = Schema.Struct({
 const ReadSessionResult = Schema.Struct({
   sessionId: Schema.String,
   content: Schema.String,
-  extracted: Schema.Boolean,
-  error: Schema.optional(Schema.String),
-  goal: Schema.optional(Schema.String),
   messageCount: Schema.optional(Schema.Finite),
   branchCount: Schema.optional(Schema.Finite),
 })
@@ -57,8 +47,6 @@ const ReadSessionResult = Schema.Struct({
 
 const MAX_TOOL_ARG_CHARS = 500
 const MAX_TREE_CHARS = 120_000
-const EXTRACT_ADDENDUM =
-  "Extract only the information relevant to the stated goal from the given transcript. Cite files and decisions. Do not run tools."
 
 export const renderMessageParts = (parts: ReadonlyArray<Message["parts"][number]>): string =>
   messagePartsDisplayText(parts, { maxToolChars: MAX_TOOL_ARG_CHARS })
@@ -99,7 +87,7 @@ export function renderSessionTree(
 export const ReadSessionTool = tool({
   id: "read_session",
   description:
-    "Read a past session's conversation. Optionally extract relevant information using an AI sub-agent.",
+    "Read a past session's conversation as markdown. A long transcript keeps its head and tail.",
   params: ReadSessionParams,
   output: ReadSessionResult,
   execute: Effect.fn("ReadSessionTool.execute")(function* (params: typeof ReadSessionParams.Type) {
@@ -120,50 +108,10 @@ export const ReadSessionTool = tool({
       ),
     )
 
-    // Render session tree as markdown
-    let markdown = renderSessionTree(tree.branches, targetBranchId)
-
-    // Truncate for AI extraction
-    const truncated = headTailChars(markdown, MAX_TREE_CHARS)
-    const truncatedOption = Option.fromNullishOr(truncated)
-    if (Option.isSome(truncatedOption)) {
-      markdown = truncatedOption.value.text
-    }
-
-    // If goal provided, use AI extraction
-    const goal = Option.fromNullishOr(params.goal)
-    if (Option.isSome(goal)) {
-      const prompt = `Here is a coding agent session transcript:\n\n${markdown}\n\n---\n\nExtract the information relevant to this goal: ${goal.value}`
-      const result = yield* runChild({
-        prompt,
-        runSpec: makeRunSpec({
-          visibility: "private",
-          parentToolCallId: ctx.toolCallId,
-          overrides: { systemPromptAddendum: EXTRACT_ADDENDUM, allowedTools: [] },
-        }),
-      })
-
-      if (result._tag === "Error") {
-        return {
-          sessionId: params.sessionId,
-          content: markdown,
-          extracted: false,
-          error: result.error,
-        }
-      }
-
-      return {
-        sessionId: params.sessionId,
-        content: result.text,
-        extracted: true,
-        goal: goal.value,
-      }
-    }
-
+    const markdown = renderSessionTree(tree.branches, targetBranchId)
     return {
       sessionId: params.sessionId,
-      content: markdown,
-      extracted: false,
+      content: headTailChars(markdown, MAX_TREE_CHARS).text,
       messageCount: tree.branches.reduce((sum, b) => sum + b.messages.length, 0),
       branchCount: tree.branches.length,
     }

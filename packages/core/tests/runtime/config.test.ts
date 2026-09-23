@@ -71,7 +71,7 @@ describe("user configuration", () => {
         yield* fs.writeFileString(projectConfigPath, encodeJson({ trustedProjects: [cwd] }))
         const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
         const live = ConfigService.Live.pipe(
-          Layer.provide(RuntimeEnvironment.Live({ cwd, home, platform: "darwin" })),
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
           Layer.provide(BunServices.layer),
         )
         yield* Effect.gen(function* () {
@@ -142,7 +142,7 @@ describe("user configuration", () => {
         const platformLayer = Layer.mergeAll(
           delayedFsLayer,
           Path.layer,
-          RuntimeEnvironment.Live({ cwd, home, platform: "darwin" }),
+          RuntimeEnvironment.Live({ cwd, home }),
         )
         const live = ConfigService.Live.pipe(Layer.provide(platformLayer))
         yield* Effect.gen(function* () {
@@ -234,7 +234,7 @@ describe("user configuration", () => {
           '{"driverOverrides":{"cowork":{"_tag":"external","id":"acp-claude-code"}},"disabledExtensions":["@gent/skills"]}',
         )
         const live = ConfigService.Live.pipe(
-          Layer.provide(RuntimeEnvironment.Live({ cwd, home, platform: "darwin" })),
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
           Layer.provide(BunServices.layer),
         )
         yield* Effect.gen(function* () {
@@ -279,7 +279,7 @@ describe("user configuration", () => {
           '{"disabledExtensions":42,"trustedProjects":["/keep/me"],"agents":{"main":{"reasoningEffort":"high"}}}'
         yield* fs.writeFileString(userConfigPath, original)
         const live = ConfigService.Live.pipe(
-          Layer.provide(RuntimeEnvironment.Live({ cwd, home, platform: "darwin" })),
+          Layer.provide(RuntimeEnvironment.Live({ cwd, home })),
           Layer.provide(BunServices.layer),
         )
         yield* Effect.gen(function* () {
@@ -417,7 +417,7 @@ describe("user configuration", () => {
           [AgentName.make("main")]: { modelId: ModelId.make("openai/gpt-5.6-sol") },
         })
         const live = ConfigService.Live.pipe(
-          Layer.provide(RuntimeEnvironment.Live({ cwd: project, home, platform: "darwin" })),
+          Layer.provide(RuntimeEnvironment.Live({ cwd: project, home })),
           Layer.provide(BunServices.layer),
         )
         yield* Effect.gen(function* () {
@@ -480,7 +480,7 @@ describe("user configuration", () => {
       yield* writeProjectConfig(projectB, "cowork", "acp-projectB-driver")
 
       const live = ConfigService.Live.pipe(
-        Layer.provide(RuntimeEnvironment.Live({ cwd: launch, home, platform: "darwin" })),
+        Layer.provide(RuntimeEnvironment.Live({ cwd: launch, home })),
         Layer.provide(BunServices.layer),
       )
       return { live, projectA, projectB }
@@ -656,7 +656,6 @@ describe("run spec CLI serialization", () => {
 
   test("round-trips through JSON encode/decode", () => {
     const runSpec = {
-      visibility: "private",
       overrides: {
         modelId: ModelId.make("anthropic/claude-sonnet-4-6"),
         allowedTools: ["grep", "read"],

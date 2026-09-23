@@ -39,12 +39,7 @@ import {
 import { BunServices } from "@effect/platform-bun"
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
 import { test as bunTest } from "bun:test"
-import {
-  DriverRegistry,
-  type DriverRegistryService,
-  ExtensionRegistry,
-  resolveExtensions,
-} from "../../src/runtime/extension-host"
+import { ExtensionRegistry, resolveExtensions } from "../../src/runtime/extension-host"
 import type { LoadedExtension } from "../../src/domain/extension.js"
 import {
   AgentDefinition,
@@ -234,7 +229,7 @@ describe("provider retry", () => {
  * ModelRegistry now concatenates what each driver lists. Where a driver's
  * catalog comes from -- the models.dev fetch, its disk cache, its staleness --
  * is the driver's own concern and is covered by
- * `packages/extensions/tests/models-dev.test.ts`.
+ * `packages/extensions/tests/providers.test.ts`.
  */
 
 const unusedResolution = (): Effect.Effect<ProviderResolution> =>
@@ -278,10 +273,16 @@ const makeRegistryLayerWithDrivers = (
   ModelRegistry.Live.pipe(
     Layer.provide(
       Layer.mergeAll(
-        DriverRegistry.fromResolved({
-          modelDrivers: new Map(modelDrivers.map((driver) => [driver.id, driver])),
-          externalDrivers: new Map(),
-        }),
+        ExtensionRegistry.fromResolved(
+          resolveExtensions([
+            {
+              manifest: { id: ExtensionId.make("catalog-drivers") },
+              scope: "builtin",
+              sourcePath: "test",
+              contributions: { modelDrivers },
+            },
+          ]),
+        ),
         overrideAuthLayer,
       ),
     ),
@@ -611,13 +612,7 @@ const testResolved = resolveExtensions([
     },
   } satisfies LoadedExtension,
 ])
-const testRegistryLayer = Layer.merge(
-  ExtensionRegistry.fromResolved(testResolved),
-  DriverRegistry.fromResolved({
-    modelDrivers: testResolved.modelDrivers,
-    externalDrivers: testResolved.externalDrivers,
-  }),
-)
+const testRegistryLayer = ExtensionRegistry.fromResolved(testResolved)
 
 const helperResolved = resolveExtensions([
   {
@@ -636,20 +631,14 @@ const helperResolved = resolveExtensions([
     },
   } satisfies LoadedExtension,
 ])
-const helperAgentRegistryLayer = Layer.merge(
-  ExtensionRegistry.fromResolved(helperResolved),
-  DriverRegistry.fromResolved({
-    modelDrivers: helperResolved.modelDrivers,
-    externalDrivers: helperResolved.externalDrivers,
-  }),
-)
+const helperAgentRegistryLayer = ExtensionRegistry.fromResolved(helperResolved)
 
 describe("AuthGuard", () => {
   const apiInfo = (key: string): AuthInfo => AuthApi.make({ type: "api", key })
 
   const guardLayerWithSeed = (
     seed: Record<string, AuthInfo>,
-    registryLayer: Layer.Layer<ExtensionRegistry | DriverRegistry>,
+    registryLayer: Layer.Layer<ExtensionRegistry>,
   ) => AuthGuard.Live.pipe(Layer.provide(Auth.Test(seed)), Layer.provide(registryLayer))
 
   it.live("only the main agent's model provider is marked required", () => {
@@ -846,10 +835,6 @@ const testResolvedProviderAuth = resolveExtensions([
   } satisfies LoadedExtension,
 ])
 const testRegistry = ExtensionRegistry.fromResolved(testResolvedProviderAuth)
-const testDriverRegistry = DriverRegistry.fromResolved({
-  modelDrivers: testResolvedProviderAuth.modelDrivers,
-  externalDrivers: testResolvedProviderAuth.externalDrivers,
-})
 const failingAuthStoreLayer = Layer.succeed(
   Auth,
   Auth.of({
@@ -865,7 +850,7 @@ describe("ProviderAuth", () => {
       const authLayer = Auth.Test()
       const layer = Layer.provideMerge(
         ProviderAuth.Live,
-        Layer.mergeAll(authLayer, testRegistry, testDriverRegistry, GentPlatform.Test()),
+        Layer.mergeAll(authLayer, testRegistry, GentPlatform.Test()),
       )
       const result = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
@@ -897,7 +882,7 @@ describe("ProviderAuth", () => {
       const authLayer = Auth.Test()
       const layer = Layer.provideMerge(
         ProviderAuth.Live,
-        Layer.mergeAll(authLayer, testRegistry, testDriverRegistry, GentPlatform.Test()),
+        Layer.mergeAll(authLayer, testRegistry, GentPlatform.Test()),
       )
       const methods = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
@@ -914,12 +899,7 @@ describe("ProviderAuth", () => {
     Effect.gen(function* () {
       const layer = Layer.provideMerge(
         ProviderAuth.Live,
-        Layer.mergeAll(
-          failingAuthStoreLayer,
-          testRegistry,
-          testDriverRegistry,
-          GentPlatform.Test(),
-        ),
+        Layer.mergeAll(failingAuthStoreLayer, testRegistry, GentPlatform.Test()),
       )
       const exit = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
@@ -937,12 +917,7 @@ describe("ProviderAuth", () => {
       pendingCallbacks.clear()
       const layer = Layer.provideMerge(
         ProviderAuth.Live,
-        Layer.mergeAll(
-          failingAuthStoreLayer,
-          testRegistry,
-          testDriverRegistry,
-          GentPlatform.Test(),
-        ),
+        Layer.mergeAll(failingAuthStoreLayer, testRegistry, GentPlatform.Test()),
       )
       const exit = yield* Effect.gen(function* () {
         const auth = yield* ProviderAuth
@@ -1014,7 +989,6 @@ interface ModelRequest {
   readonly reasoning?: string
   readonly maxTokens?: number
   readonly temperature?: number
-  readonly driverRegistry?: DriverRegistryService
   readonly driverId?: string
 }
 
@@ -1024,15 +998,8 @@ const buildProviderLayer = (
 ) => {
   const resolved = resolveExtensions(extensions)
   const registryLayer = ExtensionRegistry.fromResolved(resolved)
-  const driverRegistryLayer = DriverRegistry.fromResolved({
-    modelDrivers: resolved.modelDrivers,
-    externalDrivers: resolved.externalDrivers,
-  })
   const authLayer = Layer.succeed(Auth, authStore)
-  return Layer.provide(
-    ModelResolver.Live,
-    Layer.mergeAll(authLayer, registryLayer, driverRegistryLayer),
-  )
+  return Layer.provideMerge(ModelResolver.Live, Layer.mergeAll(authLayer, registryLayer))
 }
 const resolveModel = (request: ModelRequest) =>
   Effect.gen(function* () {
@@ -1044,7 +1011,6 @@ const resolveModel = (request: ModelRequest) =>
         maxTokens: request.maxTokens,
         temperature: request.temperature,
       },
-      driverRegistry: request.driverRegistry,
       driverId: request.driverId,
     })
   })
@@ -1131,7 +1097,14 @@ describe("Provider model resolution", () => {
       if (result._tag === "Failure") {
         expect(Cause.pretty(result.cause)).toContain("provider exploded")
       }
-    }).pipe(Effect.provide(ModelResolver.fromLanguageModel(LanguageModelLayers.failing))),
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          ModelResolver.fromLanguageModel(LanguageModelLayers.failing),
+          ExtensionRegistry.Test(),
+        ),
+      ),
+    ),
   )
   it.scoped("wraps extension resolveModel errors as ProviderError preserving cause", () =>
     Effect.gen(function* () {
@@ -1230,38 +1203,35 @@ describe("Provider model resolution", () => {
       expect(result.toString()).toContain('Failed to read auth for provider "auth-fails"')
     }),
   )
-  // ── Per-turn driver registry override (per-cwd profile shadowing) ──
-  it.scoped("per-request driverRegistry overrides the captured one for model resolution", () =>
+  // ── Per-turn registry (per-cwd profile shadowing) ──
+  it.scoped("resolution reads the extension registry of the calling turn", () =>
     Effect.gen(function* () {
-      // Captured registry has only "captured-only" — would fail to find "shadowed"
+      // The launch registry has only "captured-only", so "shadowed" is unknown there.
       const capturedLayer = buildProviderLayer([
         makeExt("captured", [makeProvider("captured-only", "Captured")]),
       ])
-      // Per-turn registry has "shadowed" — should win
-      const shadowedResolved = resolveExtensions([
-        makeExt("shadowed", [makeProvider("shadowed", "Shadowed")]),
-      ])
-      const overrideRegistry = yield* Effect.service(DriverRegistry).pipe(
+      // The turn registry has "shadowed" and must win.
+      const turnRegistry = yield* Effect.service(ExtensionRegistry).pipe(
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
         Effect.provide(
-          DriverRegistry.fromResolved({
-            modelDrivers: shadowedResolved.modelDrivers,
-            externalDrivers: shadowedResolved.externalDrivers,
-          }),
+          ExtensionRegistry.fromResolved(
+            resolveExtensions([makeExt("shadowed", [makeProvider("shadowed", "Shadowed")])]),
+          ),
         ),
       )
-      const result = yield* Effect.exit(
-        resolveModel({
-          model: "shadowed/some-model",
-          driverRegistry: overrideRegistry,
-          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        }).pipe(Effect.provide(capturedLayer)),
+      const launch = yield* Effect.exit(
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        resolveModel({ model: "shadowed/some-model" }).pipe(Effect.provide(capturedLayer)),
       )
-      // Resolution should NOT fail with "Unknown provider" — overrideRegistry has "shadowed".
-      if (result._tag === "Failure") {
-        const pretty = result.cause.toString()
-        expect(pretty).not.toContain("Unknown provider")
-      }
+      expect(launch._tag).toBe("Failure")
+      const turn = yield* Effect.exit(
+        resolveModel({ model: "shadowed/some-model" }).pipe(
+          Effect.provideService(ExtensionRegistry, turnRegistry),
+          // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+          Effect.provide(capturedLayer),
+        ),
+      )
+      expect(turn._tag).toBe("Success")
     }),
   )
   // ── ModelDriverRef.id override ──

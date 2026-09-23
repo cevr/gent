@@ -3083,8 +3083,7 @@ describe("message.send", () => {
           createE2ELayer({
             ...e2ePreset,
             providerLayer,
-            extensionInputs: [],
-            extensions: [parentToolCallProbeExtension],
+            extensionInputs: [...e2ePreset.extensionInputs, parentToolCallProbeExtension],
           }),
         )
         const created = yield* client.session.create({ cwd: process.cwd() })

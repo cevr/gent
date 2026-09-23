@@ -71,7 +71,7 @@ export type Question = typeof QuestionSchema.Type
 export const EventId = Schema.Finite.pipe(branded("EventId"))
 export type EventId = typeof EventId.Type
 
-/** Tags of `StepOutcome` in `agent-loop.turn-execution.ts`, as they travel on `StreamEnded`. */
+/** Tags of `StepOutcome` (`runtime/turn.ts`), as they travel on `StreamEnded`. */
 const StepOutcomeTag = Schema.Literals([
   "Interrupted",
   "Failed",
@@ -316,9 +316,6 @@ export const ExtensionStateChanged = AgentEvent.cases.ExtensionStateChanged
 export type ExtensionStateChanged = typeof AgentEvent.cases.ExtensionStateChanged.Type
 export const StreamSynchronized = AgentEvent.cases.StreamSynchronized
 export type StreamSynchronized = typeof AgentEvent.cases.StreamSynchronized.Type
-
-/** Union of all `_tag` literal strings across `AgentEvent` variants. */
-export type AgentEventTag = Schema.Schema.Type<typeof AgentEvent>["_tag"]
 
 // ============================================================================
 // Interaction types — shared between server and client

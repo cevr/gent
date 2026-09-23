@@ -1649,51 +1649,6 @@ describe("Message Metadata", () => {
 
 // ── sqlite-event-storage.test ───────────────────────────────────────────────
 
-describe("Events", () => {
-  it.live("getLatestEvent returns latest event by tag", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const events = yield* EventStorage
-      const session = new Session({
-        id: SessionId.make("event-session"),
-        createdAt: FIXED_NOW,
-        updatedAt: FIXED_NOW,
-      })
-      const branch = new Branch({
-        id: BranchId.make("event-branch"),
-        sessionId: SessionId.make("event-session"),
-        createdAt: FIXED_NOW,
-      })
-      yield* sessions.createSession(session)
-      yield* branches.createBranch(branch)
-      yield* events.appendEvent(
-        ErrorOccurred.make({
-          sessionId: session.id,
-          branchId: branch.id,
-          error: "first",
-        }),
-      )
-      yield* events.appendEvent(
-        ErrorOccurred.make({
-          sessionId: session.id,
-          branchId: branch.id,
-          error: "second",
-        }),
-      )
-      const latest = yield* events.getLatestEvent({
-        sessionId: session.id,
-        branchId: branch.id,
-        tags: ["ErrorOccurred"],
-      })
-      expect(latest?._tag).toBe("ErrorOccurred")
-      if (latest && latest._tag === "ErrorOccurred") {
-        expect(latest.error).toBe("second")
-      }
-    }).pipe(Effect.provide(SqliteStorage.TestWithSql(() => Layer.empty, {}))),
-  )
-})
-
 describe("Event decoding", () => {
   const layer = SqliteStorage.TestWithSql(() => Layer.empty, {})
   it.live("listEvents skips an event whose tag was retired and keeps the rest", () =>
@@ -1749,40 +1704,6 @@ describe("Event decoding", () => {
         expect(error).toBeInstanceOf(EventDecodeError)
         expect(error.operation).toBe("listEvents")
       }).pipe(Effect.provide(layer)),
-  )
-  it.live("getLatestEvent fails with a tagged decode error for undecodable events", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStorage
-      const branches = yield* BranchStorage
-      const events = yield* EventStorage
-      const sql = yield* SqlClient.SqlClient
-      const sessionId = SessionId.make("unknown-event-latest")
-      const branchId = BranchId.make("unknown-event-latest-b")
-      const unknownEventJson =
-        '{"_tag":"__test_unknown__","sessionId":"unknown-event-latest","branchId":"unknown-event-latest-b"}'
-      yield* sessions.createSession(
-        new Session({
-          id: sessionId,
-          name: "unknown-event-latest",
-          createdAt: FIXED_NOW,
-          updatedAt: FIXED_NOW,
-        }),
-      )
-      yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: FIXED_NOW }))
-      yield* sql`INSERT INTO events (session_id, branch_id, event_tag, event_json, created_at) VALUES (${sessionId}, ${branchId}, 'SessionStarted', ${unknownEventJson}, ${FIXED_NOW_MILLIS})`
-      const error = yield* events
-        .getLatestEvent({
-          sessionId,
-          branchId,
-          tags: ["SessionStarted"],
-        })
-        .pipe(Effect.flip)
-      expect(error._tag).toBe("EventDecodeError")
-      if (error._tag !== "EventDecodeError") return
-      expect(error).toBeInstanceOf(EventDecodeError)
-      expect(error.eventId).toBeDefined()
-      expect(error.operation).toBe("getLatestEvent")
-    }).pipe(Effect.provide(layer)),
   )
 })
 
@@ -2145,16 +2066,17 @@ describe("Concurrent writes", () => {
 /**
  * The thread a session belongs to.
  *
- * A thread is the work, not one session's parent line. A compaction handoff
- * continues the work and stays in the thread; a delegate run or a `/btw` side
- * question is its own work and starts its own thread.
+ * A thread is the work, not one session's parent line. Storage keeps a thread
+ * passed on create and roots a new one at a session created without one.
+ * `SessionMutations.createSession` passes none, so a delegate run or a `/btw`
+ * fork starts its own thread; rows that an earlier handoff writer stored can
+ * still share their parent's thread.
  */
 
 /**
- * Create a session the way one of the two child writers would.
- *
- * `threadId` is what separates them: a compaction handoff passes the parent's
- * thread, a spawn passes nothing and storage roots a new thread at the session.
+ * Create a session with an optional parent and thread. A stored handoff row
+ * carries its parent's thread; a spawn carries none, so storage roots a new
+ * thread at the session.
  */
 const makeSession = (
   id: string,

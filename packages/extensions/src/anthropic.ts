@@ -1,8 +1,10 @@
 import {
   Clock,
   Context,
+  Crypto,
   Duration,
   Effect,
+  Encoding,
   Equal,
   FileSystem,
   Layer,
@@ -30,11 +32,13 @@ import {
   type ProviderAuthorizationResult,
   type ProviderHints,
 } from "@gent/core/extensions/api"
-import { GentPlatform } from "@gent/core/extensions/branch-tools"
 import {
+  type CatalogSource,
+  catalogSource,
   type CredentialCache,
   type CredentialCacheCell,
   type CredentialCacheCellRef,
+  driverListModels,
   EMPTY_CREDENTIAL_CELL,
   freshCredentials,
   freshEnoughAt,
@@ -43,7 +47,6 @@ import {
   recoverUnauthorized,
   withHeaders,
 } from "./providers.js"
-import { type CatalogSource, catalogSource, driverListModels } from "./models-dev.js"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
   FetchHttpClient,
@@ -54,20 +57,15 @@ import {
 } from "effect/unstable/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
 import type { HttpClientError } from "effect/unstable/http/HttpClientError"
-import { BunServices } from "@effect/platform-bun"
+import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { Model as AiModel } from "effect/unstable/ai"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 
 // ── model config ────────────────────────────────────────────────────────────
 
 /**
  * Per-model Anthropic configuration — beta flags, ccVersion, and
- * model-specific overrides. Counsel  — ports
- * `griffinmartin/opencode-claude-auth/src/model-config.ts` so beta
- * derivation lives in one place instead of being scattered across
- * `oauth.ts` (`DEFAULT_BETA_FLAGS`, `LONG_CONTEXT_BETAS`,
- * `getModelBetas` haiku/long-context heuristics) and `signing.ts`
- * (hard-coded `"2.1.80"`).
+ * model-specific overrides, in one place. Follows
+ * `griffinmartin/opencode-claude-auth/src/model-config.ts`.
  *
  * The override table is matched first-match-wins by `String.includes`
  * against the lowercased model id — list more specific keys before
@@ -227,9 +225,8 @@ type ExtensionHostProcess = ExtensionHostService["Process"]
 
 /**
  * Env vars for Anthropic keychain, read once at extension setup and
- * carried alongside platform inputs. Previously a module-level `let
- * _env`; promoted onto the platform shape so each extension instance
- * carries its own snapshot.
+ * carried alongside platform inputs, so each extension instance carries
+ * its own snapshot.
  */
 export interface AnthropicKeychainEnv {
   readonly betaFlags?: string
@@ -351,17 +348,26 @@ export const extractFirstUserMessageText = (messages: ReadonlyArray<object>): st
   )
 
 /**
+ * Hex SHA-256 of `text` (UTF-8). A digest of an in-memory buffer does not
+ * fail on a working runtime, so a failure is a defect.
+ */
+const sha256Hex = (text: string): Effect.Effect<string, never, Crypto.Crypto> =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const digest = yield* crypto
+      .digest("SHA-256", new TextEncoder().encode(text))
+      .pipe(Effect.orDie)
+    return Encoding.encodeHex(digest)
+  })
+
+/**
  * Compute `cch` — first 5 hex chars of `sha256(messageText)`. The
  * Anthropic billing-validation step rejects requests whose `cch`
  * doesn't match the first user message we send, so this MUST be
- * recomputed per request (the previous hardcoded `c5e82` placeholder
- * worked exactly once, by accident).
+ * recomputed per request.
  */
-export const computeCch = (messageText: string): Effect.Effect<string, never, GentPlatform> =>
-  Effect.gen(function* () {
-    const platform = yield* GentPlatform
-    return platform.hash("sha256", messageText).slice(0, 5)
-  })
+export const computeCch = (messageText: string): Effect.Effect<string, never, Crypto.Crypto> =>
+  sha256Hex(messageText).pipe(Effect.map((hex) => hex.slice(0, 5)))
 
 /**
  * Compute the 3-char version suffix appended to `cc_version`. Samples
@@ -373,14 +379,13 @@ export const computeCch = (messageText: string): Effect.Effect<string, never, Ge
 export const computeVersionSuffix = (
   messageText: string,
   version: string,
-): Effect.Effect<string, never, GentPlatform> =>
+): Effect.Effect<string, never, Crypto.Crypto> =>
   Effect.gen(function* () {
-    const platform = yield* GentPlatform
     const sampled = [4, 7, 20]
       .map((index) => Option.getOrElse(Option.fromNullishOr(messageText[index]), () => "0"))
       .join("")
-    const input = `${BILLING_SALT}${sampled}${version}`
-    return platform.hash("sha256", input).slice(0, 3)
+    const hex = yield* sha256Hex(`${BILLING_SALT}${sampled}${version}`)
+    return hex.slice(0, 3)
   })
 
 /**
@@ -392,7 +397,7 @@ export const buildBillingHeaderValue = (
   messages: ReadonlyArray<object>,
   version: string,
   entrypoint: string,
-): Effect.Effect<string, never, GentPlatform> =>
+): Effect.Effect<string, never, Crypto.Crypto> =>
   Effect.gen(function* () {
     const text = extractFirstUserMessageText(messages)
     const suffix = yield* computeVersionSuffix(text, version)
@@ -413,19 +418,17 @@ export const buildBillingHeaderValue = (
  *
  * This isn't just per-request retry state — it's session-level memory
  * so that turn N+1 doesn't include a beta turn N already learned the
- * server hates. Was module-global state in `oauth.ts` (deleted in
- * Commit 4). Now a service so it composes through Layer instead of
- * import-time mutable state, and so tests don't have to thread
- * `initAnthropicKeychainEnv` to reset between runs.
+ * server hates. It is a service, so it composes through Layer and
+ * holds no import-time mutable state.
  *
- * Two implicit clear conditions, both ported verbatim:
+ * Two implicit clear conditions:
  *   1. `betaFlags` env changes — user toggled flags, prior learning
  *      may no longer apply.
  *   2. `modelId` changes — different model, different beta surface.
  *
  * `getExcluded` takes `currentBetaFlags` as a parameter (not yielded
- * from a hidden module). Production wiring passes `_env.betaFlags` from
- * `oauth.ts`; tests can pass anything they want. No global mutation.
+ * from a hidden module). Production wiring passes the env beta flags;
+ * tests can pass anything they want. No global mutation.
  */
 
 // ── Internal cache cell ──
@@ -447,14 +450,11 @@ const cellAfterMaybeClear = (
   currentBetaFlags: Option.Option<string>,
   modelId: string,
 ): BetaCacheCell => {
-  // Env betaFlags changed → clear everything. (Note: prior shape
-  // tracked `lastBetaFlagsEnv` separately; here it's part of the cell.)
+  // Env betaFlags changed → clear everything.
   if (!Equal.equals(cell.lastBetaFlags, currentBetaFlags)) {
     return { map: new Map(), lastBetaFlags: currentBetaFlags, lastModelId: Option.some(modelId) }
   }
-  // Model changed → clear (prior shape only cleared when lastModelId
-  // was already set, but the result is identical because the very
-  // first request also has nothing to clear).
+  // Model changed → clear. The first request has nothing to clear.
   if (Option.isSome(cell.lastModelId) && cell.lastModelId.value !== modelId) {
     return { map: new Map(), lastBetaFlags: currentBetaFlags, lastModelId: Option.some(modelId) }
   }
@@ -501,11 +501,9 @@ export class AnthropicBetaCache extends Context.Service<
   )
 
   /**
-   * Counsel  fix: cell Ref provided externally so the cache can live
-   * for the extension lifetime instead of being rebuilt for every
-   * `resolveModel` call. Without this, cross-request beta learning is
-   * lost — a beta the server rejected on turn N would still appear on
-   * turn N+1 because the rebuild zeros the map.
+   * The cell Ref is provided externally so the cache lives for the
+   * extension lifetime, not one `resolveModel` call. A beta the server
+   * rejected on turn N stays excluded on turn N+1.
    */
   static layerFromRef = (cellRef: Ref.Ref<BetaCacheCell>): Layer.Layer<AnthropicBetaCache> =>
     Layer.succeed(AnthropicBetaCache, AnthropicBetaCache.buildService(cellRef))
@@ -655,18 +653,10 @@ export const isLongContextError = (responseBody: string): boolean =>
   responseBody.includes("long context beta is not yet available")
 
 /**
- * Long-context backoff candidates — only the long-context betas that
- * actually appear in this model's effective header. Counsel deep
- * surfaced two related defects in the prior shape:
- *   1. We walked `LONG_CONTEXT_BETAS` directly, ignoring per-model
- *      overrides — so a haiku request (which excludes
- *      `interleaved-thinking-2025-05-14` via the override) would still
- *      "exclude" it on backoff, burning a retry on a beta that wasn't
- *      sent.
- *   2. The retry budget at the call site was `length - 1`, so the
- *      second exclusion attempt never went on the wire.
- * Both are fixed by deriving candidates from the model's actual
- * outgoing betas and giving each one a retry slot.
+ * Long-context backoff candidates: only the long-context betas that
+ * appear in this model's outgoing header, after per-model overrides.
+ * A beta the model never sends is never a backoff candidate, and the
+ * call site gives each candidate its own retry slot.
  */
 const getLongContextBetasForWith = (
   modelId: string,
@@ -689,7 +679,7 @@ const getUserAgent = (env: AnthropicKeychainEnv): string =>
 
 /**
  * Inputs the billing-header builder needs (CLI version + entrypoint).
- * The actual header text is built in `signing.ts` per request because
+ * `buildBillingHeaderValue` builds the header text per request because
  * both hashes depend on the live first-user-message text.
  */
 const getBillingHeaderInputs = (env: AnthropicKeychainEnv) => ({
@@ -777,9 +767,8 @@ const writeCredentialsFile = (
     const updated = updateCredentialBlob(raw, creds)
     if (Option.isNone(updated)) return
     yield* fs.writeFileString(credentialsFile, updated.value).pipe(Effect.mapError(mapFsError))
-    // Counsel  deep — chmod 0600 after write so the credentials
-    // file isn't world-readable on first creation. Matches the
-    // opencode reference's keychain.ts:297 behavior.
+    // chmod 0600 after write so the credentials file is not
+    // world-readable on first creation.
     yield* platform.runProcess("chmod", ["600", credentialsFile], { stdout: "ignore" }).pipe(
       Effect.mapError(
         (e) =>
@@ -793,13 +782,8 @@ const writeCredentialsFile = (
 
 // ── oauth keychain ──────────────────────────────────────────────────────────
 
-/**
- * Default keychain service name and on-disk file path. Counsel K2
- * called out that hard-coding the primary service silently broke any
- * future multi-account UI consumer — every credential helper now takes
- * an explicit `source` so callers spell out which account they mean.
- */
-export const PRIMARY_CLAUDE_SERVICE = "Claude Code-credentials"
+/** The keychain service Claude Code stores its primary account under. */
+const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 
 class ClaudeKeychainNotFoundError extends Schema.TaggedError<ClaudeKeychainNotFoundError>()(
   "ClaudeKeychainNotFoundError",
@@ -848,41 +832,13 @@ const spawnSecurity = (
     })
   })
 
-const readFromKeychain = (
-  source: string,
-): Effect.Effect<
+const readFromKeychain: Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError | ClaudeKeychainNotFoundError,
   AnthropicPlatform
-> =>
-  spawnSecurity(["find-generic-password", "-s", source, "-w"]).pipe(
-    Effect.flatMap(decodeCredentials),
-  )
-
-/**
- * Pure policy: should a keychain miss for `source` fall back to the
- * on-disk credentials file? Only when we're not on darwin (no
- * keychain at all) or the request is for the primary account. For
- * non-primary sources on darwin, source means source — silently
- * returning the disk credential would leak the primary into a
- * multi-account picker.
- *
- * Exported so the policy can be unit-tested without spawning
- * `security`. Counsel  review surfaced this as a real defect.
- */
-export const shouldFallBackToCredentialsFile = (platform: string, source: string): boolean =>
-  platform !== "darwin" || source === PRIMARY_CLAUDE_SERVICE
-
-/**
- * Pure policy: when direct OAuth refresh fails, should we spawn the
- * `claude` CLI as a fallback? Only safe for the primary source — the
- * CLI persists to whichever account it considers active, so a
- * non-primary spawn could refresh the wrong account.
- *
- * Exported so the policy can be unit-tested without spawning a
- * subprocess. Counsel  review.
- */
-export const shouldFallBackToCli = (source: string): boolean => source === PRIMARY_CLAUDE_SERVICE
+> = spawnSecurity(["find-generic-password", "-s", CLAUDE_KEYCHAIN_SERVICE, "-w"]).pipe(
+  Effect.flatMap(decodeCredentials),
+)
 
 /**
  * Discover the macOS username stored on a keychain entry. The Claude
@@ -945,58 +901,37 @@ const writeKeychainEntry = (
 // ── oauth accounts ──────────────────────────────────────────────────────────
 
 /**
- * Read Claude Code credentials for `source` (the keychain service name).
- * Use `PRIMARY_CLAUDE_SERVICE` for the default account.
- *
- * On non-darwin (no keychain), `source` is ignored and the on-disk
- * `.credentials.json` is read instead — that file holds only one
- * credential, mirroring the CLI's behaviour.
- *
- * On darwin, the on-disk fallback is gated to PRIMARY only. A
- * non-primary keychain miss propagates `ProviderAuthError` rather
- * than silently returning the disk credential as if it belonged to
- * the requested source.
+ * Read Claude Code's primary-account credentials: the keychain on darwin,
+ * falling back to `~/.claude/.credentials.json` when the keychain has no
+ * entry; that file alone elsewhere, mirroring the CLI.
  */
-const readClaudeCodeCredentials = (
-  source: string,
-): Effect.Effect<
+const readClaudeCodeCredentials: Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const platform = yield* AnthropicPlatform
-    if (platform.platform !== "darwin") {
-      return yield* readCredentialsFile
-    }
-    return yield* readFromKeychain(source).pipe(
-      Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => {
-        if (shouldFallBackToCredentialsFile(platform.platform, source)) {
-          return readCredentialsFile
-        }
-        return Effect.fail(
-          new ProviderAuthError({
-            message: `No Claude credentials found in keychain for source: ${source}`,
-          }),
-        )
-      }),
-    )
-  })
+> = Effect.gen(function* () {
+  const platform = yield* AnthropicPlatform
+  if (platform.platform !== "darwin") {
+    return yield* readCredentialsFile
+  }
+  return yield* readFromKeychain.pipe(
+    Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () => readCredentialsFile),
+  )
+})
 
 /**
- * Persist refreshed credentials back to the keychain entry named by
- * `source` (or `~/.claude/.credentials.json` on non-darwin). Without
+ * Persist refreshed credentials back to the primary keychain entry
+ * (or `~/.claude/.credentials.json` on non-darwin). Without
  * this, every direct OAuth refresh is wasted — the next read pulls
  * the stale `accessToken` straight back from disk/keychain. The
  * `acct` field is preserved by reading the existing entry first.
  *
- * Errors are surfaced as `ProviderAuthError` for the caller to log
- * (per : write-back is best-effort; the in-memory creds are
- * authoritative for the in-flight request).
+ * Errors are surfaced as `ProviderAuthError` for the caller to log:
+ * write-back is best-effort; the in-memory creds are authoritative for
+ * the in-flight request.
  */
 const writeBackCredentials = (
   creds: ClaudeCredentials,
-  source: string,
 ): Effect.Effect<
   void,
   ProviderAuthError,
@@ -1008,29 +943,34 @@ const writeBackCredentials = (
       return yield* writeCredentialsFile(creds)
     }
 
-    // Counsel  deep — surface the read failure as a typed error
-    // instead of swallowing it into "" and silently returning success.
-    // The previous shape bypassed the warn-on-failure path at the
-    // refresh call site, so a keychain read fault during write-back
-    // looked indistinguishable from a successful update.
+    // A read failure surfaces as a typed error, so the refresh call site
+    // warns instead of reporting a keychain fault as a successful update.
     //
     // ClaudeKeychainNotFoundError is mapped to a ProviderAuthError so
     // the public signature stays narrow — write-back callers use a
     // best-effort `catchEager` that doesn't need to know about the
     // internal not-found tag.
-    const raw = yield* spawnSecurity(["find-generic-password", "-s", source, "-w"]).pipe(
+    const raw = yield* spawnSecurity([
+      "find-generic-password",
+      "-s",
+      CLAUDE_KEYCHAIN_SERVICE,
+      "-w",
+    ]).pipe(
       Effect.catchIf(Schema.is(ClaudeKeychainNotFoundError), () =>
         Effect.fail(
           new ProviderAuthError({
-            message: `Cannot write back: no keychain entry for source: ${source}`,
+            message: `Cannot write back: no keychain entry for ${CLAUDE_KEYCHAIN_SERVICE}`,
           }),
         ),
       ),
     )
     const updated = updateCredentialBlob(raw, creds)
     if (Option.isNone(updated)) return
-    const accountName = Option.getOrElse(yield* getKeychainAccountName(source), () => source)
-    yield* writeKeychainEntry(source, accountName, updated.value)
+    const accountName = Option.getOrElse(
+      yield* getKeychainAccountName(CLAUDE_KEYCHAIN_SERVICE),
+      () => CLAUDE_KEYCHAIN_SERVICE,
+    )
+    yield* writeKeychainEntry(CLAUDE_KEYCHAIN_SERVICE, accountName, updated.value)
   })
 
 // ── oauth refresh ───────────────────────────────────────────────────────────
@@ -1148,53 +1088,41 @@ const spawnClaudeCli = (): Effect.Effect<
  * here is best-effort; the in-memory creds are authoritative for this
  * turn.
  */
-const refreshClaudeCodeCredentials = (
-  source: string,
-): Effect.Effect<
+const refreshClaudeCodeCredentials: Effect.Effect<
   ClaudeCredentials,
   ProviderAuthError,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
-    const current = yield* readClaudeCodeCredentials(source).pipe(Effect.option)
-    if (Option.isSome(current) && current.value.refreshToken !== "") {
-      const refreshed = yield* refreshViaOAuth(current.value.refreshToken).pipe(Effect.option)
-      if (Option.isSome(refreshed)) {
-        // Best-effort write-back so subsequent processes pick up the
-        // new token. A failure here doesn't lose the refresh — the
-        // caller has it in memory.
-        yield* writeBackCredentials(refreshed.value, source).pipe(
-          Effect.catchEager((e: ProviderAuthError) =>
-            Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
-              Effect.annotateLogs({ error: String(e), source }),
-            ),
+> = Effect.gen(function* () {
+  const current = yield* readClaudeCodeCredentials.pipe(Effect.option)
+  if (Option.isSome(current) && current.value.refreshToken !== "") {
+    const refreshed = yield* refreshViaOAuth(current.value.refreshToken).pipe(Effect.option)
+    if (Option.isSome(refreshed)) {
+      // Best-effort write-back so subsequent processes pick up the
+      // new token. A failure here doesn't lose the refresh — the
+      // caller has it in memory.
+      yield* writeBackCredentials(refreshed.value).pipe(
+        Effect.catchEager((e: ProviderAuthError) =>
+          Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
+            Effect.annotateLogs({ error: String(e) }),
           ),
-        )
-        return refreshed.value
-      }
+        ),
+      )
+      return refreshed.value
     }
-    // Direct path failed — fall back to the CLI spawn (second attempt
-    // historically helps when the first invocation kicks a stale-token
-    // error). The CLI persists its own credentials to whichever
-    // account it considers active, so this fallback is ONLY safe for
-    // the primary source. For non-primary accounts a CLI spawn could
-    // refresh the wrong account; surface a typed failure instead so
-    // the picker can prompt the user to refresh that account
-    // explicitly.
-    if (!shouldFallBackToCli(source)) {
-      return yield* new ProviderAuthError({
-        message: `Direct OAuth refresh failed for ${source}; CLI fallback would target the active account, not this one. Refresh the account in Claude Code directly.`,
-      })
-    }
-    yield* spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
-    return yield* readClaudeCodeCredentials(source)
-  })
+  }
+  // Direct path failed — fall back to the CLI spawn (second attempt
+  // historically helps when the first invocation kicks a stale-token
+  // error). The CLI refreshes its active account, which is the
+  // primary one read here.
+  yield* spawnClaudeCli().pipe(Effect.retry({ times: 1 }))
+  return yield* readClaudeCodeCredentials
+})
 
 // ── credential service ──────────────────────────────────────────────────────
 
 /**
  * AnthropicCredentialService — Claude Code credentials behind the shared
- * credential cache (`../provider-credentials.ts`).
+ * credential cache (`makeCredentialCache` in `providers.ts`).
  *
  * The keychain is the source of truth: once the cache TTL lapses the
  * service re-reads it, and only refreshes (OAuth or CLI fallback) when
@@ -1219,17 +1147,15 @@ type CredentialIO = Effect.Effect<
 
 /** IO the service depends on, lifted out so tests can drive it without spawning `security` or touching the keychain. */
 export interface AnthropicCredentialIO {
-  /** Read currently-stored creds for the primary source. */
+  /** Read the primary account's stored creds. */
   readonly read: CredentialIO
-  /** Refresh creds for the primary source via OAuth or CLI fallback. */
+  /** Refresh the primary account's creds via OAuth or CLI fallback. */
   readonly refresh: CredentialIO
 }
 
-// PRIMARY_CLAUDE_SERVICE is the only source wired here — the multi-account
-// picker UI doesn't exist yet. Spelled out so an audit-grep finds every site.
 const realIO: AnthropicCredentialIO = {
-  read: readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE),
-  refresh: refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE),
+  read: readClaudeCodeCredentials,
+  refresh: refreshClaudeCodeCredentials,
 }
 
 // ── Service tag ──
@@ -1314,7 +1240,7 @@ const build = (
  * out of the generic provider boundary.
  */
 
-type KeychainTransformRequirements = GentPlatform | AnthropicPlatform
+type KeychainTransformRequirements = Crypto.Crypto | AnthropicPlatform
 
 // ── Constants ──
 
@@ -1336,11 +1262,6 @@ const MessageStreamEventSchema = Schema.Union([
 const decodeMessageStreamEvent = Schema.decodeUnknownSync(MessageStreamEventSchema)
 const decodeMessagePayload = Schema.decodeUnknownSync(Generated.BetaCreateMessageParams)
 const encodeMessagePayload = Schema.encodeUnknownSync(Generated.BetaCreateMessageParams)
-
-// Counsel  — model-specific quirks (effort-disabled, etc.) live in
-// `model-config.ts`'s `MODEL_OVERRIDES` table; we read them via
-// `getModelOverride(modelId).disableEffort` rather than a prefix check
-// hard-coded here.
 
 // ── Payload Transforms (outgoing) ──
 
@@ -1392,7 +1313,7 @@ const transformToolChoice = (toolChoice: JsonValue): JsonValue => {
 }
 
 /**
- * Counsel  (opencode parity B) — drop orphan `tool_use` blocks (no
+ * Drop orphan `tool_use` blocks (no
  * matching downstream `tool_result`) and orphan `tool_result` blocks
  * (no matching upstream `tool_use`) from message history. Anthropic
  * rejects requests with mismatched pairs (HTTP 400), and a partial turn
@@ -1509,10 +1430,9 @@ const stripExistingBillingBlocks = (blocks: ReadonlyArray<JsonRecord>): Readonly
  * decide what to pull into the first user message before billing is
  * computed.
  *
- * Counsel  deep — a single block carrying `IDENTITY + "\n\n<rest>"`
- * (the shape OpenCode's `system.transform` hook produces) used to
- * classify as identity-only and silently drop `<rest>`. Now we split
- * the block at the identity boundary: identity goes to identityBlocks,
+ * A single block carrying `IDENTITY + "\n\n<rest>"` (the shape
+ * OpenCode's `system.transform` hook produces) is split at the identity
+ * boundary: identity goes to identityBlocks,
  * the trailing remainder rides along as third-party so the relocator
  * pulls it into the first user message.
  */
@@ -1561,7 +1481,7 @@ const partitionSystemBlocks = (callerSystem: JsonValue): PartitionedSystemBlocks
  * Anthropic rejects requests exceeding 4 cache_control blocks per
  * request, and the billing entry would count toward that limit.
  *
- * Counsel  — caller MUST pass the FINAL post-relocation messages so
+ * The caller MUST pass the FINAL post-relocation messages so
  * the billing hash matches the first-user text actually sent on the
  * wire. Computing the hash from pre-relocation messages produces a
  * stale digest and 400s.
@@ -1581,22 +1501,21 @@ const buildSystemArray = (
   })
 
 /**
- * Counsel  (opencode parity A) — Anthropic's OAuth-billing path
+ * Anthropic's OAuth-billing path
  * validates `system[]` against the Claude Code identity prefix.
  * Third-party system content alongside the prefix trips a 400 "out of
  * extra usage" rejection. The relocator takes the third-party blocks
  * (already partitioned by `partitionSystemBlocks`) and folds them into
  * the first user message as a single text block.
  *
- * Counsel  follow-up:
+ * Ordering rules:
  *   - tool_result ordering: Anthropic requires tool_result blocks to be
  *     the FIRST blocks of a user message that carries any. Inserting
  *     text at index 0 in such a message produces 400. We splice the
  *     relocated text in AFTER the leading run of tool_result blocks.
  *   - billing freshness: this runs BEFORE buildSystemArray so the
- *     billing hash is computed from the FINAL first-user text. The
- *     pre-fix shape computed billing first, then mutated the message,
- *     so the wire hash didn't match the wire text.
+ *     billing hash is computed from the FINAL first-user text, and the
+ *     wire hash matches the wire text.
  *
  * Returns the new messages array; mutates nothing.
  */
@@ -1651,17 +1570,13 @@ const relocateThirdPartyIntoFirstUser = (
 }
 
 /**
- * Counsel  (opencode parity C) — strip the effort knob for models
- * that don't support it (haiku family). Anthropic returns 400 if
+ * Strip the effort knob for models that do not support it (the
+ * override table sets `disableEffort` for the haiku family). Anthropic returns 400 if
  * effort is sent with a haiku model. We strip from BOTH
- * `output_config.effort` (the shape gent emits today via
- * `anthropic/index.ts` `buildAnthropicConfig`) AND `thinking.effort`
+ * `output_config.effort` (the shape gent emits) AND `thinking.effort`
  * (the shape the upstream Anthropic SDK may emit in future versions —
  * matches the opencode reference). Each branch deletes the parent
  * object if it empties out.
- *
- *  will replace the `claude-haiku` prefix match with the per-model
- * override table from opencode-claude-auth's `model-config.ts`.
  */
 const stripObjectKey = (parent: JsonRecord, key: string): Option.Option<JsonRecord> => {
   if (!(key in parent)) return Option.some(parent)
@@ -1673,9 +1588,6 @@ const stripObjectKey = (parent: JsonRecord, key: string): Option.Option<JsonReco
 const stripHaikuEffort = (payload: JsonRecord): JsonRecord => {
   const model = payload["model"]
   if (!Predicate.isString(model)) return payload
-  // Counsel  — defer to the per-model override table instead of
-  // string-prefix matching here. `disableEffort` is currently set for
-  // the `haiku` family in `MODEL_CONFIG`.
   const override = getModelOverride(model)
   if (Option.isNone(override) || override.value.disableEffort !== true) return payload
 
@@ -2045,8 +1957,8 @@ const buildOauthHeaders = (
   headers = Headers.set(headers, "anthropic-beta", mergedBetas.join(","))
   headers = Headers.set(headers, "x-app", "cli")
   headers = Headers.set(headers, "user-agent", getUserAgent(env))
-  // The billing header lives in `system[0]` (see keychain-client.ts +
-  // signing.ts), NOT as an HTTP header. We do set this declarative
+  // The billing header lives in `system[0]` (see `buildSystemArray`),
+  // NOT as an HTTP header. We do set this declarative
   // browser-access acknowledgement to match Claude Code's behavior.
   headers = Headers.set(headers, "anthropic-dangerous-direct-browser-access", "true")
 
@@ -2096,10 +2008,8 @@ export const buildKeychainTransformClient =
       // the body, record the offending beta into the cache and fail with
       // LongContextBetaError so Effect.retry re-runs preprocess (which
       // re-reads the now-larger excluded set) + postprocess. Budget = one
-      // retry slot per long-context candidate the model actually emits
-      // (Counsel  deep at the to-be-deleted oauth.ts:847-887 fixed
-      // the prior off-by-one + per-model-override bugs; this port
-      // preserves that fix). When candidates exhaust, the catch-tag
+      // retry slot per long-context candidate the model actually emits.
+      // When candidates exhaust, the catch-tag
       // folds the terminal 400 back into the success channel.
       HttpClient.transformResponse((effect) =>
         effect.pipe(
@@ -2291,7 +2201,7 @@ const makeOauthAnthropicLayer = (
 
   const wrappedClient = makeKeychainClientLayer.pipe(
     Layer.provide(clientLayer),
-    Layer.provide(BunGentPlatformLive),
+    Layer.provide(BunCrypto.layer),
     Layer.provide(Layer.succeed(AnthropicPlatform, platform)),
   )
   return AnthropicLanguageModel.layer({ model: modelName, config }).pipe(
@@ -2383,17 +2293,14 @@ export const buildAnthropicModelDriver = (
     authorize: (ctx) =>
       Effect.gen(function* () {
         if (ctx.methodIndex !== 0) return Option.none()
-        // The Claude Code authorize flow targets the primary
-        // account by default. PRIMARY_CLAUDE_SERVICE is spelled
-        // out here so a future audit-grep finds every "default"
-        // site (the multi-account picker UI is the next consumer).
-        let creds = yield* readClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
+        // The Claude Code authorize flow reads the primary account.
+        let creds = yield* readClaudeCodeCredentials
         const now = yield* Clock.currentTimeMillis
         if (!freshEnoughForUse(creds, now)) {
           // Use the returned creds — re-reading keychain after refresh
           // would silently lose direct-OAuth tokens whenever write-back
           // failed.
-          creds = yield* refreshClaudeCodeCredentials(PRIMARY_CLAUDE_SERVICE)
+          creds = yield* refreshClaudeCodeCredentials
         }
         // Persist keychain creds to Auth
         yield* ctx.persist({

@@ -14,8 +14,8 @@ import * as AiTool from "effect/unstable/ai/Tool"
 /**
  * System prompt construction via ordered sections.
  *
- * Static prompt sections are bundled on capability leaf `prompt`. Dynamic
- * content resolved per-turn from services lives on extension hooks.
+ * Core writes the environment section. Extensions add sections from a
+ * `turnProjection` hook, which runs each turn.
  */
 export interface PromptSection {
   readonly id: string
@@ -117,9 +117,6 @@ interface ToolDeclarations {
    * own binding. Declaring it keeps the loop from having to know tool names.
    */
   readonly dispatches?: boolean
-  /** Static system-prompt section bundled with this tool. For dynamic
-   *  prompt fragments resolved per-turn from services, use a turn projection hook. */
-  readonly prompt?: PromptSection
 }
 
 /**
@@ -145,7 +142,6 @@ interface ToolCapabilityApi extends ToolDeclarations {
 interface RequestCapabilityApi {
   readonly _tag: "request"
   readonly id: RpcId
-  readonly prompt?: PromptSection
   readonly input: unknown
   readonly output: unknown
   readonly effect: unknown
@@ -210,7 +206,6 @@ export type RequestCapability<Input = unknown, Output = unknown> = RequestCapabi
   readonly id: RpcId
   readonly slash?: RequestInput<Input, Output>["slash"]
   readonly description?: string
-  readonly prompt?: PromptSection
   readonly input: Schema.Codec<Input, unknown, never, never>
   readonly output: Schema.Codec<Output, unknown, never, never>
   /**
@@ -240,8 +235,6 @@ export interface RequestInput<
   readonly input: Schema.Codec<Input, unknown, never, never>
   /** Schema for validating `output` at the boundary. */
   readonly output: Schema.Codec<Output, unknown, never, never>
-  /** Static system-prompt section bundled with this request. */
-  readonly prompt?: PromptSection
   /** Human-readable description for registry/listing surfaces. */
   readonly description?: string
   /**
@@ -280,7 +273,6 @@ export function request(input: {
   readonly id: string
   readonly input: Schema.Codec<unknown, unknown, never, never>
   readonly output: Schema.Codec<unknown, unknown, never, never>
-  readonly prompt?: PromptSection
   readonly description?: string
   readonly readonly?: boolean
   readonly slash?: RequestInput<unknown, unknown>["slash"]
@@ -335,7 +327,6 @@ export function request(input: {
     readonly: input.readonly,
     input: input.input,
     output: input.output,
-    prompt: input.prompt,
     effect,
     ref: refValue,
   }
@@ -406,7 +397,6 @@ const declarationsOf = (source: ToolDeclarations): ToolDeclarations => ({
   }),
   ...(Predicate.isNotUndefined(source.interactive) && { interactive: source.interactive }),
   ...(Predicate.isNotUndefined(source.dispatches) && { dispatches: source.dispatches }),
-  ...(Predicate.isNotUndefined(source.prompt) && { prompt: source.prompt }),
 })
 
 interface GentToolMetadata<

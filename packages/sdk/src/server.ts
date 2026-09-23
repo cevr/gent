@@ -595,10 +595,7 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
       makeToolCall({
         id: asToolCallId("dbg-read-session"),
         name: "read_session",
-        params: {
-          sessionId: "019debug1-session",
-          goal: "Understand the renderer cleanup thread",
-        },
+        params: { sessionId: "019debug1-session" },
       }),
     ],
     createdAt: nowPlus(-25_000),
@@ -621,9 +618,9 @@ const seedDebugSession = Effect.fn("DebugSession.seed")(function* (cwd: string) 
       }),
       makeJsonResult(asToolCallId("dbg-read-session"), "read_session", {
         sessionId: "019debug1-session",
-        extracted: true,
-        goal: "Understand the renderer cleanup thread",
         content: "Audit said queue semantics and renderer chrome should be tested together.",
+        messageCount: 12,
+        branchCount: 1,
       }),
     ],
     createdAt: nowPlus(-23_000),

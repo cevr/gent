@@ -176,7 +176,6 @@ import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
   ApprovalService,
-  DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
   SessionProfileCache,
@@ -687,7 +686,7 @@ describe("continuation", () => {
         )
         yield* controls.waitForCall(1)
         yield* steerAgentLoop({
-          _tag: "Interrupt",
+          _tag: "Cancel",
           sessionId: contSessionId,
           branchId: contBranchId,
           requestId: "req-continuation-interrupt-first",
@@ -782,7 +781,7 @@ describe("continuation", () => {
         // time it returns, the actor has already set `interruptedRef = true`
         // and signalled the active stream. No additional wait needed.
         yield* steerAgentLoop({
-          _tag: "Interrupt",
+          _tag: "Cancel",
           sessionId: contSessionId,
           branchId: contBranchId,
           requestId: "req-continuation-interrupt-second",
@@ -1591,18 +1590,11 @@ describe("native model context projection", () => {
       },
     ])
     const extensionRegistry = ExtensionRegistry.fromResolved(resolved)
-    const driverRegistry = DriverRegistry.fromResolved({
-      modelDrivers: resolved.modelDrivers,
-      externalDrivers: resolved.externalDrivers,
-    })
-    const modelResolver = ModelResolver.Live.pipe(
-      Layer.provide(Layer.mergeAll(Auth.Test(), driverRegistry)),
-    )
+    const modelResolver = ModelResolver.Live.pipe(Layer.provide(Auth.Test()))
     const deps = Layer.mergeAll(
       SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
       extensionRegistry,
-      driverRegistry,
-      RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       ConfigService.Test(),
       EventStore.Memory,
       ToolRunner.Test(),
@@ -1972,7 +1964,7 @@ describe("turn lifecycle hooks", () => {
       yield* controls.waitForStreamStart.pipe(Effect.timeout("5 seconds"))
       yield* client.steer.command({
         command: {
-          _tag: "Interrupt",
+          _tag: "Cancel",
           sessionId,
           branchId,
           requestId: "req-lifecycle-interrupt",
@@ -2113,7 +2105,7 @@ describe("agent-loop recovery race", () => {
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
           makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
@@ -2222,7 +2214,7 @@ describe("agent-loop recovery race", () => {
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
           makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
@@ -2817,14 +2809,10 @@ const makeRuntimeLayer = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolvedExtensions.modelDrivers,
-      externalDrivers: resolvedExtensions.externalDrivers,
-    }),
     eventStoreLayer,
     recorderLayer,
     toolRunnerLayer,
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
@@ -3316,7 +3304,7 @@ describe("queue drain regression", () => {
           gatedProvider,
           ModelResolver.fromLanguageModel(gatedProvider),
           makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
@@ -3452,7 +3440,7 @@ describe("queue drain regression", () => {
             queuedProvider,
             ModelResolver.fromLanguageModel(queuedProvider),
             makeExtRegistry(),
-            RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+            RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
             ConfigService.Test(),
             EventStore.Memory,
             ToolRunner.Test(),
@@ -3539,7 +3527,7 @@ describe("queue drain regression", () => {
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
           makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
@@ -3606,7 +3594,7 @@ describe("queue drain regression", () => {
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
           makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
@@ -3691,7 +3679,7 @@ describe("queue drain regression", () => {
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
           makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
@@ -3783,7 +3771,7 @@ describe("queue drain regression", () => {
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
           makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
@@ -3906,7 +3894,7 @@ describe("queue drain regression", () => {
           providerLayer,
           ModelResolver.fromLanguageModel(providerLayer),
           makeExtRegistry([echoTool]),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
@@ -4003,7 +3991,7 @@ describe("queue drain regression", () => {
           heldProvider,
           ModelResolver.fromLanguageModel(heldProvider),
           makeExtRegistry(),
-          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
           ConfigService.Test(),
           EventStore.Memory,
           ToolRunner.Test(),
@@ -4135,7 +4123,7 @@ describe("interaction", () => {
       resolvedProviderLayer,
       ModelResolver.fromLanguageModel(resolvedProviderLayer),
       makeExtRegistry(tools),
-      RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+      RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       ConfigService.Test(),
       ApprovalService.Test(),
       BunServices.layer,
@@ -4278,7 +4266,7 @@ describe("interaction", () => {
             const running = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
             yield* Deferred.await(toolCallArrived)
             yield* steerAgentLoop({
-              _tag: "Interrupt",
+              _tag: "Cancel",
               sessionId: intSessionId,
               branchId: intBranchId,
               requestId: "req-interrupt-mid-tool-call",
@@ -4344,7 +4332,7 @@ describe("interaction", () => {
           const running = yield* Effect.forkChild(runAgentLoop(agentLoop, first))
           yield* Deferred.await(started)
           yield* steerAgentLoop({
-            _tag: "Interrupt",
+            _tag: "Cancel",
             sessionId: intSessionId,
             branchId: intBranchId,
             requestId: "req-interrupt-running-tool",
@@ -4436,7 +4424,7 @@ describe("interaction", () => {
             "WaitingForInteraction",
           )
           yield* steerAgentLoop({
-            _tag: "Interrupt",
+            _tag: "Cancel",
             sessionId: intSessionId,
             branchId: intBranchId,
             requestId: "req-interrupt-waiting-interaction",
@@ -4465,7 +4453,7 @@ describe("interaction", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         makeExtRegistry(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ConfigService.Test(),
         EventStore.Memory,
         ToolRunner.Test(),
@@ -5245,28 +5233,16 @@ describe("streaming", () => {
           Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
         )
       })
-      const delayedEventStorage = Layer.effect(
-        EventStorage,
-        Effect.gen(function* () {
-          const eventStorage = yield* EventStorage
-          return EventStorage.of({
-            ...eventStorage,
-            getLatestEvent: (input) =>
-              eventStorage.getLatestEvent(input).pipe(Effect.delay("5 millis")),
-          })
-        }),
-      )
       const baseStorageLayer = SqliteStorage.TestWithSql(
         noBranchTools.storage,
         noBranchTools.migrations,
       )
-      const slowStorage = Layer.provideMerge(delayedEventStorage, baseStorageLayer)
       const deps = Layer.mergeAll(
-        slowStorage,
+        baseStorageLayer,
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         makeExtRegistry(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ConfigService.Test(),
         EventStore.Memory,
         ToolRunner.Test(),
@@ -5354,6 +5330,7 @@ describe("streaming", () => {
           const fiberB = yield* Effect.forkChild(runAgentLoop(agentLoop, messageB))
           yield* Deferred.await(startedA)
           yield* Deferred.await(startedB)
+          // No writer sends `Interrupt` now; a stored steer row with it still cancels.
           yield* steerAgentLoop({
             _tag: "Interrupt",
             sessionId: SessionId.make("s1"),
@@ -6268,7 +6245,6 @@ describe("tool binding replay", () => {
               "resource",
               defineResource({
                 id: "test/replay-policy-resource",
-                tag: ReplayResource,
                 scope: "process",
                 layer: Layer.succeed(ReplayResource, ReplayResource.of({ value: "live" })),
               }),
@@ -7033,11 +7009,6 @@ const makeExtRegistryExternalTurn = (
   executor: TurnExecutor,
   tools?: ReadonlyArray<ToolCapability>,
 ) => ExtensionRegistry.fromResolved(makeResolved(executor, tools))
-const makeDriverRegistry = (executor: TurnExecutor, tools?: ReadonlyArray<ToolCapability>) =>
-  DriverRegistry.fromResolved({
-    modelDrivers: makeResolved(executor, tools).modelDrivers,
-    externalDrivers: makeResolved(executor, tools).externalDrivers,
-  })
 /** Counting event store that captures published events. */
 const makeCountingEventStore = (eventsRef: Ref.Ref<AgentEvent[]>) =>
   Layer.succeed(
@@ -7078,10 +7049,9 @@ const makeLayerWithEventsExternalTurn = (
     providerLayer,
     ModelResolver.fromLanguageModel(providerLayer),
     makeExtRegistryExternalTurn(executor, options?.tools),
-    makeDriverRegistry(executor, options?.tools),
     makeCountingEventStore(eventsRef),
     toolRunnerLayer,
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
     ApprovalService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
@@ -7559,14 +7529,10 @@ describe("external turn execution", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(agentsResolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: agentsResolved.modelDrivers,
-          externalDrivers: agentsResolved.externalDrivers,
-        }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ConfigService.Test(),
         BunServices.layer,
         ModelRegistry.Test(),
@@ -7688,11 +7654,11 @@ describe("external turn execution", () => {
 })
 // ── ExternalDriverContribution end-to-end ──
 //
-// Proves that `ExternalDriverContribution` wired through `DriverRegistry`
+// Proves that `ExternalDriverContribution` wired through `ExtensionRegistry`
 // (not a mock) actually dispatches to the registered `TurnExecutor` AND
 // that the executor's text output lands in the stored messages.
 describe("ExternalDriverContribution end-to-end", () => {
-  it.live("text from TurnExecutor appears in stored messages via DriverRegistry dispatch", () =>
+  it.live("text from TurnExecutor appears in stored messages via registry dispatch", () =>
     Effect.gen(function* () {
       const e2eSessionId = SessionId.make("e2e-session")
       const e2eBranchId = BranchId.make("e2e-branch")
@@ -7729,15 +7695,11 @@ describe("ExternalDriverContribution end-to-end", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: e2eResolved.modelDrivers,
-          externalDrivers: e2eResolved.externalDrivers,
-        }),
         // Messages go through focused storage directly — EventStore path is orthogonal.
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ConfigService.Test(),
         BunServices.layer,
         ModelRegistry.Test(),
@@ -7814,14 +7776,10 @@ describe("ExternalDriverContribution end-to-end", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: e2eResolved.modelDrivers,
-          externalDrivers: e2eResolved.externalDrivers,
-        }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ConfigService.Test(),
         BunServices.layer,
         ModelRegistry.Test(),
@@ -7913,14 +7871,10 @@ describe("ExternalDriverContribution end-to-end", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: e2eResolved.modelDrivers,
-          externalDrivers: e2eResolved.externalDrivers,
-        }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ConfigService.Test(),
         BunServices.layer,
         ModelRegistry.Test(),
@@ -8011,14 +7965,10 @@ describe("ExternalDriverContribution end-to-end", () => {
         providerLayer,
         ModelResolver.fromLanguageModel(providerLayer),
         ExtensionRegistry.fromResolved(e2eResolved),
-        DriverRegistry.fromResolved({
-          modelDrivers: e2eResolved.modelDrivers,
-          externalDrivers: e2eResolved.externalDrivers,
-        }),
         makeCountingEventStore(eventsRef),
         ToolRunner.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ConfigService.Test(),
         BunServices.layer,
         ModelRegistry.Test(),

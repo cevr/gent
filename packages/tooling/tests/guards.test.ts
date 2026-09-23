@@ -377,7 +377,7 @@ describe("core feature independence guard", () => {
 
   test("lets an extension name the catalog host it owns", () => {
     const findings = findCoreFeatureIndependenceFindings(
-      "packages/extensions/src/models-dev.ts",
+      "packages/extensions/src/providers.ts",
       'const MODELS_URL = "https://models.dev"',
     )
     expect(findings).toEqual([])
@@ -982,13 +982,25 @@ describe("platform duplication guards", () => {
       ),
     ).toEqual([])
 
-    // The Anthropic root is allowlisted: `BunGentPlatformLive` has no public path.
+    // No shipped extension is exempt, the Anthropic driver included.
     expect(
       findPlatformDuplicationViolations(
         "packages/extensions/src/anthropic.ts",
         'import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"',
       ),
-    ).toEqual([])
+    ).toEqual([
+      {
+        file: "packages/extensions/src/anthropic.ts",
+        line: 1,
+        message: "Bun platform layers may only be provided by platform roots",
+      },
+      {
+        file: "packages/extensions/src/anthropic.ts",
+        line: 1,
+        message:
+          "Shipped extensions must use @gent/core/extensions/api or @gent/core/extensions/branch-tools, not core internals",
+      },
+    ])
   })
 
   test("flags deleted runtime bridge names in active source", () => {

@@ -25,6 +25,7 @@ import {
   tool,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
+import { classifyBashCommand } from "./exec-tools.js"
 
 // ── protocol ────────────────────────────────────────────────────────────────
 
@@ -40,6 +41,9 @@ export const WAKE_MESSAGE_TYPE = "wake"
 /** `wake` starts a turn when the entry fires; `notify` leaves a notice the user sees at once and the model reads on its next turn. */
 const WakeMode = Schema.Literals(["wake", "notify"])
 type WakeMode = typeof WakeMode.Type
+
+/** How a notice came about: a fire, or a stored monitor dropped on re-arm because its command was never approved. */
+const NoticeOutcome = Schema.Literals(["fired", "matched", "timed-out", "blocked"])
 
 /**
  * One pending wake. An alarm fires at a time, and again every `everySeconds`
@@ -63,11 +67,13 @@ export const WakeEntry = Schema.TaggedUnion({
     deadline: Schema.Finite,
     mode: Schema.optionalKey(WakeMode),
     note: Schema.String,
+    /** The command passed the bash guardrail when the monitor was set: approved, or classified safe. Rows written before the guardrail have none. */
+    cleared: Schema.optionalKey(Schema.Boolean),
   },
-  /** A `notify` fire nobody has read yet. The next turn's projection consumes it; `wake.cancel` dismisses it. */
+  /** A `notify` fire, or a monitor blocked on re-arm, that nobody has read yet. The next turn's projection consumes it; `wake.cancel` dismisses it. */
   notice: {
     wakeId: Schema.String,
-    outcome: Schema.Literals(["fired", "matched", "timed-out"]),
+    outcome: NoticeOutcome,
     firedAt: Schema.Finite,
     content: Schema.String,
     note: Schema.String,
@@ -374,15 +380,61 @@ const workFor = Match.type<PendingWakeEntry>().pipe(
   }),
 )
 
+/** A monitor whose command the guardrail flags and that no one cleared: a row written before the guardrail existed. */
+const unclearedRisk = (
+  entry: Extract<WakeEntry, { readonly _tag: "monitor" }>,
+): Option.Option<string> => {
+  if (entry.cleared === true) return Option.none()
+  const risk = classifyBashCommand(entry.command)
+  if (risk.level === "safe") return Option.none()
+  return Option.some(`${risk.level}: ${risk.reason}`)
+}
+
+/**
+ * Replaces an uncleared risky monitor with a `blocked` notice, so the command
+ * never runs and the model reads why on its next turn.
+ */
+const blockEntry = Effect.fn("WakeTool.block")(function* (
+  entry: Extract<WakeEntry, { readonly _tag: "monitor" }>,
+  risk: string,
+) {
+  const ctx = yield* ExtensionContext
+  yield* Effect.logWarning("wake.monitor.blocked").pipe(
+    Effect.annotateLogs({ wakeId: entry.wakeId, command: entry.command, risk }),
+  )
+  const notice = WakeEntry.cases.notice.make({
+    wakeId: entry.wakeId,
+    outcome: "blocked",
+    firedAt: yield* Clock.currentTimeMillis,
+    content: `Monitor ${entry.wakeId} was not re-armed: \`${entry.command}\` is ${risk}, and it was never approved. Set the monitor again to ask for approval. ${entry.note}`,
+    note: entry.note,
+  })
+  yield* modifyWakeEntries((current) => [
+    ...current.filter(
+      (candidate) => candidate._tag === "notice" || candidate.wakeId !== entry.wakeId,
+    ),
+    notice,
+  ])
+  yield* ctx.State.changed()
+})
+
 /**
  * Starts the timer for one stored entry. A settled fire (or a fire that
  * failed) drops the entry from the file; an interrupt does not, so a branch
  * close or a shutdown leaves the row for the next re-arm, and a cancel cleans
  * the file itself. A repeating alarm never settles; only a cancel ends it. An
- * id already running is left alone.
+ * id already running is left alone. A monitor whose risky command was never
+ * cleared becomes a `blocked` notice instead of running.
  */
 const armEntry = Effect.fn("WakeTool.arm")(function* (entry: WakeEntry) {
   if (entry._tag === "notice") return false
+  if (entry._tag === "monitor") {
+    const risk = unclearedRisk(entry)
+    if (Option.isSome(risk)) {
+      yield* blockEntry(entry, risk.value)
+      return false
+    }
+  }
   const ctx = yield* ExtensionContext
   const alarms = yield* WakeAlarms
   const work = workFor(entry)
@@ -594,9 +646,8 @@ const validRegex = (pattern: Option.Option<string>): Effect.Effect<void, WakeErr
       }).pipe(Effect.asVoid),
   })
 
-const MonitorTool = tool({
+export const MonitorTool = tool({
   id: "monitor",
-  readonly: true,
   description:
     "Poll a shell command on an interval until it exits 0 (or its output matches `until`), then wake this branch with a message carrying the last output and your note. Use it for CI runs, deploys, ports, files, or URLs that change on their own.",
   promptSnippet: "Poll a command until it succeeds, then wake",
@@ -628,6 +679,17 @@ const MonitorTool = tool({
     if (params.command.trim().length === 0) {
       return yield* new WakeError({ message: "command is empty" })
     }
+    // The command runs on every check, so it passes the bash guardrail once, here.
+    const risk = classifyBashCommand(params.command)
+    if (risk.level !== "safe") {
+      const decision = yield* ctx.Interaction.approve({
+        text: `This monitor command is classified as ${risk.level}: ${risk.reason}\n\n\`${params.command}\`\n\nAllow it to run on every check?`,
+        metadata: { type: "bash-guardrail", level: risk.level },
+      })
+      if (!decision.approved) {
+        return yield* new WakeError({ message: `Command blocked: ${risk.reason}` })
+      }
+    }
     const deadline = now + timeoutSeconds * 1000
     // An optional key must be absent, not `undefined`, for the entry schema.
     const entry = WakeEntry.cases.monitor.make({
@@ -637,6 +699,7 @@ const MonitorTool = tool({
       everySeconds,
       deadline,
       note: params.note,
+      cleared: true,
       ...omitUndefined({ until: params.until, mode: params.mode }),
     })
     yield* storeAndArm(entry)
@@ -702,7 +765,7 @@ const WakeListing = Schema.TaggedUnion({
   },
   notice: {
     wakeId: Schema.String,
-    outcome: Schema.Literals(["fired", "matched", "timed-out"]),
+    outcome: NoticeOutcome,
     firedAt: Schema.String,
     content: Schema.String,
     note: Schema.String,
@@ -822,7 +885,6 @@ export const WakeExtension = defineExtension({
       "resource",
       defineResource({
         id: "@gent/wake/alarms",
-        tag: WakeAlarms,
         scope: "branch",
         layer: WakeAlarmsLive,
       }),

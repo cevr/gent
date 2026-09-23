@@ -334,10 +334,9 @@ export const ModelContextCompactorLive = Layer.succeed(
 const COMPACTION_EXTENSION_ID = ExtensionId.make("@gent/compaction")
 
 /** Summarises older history when the model window overflows or the model asks. */
-export const ModelContextCompactorResource = defineResource({
+const ModelContextCompactorResource = defineResource({
   id: "@gent/compaction/model-context-compactor",
   scope: "process",
-  tag: ModelContextCompactor,
   layer: ModelContextCompactorLive,
 })
 

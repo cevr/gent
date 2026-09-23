@@ -38,7 +38,6 @@ import {
   ExtensionHost,
   type GentExtension,
   getToolId,
-  hook,
   request,
   type RequestCapability,
   tool,
@@ -51,9 +50,8 @@ import {
   CurrentExtensionHostContext,
   type DiscoveredExtension,
   discoverExtensions,
-  DriverRegistry,
-  ExtensionHostContextProvider,
   ExtensionRegistry,
+  listModelCatalog,
   makeExtensionHostContextProvider,
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
@@ -120,7 +118,6 @@ import {
   GentToolMetadataTag,
   getToolMetadata,
   isToolCapability,
-  type PromptSection,
 } from "../../src/domain/capability"
 import { builtinAgent, getBuiltinAgent } from "../../../extensions/tests/helpers/builtin-agents.js"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
@@ -132,6 +129,7 @@ import {
   SessionMutations,
   type ExtensionHostContext,
   type ExtensionLoadError,
+  hook,
   LoadedArtifactIdentity,
   registerContributions,
   type SystemPromptInput,
@@ -160,15 +158,12 @@ const sessionId = SessionId.make("ambient-host-session")
 const branchId = BranchId.make("ambient-host-branch")
 const approvalRequest = { text: "Approve?", metadata: {} }
 
-const resolved = resolveExtensions([])
-
 const ambientContext = Effect.gen(function* () {
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
-    extensionRegistry: { extensionHooks: resolved.extensionHooks, getResolved: () => resolved },
   })
   return provider.forRun({ sessionId, branchId })
-})
+}).pipe(Effect.provide(RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" })))
 
 describe("ambient extension host context", () => {
   it.live("assembles with no host services in scope", () =>
@@ -327,13 +322,15 @@ class SessionProfileStartProbe extends Context.Service<
   { readonly value: string }
 >()("@gent/core/tests/runtime/extension-host.test/SessionProfileStartProbe") {}
 
-/** A process resource whose only behavior is its `start` effect. */
+/** A process resource whose layer runs `start` as it builds. */
 const startResource = (id: string, start: Effect.Effect<void>) =>
   defineResource({
     id,
     scope: "process",
-    layer: Layer.succeed(SessionProfileStartProbe, SessionProfileStartProbe.of({ value: id })),
-    start,
+    layer: Layer.effect(
+      SessionProfileStartProbe,
+      Effect.as(start, SessionProfileStartProbe.of({ value: id })),
+    ),
   })
 
 const makeCacheLayer = (params: {
@@ -346,7 +343,6 @@ const makeCacheLayer = (params: {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: params.cwd,
     home: params.home,
-    platform: "darwin",
   })
   const configServiceLive = ConfigService.Live.pipe(
     Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
@@ -377,11 +373,13 @@ const markerExtension = (id: string, value: string, stop: Effect.Effect<void> = 
         defineResource({
           id: `${id}/marker`,
           scope: "process",
-          layer: Layer.succeed(
+          layer: Layer.effect(
             SessionProfileResourceMarker,
-            SessionProfileResourceMarker.of({ value }),
+            Effect.as(
+              Effect.addFinalizer(() => stop),
+              SessionProfileResourceMarker.of({ value }),
+            ),
           ),
-          stop,
         }),
       )
     }),
@@ -570,10 +568,6 @@ describe("session profile resolution", () => {
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const emptyRegistryLayer = ExtensionRegistry.fromResolved(resolveExtensions([]))
-const emptyDriverRegistryLayer = DriverRegistry.fromResolved({
-  modelDrivers: new Map(),
-  externalDrivers: new Map(),
-})
 describe("resolveTurnProfile", () => {
   it.scopedLive("uses the stored session cwd to resolve the profile-scoped host context", () =>
     Effect.gen(function* () {
@@ -593,7 +587,6 @@ describe("resolveTurnProfile", () => {
       const runtimeEnvironmentLive = RuntimeEnvironment.Live({
         cwd: launch,
         home,
-        platform: "darwin",
       })
       const configServiceLive = ConfigService.Live.pipe(
         Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
@@ -616,13 +609,11 @@ describe("resolveTurnProfile", () => {
         BunServices.layer,
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
         emptyRegistryLayer,
-        emptyDriverRegistryLayer,
         runtimeEnvironmentLive,
         sessionProfileCacheLive,
       )
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
-        const extensionRegistry = yield* ExtensionRegistry
         const profileCache = yield* SessionProfileCache
         const now = dateFromMillis(1_767_225_600_000)
         yield* sessionStorage.createSession(
@@ -635,17 +626,14 @@ describe("resolveTurnProfile", () => {
         )
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
-          extensionRegistry,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-profile"),
           branchId: BranchId.make("branch-runtime-context-profile"),
           profileCache,
-          defaults: {
-            driverRegistry: yield* DriverRegistry,
-            baseSections: [],
-          },
-        }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
+          hostProvider,
+          defaults: { baseSections: [] },
+        })
         expect(resolved.turnHostCtx.cwd).toBe(secondary)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer), Effect.scoped)
@@ -656,16 +644,8 @@ describe("resolveTurnProfile", () => {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-default",
         home: "/tmp/runtime-context-home",
-        platform: "test",
       })
-      const driverRegistryContext = yield* Layer.build(
-        DriverRegistry.fromResolved({
-          modelDrivers: new Map(),
-          externalDrivers: new Map(),
-        }),
-      ).pipe(Effect.scoped)
       const defaults: TurnProfileDefaults = {
-        driverRegistry: Context.get(driverRegistryContext, DriverRegistry),
         baseSections: [{ id: "default", content: "Default", priority: 1 }],
       }
       const testLayer = Layer.mergeAll(
@@ -674,16 +654,15 @@ describe("resolveTurnProfile", () => {
         runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
-        const extensionRegistry = yield* ExtensionRegistry
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
-          extensionRegistry,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("missing-session"),
           branchId: BranchId.make("missing-branch"),
+          hostProvider,
           defaults,
-        }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
+        })
         expect(resolved.turnHostCtx.cwd).toBe("/tmp/runtime-context-default")
         expect(resolved.turnBaseSections).toEqual([
           { id: "default", content: "Default", priority: 1 },
@@ -697,37 +676,28 @@ describe("resolveTurnProfile", () => {
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-fail",
         home: "/tmp/runtime-context-home",
-        platform: "test",
       })
       const testLayer = Layer.mergeAll(
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
         emptyRegistryLayer,
-        emptyDriverRegistryLayer,
         runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
-        const extensionRegistry = yield* ExtensionRegistry
         const failingSessionStorage: SessionStorageService = {
           ...sessionStorage,
           getSession: () => Effect.fail(new StorageError({ message: "lookup failed" })),
         }
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
-          extensionRegistry,
         })
         const exit = yield* Effect.exit(
           resolveTurnProfile({
             sessionId: SessionId.make("session-runtime-context-storage-failure"),
             branchId: BranchId.make("branch-runtime-context-storage-failure"),
-            defaults: {
-              driverRegistry: yield* DriverRegistry,
-              baseSections: [],
-            },
-          }).pipe(
-            Effect.provideService(ExtensionHostContextProvider, hostProvider),
-            Effect.provideService(SessionStorage, failingSessionStorage),
-          ),
+            hostProvider,
+            defaults: { baseSections: [] },
+          }).pipe(Effect.provideService(SessionStorage, failingSessionStorage)),
         )
         expect(exit._tag).toBe("Success")
         if (exit._tag === "Success") {
@@ -737,46 +707,36 @@ describe("resolveTurnProfile", () => {
       }).pipe(Effect.provide(testLayer))
     }),
   )
-  it.live("prefers the profile-backed driver registry over fallback defaults", () =>
+  it.live("prefers the profile registry and its drivers over fallback defaults", () =>
     Effect.gen(function* () {
-      const defaultDriverRegistryLayer = DriverRegistry.fromResolved({
-        modelDrivers: new Map(),
-        externalDrivers: new Map(),
-      })
-      const profileDriverRegistryLayer = DriverRegistry.fromResolved({
-        modelDrivers: new Map(),
-        externalDrivers: new Map<string, ExternalDriverContribution>([
-          [
-            "profile-driver",
-            {
-              id: "profile-driver",
-              executor: {
-                executeTurn: () => Stream.die("unused in test"),
+      const profileResolved = resolveExtensions([
+        {
+          manifest: { id: ExtensionId.make("profile-driver-ext") },
+          scope: "project",
+          sourcePath: "/test/profile-driver-ext",
+          contributions: {
+            externalDrivers: [
+              {
+                id: "profile-driver",
+                executor: { executeTurn: () => Stream.die("unused in test") },
+                invalidate: Effect.void,
               },
-              invalidate: Effect.void,
-            },
-          ],
-        ]),
-      })
+            ],
+          },
+        },
+      ])
       const runtimeEnvironmentLayer = RuntimeEnvironment.Live({
         cwd: "/tmp/runtime-context-default",
         home: "/tmp/runtime-context-home",
-        platform: "test",
       })
       const testLayer = Layer.mergeAll(
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(GentPlatform.Test())),
         emptyRegistryLayer,
-        defaultDriverRegistryLayer,
         runtimeEnvironmentLayer,
       )
       yield* Effect.gen(function* () {
         const sessionStorage = yield* SessionStorage
         const extensionRegistry = yield* ExtensionRegistry
-        const defaultDriverRegistry = yield* DriverRegistry
-        const profileDriverRegistry = yield* Layer.build(profileDriverRegistryLayer).pipe(
-          Effect.map((ctx) => Context.get(ctx, DriverRegistry)),
-          Effect.scoped,
-        )
         const now = dateFromMillis(1_767_225_600_000)
         yield* sessionStorage.createSession(
           new Session({
@@ -788,10 +748,9 @@ describe("resolveTurnProfile", () => {
         )
         const fakeProfile: SessionProfile = {
           cwd: "/tmp/profile-driver-scope",
-          resolved: resolveExtensions([]),
+          resolved: profileResolved,
           layerContext: Context.makeUnsafe(new Map<string, unknown>()),
-          registryService: extensionRegistry,
-          driverRegistryService: profileDriverRegistry,
+          registryService: { getResolved: () => profileResolved },
           baseSections: [],
           generationId: ProcessGenerationId.make("test"),
         }
@@ -800,22 +759,18 @@ describe("resolveTurnProfile", () => {
         }
         const hostProvider = yield* makeExtensionHostContextProvider({
           host: testHostFacts().host,
-          extensionRegistry,
         })
         const resolved = yield* resolveTurnProfile({
           sessionId: SessionId.make("session-runtime-context-driver"),
           branchId: BranchId.make("branch-runtime-context-driver"),
           profileCache: fakeProfileCache,
-          defaults: {
-            driverRegistry: defaultDriverRegistry,
-            baseSections: [],
-          },
-        }).pipe(Effect.provideService(ExtensionHostContextProvider, hostProvider))
-        const fromProfile = yield* resolved.turnDriverRegistry.getExternal("profile-driver")
-        const fromDefault = yield* defaultDriverRegistry.getExternal("profile-driver")
+          hostProvider,
+          defaults: { baseSections: [] },
+        })
+        const drivers = resolved.turnExtensionRegistry.getResolved().externalDrivers
         expect(resolved.turnHostCtx.cwd).toBe("/tmp/profile-driver-scope")
-        expect(fromProfile?.id).toBe("profile-driver")
-        expect(fromDefault).toBeUndefined()
+        expect(drivers.get("profile-driver")?.id).toBe("profile-driver")
+        expect(extensionRegistry.getResolved().externalDrivers.has("profile-driver")).toBe(false)
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
       }).pipe(Effect.provide(testLayer))
     }),
@@ -825,13 +780,11 @@ describe("resolveTurnProfile", () => {
 // ── ../drivers/driver-registry.test ─────────────────────────────────────────
 
 /**
- * DriverRegistry — unit tests for the unified driver lookup.
- *
- * Covers both categories (model + external) under one registry, scope precedence
- * across categories, and listModelCatalog concatenation. Pinned at this seam
- * because every agent turn dispatches through
- * `agent.driver: DriverRef → DriverRegistry`. Regressing scope precedence
- * silently breaks per-cwd extension resolution.
+ * Driver resolution — both categories (model + external) resolve into the
+ * extension registry with scope precedence, and listModelCatalog concatenates
+ * every driver's catalog. Every agent turn dispatches through
+ * `agent.driver: DriverRef → ExtensionRegistry`, so a scope-precedence
+ * regression breaks per-cwd extension resolution.
  */
 const noopInvalidate = Effect.void
 const stubResolution = (): Effect.Effect<ProviderResolution> =>
@@ -885,78 +838,47 @@ const makeExt = (
     contributions,
   }
 }
-const buildRegistry = (extensions: ReadonlyArray<LoadedExtension>) => {
-  const resolved = resolveExtensions(extensions)
-  return DriverRegistry.fromResolved({
-    modelDrivers: resolved.modelDrivers,
-    externalDrivers: resolved.externalDrivers,
+describe("driver resolution", () => {
+  test("getModel resolves a registered model driver", () => {
+    const resolved = resolveExtensions([
+      makeExt("anthropic-ext", "builtin", { modelDrivers: [makeModel("anthropic")] }),
+    ])
+    const result = resolved.modelDrivers.get("anthropic")
+    expect(result?.id).toBe("anthropic")
   })
-}
-describe("DriverRegistry", () => {
-  it.live("getModel resolves a registered model driver", () =>
-    Effect.gen(function* () {
-      const layer = buildRegistry([
-        makeExt("anthropic-ext", "builtin", { modelDrivers: [makeModel("anthropic")] }),
-      ])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.getModel("anthropic")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(result?.id).toBe("anthropic")
-    }),
-  )
-  it.live("getExternal resolves a registered external driver", () =>
-    Effect.gen(function* () {
-      const exec = makeExecutor("hello")
-      const layer = buildRegistry([
-        makeExt("acp-ext", "builtin", {
-          externalDrivers: [{ id: "acp-claude-code", executor: exec, invalidate: noopInvalidate }],
-        }),
-      ])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.getExternal("acp-claude-code")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(result?.id).toBe("acp-claude-code")
-      expect(result?.executor).toBe(exec)
-    }),
-  )
-  it.live("project scope shadows builtin for same model driver id", () =>
-    Effect.gen(function* () {
-      const layer = buildRegistry([
-        makeExt("ext-builtin", "builtin", { modelDrivers: [makeModel("openai", "Builtin")] }),
-        makeExt("ext-project", "project", { modelDrivers: [makeModel("openai", "Project")] }),
-      ])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.getModel("openai")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(result?.name).toBe("Project")
-    }),
-  )
-  it.live("project scope shadows builtin for same external driver id", () =>
-    Effect.gen(function* () {
-      const builtinExec = makeExecutor("builtin")
-      const projectExec = makeExecutor("project")
-      const layer = buildRegistry([
-        makeExt("ext-builtin", "builtin", {
-          externalDrivers: [{ id: "shared", executor: builtinExec, invalidate: noopInvalidate }],
-        }),
-        makeExt("ext-project", "project", {
-          externalDrivers: [{ id: "shared", executor: projectExec, invalidate: noopInvalidate }],
-        }),
-      ])
-      const driver = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.getExternal("shared")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      expect(driver?.executor).toBe(projectExec)
-    }),
-  )
+  test("getExternal resolves a registered external driver", () => {
+    const exec = makeExecutor("hello")
+    const resolved = resolveExtensions([
+      makeExt("acp-ext", "builtin", {
+        externalDrivers: [{ id: "acp-claude-code", executor: exec, invalidate: noopInvalidate }],
+      }),
+    ])
+    const result = resolved.externalDrivers.get("acp-claude-code")
+    expect(result?.id).toBe("acp-claude-code")
+    expect(result?.executor).toBe(exec)
+  })
+  test("project scope shadows builtin for same model driver id", () => {
+    const resolved = resolveExtensions([
+      makeExt("ext-builtin", "builtin", { modelDrivers: [makeModel("openai", "Builtin")] }),
+      makeExt("ext-project", "project", { modelDrivers: [makeModel("openai", "Project")] }),
+    ])
+    const result = resolved.modelDrivers.get("openai")
+    expect(result?.name).toBe("Project")
+  })
+  test("project scope shadows builtin for same external driver id", () => {
+    const builtinExec = makeExecutor("builtin")
+    const projectExec = makeExecutor("project")
+    const resolved = resolveExtensions([
+      makeExt("ext-builtin", "builtin", {
+        externalDrivers: [{ id: "shared", executor: builtinExec, invalidate: noopInvalidate }],
+      }),
+      makeExt("ext-project", "project", {
+        externalDrivers: [{ id: "shared", executor: projectExec, invalidate: noopInvalidate }],
+      }),
+    ])
+    const driver = resolved.externalDrivers.get("shared")
+    expect(driver?.executor).toBe(projectExec)
+  })
   it.live("listModelCatalog concatenates every driver's own catalog", () =>
     Effect.gen(function* () {
       const first: ModelDriverContribution = {
@@ -971,12 +893,10 @@ describe("DriverRegistry", () => {
         resolveModel: stubResolution,
         listModels: () => Effect.succeed([makeCatalogModel("second/one")]),
       }
-      const layer = buildRegistry([makeExt("ext", "builtin", { modelDrivers: [first, second] })])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.listModelCatalog()
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
+      const resolved = resolveExtensions([
+        makeExt("ext", "builtin", { modelDrivers: [first, second] }),
+      ])
+      const result = yield* listModelCatalog(resolved.modelDrivers)
       expect(result.map((model) => model.id)).toEqual([
         ModelId.make("first/one"),
         ModelId.make("second/one"),
@@ -996,12 +916,10 @@ describe("DriverRegistry", () => {
         name: "Silent",
         resolveModel: stubResolution,
       }
-      const layer = buildRegistry([makeExt("ext", "builtin", { modelDrivers: [listing, silent] })])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.listModelCatalog()
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
+      const resolved = resolveExtensions([
+        makeExt("ext", "builtin", { modelDrivers: [listing, silent] }),
+      ])
+      const result = yield* listModelCatalog(resolved.modelDrivers)
       expect(result.map((model) => model.id)).toEqual([ModelId.make("listing/one")])
     }),
   )
@@ -1031,17 +949,13 @@ describe("DriverRegistry", () => {
             return [makeCatalogModel("auth-b/one")]
           }),
       }
-      const layer = buildRegistry([
+      const resolved = resolveExtensions([
         makeExt("auth-ext", "builtin", { modelDrivers: [driverA, driverB] }),
       ])
-      yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.listModelCatalog((driverId) => {
-          if (driverId === "auth-a") return Effect.succeed({ type: "api", key: "secret-a" })
-          return Effect.succeed(Option.getOrUndefined(Option.none<ProviderAuthInfo>()))
-        })
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
+      yield* listModelCatalog(resolved.modelDrivers, (driverId) => {
+        if (driverId === "auth-a") return Effect.succeed({ type: "api", key: "secret-a" })
+        return Effect.succeed(Option.getOrUndefined(Option.none<ProviderAuthInfo>()))
+      })
       // Each driver's listModels should have been called with the auth from resolveAuth(its id)
       const authAEntry = Option.fromUndefinedOr(seenAuth.find((s) => s.driverId === "auth-a"))
       expect(Option.isSome(authAEntry)).toBe(true)
@@ -1065,13 +979,10 @@ describe("DriverRegistry", () => {
         resolveModel: stubResolution,
         listModels: () => Effect.succeed([malformed]),
       }
-      const layer = buildRegistry([makeExt("broken-ext", "builtin", { modelDrivers: [broken] })])
-      const result = yield* Effect.gen(function* () {
-        const reg = yield* DriverRegistry
-        return yield* reg.listModelCatalog()
-      }).pipe(
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-        Effect.provide(layer),
+      const resolved = resolveExtensions([
+        makeExt("broken-ext", "builtin", { modelDrivers: [broken] }),
+      ])
+      const result = yield* listModelCatalog(resolved.modelDrivers).pipe(
         Effect.catchEager((error) =>
           Effect.sync(() => {
             let message = error.message
@@ -1268,7 +1179,6 @@ describe("extension activation isolation", () => {
     id: string,
     metadata: {
       readonly id?: string
-      readonly prompt?: PromptSection
     } = {},
   ): never => {
     const legit = tool({
@@ -1276,7 +1186,6 @@ describe("extension activation isolation", () => {
       description: "legit",
       params: Schema.Unknown,
       output: Schema.Void,
-      prompt: metadata.prompt,
       execute: () => Effect.void,
     })
     // oxlint-disable-next-line effect/noAs -- This metadata-spoofed native tool is a runtime validation fixture.
@@ -1413,45 +1322,6 @@ describe("extension activation isolation", () => {
     }).pipe(Effect.provide(fsLayer)),
   )
 
-  it.live("a metadata-spoofed tool never collides on a copied prompt section", () =>
-    Effect.gen(function* () {
-      const prompt = { id: "shared_prompt", content: "rules", priority: 50 }
-      const result = yield* setupExtensions({
-        extensions: [
-          makeBuiltin(
-            "healthy-ext",
-            Effect.succeed({
-              tools: [
-                tool({
-                  id: "healthy_tool",
-                  description: "healthy",
-                  params: Schema.Unknown,
-                  output: Schema.Void,
-                  prompt,
-                  execute: () => Effect.void,
-                }),
-              ],
-            }),
-          ),
-          makeBuiltin(
-            "metadata-spoof",
-            Effect.succeed({ tools: [metadataSpoofedToolLeaf("spoofed_native", { prompt })] }),
-          ),
-        ].map(builtin),
-        cwd: "/tmp",
-        home: "/tmp",
-        disabled: new Set(),
-      })
-
-      expect(result.active.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("healthy-ext")])
-      expect(result.failed).toHaveLength(1)
-      expect(result.failed[0]?.manifest.id).toBe(ExtensionId.make("metadata-spoof"))
-      expect(result.failed[0]?.error).toContain(
-        "tools[0]: tool must be created with `tool({...})` so Gent metadata is attached",
-      )
-    }).pipe(Effect.provide(fsLayer)),
-  )
-
   it.live("a request capability without a description stays active", () =>
     Effect.gen(function* () {
       // Requests never ship to the LLM as a tool schema, so the description
@@ -1521,7 +1391,7 @@ describe("extension activation isolation", () => {
     }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
   )
 
-  it.scopedLive("a failed resource start suspends only its extension and keeps siblings live", () =>
+  it.scopedLive("a failed resource layer suspends only its extension and keeps siblings live", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const home = yield* fs.makeTempDirectoryScoped()
@@ -1557,8 +1427,7 @@ describe("extension activation isolation", () => {
             defineResource({
               id: "test/broken",
               scope: "process",
-              layer: Layer.empty,
-              start: Effect.die("resource start boom"),
+              layer: Layer.effectDiscard(Effect.die("resource layer boom")),
             }) as never,
           )
         }),
@@ -1580,7 +1449,7 @@ describe("extension activation isolation", () => {
       expect(profile.resolved.failedExtensions).toMatchObject([
         { manifest: { id: ExtensionId.make("broken") }, phase: "startup" },
       ])
-      expect(profile.resolved.failedExtensions[0]?.error).toContain("resource start boom")
+      expect(profile.resolved.failedExtensions[0]?.error).toContain("resource layer boom")
       // The healthy resource stays acquired until the server scope closes.
       expect(released).toBe(0)
     }).pipe(Effect.provide(Layer.merge(fsLayer, ConfigService.Test()))),
@@ -2240,21 +2109,16 @@ describe("runtime slots", () => {
 // ── ../extensions/host-facet-survivors.test ─────────────────────────────────
 
 /**
- * Host facet survivor regression suite.
- *
- * After deleting 9 unused `ExtensionSession` CRUD methods in W33-C9.5,
- * `ctx.Session.listBranches` remains as the one non-trivial host-wired
- * behavior with no other direct test coverage. The RPC suites exercise the
- * durable mutation surface from the public RPC angle; this test pins the
- * host-facet shape from the extension angle.
+ * `ctx.Session.listBranches` is a host-wired facet verb with no other direct
+ * coverage. The RPC suites exercise the durable mutation surface from the
+ * public RPC angle; this test pins the facet from the extension angle.
  */
 
 const SESSION_ID = SessionId.make("test-session")
 const BRANCH_ID = BranchId.make("test-branch")
 const FIXTURE_DATE = dateFromMillis(0)
-const EMPTY_RESOLVED_EXTENSIONS = resolveExtensions([])
 
-describe("host facet survivors after C9.5 prune", () => {
+describe("host session facet", () => {
   it.live("ctx.Session.listBranches returns branches for the current session", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionStorage
@@ -2273,17 +2137,18 @@ describe("host facet survivors after C9.5 prune", () => {
       )
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
-        extensionRegistry: {
-          extensionHooks: EMPTY_RESOLVED_EXTENSIONS.extensionHooks,
-          getResolved: () => EMPTY_RESOLVED_EXTENSIONS,
-        },
       })
       const ctx = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID })
       const listed = yield* ctx.Session.listBranches
       expect(listed).toHaveLength(1)
       expect(listed[0]!.id).toBe(BRANCH_ID)
     }).pipe(
-      Effect.provide(SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)),
+      Effect.provide(
+        Layer.merge(
+          SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
+        ),
+      ),
     ),
   )
 })
@@ -2297,10 +2162,6 @@ describe("test Files facet path parity", () => {
     Effect.gen(function* () {
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
-        extensionRegistry: {
-          extensionHooks: EMPTY_RESOLVED_EXTENSIONS.extensionHooks,
-          getResolved: () => EMPTY_RESOLVED_EXTENSIONS,
-        },
       })
       const production = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID }).Files
       const stub = testExtensionFiles()
@@ -2324,6 +2185,7 @@ describe("test Files facet path parity", () => {
         Layer.mergeAll(
           SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
           Path.layer,
+          RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         ),
       ),
     ),
@@ -2504,11 +2366,10 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
 
   // Raw hand-rolled `{ manifest, setup }` (no `defineExtension`) must yield
   // the `ExtensionHost` Tag to read setup facts. There is no ctx-as-param escape.
-  it.live("setup sees cwd, home, and source from the host", () =>
+  it.live("setup sees cwd and home from the host", () =>
     Effect.gen(function* () {
       const captured = yield* Effect.sync(() => ({
         cwd: "",
-        source: "",
         home: "",
         hasReadAuthority: false,
       }))
@@ -2517,7 +2378,6 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
         setup: Effect.gen(function* () {
           const host = yield* ExtensionHost
           captured.cwd = host.cwd
-          captured.source = host.source
           captured.home = host.home
           captured.hasReadAuthority =
             "readFileString" in host.host || "writeFileString" in host.host
@@ -2536,7 +2396,6 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
 
       // Loader-built narrowed shape is observable from raw setup
       expect(captured.cwd).toBe("/tmp/project-cwd")
-      expect(captured.source).toBe("/tmp/raw-setup.ts")
       expect(captured.home).toBe("/tmp/home-dir")
       // Public host facts strip read/write authority; only narrowed facts remain
       expect(captured.hasReadAuthority).toBe(false)
@@ -2751,7 +2610,12 @@ const compileRegistryPolicy = (
   agent: AgentDefinition,
   projections: Parameters<typeof compileToolPolicy>[3] = [],
 ) =>
-  compileToolPolicy([...registry.getResolved().modelCapabilities.values()], agent, {}, projections)
+  compileToolPolicy(
+    [...registry.getResolved().modelCapabilities.values()].map((entry) => entry.capability),
+    agent,
+    {},
+    projections,
+  )
 const makeAgent = (
   name: string,
   options?: Partial<ConstructorParameters<typeof AgentDefinition>[0]>,
@@ -2768,17 +2632,6 @@ const makeProvider = (providerId: string, name?: string): ModelDriverContributio
       ),
     ),
 })
-// Static prompt sections live on capability leaf `prompt`. Build a synthetic
-// no-op model capability to carry each section through the pipeline.
-const promptSectionAsToolContribution = (section: PromptSection): ToolCapability =>
-  tool({
-    id: `section-carrier-${section.id}`,
-    description: `carrier for ${section.id}`,
-    params: Schema.Struct({}),
-    output: Schema.Void,
-    prompt: section,
-    execute: () => Effect.void,
-  })
 const makeExtRegistry = (
   id: string,
   scope: "builtin" | "user" | "project",
@@ -2787,13 +2640,9 @@ const makeExtRegistry = (
     requests?: RequestCapability[]
     agents?: AgentDefinition[]
     modelDrivers?: ModelDriverContribution[]
-    promptSections?: PromptSection[]
   },
 ): LoadedExtension => {
-  const tools = [
-    ...(opts?.tools ?? []),
-    ...(opts?.promptSections ?? []).map(promptSectionAsToolContribution),
-  ]
+  const tools = opts?.tools ?? []
   let contributions: ExtensionContributions = {}
   if (tools.length > 0) contributions = { ...contributions, tools }
   if (!Predicate.isUndefined(opts?.requests))
@@ -2862,7 +2711,7 @@ describe("resolveExtensions", () => {
       makeExtRegistry("a", "builtin", { tools: [builtinRead] }),
       makeExtRegistry("b", "project", { tools: [projectRead] }),
     ])
-    expect(resolved.modelCapabilities.get("read")?.description).toBe("project override")
+    expect(resolved.modelCapabilities.get("read")?.capability.description).toBe("project override")
   })
   test("later scope wins for same-name agent", () => {
     const builtinExplore = makeAgent("explore")
@@ -3017,26 +2866,14 @@ describe("ExtensionRegistry", () => {
       Effect.provide(ExtensionRegistry.fromResolved(resolved)),
     )
   }
-  const buildDriverRegistry = (
-    extensions: LoadedExtension[],
-    failedExtensions: Parameters<typeof resolveExtensions>[1] = [],
-  ) => {
-    const resolved = resolveExtensions(extensions, failedExtensions)
-    return Effect.service(DriverRegistry).pipe(
-      Effect.provide(
-        DriverRegistry.fromResolved({
-          modelDrivers: resolved.modelDrivers,
-          externalDrivers: resolved.externalDrivers,
-        }),
-      ),
-    )
-  }
   it.live("registered model capability is findable by name", () =>
     Effect.gen(function* () {
       const registry = yield* buildRegistry([
         makeExtRegistry("a", "builtin", { tools: [makeTool("read")] }),
       ])
-      const tools = [...registry.getResolved().modelCapabilities.values()]
+      const tools = [...registry.getResolved().modelCapabilities.values()].map(
+        (entry) => entry.capability,
+      )
       const tool = tools.find((capability) => String(getToolId(capability)) === "read")
       expect(tool).toBeDefined()
       if (Predicate.isUndefined(tool)) return
@@ -3046,7 +2883,9 @@ describe("ExtensionRegistry", () => {
   it.live("unregistered model capability name returns undefined", () =>
     Effect.gen(function* () {
       const registry = yield* buildRegistry([])
-      const tools = [...registry.getResolved().modelCapabilities.values()]
+      const tools = [...registry.getResolved().modelCapabilities.values()].map(
+        (entry) => entry.capability,
+      )
       const tool = tools.find((capability) => String(getToolId(capability)) === "nonexistent")
       expect(tool).toBeUndefined()
     }),
@@ -3056,7 +2895,9 @@ describe("ExtensionRegistry", () => {
       const registry = yield* buildRegistry([
         makeExtRegistry("a", "builtin", { tools: [makeTool("read"), makeTool("write")] }),
       ])
-      const tools = [...registry.getResolved().modelCapabilities.values()]
+      const tools = [...registry.getResolved().modelCapabilities.values()].map(
+        (entry) => entry.capability,
+      )
       expect(tools.length).toBe(2)
     }),
   )
@@ -3074,7 +2915,9 @@ describe("ExtensionRegistry", () => {
           },
         ],
       )
-      const tools = [...registry.getResolved().modelCapabilities.values()]
+      const tools = [...registry.getResolved().modelCapabilities.values()].map(
+        (entry) => entry.capability,
+      )
       const failed = registry.getResolved().failedExtensions
       const statuses = registry.getResolved().extensionStatuses
       expect(tools.map((tool) => String(getToolId(tool)))).toEqual(["read"])
@@ -3209,65 +3052,36 @@ describe("ExtensionRegistry", () => {
       expect(tools.map((t) => String(getToolId(t)))).not.toContain("secret")
     }),
   )
-  it.live("registered model driver is findable by ID", () =>
-    Effect.gen(function* () {
-      const registry = yield* buildDriverRegistry([
-        makeExtRegistry("a", "builtin", { modelDrivers: [makeProvider("anthropic")] }),
-      ])
-      const provider = yield* registry.getModel("anthropic")
-      expect(provider?.id).toBe("anthropic")
-    }),
-  )
-  it.live("unregistered model driver ID returns undefined", () =>
-    Effect.gen(function* () {
-      const registry = yield* buildDriverRegistry([])
-      const provider = yield* registry.getModel("nonexistent")
-      expect(provider).toBeUndefined()
-    }),
-  )
-  it.live("lists all registered model drivers", () =>
-    Effect.gen(function* () {
-      const registry = yield* buildDriverRegistry([
-        makeExtRegistry("a", "builtin", {
-          modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
-        }),
-      ])
-      const providers = yield* registry.listModels
-      expect(providers.length).toBe(2)
-    }),
-  )
+  test("registered model driver is findable by ID", () => {
+    const registry = resolveExtensions([
+      makeExtRegistry("a", "builtin", { modelDrivers: [makeProvider("anthropic")] }),
+    ])
+    const provider = registry.modelDrivers.get("anthropic")
+    expect(provider?.id).toBe("anthropic")
+  })
+  test("unregistered model driver ID returns undefined", () => {
+    const registry = resolveExtensions([])
+    const provider = registry.modelDrivers.get("nonexistent")
+    expect(provider).toBeUndefined()
+  })
+  test("lists all registered model drivers", () => {
+    const registry = resolveExtensions([
+      makeExtRegistry("a", "builtin", {
+        modelDrivers: [makeProvider("anthropic"), makeProvider("openai")],
+      }),
+    ])
+    expect(registry.modelDrivers.size).toBe(2)
+  })
   it.live("test layer starts with empty registry", () =>
     Effect.gen(function* () {
-      const layer = Layer.merge(
-        ExtensionRegistry.Test(),
-        DriverRegistry.fromResolved({ modelDrivers: new Map(), externalDrivers: new Map() }),
-      )
-      const registries = yield* Effect.gen(function* () {
+      const resolved = yield* Effect.gen(function* () {
         const ext = yield* ExtensionRegistry
-        const driver = yield* DriverRegistry
-        return { ext, driver }
+        return ext.getResolved()
         // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(layer))
-      const tools = [...registries.ext.getResolved().modelCapabilities.values()]
-      expect(tools.length).toBe(0)
-      const agents = [...registries.ext.getResolved().agents.values()]
-      expect(agents.length).toBe(0)
-      const providers = yield* registries.driver.listModels
-      expect(providers.length).toBe(0)
-    }),
-  )
-  it.live("static prompt sections are returned as-is", () =>
-    Effect.gen(function* () {
-      const registry = yield* buildRegistry([
-        makeExtRegistry("@gent/test", "builtin", {
-          promptSections: [{ id: "test", content: "Hello", priority: 50 }],
-        }),
-      ])
-      const sections = [...registry.getResolved().promptSections.values()]
-      expect(sections.length).toBe(1)
-      expect(sections[0]?.id).toBe("test")
-      expect(sections[0]?.content).toBe("Hello")
-      expect(sections[0]?.priority).toBe(50)
+      }).pipe(Effect.provide(ExtensionRegistry.Test()))
+      expect(resolved.modelCapabilities.size).toBe(0)
+      expect(resolved.agents.size).toBe(0)
+      expect(resolved.modelDrivers.size).toBe(0)
     }),
   )
 })
@@ -3335,7 +3149,9 @@ describe("resolveExtensions — slash command discovery", () => {
     })
     const resolved = resolveExtensions([makeExtRegistry("@test/echo", "builtin", { tools: [cap] })])
     expect(resolved.modelCapabilities.has("echo")).toBe(true)
-    expect(resolved.modelCapabilities.get("echo")?.description).toBe("Echo input back as output.")
+    expect(resolved.modelCapabilities.get("echo")?.capability.description).toBe(
+      "Echo input back as output.",
+    )
   })
   test("project rpc shadows builtin tool", () => {
     const builtin = makeExtRegistry("@test/shadow", "builtin", { tools: [makeTool("act")] })
@@ -3363,7 +3179,9 @@ describe("resolveExtensions — slash command discovery", () => {
     const project = makeExtRegistry("@test/shadow", "project", { tools: [projectCap] })
     const resolved = resolveExtensions([builtin, project])
     expect(resolved.modelCapabilities.has("run")).toBe(true)
-    expect(resolved.modelCapabilities.get("run")?.description).toBe("project run override")
+    expect(resolved.modelCapabilities.get("run")?.capability.description).toBe(
+      "project run override",
+    )
   })
   test("model capability preserves all tool metadata fields", () => {
     const cap = tool({
@@ -3377,7 +3195,7 @@ describe("resolveExtensions — slash command discovery", () => {
       execute: () => Effect.void,
     })
     const resolved = resolveExtensions([makeExtRegistry("@test/rich", "builtin", { tools: [cap] })])
-    const resolvedTool = resolved.modelCapabilities.get("rich")
+    const resolvedTool = resolved.modelCapabilities.get("rich")?.capability
     expect(resolvedTool).toBeDefined()
     if (Predicate.isUndefined(resolvedTool)) return
     expect(resolvedTool.description).toBe("rich tool")
@@ -3440,13 +3258,11 @@ describe("defineResource", () => {
   test("emits a contribution with the declared scope", () => {
     const r = defineResource({
       id: "test/resource-host/declared-scope",
-      tag: TestServiceA,
       scope: "process",
       layer: layerA,
     })
     expect(String(r.id)).toBe("test/resource-host/declared-scope")
     expect(r.scope).toBe("process")
-    expect(r.tag).toBe(TestServiceA)
   })
 
   test("rejects an empty resource id", () => {
@@ -3498,116 +3314,62 @@ describe("buildResourceLayer", () => {
   )
 })
 
-// ── lifecycle correctness (Resource.start / Resource.stop) ──
-//
-// Codex  review flagged two BLOCK findings that these tests lock down:
-//
-//   - BLOCK 1: a failed `start` must fail the Resource layer instead of
-//     leaving dependent extension contributions active.
-//   - BLOCK 2: lifecycle teardown order must be reverse-of-start, not
-//     racing parallel finalizers.
-//     (Pre-fix `Layer.mergeAll` of per-Resource lifecycle layers raced.)
+// ── resource layer lifecycle ──
 
 describe("buildResourceLayer lifecycle", () => {
-  it.live(
-    "starts run in declaration order, stops run in reverse start order at scope teardown",
-    () =>
-      Effect.gen(function* () {
-        const log: string[] = []
-        const append = (s: string) => Effect.sync(() => log.push(s))
-        const ext = makeStubExtension("ext", [
-          defineResource({
-            id: "test/resource-host/lifecycle/start-stop-1",
-            scope: "process",
-            layer: layerA,
-            start: append("start-1"),
-            stop: append("stop-1"),
-          }),
-          defineResource({
-            id: "test/resource-host/lifecycle/start-stop-2",
-            scope: "process",
-            layer: layerB,
-            start: append("start-2"),
-            stop: append("stop-2"),
-          }),
-        ])
-        yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
-        // After teardown: starts in declaration order, stops in reverse.
-        expect(log).toEqual(["start-1", "start-2", "stop-2", "stop-1"])
-      }),
+  const lifecycleLog = () => {
+    const log: string[] = []
+    const append = (s: string) => Effect.sync(() => log.push(s))
+    const tracked = <I>(layer: Layer.Layer<I>, name: string) =>
+      Layer.provideMerge(
+        layer,
+        Layer.effectDiscard(
+          Effect.acquireRelease(append(`start-${name}`), () => append(`stop-${name}`)),
+        ),
+      )
+    return { log, tracked }
+  }
+
+  it.live("layers build in declaration order and release in reverse at scope teardown", () =>
+    Effect.gen(function* () {
+      const { log, tracked } = lifecycleLog()
+      const ext = makeStubExtension("ext", [
+        defineResource({
+          id: "test/resource-host/lifecycle/order-1",
+          scope: "process",
+          layer: tracked(layerA, "1"),
+        }),
+        defineResource({
+          id: "test/resource-host/lifecycle/order-2",
+          scope: "process",
+          layer: tracked(layerB, "2"),
+        }),
+      ])
+      yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
+      expect(log).toEqual(["start-1", "start-2", "stop-2", "stop-1"])
+    }),
   )
 
-  it.live("failed start fails the layer and stops previously started Resources", () =>
+  it.live("a failed layer fails the build and releases the layers built before it", () =>
     Effect.gen(function* () {
-      const log: string[] = []
-      const append = (s: string) => Effect.sync(() => log.push(s))
+      const { log, tracked } = lifecycleLog()
       const ext = makeStubExtension("ext", [
         defineResource({
           id: "test/resource-host/lifecycle/failure/good",
           scope: "process",
-          layer: layerA,
-          start: append("start-good-1"),
-          stop: append("stop-good-1"),
+          layer: tracked(layerA, "good"),
         }),
         defineResource({
           id: "test/resource-host/lifecycle/failure/bad",
           scope: "process",
-          layer: layerB,
-          // Intentional failure — must not bring down the layer build.
-          start: Effect.die(new Error("boom")),
-          // Must NOT run, because start failed.
-          stop: append("stop-should-not-run"),
+          layer: Layer.effect(TestServiceB, Effect.die(new Error("boom"))),
         }),
       ])
       const exit = yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process"))).pipe(
         Effect.exit,
       )
       expect(exit._tag).toBe("Failure")
-      // Good start ran, its stop ran on failure teardown; failed Resource's
-      // stop never registered, so it never appears in the log.
-      expect(log).toEqual(["start-good-1", "stop-good-1"])
-    }),
-  )
-
-  it.live("Resource with stop but no start still registers finalizer", () =>
-    Effect.gen(function* () {
-      const log: string[] = []
-      const append = (s: string) => Effect.sync(() => log.push(s))
-      const ext = makeStubExtension("ext", [
-        defineResource({
-          id: "test/resource-host/lifecycle/stop-only",
-          scope: "process",
-          layer: layerA,
-          stop: append("stop-only"),
-        }),
-      ])
-      yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
-      expect(log).toEqual(["stop-only"])
-    }),
-  )
-
-  it.live("stop failure is swallowed and does not mask sibling stops", () =>
-    Effect.gen(function* () {
-      const log: string[] = []
-      const append = (s: string) => Effect.sync(() => log.push(s))
-      const ext = makeStubExtension("ext", [
-        defineResource({
-          id: "test/resource-host/lifecycle/stop-failure/good",
-          scope: "process",
-          layer: layerA,
-          stop: append("stop-1"),
-        }),
-        defineResource({
-          id: "test/resource-host/lifecycle/stop-failure/bad",
-          scope: "process",
-          layer: layerB,
-          // Failing stop must not prevent stop-1 from running.
-          stop: Effect.die(new Error("stop boom")),
-        }),
-      ])
-      yield* Effect.scoped(Layer.build(buildResourceLayer([ext], "process")))
-      // stop-2 (the failing one) is reverse-first; stop-1 still ran.
-      expect(log).toEqual(["stop-1"])
+      expect(log).toEqual(["start-good", "stop-good"])
     }),
   )
 })
@@ -3747,7 +3509,7 @@ describe("scope precedence", () => {
         extScopePrecedence("c", "project", { tools: [projectTool] }),
       ])
 
-      const resolvedTool = resolved.modelCapabilities.get("greet")
+      const resolvedTool = resolved.modelCapabilities.get("greet")?.capability
       expect(resolvedTool).toBeDefined()
       if (!isToolCapability(resolvedTool)) return Effect.void
       expect(resolvedTool).toBe(projectTool)
@@ -3772,61 +3534,6 @@ describe("scope precedence", () => {
       )
     })
 
-    test("prompt section by id: project tool prompt shadows builtin", () => {
-      const builtinTool = tool({
-        id: "carrier-builtin",
-        description: "carrier",
-        params: Schema.Struct({}),
-        output: Schema.String,
-        prompt: { id: "rules", content: "builtin rules", priority: 50 },
-        execute: () => Effect.succeed("ok"),
-      })
-      const projectTool = tool({
-        id: "carrier-project",
-        description: "carrier",
-        params: Schema.Struct({}),
-        output: Schema.String,
-        prompt: { id: "rules", content: "project rules", priority: 50 },
-        execute: () => Effect.succeed("ok"),
-      })
-
-      const resolved = resolveExtensions([
-        extScopePrecedence("a", "builtin", { tools: [builtinTool] }),
-        extScopePrecedence("b", "project", { tools: [projectTool] }),
-      ])
-      return Effect.sync(() =>
-        expect(resolved.promptSections.get("rules")).toMatchObject({ content: "project rules" }),
-      )
-    })
-
-    test("tool prompt: shadowed lower-scope prompt does NOT survive", () => {
-      // Previously, prompts/rules were collected from raw extracted leaves, not
-      // winners. A higher-scope tool shadowing a lower-scope tool would leak
-      // the loser's prompt.
-      const builtinTool = tool({
-        id: "shadow-me",
-        description: "carrier",
-        params: Schema.Struct({}),
-        output: Schema.String,
-        prompt: { id: "shadow-prompt", content: "BUILTIN PROMPT", priority: 50 },
-        execute: () => Effect.succeed("ok"),
-      })
-      const projectTool = tool({
-        id: "shadow-me",
-        description: "carrier",
-        params: Schema.Struct({}),
-        output: Schema.String,
-        // NO prompt — should remove the section
-        execute: () => Effect.succeed("ok"),
-      })
-
-      const resolved = resolveExtensions([
-        extScopePrecedence("a", "builtin", { tools: [builtinTool] }),
-        extScopePrecedence("b", "project", { tools: [projectTool] }),
-      ])
-      return Effect.sync(() => expect(resolved.promptSections.has("shadow-prompt")).toBe(false))
-    })
-
     test("same scope ties broken by extension id alphabetically", () => {
       const toolFromZ = toolReturning("greet", "from-z")
       const toolFromA = toolReturning("greet", "from-a")
@@ -3838,7 +3545,7 @@ describe("scope precedence", () => {
       ])
 
       // Sorted [a-ext, z-ext] — z-ext registered last, so wins
-      const resolvedTool = resolved.modelCapabilities.get("greet")
+      const resolvedTool = resolved.modelCapabilities.get("greet")?.capability
       expect(resolvedTool).toBeDefined()
       if (!isToolCapability(resolvedTool)) return Effect.void
       expect(resolvedTool).toBe(toolFromZ)
@@ -3910,13 +3617,9 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     eventStoreLayer,
     recorderLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
-    DriverRegistry.fromResolved({
-      modelDrivers: resolvedExtensions.modelDrivers,
-      externalDrivers: resolvedExtensions.externalDrivers,
-    }),
     ToolRunner.Test(),
     ApprovalService.Test(),
-    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+    RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
     ConfigService.Test(),
     BunServices.layer,
     ModelRegistry.Test(),
@@ -4084,38 +3787,6 @@ describe("ExternalDriver registry", () => {
     expect(resolved.externalDrivers.size).toBe(1)
     expect(resolved.externalDrivers.get("shared-id")?.executor).toBe(echoExecutor)
   })
-  it.live("getExternal resolves driver with executor from registry service", () =>
-    Effect.gen(function* () {
-      const resolved = resolveExtensions([
-        makeExtTurnExecutor("ext-a", [{ id: "test-executor", executor: echoExecutor }]),
-      ])
-      const registryLayer = DriverRegistry.fromResolved({
-        modelDrivers: resolved.modelDrivers,
-        externalDrivers: resolved.externalDrivers,
-      })
-      const driver = yield* Effect.gen(function* () {
-        const registry = yield* DriverRegistry
-        return yield* registry.getExternal("test-executor")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(registryLayer))
-      expect(driver?.executor).toBe(echoExecutor)
-    }),
-  )
-  it.live("getExternal returns undefined for missing ID", () =>
-    Effect.gen(function* () {
-      const resolved = resolveExtensions([makeExtTurnExecutor("ext-a", [])])
-      const registryLayer = DriverRegistry.fromResolved({
-        modelDrivers: resolved.modelDrivers,
-        externalDrivers: resolved.externalDrivers,
-      })
-      const result = yield* Effect.gen(function* () {
-        const registry = yield* DriverRegistry
-        return yield* registry.getExternal("nonexistent")
-        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
-      }).pipe(Effect.provide(registryLayer))
-      expect(result).toBeUndefined()
-    }),
-  )
 })
 
 // ── addressed session verbs ─────────────────────────────────────────────────
@@ -4212,7 +3883,7 @@ describe("addressed session verbs via RPC", () => {
       execute: Effect.fn("Steer.execute")(function* (target) {
         const ctx = yield* ExtensionContext
         yield* ctx.Session.steer({
-          _tag: "Interrupt",
+          _tag: "Cancel",
           ...target,
           requestId: RequestId.make("addressed-interrupt"),
         })

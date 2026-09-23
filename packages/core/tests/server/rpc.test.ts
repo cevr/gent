@@ -79,7 +79,6 @@ import {
 import {
   ApprovalService,
   buildResourceLayer,
-  DriverRegistry,
   ExtensionRegistry,
   resolveExtensions,
   type SessionProfile,
@@ -92,7 +91,7 @@ import { MinimumLogLevel } from "effect/References"
 import { narrowR } from "../helpers/effect"
 import { type Message, messageSingleText } from "../../src/domain/message"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
-import { type LogEvent, WideEventLogger } from "../../src/runtime/wide-event-boundary"
+import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
 // ── rpc-contract.test ───────────────────────────────────────────────────────
 
@@ -148,7 +147,7 @@ describe("RPC contract schemas", () => {
  * acceptance tests.
  *
  * Drives the full transport boundary (Gent.test → RpcServer → handler →
- * ConfigService + DriverRegistry) so the tests catch wiring bugs the
+ * ConfigService + ExtensionRegistry) so the tests catch wiring bugs the
  * unit tests on `ConfigService.setDriverOverride` don't cover.
  */
 
@@ -455,7 +454,6 @@ describe("auth.listProviders", () => {
           const runtimeEnvironmentLive = RuntimeEnvironment.Live({
             cwd: launch,
             home,
-            platform: "darwin",
           })
           const configServiceLive = ConfigService.Live.pipe(
             Layer.provide(Layer.merge(BunServices.layer, runtimeEnvironmentLive)),
@@ -1094,13 +1092,7 @@ describe("extension command RPCs", () => {
       const layerContext = yield* Layer.build(
         Layer.provideMerge(
           buildResourceLayer(resolved.extensions, "process"),
-          Layer.mergeAll(
-            ExtensionRegistry.fromResolved(resolved),
-            DriverRegistry.fromResolved({
-              modelDrivers: resolved.modelDrivers,
-              externalDrivers: resolved.externalDrivers,
-            }),
-          ),
+          ExtensionRegistry.fromResolved(resolved),
         ),
       )
       return {
@@ -1108,7 +1100,6 @@ describe("extension command RPCs", () => {
         resolved,
         layerContext,
         registryService: Context.get(layerContext, ExtensionRegistry),
-        driverRegistryService: Context.get(layerContext, DriverRegistry),
         baseSections: [],
         generationId: ProcessGenerationId.make("test"),
       } satisfies SessionProfile
@@ -1281,6 +1272,47 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+  it.live("a turn emits one agent-loop wide event with its session envelope", () =>
+    narrowR(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("traced reply"),
+          ])
+          const wideEvents = MutableRef.make<Array<LogEvent>>([])
+          const minimumLogLevel = Layer.effectContext(
+            Effect.succeed(Context.make(MinimumLogLevel, "Info")),
+          )
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: "/tmp/gent-turn-wide-event",
+            extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
+          })
+          yield* client.message.send({ sessionId, branchId, content: "trace me" })
+          const turnEvents = yield* waitFor(
+            Effect.sync(() =>
+              MutableRef.get(wideEvents).filter(
+                (event) => event.annotations["service"] === "agent-loop",
+              ),
+            ),
+            (events) => events.length > 0,
+            4000,
+            "turn wide event",
+          )
+          expect(turnEvents).toHaveLength(1)
+          expect(turnEvents[0]?.annotations).toMatchObject({
+            service: "agent-loop",
+            method: "turn",
+            status: "ok",
+            actor: DEFAULT_AGENT_NAME,
+            sessionId,
+            branchId,
+          })
+        }),
+      ),
+    ).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  )
   it.live("RPC event subscriptions mark the move from replay to live", () =>
     narrowR(
       Effect.scoped(
@@ -1332,6 +1364,99 @@ describe("extension command RPCs", () => {
         }),
       ),
     ).pipe(Effect.provide(BunServices.layer), Effect.timeout("10 seconds")),
+  )
+
+  it.live("a child session created through the facade starts its own thread", () =>
+    Effect.gen(function* () {
+      const extensionId = ExtensionId.make("@test/spawn-child")
+      const ext: LoadedExtension = {
+        manifest: { id: extensionId },
+        scope: "builtin",
+        sourcePath: "test",
+        contributions: {
+          requests: [
+            request({
+              id: "spawn-child",
+              input: Schema.String,
+              output: SessionId,
+              execute: (name) =>
+                Effect.gen(function* () {
+                  const ctx = yield* ExtensionContext
+                  const child = yield* ctx.Session.create({
+                    name,
+                    parentSessionId: ctx.sessionId,
+                    parentBranchId: ctx.branchId,
+                  })
+                  return child.sessionId
+                }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new CapabilityError({
+                        extensionId,
+                        capabilityId: "spawn-child",
+                        reason: cause.message,
+                      }),
+                  ),
+                ),
+            }),
+          ],
+        },
+      }
+      yield* narrowR(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+            const { client, sessionId, branchId } = yield* createRpcHarness({
+              ...e2ePreset,
+              providerLayer,
+              extensions: [ext],
+              cwd: "/tmp/gent-child-thread",
+            })
+            const childId = yield* client.extension.request({
+              sessionId,
+              branchId,
+              extensionId,
+              capabilityId: "spawn-child",
+              input: "side work",
+            })
+            const child = yield* Schema.decodeUnknownEffect(SessionId)(childId)
+            const parentThread = yield* client.session.thread({ sessionId })
+            expect(parentThread.map((session) => session.id)).toEqual([sessionId])
+            const childThread = yield* client.session.thread({ sessionId: child })
+            expect(childThread.map((session) => session.id)).toEqual([child])
+            expect(childThread[0]?.parentSessionId).toBe(sessionId)
+          }).pipe(Effect.timeout("4 seconds")),
+        ),
+      )
+    }),
+  )
+
+  it.live("a handoff joins its parent's thread; a plain child starts its own", () =>
+    narrowR(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: "/tmp/gent-handoff-thread",
+          })
+          const handoff = yield* client.session.create({
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+            continueThread: true,
+          })
+          const plain = yield* client.session.create({
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          const thread = yield* client.session.thread({ sessionId: handoff.sessionId })
+          expect(thread.map((session) => session.id)).toEqual([sessionId, handoff.sessionId])
+          const plainThread = yield* client.session.thread({ sessionId: plain.sessionId })
+          expect(plainThread.map((session) => session.id)).toEqual([plain.sessionId])
+        }).pipe(Effect.timeout("4 seconds")),
+      ),
+    ),
   )
 
   it.live("RPC request follow-up on a warm idle branch runs the queued turn", () =>
@@ -1612,7 +1737,6 @@ describe("extension command RPCs", () => {
           resources: [
             defineResource({
               id: "test/extension-commands-rpc/profile-token",
-              tag: ProfileToken,
               scope: "process",
               layer: Layer.succeed(
                 ProfileToken,
@@ -1677,7 +1801,6 @@ describe("extension command RPCs", () => {
             "resource",
             defineResource({
               id: "test/extension-commands-rpc/live-profile-token",
-              tag: ProfileToken,
               scope: "process",
               layer: Layer.succeed(
                 ProfileToken,

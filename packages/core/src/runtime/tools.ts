@@ -70,7 +70,7 @@ import {
   ToolCallStarted,
   ToolCallSucceeded,
 } from "../domain/event.js"
-import { WideEvent, WideEventBoundary, withWideEvent } from "./wide-event-boundary.js"
+import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
 import type { AgentDefinition, AgentName as AgentNameType } from "../domain/agent.js"
@@ -84,12 +84,8 @@ import type { CurrentAgentLoopTurnProfile } from "./turn.js"
  * The loop, the turn executor and the branch's tools all need this one bit,
  * but they need different halves of it: the worker interrupts a turn and
  * begins the next one, while a running turn and the tools it dispatches only
- * ask. A shared `Ref.Ref<boolean>` gave every one of them both halves and left
- * the meaning of `true` and `false` to be re-derived at each call site.
- *
- * Naming the two transitions keeps that meaning in one place: `interrupt`
- * stops the turn now running, and `beginTurn` declares that a fresh turn
- * starts uninterrupted.
+ * ask. `interrupt` stops the turn now running, and `beginTurn` declares that a
+ * fresh turn starts uninterrupted.
  *
  * @module
  */
@@ -856,22 +852,10 @@ const normalizeToolExecutionError = (
 
 export const staticToolEntries = (
   activeRegistry: ExtensionRegistryService,
-): ReadonlyArray<ResolvedToolCapability> => {
-  const resolved = activeRegistry.getResolved()
-  const entries: ResolvedToolCapability[] = []
-  for (const capability of resolved.modelCapabilities.values()) {
-    const extension = resolved.extensions.find((extension) =>
-      (extension.contributions.tools ?? []).includes(capability),
-    )
-    if (!Predicate.isUndefined(extension)) {
-      entries.push({
-        extensionId: extension.manifest.id,
-        capability,
-      })
-    }
-  }
-  return entries
-}
+): ReadonlyArray<ResolvedToolCapability> =>
+  [...activeRegistry.getResolved().modelCapabilities.values()].map(
+    ({ extensionId, capability }) => ({ extensionId, capability }),
+  )
 
 const captureToolEntry = (params: {
   readonly toolName: string
@@ -1163,34 +1147,15 @@ const applyToolProjection = (
   projection: TurnProjection,
   allToolsByName: ReadonlyMap<string, ToolCapability>,
 ): ToolCapability[] => {
-  const policy = Option.fromUndefinedOr(projection.toolPolicy)
-  if (Option.isNone(policy)) return tools
-
-  const overrideSet = Option.fromUndefinedOr(policy.value.overrideSet)
-  if (Option.isSome(overrideSet)) {
-    return overrideSet.value.flatMap((name) => {
-      const tool = allToolsByName.get(name)
-      if (Predicate.isUndefined(tool)) return []
-      return [tool]
-    })
-  }
-
-  const include = Option.fromUndefinedOr(policy.value.include)
-  if (Option.isSome(include)) {
-    const existing = new Set(tools.map((tool) => String(getToolId(tool))))
-    for (const name of include.value) {
-      if (existing.has(name)) continue
-      const tool = allToolsByName.get(name)
-      if (Predicate.isUndefined(tool)) continue
-      tools.push(tool)
-      existing.add(name)
-    }
-  }
-
-  const exclude = Option.fromUndefinedOr(policy.value.exclude)
-  if (Option.isSome(exclude)) {
-    const excludeSet = new Set(exclude.value)
-    return tools.filter((tool) => !excludeSet.has(String(getToolId(tool))))
+  const include = Option.fromUndefinedOr(projection.toolPolicy?.include)
+  if (Option.isNone(include)) return tools
+  const existing = new Set(tools.map((tool) => String(getToolId(tool))))
+  for (const name of include.value) {
+    if (existing.has(name)) continue
+    const tool = allToolsByName.get(name)
+    if (Predicate.isUndefined(tool)) continue
+    tools.push(tool)
+    existing.add(name)
   }
   return tools
 }
@@ -1211,9 +1176,11 @@ const collectProjectionPromptSections = (
  *
  * Pipeline:
  * 1. Agent allow/deny filtering
- * 2. Extension projection fragments (include/exclude/overrideSet)
+ * 2. Extension `include` fragments add tools
  * 3. Re-apply agent deny list (extensions can't escape denials)
- * 4. Collect extension-contributed prompt sections
+ * 4. Drop interactive tools in a non-interactive turn
+ * 5. The last `modelSet` picks the model-facing subset
+ * 6. Collect extension-contributed prompt sections
  */
 export const compileToolPolicy = (
   allTools: ReadonlyArray<ToolCapability>,
@@ -1226,15 +1193,15 @@ export const compileToolPolicy = (
   // 1. Agent allow/deny filtering
   let tools = filterToolsForAgent(allTools, agent)
 
-  // 2. Extension projection fragments (overrideSet is exclusive — include/exclude ignored when set)
+  // 2. Extension `include` fragments
   for (const projection of extensionProjections) {
     tools = applyToolProjection(tools, projection, allToolsByName)
   }
 
-  // 4. Re-apply agent deny list — extensions can't escape denials
+  // 3. Re-apply agent deny list — extensions can't escape denials
   tools = applyDenyFilter(tools, agent)
 
-  // 5. Filter interactive tools in non-interactive contexts (headless, subagent)
+  // 4. Filter interactive tools in non-interactive contexts (headless, subagent)
   if (turn.interactive === false) {
     tools = tools.filter((t) => getToolMetadata(t).interactive !== true)
   }

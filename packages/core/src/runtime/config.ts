@@ -19,10 +19,9 @@ import {
 
 // ── runtime-environment ─────────────────────────────────────────────────────
 
-export interface RuntimeEnvironmentApi {
+interface RuntimeEnvironmentApi {
   readonly cwd: string
   readonly home: string
-  readonly platform: string
 }
 
 export class RuntimeEnvironment extends Context.Service<

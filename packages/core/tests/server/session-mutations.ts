@@ -1,10 +1,9 @@
 import { Predicate, Deferred, Effect, Layer, Stream } from "effect"
 import { RpcClient, RpcTest } from "effect/unstable/rpc"
-import { ExtensionContext, hook } from "@gent/core/extensions/api"
+import { defineExtension, ExtensionContext, ExtensionHost } from "@gent/core/extensions/api"
 import { LanguageModelLayers, textStep } from "../../src/test-utils/language-model"
 import { ExtensionRegistry } from "../../src/runtime/extension-host.js"
 import type { BranchId, SessionId } from "../../src/domain/ids"
-import { ExtensionId } from "../../src/domain/ids"
 import { Branch, dateFromMillis, emptyQueueSnapshot, Session } from "../../src/domain/message"
 import { AgentName } from "../../src/domain/agent"
 import { EventPublisher, EventStore, EventStoreError } from "../../src/domain/event"
@@ -26,7 +25,6 @@ import {
 import { createE2ELayer } from "../../src/test-utils/index"
 import { Gent } from "@gent/sdk"
 import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
-import type { LoadedExtension } from "../../src/domain/extension"
 
 export const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 export const datePlusMillis = (date: Date, millis: number): Date =>
@@ -333,32 +331,29 @@ export const racySessionMutationsLayer = (params: {
   return Layer.provideMerge(SessionMutationsLive, deps)
 }
 
-export const parentToolCallProbeExtension: LoadedExtension = {
-  manifest: { id: ExtensionId.make("parent-tool-call-probe") },
-  scope: "builtin",
-  sourcePath: "test",
-  contributions: {
-    hooks: [
-      hook("turnProjection", () =>
-        Effect.gen(function* () {
-          const ctx = yield* ExtensionContext
-          let promptSections: ReadonlyArray<{
-            readonly id: string
-            readonly content: string
-            readonly priority: number
-          }> = []
-          if (!Predicate.isUndefined(ctx.turn?.parentToolCallId)) {
-            promptSections = [
-              {
-                id: "parent-tool-call-probe",
-                content: `parentToolCallId:${ctx.turn.parentToolCallId}`,
-                priority: 45,
-              },
-            ]
-          }
-          return { promptSections }
-        }),
-      ),
-    ],
-  },
-}
+export const parentToolCallProbeExtension = defineExtension({
+  id: "parent-tool-call-probe",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost
+    yield* host.on("turnProjection", () =>
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        let promptSections: ReadonlyArray<{
+          readonly id: string
+          readonly content: string
+          readonly priority: number
+        }> = []
+        if (!Predicate.isUndefined(ctx.turn?.parentToolCallId)) {
+          promptSections = [
+            {
+              id: "parent-tool-call-probe",
+              content: `parentToolCallId:${ctx.turn.parentToolCallId}`,
+              priority: 45,
+            },
+          ]
+        }
+        return { promptSections }
+      }),
+    )
+  }),
+})

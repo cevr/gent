@@ -675,7 +675,6 @@ export const BashTool = tool({
   description:
     "Execute shell command. Use for git, npm, system commands. Prefer dedicated tools for file ops. Large output is kept whole; the prompt shows the head and tail, and context.read(toolCallId, { offset, limit }) pages the rest.",
   promptSnippet: "Execute shell commands",
-  promptGuidelines: ["Use the read/grep/edit/write tools instead of cat/head/tail/grep/sed"],
   params: BashParams,
   output: BashResult,
   execute: Effect.fn("BashTool.execute")(function* (params: typeof BashParams.Type) {
@@ -732,8 +731,8 @@ export const BashTool = tool({
     // Sync mode — spawn into an explicit scope so on timeout we can
     // fork-and-forget the scope-close (which fires SIGTERM/SIGKILL via
     // the spawn finalizer) instead of awaiting forceKillAfter on the
-    // calling fiber. Matches the prior killGracefully fire-and-forget
-    // semantics: tool returns immediately on timeout, kill happens async.
+    // calling fiber: the tool returns immediately on timeout and the kill
+    // happens async.
     const spawnScope = yield* Scope.make()
     const closeSpawnScope = Scope.close(spawnScope, Exit.void).pipe(Effect.ignore)
     const result = yield* runBashCommand(command, cwd).pipe(
@@ -778,7 +777,17 @@ export const BashTool = tool({
 
 const EXEC_TOOLS_EXTENSION_ID = ExtensionId.make("@gent/exec-tools")
 
-const BackgroundBashLayer = BackgroundBashSupervisorLive.pipe(
+// A job still marked running belongs to a process that is gone: mark it
+// interrupted before the supervisor takes new work.
+const ReconcileInterruptedJobs = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const storage = yield* BackgroundBashStorage
+    yield* storage.reconcileInterrupted
+  }),
+)
+
+export const BackgroundBashLayer = BackgroundBashSupervisorLive.pipe(
+  Layer.provideMerge(ReconcileInterruptedJobs),
   Layer.provideMerge(BackgroundBashStorage.Live),
 )
 
@@ -793,10 +802,6 @@ export const ExecToolsExtension = defineExtension({
         id: "@gent/exec-tools/background-bash",
         scope: "process",
         layer: BackgroundBashLayer,
-        start: Effect.gen(function* () {
-          const storage = yield* BackgroundBashStorage
-          yield* storage.reconcileInterrupted
-        }),
       }),
     )
   }),

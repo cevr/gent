@@ -107,7 +107,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -164,9 +164,6 @@ describe("tool execution", () => {
       const registryLayer = Layer.succeed(
         ExtensionRegistry,
         ExtensionRegistry.of({
-          get extensionHooks() {
-            return current.extensionHooks
-          },
           getResolved: () => current,
         }),
       )
@@ -175,7 +172,7 @@ describe("tool execution", () => {
         registryLayer,
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -282,7 +279,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -332,7 +329,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -377,7 +374,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -494,7 +491,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -556,7 +553,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
         Layer.succeed(ToolWriteToken, ToolWriteToken.of({ write: Effect.succeed("outer-write") })),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
@@ -632,7 +629,7 @@ describe("tool execution", () => {
         ),
         EventPublisher.Test(),
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -706,7 +703,7 @@ describe("tool execution", () => {
         ),
         eventPublisherLayer,
         ApprovalService.Test(),
-        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp", platform: "test" }),
+        RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" }),
       )
       const runnerLayer = ToolRunner.Live.pipe(Layer.provide(deps))
       const layer = Layer.mergeAll(deps, runnerLayer)
@@ -892,14 +889,6 @@ describe("compileToolPolicy", () => {
     expect(tools).toEqual([])
   })
 
-  test("extension projection exclude removes tools", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
-    const projections = [{ toolPolicy: { exclude: ["bash", "write"] } }]
-    const { tools } = compileToolPolicy(allTools, agent, {}, projections)
-    expect(names(tools)).not.toContain("bash")
-    expect(names(tools)).not.toContain("write")
-  })
-
   test("extension projection include adds tools when they are allowed", () => {
     const agent = AgentDefinition.make({
       name: AgentName.make("cowork"),
@@ -909,13 +898,6 @@ describe("compileToolPolicy", () => {
     const { tools } = compileToolPolicy(allTools, agent, {}, projections)
     expect(names(tools)).toContain("bash")
     expect(names(tools)).toContain("read")
-  })
-
-  test("extension projection overrideSet replaces tool list", () => {
-    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
-    const projections = [{ toolPolicy: { overrideSet: ["read", "grep"] } }]
-    const { tools } = compileToolPolicy(allTools, agent, {}, projections)
-    expect(names(tools)).toEqual(["grep", "read"])
   })
 
   test("denied tools cannot be re-added by extension projection include", () => {

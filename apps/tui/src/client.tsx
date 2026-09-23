@@ -1376,7 +1376,10 @@ export function ClientProvider(props: ClientProviderProps) {
   }
 
   const createSessionWith = (
-    input: Pick<CreateSessionInput, "parentSessionId" | "parentBranchId" | "initialPrompt">,
+    input: Pick<
+      CreateSessionInput,
+      "parentSessionId" | "parentBranchId" | "continueThread" | "initialPrompt"
+    >,
   ) => {
     dispatchSession(SessionStateEvent.cases.CreateRequested.make({}))
     const createSessionEffect = Effect.fn("TUI.createSession")(function* () {
@@ -1436,6 +1439,7 @@ export function ClientProvider(props: ClientProviderProps) {
       createSessionWith({
         parentSessionId: current.value.sessionId,
         parentBranchId: current.value.branchId,
+        continueThread: true,
         initialPrompt: summary,
       })
     },

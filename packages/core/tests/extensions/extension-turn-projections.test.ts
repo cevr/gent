@@ -77,7 +77,7 @@ describe("turn projection hooks", () => {
               { id: "shared", content: "project", priority: 50 },
               { id: "project-only", content: "project-only", priority: 60 },
             ],
-            toolPolicy: { exclude: ["project-blocked"] },
+            toolPolicy: { modelSet: ["project-visible"] },
           }),
         ),
       ])
@@ -91,7 +91,7 @@ describe("turn projection hooks", () => {
       ])
       expect(result.policyFragments).toEqual([
         { include: ["builtin-tool"] },
-        { exclude: ["project-blocked"] },
+        { modelSet: ["project-visible"] },
       ])
     }))
 

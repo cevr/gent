@@ -47,11 +47,10 @@ class ResourceInstance extends Context.Service<ResourceInstance, { readonly id: 
 ) {}
 
 describe("extension tool test layer", () => {
-  it.live("uses the started resource instance and releases it once", () =>
+  it.live("uses the one built resource instance and releases it once", () =>
     Effect.gen(function* () {
       let acquired = 0
       let released = 0
-      let started = 0
       const extension = defineExtension({
         id: "resource-instance",
         setup: Effect.gen(function* () {
@@ -61,7 +60,6 @@ describe("extension tool test layer", () => {
             defineResource({
               id: "test/resource-instance",
               scope: "process",
-              tag: ResourceInstance,
               layer: Layer.effect(
                 ResourceInstance,
                 Effect.acquireRelease(
@@ -72,16 +70,13 @@ describe("extension tool test layer", () => {
                     }),
                 ),
               ),
-              start: Effect.gen(function* () {
-                started = (yield* ResourceInstance).id
-              }),
             }),
           )
         }),
       })
       yield* Effect.gen(function* () {
         const instance = yield* ResourceInstance
-        expect(instance.id).toBe(started)
+        expect(instance.id).toBe(1)
         expect(acquired).toBe(1)
         expect(released).toBe(0)
       }).pipe(

@@ -52,25 +52,6 @@ const openProfile = Effect.fn("RuntimeProfileTest.openProfile")(function* (
   return { ...profile, profile }
 })
 
-// Static prompt sections live on capability leaf `prompt`. The tool here is a
-// no-op carrier — its only purpose is to bring the prompt section into scope.
-const sectionTool = tool({
-  id: "rp-test-tool",
-  description: "carrier for rp-test-section",
-  params: S.Struct({}),
-  output: S.String,
-  prompt: { id: "rp-test-section", content: "rp test content", priority: 50 },
-  execute: () => Effect.succeed("ok"),
-})
-
-const sectionExtension = defineExtension({
-  id: "@gent/test-runtime-profile",
-  setup: Effect.gen(function* () {
-    const host = yield* ExtensionHost
-    yield* host.register("tool", sectionTool)
-  }),
-})
-
 // Dynamic prompt section: the hook Effect yields a service from the
 // extension's Resource layer. The service Tag is `ReadOnly`-branded so the
 // prompt hook only receives a read surface.
@@ -114,7 +95,6 @@ const dynamicExtension = defineExtension({
       "resource",
       defineResource({
         id: "test/runtime-profile/fake-provider",
-        tag: FakeProvider,
         scope: "process",
         layer: fakeProviderLive,
       }),
@@ -133,7 +113,7 @@ const dynamicExtension = defineExtension({
 describe("live Profile", () => {
   const test = it.live.layer(BunServices.layer)
 
-  test("loads declarations without lifecycle work before boot activation", () =>
+  test("loads declarations without building resource layers before boot activation", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -162,30 +142,7 @@ describe("live Profile", () => {
                     (probe) => Effect.sync(() => events.push(["release", probe.instance])),
                   ),
                 ),
-                start: Effect.gen(function* () {
-                  const probe = yield* ScopedProbe
-                  events.push(["start", probe.instance])
-                }),
-                stop: Effect.gen(function* () {
-                  const probe = yield* ScopedProbe
-                  events.push(["stop", probe.instance])
-                }),
               }) as never,
-            )
-            yield* host.register(
-              "tool",
-              tool({
-                id: "rp-declaration-prompt",
-                description: "declaration prompt fixture",
-                params: S.Struct({}),
-                output: S.String,
-                prompt: {
-                  id: "rp-declaration-prompt-section",
-                  content: "loaded during declaration setup",
-                  priority: 1,
-                },
-                execute: () => Effect.succeed("ok"),
-              }),
             )
           }),
         })
@@ -236,11 +193,6 @@ describe("live Profile", () => {
         const runtimeExit = yield* Effect.exit(Effect.scoped(openProfile(inputs, false)))
         expect(runtimeExit._tag).toBe("Success")
         if (runtimeExit._tag === "Success") {
-          expect(runtimeExit.value.profile.baseSections).toContainEqual({
-            id: "rp-declaration-prompt-section",
-            content: "loaded during declaration setup",
-            priority: 1,
-          })
           expect(runtimeExit.value.profile.resolved.failedExtensions).toContainEqual(
             expect.objectContaining({
               manifest: { id: "@gent/test-runtime-profile/declaration-invalid" },
@@ -250,14 +202,12 @@ describe("live Profile", () => {
         }
         expect(events).toEqual([
           ["acquire", 1],
-          ["start", 1],
-          ["stop", 1],
           ["release", 1],
         ])
       }),
     ).pipe(Effect.provide(sharedLayer)))
 
-  test("live Profile starts process resources once and skips duplicate lifecycle hooks", () =>
+  test("live Profile builds a process resource layer once", () =>
     Effect.scoped(
       Effect.gen(function* () {
         let starts = 0
@@ -271,10 +221,11 @@ describe("live Profile", () => {
               defineResource({
                 id: "test/runtime-profile/start-once",
                 scope: "process",
-                layer: Layer.empty,
-                start: Effect.sync(() => {
-                  starts += 1
-                }),
+                layer: Layer.effectDiscard(
+                  Effect.sync(() => {
+                    starts += 1
+                  }),
+                ),
               }) as never,
             )
           }),
@@ -316,19 +267,10 @@ describe("live Profile", () => {
                   (probe) => Effect.sync(() => events.push(["release", probe.instance])),
                 ),
               ),
-              start: Effect.gen(function* () {
-                const probe = yield* ScopedProbe
-                events.push(["start", probe.instance])
-              }),
-              stop: Effect.gen(function* () {
-                const probe = yield* ScopedProbe
-                events.push(["stop", probe.instance])
-              }),
             }) as never,
             // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
             defineResource({
               id: "test/runtime-profile/resource-identity/pure",
-              tag: PureProbe,
               scope: "process",
               layer: Layer.succeed(PureProbe, { value: "pure" } satisfies PureProbeApi),
             }) as never,
@@ -374,8 +316,9 @@ describe("live Profile", () => {
 
             // The turn provides the profile's layer context, which carries the
             // built process resources, exactly as the agent loop does.
-            const result = yield* runtime.registryService.extensionHooks
-              .resolveTurnProjection(hookCtx.projection)
+            const result = yield* runtime.registryService
+              .getResolved()
+              .extensionHooks.resolveTurnProjection(hookCtx.projection)
               .pipe(
                 Effect.provideService(CurrentExtensionHostContext, hookCtx.host),
                 Effect.provideContext(runtime.layerContext),
@@ -385,7 +328,6 @@ describe("live Profile", () => {
             ])
             expect(events).toEqual([
               ["acquire", 1],
-              ["start", 1],
               ["capability", 1],
             ])
           }),
@@ -395,9 +337,7 @@ describe("live Profile", () => {
       expect(exit._tag).toBe("Success")
       expect(events).toEqual([
         ["acquire", 1],
-        ["start", 1],
         ["capability", 1],
-        ["stop", 1],
         ["release", 1],
       ])
     }).pipe(Effect.provide(sharedLayer)))
@@ -415,14 +355,14 @@ describe("live Profile", () => {
               // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
               defineResource({
                 id: "test/runtime-profile/precedence/activated",
-                tag: PrecedenceProbe,
                 scope: "process",
-                layer: Layer.succeed(PrecedenceProbe, {
-                  value: "activated",
-                } satisfies PrecedenceProbeApi),
-                start: Effect.sync(() => {
-                  starts += 1
-                }),
+                layer: Layer.effect(
+                  PrecedenceProbe,
+                  Effect.sync(() => {
+                    starts += 1
+                    return { value: "activated" } satisfies PrecedenceProbeApi
+                  }),
+                ),
               }) as never,
             )
           }),
@@ -436,7 +376,6 @@ describe("live Profile", () => {
               // oxlint-disable-next-line effect/noAs -- The contribution array intentionally erases a resource's private service and scope types.
               defineResource({
                 id: "test/runtime-profile/precedence/pure",
-                tag: PrecedenceProbe,
                 scope: "process",
                 layer: Layer.succeed(PrecedenceProbe, {
                   value: "pure",
@@ -460,23 +399,6 @@ describe("live Profile", () => {
         }
 
         expect(starts).toBe(2)
-      }),
-    ).pipe(Effect.provide(sharedLayer)))
-
-  test("the profile's ExtensionRegistry carries the resolved prompt sections", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layerContext } = yield* openProfile({
-          cwd: "/tmp",
-          home: "/tmp",
-          platform: "darwin",
-          extensions: [sectionExtension],
-        })
-        const registryService = Context.get(layerContext, ExtensionRegistry)
-
-        const sections = [...registryService.getResolved().promptSections.values()]
-        const ids = sections.map((s) => s.id)
-        expect(ids).toContain("rp-test-section")
       }),
     ).pipe(Effect.provide(sharedLayer)))
 
@@ -506,8 +428,9 @@ describe("live Profile", () => {
             home: "/tmp",
           }),
         }
-        const result = yield* registryService.extensionHooks
-          .resolveTurnProjection(hookCtx.projection)
+        const result = yield* registryService
+          .getResolved()
+          .extensionHooks.resolveTurnProjection(hookCtx.projection)
           .pipe(
             Effect.provideService(CurrentExtensionHostContext, hookCtx.host),
             Effect.provideContext(layerContext),

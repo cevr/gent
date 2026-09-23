@@ -17,7 +17,7 @@
  *                                     (ACP agents: claude-code/opencode/gemini-cli).
  *
  * Agents reference a driver by `driver: DriverRef`; the agent loop dispatches
- * through `DriverRegistry`, so both kinds of backend reach a turn through one
+ * through the turn's `ExtensionRegistry`, so both kinds of backend reach a turn through one
  * capability-shaped union resolved in one place — `composability-not-flags`.
  *
  * The auth, hint, and resolution shapes live here too: they are

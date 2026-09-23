@@ -35,7 +35,6 @@ const PlatformLayer = Layer.merge(
   RuntimeEnvironment.Live({
     cwd: process.cwd(),
     home: "/tmp/test-home",
-    platform: "test",
   }),
 )
 const ToolLayer = PlatformLayer

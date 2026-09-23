@@ -72,14 +72,13 @@ import {
 } from "../domain/agent-loop.js"
 import {
   type ApprovalService,
-  type DriverRegistry,
   type ExtensionRegistry,
   resolveExistingSessionBranch,
 } from "./extension-host.js"
 import type { ModelRegistry, ModelResolver } from "./provider.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { ToolRunner } from "./tools.js"
-import type { ConfigService } from "./config.js"
+import type { ConfigService, RuntimeEnvironment } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 
 // ── event-store-live ────────────────────────────────────────────────────────
@@ -221,8 +220,8 @@ export const makeRequestDeduper = <In, A, E>(opts: {
 
 /**
  * Session nesting depth: one computation and one admission rule for every
- * child-session writer. Delegate spawns and compaction handoffs both nest a
- * session under a parent; both go through `admitChildSessionDepth`.
+ * child-session writer. `SessionMutations.createSession` nests a session under
+ * a parent (a delegate child, a `/btw` fork) and runs `admitChildSessionDepth`.
  *
  * @module
  */
@@ -308,9 +307,9 @@ type SessionRuntimeLayerRequirements =
   | EventStore
   | EventPublisher
   | ExtensionRegistry
-  | DriverRegistry
   | ModelRegistry
   | GentPlatform
+  | RuntimeEnvironment
   | SessionStorage
   | SessionOperationStorage
   | MessageStorage
@@ -591,7 +590,7 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
 export class SessionRuntime extends Context.Service<SessionRuntime, SessionRuntimeService>()(
   "@gent/core/src/runtime/session/SessionRuntime",
 ) {
-  /** Client-only composition lets child runners exist before actor handlers capture services. */
+  /** Client-only composition: the session runtime exists before actor handlers capture services. */
   static readonly Client = Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(
     Layer.provideMerge(Actor.toLayer(AgentLoopActor)),
   )

@@ -60,8 +60,6 @@ import {
 import type { ExtensionHostContext, TurnProjection } from "../domain/extension.js"
 import {
   CurrentExtensionHostContext,
-  DriverRegistry,
-  type DriverRegistryService,
   ExtensionRegistry,
   type ExtensionRegistryService,
   provideCurrentCapabilityContext,
@@ -137,7 +135,7 @@ import {
   type ResolveModelRequest,
   retryProviderCall,
 } from "./provider.js"
-import { WideEvent, WideEventBoundary, withWideEvent } from "./wide-event-boundary.js"
+import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import * as AiError from "effect/unstable/ai/AiError"
 import {
   currentHandoffId,
@@ -268,7 +266,6 @@ const toolCallsFromMessage = (message: Message) => messagePartsToolCallParts(mes
 
 export interface AgentLoopTurnProfile {
   readonly turnExtensionRegistry: ExtensionRegistryService
-  readonly turnDriverRegistry: DriverRegistryService
   readonly turnBaseSections: ReadonlyArray<PromptSection>
   readonly turnHostCtx: ExtensionHostContext
   readonly turnCapabilityContext?: Context.Context<never>
@@ -294,7 +291,6 @@ export const runAgentLoopTurnProfile =
       Effect.provideContext(turnCapabilityContext),
       Effect.provideService(CurrentAgentLoopTurnProfile, profile),
       Effect.provideService(ExtensionRegistry, profile.turnExtensionRegistry),
-      Effect.provideService(DriverRegistry, profile.turnDriverRegistry),
       provideCurrentCapabilityContext(profile.turnCapabilityContext),
       provideCurrentHostCtx(profile.turnHostCtx),
     )
@@ -691,13 +687,9 @@ export const collectExternalTurnResponse = <R>(params: {
  * model steps and are read once, at the end, to fill `TurnCompleted`. The
  * accumulator therefore outlives no turn: the next one starts from zero.
  *
- * A bare `Ref<TurnMetrics>` at loop scope left that fact to a hand-written
- * `Ref.set(..., emptyTurnMetrics())` at the top of `runTurn`, and the fold —
- * which totals to add, which counts make the total unreportable — sat inline
- * at the one call site that knew it. Naming the operations keeps both in one
- * place, the way `turn-interruption.ts` does for the interrupt latch:
  * `beginTurn` is the reset, and a writer says what its step observed rather
- * than how to merge it.
+ * than how to merge it; the fold (which totals to add, which counts make the
+ * total unreportable) lives here.
  *
  * @module
  */
@@ -1217,14 +1209,10 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
     return undefined
   }
-  // `ConfigService` is a hard requirement of the actor behavior deps.
-  // Making it optional here let test layers omit it and silently fall
-  // through to the default driver, hiding wiring bugs.
+  // `ConfigService` is required, so a root that omits it fails at wiring.
   const configService = yield* ConfigService
-  // Read overrides from the session's cwd. Without per-session
-  // resolution, a multi-cwd server's project overrides would all
-  // come from the launch cwd. `get(undefined)` falls back to the
-  // launch-cwd cached config.
+  // Overrides come from the session's cwd, so a multi-cwd server reads each
+  // project's own config. `get(undefined)` reads the launch-cwd config.
   const sessionConfig = yield* configService.get(hostCtx.cwd)
   // Config `agents[name]` reshapes the definition; the run's own overrides win.
   const effectiveAgent = applyAgentOverrides(
@@ -1258,7 +1246,9 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
   // Filter out hidden messages — visible in transcript but excluded from LLM context
   const messages = rawMessages.filter((m) => m.metadata?.hidden !== true)
 
-  const projEval = yield* extensionRegistry.extensionHooks.resolveTurnProjection(turnCtx)
+  const projEval = yield* extensionRegistry
+    .getResolved()
+    .extensionHooks.resolveTurnProjection(turnCtx)
   const extensionProjections: TurnProjection[] = projEval.policyFragments.map((p) => ({
     toolPolicy: p,
   }))
@@ -1298,7 +1288,7 @@ export const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(fu
     extensionSections,
   )
   const turnPrompt = compileSystemPrompt(sections)
-  const systemPrompt = yield* extensionRegistry.extensionHooks.resolveSystemPrompt({
+  const systemPrompt = yield* extensionRegistry.getResolved().extensionHooks.resolveSystemPrompt({
     basePrompt: turnPrompt,
     agent: dispatchAgent,
     interactive: params.interactive,
@@ -1406,7 +1396,8 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     EventPublisher | EventStorage | MessageStorage | ToolCallBindingStorage
   >
 }) {
-  const driverRegistry = yield* DriverRegistry
+  const extensionRegistry = yield* ExtensionRegistry
+  const drivers = extensionRegistry.getResolved()
   const hostCtx = yield* CurrentExtensionHostContext
   const publishEventOrDie = (event: ErrorOccurred | ProviderRetrying) =>
     Effect.gen(function* () {
@@ -1446,8 +1437,7 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         model: resolved.modelId,
       })
     }
-    const externalDriver = yield* driverRegistry.getExternal(resolvedDriver.id)
-    const executor = Option.fromUndefinedOr(externalDriver).pipe(
+    const executor = Option.fromUndefinedOr(drivers.externalDrivers.get(resolvedDriver.id)).pipe(
       Option.flatMap((value) => Option.fromUndefinedOr(value.executor)),
     )
     if (Option.isNone(executor)) {
@@ -1553,7 +1543,9 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         model: resolved.modelId,
       })
     }
-    return yield* modelResolver.resolve(request)
+    return yield* modelResolver
+      .resolve(request)
+      .pipe(Effect.provideService(ExtensionRegistry, extensionRegistry))
   })
   const { driverId, contextModelId } = resolved.modelDriver
   const modelRequest: ResolveModelRequest = {
@@ -1563,11 +1555,10 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
       reasoning: resolved.reasoning,
       cacheKey: params.sessionId,
     },
-    driverRegistry,
     driverId: Option.getOrUndefined(driverId),
   }
 
-  const retryPolicy = yield* driverRetryPolicy(driverRegistry, driverId)
+  const retryPolicy = yield* driverRetryPolicy(driverId)
 
   const modelRegistry = yield* ModelRegistry
   const modelOption = yield* modelRegistry.get(contextModelId)
@@ -1791,7 +1782,7 @@ const computeStreamEndedCost: (params: {
   return Option.some(calculateCost(params.usage.value, pricing))
 })
 
-// ── agent-loop.turn-execution ───────────────────────────────────────────────
+// ── turn-execution ──────────────────────────────────────────────────────────
 
 /**
  * What one model step produced, classified once from the collected response.
@@ -2506,7 +2497,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       yield* eventPublisher.deliver(envelope)
 
       yield* Effect.logDebug("finalize.turn-after.start")
-      yield* extensionRegistry.extensionHooks.emitTurnAfter({
+      yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter({
         sessionId: scope.sessionId,
         branchId: scope.branchId,
         durationMs: Number(turnDurationMs),

@@ -47,7 +47,6 @@ interface AgentRowKey {
 export interface LiveAgentRow {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly agent: string
   /**
    * Runtime state tag, e.g. `"Idle"` / `"Running"` / `"WaitingForInteraction"`.
    *
@@ -72,7 +71,6 @@ export interface AgentRow {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly section: AgentSection
-  readonly agent: Option.Option<string>
   readonly status: Option.Option<string>
   readonly name: Option.Option<string>
   readonly cwd: Option.Option<string>
@@ -148,7 +146,6 @@ export const reconcileAgentRows = (params: {
       sessionId: identity.value.sessionId,
       branchId: identity.value.branchId,
       section: sectionOf(live),
-      agent: Option.map(live, (row) => row.agent),
       status: Option.flatMap(live, (row) => row.status),
       name: Option.flatMap(durable, (row) => row.name),
       cwd: Option.flatMap(durable, (row) => row.cwd),
@@ -242,7 +239,6 @@ export const filterRows = (
   return rows.filter((row) => {
     const fields = [
       Option.getOrElse(row.name, () => ""),
-      Option.getOrElse(row.agent, () => ""),
       Option.getOrElse(row.cwd, () => ""),
       row.sessionId,
       row.branchId,
@@ -266,13 +262,10 @@ export const projectAgentRows = (params: {
 // ── protocol ────────────────────────────────────────────────────────────────
 
 /**
- * Agents view — the wire contract between the two halves.
- *
- * Split from `index.ts` so the client half can import the row schema and the
- * capability ref without pulling in the server's projection code, and so
- * `defineRequests` binds the extension id before either half runs.
- *
- * @module
+ * Agents view — the wire contract between the two halves. The client half
+ * imports the row schema and the capability ref from here through
+ * `client.ts`; `defineRequests` binds the extension id before either half
+ * runs.
  */
 
 const AGENTS_VIEW_EXTENSION_ID = ExtensionId.make("@gent/agents-view")
@@ -287,7 +280,6 @@ export const AgentRowEntry = Schema.Struct({
   sessionId: SessionId,
   branchId: BranchId,
   section: Schema.Literals(["running", "idle", "inactive"]),
-  agent: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
@@ -300,7 +292,7 @@ export const AgentRowEntry = Schema.Struct({
 export type AgentRowEntry = typeof AgentRowEntry.Type
 
 const ListAgentsInput = Schema.Struct({
-  /** Case-insensitive substring filter over name, agent, cwd, and ids. */
+  /** Case-insensitive substring filter over name, cwd, and ids. */
   query: Schema.optional(Schema.String),
 })
 
@@ -312,7 +304,8 @@ const ListAgentsOutput = Schema.Struct({
  * Join the live loop enumeration against durable session storage.
  *
  * Neither catalog is sufficient alone: the live one is empty after a restart,
- * and the durable one cannot say what is running. See `./projection.js`.
+ * and the durable one cannot say what is running. `projectAgentRows` above
+ * reconciles the two.
  */
 const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string) {
   const ctx = yield* ExtensionContext
@@ -328,7 +321,6 @@ const collectRows = Effect.fn("AgentsView.collectRows")(function* (query: string
   const live: ReadonlyArray<LiveAgentRow> = activeLoops.map((loop) => ({
     sessionId: loop.sessionId,
     branchId: loop.branchId,
-    agent: "main",
     status: loop.status,
   }))
 
@@ -371,7 +363,6 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
           sessionId: row.sessionId,
           branchId: row.branchId,
           section: row.section,
-          agent: Option.getOrUndefined(row.agent),
           status: Option.getOrUndefined(row.status),
           name: Option.getOrUndefined(row.name),
           cwd: Option.getOrUndefined(row.cwd),
@@ -396,10 +387,8 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
  * not app code. This half contributes one `request` capability returning the
  * reconciled agent rows; the client half renders them.
  *
- * The wire contract lives in `./protocol.js` and the reconciliation in
- * `./projection.js`, so the correctness is tested without a terminal.
- *
- * @module
+ * The wire contract and the reconciliation above are pure, so their
+ * correctness is tested without a terminal.
  */
 
 export const AgentsViewExtension = defineExtension({

@@ -1173,7 +1173,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
       const wrapped = transform(makeFakeClient(fakeState))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -1197,7 +1197,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
       const wrapped = transform(makeFakeClient(fakeState))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             headers: { authorization: "Bearer placeholder" },
             body: jsonBody({ model: "gpt-5.4" }),
           }),
@@ -1219,7 +1219,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
       const wrapped = transform(makeFakeClient(fakeState))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -1240,7 +1240,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
       const wrapped = transform(makeFakeClient(fakeState))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -1261,7 +1261,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
       const wrapped = transform(makeFakeClient(fakeState))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -1283,7 +1283,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
       const wrapped = transform(makeFakeClient(fakeState))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             headers: { originator: "custom-app", "user-agent": "custom-ua/1.0" },
             body: jsonBody({ model: "gpt-5.4" }),
           }),
@@ -1351,7 +1351,7 @@ describe("codexTransformClient — auth headers (O2)", () => {
       const wrapped = transform(makeFakeClient(fakeState))
       const result = yield* Effect.scoped(
         wrapped
-          .post("https://api.openai.com/v1/chat/completions", {
+          .post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           })
           .pipe(Effect.exit),
@@ -1423,14 +1423,14 @@ describe("codexTransformClient — auth headers (O2)", () => {
       const wrapped = transform(makeFakeClient(fakeState))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
       )
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -1457,20 +1457,6 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
         return buildCodexTransformClient(creds)(makeFakeClient(state))
       }),
     )
-  it.live("rewrites /v1/chat/completions URL to the Codex backend endpoint", () =>
-    Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
-            body: jsonBody({ model: "gpt-5.4", messages: [{ role: "user", content: "hi" }] }),
-          }),
-        ),
-      )
-      expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
-    }),
-  )
   it.live("rewrites /v1/responses URL to the Codex backend endpoint", () =>
     Effect.gen(function* () {
       const state = okResponse()
@@ -1485,20 +1471,25 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       expect(state.captured[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses")
     }),
   )
-  it.live("does NOT rewrite paths that are not exactly chat/completions or responses", () =>
+  it.live("does NOT rewrite paths that are not exactly responses", () =>
     Effect.gen(function* () {
-      // Exact path equality avoids rewriting sub-resources.
+      // Exact path equality avoids rewriting sub-resources and other APIs.
       const state = okResponse()
       const wrapped = yield* Effect.promise(() => buildWrapped(state))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions/foo", {
-            body: jsonBody({ model: "gpt-5.4" }),
-          }),
-        ),
-      )
-      expect(state.captured[0]!.url).toBe("https://api.openai.com/v1/chat/completions/foo")
+      for (const url of [
+        "https://api.openai.com/v1/responses/foo",
+        "https://api.openai.com/v1/chat/completions",
+      ]) {
+        yield* Effect.promise(() =>
+          runOk(wrapped.post(url, { body: jsonBody({ model: "gpt-5.4" }) })),
+        )
+      }
+      expect(state.captured.map((request) => request.url)).toEqual([
+        "https://api.openai.com/v1/responses/foo",
+        "https://api.openai.com/v1/chat/completions",
+      ])
       expect(state.captured[0]!.headers["openai-beta"]).toBeUndefined()
+      expect(state.captured[1]!.headers["openai-beta"]).toBeUndefined()
     }),
   )
   it.live("sets OpenAI-Beta header on Codex-bound paths", () =>
@@ -1507,7 +1498,7 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       const wrapped = yield* Effect.promise(() => buildWrapped(state))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -1528,7 +1519,7 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
         const wrapped = yield* Effect.promise(() => buildWrapped(state))
         yield* Effect.promise(() =>
           runOk(
-            wrapped.post("https://api.openai.com/v1/chat/completions", {
+            wrapped.post("https://api.openai.com/v1/responses", {
               headers: { "openai-beta": "custom=value" },
               body: jsonBody({ model: "gpt-5.4" }),
             }),
@@ -1545,7 +1536,7 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       const wrapped = yield* Effect.promise(() => buildWrapped(state))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             headers: { "openai-beta": "custom=value, responses=experimental" },
             body: jsonBody({ model: "gpt-5.4" }),
           }),
@@ -1610,43 +1601,6 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       expect(second["input"]).toEqual([...history, { ...update, role: "developer" }])
     }),
   )
-  it.live("chat context updates stay after earlier user and assistant messages", () =>
-    Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
-      yield* wrapped.post("https://api.openai.com/v1/chat/completions", {
-        body: jsonBody({
-          model: "gpt-5.6-luna",
-          messages: [
-            { role: "system", content: "Fixed instructions." },
-            { role: "user", content: "First turn." },
-            { role: "assistant", content: "Done." },
-            { role: "system", content: "Today's date is now: 2026-09-09" },
-            { role: "user", content: "Next turn." },
-          ],
-        }),
-      })
-      const request = Option.getOrThrow(Option.fromUndefinedOr(state.captured[0]))
-      const parsed = yield* decodeJsonRecord(
-        Option.getOrThrow(Option.fromUndefinedOr(request.body)),
-      )
-      expect(parsed["instructions"]).toBe("Fixed instructions.")
-      expect(parsed["input"]).toEqual([
-        { role: "user", content: [{ type: "input_text", text: "First turn." }] },
-        {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: "Done.", annotations: [] }],
-          status: "completed",
-        },
-        {
-          role: "developer",
-          content: [{ type: "input_text", text: "Today's date is now: 2026-09-09" }],
-        },
-        { role: "user", content: [{ type: "input_text", text: "Next turn." }] },
-      ])
-    }),
-  )
   it.live("drops sampling limits the Codex backend rejects", () =>
     Effect.gen(function* () {
       const state = okResponse()
@@ -1699,40 +1653,14 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
         expect(parsed["model"]).toBe("gpt-5.4")
       }),
   )
-  it.live("chat-completions body is normalized to Codex Responses body", () =>
-    Effect.gen(function* () {
-      const state = okResponse()
-      const wrapped = yield* Effect.promise(() => buildWrapped(state))
-      yield* Effect.promise(() =>
-        runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
-            body: jsonBody({
-              model: "gpt-5.4",
-              messages: [
-                { role: "system", content: "Be brief." },
-                { role: "user", content: "hi" },
-              ],
-            }),
-          }),
-        ),
-      )
-      const parsed = yield* decodeJsonRecord(state.captured[0]!.body!)
-      expect(parsed["messages"]).toBeUndefined()
-      expect(parsed["instructions"]).toBe("Be brief.")
-      expect(parsed["input"]).toEqual([
-        { role: "user", content: [{ type: "input_text", text: "hi" }] },
-      ])
-      expect(parsed["store"]).toBe(false)
-    }),
-  )
   it.live("Codex-bound body with no instructions gets a non-empty default", () =>
     Effect.gen(function* () {
       const state = okResponse()
       const wrapped = yield* Effect.promise(() => buildWrapped(state))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
-            body: jsonBody({ model: "gpt-5.4", messages: [] }),
+          wrapped.post("https://api.openai.com/v1/responses", {
+            body: jsonBody({ model: "gpt-5.4", input: [] }),
           }),
         ),
       )
@@ -1795,7 +1723,7 @@ describe("codexTransformClient — URL/body/beta rewrite (O3)", () => {
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
       yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -1858,7 +1786,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
       const response = yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -1899,7 +1827,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
       const response = yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -1925,7 +1853,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
       const response = yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -1950,7 +1878,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
       const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
       const response = yield* Effect.promise(() =>
         runOk(
-          wrapped.post("https://api.openai.com/v1/chat/completions", {
+          wrapped.post("https://api.openai.com/v1/responses", {
             body: jsonBody({ model: "gpt-5.4" }),
           }),
         ),
@@ -2000,7 +1928,7 @@ describe("codexTransformClient — 401 recovery (O4)", () => {
         const wrapped = buildCodexTransformClient(creds)(makeFakeClient(state))
         const result = yield* Effect.scoped(
           wrapped
-            .post("https://api.openai.com/v1/chat/completions", {
+            .post("https://api.openai.com/v1/responses", {
               body: jsonBody({ model: "gpt-5.4" }),
             })
             .pipe(Effect.exit),
@@ -2312,8 +2240,7 @@ describe("buildOpenAIModelDriver — OAuth path uses external cache Ref", () => 
         const fetchState = makeFakeFetchState()
         yield* runOne(model, fetchState)
         const lastReq = fetchState.captured.at(-1)!
-        // Codex transform replaces the SDK's `/chat/completions` target
-        // with the ChatGPT backend Codex endpoint.
+        // The Responses SDK posts `/responses` under the Codex base URL.
         expect(lastReq.url).toBe("https://chatgpt.com/backend-api/codex/responses")
         // Codex requires the `responses=experimental` beta token. The
         // transform merges it into any existing OpenAI-Beta value. The SDK

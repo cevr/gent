@@ -28,7 +28,7 @@ import {
   resolveDefaultAgentModel,
 } from "../domain/agent.js"
 import { SessionId } from "../domain/ids.js"
-import { DriverRegistry, type DriverRegistryService, ExtensionRegistry } from "./extension-host.js"
+import { ExtensionRegistry, listModelCatalog } from "./extension-host.js"
 import { causeMessage } from "../domain/guards.js"
 import {
   DEFAULT_RETRY_POLICY,
@@ -47,9 +47,8 @@ import * as AiError from "effect/unstable/ai/AiError"
 // ── auth ────────────────────────────────────────────────────────────────────
 
 /**
- * `domain/auth` — single module owning every auth concept gent uses.
- *
- * The auth method, the store, its persistence, and the guard all live here.
+ * Every auth concept gent uses: the auth method, the store, its persistence,
+ * and the guard.
  * Persistence is delegated to `KeyValueStore.layerFileSystem(...)` +
  * `toSchemaStore`: the directory inherits whatever protection the user's home
  * directory already has, which matches how every other gent state file
@@ -263,86 +262,83 @@ export class AuthGuard extends Context.Service<AuthGuard, AuthGuardService>()(
    * so it lives beside it.
    *
    * Composes auth info (`Auth.get`) with registry-derived metadata
-   * (`DriverRegistry.listModels`) and per-session routing
+   * (the resolved model drivers) and per-session routing
    * (`resolveDefaultAgentModel` + resolved extension agents) to compute
    * which providers are required *and* present. External-routed
    * agents (driver._tag === "External") own their own auth, so model
    * auth is short-circuited for them.
    */
-  static Live: Layer.Layer<AuthGuard, never, Auth | ExtensionRegistry | DriverRegistry> =
-    Layer.effect(
-      AuthGuard,
-      Effect.gen(function* () {
-        const auth = yield* Auth
-        const extensionRegistry = yield* ExtensionRegistry
-        const driverRegistry = yield* DriverRegistry
+  static Live: Layer.Layer<AuthGuard, never, Auth | ExtensionRegistry> = Layer.effect(
+    AuthGuard,
+    Effect.gen(function* () {
+      const auth = yield* Auth
+      const extensionRegistry = yield* ExtensionRegistry
+      const registeredProviders = [...extensionRegistry.getResolved().modelDrivers.values()]
+      const registeredIds = new Set(registeredProviders.map((p) => p.id))
 
-        const registeredProviders = yield* driverRegistry.listModels
-        const registeredIds = new Set(registeredProviders.map((p) => p.id))
+      const requiredProviders = (query: AuthProviderQuery = {}): ProviderId[] => {
+        const agents = [...extensionRegistry.getResolved().agents.values()]
+        const providers: ProviderId[] = []
+        const seen = new Set<string>()
+        const modelIds: ModelId[] = Option.toArray(resolveDefaultAgentModel(agents))
 
-        const requiredProviders = (query: AuthProviderQuery = {}): ProviderId[] => {
-          const agents = [...extensionRegistry.getResolved().agents.values()]
-          const providers: ProviderId[] = []
-          const seen = new Set<string>()
-          const modelIds: ModelId[] = Option.toArray(resolveDefaultAgentModel(agents))
-
-          if (!Predicate.isUndefined(query.agentName)) {
-            const selectedAgent = agents.find((agent) => agent.name === query.agentName)
-            if (!Predicate.isUndefined(selectedAgent)) {
-              const resolved = resolveAgentDriver(selectedAgent, query.driverOverrides)
-              if (resolved.driver?._tag === "External") {
-                return providers
-              }
-              if (!Predicate.isUndefined(selectedAgent.model)) {
-                modelIds.push(resolveAgentModel(selectedAgent))
-              }
+        if (!Predicate.isUndefined(query.agentName)) {
+          const selectedAgent = agents.find((agent) => agent.name === query.agentName)
+          if (!Predicate.isUndefined(selectedAgent)) {
+            const resolved = resolveAgentDriver(selectedAgent, query.driverOverrides)
+            if (resolved.driver?._tag === "External") {
+              return providers
+            }
+            if (!Predicate.isUndefined(selectedAgent.model)) {
+              modelIds.push(resolveAgentModel(selectedAgent))
             }
           }
-
-          for (const modelId of modelIds) {
-            const provider = parseModelProvider(modelId)
-            if (
-              Option.isSome(provider) &&
-              registeredIds.has(provider.value) &&
-              !seen.has(provider.value)
-            ) {
-              providers.push(provider.value)
-              seen.add(provider.value)
-            }
-          }
-
-          return providers
         }
 
-        const listProviders = Effect.fn("AuthGuard.listProviders")(function* (
-          query: AuthProviderQuery = {},
-        ) {
-          const requiredSet = new Set(requiredProviders(query))
-          const providers: AuthProviderInfo[] = []
-
-          for (const provider of registeredProviders) {
-            const storedInfo = yield* auth.get(provider.id)
-            const required = requiredSet.has(ProviderId.make(provider.id))
-
-            if (!Predicate.isUndefined(storedInfo)) {
-              providers.push({
-                provider: ProviderId.make(provider.id),
-                hasKey: true,
-                source: "stored",
-                authType: storedInfo.type,
-                required,
-              })
-              continue
-            }
-            providers.push({ provider: ProviderId.make(provider.id), hasKey: false, required })
+        for (const modelId of modelIds) {
+          const provider = parseModelProvider(modelId)
+          if (
+            Option.isSome(provider) &&
+            registeredIds.has(provider.value) &&
+            !seen.has(provider.value)
+          ) {
+            providers.push(provider.value)
+            seen.add(provider.value)
           }
+        }
 
-          return providers
-        })
+        return providers
+      }
 
-        return AuthGuard.of({ listProviders })
-      }),
-    )
+      const listProviders = Effect.fn("AuthGuard.listProviders")(function* (
+        query: AuthProviderQuery = {},
+      ) {
+        const requiredSet = new Set(requiredProviders(query))
+        const providers: AuthProviderInfo[] = []
+
+        for (const provider of registeredProviders) {
+          const storedInfo = yield* auth.get(provider.id)
+          const required = requiredSet.has(ProviderId.make(provider.id))
+
+          if (!Predicate.isUndefined(storedInfo)) {
+            providers.push({
+              provider: ProviderId.make(provider.id),
+              hasKey: true,
+              source: "stored",
+              authType: storedInfo.type,
+              required,
+            })
+            continue
+          }
+          providers.push({ provider: ProviderId.make(provider.id), hasKey: false, required })
+        }
+
+        return providers
+      })
+
+      return AuthGuard.of({ listProviders })
+    }),
+  )
 }
 
 // ── provider-auth ───────────────────────────────────────────────────────────
@@ -372,6 +368,26 @@ const persistAuthTo =
       ),
     )
 
+/**
+ * A stored credential as a driver sees it. An OAuth credential carries a
+ * `persist` that writes a refreshed token back to the store.
+ */
+const toProviderAuthInfo = (
+  authStore: AuthService,
+  providerId: string,
+  info: AuthInfo,
+): ProviderAuthInfo => {
+  if (info.type === "api") return { type: "api", key: info.key }
+  return {
+    type: "oauth",
+    access: info.access,
+    refresh: info.refresh,
+    expires: info.expires,
+    accountId: info.accountId,
+    persist: (updated) => persistAuthTo(authStore, providerId)({ type: "oauth", ...updated }),
+  }
+}
+
 interface ProviderAuthService {
   readonly listMethods: Effect.Effect<Record<string, ReadonlyArray<AuthMethod>>>
   readonly authorize: (
@@ -391,18 +407,17 @@ interface ProviderAuthService {
 const makeProviderAuth: Effect.Effect<
   ProviderAuthService,
   never,
-  Auth | DriverRegistry | GentPlatform
+  Auth | ExtensionRegistry | GentPlatform
 > = Effect.gen(function* () {
-  const driverRegistry = yield* DriverRegistry
+  const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
   const authStore = yield* Auth
   const platform = yield* GentPlatform
 
   const makePersist = (providerId: string) => persistAuthTo(authStore, providerId)
 
-  const listMethods = Effect.gen(function* () {
+  const listMethods = Effect.sync(() => {
     const result: Record<string, ReadonlyArray<AuthMethod>> = {}
-    const registeredProviders = yield* driverRegistry.listModels
-    for (const provider of registeredProviders) {
+    for (const provider of modelDrivers.values()) {
       if (!Predicate.isUndefined(provider.auth) && provider.auth.methods.length > 0) {
         result[provider.id] = provider.auth.methods
       }
@@ -415,7 +430,7 @@ const makeProviderAuth: Effect.Effect<
     provider: string,
     method: number,
   ) {
-    const extProvider = yield* driverRegistry.getModel(provider)
+    const extProvider = modelDrivers.get(provider)
     if (Predicate.isUndefined(extProvider?.auth?.authorize)) {
       return yield* new ProviderAuthError({
         message: `Provider "${provider}" does not support authorize`,
@@ -457,7 +472,7 @@ const makeProviderAuth: Effect.Effect<
     authorizationId: string,
     code?: string,
   ) {
-    const extProvider = yield* driverRegistry.getModel(provider)
+    const extProvider = modelDrivers.get(provider)
     if (Predicate.isUndefined(extProvider?.auth?.callback)) {
       // No callback handler — auth completed during authorize (e.g. "done" method)
       return
@@ -492,7 +507,7 @@ const makeProviderAuth: Effect.Effect<
 export class ProviderAuth extends Context.Service<ProviderAuth, ProviderAuthService>()(
   "@gent/core/src/runtime/provider/ProviderAuth",
 ) {
-  static Live: Layer.Layer<ProviderAuth, never, Auth | DriverRegistry | GentPlatform> =
+  static Live: Layer.Layer<ProviderAuth, never, Auth | ExtensionRegistry | GentPlatform> =
     Layer.effect(ProviderAuth, makeProviderAuth)
 }
 
@@ -502,11 +517,6 @@ export interface ResolveModelRequest {
   readonly modelId: ModelId | string
   readonly agentName?: AgentName
   readonly hints?: ProviderHints
-  /**
-   * Per-turn driver registry override. Used when a session profile supplies
-   * cwd-scoped drivers.
-   */
-  readonly driverRegistry?: DriverRegistryService
   /** Per-agent model driver override from `agent.driver`. */
   readonly driverId?: string
 }
@@ -522,7 +532,11 @@ export const CurrentResolveModelAssertion = Context.Reference<
 interface ModelResolverService {
   readonly resolve: (
     request: ResolveModelRequest,
-  ) => Effect.Effect<LanguageModel.Service, ProviderError | ProviderAuthError, Scope.Scope>
+  ) => Effect.Effect<
+    LanguageModel.Service,
+    ProviderError | ProviderAuthError,
+    Scope.Scope | ExtensionRegistry
+  >
 }
 
 const resolveModelDefect = (
@@ -557,11 +571,9 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
     () => parsedProviderName,
   )
   const authStore = yield* Auth
-  const defaultRegistry = yield* DriverRegistry
-  let driverRegistry = defaultRegistry
-  if (!Predicate.isUndefined(request.driverRegistry)) driverRegistry = request.driverRegistry
-
-  const extensionProvider = yield* driverRegistry.getModel(providerName)
+  // The registry of the running turn's profile: its cwd-scoped drivers resolve here.
+  const extensionRegistry = yield* ExtensionRegistry
+  const extensionProvider = extensionRegistry.getResolved().modelDrivers.get(providerName)
   if (Predicate.isUndefined(extensionProvider)) {
     return yield* new ProviderError({
       message: `Unknown provider: ${providerName}`,
@@ -580,19 +592,9 @@ const resolveProviderModel = Effect.fn("ModelResolver.resolveProviderModel")(fun
     ),
     Effect.map(Option.fromUndefinedOr),
   )
-  let authParam: Option.Option<ProviderAuthInfo> = Option.none()
-  if (Option.isSome(authInfo) && authInfo.value.type === "api") {
-    authParam = Option.some({ type: "api", key: authInfo.value.key })
-  } else if (Option.isSome(authInfo) && authInfo.value.type === "oauth") {
-    authParam = Option.some<ProviderAuthInfo>({
-      type: "oauth",
-      access: authInfo.value.access,
-      refresh: authInfo.value.refresh,
-      expires: authInfo.value.expires,
-      accountId: authInfo.value.accountId,
-      persist: (updated) => persistAuthTo(authStore, providerName)({ type: "oauth", ...updated }),
-    })
-  }
+  const authParam = Option.map(authInfo, (info) =>
+    toProviderAuthInfo(authStore, providerName, info),
+  )
 
   return yield* Effect.suspend(() =>
     extensionProvider.resolveModel(modelName, Option.getOrUndefined(authParam), request.hints),
@@ -624,10 +626,10 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
       }),
     ).pipe(Layer.provide(layer))
 
-  static Live: Layer.Layer<ModelResolver, never, Auth | DriverRegistry> = Layer.effect(
+  static Live: Layer.Layer<ModelResolver, never, Auth> = Layer.effect(
     ModelResolver,
     Effect.gen(function* () {
-      const context = yield* Effect.context<Auth | DriverRegistry>()
+      const auth = yield* Auth
       return ModelResolver.of({
         resolve: (request) =>
           Effect.gen(function* () {
@@ -635,7 +637,7 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
             const scope = yield* Effect.scope
             const built = yield* Layer.buildWithScope(resolved, scope)
             return Context.get(built, LanguageModel.LanguageModel)
-          }).pipe(Effect.provideContext(context)),
+          }).pipe(Effect.provideService(Auth, auth)),
       })
     }),
   )
@@ -659,10 +661,10 @@ interface ModelRegistryService {
 export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryService>()(
   "@gent/core/src/runtime/provider/ModelRegistry",
 ) {
-  static Live: Layer.Layer<ModelRegistry, never, DriverRegistry | Auth> = Layer.effect(
+  static Live: Layer.Layer<ModelRegistry, never, ExtensionRegistry | Auth> = Layer.effect(
     ModelRegistry,
     Effect.gen(function* () {
-      const driverRegistry = yield* DriverRegistry
+      const { modelDrivers } = (yield* ExtensionRegistry).getResolved()
       const authStore = yield* Auth
 
       const resolveAuthOption = (
@@ -670,18 +672,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
       ): Effect.Effect<Option.Option<ProviderAuthInfo>, ProviderAuthError> =>
         authStore.get(providerId).pipe(
           Effect.map(Option.fromUndefinedOr),
-          Effect.map(
-            Option.map((info): ProviderAuthInfo => {
-              if (info.type === "api") return { type: "api", key: info.key }
-              return {
-                type: "oauth",
-                access: info.access,
-                refresh: info.refresh,
-                expires: info.expires,
-                accountId: info.accountId,
-              }
-            }),
-          ),
+          Effect.map(Option.map((info) => toProviderAuthInfo(authStore, providerId, info))),
           Effect.mapError(
             (e) =>
               new ProviderAuthError({
@@ -693,7 +684,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
 
       /** Every driver's own catalog, newest release first. Core fetches nothing. */
       const load = Effect.fn("ModelRegistry.load")(function* () {
-        const catalog = yield* driverRegistry.listModelCatalog((providerId) =>
+        const catalog = yield* listModelCatalog(modelDrivers, (providerId) =>
           resolveAuthOption(providerId).pipe(Effect.map(Option.getOrUndefined)),
         )
         return byReleaseDateDesc(catalog)
@@ -744,11 +735,10 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
  * or no driver at all, retries under `DEFAULT_RETRY_POLICY`.
  */
 export const driverRetryPolicy = Effect.fn("Retry.driverRetryPolicy")(function* (
-  driverRegistry: DriverRegistryService,
   driverId: Option.Option<string>,
 ) {
   if (Option.isNone(driverId)) return DEFAULT_RETRY_POLICY
-  const driver = yield* driverRegistry.getModel(driverId.value)
+  const driver = (yield* ExtensionRegistry).getResolved().modelDrivers.get(driverId.value)
   if (Predicate.isUndefined(driver) || Predicate.isUndefined(driver.retry)) {
     return DEFAULT_RETRY_POLICY
   }

@@ -1,14 +1,7 @@
 import { Option, Predicate, Result, Schema } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { BranchId, MessageId, RequestId, SessionId, ToolCallId } from "./ids.js"
-import {
-  AgentName,
-  type AgentRunToolCall,
-  AgentRunToolCallSchema,
-  ModelId,
-  ReasoningEffort,
-  RunSpecSchema,
-} from "./agent.js"
+import { AgentName, ModelId, ReasoningEffort, RunSpecSchema } from "./agent.js"
 import type { EventEnvelope, Usage } from "./event.js"
 import * as Response from "effect/unstable/ai/Response"
 
@@ -186,6 +179,8 @@ export const SteerCommand = Schema.Union([
     ...SteerTargetFields,
     messageId: Schema.optional(MessageId),
   }),
+  // No writer sends `Interrupt`; it stays so stored Steer mailbox rows still decode.
+  // The loop treats it as `Cancel`.
   Schema.TaggedStruct("Interrupt", {
     ...SteerTargetFields,
     messageId: Schema.optional(MessageId),
@@ -377,11 +372,11 @@ export class Session extends Schema.Class<Session>("Session")({
   /**
    * The thread this session belongs to, named by the session that started it.
    *
-   * A compaction handoff inherits its parent's thread, so work that outgrew one
-   * context window stays one thread. A delegate run or a `/btw` fork
-   * starts its own, so it never pollutes the thread it was launched from.
-   * Storage fills it in on create; only a caller continuing existing work
-   * passes one.
+   * A handoff joins its parent's thread (`continueThread` on create), so work
+   * that outgrew one session stays one thread. Every other session, a
+   * delegate child or a `/btw` fork included, starts its own, so side work
+   * never joins the thread it was launched from. Storage fills it with the
+   * session id when the create names none.
    */
   threadId: Schema.optional(SessionId),
   createdAt: DateFromNumber,
@@ -618,30 +613,6 @@ export const latestAssistantText = (
     return messagePartsReasoningLines(message.parts).join("\n")
   }
   return ""
-}
-
-const decodeToolArgs = Schema.decodeUnknownOption(AgentRunToolCallSchema.fields.args)
-
-/** Every finished tool call on a branch, paired with its result. Object params only. */
-export const messagesToolCalls = (
-  messages: ReadonlyArray<{ readonly parts: ReadonlyArray<MessagePart> }>,
-): ReadonlyArray<AgentRunToolCall> => {
-  const parts = messages.flatMap((message) => message.parts)
-  const calls = new Map<string, Pick<AgentRunToolCall, "toolName" | "args">>()
-  for (const part of parts) {
-    if (part.type !== "tool-call") continue
-    calls.set(part.id, {
-      toolName: part.name,
-      args: Option.getOrElse(decodeToolArgs(part.params), () => ({})),
-    })
-  }
-  return parts.flatMap((part) => {
-    if (part.type !== "tool-result") return []
-    const call = calls.get(part.id)
-    return [
-      { toolName: call?.toolName ?? part.name, args: call?.args ?? {}, isError: part.isFailure },
-    ]
-  })
 }
 
 const messagePartsReasoningLines = (parts: ReadonlyArray<MessagePart>): ReadonlyArray<string> =>

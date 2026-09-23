@@ -162,13 +162,11 @@ describe("defineExtension", () => {
 
   test("each kind round-trips into its corresponding bucket", () =>
     Effect.gen(function* () {
-      // The PromptSection is bundled on the Capability it decorates (`myTool.prompt`).
       const myTool = tool({
         id: "echo",
         description: "echo",
         params: Schema.Struct({}),
         output: Schema.String,
-        prompt: { id: "rules", content: "rule one", priority: 50 },
         execute: () => Effect.succeed("ok"),
       })
       const myLayer = Layer.empty
@@ -195,19 +193,21 @@ describe("defineExtension", () => {
       const firstModelCap = modelCaps[0]
       expect(firstModelCap).toBeDefined()
       if (Predicate.isUndefined(firstModelCap)) return
-      const modelCapMetadata = getToolMetadata(firstModelCap)
       expect(String(getToolId(firstModelCap))).toBe("echo")
-      expect(modelCapMetadata?.prompt?.id).toBe("rules")
       expect((contributions.agents ?? [])[0]?.name).toBe(DEFAULT_AGENT_NAME)
       expect(contributions.hooks?.[0]?.kind).toBe("systemPrompt")
       const resources = contributions.resources ?? []
       expect(resources).toHaveLength(1)
     }))
 
-  test("Resource.start and Resource.stop run at scope build/teardown via buildResourceLayer in declaration / reverse order", () =>
+  test("resource layers acquire at scope build and release at teardown in declaration / reverse order", () =>
     Effect.gen(function* () {
       const log: string[] = []
       const append = (s: string) => Effect.sync(() => log.push(s))
+      const lifecycle = (n: number) =>
+        Layer.effectDiscard(
+          Effect.acquireRelease(append(`startup-${n}`), () => append(`shutdown-${n}`)),
+        )
       const ext = defineExtension({
         id: "lifecycle",
         setup: Effect.gen(function* () {
@@ -218,9 +218,7 @@ describe("defineExtension", () => {
             defineResource({
               id: "test/define-extension/lifecycle/resource-1",
               scope: "process",
-              layer: Layer.empty,
-              start: append("startup-1"),
-              stop: append("shutdown-1"),
+              layer: lifecycle(1),
             }) as never,
           )
           yield* host.register(
@@ -229,9 +227,7 @@ describe("defineExtension", () => {
             defineResource({
               id: "test/define-extension/lifecycle/resource-2",
               scope: "process",
-              layer: Layer.empty,
-              start: append("startup-2"),
-              stop: append("shutdown-2"),
+              layer: lifecycle(2),
             }) as never,
           )
         }),
@@ -244,9 +240,6 @@ describe("defineExtension", () => {
         contributions,
       } satisfies LoadedExtension
       yield* Effect.scoped(Layer.build(buildResourceLayer([loaded], "process")).pipe(Effect.asVoid))
-      // Strict ordering — no sorting. Codex  review flagged that the
-      // prior `slice(...).sort()` masked a real ordering bug. Lifecycle
-      // is now sequenced through one Effect, so this is deterministic.
       expect(log).toEqual(["startup-1", "startup-2", "shutdown-2", "shutdown-1"])
     }))
 
@@ -299,7 +292,7 @@ describe("defineExtension", () => {
       ])
     }))
 
-  test("setup sees cwd, home, and source from the host", () =>
+  test("setup sees cwd and home from the host", () =>
     Effect.gen(function* () {
       let captured: Option.Option<ExtensionHostService> = Option.none()
       const ext = defineExtension({
@@ -311,13 +304,11 @@ describe("defineExtension", () => {
       yield* collectTestContributions(ext.setup, {
         cwd: "/work/project",
         home: "/work/home",
-        source: "/work/project/.gent/extensions/captures-host.ts",
       })
       expect(Option.isSome(captured)).toBe(true)
       if (Option.isNone(captured)) return
       expect(captured.value.cwd).toBe("/work/project")
       expect(captured.value.home).toBe("/work/home")
-      expect(captured.value.source).toBe("/work/project/.gent/extensions/captures-host.ts")
       expect("spawner" in captured.value).toBe(false)
       expect("parentEnv" in captured.value.host).toBe(false)
       expect("signalPid" in captured.value.host).toBe(false)
@@ -351,7 +342,7 @@ describe("defineExtension", () => {
         contributions,
       } satisfies LoadedExtension
       const resolved = resolveExtensions([loaded])
-      const resolvedTool = resolved.modelCapabilities.get("from-define")
+      const resolvedTool = resolved.modelCapabilities.get("from-define")?.capability
       expect(resolvedTool).toBeDefined()
       if (Predicate.isUndefined(resolvedTool)) return
       expect(String(getToolId(resolvedTool))).toBe("from-define")

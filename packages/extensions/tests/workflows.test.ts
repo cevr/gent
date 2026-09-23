@@ -136,6 +136,7 @@ describe("WorkflowsExtension via RPC", () => {
           expect(displayNames.toSorted((a, b) => a.localeCompare(b))).toEqual([
             "Audit",
             "Counsel",
+            "Handoff",
             "Plan",
             "Research",
             "Review",
@@ -181,6 +182,7 @@ describe("WorkflowsExtension via RPC", () => {
           "audit-command",
           "counsel-command",
           "research-command",
+          "handoff-command",
           "plan-command",
         ]) {
           let input = "  inspect the fixture  "
@@ -194,8 +196,10 @@ describe("WorkflowsExtension via RPC", () => {
           })
         }
         const { followUp } = yield* client.queue.get({ sessionId, branchId })
-        expect(followUp).toHaveLength(5)
-        const [review, audit, counsel, research, savedPlan] = followUp.map((item) => item.content)
+        expect(followUp).toHaveLength(6)
+        const [review, audit, counsel, research, handoff, savedPlan] = followUp.map(
+          (item) => item.content,
+        )
         expect(review).toContain("Review: inspect the fixture\n")
         expect(review).toContain("Do not edit source files")
         expect(audit).toContain("Audit: inspect the fixture\n")
@@ -204,6 +208,7 @@ describe("WorkflowsExtension via RPC", () => {
         expect(counsel).toContain("different model")
         expect(research).toContain("Research: inspect the fixture\n")
         expect(research).toContain("citations")
+        expect(handoff).toContain("Use the handoff tool with the distilled context")
         expect(savedPlan).toContain(`/.gent/results/${sessionId}/${branchId}/plan.md`)
         expect(savedPlan).toContain("Do not depend on kernel bindings")
         expect(savedPlan).not.toContain("atomic: true")

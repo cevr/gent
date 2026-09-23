@@ -122,7 +122,6 @@ import { ProviderAuthError } from "../domain/driver.js"
 import { ConfigService, RuntimeEnvironment } from "../runtime/config.js"
 import {
   ApprovalService,
-  DriverRegistry,
   ExtensionRegistry,
   type ExtensionRegistryService,
   resolveExistingSessionBranch,
@@ -130,7 +129,7 @@ import {
 } from "../runtime/extension-host.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import { applyAgentOverrides, resolveSessionSettings } from "../runtime/turn.js"
-import { WideEvent, WideEventBoundary, withWideEvent } from "../runtime/wide-event-boundary.js"
+import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import {
   type ApprovalDecision,
   decodeInteractionDecision,
@@ -536,6 +535,45 @@ const makeSessionMutationsService: Effect.Effect<
     yield* sessionRuntime.sendUserMessage(message)
   })
 
+  /**
+   * Check the parent a create names and admit the child's depth. Returns the
+   * thread the new session joins: the parent's for a handoff
+   * (`continueThread`), none otherwise, so storage starts a new one.
+   */
+  const admitParent = Effect.fn("SessionMutations.admitParent")(function* (
+    input: CreateSessionInput,
+  ) {
+    if (Predicate.isUndefined(input.parentSessionId)) {
+      if (!Predicate.isUndefined(input.parentBranchId)) {
+        return yield* new NotFoundError({ message: "parentBranchId requires parentSessionId" })
+      }
+      if (input.continueThread === true) {
+        return yield* new NotFoundError({ message: "continueThread requires parentSessionId" })
+      }
+      return Option.none<SessionId>()
+    }
+    const parentSessionId = input.parentSessionId
+    const parent = yield* sessionStorage.getSession(parentSessionId)
+    if (Predicate.isUndefined(parent)) {
+      return yield* new NotFoundError({
+        message: `Parent session not found: ${parentSessionId}`,
+      })
+    }
+    yield* admitChildSessionDepth(parentSessionId).pipe(
+      Effect.provideService(RelationshipStorage, relationshipStorage),
+    )
+    if (!Predicate.isUndefined(input.parentBranchId)) {
+      const parentBranch = yield* branchStorage.getBranch(input.parentBranchId)
+      if (Predicate.isUndefined(parentBranch) || parentBranch.sessionId !== parentSessionId) {
+        return yield* new NotFoundError({
+          message: `Parent branch not found in parent session: ${input.parentBranchId}`,
+        })
+      }
+    }
+    if (input.continueThread !== true) return Option.none<SessionId>()
+    return Option.some(parent.threadId ?? parent.id)
+  })
+
   const createSession = Effect.fn("SessionMutations.createSession")(function* (
     input: CreateSessionInput,
   ) {
@@ -545,48 +583,14 @@ const makeSessionMutationsService: Effect.Effect<
       (result) => result,
       Effect.gen(function* () {
         const sessionId = SessionId.make(yield* platform.randomId)
-        if (
-          !Predicate.isUndefined(input.parentBranchId) &&
-          Predicate.isUndefined(input.parentSessionId)
-        ) {
-          return yield* new NotFoundError({
-            message: "parentBranchId requires parentSessionId",
-          })
-        }
-        let parentThread = Option.none<SessionId>()
-        if (!Predicate.isUndefined(input.parentSessionId)) {
-          const parent = yield* sessionStorage.getSession(input.parentSessionId)
-          if (Predicate.isUndefined(parent)) {
-            return yield* new NotFoundError({
-              message: `Parent session not found: ${input.parentSessionId}`,
-            })
-          }
-          parentThread = Option.fromNullishOr(parent.threadId)
-          yield* admitChildSessionDepth(input.parentSessionId).pipe(
-            Effect.provideService(RelationshipStorage, relationshipStorage),
-          )
-        }
-        if (
-          !Predicate.isUndefined(input.parentBranchId) &&
-          !Predicate.isUndefined(input.parentSessionId)
-        ) {
-          const parentBranch = yield* branchStorage.getBranch(input.parentBranchId)
-          if (
-            Predicate.isUndefined(parentBranch) ||
-            parentBranch.sessionId !== input.parentSessionId
-          ) {
-            return yield* new NotFoundError({
-              message: `Parent branch not found in parent session: ${input.parentBranchId}`,
-            })
-          }
-        }
+        const threadId = yield* admitParent(input)
 
         const branchId = BranchId.make(yield* platform.randomId)
         const now = yield* DateTime.nowAsDate
         const name = input.name ?? "New Chat"
-        // A handoff continues the parent's work, so it stays in the parent's
-        // thread. Every other create — including a spawn — starts its own,
-        // which storage supplies by defaulting the thread to the session id.
+        // A handoff joins its parent's thread. Every other create, a spawned
+        // child included, starts its own: storage defaults the thread to the
+        // session id.
         const session = new Session({
           id: sessionId,
           name,
@@ -594,7 +598,7 @@ const makeSessionMutationsService: Effect.Effect<
           activeBranchId: branchId,
           parentSessionId: input.parentSessionId,
           parentBranchId: input.parentBranchId,
-          threadId: Option.getOrUndefined(parentThread),
+          threadId: Option.getOrUndefined(threadId),
           createdAt: now,
           updatedAt: now,
         })
@@ -1042,12 +1046,12 @@ const invalidateExternalDriversFor = (
   next: Option.Option<DriverRef>,
 ) =>
   Effect.gen(function* () {
-    const registry = yield* DriverRegistry
+    const { externalDrivers } = (yield* ExtensionRegistry).getResolved()
     const ids = new Set<string>()
     if (Option.isSome(prev) && prev.value._tag === "External") ids.add(prev.value.id)
     if (Option.isSome(next) && next.value._tag === "External") ids.add(next.value.id)
     for (const id of ids) {
-      const driver = yield* registry.getExternal(id)
+      const driver = externalDrivers.get(id)
       if (!Predicate.isUndefined(driver)) yield* driver.invalidate
     }
   })
@@ -1118,7 +1122,6 @@ const RpcHandlers = GentRpcs.toLayer(
     // yielded inside returned handler Effects would otherwise become deferred
     // request-time defects instead of layer-build failures.
     yield* RuntimeEnvironment
-    yield* DriverRegistry
 
     // `message.send` has no durable operation row; the runtime keys its actor
     // command on `requestId`. This cache collapses concurrent same-requestId
@@ -1293,10 +1296,10 @@ const RpcHandlers = GentRpcs.toLayer(
       "driver.list": () =>
         Effect.gen(function* () {
           const config = yield* configService.get()
-          const driverRegistry = yield* DriverRegistry
-          const models = yield* driverRegistry.listModels
-          const externals = yield* driverRegistry.listExternal
-          const agents = [...extensionRegistry.getResolved().agents.values()]
+          const resolved = extensionRegistry.getResolved()
+          const models = [...resolved.modelDrivers.values()]
+          const externals = [...resolved.externalDrivers.values()]
+          const agents = [...resolved.agents.values()]
           const drivers = [
             ...models.map((driver) =>
               DriverInfo.cases.Model.make({
@@ -1322,9 +1325,9 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "driver.set": ({ agentName, driver }: SetDriverOverrideInput) =>
         Effect.gen(function* () {
-          const driverRegistry = yield* DriverRegistry
+          const resolved = extensionRegistry.getResolved()
           if (driver._tag === "Model" && !Predicate.isUndefined(driver.id)) {
-            const found = yield* driverRegistry.getModel(driver.id)
+            const found = resolved.modelDrivers.get(driver.id)
             if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({
                 message: `Unknown model driver "${driver.id}"`,
@@ -1332,7 +1335,7 @@ const RpcHandlers = GentRpcs.toLayer(
             }
           }
           if (driver._tag === "External") {
-            const found = yield* driverRegistry.getExternal(driver.id)
+            const found = resolved.externalDrivers.get(driver.id)
             if (Predicate.isUndefined(found)) {
               return yield* new NotFoundError({
                 message: `Unknown external driver "${driver.id}"`,
@@ -1611,7 +1614,6 @@ export const createDependencies = (config: DependenciesConfig) => {
   const runtimeEnvironmentLive = RuntimeEnvironment.Live({
     cwd: config.cwd,
     home: config.home,
-    platform: config.platform,
   })
 
   const storageLive = makeStorageLayer(config)
@@ -1668,7 +1670,6 @@ export const createDependencies = (config: DependenciesConfig) => {
         // runtime for extension consumers.
         return Layer.mergeAll(
           Layer.succeed(ExtensionRegistry, profile.registryService),
-          Layer.succeed(DriverRegistry, profile.driverRegistryService),
           Layer.succeedContext(profile.layerContext),
         )
       }),

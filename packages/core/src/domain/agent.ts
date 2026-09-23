@@ -94,7 +94,7 @@ export const ReasoningEffort = Schema.Literals([
 export type ReasoningEffort = typeof ReasoningEffort.Type
 export const isReasoningEffort = Schema.is(ReasoningEffort)
 
-// Agent driver — discriminated reference into `DriverRegistry`.
+// Agent driver — discriminated reference into the resolved extension drivers.
 //
 // Optional: when omitted, the loop resolves a model driver from the agent's
 // model id (`provider/model` parses out the driver id). Specify
@@ -298,7 +298,6 @@ export const effectiveModelDriver = (
 // ── RunSpec — per-run dispatch configuration ──
 //
 // Separates per-run concerns from agent identity:
-//   - `visibility`    — whether the child leaves a trace on the parent
 //   - `overrides`     — per-turn model/tool/prompt overrides
 //   - `parentToolCallId` — links a child run to the tool call that spawned it
 //
@@ -316,15 +315,7 @@ export const AgentRunOverridesSchema = Schema.Struct({
 })
 export type AgentRunOverrides = typeof AgentRunOverridesSchema.Type
 
-/**
- * `private` keeps a run off the parent's event stream, and its session is
- * deleted when the run ends. One-shot extractions rely on it.
- */
-const AgentRunVisibility = Schema.Literals(["parent", "private"])
-type AgentRunVisibility = typeof AgentRunVisibility.Type
-
 export const RunSpecSchema = Schema.Struct({
-  visibility: Schema.optional(AgentRunVisibility),
   overrides: Schema.optional(AgentRunOverridesSchema),
   parentToolCallId: Schema.optional(ToolCallId),
 })
@@ -337,10 +328,9 @@ export const makeRunSpec = (input: RunSpec = {}): RunSpec => omitUndefined(input
 /**
  * Maximum session nesting depth. Derived from the persisted parent chain; root
  * depth is 0, and a parent at depth 3 cannot get another child. Enforced in one
- * place, `admitChildSessionDepth` (`runtime/session-depth.ts`), which both
- * child writers call: `admitChildSession` (delegate and read-session spawns)
- * and `SessionMutations.createSession` (`session.create` with a
- * `parentSessionId`, the compaction handoff).
+ * place, `admitChildSessionDepth` (`runtime/session.ts`), which the one child
+ * writer calls: `SessionMutations.createSession` (a create with a
+ * `parentSessionId`).
  */
 export const DEFAULT_MAX_AGENT_RUN_DEPTH = 3
 
@@ -354,15 +344,5 @@ export class SessionDepthLimitError extends Schema.TaggedError<SessionDepthLimit
     max: Schema.Int,
   },
 ) {}
-/**
- * One child turn's tool call, in the shape the delegate persists on its run
- * receipt and `message.ts` decodes when replaying a child's history.
- */
-export const AgentRunToolCallSchema = Schema.Struct({
-  toolName: Schema.String,
-  args: Schema.Record(Schema.String, Schema.Unknown),
-  isError: Schema.Boolean,
-})
-export type AgentRunToolCall = Schema.Schema.Type<typeof AgentRunToolCallSchema>
 
 // ── steer ───────────────────────────────────────────────────────────────────

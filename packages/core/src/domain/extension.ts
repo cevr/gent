@@ -121,42 +121,19 @@ type ScopeOf<S extends ResourceScope> = S extends "process"
  * One Resource carries:
  *
  * - `id` — stable identity, reported when the resource fails to build.
- * - `tag` + `layer` — the canonical Layer providing one or more services.
- *   The `R` channel must include `ScopeOf<S>` so the typed scope brand
- *   gates instantiation.
  * - `scope` — the lifetime, declared at the type level via the literal.
- * - `start` / `stop` — optional startup + shutdown effects.
- *   `stop` is `Effect<void, never, A>` per Effect finalizer contract — it
- *   may not fail (failures are not propagated through scope teardown).
- * - `runtime` — explicit runtime slots for long-lived behavior that reacts
- *   to turns/messages or enriches tool results without going through a
- *   string-keyed middleware registry.
+ * - `layer` — the Layer providing one or more services. The `R` channel must
+ *   include `ScopeOf<S>` so the typed scope brand gates instantiation. Work
+ *   that must run when the resource starts goes in the layer build; disposal
+ *   is a finalizer in that build. A layer that fails rejects its extension.
  *
- * Authors typically create a Resource through the smart constructor
- * `defineResource(...)`. The `tag` is the canonical entry into the service
- * the Resource provides; consumers depend on the tag, not on Resource.
+ * Consumers yield the service Tags the layer provides; they never see the
+ * Resource.
  */
-interface ResourceContribution<A, S extends ResourceScope, R = never, E = never, StartR = never> {
+interface ResourceContribution<A, S extends ResourceScope, R = never, E = never> {
   readonly id: ResourceId
-  /**
-   * Optional canonical service tag. When present, consumers may depend on the
-   * tag without knowing about Resource. The `start`/`stop` effects get `A`
-   * in their R channel so they can read the owned service.
-   *
-   * When absent, the Resource is a pure layer contribution (the `layer` may
-   * provide multiple services via `Layer.merge(...)`), and the lifecycle
-   * effects have `A = never` in their R channel.
-   *
-   * Effect v4 `Context.Service<Identity, Service>` produces a tag whose
-   * identity (`A`) and service interface differ; this is why we use the
-   * 2-parameter `Context.Key<I, S>` shape instead of the 1-parameter
-   * `Context.Tag<A>` shape.
-   */
-  readonly tag?: Context.Key<A, unknown>
   readonly scope: S
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
-  readonly start?: Effect.Effect<void, E, A | R | StartR>
-  readonly stop?: Effect.Effect<void, never, A>
 }
 
 /**
@@ -165,40 +142,16 @@ interface ResourceContribution<A, S extends ResourceScope, R = never, E = never,
  * route each Resource to the appropriate engine.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- schema and brand factory owns nominal type boundary
-export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any, any>
-
-interface ResourceIdentitySpec {
-  /** Stable resource identity. */
-  readonly id: string
-}
+export type AnyResourceContribution = ResourceContribution<any, ResourceScope, any, any>
 
 // ── Smart constructor ──
 
-/**
- * Spec type accepted by {@link defineResource}. Uses `NoInfer` on the
- * `tag` field so the identity `A` is inferred from `layer` only — passing
- * a tag for a different service identity is then a type error rather
- * than a silent unification of `A` to a union supertype.
- */
-interface ResourceSpec<
-  A,
-  S extends ResourceScope,
-  R = never,
-  E = never,
-  StartR = never,
-> extends ResourceIdentitySpec {
-  readonly tag?: Context.Key<NoInfer<A>, unknown>
+/** Spec type accepted by {@link defineResource}. */
+interface ResourceSpec<A, S extends ResourceScope, R = never, E = never> {
+  /** Stable resource identity. */
+  readonly id: string
   readonly scope: S
   readonly layer: Layer.Layer<A, E, R | ScopeOf<S>>
-  /**
-   * `StartR` is the additional services `start` may yield beyond the
-   * resource's own service `A` and the layer's `R`. Useful when the
-   * lifecycle action needs runtime services provided by sibling base
-   * layers without forcing the resource's layer
-   * itself to depend on them.
-   */
-  readonly start?: Effect.Effect<void, E, NoInfer<A> | R | StartR>
-  readonly stop?: Effect.Effect<void, never, NoInfer<A>>
 }
 
 /**
@@ -206,17 +159,14 @@ interface ResourceSpec<
  *
  * The factory infers the generics from the inputs (so authors don't write
  * `<MyService, "process", never, never>`) and brands the resource id.
- *
- * Identity `A` is inferred from `layer`. The `tag` field, if present, is
- * typed as `Context.Key<NoInfer<A>, unknown>` — it must match the layer's
- * identity exactly. Passing a tag for a different service is a type error.
  */
-export const defineResource = <A, S extends ResourceScope, R = never, E = never, StartR = never>(
-  spec: ResourceSpec<A, S, R, E, StartR>,
-): ResourceContribution<A, S, R, E, StartR> => {
-  const { id, ...resource } = spec
-  return { ...resource, id: ResourceId.make(id) }
-}
+export const defineResource = <A, S extends ResourceScope, R = never, E = never>(
+  spec: ResourceSpec<A, S, R, E>,
+): ResourceContribution<A, S, R, E> => ({
+  id: ResourceId.make(spec.id),
+  scope: spec.scope,
+  layer: spec.layer,
+})
 
 // ── contribution ────────────────────────────────────────────────────────────
 
@@ -228,12 +178,11 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never,
  * smart constructors, no `filterByKind`.
  *
  * Capabilities are authored through the typed factories `tool({...})` and
- * `request({...})` at `domain/capability/{tool,request}.ts`. Slash commands
- * are requests carrying a `slash:` presentation block.
+ * `request({...})` in `domain/capability.ts`. Slash commands are requests
+ * carrying a `slash:` presentation block.
  *
- * Resources are authored through `defineResource({...})` from
- * `./resource.ts`. Each leaf carries an
- * explicit stable resource identity and graph metadata; the leaf is widened
+ * Resources are authored through `defineResource({ id, scope, layer })` in
+ * this file. Each leaf carries a stable resource identity; the leaf is widened
  * by structural assignability at the bucket boundary.
  *
  * Drivers split into `modelDrivers` and `externalDrivers`; one untagged
@@ -275,16 +224,6 @@ export interface ExtensionContributions {
   readonly modelDrivers?: ReadonlyArray<ModelDriverContribution>
   readonly externalDrivers?: ReadonlyArray<ExternalDriverContribution>
 }
-
-// ── Smart constructors ──
-//
-// Capabilities are authored through the typed factories in
-// `domain/capability/{tool,request}.ts`. The Resource primitive is authored
-// through `defineResource({...})` directly — leaves widen to
-// `AnyResourceContribution` by structural assignability when the `layer`'s
-// `A` is concrete (not `never`). Lifecycle-only resources should
-// encode disposal as a `Layer.scoped` finalizer over a marker tag rather than
-// `{ layer: Layer.empty, stop: ... }`.
 
 // ── extension ───────────────────────────────────────────────────────────────
 
@@ -450,7 +389,7 @@ export interface TurnAfterInput {
 // ── Lifecycle hooks ──
 //
 // Per-extension, per-session handlers run by the runtime at the prompt and
-// turn seams. Authored on `defineExtension({ hooks })`.
+// turn seams. Registered with `host.on(kind, handler)` inside `setup`.
 // Failures are always isolated: the runtime logs a warning and lets later hooks
 // still fire.
 
@@ -505,14 +444,10 @@ export interface ExtensionTurnContext extends RunContext {
   readonly allTools: ReadonlyArray<ToolCapability>
 }
 
-/** Fragment contributed by an extension's derive() to influence tool visibility */
+/** Fragment a `turnProjection` hook returns to shape the turn's tools */
 export interface ToolPolicyFragment {
-  /** Tool names to force-include */
+  /** Tool names the host may run although the agent does not allow them. Agent deny still wins. */
   readonly include?: ReadonlyArray<string>
-  /** Tool names to force-exclude */
-  readonly exclude?: ReadonlyArray<string>
-  /** If set, replaces the full tool list (before agent deny reapplication) */
-  readonly overrideSet?: ReadonlyArray<string>
   /**
    * Model-facing subset of the final admitted host tools. The last supplied set
    * wins. Missing, denied, and filtered interactive tools cannot be restored here.
@@ -584,11 +519,11 @@ export interface GentExtension<R = ExtensionSetupServices> {
 /**
  * `ExtensionHost` — the one service an extension's `setup` yields.
  *
- * It carries the setup-time facts (cwd, source, home, host facts, process
- * helpers) and the two registration primitives:
+ * It carries the setup-time facts (cwd, home, host facts, process helpers)
+ * and the two registration primitives:
  *
  * - `register(domain, ...values)` adds typed leaves to one registration
- *   domain: tools, requests, agents, resources, jobs, model or external drivers.
+ *   domain: tools, requests, agents, resources, model or external drivers.
  * - `on(kind, handler)` adds one runtime hook.
  *
  * The loader provides the service around `GentExtension.setup`, collects the
@@ -627,7 +562,6 @@ type RegistrationValue<D extends RegistrationDomain> = ElementOf<
 
 export interface ExtensionHostService {
   readonly cwd: string
-  readonly source: string
   readonly home: string
   readonly host: Pick<
     ExtensionHostPlatform,
@@ -652,7 +586,6 @@ export class ExtensionHost extends Context.Service<ExtensionHost, ExtensionHostS
 
 interface CollectingHostFacts {
   readonly cwd: string
-  readonly source: string
   readonly home: string
   readonly host: ExtensionHostPlatform
 }
@@ -689,7 +622,6 @@ export const makeCollectingExtensionHost = (
   }
   const service: ExtensionHostService = {
     cwd: facts.cwd,
-    source: facts.source,
     home: facts.home,
     host: {
       osInfo: facts.host.osInfo,

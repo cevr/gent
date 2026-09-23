@@ -1,11 +1,15 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Fiber, Option, Stream } from "effect"
-import { AgentsExtension, SessionToolsExtension } from "../src/index.js"
+import { AgentsExtension } from "../src/agents.js"
 import { getBuiltinAgent } from "./helpers/builtin-agents.js"
 import type { SystemPromptInput } from "@gent/core/extensions/api"
 import { collectTestContributions, createRpcHarness } from "@gent/core-internal/test-utils/index"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { renderMessageParts, renderSessionTree } from "../src/session-tools.js"
+import {
+  renderMessageParts,
+  renderSessionTree,
+  SessionToolsExtension,
+} from "../src/session-tools.js"
 import {
   Branch,
   dateFromMillis,

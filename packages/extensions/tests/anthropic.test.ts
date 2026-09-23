@@ -22,10 +22,7 @@ import {
   isLongContextError,
   MODEL_CONFIG,
   parseOAuthResponse,
-  PRIMARY_CLAUDE_SERVICE,
   repairToolPairs,
-  shouldFallBackToCli,
-  shouldFallBackToCredentialsFile,
   supports1mContext,
   SYSTEM_IDENTITY_PREFIX,
   transformPayload as transformPayloadEffect,
@@ -50,9 +47,8 @@ import {
   SynchronizedRef,
 } from "effect"
 import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
-import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun"
 import { ExtensionHostProcessError } from "@gent/core-internal/domain/extension"
-import { BunServices } from "@effect/platform-bun"
+import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
 import { testHostFacts } from "@gent/core-internal/test-utils/index"
 import { HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
@@ -128,13 +124,12 @@ const testPlatformLayer = Layer.succeed(
 const JsonRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
 type JsonRecord = Schema.Schema.Type<typeof JsonRecordSchema>
 
-// Synchronously run a transformPayload effect with the live Bun platform —
-// `BunGentPlatformLive` is `Layer.succeed`, so the underlying SHA256 hash is
-// computed eagerly without needing an async runtime.
+// Synchronously run a transformPayload effect — `BunCrypto.layer` hashes
+// with `node:crypto` `createHash`, which is synchronous.
 const transformPayload = (payload: JsonRecord): JsonRecord =>
   Effect.runSync(
     transformPayloadEffect(payload).pipe(
-      Effect.provide(Layer.merge(BunGentPlatformLive, testPlatformLayer)),
+      Effect.provide(Layer.merge(BunCrypto.layer, testPlatformLayer)),
     ),
   )
 
@@ -1886,52 +1881,6 @@ describe("updateCredentialBlob", () => {
   })
 })
 
-describe("PRIMARY_CLAUDE_SERVICE", () => {
-  // Counsel K2 — the primary service name was hard-coded inside the
-  // module. Exposing it as a named export forces every caller that
-  // assumes "the default account" to spell it out, so a future
-  // multi-account picker UI can audit-grep all the places that need
-  // updating.
-  test("is the canonical Claude Code keychain service name", () => {
-    expect(PRIMARY_CLAUDE_SERVICE).toBe("Claude Code-credentials")
-  })
-})
-
-describe("source-policy gates", () => {
-  // Two real defects this guards: a non-primary keychain miss silently
-  // falling through to the on-disk file (which holds only the primary
-  // credential), and the CLI refresh fallback running for any source
-  // (the CLI persists to whichever account is active, not the
-  // requested one). Both policies extracted into pure helpers so the
-  // gate is unit-testable without spawning `security` or `claude`.
-  describe("shouldFallBackToCredentialsFile", () => {
-    test("returns true on non-darwin (no keychain at all)", () => {
-      expect(shouldFallBackToCredentialsFile("linux", PRIMARY_CLAUDE_SERVICE)).toBe(true)
-      expect(shouldFallBackToCredentialsFile("linux", "Claude Code-credentials-abc123")).toBe(true)
-    })
-
-    test("returns true for the primary source on darwin", () => {
-      expect(shouldFallBackToCredentialsFile("darwin", PRIMARY_CLAUDE_SERVICE)).toBe(true)
-    })
-
-    test("returns false for non-primary sources on darwin", () => {
-      expect(shouldFallBackToCredentialsFile("darwin", "Claude Code-credentials-abc123")).toBe(
-        false,
-      )
-    })
-  })
-
-  describe("shouldFallBackToCli", () => {
-    test("returns true for the primary source", () => {
-      expect(shouldFallBackToCli(PRIMARY_CLAUDE_SERVICE)).toBe(true)
-    })
-
-    test("returns false for non-primary sources", () => {
-      expect(shouldFallBackToCli("Claude Code-credentials-abc123")).toBe(false)
-    })
-  })
-})
-
 describe("freshEnoughForUse", () => {
   // The gate that decides "use these creds vs. refresh first" must
   // allow at least a 60s safety margin so a token that's about to
@@ -1972,14 +1921,14 @@ describe("freshEnoughForUse", () => {
  * validator on every request, surfacing as `InvalidKey` from the SDK.
  */
 
-// `BunGentPlatformLive` is `Layer.succeed` — the real SHA256 hash is
-// computed synchronously, so each helper can run via `Effect.runSync`.
+// `BunCrypto.layer` hashes synchronously, so each helper can run via
+// `Effect.runSync`.
 const runSync = <A>(effect: Effect.Effect<A, never, never>): A => Effect.runSync(effect)
 
 const computeCch = (text: string): string =>
-  runSync(computeCchEffect(text).pipe(Effect.provide(BunGentPlatformLive)))
+  runSync(computeCchEffect(text).pipe(Effect.provide(BunCrypto.layer)))
 const computeVersionSuffix = (text: string, version: string): string =>
-  runSync(computeVersionSuffixEffect(text, version).pipe(Effect.provide(BunGentPlatformLive)))
+  runSync(computeVersionSuffixEffect(text, version).pipe(Effect.provide(BunCrypto.layer)))
 const buildBillingHeaderValue = (
   messages: Parameters<typeof buildBillingHeaderValueEffect>[0],
   version: string,
@@ -1987,7 +1936,7 @@ const buildBillingHeaderValue = (
 ): string =>
   runSync(
     buildBillingHeaderValueEffect(messages, version, entrypoint).pipe(
-      Effect.provide(BunGentPlatformLive),
+      Effect.provide(BunCrypto.layer),
     ),
   )
 
@@ -2086,6 +2035,17 @@ describe("buildBillingHeaderValue", () => {
     )
     const expectedCch = computeCch("the prompt")
     expect(value).toContain(`cch=${expectedCch};`)
+  })
+
+  test("matches a fixed vector byte for byte", () => {
+    const value = buildBillingHeaderValue(
+      [{ role: "user", content: "Fix the flaky test in the billing module, please." }],
+      "2.1.80",
+      "cli",
+    )
+    expect(value).toBe(
+      "x-anthropic-billing-header: cc_version=2.1.80.764; cc_entrypoint=cli; cch=cb258;",
+    )
   })
 
   test("uses the entrypoint verbatim", () => {

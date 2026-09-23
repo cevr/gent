@@ -61,15 +61,12 @@ export {
   makeRunSpec,
   type RunSpec,
   RunSpecSchema,
-  AgentRunToolCallSchema,
 } from "../domain/agent.js"
 export {
-  type AnyExtensionHook,
   type GentExtension,
   LoadedArtifactIdentity,
   type SystemPromptInput,
   type TurnAfterInput,
-  hook,
 } from "../domain/extension.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
 export { DEFAULT_RETRY_POLICY, ProviderAuthError, TurnError } from "../domain/driver.js"
@@ -94,11 +91,7 @@ export { Model, ModelId, type ModelPricing, ProviderId } from "../domain/agent.j
 export { AuthMethod } from "../runtime/provider.js"
 export { type Message, type Branch } from "../domain/message.js"
 export type { AgentEvent, Question } from "../domain/event.js"
-export {
-  latestAssistantText,
-  messagePartsDisplayText,
-  messagesToolCalls,
-} from "../domain/message.js"
+export { latestAssistantText, messagePartsDisplayText } from "../domain/message.js"
 export {
   // Smart constructor — returns a bare leaf value; the bucket it's placed
   // in is the discrimination (no `_kind` field).
@@ -108,7 +101,7 @@ export {
 // Typed capability factories. Extension registries dispatch by factory-origin
 // metadata baked into the lowering.
 //
-// See `domain/capability/{tool,request}.ts` for the typed shapes.
+// See `domain/capability.ts` for the typed shapes.
 export {
   getToolId,
   getToolPrompt,

@@ -98,7 +98,6 @@ import {
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
   RuntimeEnvironment,
-  type RuntimeEnvironmentApi,
   type UserConfig,
 } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
@@ -215,7 +214,7 @@ const sealErasedEffect = <A, E>(
  * Variant for hosts that need the raw `Exit` to apply local failure policy
  * (`continue` / `isolate` / `halt`, lifecycle finalizer behavior, etc.).
  */
-export const exitErasedEffect = <A>(
+const exitErasedEffect = <A>(
   effect: () => Effect.Effect<A, unknown, unknown>,
 ): Effect.Effect<Exit.Exit<A, unknown>> => {
   // @effect-diagnostics-next-line anyUnknownInErrorContext:off
@@ -228,9 +227,8 @@ export const exitErasedEffect = <A>(
 export type ErasedResourceLayer = Layer.Layer<any, never, never>
 
 /**
- * Resource-host call sites keep the old narrower return type (`Layer.Layer<any>`)
- * so resource layers do not leak their heterogeneous error or requirement
- * channels into tests.
+ * Resource layers erase to `Layer.Layer<any>` so their heterogeneous error and
+ * requirement channels do not leak into callers.
  */
 export const eraseResourceLayer = <A, E, R>(layer: Layer.Layer<A, E, R>): ErasedResourceLayer => {
   // oxlint-disable-next-line effect/noAs, effect/noChainedTypeAssertions, typescript/no-unsafe-type-assertion -- The resource membrane intentionally erases heterogeneous service output and requirements.
@@ -504,12 +502,12 @@ interface SlashCommand {
 // Resolved snapshot — the immutable compiled state
 
 interface ResolvedExtensions {
-  readonly modelCapabilities: ReadonlyMap<string, ToolCapability>
+  /** Winning model tool per name, with the extension that registered it. */
+  readonly modelCapabilities: ReadonlyMap<string, RegisteredToolEntry>
   readonly rpcRegistry: CompiledRpcRegistry
   readonly agents: ReadonlyMap<string, AgentDefinition>
   readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
   readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
-  readonly promptSections: ReadonlyMap<string, PromptSection>
   readonly slashCommands: ReadonlyArray<SlashCommand>
   readonly extensionHooks: CompiledExtensionHooks
   readonly extensions: ReadonlyArray<LoadedExtension>
@@ -775,10 +773,10 @@ export const resolveExtensions = (
   const capabilityWinners = compileCapabilityWinners(sorted)
   const capabilityEntries = compileCapabilityEntries(sorted)
   const rpcRegistry = compileRpcRegistry(capabilityEntries)
-  const modelCapabilities = new Map<string, ToolCapability>()
+  const modelCapabilities = new Map<string, RegisteredToolEntry>()
   for (const [id, entry] of capabilityWinners) {
     if (entry.kind !== "tool") continue
-    modelCapabilities.set(id, entry.capability)
+    modelCapabilities.set(id, entry)
   }
 
   const agents = compileBucket(
@@ -797,19 +795,6 @@ export const resolveExtensions = (
     (d) => d.id,
   )
 
-  // Prompt sections from capability leaves are read off the WINNERS map,
-  // not raw extractions. Otherwise a higher-scope capability shadowing a
-  // lower-scope tool would still inherit the loser's prompt — defeating the
-  // shadow. Last scope wins by section id.
-  // (Dynamic prompt content is assembled per-turn by ExtensionHooks, not here.)
-  const promptSectionsMap = new Map<string, PromptSection>()
-  for (const { capability: cap } of capabilityWinners.values()) {
-    let prompt = Option.none<PromptSection>()
-    if (isToolCapability(cap)) prompt = Option.fromUndefinedOr(getToolMetadata(cap).prompt)
-    else prompt = Option.fromUndefinedOr(cap.prompt)
-    if (Option.isSome(prompt)) promptSectionsMap.set(prompt.value.id, prompt.value)
-  }
-
   const slashCommands = compileSlashCommands(capabilityWinners)
 
   const extensionHooks = compileExtensionHooks(sorted)
@@ -824,7 +809,6 @@ export const resolveExtensions = (
     agents,
     modelDrivers,
     externalDrivers,
-    promptSections: promptSectionsMap,
     slashCommands,
     extensionHooks,
     extensions: sorted,
@@ -835,10 +819,12 @@ export const resolveExtensions = (
 
 // Extension Registry Service
 
+/**
+ * The resolved extensions one profile runs with: tools, requests, agents,
+ * model and external drivers, and hooks. A turn reads the registry of its own
+ * profile, so a cwd-scoped extension's drivers and tools reach only its turns.
+ */
 export interface ExtensionRegistryService {
-  readonly extensionHooks: CompiledExtensionHooks
-
-  // Raw resolved data — needed for rebuilding extension services in child runtimes
   readonly getResolved: () => ResolvedExtensions
 }
 
@@ -850,7 +836,6 @@ export class ExtensionRegistry extends Context.Service<
     Layer.succeed(
       ExtensionRegistry,
       ExtensionRegistry.of({
-        extensionHooks: resolved.extensionHooks,
         getResolved: () => resolved,
       }),
     )
@@ -859,106 +844,43 @@ export class ExtensionRegistry extends Context.Service<
     ExtensionRegistry.fromResolved(resolveExtensions([]))
 }
 
-// ── driver-registry ─────────────────────────────────────────────────────────
-
-/**
- * DriverRegistry — unified lookup over both model and external drivers.
- *
- * Replaces the dual-path dispatch through `ExtensionRegistry.getProvider` +
- * `ExtensionRegistry.getTurnExecutor` with one capability-shaped registry
- * keyed by `DriverRef`. The agent loop reads `agent.driver: DriverRef` and
- * routes through this single seam regardless of whether the underlying
- * implementation is a model provider or an external turn executor —
- * `composability-not-flags`.
- *
- * The contributing extensions still register through their respective
- * contribution kinds (`model-driver` or `external-driver`); this registry
- * is the read side. Auth flow integration (OAuth + API key resolution)
- * stays with model resolution because it belongs to model drivers
- * specifically.
- *
- * @module
- */
+// ── model-catalog ───────────────────────────────────────────────────────────
 
 const decodeModelCatalog = Schema.decodeUnknownOption(Schema.Array(Model))
 
-// ── Resolved driver state (one map per kind, lookup by id) ──
-
-interface ResolvedDrivers {
-  readonly modelDrivers: ReadonlyMap<string, ModelDriverContribution>
-  readonly externalDrivers: ReadonlyMap<string, ExternalDriverContribution>
-}
-
-// ── Service interface ──
-
-export interface DriverRegistryService {
-  /** Resolve a model driver by id (the `provider` segment of `provider/model`). */
-  // oxlint-disable-next-line effect/noNullish -- Driver lookup preserves an absent-driver result at this internal boundary.
-  readonly getModel: (id: string) => Effect.Effect<ModelDriverContribution | undefined>
-  /** Resolve an external driver by id (the runner id, e.g. `acp-claude-code`). */
-  // oxlint-disable-next-line effect/noNullish -- Driver lookup preserves an absent-driver result at this internal boundary.
-  readonly getExternal: (id: string) => Effect.Effect<ExternalDriverContribution | undefined>
-  /** All registered model drivers in registration order. */
-  readonly listModels: Effect.Effect<ReadonlyArray<ModelDriverContribution>>
-  /** All registered external drivers in registration order. */
-  readonly listExternal: Effect.Effect<ReadonlyArray<ExternalDriverContribution>>
-  /** Concatenate every model driver's own catalog. Core fetches nothing itself. */
-  readonly listModelCatalog: (
-    resolveAuth?: (
-      driverId: string,
-      // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
-    ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
-  ) => Effect.Effect<ReadonlyArray<Model>, DriverError | ProviderAuthError>
-}
-
-export class DriverRegistry extends Context.Service<DriverRegistry, DriverRegistryService>()(
-  "@gent/core/src/runtime/extension-host/DriverRegistry",
+/** Concatenate every model driver's own catalog. Core fetches nothing itself. */
+export const listModelCatalog = Effect.fn("ExtensionRegistry.listModelCatalog")(function* (
+  modelDrivers: ReadonlyMap<string, ModelDriverContribution>,
+  resolveAuth?: (
+    driverId: string,
+    // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
+  ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
 ) {
-  static fromResolved = (resolved: ResolvedDrivers): Layer.Layer<DriverRegistry> =>
-    Layer.succeed(
-      DriverRegistry,
-      DriverRegistry.of({
-        getModel: (id) => Effect.succeed(resolved.modelDrivers.get(id)),
-        getExternal: (id) => Effect.succeed(resolved.externalDrivers.get(id)),
-        listModels: Effect.succeed([...resolved.modelDrivers.values()]),
-        listExternal: Effect.succeed([...resolved.externalDrivers.values()]),
-        listModelCatalog: Effect.fn("DriverRegistry.listModelCatalog")(function* (
-          resolveAuth?: (
-            driverId: string,
-            // oxlint-disable-next-line effect/noNullish -- Driver auth callbacks may have no auth result.
-          ) => Effect.Effect<ProviderAuthInfo | undefined, ProviderAuthError>,
-        ) {
-          const catalog: Array<Model> = []
-          for (const driver of resolved.modelDrivers.values()) {
-            if (Predicate.isUndefined(driver.listModels)) continue
-            let auth = Option.none<ProviderAuthInfo>()
-            if (!Predicate.isUndefined(resolveAuth)) {
-              auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
-            }
-            const driverCatalog = yield* driver.listModels(Option.getOrUndefined(auth))
-            const decoded = decodeModelCatalog(driverCatalog)
-            if (decoded._tag === "None") {
-              return yield* new DriverError({
-                driver: DriverFailureId.make(driver.id),
-                reason: `Model driver "${driver.id}" returned an invalid model catalog`,
-              })
-            }
-            catalog.push(...decoded.value)
-          }
-          return catalog
-        }),
-      }),
-    )
-}
+  const catalog: Array<Model> = []
+  for (const driver of modelDrivers.values()) {
+    if (Predicate.isUndefined(driver.listModels)) continue
+    let auth = Option.none<ProviderAuthInfo>()
+    if (!Predicate.isUndefined(resolveAuth)) {
+      auth = yield* resolveAuth(driver.id).pipe(Effect.map(Option.fromUndefinedOr))
+    }
+    const driverCatalog = yield* driver.listModels(Option.getOrUndefined(auth))
+    const decoded = decodeModelCatalog(driverCatalog)
+    if (decoded._tag === "None") {
+      return yield* new DriverError({
+        driver: DriverFailureId.make(driver.id),
+        reason: `Model driver "${driver.id}" returned an invalid model catalog`,
+      })
+    }
+    catalog.push(...decoded.value)
+  }
+  return catalog
+})
 
 // ── resource-layer ──────────────────────────────────────────────────────────
 
 /**
- * Resource service/lifecycle assembly.
- *
- * Owns heterogeneous Resource layer erasure and lifecycle finalizer policy.
- * Schedule reconciliation owns its own protocol; this module owns only service
- * layers plus start/stop.
+ * Resource layer assembly: merges every Resource layer of one scope behind the
+ * heterogeneous erasure membrane. Start work and disposal live in each layer.
  *
  * @module
  */
@@ -967,11 +889,6 @@ interface ResourceEntry {
   readonly extensionId: ExtensionId
   readonly resource: AnyResourceContribution
 }
-
-class ResourceStartError extends Schema.TaggedError<ResourceStartError>()("ResourceStartError", {
-  extensionId: Schema.String,
-  cause: Schema.String,
-}) {}
 
 const collectResourceEntries = (
   extensions: ReadonlyArray<LoadedExtension>,
@@ -983,38 +900,6 @@ const collectResourceEntries = (
       .map((resource) => ({ extensionId: ext.manifest.id, resource })),
   )
 
-const buildLifecycleLayer = (
-  entries: ReadonlyArray<ResourceEntry>,
-): Layer.Layer<never, ResourceStartError> =>
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      for (const entry of entries) {
-        const start = entry.resource.start
-        if (!Predicate.isUndefined(start)) {
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.
-          const exit = yield* exitErasedEffect(() => start)
-          if (Exit.isFailure(exit)) {
-            yield* Effect.logError("resource.start.failed").pipe(
-              Effect.annotateLogs({
-                extensionId: entry.extensionId,
-                cause: Cause.pretty(exit.cause),
-              }),
-            )
-            return yield* new ResourceStartError({
-              extensionId: entry.extensionId,
-              cause: Cause.pretty(exit.cause),
-            })
-          }
-        }
-        const stop = entry.resource.stop
-        if (!Predicate.isUndefined(stop)) {
-          // @effect-diagnostics-next-line anyUnknownInErrorContext:off — Resource lifecycle effects cross the explicit exitErasedEffect membrane.
-          yield* Effect.addFinalizer(() => exitErasedEffect(() => stop).pipe(Effect.asVoid))
-        }
-      }
-    }),
-  )
-
 export const buildResourceLayer = (
   extensions: ReadonlyArray<LoadedExtension>,
   scope: ResourceScope = "process",
@@ -1022,19 +907,12 @@ export const buildResourceLayer = (
   const entries = collectResourceEntries(extensions, scope)
   if (entries.length === 0) return emptyErasedResourceLayer
 
-  const serviceLayers = entries.reduce<ErasedResourceLayer>(
+  return entries.reduce<ErasedResourceLayer>(
     (acc, { resource }) =>
       // @effect-diagnostics-next-line anyUnknownInErrorContext:off — heterogeneous Resource layer enters the explicit eraseResourceLayer membrane.
       Layer.merge(acc, eraseResourceLayer(resource.layer)),
     emptyErasedResourceLayer,
   )
-  const hasLifecycle = entries.some(
-    ({ resource }) =>
-      !Predicate.isUndefined(resource.start) || !Predicate.isUndefined(resource.stop),
-  )
-  if (!hasLifecycle) return serviceLayers
-
-  return eraseResourceLayer(Layer.provideMerge(buildLifecycleLayer(entries), serviceLayers))
 }
 
 // ── host-platform ───────────────────────────────────────────────────────────
@@ -1217,8 +1095,7 @@ const isGentExtension = (value: unknown): value is LoadedUserExtension => {
   return Option.isSome(decoded) && Effect.isEffect(decoded.value.setup)
 }
 
-/** Extract GentExtension from a module export. Paired-package wrapping is gone;
- *  only raw `GentExtension` values are valid now. */
+/** Extract a `GentExtension` from a module export; any other value is not one. */
 // oxlint-disable-next-line effect/noUnknownParameters -- Runtime module exports enter as untyped values.
 const resolveToGentExtension = (value: unknown): Option.Option<LoadedUserExtension> => {
   if (isGentExtension(value)) return Option.some(value)
@@ -1299,7 +1176,6 @@ export const setupExtension = Effect.fn("ExtensionLoader.setupExtension")(functi
   const manifest = discovered.extension.manifest
   const collector = makeCollectingExtensionHost({
     cwd,
-    source: discovered.sourcePath,
     home,
     host,
   })
@@ -1542,25 +1418,6 @@ const collectValidationFailures = (
     (driver) => Option.some(driver.id),
     "external driver",
   )
-  // Static prompt sections live on capability leaf `prompt`. Collision check
-  // uses prompt-section id dedup.
-  collectScopedCollisions(
-    (cs) => {
-      const sections: PromptSection[] = []
-      for (const tool of cs.tools ?? []) {
-        if (!isToolCapability(tool)) continue
-        const prompt = Option.fromUndefinedOr(getToolMetadata(tool).prompt)
-        if (Option.isSome(prompt)) sections.push(prompt.value)
-      }
-      for (const rpc of cs.requests ?? []) {
-        const prompt = Option.fromUndefinedOr(rpc.prompt)
-        if (Option.isSome(prompt)) sections.push(prompt.value)
-      }
-      return sections
-    },
-    (section) => Option.some(section.id),
-    "prompt section",
-  )
 
   return failures
 }
@@ -1624,7 +1481,6 @@ export interface SessionProfile {
   readonly resolved: ResolvedExtensions
   readonly layerContext: RuntimeProfileServiceContext
   readonly registryService: ExtensionRegistryService
-  readonly driverRegistryService: DriverRegistryService
   readonly baseSections: ReadonlyArray<PromptSection>
   /**
    * Identity of the process that built this profile. A process-local tool
@@ -1638,8 +1494,7 @@ export interface SessionProfile {
  * acquired.
  *
  * Extension setup is trusted code and can perform its own ordinary effects.
- * This boundary only guarantees that it does not build Resource layers,
- * invoke Resource start/stop hooks.
+ * This boundary only guarantees that it does not build Resource layers.
  */
 interface RuntimeProfileDeclarations {
   readonly extensionDeclarations: ExtensionActivationResult
@@ -1707,7 +1562,7 @@ export const loadRuntimeProfileDeclarations = (
       active: extensionDeclarations.active,
       failed: [...setup.failed, ...extensionDeclarations.failed],
     }
-    // 5. Build base prompt sections (core writes the environment; extensions shadow by id)
+    // 5. Build the base prompt section: core writes the environment
     const isGitRepo = yield* fs
       .exists(path.join(canonicalCwd, ".git"))
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
@@ -1747,24 +1602,15 @@ const buildSessionProfile = (params: {
     const resourceLayer: Layer.Layer<any, never, never> = Layer.succeedContext(
       params.resourceContext,
     )
-    const baseLayers = Layer.mergeAll(
-      ExtensionRegistry.fromResolved(params.resolved),
-      DriverRegistry.fromResolved({
-        modelDrivers: params.resolved.modelDrivers,
-        externalDrivers: params.resolved.externalDrivers,
-      }),
+    const layerContext = yield* Layer.build(
+      Layer.provideMerge(resourceLayer, ExtensionRegistry.fromResolved(params.resolved)),
     )
-    const layerContext = yield* Layer.build(Layer.provideMerge(resourceLayer, baseLayers))
-    // Extension sections shadow core sections by id.
-    const sectionMap = new Map(params.coreSections.map((s) => [s.id, s]))
-    for (const s of params.resolved.promptSections.values()) sectionMap.set(s.id, s)
     return {
       cwd: params.cwd,
       resolved: params.resolved,
       layerContext,
       registryService: Context.get(layerContext, ExtensionRegistry),
-      driverRegistryService: Context.get(layerContext, DriverRegistry),
-      baseSections: [...sectionMap.values()],
+      baseSections: params.coreSections,
       generationId: params.generationId,
     } satisfies SessionProfile
   })
@@ -2019,22 +1865,13 @@ export class SessionProfileCache extends Context.Service<
             if (Option.isSome(existing)) return existing.value
             const resolved = resolveExtensions([])
             const layerContext = Effect.runSync(
-              Layer.build(
-                Layer.mergeAll(
-                  ExtensionRegistry.fromResolved(resolved),
-                  DriverRegistry.fromResolved({
-                    modelDrivers: resolved.modelDrivers,
-                    externalDrivers: resolved.externalDrivers,
-                  }),
-                ),
-              ).pipe(Effect.scoped),
+              Layer.build(ExtensionRegistry.fromResolved(resolved)).pipe(Effect.scoped),
             )
             const profile: SessionProfile = {
               cwd,
               resolved,
               layerContext,
               registryService: Context.get(layerContext, ExtensionRegistry),
-              driverRegistryService: Context.get(layerContext, DriverRegistry),
               baseSections: [],
               generationId: ProcessGenerationId.make("test"),
             }
@@ -2192,7 +2029,6 @@ interface ExtensionSessionControlService {
 const ACTIVE_LOOP_DECODE_CONCURRENCY = 8
 
 interface ExtensionHostContextInput {
-  readonly extensionRegistry: ExtensionRegistryService
   /** Built by the caller over `GentPlatform`, which is an Effect rather than a service Tag. */
   readonly host: ExtensionHostPlatform
   /** The loop's follow-up queue. Absent outside a loop. */
@@ -2206,15 +2042,10 @@ interface MakeExtensionHostContextRunInfo {
   readonly sessionCwd?: string
 }
 
-interface ExtensionHostContextProviderService {
-  readonly defaultExtensionRegistry: ExtensionRegistryService
+/** Builds the `ExtensionHostContext` for one run of one branch. */
+interface ExtensionHostContextProvider {
   readonly forRun: (runInfo: MakeExtensionHostContextRunInfo) => ExtensionHostContext
 }
-
-export class ExtensionHostContextProvider extends Context.Service<
-  ExtensionHostContextProvider,
-  ExtensionHostContextProviderService
->()("@gent/core/src/runtime/extension-host/ExtensionHostContextProvider") {}
 
 /** Runs `use` against the service, or dies naming the absent one. */
 type Facet<S> = <A, E, R>(use: (service: S) => Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
@@ -2244,16 +2075,11 @@ const mapInteraction = <A, E>(
     }),
   )
 
-const unavailablePlatform: RuntimeEnvironmentApi = { cwd: "", home: "", platform: "unknown" }
-
 export const makeExtensionHostContextProvider = (
   input: ExtensionHostContextInput,
-): Effect.Effect<ExtensionHostContextProviderService> =>
+): Effect.Effect<ExtensionHostContextProvider, never, RuntimeEnvironment> =>
   Effect.gen(function* () {
-    const platform = Option.getOrElse(
-      yield* Effect.serviceOption(RuntimeEnvironment),
-      () => unavailablePlatform,
-    )
+    const environment = yield* RuntimeEnvironment
     const host = input.host
     const control = via(Option.fromUndefinedOr(input.sessionControl), "SessionControl")
     const approval = yield* facet(ApprovalService, "ApprovalService")
@@ -2386,8 +2212,8 @@ export const makeExtensionHostContextProvider = (
     const forRun = (runInfo: MakeExtensionHostContextRunInfo): ExtensionHostContext => ({
       sessionId: runInfo.sessionId,
       branchId: runInfo.branchId,
-      cwd: runInfo.sessionCwd ?? platform.cwd,
-      home: platform.home,
+      cwd: runInfo.sessionCwd ?? environment.cwd,
+      home: environment.home,
       host,
       Process,
       Files,
@@ -2444,7 +2270,7 @@ export const makeExtensionHostContextProvider = (
           mutations((service) =>
             service.createSession({
               name: params.name,
-              cwd: params.cwd ?? runInfo.sessionCwd ?? platform.cwd,
+              cwd: params.cwd ?? runInfo.sessionCwd ?? environment.cwd,
               parentSessionId: params.parentSessionId,
               parentBranchId: params.parentBranchId,
               historyBranchId: params.historyBranchId,
@@ -2605,13 +2431,12 @@ export const makeExtensionHostContextProvider = (
       },
     })
 
-    return { defaultExtensionRegistry: input.extensionRegistry, forRun }
+    return { forRun }
   })
 
 // ── session-runtime-context ─────────────────────────────────────────────────
 
 export interface TurnProfileDefaults {
-  readonly driverRegistry: DriverRegistryService
   readonly baseSections: ReadonlyArray<PromptSection>
 }
 
@@ -2624,18 +2449,20 @@ interface ExistingSessionBranch {
 
 /**
  * Resolve the turn profile for one branch: the stored session cwd selects a
- * profile from the cache; without a session or a cache, the host defaults
- * apply. A storage lookup failure falls back to the defaults as well.
+ * profile from the cache; without a session or a cache, the launch registry
+ * and the host defaults apply. A storage lookup failure falls back to them as well.
  */
 export const resolveTurnProfile = (params: {
   readonly sessionId: SessionId
   readonly branchId: BranchId
   readonly profileCache?: SessionProfileCacheService
+  readonly hostProvider: ExtensionHostContextProvider
   readonly defaults: TurnProfileDefaults
-}): Effect.Effect<AgentLoopTurnProfile, never, ExtensionHostContextProvider | SessionStorage> =>
+}): Effect.Effect<AgentLoopTurnProfile, never, ExtensionRegistry | SessionStorage> =>
   Effect.gen(function* () {
     const sessionStorage = yield* SessionStorage
-    const hostProvider = yield* ExtensionHostContextProvider
+    const launchRegistry = yield* ExtensionRegistry
+    const hostProvider = params.hostProvider
     const sessionCwd = yield* sessionStorage.getSession(params.sessionId).pipe(
       Effect.map((session) => Option.fromUndefinedOr(session?.cwd)),
       Effect.orElseSucceed(() => Option.none<string>()),
@@ -2654,15 +2481,13 @@ export const resolveTurnProfile = (params: {
     )
     if (Option.isNone(profile)) {
       return {
-        turnExtensionRegistry: hostProvider.defaultExtensionRegistry,
-        turnDriverRegistry: params.defaults.driverRegistry,
+        turnExtensionRegistry: launchRegistry,
         turnBaseSections: params.defaults.baseSections,
         turnHostCtx: hostProvider.forRun(runInfo),
       }
     }
     return {
       turnExtensionRegistry: profile.value.registryService,
-      turnDriverRegistry: profile.value.driverRegistryService,
       turnBaseSections: profile.value.baseSections,
       turnHostCtx: hostProvider.forRun(runInfo),
       turnCapabilityContext: profile.value.layerContext,

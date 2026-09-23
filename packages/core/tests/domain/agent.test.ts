@@ -3,7 +3,6 @@ import { Effect, Option, Schema } from "effect"
 import {
   AgentDefinition,
   AgentName,
-  AgentRunToolCallSchema,
   DEFAULT_AGENT_NAME,
   type DriverRef,
   effectiveModelDriver,
@@ -30,20 +29,6 @@ describe("AgentName brand", () => {
     expect(Schema.is(AgentName)("cowork")).toBe(true) // brand-only filter accepts strings at runtime
     const decoded = Effect.runSync(Schema.decodeEffect(AgentName)("research"))
     expect(decoded).toBe(AgentName.make("research"))
-  })
-})
-
-describe("AgentRunToolCallSchema", () => {
-  test("decodes structurally typed tool-call records", () => {
-    const decoded = Effect.runSync(
-      Schema.decodeEffect(AgentRunToolCallSchema)({
-        toolName: "read",
-        args: { path: "x.ts" },
-        isError: false,
-      }),
-    )
-    expect(decoded.toolName).toBe("read")
-    expect(decoded.isError).toBe(false)
   })
 })
 
@@ -188,14 +173,11 @@ describe("run spec construction", () => {
   test("undefined fields are omitted, not stored", () => {
     const spec = makeRunSpec({
       // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
-      visibility: undefined,
-      // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       overrides: undefined,
       // oxlint-disable-next-line effect/noNullish -- Keep the absent field in this schema boundary fixture.
       parentToolCallId: undefined,
     })
     expect(Object.keys(spec)).toEqual([])
-    expect("visibility" in spec).toBe(false)
     expect("overrides" in spec).toBe(false)
     expect("parentToolCallId" in spec).toBe(false)
   })
@@ -203,7 +185,6 @@ describe("run spec construction", () => {
   test("threads each provided field through", () => {
     const tcid = ToolCallId.make("tc-1")
     const spec = makeRunSpec({
-      visibility: "private",
       overrides: {
         modelId: ModelId.make("custom/model"),
         allowedTools: ["bash"],
@@ -213,7 +194,6 @@ describe("run spec construction", () => {
       },
       parentToolCallId: tcid,
     })
-    expect(spec.visibility).toBe("private")
     expect(spec.overrides?.modelId).toBe(ModelId.make("custom/model"))
     expect(spec.overrides?.allowedTools).toEqual(["bash"])
     expect(spec.overrides?.deniedTools).toEqual(["read"])
@@ -222,9 +202,9 @@ describe("run spec construction", () => {
     expect(spec.parentToolCallId).toBe(tcid)
   })
 
-  test("partial input — only visibility", () => {
-    const spec = makeRunSpec({ visibility: "private" })
-    expect(Object.keys(spec)).toEqual(["visibility"])
+  test("partial input — only the parent tool call", () => {
+    const spec = makeRunSpec({ parentToolCallId: ToolCallId.make("tc-2") })
+    expect(Object.keys(spec)).toEqual(["parentToolCallId"])
   })
 })
 

@@ -6,14 +6,14 @@ The resource evolution plan is in [`docs/malleability.md`](docs/malleability.md)
 
 ## Core Model
 
-`gent` is organized around five nouns:
+`gent` is organized around six nouns:
 
 - `Server` — process-wide services only: storage, auth stores, platform, transport wiring, connection tracking.
 - `Profile` — cwd-scoped extension graph: drivers, hooks, resources, capability leaves.
 - `SessionRuntime` — the single public session engine: inbox, queue, checkpoint, watch state, turn orchestration.
 - `Tool` / `Request` — independent callable leaves for model tools and typed extension RPC. Requests with a `slash:` block also surface as human slash commands.
-- `Resource` — long-lived services, schedules, lifecycle, and extension-owned state.
-- `Reaction` — turn/message/tool-result hooks for prompt, policy, runtime, and client state derivation.
+- `Resource` — long-lived scoped services and extension-owned state.
+- `Hook` — `systemPrompt`, `turnProjection`, and `turnAfter` handlers registered with `host.on` for prompt, policy, and turn follow-up.
 
 Everything else is adapter code around those nouns.
 
@@ -205,9 +205,9 @@ The app surface is split by concern:
 - `SessionQueries`
 - `InteractionCommands`
 
-`message.send` request-id dedup lives in `rpc-handlers.ts` next to the handler; the runtime keys the actor command on the same request id.
+`message.send` request-id dedup lives in `server/server.ts` next to the handler; the runtime keys the actor command on the same request id.
 
-`SessionEvents` and `SessionSubscriptions` are inlined into `rpc-handlers.ts` — they are not separate services.
+`SessionEvents` and `SessionSubscriptions` are inlined into `server/server.ts` — they are not separate services.
 
 `AppServicesLive` is assembled inline at the top of `packages/core/src/server/server-root.ts` (private to the file — `buildServerRoot` is the only consumer).
 
@@ -226,17 +226,17 @@ It is the composition boundary. Not the domain boundary.
 
 `packages/core/src/runtime/extension-host.ts` owns the shared profile pipeline.
 `loadRuntimeProfileDeclarations` discovers extensions, runs trusted setup,
-validates declarations, and loads static prompt inputs. It does not acquire
-Resource layers, invoke their lifecycle hooks, or reconcile scheduled jobs.
-Trusted setup can still perform its own effects; this is not a sandbox boundary.
+validates declarations, and loads the core prompt sections. It does not build
+Resource layers. Trusted setup can still perform its own effects; this is not a
+sandbox boundary.
 
-`runtime/live-profile.ts` sends these declarations to the graph host and
-reconciles scheduled jobs while staging the catalog. `buildProfileCatalog`
-assembles registries and prompt inputs from the acquired resource context.
-`buildExtensionLayers` remains the isolated child adapter. It builds child
-service values without repeating the parent's process lifecycle hooks.
-Profile tests use the live cache. The tool test layer uses the production
-composition root. Neither has a separate activation implementation.
+`SessionProfileCache` builds one profile per (workspace, cwd). It builds every
+extension's process-scope resources in resolution order, each in its own child
+scope, and reports an extension whose layer fails as failed at the startup
+phase. `buildSessionProfile` then stages the `ExtensionRegistry` and the base
+prompt sections over the built resource context. Profile tests use the live
+cache. The tool test layer uses the production composition root. Neither has a
+separate activation implementation.
 
 The production server uses one live profile owner:
 
@@ -259,8 +259,8 @@ Native source-mode approval, public repair, direct-command cleanup, and external
 callback limits have focused validation. Full gate and terminal/server E2E pass.
 See `plans/live-composition-review.md` for evidence and recovery limits.
 
-`compileBaseSections(profile)` combines static core and extension prompt sections.
-Per-turn projection hooks resolve dynamic prompt content inside the extension
+Core writes one base prompt section, the environment. Extensions add sections
+only from `turnProjection` hooks, which run each turn inside the extension
 service context.
 
 ## Runtime
@@ -277,7 +277,7 @@ Shape:
 
 - `SessionRuntime` is the single public session engine.
 - `AgentLoop` is an actor-backed internal control plane. There is no public
-  `AgentLoop` service facade; `session-runtime.ts` talks to the actor in
+  `AgentLoop` service facade; `runtime/session.ts` talks to the actor in
   `agent-loop.ts` directly. The actor entity id includes
   `(workspaceId, sessionId, branchId)`.
 - The turn worker holds the cluster entity keep-alive while a turn runs.
@@ -304,11 +304,7 @@ Shape:
 - One writer settles a child's completion. The delegate's `turnAfter` hook on
   the child branch delivers every receipt as one idempotent follow-up message
   on the parent branch (metadata `customType: "child-completion"`, `wake` set
-  so a parent with no prior turn still starts one). The one exception is a
-  private helper run (`runChild`, used by `read_session`), whose
-  caller needs the answer in hand: it claims the row under a per-process nonce
-  and the hook leaves it alone; a claim naming another process is a crash
-  leftover and reads as unclaimed.
+  so a parent with no prior turn still starts one). Nothing waits on a child.
 - The same hook, read on the parent side, cascades an interrupt: when a turn
   ends interrupted, every child it started and had not heard from is settled
   as interrupted and then stopped, so a parent Escape stops the whole subtree
@@ -443,9 +439,8 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - Completion has one writer: the delegate's `turnAfter` hook on the child
   branch delivers every receipt as one ordinary user message on the parent
   branch (metadata `customType: "child-completion"`) with the outcome and a
-  bounded preview, and the message wakes the parent. The model never waits on a
-  child; only the private helper run (`runChild`) does, and it holds its row so
-  the hook leaves it alone. Lazy reconcile covers the crash window between the
+  bounded preview, and the message wakes the parent. Nothing waits on a child.
+  Lazy reconcile covers the crash window between the
   receipt and the hook: the delegate reconciles its registry on the parent's
   next turn and on every `delegate.list`, so a caller that died mid-op leaves a
   child the registry still resolves, never a running one nobody delivers.
@@ -471,7 +466,7 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
 - Child session nesting depth is admitted on the `session.create` command path
   (`admitChildSessionDepth`). Missing or incomplete ancestry is an error, not
   root depth; a parent at the depth limit cannot spawn.
-- Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, prompt addendum) win over both. That config entry is where a pairing such as fable → opus or opus → sonnet is declared. Helper runs such as `read_session` goal extraction pass `visibility: "private"`.
+- Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, prompt addendum) win over both. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
 - `/btw` (`@gent/btw`) forks the branch: `btw.fork` creates a child session with `historyBranchId` set to this branch, so the fork starts from this branch's context window and runs as the session's own agent with its tools — a parallel session, not a side channel. Nothing it does lands on the branch it forked from. The pane asks it through `btw.ask` and reads it through `btw.progress` (turns after the fork point plus the reply streaming now, folded from the fork's event stream by a process resource); `^o` opens the fork as the shell's session, which is `switchSession`, because the fork already is one. The open fork per branch is process state; the fork itself is durable and listed with every other child session.
 - Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` prompt section, and `turnAfter` on an answered turn clears those that fired before it started, so a failed or interrupted turn keeps them; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back on the branch's next turn (the `turnProjection` hook re-arms them; past-due alarms fire at once). The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from the `wake.pending` request with their cadence and `(notify)` when the fire starts no turn; the model reads the same entries with the `wake.list` tool, in ISO times like the `wake` and `monitor` results (a tool and a request cannot share an id inside one extension). The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
 - Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, the goal `turnAfter` hook charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.
@@ -490,14 +485,14 @@ including when SQLite runs in memory. `EventStore.Memory` is an explicit test
 override, not the default for in-memory application sessions. This keeps the
 snapshot cursor aligned with replayed navigation and interaction events.
 
-Slow-client policy: `session-pubsub-registry.ts` gives each session one sliding
+Slow-client policy: the session PubSub registry in `domain/event.ts` gives each session one sliding
 PubSub of event ids, not envelopes. Publishing never waits for a subscriber, so a
 stalled client cannot block tool execution. `makeCursorReplayStream` opens the
 subscription first, drains the durable store from the subscriber's cursor, and
 drains again on every notification burst. Lost or coalesced notifications cost
 one extra read, never an event, and replay and live delivery share one ordered
 source, so there is no replay/live race. Both `EventStoreLive` and
-`EventStore.Memory` use this path; `tests/domain/event-stream-delivery.test.ts`
+`EventStore.Memory` use this path; `tests/domain/event.test.ts`
 proves the stalled-subscriber, race, and branch-filter properties for both.
 
 Synchronization marker: a subscription opened with `synchronize` emits one
@@ -560,14 +555,14 @@ Key properties:
   Its caller must verify receipt ownership.
 - **No permission rules.** A tool that guards a call asks once through the durable approval request (`ApprovalService`); the answer is not saved, and a request with no answerer fails closed. Core has no rule schema, no rule storage, and no `permission.*` RPC.
 
-Files: `interaction-request.ts` (InteractionPendingError, makeInteractionService), `approval-service.ts` (ApprovalService), `interaction-pending-reader.ts` (pending storage read seam), `agent-loop.state.ts` (WaitingForInteraction), `interaction-commands.ts` (respond orchestration).
+Files: `domain/interaction.ts` (InteractionPendingError, makeInteractionService), `runtime/extension-host.ts` (ApprovalService), `storage/storage.ts` (InteractionStorage, the pending read seam), `domain/agent-loop.ts` (WaitingForInteraction), `runtime/agent-loop.ts` (respond orchestration).
 
 ## Platform Boundaries
 
 Core runtime should not reach for ambient process state unless the app shell is the real owner.
 
-The Bun cell implementation in `runtime/code-cell/` is the shipped model
-execution surface. `cell-extension.ts` registers the `@gent/cell` tool and selects it
+The Bun cell implementation in `packages/extensions/src/cell.ts` is the shipped model
+execution surface. Its extension section registers the `@gent/cell` tool and selects it
 through the ordinary `turnProjection` hook. `ToolPolicyFragment.modelSet` narrows
 the final admitted host tools for model calls. The last explicit set wins; an
 empty set advertises no tools. It cannot restore unknown, denied, or filtered
@@ -584,11 +579,11 @@ different model and effort for one child. The loop has no `cell` name rule
 for selection or allow lists. The server root still composes the extension before
 the extension package builtins; its branch lifetime and worker build still belong
 to core. Test presets that exercise host tools directly omit it.
-`cell-kernel.ts` owns serialized evaluate/reset operations,
+The kernel section of `cell.ts` owns serialized evaluate/reset operations,
 evaluation deadlines, host-call dispatch, and worker disposal. Each evaluation
 receives its host service from the caller's Effect context. Worker faults lose
 working state; ordinary cell errors preserve it. No cell is automatically replayed.
-`cell-process.ts` owns the worker process and its bounded pipes. The worker runs
+The process section of `cell.ts` owns the worker process and its bounded pipes. The worker runs
 with the host's working directory, environment, and OS permissions, the same
 authority the bash tool grants, so cells use the full Bun runtime, `require`,
 and dynamic `import` directly. Protocol frames travel on dedicated descriptors
@@ -609,9 +604,9 @@ can replace the worker. Each kernel permits three replacement attempts by
 default, including failed starts. Close cancels active work and waits for its
 cleanup. The Gent policy bridge and other platform isolation remain unfinished.
 
-The core build compiles `runtime/code-cell-worker-boundary.ts` into `dist/gent-cell`.
+The `@gent/extensions` build compiles `src/cell-worker-boundary.ts` into `dist/gent-cell`.
 Turbo builds that declared dependency before the TUI copies the worker into
-`bin/gent-cell` beside `bin/gent`. Core owns the worker build; the TUI only
+`bin/gent-cell` beside `bin/gent`. `@gent/extensions` owns the worker build; the TUI only
 packages it. The worker embeds Bun and needs no external Bun executable. Its
 compile options disable automatic dotenv, bunfig, tsconfig, and package.json
 loading. The process launcher uses this artifact as both its runtime
@@ -622,10 +617,10 @@ This is a packaged worker, not a daemon or a new session owner.
 host uses its sibling `gent-cell`. Source runs use core's `dist/gent-cell`, resolved
 from the platform module, not cwd or the Bun executable. Source runs need the core
 build first. The TUI build sets the compiled-host marker explicitly.
-`agent-loop.handlers.ts` allocates a child of the actor scope for each loop rebuild.
+The actor section of `runtime/agent-loop.ts` allocates a child of the actor scope for each loop rebuild.
 It publishes the loop handle before it transfers scope ownership. Failure or
 interruption during construction closes that child immediately.
-`agent-loop.behavior.ts` uses this supplied scope to build `CellExecution.Branch`
+The loop behavior in `runtime/agent-loop.ts` uses this supplied scope to build `CellExecution.Branch`
 and supplies the service to turn execution. Each branch owns a separate service and lazy
 worker. Closing the loop scope closes that worker. Source runs have no
 build artifact, so builtin tools carry no durable identity there; cells record a
@@ -638,7 +633,7 @@ signals active evaluation and waits for cleanup. Cells queued before cancellatio
 cannot evaluate; the branch interrupt flag also stops later calls in that turn.
 
 Inner calls a cell admits publish the ordinary tool events with a
-`parentToolCallId` naming the cell. `cell-operation-receipt.ts` attaches compact
+`parentToolCallId` naming the cell. The operation receipt section of `cell.ts` attaches compact
 receipts (`tool`, `outcome`, `summary`) to the saved cell result whenever a cell
 made inner calls, so the transcript keeps effects visible after reload. The TUI
 nests live inner calls under the cell, counts them in the compact tree, and shows
@@ -655,7 +650,7 @@ worker loses state and requires explicit reset; a cell stopped before evaluation
 reports that it did not start. The steering RPC still acknowledges durable
 delivery, not completed cancellation. Clients observe completion through events.
 
-`storage/cell-execution-storage.ts` provides outer cell admission in the existing
+The execution storage section of `cell.ts` provides outer cell admission in the existing
 SQLite database. A claim must refer to one `cell` call in an assistant message
 owned by the current workspace, session, and branch. Only the first claim returns
 the stored source for evaluation. Repeat claims return the saved tool result or
@@ -663,7 +658,7 @@ the stored source for evaluation. Repeat claims return the saved tool result or
 evaluation. Results are immutable. Receipts cascade with their assistant message.
 Admission rejects a caller-owned SQL transaction so its claim commits before
 external effects start. Cell execution must remain outside SQL transactions.
-`runtime/code-cell.ts` joins this store to the real kernel. Each
+`cell.ts` joins this store to the real kernel. Each
 layer fixes one session and branch. It serializes admission, evaluation, result
 storage, and reset. It opens a worker only after a fresh claim. Saved results and
 incomplete claims do not start a worker. Initial startup failures consume the
@@ -675,7 +670,7 @@ Inner operation bindings and durable approvals use the stores described below.
 `runtime/tools.ts` carries the transcript-owned call address
 and the turn's selected tool bindings.
 The shared turn dispatcher supplies it for each bound tool invocation, including
-explicit tool invocation. `runtime/code-cell.ts` uses that address
+explicit tool invocation. `cell.ts` uses that address
 and the current turn profile to enter branch-owned cell execution.
 It does not search messages or accept a call address from model input. It rejects
 an inner host operation that attempts to dispatch another outer cell. Missing
@@ -684,8 +679,8 @@ missing-service defect. The RPC test catches a nested-dispatch rejection inside
 the worker and verifies that the attempted source did not change retained state.
 The RPC lifetime test uses this adapter and checks two identical sources in one model
 response. Each source runs once and receives a distinct result receipt.
-`runtime/code-cell.ts` now declares the cell tool and is exercised by
-this RPC test. It is not installed in the default profile yet. It returns saved
+`cell.ts` declares the cell tool and is exercised by
+this RPC test. It returns saved
 JSON success data or fails with the public `ToolResultFailure` type. The normal
 tool runner preserves that failure's JSON data and still supplies transcript
 identity itself. The type cannot select a call ID or tool name. Permission checks
@@ -696,7 +691,7 @@ host tool restarts at its approval boundary and records one decision. The outer
 source does not restart or continue after approval. Recovery returns the saved
 operation results in a failed outer result with visible worker state loss.
 
-The shared `domain/cell-input.ts` schema accepts optional `reset: true`. Admission
+The input schema in `cell.ts` accepts optional `reset: true`. Admission
 reads this flag from the stored assistant call. After a fresh claim commits, the
 branch execution permit covers reset and evaluation together. Completed or
 incomplete calls do not reset the worker. A repeated reset call returns its saved
@@ -723,10 +718,10 @@ The catalog is instruction plus data, not a tool. When the surface narrows to
 `cell`, `buildTurnPromptSections` adds a `cell-catalog` section that lists every
 selected host tool with its prompt snippet or description; the section is
 rebuilt each turn, so live composition changes reach the model as ordinary
-instruction changes. `runtime/code-cell.ts` builds the data half
+instruction changes. `cell.ts` builds the data half
 from the same selected map: name, description, guidelines, and the actual Effect
 AI input schema, hashed over its encoding. `dispatchCell` hands it to the cell
-host; `cell-kernel.ts` sends it inside `Evaluate` only when the hash differs
+host; the kernel sends it inside `Evaluate` only when the hash differs
 from what the current worker holds, and clears that memory when a replacement
 worker starts, so the first cell on a new worker carries the full catalog. The
 worker keeps the catalog beside the namespace: `reset` clears bindings, not the
@@ -747,7 +742,7 @@ policy removes `cell`, the replay dispatcher receives no outer cell binding and
 returns a failure without executing it. Already admitted cells still use saved
 operation recovery and never evaluate their source again.
 
-`runtime/code-cell.ts` adapts one already-bound host call to
+`cell.ts` adapts one already-bound host call to
 `ToolRunner.runBound`. It does not resolve a missing binding by name. The caller still owns the durable operation
 receipt. Execution returns the original tool result.
 A separate result conversion runs after persistence and maps failures to cell errors.
@@ -757,7 +752,7 @@ not send that signal to cell JavaScript as a catchable error. Recorded execution
 preserves the suspension and leaves its outer claim incomplete. Durable inner
 operation resume uses the recorded host below; suspension never authorizes cell replay.
 
-`storage/cell-tool-operation-storage.ts` records inner operations under an
+The tool operation storage section of `cell.ts` records inner operations under an
 admitted outer cell in the same SQLite database. The operation's input, tool
 binding, and derived tool-call ID are immutable. Its state is Started, Waiting,
 Resuming, or Completed. Repeated admission never grants another execution.
@@ -776,7 +771,7 @@ The cell host supplies this address from admitted operation storage and validate
 the recorded binding under its publication lease.
 The store does not itself run tools or restore a worker continuation.
 
-`runtime/code-cell.ts` joins fresh inner-operation admission to
+`cell.ts` joins fresh inner-operation admission to
 the tool adapter. It enters the existing live turn publication lease, captures
 the exact capability, and requires a source identity before admission. It gives
 the approval service the host-owned operation address. It saves the original
@@ -796,7 +791,7 @@ The branch phase is held in memory; queue storage persists the in-flight item,
 not the complete Running state. Recovery must use stored cell receipts rather
 than depend on a new field in that transient phase.
 
-`runtime/code-cell.ts` builds the paired outer result after the
+`cell.ts` builds the paired outer result after the
 branch owner has stopped cell execution. It preserves undecided approvals,
 resumes only waiting operations with saved decisions, and reuses completed
 receipts. Started or Resuming operations remain unknown; recovery does not
@@ -805,7 +800,7 @@ completed tool results separately from unknown operations. Repeated recovery
 returns that result. This adapter has no evaluator call. Callers must not run
 recovery beside an active cell.
 
-`agent-loop.turn-execution.ts` routes admitted saved cell calls through this
+`runtime/turn.ts` routes admitted saved cell calls through this
 adapter before native binding replay. `CellExecutionStorage.get` reads admission
 without creating it. Unadmitted calls keep the native path. Recovery requires a
 live publication. A suspended inner operation parks the actor with the outer
@@ -868,7 +863,7 @@ Main boundaries:
 - `apps/tui/src/session.tsx` for session-screen orchestration
 - `apps/tui/src/extensions/client-facets.ts` for TUI-owned extension facets
 - route state machines for modal/session surfaces
-- components like `composer.tsx`, `message-list.tsx`, `queue-widget.tsx` as presentation + local interaction
+- components like `composer.tsx` and `message-list.tsx` as presentation + local interaction
 
 Rules:
 
@@ -922,14 +917,12 @@ TUI client extensions may also import shared client data from `@gent/core/protoc
 must either live here as a stable authoring primitive or move behind a
 host-owned design. It should expose:
 
-- extension shape: `defineExtension`, `GentExtension`, `ExtensionHost`,
-  `registrationDomains`;
-- typed leaves: `tool`, `request`, `ref`;
-- scoped resources: `defineResource`, `defineStateResource`, and resource
-  scope types;
+- extension shape: `defineExtension`, `GentExtension`, `ExtensionHost`;
+- typed leaves: `tool`, `request`, `defineRequests`, `ref`;
+- scoped resources: `defineResource`;
 - turn hooks: the public hook input/output types needed to author
   `host.on(kind, handler)`;
-- agents and model ids: `defineAgent`, `AgentName`, `ModelId`, run-spec
+- agents and model ids: `AgentDefinition`, `AgentName`, `ModelId`, run-spec
   helpers needed for turn-scoped subagent dispatch;
 - stable ids and author-facing schemas: `ExtensionId`,
   `ToolCallId`, output/message projection
@@ -953,7 +946,7 @@ Everything else is builtin/internal:
   implementation details;
 - raw event/message domain internals that are not part of the serialized
   authoring contract;
-- driver registry internals and provider auth persistence machinery;
+- the extension registry's driver maps and provider auth persistence machinery;
 - test-only helpers such as `getToolEffect`, raw metadata tags, and fixture
   constructors.
 
@@ -964,8 +957,8 @@ Rules:
   transport projections instead of privileged `@gent/extensions` registries
 - dispatch compiles once, then runs from typed registries and explicit runtime slots
 - public snapshot schema is enforced at runtime — invalid snapshots are dropped, not passed through
-- declaration setup and validation failures exclude the affected extension;
-  resource start failures reject the live graph publication
+- declaration setup, validation, and process-resource build failures exclude
+  the affected extension; a branch-resource build failure fails its loop
 - stateful side effects cross explicit typed slots (`host.on` hooks, resources,
   or extension-owned services), not private host imports
 
@@ -973,26 +966,24 @@ For the full authoring guide, see [docs/extensions.md](docs/extensions.md). Exam
 
 ### Server Extensions
 
-One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `job`, `agent`, `modelDriver`, `externalDriver`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `source`, `host`, `Process`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. The loader (`runtime/extension-host.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
+One authoring shape: `defineExtension({ id, setup })`. `setup` is an Effect that yields `ExtensionHost` (`packages/core/src/domain/extension.ts`) and calls `host.register(domain, ...values)` for leaves (`tool`, `request`, `resource`, `agent`, `modelDriver`, `externalDriver`) and `host.on(kind, handler)` for hooks. Setup-time host facts (`cwd`, `home`, `host`, `Process`) live on the same service; runtime host authority comes from `yield* ExtensionContext`. The domain string IS the discriminator — TypeScript checks the value type per domain at the call site. The loader (`runtime/extension-host.ts`) provides a collecting host, seals the registrations into `ExtensionContributions`, binds requests to the extension id, and runs `validateExtensionPackage` so malformed registrations fail activation instead of dispatch.
 
 There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContributions` (`packages/core/src/domain/extension.ts`) is the compiled record consumed by the registry, hook compiler, and profile build; adding a new kind means adding a registration domain and a record field, not a new union arm. Each extension's process resources build once into their own child of the profile scope, which owns acquisition and release.
 
-- **Resource** — `defineResource({ id, scope, layer, start?, stop? })`. Long-lived state has a stable identity and explicit `scope`; resources build in extension resolution order. Today only `"process"` is public, because it is the only lifecycle with a host owner. `cwd`, `session`, and `branch` lifetimes stay out of the author API until their runtime owners exist. Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/extension.ts` and `runtime/extensions/resource-host/`.
-- **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability/{tool,request}.ts`; `runtime/extension-host.ts` compiles the model, RPC, and slash registries.
+- **Resource** — `defineResource({ id, scope, layer })`. Start work runs in the layer build and disposal is a finalizer in it. Long-lived state has a stable identity and explicit `scope`; resources build in extension resolution order. `scope` is `"process"` (built once per profile, released when the profile scope closes) or `"branch"` (built per branch loop, released when the loop closes). Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/extension.ts` and `buildResourceLayer` in `runtime/extension-host.ts`.
+- **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Interaction`, `Process`, `Files`, `FileLock`, `State`); extension-private authority comes from extension-owned Effect service Tags. The `Files` / `FileLock` / `State` facets wrap the host-internal `FileIndex`, `FileLockService`, and `ExtensionStatePublisher` so shipped and external extensions share the same surface. See `packages/core/src/domain/capability.ts`; `runtime/extension-host.ts` compiles the model, RPC, and slash registries.
 - **Addressed session verbs** — `ExtensionContext.Session` reaches other branches through the same verbs the server uses: `create` (durable-once by `requestId`, optional `historyBranchId` copies the visible rows in, depth admitted by the host), `send` (an addressed user message with the loop `completion` modes; the own branch refuses and points at `queueFollowUp`), `steer`, `events` (replay, then the `StreamSynchronized` marker, then live), `delete` (cascade), and `queueFollowUp` with `sessionId`. The bodies live in the `agent-loop.client` section of `packages/core/src/domain/agent-loop.ts`; `SessionRuntime` and the loop's `sessionControl` both call them, so the facade and the RPC path cannot drift. The verbs are uniform: no extension, shipped or not, holds a grant another lacks. `AgentDefinition.maxModelAttempts` (and the RunSpec override) is the generic per-turn model-attempt budget, reserved durably per turn message id.
 - **Hooks** — `host.on("systemPrompt" | "turnProjection" | "turnAfter", handler)` registers the three runtime hooks; each kind is typed by `ExtensionHookSignatures`. Hooks, tools, and requests all cross one membrane: `provideExtensionLeaf(frame)` in `runtime/extension-host.ts` reads the run's `CurrentExtensionHostContext` and provides `ExtensionContext`; the turn projection is an input to `resolveTurnProjection`. Hook handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. `turnAfter` carries the turn's token usage. See `packages/core/src/domain/extension.ts` and `runtime/extension-host.ts`.
-- **Driver** — the `modelDriver` and `externalDriver` domains take `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth and list their own catalog (`listModels(auth)`; core concatenates every driver's list and fetches nothing — the shipped drivers read models.dev through `packages/extensions/src/models-dev.ts`, cached on disk for a day); external drivers stream Effect AI response parts from process-owned executors. See `packages/core/src/domain/driver.ts` and `runtime/extension-host.ts`.
+- **Driver** — the `modelDriver` and `externalDriver` domains take `ModelDriverContribution` and `ExternalDriverContribution`. Model drivers provide LLM provider layers + auth and list their own catalog (`listModels(auth)`; core concatenates every driver's list and fetches nothing — the shipped drivers read models.dev through the catalog section of `packages/extensions/src/providers.ts`, cached on disk for a day); external drivers stream Effect AI response parts from process-owned executors. See `packages/core/src/domain/driver.ts` and `runtime/extension-host.ts`.
 
 Other notes:
 
-- Lifecycle effects live on Resources as `start` / `stop`. A failed start
-  rejects publication and closes newly acquired resources. First activation
-  leaves no cache entry. A failed replacement after retirement leaves no
-  active publication; it does not restore retired authority. Validation failure
-  before retirement preserves the previous publication. A missing optional
-  provider suspends affected extensions through the resource plan.
-  Scheduler failures remain extension health diagnostics. The graph host
-  owns resource stop order and scoped cleanup.
+- A process Resource layer that fails to build rejects its extension: the
+  profile reports it failed at the `startup` phase, closes what that layer
+  acquired, and keeps its siblings live. Branch resources build together when
+  a branch loop starts, so a branch resource that fails to build fails that
+  loop, not one extension. Release runs in reverse build order when the owning
+  scope closes.
 - Prompt shaping, input normalization, permission policy, and turn hooks are explicit runtime slots compiled from extension hooks and typed leaves, not generic middleware buckets.
 - Agent choice is turn-scoped: `QueuedTurnItem.agentOverride` names the agent
   for one turn and nothing else. A branch holds no agent of its own, so there
@@ -1001,7 +992,7 @@ Other notes:
 
 ### EventPublisher
 
-`EventPublisherRouterLive` (`server/event-publisher.ts`) dispatches through per-cwd profiles. For a single-cwd run the profile is resolved once at boot; for multi-cwd server topologies the router resolves lazily per cwd and fans out to the correct extension runtime. Transport-level broadcast (session stream, WebSocket push) is cwd-agnostic; only the extension runtime dispatch is per-cwd.
+`EventPublisherLive` (`domain/event.ts`) appends an event to the `EventStore` and delivers the envelope to subscribers; `append` and `deliver` are also separate so a mutation can append inside its transaction and deliver after commit. The same layer provides `ExtensionStatePublisher`, which publishes `ExtensionStateChanged`. Publishing is cwd-agnostic; per-cwd extension behavior comes from the turn's profile.
 
 ### TUI Extensions
 
@@ -1102,13 +1093,6 @@ The TUI renders interactions from the typed event feed (`InteractionPresented` e
 Working values live in the kernel. Durable results are ordinary files. There is no separate result store, result RPC, or count badge. File links refer to the current content, not an immutable revision. A branch fork does not copy a saved plan; adoption requires an explicit file copy.
 
 Workflow commands (`/plan`, `/review`, `/audit`, `/counsel`, `/research`) live in `@gent/workflows` as outcome prompts. They retain no workflow state and impose no fixed child count. The model uses cell bindings and files for working data, and delegates independent work when useful. Final plans, reviews, and audits use atomic writes to `.gent/results/<session>/<branch>/<kind>.md` in the server working directory. Explicit exports are separate files. Empty `/plan` reads that branch-local file without kernel bindings; it does not infer a plan from another branch. A plan saves its result and ends that cell before it requests approval in a separate cell, so the last good namespace precedes suspension. Review and audit prompts allow saving their reports but prohibit source edits; this instruction is not a sandbox boundary.
-
-### Test Utilities
-
-- `withTinyContextWindow(effect)` — patches `MODEL_CONTEXT_WINDOWS` to 5k tokens for threshold tests
-- `trackingApprovalService()` — returns `{ layer, presentCalled: Ref<boolean> }` for approval assertions
-
-Both exported from `@gent/core-internal/test-utils/e2e-layer`.
 
 ## Observability
 
