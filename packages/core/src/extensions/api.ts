@@ -98,6 +98,7 @@ export { type Message, type Branch } from "../domain/message.js"
 export type { AgentEvent, Question } from "../domain/event.js"
 export {
   isRuntimeUserMessage,
+  isSpawnedSession,
   latestAssistantText,
   messagePartsDisplayText,
 } from "../domain/message.js"
