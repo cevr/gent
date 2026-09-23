@@ -51,7 +51,7 @@ import {
   toolCallStep,
   waitFor,
 } from "../../src/test-utils/language-model"
-import { messageSingleText } from "../../src/domain/message"
+import { messagePartsText } from "../../src/domain/message"
 import { BunGentPlatformLive } from "../../src/runtime/gent-platform-bun"
 
 // ── tool runner ──────────────────────────────────────────────────────────────
@@ -1171,7 +1171,7 @@ describe("extension model surface over RPC", () => {
           (messages) =>
             messages.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "finished",
+                message.role === "assistant" && messagePartsText(message.parts) === "finished",
             ),
           3000,
           "bridge reply",

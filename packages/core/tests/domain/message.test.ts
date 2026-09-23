@@ -17,7 +17,6 @@ import {
   messagePartsText,
   messagePartsTextLines,
   messagePartsToolCallParts,
-  messageSingleText,
   projectMessagesWithToolInteractions,
   projectResponsePartsToMessageParts,
   splitLines,
@@ -1302,7 +1301,6 @@ describe("message part projection", () => {
 
     expect(messagePartsText(parts)).toBe("hello")
     expect(messagePartsTextLines(parts)).toEqual(["hello"])
-    expect(messageSingleText(parts)).toBeUndefined()
     expect(messagePartsReasoning(parts)).toBe("")
     expect(messagePartsImages(parts)).toEqual([{ mediaType: "image/png" }])
     expect(messagePartsToolCallParts(parts)).toEqual([toolCallPart])
@@ -1312,7 +1310,6 @@ describe("message part projection", () => {
     const first = Prompt.textPart({ text: "one" })
     const parts = [first, Prompt.reasoningPart({ text: "think" }), Prompt.textPart({ text: "two" })]
 
-    expect(messageSingleText([first])).toBe("one")
     expect(messagePartsText(parts)).toBe("onetwo")
     expect(messagePartsTextLines(parts)).toEqual(["one", "two"])
     expect(messagePartsReasoning(parts)).toBe("think")

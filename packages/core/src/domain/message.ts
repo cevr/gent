@@ -781,16 +781,6 @@ export const messagePartsTextLines = (parts: ReadonlyArray<MessagePart>): Readon
     return [text]
   })
 
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-export const messageSingleText = (parts: ReadonlyArray<MessagePart>): string | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-  if (parts.length !== 1) return undefined
-  const [part] = parts
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-  if (Predicate.isUndefined(part)) return undefined
-  return messagePartText(part)
-}
-
 export const messagePartsReasoning = (parts: ReadonlyArray<MessagePart>): string =>
   parts.flatMap((part) => messagePartReasoning(part) ?? []).join("")
 

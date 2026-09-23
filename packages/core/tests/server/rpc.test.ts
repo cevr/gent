@@ -109,7 +109,7 @@ import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { CurrentInteractionOwner, encodeInteractionDecision } from "../../src/domain/interaction.js"
 import { EventStoreError } from "../../src/domain/event"
 import { MinimumLogLevel } from "effect/References"
-import { Message, messageSingleText } from "../../src/domain/message"
+import { Message, messagePartsText } from "../../src/domain/message"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
@@ -3520,7 +3520,7 @@ describe("extension command RPCs", () => {
           (messages) =>
             messages.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "synced reply",
+                message.role === "assistant" && messagePartsText(message.parts) === "synced reply",
             ),
           4000,
           "synced reply",
@@ -3681,7 +3681,7 @@ describe("extension command RPCs", () => {
           ) =>
             messages
               .filter((message) => message.role === "assistant")
-              .map((message) => messageSingleText(message.parts))
+              .map((message) => messagePartsText(message.parts))
           yield* client.message.send({ sessionId, branchId, content: "warm the branch" })
           yield* waitFor(
             client.message.list({ branchId }),
@@ -3709,7 +3709,7 @@ describe("extension command RPCs", () => {
           expect(
             messages.some(
               (message) =>
-                message.role === "user" && messageSingleText(message.parts) === "queued while idle",
+                message.role === "user" && messagePartsText(message.parts) === "queued while idle",
             ),
           ).toBe(true)
           yield* controls.assertDone
