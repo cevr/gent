@@ -578,6 +578,45 @@ describe("files popup finder", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  // Each finder holds an index and a watcher. The popup keeps one, for the
+  // directory it ranks now: a key in another directory destroys the old one.
+  filesTest("a key in another directory destroys the finder of the one before", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      const dirs = [
+        yield* fs.makeTempDirectoryScoped(),
+        yield* fs.makeTempDirectoryScoped(),
+        yield* fs.makeTempDirectoryScoped(),
+      ]
+      for (const dir of dirs) yield* fs.writeFileString(path.join(dir, "note.md"), "note")
+      let cwd = dirs[0] ?? ""
+      const { counts } = yield* countingFinders(
+        provideClientServices(
+          Effect.gen(function* () {
+            const contributions = yield* builtinFiles.setup
+            const source = Option.getOrThrow(
+              Option.fromUndefinedOr(contributions.autocomplete?.[0]),
+            )
+            for (const dir of dirs) {
+              cwd = dir
+              const result = source.items("note")
+              if (Effect.isEffect(result)) yield* result
+            }
+          }).pipe(Effect.orDie),
+          {
+            workspace: { cwd: home, home, sessionCwd: Effect.sync(() => cwd) },
+            currentSession: () => Option.some(session),
+            requestEffect: () => Effect.succeed(["note.md"]),
+          },
+        ),
+      )
+      // Three directories, three finders; only the last one is still alive.
+      expect(counts).toEqual({ created: 3, destroyed: 2 })
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   // The session is rooted outside the launch directory, and fff resolves a
   // relative pick against the process's directory. The pick names the
   // session's file, so the next ranking puts it first.
