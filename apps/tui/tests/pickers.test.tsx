@@ -153,6 +153,47 @@ describe("Branch picker", () => {
     }),
   )
 
+  it.live("two unnamed branches started in the same minute get different labels", () =>
+    Effect.gen(function* () {
+      // Branch ids are UUIDv7: the head is the start time, the tail is random.
+      const unnamed = (id: string): Branch => ({
+        id: BranchId.make(id),
+        sessionId: SessionId.make("session-test"),
+        createdAt: dateFromMillis(0),
+      })
+      const first = unnamed("0199a1b2-c3d4-7e5f-8a6b-111111111111")
+      const fork = unnamed("0199a1b2-c3d5-7e5f-8a6b-222222222222")
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <BranchPicker
+              open={true}
+              sessionId={SessionId.make("session-test")}
+              sessionName="Test Session"
+              branches={[first, fork]}
+              onSelect={() => {}}
+              onClose={() => {}}
+            />
+          ),
+          {
+            client: createMockClient({
+              branch: {
+                getTree: () =>
+                  Effect.succeed([
+                    { branch: first, messageCount: 4, children: [] },
+                    { branch: fork, messageCount: 2, children: [] },
+                  ]),
+              },
+            }),
+          },
+        ),
+      )
+      const frame = yield* waitForFrame(setup, (next) => next.includes("(4)"), "counts")
+      expect(frame).toContain("11111111 (4)")
+      expect(frame).toContain("22222222 (2)")
+    }),
+  )
+
   it.live("hands escape to the pane owner rather than dismissing the list itself", () =>
     Effect.gen(function* () {
       // The select list treats escape as its own dismissal. The pane's handler

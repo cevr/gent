@@ -3,6 +3,7 @@ import { describe, expect, it, test } from "effect-bun-test"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   ConfigProvider,
+  Console,
   Effect,
   Exit,
   FileSystem,
@@ -477,9 +478,36 @@ describe("local health", () => {
           home,
           new ServerLockEntry({ ...identity, rpcUrl: `${new URL(endpoint.url).origin}/rpc` }),
         )
-        const refused = yield* refuseResetWhileServing(home).pipe(Effect.flip)
+        reported.stderr = ""
+        const refused = yield* reportFailureOnStderr(refuseResetWhileServing(home)).pipe(
+          Effect.flip,
+        )
         expect(refused._tag).toBe("CliStartupError")
-      }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+        expect(reported.stderr).toBe(
+          "CliStartupError: shared server is running; stop it with `gent server stop` first\n",
+        )
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            BunServices.layer,
+            GentPlatform.Test(),
+            Stdio.layerTest({
+              stdout: () => captureTo("stdout"),
+              stderr: () => captureTo("stderr"),
+            }),
+            // Anything logged as an error reaches the same stderr.
+            Layer.effect(
+              Console.Console,
+              Effect.map(Console.Console, (console) => ({
+                ...console,
+                error: (...args: ReadonlyArray<unknown>) => {
+                  reported.stderr += `${args.join(" ")}\n`
+                },
+              })),
+            ),
+          ),
+        ),
+      ),
   )
 
   it.scopedLive("storage reset is idempotent when no db files exist", () =>

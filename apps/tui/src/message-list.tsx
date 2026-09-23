@@ -11,7 +11,6 @@ import {
   plural,
   previewOutput,
   workingIconFrame,
-  lineCount,
 } from "./utils"
 import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
 import { useTheme } from "./theme"
@@ -43,6 +42,7 @@ import type { ScrollBoxRenderable, ScrollbackSurface, SyntaxStyle } from "@opent
 import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import {
   bashOutputRows,
+  parseBashOutput,
   cellOperations,
   GenericToolRenderer,
   RegisteredToolCall,
@@ -53,6 +53,7 @@ import type { MessageRenderer, MessageRowProps } from "./extensions/client-facet
 import {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   type ImagePartProjection,
+  lineCount,
   MODEL_CHANGE_MESSAGE_TYPE,
 } from "@gent/core/protocol"
 import { replaceMermaidBlocks } from "./mermaid"
@@ -217,12 +218,6 @@ const CellFailure = Schema.Struct({
   error: Schema.optional(Schema.String),
 })
 
-const BashOutput = Schema.Struct({
-  stdout: Schema.String,
-  stderr: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.Literals(["blocked", "background"])),
-})
-
 /** The part of a window marker's details the transcript shows: how much history a handoff replaced. */
 const HandoffDetails = Schema.Struct({
   summarized: Schema.optional(Schema.Struct({ count: Schema.Natural })),
@@ -257,12 +252,12 @@ const rowOutputText = (call: ToolCall): string => {
     return result.display
   }
   if (call.toolName === "bash") {
-    return Option.match(decodeToolOutputOption(BashOutput, call.output), {
+    return Option.match(parseBashOutput(call.output), {
       onNone: () => formatGenericToolText(call.output) ?? "",
       // Each stream's final newline ends its last line, so the joined text
       // holds as many lines as the two streams do.
       onSome: (value) =>
-        [value.stdout, value.stderr ?? ""]
+        [value.stdout, value.stderr]
           .filter((text) => text.length > 0)
           .map((text) => text.replace(/\n$/, ""))
           .join("\n"),
@@ -276,7 +271,7 @@ const rowOutputText = (call: ToolCall): string => {
  * cut stream counts the whole output its record names, not the kept excerpt.
  */
 const rowOutputLines = (call: ToolCall): number => {
-  if (call.toolName === "bash" && Option.isSome(decodeToolOutputOption(BashOutput, call.output))) {
+  if (call.toolName === "bash" && Option.isSome(parseBashOutput(call.output))) {
     return bashOutputRows(call).total
   }
   return lineCount(rowOutputText(call))
@@ -285,11 +280,7 @@ const rowOutputLines = (call: ToolCall): number => {
 /** A declined command never ran and a background one has not ended: neither has lines to count. */
 const hasNoOutputYet = (call: ToolCall): boolean =>
   call.toolName === "bash" &&
-  Option.isSome(
-    Option.flatMap(decodeToolOutputOption(BashOutput, call.output), (value) =>
-      Option.fromUndefinedOr(value.status),
-    ),
-  )
+  Option.exists(parseBashOutput(call.output), (value) => Option.isSome(value.status))
 
 const rowCounts = (call: ToolCall): string => {
   if (call.status === "running" || hasNoOutputYet(call)) return ""

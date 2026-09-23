@@ -6,7 +6,7 @@ import { DefaultWorkspaceId, WorkspaceId } from "../../src/server/workspace-rpc"
 import { AgentEvent } from "../../src/domain/event"
 import { ModelId } from "../../src/domain/agent"
 
-// ── ../runtime/agent/agent-loop.entity-id.test ──────────────────────────────
+// ── entity id ───────────────────────────────────────────────────────────────
 
 const cases: ReadonlyArray<{ readonly session: string; readonly branch: string }> = [
   { session: "session-a", branch: "branch-main" },
@@ -78,7 +78,7 @@ describe("agent-loop.entity-id", () => {
   )
 })
 
-// ── ../runtime/agent-loop/session-metrics-fold.test ─────────────────────────
+// ── session metrics fold ────────────────────────────────────────────────────
 
 const sessionId = SessionId.make("s")
 const branchId = BranchId.make("b")
@@ -134,6 +134,39 @@ describe("session metrics fold", () => {
         compactions: 1,
       },
     })
+  })
+
+  test("a projection's input count waits for its own step, so a model switch never mixes windows", () => {
+    const projected = (contextLimitTokens: number) =>
+      wrap(
+        AgentEvent.cases.ModelContextProjected.make({
+          sessionId,
+          branchId,
+          estimatedTokens: 5_000,
+          availableInputTokens: contextLimitTokens - 5_000,
+          contextLimitTokens,
+          omittedMessages: 0,
+          compacted: false,
+        }),
+      )
+    const ended = (inputTokens: number) =>
+      wrap(
+        AgentEvent.cases.StreamEnded.make({
+          sessionId,
+          branchId,
+          usage: { inputTokens, outputTokens: 1 },
+          outcome: "Answered",
+        }),
+      )
+    // The old model's step reported 150k of its 200k window.
+    const before = [projected(200_000), ended(150_000)]
+    expect(foldSessionMetrics(before).lastInputTokens).toBe(150_000)
+    // The switched model's step is projected and still streaming: its count is not in yet.
+    const streaming = [...before, projected(1_000_000)]
+    expect(foldSessionMetrics(streaming).lastInputTokens).toBe(0)
+    expect(foldSessionMetrics(streaming).context?.contextLimitTokens).toBe(1_000_000)
+    // Its own step ends: the count belongs to the window it is divided by.
+    expect(foldSessionMetrics([...streaming, ended(20_000)]).lastInputTokens).toBe(20_000)
   })
 
   test("a branch with no projection carries no context block", () => {

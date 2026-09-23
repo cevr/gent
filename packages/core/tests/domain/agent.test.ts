@@ -16,8 +16,6 @@ import {
 } from "../../src/domain/agent"
 import { ApprovalDecisionSchema, ApprovalRequestSchema } from "../../src/domain/interaction"
 
-// ── agent.test ──────────────────────────────────────────────────────────────
-
 describe("AgentName brand", () => {
   test("DEFAULT_AGENT_NAME is branded as AgentName", () => {
     expect(Schema.is(AgentName)(DEFAULT_AGENT_NAME)).toBe(true)
@@ -42,7 +40,7 @@ describe("ApprovalRequest / ApprovalDecision schemas", () => {
   })
 })
 
-// ── agent-driver-routing.test ───────────────────────────────────────────────
+// ── agent driver routing ────────────────────────────────────────────────────
 
 /**
  * resolveAgentDriver — pure precedence tests.
@@ -151,7 +149,7 @@ describe("effective model driver", () => {
   })
 })
 
-// ── agent-runspec.test ──────────────────────────────────────────────────────
+// ── run spec ────────────────────────────────────────────────────────────────
 
 describe("run spec construction", () => {
   test("empty input produces empty spec — no spurious keys", () => {
@@ -186,7 +184,7 @@ describe("run spec construction", () => {
   })
 })
 
-// ── model.test ──────────────────────────────────────────────────────────────
+// ── model ids ───────────────────────────────────────────────────────────────
 
 describe("model id parsing", () => {
   test("extracts provider and model segments", () => {

@@ -111,7 +111,7 @@ import { type Message, messageSingleText } from "../../src/domain/message"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
-// ── rpc-contract.test ───────────────────────────────────────────────────────
+// ── rpc contract schemas ────────────────────────────────────────────────────
 
 const decodeSuccess = (key: string, value: Readonly<Record<string, string>>): unknown => {
   const group = SessionRpcs
@@ -158,7 +158,7 @@ describe("RPC contract schemas", () => {
   })
 })
 
-// ── driver-rpc.test ─────────────────────────────────────────────────────────
+// ── extension rpcs ──────────────────────────────────────────────────────────
 
 /**
  * Driver routing RPCs — `driver.list` / `driver.set` / `driver.clear`
@@ -258,7 +258,7 @@ describe("ExtensionRpcs", () => {
   )
 })
 
-// ── model-context.test ──────────────────────────────────────────────────────
+// ── model context ───────────────────────────────────────────────────────────
 
 describe("model context RPC boundary", () => {
   it.scopedLive(
@@ -354,7 +354,7 @@ describe("model context RPC boundary", () => {
   )
 })
 
-// ── branch-fork ─────────────────────────────────────────────────────────────
+// ── branch fork ─────────────────────────────────────────────────────────────
 
 const EchoProbeExtension: LoadedExtension = {
   manifest: { id: ExtensionId.make("@test/echo-probe") },
@@ -430,7 +430,7 @@ describe("branch.fork", () => {
   )
 })
 
-// ── auth-rpc.test ───────────────────────────────────────────────────────────
+// ── auth rpcs ───────────────────────────────────────────────────────────────
 
 /**
  * `auth.listProviders` RPC acceptance tests.
@@ -769,7 +769,7 @@ describe("auth persistence RPC failures", () => {
   )
 })
 
-// ── interaction-commands.test ───────────────────────────────────────────────
+// ── interaction commands ────────────────────────────────────────────────────
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
@@ -2539,7 +2539,7 @@ describe("interaction.respondInteraction", () => {
   )
 })
 
-// ── extension-commands-rpc.test ─────────────────────────────────────────────
+// ── extension command rpcs ──────────────────────────────────────────────────
 
 class ProfileToken extends Context.Service<
   ProfileToken,
@@ -4014,7 +4014,7 @@ describe("extension command RPCs", () => {
   )
 })
 
-// ── namespaced-client.test ──────────────────────────────────────────────────
+// ── namespaced client ───────────────────────────────────────────────────────
 
 describe("namespaced client", () => {
   test("namespaced client exposes every RPC key from GentRpcs", () => {

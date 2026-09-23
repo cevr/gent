@@ -1,6 +1,12 @@
 import { describe, expect, test } from "effect-bun-test"
-import { Option } from "effect"
-import { countDiffLines, getEditUnifiedDiff, getFiletype } from "../src/tool-renderers"
+import { Option, Schema } from "effect"
+import { OutputCut } from "@gent/core/protocol"
+import {
+  bashOutputRows,
+  countDiffLines,
+  getEditUnifiedDiff,
+  getFiletype,
+} from "../src/tool-renderers"
 
 // ── edit utils ──────────────────────────────────────────────────────────────
 
@@ -177,5 +183,59 @@ describe("getEditUnifiedDiff", () => {
     expect(result!.diff).toContain("+++ /foo/bar.ts")
     expect(result!.diff).toContain("-const x = 1")
     expect(result!.diff).toContain("+const x = 2")
+  })
+})
+
+// ── cut bash rows ───────────────────────────────────────────────────────────
+
+/**
+ * A reloaded bash op whose stdout was cut. The record counts lines as every
+ * reader does, so a final newline ends the last line and adds none; the
+ * excerpt is the head, one marker line, then the tail from `tailLine`.
+ */
+const cutBash = (stdout: string, lines: number, tailLine: number) =>
+  bashOutputRows({
+    id: "cut",
+    toolName: "bash",
+    status: "completed",
+    input: { command: "seq 1 1000" },
+    summary: Option.getOrUndefined(Option.none<string>()),
+    output: Schema.encodeSync(Schema.fromJsonString(Schema.Json))({
+      stdout,
+      stderr: "",
+      exitCode: 0,
+    }),
+    cuts: [OutputCut.cases.Text.make({ field: "stdout", lines, tailLine, chars: 0 })],
+  })
+
+const drawn = (rows: ReturnType<typeof cutBash>["rows"]) =>
+  rows.map((row) => {
+    if (row._tag === "line") return `${row.lineNum}:${row.text}`
+    return `+${row.count}`
+  })
+
+describe("cut bash rows", () => {
+  test("an output ending in a newline counts its lines, not the empty part after them", () => {
+    const rows = cutBash("1\n2\n…\n999\n1000\n", 1000, 999)
+    expect(drawn(rows.rows)).toEqual(["1:1", "2:2", "+996", "999:999", "1000:1000"])
+    expect(rows.total).toBe(1000)
+  })
+
+  test("a tail that keeps nothing draws the gap to the last line", () => {
+    const rows = cutBash("1\n2\n…\n", 1000, 1001)
+    expect(drawn(rows.rows)).toEqual(["1:1", "2:2", "+998"])
+    expect(rows.total).toBe(1000)
+  })
+
+  test("a head that keeps nothing draws the gap from line 1", () => {
+    const rows = cutBash("…\n999\n1000", 1000, 999)
+    expect(drawn(rows.rows)).toEqual(["+998", "999:999", "1000:1000"])
+    expect(rows.total).toBe(1000)
+  })
+
+  test("an emptied stdout is one gap over all its lines", () => {
+    const rows = cutBash("", 2, 3)
+    expect(drawn(rows.rows)).toEqual(["+2"])
+    expect(rows.total).toBe(2)
   })
 })

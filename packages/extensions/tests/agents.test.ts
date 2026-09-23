@@ -25,8 +25,6 @@ import { AgentsExtension } from "../src/agents.js"
 import { FsToolsExtension } from "../src/fs-tools.js"
 import { isToolEventFor } from "./helpers/tool-event.js"
 
-// ── agents.test ─────────────────────────────────────────────────────────────
-
 /**
  * The agents extension owns the persona sections and reads project
  * instructions from `AGENTS.md` (or `CLAUDE.md`) on every turn.
@@ -156,7 +154,7 @@ describe("project instructions", () => {
   )
 })
 
-// ── fs-tools/fs-tools-model-turn.test ───────────────────────────────────────
+// ── fs tools model turn ─────────────────────────────────────────────────────
 
 /**
  * FS tools model-turn acceptance test — exercises a real model tool call

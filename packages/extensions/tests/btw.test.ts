@@ -7,8 +7,6 @@ import { AgentName, BranchId, ModelId, SessionId } from "@gent/core/extensions/a
 import { e2ePreset } from "./helpers/test-preset"
 import { BTW_EXTENSION_ID, ForkProgress } from "../src/btw.js"
 
-// ── btw/fork.test ───────────────────────────────────────────────────────────
-
 /**
  * `/btw` forks the branch into a parallel child session that carries the
  * branch's context, runs with the session's agent and tools, and never

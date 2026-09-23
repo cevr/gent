@@ -125,8 +125,10 @@ export const SessionRuntimeMetrics = Schema.Struct({
    * pricing snapshot available then, so replays always sum to the same
    * total regardless of later registry refreshes. */
   costUsd: Schema.Finite,
-  /** Input-tokens reported by the most recent `StreamEnded` (for "how close
-   * to the context window are we right now" — sums don't answer that). */
+  /** Input tokens the provider reported for the step the current `context`
+   * projection shaped (for "how close to the context window are we right
+   * now" — sums don't answer that). 0 until that step's `StreamEnded`, so a
+   * count is never divided by another model's window after a switch. */
   lastInputTokens: Schema.Finite,
   context: Schema.optional(ModelContextMetrics),
 })
@@ -151,6 +153,8 @@ export const foldSessionMetrics = (
         durationMs += event.durationMs
         break
       case "ModelContextProjected":
+        // A new step's projection: the last count belongs to the step before it.
+        lastInputTokens = 0
         if (event.compacted) compactions++
         context = Option.some({
           estimatedTokens: event.estimatedTokens,

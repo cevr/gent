@@ -38,7 +38,7 @@ import { DEFAULT_AGENT_NAME } from "../../src/domain/agent"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import type * as PublicExtensionApi from "@gent/core/extensions/api"
 
-// ── define-extension.test ───────────────────────────────────────────────────
+// ── define extension ────────────────────────────────────────────────────────
 
 /**
  * defineExtension regression locks.

@@ -9,8 +9,6 @@ import {
 } from "../../src/runtime/tools"
 import { emptyErasedResourceLayer } from "../../src/runtime/extension-host"
 
-// ── ../runtime/branch-tool-feature.test ─────────────────────────────────────
-
 /**
  * A branch-tool feature is input to the runtime, not part of it.
  *

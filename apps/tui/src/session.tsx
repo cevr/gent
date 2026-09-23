@@ -205,12 +205,21 @@ const pressureColor = (pct: number, theme: ThemeColors): RGBA => {
   return theme.textMuted
 }
 
-/** `ctx 42%`: percent of the model's input budget. What the projection dropped is in the thread pane. */
-const projectionLabel = (context: ModelContextMetrics, theme: ThemeColors): StatusRowLabel => {
-  const pct = Math.min(
-    100,
-    Math.round((context.estimatedTokens / context.contextLimitTokens) * 100),
-  )
+/**
+ * `ctx 42%`: percent of the model's context window. The provider's count of
+ * the projected step's input includes the system prompt and the tools, which
+ * the projection's estimate leaves out, so it wins once that step reports it;
+ * until then (a step still streaming, a model just switched) the estimate reads.
+ * What the projection dropped is in the thread pane.
+ */
+const projectionLabel = (
+  context: ModelContextMetrics,
+  latestInputTokens: number,
+  theme: ThemeColors,
+): StatusRowLabel => {
+  let tokens = context.estimatedTokens
+  if (latestInputTokens > 0) tokens = latestInputTokens
+  const pct = Math.min(100, Math.round((tokens / context.contextLimitTokens) * 100))
   return { text: `ctx ${pct}%`, color: pressureColor(pct, theme) }
 }
 
@@ -229,8 +238,8 @@ export function buildContextLabels(input: {
 }): StatusRowLabel[] {
   const projection = input.metrics.context
   if (Option.isSome(projection) && projection.value.contextLimitTokens > 0) {
-    // The projection is what the model saw; it beats the provider's last usage report.
-    return [projectionLabel(projection.value, input.theme)]
+    // The projection names the window the model works in.
+    return [projectionLabel(projection.value, input.metrics.latestInputTokens, input.theme)]
   }
   const tokens = input.metrics.latestInputTokens
   const limit = Option.fromNullishOr(input.contextLength)

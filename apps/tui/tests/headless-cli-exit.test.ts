@@ -31,6 +31,10 @@ const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) 
   const childEnv = { ...Bun.env }
   delete childEnv["FORCE_COLOR"]
   delete childEnv["NO_COLOR"]
+  // A key in the host's environment would satisfy the startup key check.
+  for (const name of Object.keys(childEnv)) {
+    if (name.endsWith("_API_KEY")) delete childEnv[name]
+  }
   return {
     ...childEnv,
     HOME: homeDir,
@@ -39,17 +43,24 @@ const makeChildEnv = (homeDir: string, env: ReturnType<typeof createWorkerEnv>) 
     ...env,
   }
 }
-/** Run `gent --debug <args>` in a fresh home and collect its exit and output. */
-const runGent = (args: ReadonlyArray<string>) =>
+/**
+ * Run `gent --debug <args>` in a fresh home with stored keys and collect its
+ * exit and output. `keyless` runs without `--debug` and without keys.
+ */
+const runGent = (args: ReadonlyArray<string>, options: { readonly keyless?: boolean } = {}) =>
   Effect.gen(function* () {
     const path = yield* Path.Path
     const appDir = path.resolve(import.meta.dir, "..")
     const homeDir = yield* makeTempDir
     const env = createWorkerEnv(homeDir, "debug-scripted")
-    yield* seedAuth(env["GENT_AUTH_DIRECTORY"]!)
+    const mode: Array<string> = []
+    if (options.keyless !== true) {
+      yield* seedAuth(env["GENT_AUTH_DIRECTORY"]!)
+      mode.push("--debug")
+    }
     // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
     const proc = Bun.spawn(
-      ["bun", "--preload", "@opentui/solid/preload", "src/main.tsx", "--debug", ...args],
+      ["bun", "--preload", "@opentui/solid/preload", "src/main.tsx", ...mode, ...args],
       {
         cwd: appDir,
         env: makeChildEnv(homeDir, env),
@@ -109,6 +120,31 @@ describe("headless CLI", () => {
         expect(stderr).toBe(
           "CliStartupError: --agent applies to headless mode; add -H with a prompt\n",
         )
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
+  it.scopedLive(
+    "missing API keys are one line on stderr",
+    () =>
+      Effect.gen(function* () {
+        const { exitCode, stdout, stderr } = yield* runGent(["-H", "Say hi in 3 words"], {
+          keyless: true,
+        })
+        expect(exitCode).toBe(1)
+        expect(stderr).toBe("CliStartupError: missing required API keys: anthropic\n")
+        expect(stdout).toBe("")
+      }).pipe(Effect.provide(BunServices.layer)),
+    20000,
+  )
+
+  it.scopedLive(
+    "a session id that does not exist is one line on stderr",
+    () =>
+      Effect.gen(function* () {
+        const { exitCode, stderr } = yield* runHeadless(["-s", "missing-session", "hi"])
+        expect(exitCode).toBe(1)
+        expect(stderr).toBe("AppBootstrapError: Session missing-session not found\n")
       }).pipe(Effect.provide(BunServices.layer)),
     20000,
   )

@@ -6,7 +6,7 @@ import { HttpClientError, TransportError } from "effect/unstable/http/HttpClient
 import { WebSearchTool } from "../src/network-tools.js"
 import { runToolWithCtx, testToolContext } from "@gent/core/test-utils"
 
-// ── network-tools/websearch.test ────────────────────────────────────────────
+// ── web search ──────────────────────────────────────────────────────────────
 
 /**
  * WebSearchTool — the only shipped tool that parses an untrusted external

@@ -59,7 +59,7 @@ import {
 } from "../../src/domain/capability"
 import { StorageError } from "../../src/domain/errors"
 
-// ── sqlite-session-storage.test ─────────────────────────────────────────────
+// ── session storage ─────────────────────────────────────────────────────────
 
 const FIXED_NOW_MILLIS = 1_767_225_600_000
 const FIXED_NOW = dateFromMillis(FIXED_NOW_MILLIS)
@@ -1028,7 +1028,7 @@ describe("persisted loop queue format", () => {
   )
 })
 
-// ── sqlite-message-storage.test ─────────────────────────────────────────────
+// ── message storage ─────────────────────────────────────────────────────────
 
 const MessageDetails = Schema.Struct({ iteration: Schema.Finite })
 
@@ -1653,7 +1653,7 @@ describe("Message Metadata", () => {
   })
 })
 
-// ── sqlite-event-storage.test ───────────────────────────────────────────────
+// ── event storage ───────────────────────────────────────────────────────────
 
 describe("Event decoding", () => {
   const layer = SqliteStorage.TestWithSql(() => Layer.empty, {})
@@ -1843,7 +1843,7 @@ describe("tool result window", () => {
   )
 })
 
-// ── sqlite-branch-storage.test ──────────────────────────────────────────────
+// ── branch storage ──────────────────────────────────────────────────────────
 
 describe("Branches", () => {
   it.live("creates and retrieves a branch", () =>
@@ -1917,7 +1917,7 @@ describe("Branches", () => {
   )
 })
 
-// ── sqlite-concurrency.test ─────────────────────────────────────────────────
+// ── concurrent writes ───────────────────────────────────────────────────────
 
 describe("Concurrent writes", () => {
   // The storage layer adds no in-memory locking on top of the SQL
@@ -2067,7 +2067,7 @@ describe("Concurrent writes", () => {
   )
 })
 
-// ── relationship-storage.test ───────────────────────────────────────────────
+// ── relationship storage ────────────────────────────────────────────────────
 
 /**
  * The thread a session belongs to.
@@ -2166,7 +2166,7 @@ describe("thread sessions", () => {
   )
 })
 
-// ── tool-call-binding-storage.test ──────────────────────────────────────────
+// ── tool call binding storage ───────────────────────────────────────────────
 
 const WORKSPACE_A = WorkspaceId.make("a".repeat(64))
 const WORKSPACE_B = WorkspaceId.make("b".repeat(64))
@@ -2494,7 +2494,7 @@ describe("ToolCallBindingStorage", () => {
   )
 })
 
-// ── turn-record-storage.test ────────────────────────────────────────────────
+// ── turn record storage ─────────────────────────────────────────────────────
 
 const storageLayer = SqliteStorage.TestWithSql(() => Layer.empty, {})
 

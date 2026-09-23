@@ -939,6 +939,10 @@ export function formatToolCallIdentity(identity: string): string {
   return `${identity.slice(0, 8)}…${identity.slice(-4)}`
 }
 
+/**
+ * A frame draws no margin outside itself. The transcript block that holds it
+ * owns the gap to the next block, so each block ends where its last row does.
+ */
 export function ToolFrame(props: ToolFrameProps) {
   const { theme } = useTheme()
   const callIdentity = useContext(ToolCallIdentityContext)
@@ -971,7 +975,7 @@ export function ToolFrame(props: ToolFrameProps) {
     )
 
   return (
-    <box flexDirection="column" marginBottom={1}>
+    <box flexDirection="column">
       <Show when={!bodyOnly}>
         <box flexDirection="row" onMouseDown={() => setLocalExpanded((prev) => !prev)}>
           <text flexGrow={1} flexShrink={1}>

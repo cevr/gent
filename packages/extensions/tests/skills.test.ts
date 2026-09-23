@@ -21,8 +21,6 @@ import {
 import { e2ePreset } from "./helpers/test-preset"
 import { builtinAgent } from "./helpers/builtin-agents"
 
-// ── skills/skills.test ──────────────────────────────────────────────────────
-
 const makeSkill = (
   name: string,
   level: "local" | "global",
@@ -140,7 +138,7 @@ Content here`
   })
 })
 
-// ── skills/skills-rpc.test ──────────────────────────────────────────────────
+// ── skills rpc ──────────────────────────────────────────────────────────────
 
 /**
  * Skills RPC acceptance test — exercises SkillsExtension through the full
@@ -264,7 +262,7 @@ describe("SkillsExtension via RPC", () => {
   )
 })
 
-// ── skills/bundled-skills.test ──────────────────────────────────────────────
+// ── bundled skills ──────────────────────────────────────────────────────────
 
 describe("bundled skills", () => {
   it.scopedLive("concurrent profiles publish one complete bundle of readable files", () =>

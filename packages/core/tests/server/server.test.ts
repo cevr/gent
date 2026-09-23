@@ -103,7 +103,7 @@ import { SqlClient } from "effect/unstable/sql"
 import { ModelResolver } from "../../src/runtime/provider"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 
-// ── extension-health.test ───────────────────────────────────────────────────
+// ── extension health ────────────────────────────────────────────────────────
 
 describe("buildExtensionHealthSnapshot", () => {
   test("reports one typed issue row per failed extension", () => {
@@ -318,7 +318,7 @@ describe("buildExtensionHealthSnapshot", () => {
   })
 })
 
-// ── get-branch-tree.test ────────────────────────────────────────────────────
+// ── branch tree ─────────────────────────────────────────────────────────────
 
 /**
  * Regression suite for the `getBranchTree` pure helper.
@@ -441,7 +441,7 @@ describe("getBranchTree helper", () => {
   )
 })
 
-// ── session-queries.test ────────────────────────────────────────────────────
+// ── session queries ─────────────────────────────────────────────────────────
 
 const collectRuntime = <A, E>(stream: Stream.Stream<A, E>) =>
   Effect.gen(function* () {
@@ -602,7 +602,7 @@ describe("session queries", () => {
   )
 })
 
-// ── session-command-persistence.test ────────────────────────────────────────
+// ── session command persistence ─────────────────────────────────────────────
 
 const absentModel = Option.getOrUndefined(Option.none<ModelId>())
 
@@ -926,7 +926,7 @@ describe("session command persistence", () => {
   )
 })
 
-// ── session-nesting-depth.test ──────────────────────────────────────────────
+// ── session nesting depth ───────────────────────────────────────────────────
 
 describe("session.create nesting depth", () => {
   it.live("spawned child chain stops at the shared agent-run depth cap", () =>
@@ -1023,7 +1023,7 @@ describe("session.create nesting depth", () => {
   )
 })
 
-// ── session-delete.test ─────────────────────────────────────────────────────
+// ── session delete ──────────────────────────────────────────────────────────
 
 describe("session.delete", () => {
   it.live("closes session event streams and removes the session from public queries", () =>
@@ -1361,7 +1361,7 @@ describe("session.delete", () => {
   )
 })
 
-// ── session-event-stream.test ───────────────────────────────────────────────
+// ── session event stream ────────────────────────────────────────────────────
 
 /**
  * What `client.session.events` delivers around a real turn.
@@ -1607,7 +1607,7 @@ describe("session event stream", () => {
   )
 })
 
-// ── session-queue-watch.test ────────────────────────────────────────────────
+// ── session queue watch ─────────────────────────────────────────────────────
 
 /**
  * The queue as a client reads it, while a turn is still in flight.
@@ -1809,7 +1809,7 @@ describe("session queue and runtime watch", () => {
   )
 })
 
-// ── session-transport-contract.test ─────────────────────────────────────────
+// ── session transport contract ──────────────────────────────────────────────
 
 /**
  * The public read surface a client sees around one session.
@@ -1997,7 +1997,7 @@ describe("session transport contract", () => {
   )
 })
 
-// ── session-idempotency.test ────────────────────────────────────────────────
+// ── request idempotency ─────────────────────────────────────────────────────
 
 describe("requestId idempotency", () => {
   const makePersistentSessionMutationsLayer = (dbPath: string) => {
@@ -2957,7 +2957,7 @@ describe("requestId idempotency", () => {
   )
 })
 
-// ── message-send.test ───────────────────────────────────────────────────────
+// ── message send ────────────────────────────────────────────────────────────
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 const absentReasoning = Option.getOrUndefined(Option.none<ReasoningEffort>())
@@ -3446,7 +3446,7 @@ describe("message.send", () => {
   )
 })
 
-// ── ../extensions/session-snapshot-rpc.test ─────────────────────────────────
+// ── session snapshot rpc ────────────────────────────────────────────────────
 
 /**
  * Session snapshot canary: exercises product RPCs over fresh request scopes.

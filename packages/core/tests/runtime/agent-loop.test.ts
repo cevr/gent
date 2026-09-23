@@ -225,7 +225,7 @@ import {
   ToolSourceRevision,
 } from "../../src/domain/capability"
 
-// ── agent-loop/primary-key-dedup.test ───────────────────────────────────────
+// ── op primary keys ─────────────────────────────────────────────────────────
 
 /**
  * Regression: distinct `commandId` values for the same `(workspaceId,
@@ -310,7 +310,7 @@ describe("agent-loop op primary keys", () => {
   )
 })
 
-// ── agent/agent-loop.session-governance.test ────────────────────────────────
+// ── session termination markers ─────────────────────────────────────────────
 
 const sessionA = SessionId.make("session-a")
 const sessionB = SessionId.make("session-b")
@@ -370,7 +370,7 @@ describe("session termination markers", () => {
   )
 })
 
-// ── agent-loop/turn-lifetime.test ───────────────────────────────────────────
+// ── turn lifetime ───────────────────────────────────────────────────────────
 
 describe("turn lifetime", () => {
   it.scopedLive(
@@ -412,7 +412,7 @@ describe("turn lifetime", () => {
   )
 })
 
-// ── agent-loop-concurrency.test ─────────────────────────────────────────────
+// ── concurrency ─────────────────────────────────────────────────────────────
 
 describe("concurrency", () => {
   it.live("independent tool calls may overlap", () =>
@@ -494,7 +494,7 @@ describe("concurrency", () => {
 })
 // ============================================================================
 
-// ── agent-loop-continuation.test ────────────────────────────────────────────
+// ── continuation ────────────────────────────────────────────────────────────
 
 describe("continuation", () => {
   const contSessionId = SessionId.make("cont-test-session")
@@ -849,7 +849,7 @@ describe("continuation", () => {
   )
 })
 
-// ── agent-loop-empty-final-step.test ────────────────────────────────────────
+// ── empty final step ────────────────────────────────────────────────────────
 
 /**
  * A turn whose last model step yields nothing must not report success.
@@ -1020,7 +1020,7 @@ describe("empty final step", () => {
   )
 })
 
-// ── agent-loop-max-steps.test ───────────────────────────────────────────────
+// ── max turn steps ──────────────────────────────────────────────────────────
 
 /**
  * A turn that spends the whole step budget must not report success.
@@ -1274,7 +1274,7 @@ describe("max turn steps", () => {
   )
 })
 
-// ── agent-loop-turn-stream.test ─────────────────────────────────────────────
+// ── turn stream lifecycle ───────────────────────────────────────────────────
 
 describe("turn stream lifecycle", () => {
   it.live("a model turn stores its draft and publishes the lifecycle tags in order", () =>
@@ -1334,7 +1334,7 @@ describe("turn stream lifecycle", () => {
   )
 })
 
-// ── agent-loop/tool-projection-reconciliation.test ──────────────────────────
+// ── tool projection reconciliation ──────────────────────────────────────────
 
 describe("tool projection reconciliation", () => {
   const echoTool = tool({
@@ -1659,7 +1659,7 @@ describe("tool projection reconciliation", () => {
   )
 })
 
-// ── agent-loop/model-compaction.test ────────────────────────────────────────
+// ── model compaction ────────────────────────────────────────────────────────
 
 const promptText = (prompt: Prompt.Prompt): string =>
   prompt.content
@@ -1936,7 +1936,7 @@ describe("native model compaction integration", () => {
   })
 })
 
-// ── agent-loop/model-context.test ───────────────────────────────────────────
+// ── model context projection ────────────────────────────────────────────────
 
 const promptTextModelContext = (prompt: Prompt.Prompt): string =>
   prompt.content
@@ -2180,7 +2180,7 @@ describe("model resolution failure", () => {
   })
 })
 
-// ── agent-loop/admission-withdrawal.test ────────────────────────────────────
+// ── admission withdrawal ────────────────────────────────────────────────────
 
 const sessionId = SessionId.make("withdrawal-session")
 const branchId = BranchId.make("withdrawal-branch")
@@ -2509,7 +2509,7 @@ describe("admitted turn withdrawal", () => {
   )
 })
 
-// ── agent-loop/turn-lifecycle-hooks.test ────────────────────────────────────
+// ── turn lifecycle hooks ────────────────────────────────────────────────────
 
 /**
  * How a turn ended, as an extension reads it.
@@ -2658,7 +2658,7 @@ describe("turn lifecycle hooks", () => {
   )
 })
 
-// ── agent-loop/recovery-race.test ───────────────────────────────────────────
+// ── recovery race ───────────────────────────────────────────────────────────
 
 /**
  * Regression: per-entity `handle` rebuild in `agent-loop.actor.ts` must
@@ -2967,7 +2967,7 @@ describe("agent-loop recovery race", () => {
   )
 })
 
-// ── agent-loop/turn-resume.test ─────────────────────────────────────────────
+// ── turn resume probes ──────────────────────────────────────────────────────
 
 /**
  * Resume from the durable turn record.
@@ -4139,7 +4139,7 @@ describe("turn record", () => {
   )
 })
 
-// ── agent-loop/actor-command.test ───────────────────────────────────────────
+// ── actor commands ──────────────────────────────────────────────────────────
 
 const makeTestExtensions = (
   tools: ReadonlyArray<ToolCapability> = [],
@@ -4500,7 +4500,7 @@ describe("agent-loop actor commands", () => {
   )
 })
 
-// ── agent-loop/queue.test ───────────────────────────────────────────────────
+// ── turn queue ──────────────────────────────────────────────────────────────
 
 describe("turn admission", () => {
   const item = (id: string) => ({
@@ -5350,7 +5350,7 @@ describe("queue drain regression", () => {
   )
 })
 
-// ── agent-loop/interactions.test ────────────────────────────────────────────
+// ── interactions ────────────────────────────────────────────────────────────
 
 describe("interaction", () => {
   const intSessionId = SessionId.make("s-interaction")
@@ -6430,7 +6430,7 @@ describe("interaction", () => {
 //        `redesign-from-first-principles` (the current runtime carries the
 //        same correctness load as the FSM did).
 
-// ── agent-loop/streaming.test ───────────────────────────────────────────────
+// ── streaming ───────────────────────────────────────────────────────────────
 
 describe("run completion", () => {
   it.live("run returns after a fast turn completes before the caller awaits idle", () =>
@@ -7959,7 +7959,7 @@ describe("streaming", () => {
 })
 // ============================================================================
 
-// ── agent-loop/tool-binding-replay.test ─────────────────────────────────────
+// ── tool binding replay ─────────────────────────────────────────────────────
 
 class ReplayResource extends Context.Service<ReplayResource, { readonly value: string }>()(
   "@gent/core/tests/runtime/agent-loop.test/ReplayResource",

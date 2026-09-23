@@ -19,7 +19,7 @@ import { ExtensionId, type RpcId, type ToolId } from "../../src/domain/ids"
 import { buildTurnPromptSections } from "../../src/runtime/turn"
 import { AgentDefinition, AgentName } from "../../src/domain/agent"
 
-// ── capability-ref.test ─────────────────────────────────────────────────────
+// ── capability refs ─────────────────────────────────────────────────────────
 
 /**
  * Asserts the typed-ref accessor invariants for capabilities:
@@ -145,7 +145,7 @@ describe("ref(capability)", () => {
   })
 })
 
-// ── tool-declarations.test ──────────────────────────────────────────────────
+// ── tool declarations ───────────────────────────────────────────────────────
 
 /**
  * A tool's optional declarations survive the trip into its capability.
@@ -203,7 +203,7 @@ describe("tool declarations", () => {
   })
 })
 
-// ── prompt.test ─────────────────────────────────────────────────────────────
+// ── prompt composition ──────────────────────────────────────────────────────
 
 describe("environment section", () => {
   const base = {
