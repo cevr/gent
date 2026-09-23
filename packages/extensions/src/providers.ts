@@ -24,6 +24,7 @@ import {
   ModelId,
   type ModelPricing,
   omitUndefined,
+  credentialFailureMetadata,
   ProviderAuthError,
   type ProviderAuthInfo,
   type ProviderHints,
@@ -318,8 +319,9 @@ const isUnbuiltRequest = (error: AiError.AiError): boolean =>
  * after the resolve-time check, for example when a 401 forces a refresh and
  * the server rejects the refresh token. Wrap each SDK client call: when a
  * request fails before it was sent, check the credential again. A permanent
- * failure becomes an `AuthenticationError` that carries its message; any
- * other result keeps the SDK error.
+ * failure becomes an `AuthenticationError` that carries it in its metadata,
+ * and the loop shows the user its own message. Any other result keeps the
+ * SDK error.
  */
 export const explainCredentialFailure =
   <C>(creds: CredentialCache<C>) =>
@@ -338,6 +340,7 @@ export const explainCredentialFailure =
                   reason: new AiError.AuthenticationError({
                     kind: "Unknown",
                     description: failure.message,
+                    metadata: credentialFailureMetadata(failure),
                   }),
                 }),
               )

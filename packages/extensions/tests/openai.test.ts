@@ -2494,10 +2494,9 @@ describe("buildOpenAIModelDriver — revoked sign-in", () => {
         Effect.provide(fetchLayer),
       )
 
-      expect(shown).toContain("ChatGPT sign-in expired")
-      expect(shown).toContain("Sign in again with /auth.")
-      expect(shown).not.toContain("request body")
-      expect(shown).not.toContain("effect/ai/AiError")
+      expect(shown).toBe(
+        "ChatGPT sign-in expired: Token refresh failed: 400. Sign in again with /auth.",
+      )
       // The fake endpoint answered the refresh; no request left the test.
       expect(fetchState.captured.some((request) => request.url.endsWith("/oauth/token"))).toBe(true)
     }),

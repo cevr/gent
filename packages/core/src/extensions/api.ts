@@ -67,7 +67,11 @@ export {
   type SystemPromptInput,
   type TurnAfterInput,
 } from "../domain/extension.js"
-export { DEFAULT_RETRY_POLICY, ProviderAuthError } from "../domain/driver.js"
+export {
+  credentialFailureMetadata,
+  DEFAULT_RETRY_POLICY,
+  ProviderAuthError,
+} from "../domain/driver.js"
 export { type ApprovalDecision, InteractionPendingError } from "../domain/interaction.js"
 export type {
   ModelDriverContribution,

@@ -67,7 +67,7 @@ import {
   provideCurrentHostCtx,
 } from "./extension-host.js"
 import type * as Response from "effect/unstable/ai/Response"
-import type { ProviderAuthError } from "../domain/driver.js"
+import { credentialFailureMessage, type ProviderAuthError } from "../domain/driver.js"
 import {
   type AgentEvent,
   ErrorOccurred,
@@ -1419,7 +1419,8 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
         (error: unknown) =>
           new ProviderError({
-            message: causeMessage(error),
+            // A credential failure the driver attached reads as its own message, not SDK text.
+            message: Option.getOrElse(credentialFailureMessage(error), () => causeMessage(error)),
             model: resolved.modelId,
             cause: error,
           }),

@@ -12,8 +12,8 @@
  *
  * @module
  */
-import { Schema, type Effect, type Layer, type Option } from "effect"
-import type { LanguageModel, Model as AiModel } from "effect/unstable/ai"
+import { Option, Predicate, Schema, type Effect, type Layer } from "effect"
+import { AiError, type LanguageModel, type Model as AiModel } from "effect/unstable/ai"
 import type { Model } from "./agent.js"
 import type { AuthAuthorizationMethod, AuthMethod } from "../runtime/provider.js"
 import type { SessionId } from "./ids.js"
@@ -38,6 +38,32 @@ export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+/**
+ * AiError metadata that carries a credential failure through a provider SDK.
+ * The SDK keeps a reason's metadata but drops its cause, and it adds its own
+ * text to the message. A driver attaches the failure here; the loop shows the
+ * user the failure's own message.
+ */
+const CredentialFailureMetadata = Schema.Struct({
+  gent: Schema.Struct({ credentialFailure: Schema.String }),
+})
+
+/** The AiError reason metadata that carries `error` to the loop. */
+export const credentialFailureMetadata = (
+  error: ProviderAuthError,
+): typeof CredentialFailureMetadata.Type => ({ gent: { credentialFailure: error.message } })
+
+/** The credential failure message a model error carries, if a driver attached one. */
+// oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
+export const credentialFailureMessage = (error: unknown): Option.Option<string> => {
+  if (!AiError.isAiError(error) || !Predicate.hasProperty(error.reason, "metadata")) {
+    return Option.none()
+  }
+  return Schema.decodeUnknownOption(CredentialFailureMetadata)(error.reason.metadata).pipe(
+    Option.map((metadata) => metadata.gent.credentialFailure),
+  )
+}
 
 /** Upstream Effect AI model returned by a model driver's `resolveModel`.
  *  It must be fully self-contained: auth, tool naming, cache control, and
