@@ -8,6 +8,7 @@ import {
   createRpcHarness,
   LanguageModelLayers,
   toolCallStep,
+  type MessagePart,
 } from "@gent/core/test-utils"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
@@ -21,7 +22,6 @@ import {
   Branch,
   dateFromMillis,
   Message,
-  type MessagePart,
   BranchId,
   MessageId,
   SessionId,

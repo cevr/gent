@@ -15,7 +15,7 @@ import { type ClientContextValue, useClient } from "../src/client"
 import { useExtensionUI } from "../src/extensions/host"
 import type { AgentRowEntry } from "@gent/extensions/client"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
-import { waitForRenderedFrame } from "./helpers-boundary"
+import { waitForFrame } from "./helpers-boundary"
 import { makePaneSlot } from "./extension-test-harness-boundary"
 
 // ── slash-commands.test ─────────────────────────────────────────────────────
@@ -355,34 +355,26 @@ describe("CommandPalette renderer", () => {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <OpenPaletteOnMount />, { width: 90, height: 28 }),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Commands") && frame.includes("Branches"),
-          "commands root",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Commands") && frame.includes("Branches"),
+        "commands root",
       )
       // Up from the first row lands on the last: Branches, whose level shows
       // "Back" in the footer where the root shows "Close".
       setup.mockInput.pressArrow("up")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("Esc Back"), "branches level"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Esc Back"), "branches level")
       setup.mockInput.pressEscape()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("Esc Close"), "root again"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("Esc Close"), "root again")
       // Down from the last row lands on the first: Theme.
       setup.mockInput.pressArrow("up")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("System"), "theme level"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("System"), "theme level")
     }),
   )
 
@@ -402,21 +394,17 @@ describe("CommandPalette renderer", () => {
         ),
       )
       if (Option.isNone(ctx)) return yield* Effect.die("client context not ready")
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Commands") && frame.includes("Sessions"),
-          "commands root",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Commands") && frame.includes("Sessions"),
+        "commands root",
       )
       yield* Effect.promise(() => setup.mockInput.typeText("Sessions"))
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Agents ·") && frame.includes("Delegate"),
-          "agents pane",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Agents ·") && frame.includes("Delegate"),
+        "agents pane",
       )
       // Every row is stored: no loop runs, and the pane still lists them all.
       expect(renderFrame(setup)).toContain("Inactive (3)")
@@ -426,9 +414,7 @@ describe("CommandPalette renderer", () => {
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => !frame.includes("Agents ·"), "agents pane closed"),
-      )
+      yield* waitForFrame(setup, (frame) => !frame.includes("Agents ·"), "agents pane closed")
       expect(ctx.value.session()).toEqual({
         sessionId: delegateId,
         branchId: delegateBranchId,
@@ -459,20 +445,16 @@ describe("CommandPalette renderer", () => {
           Option.map((value) => value.commands()),
           Option.getOrElse(() => []),
         )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          () => commands().some((command) => command.slash === "sessions"),
-          "extension commands loaded",
-        ),
+      yield* waitForFrame(
+        setup,
+        () => commands().some((command) => command.slash === "sessions"),
+        "extension commands loaded",
       )
       expect(executeSlashCommand("sessions", "", commands())).toEqual({ handled: true })
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Agents ·") && frame.includes("Delegate"),
-          "agents pane",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Agents ·") && frame.includes("Delegate"),
+        "agents pane",
       )
       const lines = renderFrame(setup).split("\n")
       // The marker rides the row, so the reader sees side work before opening it.

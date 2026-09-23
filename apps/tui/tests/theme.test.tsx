@@ -5,7 +5,7 @@ import { createThemeView, DEFAULT_THEMES, resolveTheme, type Theme } from "../sr
 import { Effect } from "effect"
 import { CommandPalette, useCommand } from "../src/commands"
 import { renderFrame, renderWithProviders } from "./render-harness-boundary"
-import { waitForRenderedFrame } from "./helpers-boundary"
+import { waitForFrame } from "./helpers-boundary"
 
 // ── theme-view.test ─────────────────────────────────────────────────────────
 
@@ -143,18 +143,14 @@ describe("palette theme level", () => {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <OpenPaletteOnMount />, { width: 90, height: 40 }),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Commands") && frame.includes("Theme"),
-          "commands root",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Commands") && frame.includes("Theme"),
+        "commands root",
       )
       // Theme is the first row.
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(setup, (frame) => frame.includes("System"), "theme level"),
-      )
+      yield* waitForFrame(setup, (frame) => frame.includes("System"), "theme level")
       const frame = renderFrame(setup)
       // System plus every registered theme. The list viewport clips before the
       // last rows, so the level's own count is what proves the whole catalog is
@@ -174,23 +170,19 @@ describe("palette theme level", () => {
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <OpenPaletteOnMount />, { width: 90, height: 40 }),
       )
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Commands") && frame.includes("Mode"),
-          "commands root",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Commands") && frame.includes("Mode"),
+        "commands root",
       )
       // Mode is the second row.
       setup.mockInput.pressArrow("down")
       yield* Effect.promise(() => setup.renderOnce())
       setup.mockInput.pressEnter()
-      yield* Effect.promise(() =>
-        waitForRenderedFrame(
-          setup,
-          (frame) => frame.includes("Dark") && frame.includes("Light"),
-          "mode level",
-        ),
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Dark") && frame.includes("Light"),
+        "mode level",
       )
       const frame = renderFrame(setup)
       // A mode is a variant, not a theme: no catalog name rides along.

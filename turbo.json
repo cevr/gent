@@ -13,7 +13,6 @@
         "integration/**/*.ts",
         "integration/**/*.tsx",
         "tsconfig.json",
-        "tsconfig.locks.json",
         "../../tsconfig.json",
         "package.json"
       ],

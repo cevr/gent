@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Deferred, Effect, Exit, Option, Schema, Scope } from "effect"
+import { Deferred, Effect, Exit, Option, Scope } from "effect"
 import { createMemo, createRoot, createSignal } from "solid-js"
 import { BranchId, SessionId } from "@gent/core/protocol"
 import {
@@ -15,7 +15,7 @@ import {
   provideClientServices,
 } from "../extension-test-harness-boundary"
 import { createMockRuntime, renderWithProviders } from "../render-harness-boundary"
-import { inRuntime } from "../helpers-boundary"
+import { inRuntime, waitUntil } from "../helpers-boundary"
 
 // ── ../extension-lifecycle.test ─────────────────────────────────────────────
 
@@ -72,29 +72,6 @@ describe("transport-only extension widgets", () => {
 
 type SessionIdentity = { readonly sessionId: SessionId; readonly branchId: BranchId }
 
-class ResourceTestTimeoutError extends Schema.TaggedError<ResourceTestTimeoutError>()(
-  "ResourceTestTimeoutError",
-  { message: Schema.String },
-) {}
-
-const waitFor = (
-  label: string,
-  predicate: () => boolean,
-): Effect.Effect<void, ResourceTestTimeoutError> => {
-  let attempts = 200
-  const check: Effect.Effect<void, ResourceTestTimeoutError> = Effect.gen(function* () {
-    if (predicate()) return
-    attempts -= 1
-    if (attempts <= 0) {
-      return yield* new ResourceTestTimeoutError({ message: `${label} did not settle` })
-    }
-    // gent/no-sleep: allow yield-then-retry primitive — the fetch fiber must run between checks
-    yield* Effect.sleep("1 millis")
-    return yield* check
-  })
-  return check
-}
-
 const sessionId = SessionId.make("session-resource")
 const branchId = BranchId.make("branch-resource")
 
@@ -142,8 +119,7 @@ describe("sessionQuery", () => {
         { currentSession: identity },
       )
 
-      yield* waitFor("first value", () => query.value() === 1).pipe(
-        Effect.timeout("2 seconds"),
+      yield* waitUntil(() => query.value() === 1, "first value").pipe(
         Effect.onError(() => Effect.sync(dispose)),
       )
 
@@ -176,11 +152,9 @@ describe("sessionQuery", () => {
             Option.some({ sessionId: SessionId.make(active()), branchId: BranchId.make("b") }),
         },
       )
-      yield* waitFor("first session", () => query.value() === "a").pipe(Effect.timeout("2 seconds"))
+      yield* waitUntil(() => query.value() === "a", "first session")
       setActive("z")
-      yield* waitFor("second session", () => query.value() === "z").pipe(
-        Effect.timeout("2 seconds"),
-      )
+      yield* waitUntil(() => query.value() === "z", "second session")
       dispose()
     }),
   )

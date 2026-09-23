@@ -8,7 +8,8 @@ import { destroyRenderSetup, renderWithProviders } from "../tests/render-harness
 import { baseLocalLayer, testAgent } from "@gent/core/test-utils"
 const localLayer = () => baseLocalLayer({ agents: [testAgent] })
 import { Gent } from "@gent/sdk"
-import { waitForFrame, repoRoot } from "./helpers"
+import { repoRoot } from "./helpers"
+import { waitForFrame } from "../tests/helpers-boundary"
 function StateProbe(props: { readonly onReady: (ctx: { client: ClientContextValue }) => void }) {
   const client = useClient()
   onMount(() => {
