@@ -11,7 +11,7 @@ import {
   shellOutputDirectory,
 } from "../src/composer"
 import { Deferred, Effect, FileSystem, Layer, Option } from "effect"
-import { type ActiveInteraction, BranchId, SessionId } from "@gent/core/protocol"
+import { type ActiveInteraction, BranchId, dateFromMillis, SessionId } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import { RGBA } from "@opentui/core"
@@ -25,7 +25,7 @@ import {
   SessionUiState,
   transitionComposerInteraction,
 } from "../src/session"
-import { renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { createSignal, type JSX, onMount } from "solid-js"
 import { PromptSearchState } from "../src/pickers"
 import { useExtensionUI } from "../src/extensions/host"
@@ -643,12 +643,94 @@ describe("Composer renderer", () => {
 
 /**
  * Submit takes the draft before any async work: a second Enter while a
- * `!cmd` runs or `@file` refs expand finds an empty composer.
+ * `!cmd` runs or `@file` refs expand finds an empty composer. `@file` and
+ * `!cmd` resolve against the session's directory, which a resumed or switched
+ * session does not share with the TUI's launch directory.
  */
 
 const submitTest = it.scopedLive.layer(testLayer)
 
+/** A session rooted in `cwd`, as `session.get` returns it. */
+const storedSessionIn = (cwd: string) => ({
+  id: SessionId.make("session-elsewhere"),
+  name: "Elsewhere",
+  cwd,
+  activeBranchId: BranchId.make("branch-elsewhere"),
+  createdAt: dateFromMillis(0),
+  updatedAt: dateFromMillis(0),
+})
+
 describe("Composer submit", () => {
+  submitTest("@file resolves against the session's directory, not the launch directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const launchDir = yield* fs.makeTempDirectoryScoped()
+      const sessionDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${launchDir}/notes.md`, "LAUNCH COPY")
+      yield* fs.writeFileString(`${sessionDir}/notes.md`, "SESSION COPY")
+      const submitted: Array<string> = []
+      // The session is reached by id alone, so its record names no cwd and the
+      // composer reads it from the server.
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+          {
+            cwd: launchDir,
+            client: createMockClient({
+              session: { get: () => Effect.succeed(storedSessionIn(sessionDir)) },
+            }),
+            initialSession: {
+              sessionId: SessionId.make("session-elsewhere"),
+              branchId: BranchId.make("branch-elsewhere"),
+              name: "Elsewhere",
+              modelId: Option.getOrUndefined(Option.none()),
+              reasoningLevel: Option.getOrUndefined(Option.none()),
+              cwd: Option.getOrUndefined(Option.none()),
+            },
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("see @notes.md"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => submitted.length === 1, "submitted")
+      expect(submitted[0]).toContain("SESSION COPY")
+      expect(submitted[0]).not.toContain("LAUNCH COPY")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  submitTest("!cmd runs in the session's directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const launchDir = yield* fs.makeTempDirectoryScoped()
+      const sessionDir = yield* fs.makeTempDirectoryScoped()
+      yield* fs.writeFileString(`${sessionDir}/marker-session.txt`, "")
+      const submitted: Array<string> = []
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => <TestComposer onSubmit={(content) => submitted.push(content)} />,
+          {
+            cwd: launchDir,
+            initialSession: {
+              sessionId: SessionId.make("session-elsewhere"),
+              branchId: BranchId.make("branch-elsewhere"),
+              name: "Elsewhere",
+              modelId: Option.getOrUndefined(Option.none()),
+              reasoningLevel: Option.getOrUndefined(Option.none()),
+              cwd: sessionDir,
+            },
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* Effect.promise(() => setup.mockInput.typeText("ls"))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, () => submitted.length === 1, "submitted")
+      expect(submitted[0]).toContain("marker-session.txt")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   submitTest("a second Enter while !cmd runs neither runs it again nor sends twice", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

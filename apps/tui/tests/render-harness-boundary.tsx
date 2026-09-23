@@ -197,6 +197,7 @@ const toInitialSession = (
       name: Option.getOrElse(Option.fromNullishOr(value.name), () => "Unnamed"),
       modelId: value.modelId,
       reasoningLevel: value.reasoningLevel,
+      cwd: value.cwd,
     }))
   })
 

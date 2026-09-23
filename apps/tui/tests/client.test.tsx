@@ -145,6 +145,7 @@ const active = SessionState.active({
   name: "S",
   modelId: absent,
   reasoningLevel: "high",
+  cwd: absent,
 })
 
 describe("session settings", () => {
@@ -603,6 +604,7 @@ describe("ClientProvider session lifecycle", () => {
         name: "Created",
         modelId: absent,
         reasoningLevel: absent,
+        cwd: workspaceCwd,
       })
     }),
   )
@@ -851,6 +853,7 @@ describe("ClientProvider session lifecycle", () => {
             name: "B",
             modelId: absent,
             reasoningLevel: absent,
+            cwd: absent,
           },
         })
         expect(client.agent()).toBeUndefined()
@@ -961,6 +964,7 @@ describe("ClientProvider session lifecycle", () => {
           name: "Fresh",
           modelId: absent,
           reasoningLevel: "high",
+          cwd: absent,
         },
       })
     }),
@@ -1022,6 +1026,7 @@ describe("ClientProvider session lifecycle", () => {
           name: "Target",
           modelId: absent,
           reasoningLevel: absent,
+          cwd: absent,
         },
       })
       expect(client.agent()).toBeUndefined()
@@ -1089,6 +1094,7 @@ describe("ClientProvider session lifecycle", () => {
           name: "New",
           modelId: absent,
           reasoningLevel: absent,
+          cwd: absent,
         },
       })
       expect(client.agent()).toBeUndefined()
@@ -1220,6 +1226,7 @@ const makeSession = (sessionId: SessionId, branchId: BranchId): Session => ({
   name: "Test Session",
   modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
+  cwd: Option.getOrUndefined(Option.none()),
 })
 
 /** The feed reads only which session is active, so the probe supplies only that. */

@@ -136,6 +136,7 @@ const toSession = (session: DomainSession): ClientSession | undefined => {
     name: Option.getOrElse(Option.fromNullishOr(session.name), () => "Unnamed"),
     modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
+    cwd: session.cwd,
   }
 }
 
@@ -712,11 +713,20 @@ export function Session(props: SessionProps) {
     // debug flag. A reader running several sessions at once cannot tell them
     // apart from the model and cost alone, and the cwd is the thing that
     // distinguishes them.
+    // The git facts are the launch directory's; a session rooted elsewhere
+    // shows its directory alone rather than borrow them.
+    const sessionCwd = Option.getOrElse(
+      Option.flatMap(Option.fromNullishOr(client.session()), (session) =>
+        Option.fromUndefinedOr(session.cwd),
+      ),
+      () => workspace.cwd,
+    )
+    const atLaunchCwd = sessionCwd === workspace.cwd
     items.push({
       text: formatCwdGit(
-        workspace.cwd,
-        Option.fromNullishOr(workspace.gitRoot()),
-        Option.fromNullishOr(workspace.gitStatus()?.branch),
+        sessionCwd,
+        Option.filter(Option.fromNullishOr(workspace.gitRoot()), () => atLaunchCwd),
+        Option.filter(Option.fromNullishOr(workspace.gitStatus()?.branch), () => atLaunchCwd),
       ),
       color: theme.textMuted,
     })

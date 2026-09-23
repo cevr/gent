@@ -34,6 +34,7 @@ const parentSession: Session = {
   name: "parent",
   modelId: Option.getOrUndefined(Option.none()),
   reasoningLevel: Option.getOrUndefined(Option.none()),
+  cwd: Option.getOrUndefined(Option.none()),
 }
 
 const startOp: ToolCall = {

@@ -29,6 +29,7 @@ import { useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import { textWidth } from "./text-width-adapter"
 import {
   expandFileRefs,
+  formatError,
   INLINE_MAX_BYTES,
   INLINE_MAX_LINES,
   truncate,
@@ -61,7 +62,7 @@ import {
 } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import { isSlashCommandName, parseSlashCommand, useCommand } from "./commands"
-import { useEnv, useWorkspace } from "./workspace"
+import { useEnv } from "./workspace"
 import { openExternalEditor, resolveEditor } from "./os"
 import type { ActiveInteraction, ApprovalResult } from "@gent/core/protocol"
 
@@ -537,7 +538,6 @@ function useComposerController(): ComposerController {
   const env = useEnv()
   const { cast } = useRuntime()
   const history = usePromptHistory()
-  const workspace = useWorkspace()
   const paste = createPasteManager()
   const extensionUI = useExtensionUI()
 
@@ -729,7 +729,8 @@ function useComposerController(): ComposerController {
     sc.onComposerInteraction(ComposerInteractionEvent.cases.ExitShell.make({}))
     clearInput()
     cast(
-      executeShell(text, workspace.cwd).pipe(
+      client.sessionCwd.pipe(
+        Effect.flatMap((cwd) => executeShell(text, cwd)),
         Effect.map(({ output, truncated, savedPath }) => {
           let userMessage = `$ ${text}\n\n${output}`
           if (!truncated) return userMessage
@@ -785,10 +786,17 @@ function useComposerController(): ComposerController {
     // second Enter finds an empty draft instead of sending it again.
     clearInput()
     cast(
-      expandFileRefs(text, workspace.cwd).pipe(
+      client.sessionCwd.pipe(
+        Effect.flatMap((cwd) => expandFileRefs(text, cwd)),
         Effect.tap((expanded) =>
           Effect.sync(() => {
             sc.onSubmit(expanded, mode)
+          }),
+        ),
+        Effect.catchEager((error) =>
+          Effect.sync(() => {
+            client.setError(formatError(error))
+            restoreDraft(text)
           }),
         ),
       ),
