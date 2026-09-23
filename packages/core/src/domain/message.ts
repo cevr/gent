@@ -900,9 +900,8 @@ export const QueuedTurnItem = Schema.Struct({
   /** The admitter asked for a turn even when the branch has no prior history. */
   wake: Schema.optional(Schema.Boolean),
   /**
-   * The message id is a durable source key (`followUpMessageIdForSource`), so
-   * re-admission replaces this item by id and it is never merged into a
-   * neighbour; merging would lose the identity the key exists for.
+   * The message id is a durable source key (`followUpMessageIdForSource`).
+   * Follow-ups no longer merge, so no reader needs it; stored rows carry it.
    */
   keyed: Schema.optional(Schema.Boolean),
 })

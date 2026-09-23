@@ -43,7 +43,6 @@ import {
   Message,
   type MessageMetadata,
   messagePartsTextLines,
-  messageSingleText,
   type QueuedTurnItem,
   type QueueEntryInfo,
   QueueSnapshot,
@@ -207,7 +206,7 @@ export class AgentLoopSessionGovernance extends Context.Service<
  * The loop's inbox: everything a branch does with input it has accepted but
  * not yet answered.
  *
- * One module owns admission, follow-up batching, steering, the durable
+ * One module owns admission, follow-up order, steering, the durable
  * checkpoint, the wake decision, and the question "does this loop still hold
  * that message". No other module reads the queue representation —
  * `steering`, `followUp`, `inFlight`.
@@ -282,73 +281,18 @@ export const wantsWakeOnRecovery = (
 
 const FOLLOW_UP_QUEUE_MAX = 10
 
-const canBatchQueuedFollowUp = (existing: QueuedTurnItem, incoming: QueuedTurnItem): boolean => {
-  if (
-    !Predicate.isUndefined(existing.agentOverride) ||
-    !Predicate.isUndefined(incoming.agentOverride)
-  )
-    return false
-  if (!Predicate.isUndefined(existing.runSpec) || !Predicate.isUndefined(incoming.runSpec)) {
-    return false
-  }
-  if (!Predicate.isUndefined(existing.interactive) || !Predicate.isUndefined(incoming.interactive))
-    return false
-  if (existing.message.role !== "user" || incoming.message.role !== "user") return false
-  if (existing.message._tag === "interjection" || incoming.message._tag === "interjection") {
-    return false
-  }
-  return (
-    !Predicate.isUndefined(messageSingleText(existing.message.parts)) &&
-    !Predicate.isUndefined(messageSingleText(incoming.message.parts))
-  )
-}
-
-const mergeQueuedFollowUp = (
-  existing: QueuedTurnItem,
-  incoming: QueuedTurnItem,
-): QueuedTurnItem => {
-  const existingText = Option.fromUndefinedOr(messageSingleText(existing.message.parts))
-  const incomingText = Option.fromUndefinedOr(messageSingleText(incoming.message.parts))
-  if (Option.isNone(existingText) || Option.isNone(incomingText)) return incoming
-
-  const merged: QueuedTurnItem = {
-    ...existing,
-    message: Message.cases.regular.make({
-      id: existing.message.id,
-      sessionId: existing.message.sessionId,
-      branchId: existing.message.branchId,
-      role: existing.message.role,
-      parts: [Prompt.textPart({ text: `${existingText.value}\n${incomingText.value}` })],
-      createdAt: existing.message.createdAt,
-      turnDurationMs: existing.message.turnDurationMs,
-      metadata: existing.message.metadata,
-    }),
-  }
-  if (incoming.wake === true) return { ...merged, wake: true }
-  return merged
-}
-
+/**
+ * Each follow-up stays its own item with its own id, parts, and turn. A
+ * repeat of a queued id replaces that item in place, so a retry neither
+ * duplicates nor drops content.
+ */
 const appendFollowUpItem = (
   queue: ReadonlyArray<QueuedTurnItem>,
   item: QueuedTurnItem,
 ): QueuedTurnItem[] => {
   const existingIndex = queue.findIndex((queued) => queued.message.id === item.message.id)
-  if (existingIndex >= 0) {
-    return queue.map((queued, index) => {
-      if (index === existingIndex) {
-        return item
-      }
-      return queued
-    })
-  }
-
-  if (item.keyed === true) return [...queue, item]
-
-  const last = queue[queue.length - 1]
-  if (Predicate.isUndefined(last) || !canBatchQueuedFollowUp(last, item)) {
-    return [...queue, item]
-  }
-  return [...queue.slice(0, -1), mergeQueuedFollowUp(last, item)]
+  if (existingIndex < 0) return [...queue, item]
+  return queue.with(existingIndex, item)
 }
 
 const toQueueEntry = (
@@ -755,7 +699,13 @@ export const makeLoopInbox = (
       return yield* commitQueueTransaction<Option.Option<RunningState> | AgentLoopError>(
         "reserved or queued follow-up",
         (current) => {
-          if (current.queue.followUp.length >= FOLLOW_UP_QUEUE_MAX) {
+          // Build the next queue first: a retry of a queued id replaces in
+          // place, so only an admission that grows the queue past the cap fails.
+          const nextQueue = appendFollowUpQueueState(current.queue, item)
+          if (
+            nextQueue.followUp.length > current.queue.followUp.length &&
+            nextQueue.followUp.length > FOLLOW_UP_QUEUE_MAX
+          ) {
             return {
               value: new AgentLoopError({
                 message: `Follow-up queue full (max ${FOLLOW_UP_QUEUE_MAX})`,
@@ -765,7 +715,6 @@ export const makeLoopInbox = (
             }
           }
 
-          const nextQueue = appendFollowUpQueueState(current.queue, item)
           if (options.queueOnly) {
             return {
               value: Option.none(),
@@ -1746,10 +1695,11 @@ const turnFailureBaseline = (behavior: AgentLoopBehavior): Effect.Effect<number>
  * Wait until the loop has released `messageId`, started after `baseline`.
  *
  * It ends three ways, and all three end the wait: the loop lets the message
- * go (the turn ran, or a batch absorbed it), the turn fails, or persistence
- * fails. The last two fail the effect. Only a persistence failure breaks the
- * loop, so only that one runs `onPersistenceFailure`: after a turn failure the
- * worker has already moved on to the next queued turn.
+ * go (its own turn ran, or it left the queue unrun), the turn fails, or
+ * persistence fails. Follow-ups never merge, so no other message's turn
+ * releases this one. The last two fail the effect. Only a persistence failure
+ * breaks the loop, so only that one runs `onPersistenceFailure`: after a turn
+ * failure the worker has already moved on to the next queued turn.
  */
 const awaitTurnCompletion = (
   behavior: AgentLoopBehavior,
