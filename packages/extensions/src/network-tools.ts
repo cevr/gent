@@ -6,7 +6,7 @@ import { defineExtension, ExtensionHost, tool } from "@gent/core/extensions/api"
 
 // WebSearch Error
 
-export class WebSearchError extends Schema.TaggedError<WebSearchError>()("WebSearchError", {
+class WebSearchError extends Schema.TaggedError<WebSearchError>()("WebSearchError", {
   message: Schema.String,
   query: Schema.String,
   cause: Schema.optional(Schema.Unknown),
@@ -153,24 +153,29 @@ export const WebSearchTool = tool({
               .filter((line) => line.startsWith("data: "))
               .map((line) => line.substring(6))
 
+            const mcpFailure = (error: Option.Option<{ readonly message: string }>) =>
+              new WebSearchError({
+                message: `Exa MCP error: ${Option.match(error, {
+                  onNone: () => "Unknown error",
+                  onSome: (found) => found.message,
+                })}`,
+                query: params.query,
+              })
+
             if (frames.length === 0) {
               const data = yield* parseMcpJson(responseText)
               const text = extractResult(data)
               if (Option.isSome(text)) return text.value
-              const errMsg = Option.fromNullishOr(data.error).pipe(
-                Option.map((error) => error.message),
-                Option.getOrElse(() => "Unknown error"),
-              )
-              return yield* new WebSearchError({
-                message: `Exa MCP error: ${errMsg}`,
-                query: params.query,
-              })
+              return yield* mcpFailure(Option.fromNullishOr(data.error))
             }
 
+            // A frame that carries an error ends the search with it; a frame with neither is skipped.
             for (const frame of frames) {
               const data = yield* parseMcpJson(frame)
               const text = extractResult(data)
               if (Option.isSome(text)) return text.value
+              const error = Option.fromNullishOr(data.error)
+              if (Option.isSome(error)) return yield* mcpFailure(error)
             }
 
             return "No search results found. Try a different query."
