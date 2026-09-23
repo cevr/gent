@@ -1370,10 +1370,13 @@ export const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(func
     directive,
     project,
     persist: persistDurableMessage,
+    // The summary is plain text under a small output cap. Reasoning tokens
+    // count against that cap on some providers, so the summary asks for none
+    // and never inherits the turn's effort.
     summaryModel: (maxTokens) =>
       resolveAdmittedModel({
         ...modelRequest,
-        hints: { ...modelRequest.hints, maxTokens },
+        hints: { ...modelRequest.hints, maxTokens, reasoning: "none" },
       }),
   })
 

@@ -863,9 +863,9 @@ type OpenAiCompatConfig = Required<Parameters<typeof OpenAiLanguageModel.layer>[
 export const readOptionalEnv = (name: string): Effect.Effect<Option.Option<string>> =>
   Config.option(Config.string(name)).pipe(Effect.orElseSucceed(() => Option.none()))
 
+/** Sampling limits every OpenAI-compatible driver sends; reasoning effort is the driver's own mapping. */
 export const buildOpenAiCompatConfig = (
   hints: Option.Option<ProviderHints>,
-  includeReasoning: boolean,
 ): OpenAiCompatConfig => {
   let config: OpenAiCompatConfig = {}
   if (Option.isSome(hints)) {
@@ -873,10 +873,6 @@ export const buildOpenAiCompatConfig = (
     if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
     const temperature = Option.fromNullishOr(hints.value.temperature)
     if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-    const reasoning = Option.fromNullishOr(hints.value.reasoning)
-    if (includeReasoning && Option.isSome(reasoning) && reasoning.value !== "none") {
-      config = { ...config, reasoning_effort: reasoning.value }
-    }
   }
   return config
 }
@@ -932,7 +928,7 @@ const makeApiKeyCompatDriver = (params: {
         modelName,
         apiKey: apiKey.value,
         apiUrl: params.apiUrl,
-        config: buildOpenAiCompatConfig(Option.fromNullishOr(hints), false),
+        config: buildOpenAiCompatConfig(Option.fromNullishOr(hints)),
       })
     }),
   auth: {

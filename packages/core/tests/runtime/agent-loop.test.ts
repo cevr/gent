@@ -167,7 +167,11 @@ import { windowDetails, windowMarkerMessage } from "../../src/runtime/model-cont
 import { e2ePreset, rangeCompactorLayer, testAgents } from "../helpers/test-preset"
 import * as AiModel from "effect/unstable/ai/Model"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
-import { type ModelDriverContribution, ProviderAuthError } from "../../src/domain/driver"
+import {
+  type ModelDriverContribution,
+  ProviderAuthError,
+  type ProviderHints,
+} from "../../src/domain/driver"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import {
@@ -1732,6 +1736,79 @@ describe("native model compaction integration", () => {
       Effect.provide(makeLayer(providerLayer).pipe(Layer.provideMerge(rangeCompactorLayer))),
       Effect.timeout("15 seconds"),
     )
+  })
+
+  it.live("the summary request asks for no reasoning, so thinking cannot spend its budget", () => {
+    const sessionId = SessionId.make("summary-reasoning-session")
+    const branchId = BranchId.make("summary-reasoning-branch")
+    const modelId = ModelId.make("summary-driver/model")
+    const observedHints: Array<ProviderHints> = []
+    const providerLayer = LanguageModelLayers.testStream(() =>
+      Effect.succeed(
+        Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+      ),
+    )
+    const driver: ModelDriverContribution = {
+      id: "summary-driver",
+      name: "Summary driver",
+      resolveModel: (_modelName, _authInfo, hints) =>
+        Effect.sync(() => {
+          if (Predicate.isNotUndefined(hints)) observedHints.push(hints)
+          return AiModel.make("summary-driver", "model", providerLayer)
+        }),
+    }
+    const oldMessages = Array.from({ length: 12 }, (_, index) =>
+      Message.cases.regular.make({
+        id: MessageId.make(`summary-old-${index + 1}`),
+        sessionId,
+        branchId,
+        role: "assistant",
+        parts: [Prompt.textPart({ text: `summary-old-${index + 1} ${"x".repeat(50_000)}` })],
+        createdAt: dateFromMillis(1_000 + index),
+      }),
+    )
+    const layer = actorTestRoot({
+      resolver: ModelResolver.Live.pipe(Layer.provide(Auth.Test())),
+      registry: ExtensionRegistry.fromResolved(
+        resolveExtensions([
+          {
+            manifest: { id: ExtensionId.make("summary-driver") },
+            scope: "builtin",
+            sourcePath: "test",
+            contributions: { agents: testAgents, modelDrivers: [driver] },
+          },
+        ]),
+      ),
+      models: [
+        Model.make({
+          id: modelId,
+          name: "Summary model",
+          provider: ProviderId.make("summary-driver"),
+          contextLength: 128_000,
+        }),
+      ],
+    }).pipe(Layer.provideMerge(rangeCompactorLayer))
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* ensureStorageParents({ sessionId, branchId })
+        const storage = yield* MessageStorage
+        yield* Effect.forEach(oldMessages, (message) => storage.createMessage(message), {
+          discard: true,
+        })
+        yield* runAgentLoop(agentLoop, makeMessage(sessionId, branchId, "summarize then answer"), {
+          runSpec: { overrides: { modelId, reasoningEffort: "high" } },
+        })
+        const summary = observedHints.filter((hints) => Predicate.isNotUndefined(hints.maxTokens))
+        expect(summary).toHaveLength(1)
+        expect(summary[0]?.reasoning).toBe("none")
+        // The turn itself keeps its own effort.
+        expect(
+          observedHints.filter((hints) => Predicate.isUndefined(hints.maxTokens)).at(-1)?.reasoning,
+        ).toBe("high")
+      }),
+    ).pipe(Effect.provide(layer), Effect.timeout("15 seconds"))
   })
 
   it.live("a smaller agent context window hands off history the catalog window would keep", () => {
