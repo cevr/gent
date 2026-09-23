@@ -225,19 +225,42 @@ export const childOutcomeWords = (outcome: ChildOutcome): string => {
 
 /** The child branch's messages, from the session detail. */
 /**
- * The child's messages from its start turn onward. A forked child's branch
- * begins with a copy of the parent's window; those rows are the parent's
- * reply and calls, never the child's.
+ * The messages of the child's start turn. A forked child's branch begins
+ * with a copy of the parent's window; those rows are the parent's reply and
+ * calls, never the child's. A later turn (a wake, a queued message) that ran
+ * before a recovered delivery is not the start turn either: the slice ends at
+ * the next regular user message or the next message that began a turn.
  */
 const childMessages = (entry: DelegateEntry) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
+    const startId = startMessageId(entry.requestId)
     const detail = yield* ctx.Session.getDetail(entry.sessionId)
     const branch = detail.branches.find((current) => current.branch.id === entry.branchId)
     const messages = branch?.messages ?? []
-    const start = messages.findIndex((message) => message.id === startMessageId(entry.requestId))
+    const start = messages.findIndex((message) => message.id === startId)
     if (start === -1) return []
-    return messages.slice(start)
+    const laterTurns = yield* ctx.Session.events({
+      sessionId: entry.sessionId,
+      branchId: entry.branchId,
+    }).pipe(
+      Stream.takeUntil(isSynchronized),
+      Stream.filter(isTurnCompleted),
+      Stream.map((event) => event.messageId),
+      Stream.filter(
+        (messageId): messageId is MessageId =>
+          Predicate.isNotUndefined(messageId) && messageId !== startId,
+      ),
+      Stream.runCollect,
+      Effect.map((ids) => new Set<MessageId>(ids)),
+    )
+    const after = messages.slice(start + 1)
+    const end = after.findIndex(
+      (message) =>
+        (message._tag === "regular" && message.role === "user") || laterTurns.has(message.id),
+    )
+    if (end === -1) return messages.slice(start)
+    return messages.slice(start, start + 1 + end)
   })
 
 const childName = (prompt: string) => `${DELEGATE_AGENT_NAME}: ${prompt.slice(0, 60)}`
