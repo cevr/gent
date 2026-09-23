@@ -168,7 +168,6 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | Extension ID                              | Where                    | What                                    |
 | ----------------------------------------- | ------------------------ | --------------------------------------- |
 | `@gent/tools` / `@gent/interaction-tools` | `builtins.tsx`           | Tool renderers, interaction renderers   |
-| `@gent/connection`                        | `builtins.tsx`           | Connection status widget                |
 | `@gent/skills-ui`                         | `builtins.tsx`           | `$` autocomplete: skills popup          |
 | `@gent/files-ui`                          | `builtins.tsx`           | `@` autocomplete: file search popup     |
 | `@gent/driver-ui`                         | `builtins.tsx`           | `/driver` slash command                 |
@@ -189,7 +188,7 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - One setup shape: Effect-typed `Effect<Array, E, R>`. Setups yield from the per-provider `clientRuntime` which provides `FileSystem | Path | ClientContext`. A setup yields the facets it needs: `const { transport, shell, lifecycle } = yield* ClientContext`. Never pass `ClientContext` or a facet as a parameter
 - **Transport-only widgets**: there is no in-process snapshot cache. A widget reads server state through `sessionQuery` (in `client-facets.ts`), which yields `ClientContext`, keys each reply on `(sessionId, branchId)` and drops a reply for a session the shell has left. `follow: true` reads again on every session move. The widget refreshes it on typed session events or `transport.onExtensionStateChanged` pulses. The goal label (`builtins.tsx`) and the wake tray (`wake.client.tsx`) are the canonical examples.
 - **Lifecycle**: register Solid `createRoot(dispose)` disposers AND pulse unsubscribes via `lifecycle.addCleanup`. The provider's `onCleanup` runs them in order on unmount, so widget setups leave no detached roots behind.
-- Widgets are zero-prop components that self-source from `useClient()` or `useExtensionUI()`
+- Widgets are zero-prop components that read through `ClientContext`, never the host's Solid contexts (`useClient()`, `useExtensionUI()`). Host chrome that reads them (the connection and queue widgets) renders from `app.tsx`
 - Extensions have no overlays. A pane is a `below-input` widget that the extension opens and closes with its own signal (agents, thread, btw). A pane that takes typed text reads keys through `useScopedKeyboard`, as the agents filter and the btw ask line do: an `<input>` would take the terminal's focus from the composer, and the composer would not get it back.
 - The TUI host (`src/` outside `extensions/`) never imports `@gent/extensions`; the `gent/core-entry-boundary` oxlint rule enforces it. One extension's view is a client extension that reads its server state through `ClientContext.transport`. `transport.sessionEvents(key)` reads another branch's events, as the delegate row does for each child
 - `useExtensionUI()` provides the resolved contributions, the load `failures`, and `clientRuntime`; widgets read the session from `transport.currentSession()`

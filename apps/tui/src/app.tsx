@@ -414,6 +414,83 @@ export const resolveInitialState = (input: {
     return { _tag: "session", session: created, prompt: promptText } satisfies InitialState
   })
 
+// ── connection widget ───────────────────────────────────────────────────────
+
+/**
+ * Host chrome: connection issues and extensions that failed to load. It reads
+ * the host's own contexts, so it is not an extension, and no extension id can
+ * disable or shadow the report of failed extensions.
+ */
+
+export function ConnectionWidget() {
+  const client = useClient()
+  const ext = useExtensionUI()
+  const { theme } = useTheme()
+  const disconnectedReason = () => {
+    const state = Option.fromNullishOr(client.connectionState())
+    if (Option.isNone(state)) return Option.none<string>()
+    if (state.value._tag !== "Disconnected" || state.value.reason === "stopped") {
+      return Option.none<string>()
+    }
+    return Option.some(state.value.reason)
+  }
+  const connectionIssue = () => Option.fromNullishOr(client.connectionIssue())
+  const degradedExtensions = () => {
+    const health = client.extensionHealth()
+    if (health._tag === "Degraded") return health.degradedExtensions
+    return []
+  }
+  const failedExtensions = () => [
+    ...degradedExtensions()
+      .filter((extension) => extension.issues.some((issue) => issue._tag === "ActivationFailed"))
+      .map((extension) => extension.manifest.id),
+    ...ext.failures().map((failure) => failure.id),
+  ]
+  const hasFailedExtensions = () => failedExtensions().length > 0
+  // Reconnecting and the restart count belong to the status row;
+  // this widget draws what the label cannot: issues and failed extensions.
+  const visible = () =>
+    Option.isSome(connectionIssue()) || Option.isSome(disconnectedReason()) || hasFailedExtensions()
+  const accent = () => {
+    if (hasFailedExtensions()) return theme.warning
+    return theme.error
+  }
+  const subtitle = () => {
+    if (hasFailedExtensions()) return "extension activation degraded"
+    if (Option.isSome(disconnectedReason())) return "runtime unavailable"
+    return Option.getOrElse(connectionIssue(), () => "")
+  }
+  return (
+    <Show when={visible()}>
+      <box flexDirection="column" paddingLeft={2} marginTop={1} marginBottom={1}>
+        <text>
+          <span style={{ fg: accent(), bold: true }}>• connection</span>
+          <span style={{ fg: theme.textMuted }}> · {subtitle()}</span>
+        </text>
+        <box flexDirection="column" paddingLeft={2}>
+          <Show when={Option.isSome(connectionIssue())}>
+            <text>
+              <span style={{ fg: theme.text }}>{Option.getOrUndefined(connectionIssue())}</span>
+            </text>
+          </Show>
+          <Show when={Option.isSome(disconnectedReason())}>
+            <text>
+              <span style={{ fg: theme.text }}>{Option.getOrUndefined(disconnectedReason())}</span>
+            </text>
+          </Show>
+          <Show when={hasFailedExtensions()}>
+            <text>
+              <span style={{ fg: theme.text }}>
+                failed extensions: {failedExtensions().join(", ")}
+              </span>
+            </text>
+          </Show>
+        </box>
+      </box>
+    </Show>
+  )
+}
+
 // ── queue widget ────────────────────────────────────────────────────────────
 
 interface QueueWidgetProps {
@@ -649,6 +726,7 @@ export function Session(props: SessionProps) {
               </text>
             </box>
           </Show>
+          <ConnectionWidget />
           <ExtensionWidgets slot="below-messages" />
           {/* QueueWidget stays hardwired because its data comes from session controller
               state that is not exposed through the extension context. */}

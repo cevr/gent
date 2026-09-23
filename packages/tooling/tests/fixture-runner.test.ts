@@ -109,8 +109,8 @@ const CASES: ReadonlyArray<RuleCase> = [
     invalid: "apps/tui/src/extensions/core-entry-boundary.invalid.ts",
     valid: "apps/tui/src/extensions/loader-boundary.ts",
     // a protocol subpath, host, test-utils, a relative path to core's host,
-    // a core re-export, a dynamic import
-    expectedCount: 6,
+    // a core re-export, a dynamic import, and the two host Solid contexts
+    expectedCount: 8,
   },
   {
     // The TUI host reads no extension module; a client extension owns that view.

@@ -123,6 +123,8 @@ const AUTHORING_ENTRY = /^@gent\/core\/extensions\/(?:api|branch-tools)(?:\.js)?
 const PROTOCOL_ENTRY = /^@gent\/core\/protocol(?:\.js)?$/
 const TEST_UTILS_ENTRY = /^@gent\/core\/test-utils(?:\/|$)/
 const EXTENSIONS_PACKAGE = /^@gent\/extensions(?:\/|$)/
+/** The TUI host's own Solid contexts: the client provider and the extension host. */
+const TUI_HOST_CONTEXT_PATH = /\/apps\/tui\/src\/(?:client|extensions\/host)(?:\.tsx?|\.js)?$/
 
 /** The module specifier of an import, re-export, or dynamic import. */
 const importSourceOf = (node: AstNode): string | undefined => {
@@ -505,7 +507,9 @@ const plugin: Plugin = {
      *   a relative path; it goes through the entry that publishes the name.
      * - The TUI host (`apps/tui/src/` outside `extensions/`) never reads
      *   `@gent/extensions`. One extension's view belongs in its client
-     *   extension, which reaches the host only through `ClientContext`.
+     *   extension, which reaches the host only through `ClientContext`: a
+     *   TUI client extension never reads the host's Solid contexts
+     *   (`client.tsx`, `extensions/host.tsx`), which a user extension cannot.
      *
      * Exempt: the two authoring entries themselves, which assemble the public
      * API from core internals, and the TUI's client extension loader, which is
@@ -521,6 +525,8 @@ const plugin: Plugin = {
         if (!extensionFile && !productFile && !outsideCore) return {}
         const tuiExtension = filename.includes("apps/tui/src/extensions/")
         const tuiHost = !tuiExtension && productFile && filename.includes("/apps/tui/src/")
+        const tuiClientExtension =
+          tuiExtension && !filename.endsWith("apps/tui/src/extensions/host.tsx")
 
         const extensionMessage = (
           source: string,
@@ -554,6 +560,14 @@ const plugin: Plugin = {
             CORE_SOURCE_PATH.test(resolved)
           ) {
             message = `Code outside core reads it through "@gent/core/<entry>", not its source. Forbidden: "${source}"`
+          }
+          if (
+            message === undefined &&
+            tuiClientExtension &&
+            resolved !== undefined &&
+            TUI_HOST_CONTEXT_PATH.test(resolved)
+          ) {
+            message = `A client extension reads the host through ClientContext, not its Solid contexts. Forbidden: "${source}"`
           }
           if (message === undefined && tuiHost && EXTENSIONS_PACKAGE.test(source)) {
             message = `The TUI host reads no extension module; move the view into a client extension under apps/tui/src/extensions/. Forbidden: "${source}"`
