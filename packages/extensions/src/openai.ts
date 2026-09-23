@@ -11,6 +11,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Redacted,
   Result,
   Schema,
   Scope,
@@ -42,7 +43,6 @@ import {
   type ProviderHints,
 } from "@gent/core/extensions/api"
 import {
-  buildOpenAiCompatConfig,
   type CatalogSource,
   catalogSource,
   type CredentialCache,
@@ -59,7 +59,6 @@ import {
   isTransientTokenStatus,
   makeCredentialCache,
   type CredentialStore,
-  makeOpenAiCompatResolution,
   postOAuthForm,
   apiKeyFrom,
   readOptionalEnv,
@@ -969,8 +968,8 @@ export const makeOpenAICredentialCache = (
 // ── codex transform ─────────────────────────────────────────────────────────
 
 /**
- * codexTransformClient — `@effect/ai-openai-compat` `transformClient`
- * callback for the ChatGPT OAuth (Codex) path.
+ * codexTransformClient — the `HttpClient` middleware for the ChatGPT
+ * OAuth (Codex) path.
  *
  * The SDK applies `transformClient` after its own baseline pipeline
  * (`prependUrl(${apiUrl}/v1)` + optional `bearerToken(apiKey)` +
@@ -1175,7 +1174,7 @@ const buildOauthHeaders = (
 // ── transformClient factory ──
 
 /**
- * Build the `transformClient` value the OpenAI-compat SDK accepts.
+ * Build the Codex `HttpClient` middleware the OAuth path's client runs over.
  *
  * Takes the credential cache as a closure argument for the type reasons
  * documented above.
@@ -1247,7 +1246,6 @@ const OAUTH_ALLOCATORS: ReadonlyArray<typeof allocateOpenAIAuthorization> = [
 type OpenAiResponsesConfig = Required<
   Parameters<typeof OpenAiResponsesLanguageModel.layer>[0]
 >["config"]
-type OpenAiCompatConfig = Parameters<typeof makeOpenAiCompatResolution>[0]["config"]
 const OpenAiReasoningEffort = Schema.Literals([
   "none",
   "minimal",
@@ -1311,6 +1309,11 @@ const openAiReasoningEffort = (
   )
 }
 
+/** Whether the model reasons: the catalog's flag, else a known reasoning family. */
+const openAiModelReasons = (modelName: string, hints: ProviderHints): boolean =>
+  hints.supportsReasoning ?? OPENAI_ACCEPTED_EFFORTS.some((entry) => entry.pattern.test(modelName))
+
+/** The one request config for both auth paths; both speak the Responses API. */
 const buildOpenAiResponsesConfig = (
   modelName: string,
   hints: Option.Option<ProviderHints>,
@@ -1321,8 +1324,11 @@ const buildOpenAiResponsesConfig = (
     if (Option.isSome(cacheKey)) config = { ...config, prompt_cache_key: cacheKey.value }
     const maxTokens = Option.fromNullishOr(hints.value.maxTokens)
     if (Option.isSome(maxTokens)) config = { ...config, max_output_tokens: maxTokens.value }
+    // OpenAI's reasoning models reject `temperature`.
     const temperature = Option.fromNullishOr(hints.value.temperature)
-    if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
+    if (Option.isSome(temperature) && !openAiModelReasons(modelName, hints.value)) {
+      config = { ...config, temperature: temperature.value }
+    }
     const reasoning = openAiReasoningEffort(modelName, hints.value)
     if (Option.isSome(reasoning)) {
       config = {
@@ -1337,22 +1343,26 @@ const buildOpenAiResponsesConfig = (
 // ── Layer construction helpers ──
 
 /**
- * API-key path: plain OpenAI-compatible client over `FetchHttpClient`. No
- * Codex transform — the Codex backend rewrite + OAuth headers are
- * specific to the ChatGPT OAuth path.
+ * API-key path: the Responses client with the key as Bearer auth over
+ * `FetchHttpClient`. No Codex transform — the Codex backend rewrite + OAuth
+ * headers are specific to the ChatGPT OAuth path.
  */
 const makeApiKeyOpenAIResolution = (
   modelName: string,
-  config: OpenAiCompatConfig,
+  config: OpenAiResponsesConfig,
   apiKey: string,
-) =>
-  makeOpenAiCompatResolution({
-    provider: "openai",
+) => {
+  const clientLayer = OpenAiResponsesClient.layer({ apiKey: Redacted.make(apiKey) }).pipe(
+    Layer.provide(FetchHttpClient.layer),
+  )
+  return AiModel.make(
+    "openai",
     modelName,
-    apiKey,
-    config,
-    apiUrl: Option.none(),
-  })
+    OpenAiResponsesLanguageModel.layer({ model: modelName, config }).pipe(
+      Layer.provide(clientLayer),
+    ),
+  )
+}
 
 /**
  * OAuth path: builds `OpenAiClient.layer` with `transformClient` set to
@@ -1430,9 +1440,8 @@ export const buildOpenAIModelDriver = (
   resolveModel: (modelName, authInfo, hints) =>
     Effect.gen(function* () {
       const auth = Option.fromNullishOr(authInfo)
-      // Stored OAuth — handle inline with token refresh. The ChatGPT Codex
-      // backend speaks the Responses shape, so the OAuth path uses
-      // @effect/ai-openai instead of the chat-completions compat adapter.
+      // Stored OAuth — handle inline with token refresh. Both paths speak the
+      // Responses API through @effect/ai-openai; OAuth adds the Codex rewrite.
       if (Option.isSome(auth) && auth.value._tag === "Oauth") {
         const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
         if (!isOpenAIOAuthModel(modelName)) {
@@ -1449,20 +1458,8 @@ export const buildOpenAIModelDriver = (
       const apiKey = apiKeyFrom(auth, envApiKey)
 
       if (Option.isSome(apiKey)) {
-        const config = buildOpenAiCompatConfig(Option.fromNullishOr(hints))
-        const reasoning = openAiReasoningEffort(modelName, hints ?? {})
-        return makeApiKeyOpenAIResolution(
-          modelName,
-          {
-            ...config,
-            ...Option.match(reasoning, {
-              onNone: () => ({}),
-              onSome: (effort) => ({ reasoning_effort: effort }),
-            }),
-            prompt_cache_key: hints?.cacheKey,
-          },
-          apiKey.value,
-        )
+        const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
+        return makeApiKeyOpenAIResolution(modelName, config, apiKey.value)
       }
 
       // Fail closed — no stored OAuth, no stored API key, no env var.
