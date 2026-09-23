@@ -698,6 +698,8 @@ describe("FX transcript treatment", () => {
         const [disclosure, setDisclosure] = createSignal<DisclosureLevel>("collapsed")
         const leadingCells: number[] = []
         const savedText: string[] = []
+        // Native history waits for client extensions; the checks start after they load.
+        let extensionsLoaded = () => false
         const answer: ListMessage = {
           _tag: "regular-message",
           id: "last-answer",
@@ -726,6 +728,7 @@ describe("FX transcript treatment", () => {
           renderWithProviders(
             () => {
               const renderer = useRenderer()
+              extensionsLoaded = useExtensionUI().loaded
               // Check native cells: string offsets do not match terminal columns for wide glyphs.
               const capture = (event: CliRendererExternalOutputEvent) => {
                 const { snapshot } = event
@@ -767,6 +770,10 @@ describe("FX transcript treatment", () => {
             },
             { width, height: 14 },
           ),
+        )
+        yield* Effect.promise(() => setup.flush()).pipe(
+          Effect.repeat({ until: () => extensionsLoaded() }),
+          Effect.timeout("5 seconds"),
         )
         let otherWidth = 32
         if (width === 32) otherWidth = 65
