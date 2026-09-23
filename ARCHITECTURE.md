@@ -254,7 +254,11 @@ extension directories as they are now, under the place's lock, so an edit to
 `disabledExtensions` and an added, fixed or edited extension file reach the
 next turn and the next session without a restart; a file is imported under its
 version (mtime, size, inode), so Bun's module cache does not serve the old one.
-A directory extension's version is its index file's. A list that leaves the
+A directory extension's version is its index file's. Project trust comes from
+`isProjectExtensionDirectoryTrusted` (`runtime/config.ts`), the reader the TUI's
+client-extension loader calls too: it reads `trustedProjects` from the user
+config file as it is now, and a file that does not decode trusts no project. A
+list that leaves the
 same extensions, such as one that names an unknown id, finds the profile
 already built. Finding or building the profile, its lease and making it
 current are one step no interrupt can split. `resolve` takes a

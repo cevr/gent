@@ -100,7 +100,6 @@ import {
   type FreshConfig,
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
-  isProjectRootTrusted,
   RuntimeEnvironment,
   type UserConfig,
 } from "./config.js"
@@ -1107,21 +1106,25 @@ const scanExtensionDirectories = Effect.fn("ExtensionLoader.scanExtensionDirecto
 })
 
 /**
- * The extension directories a profile for these inputs reads, read once.
- * Trust comes from the fresh config the caller already read, so a grant or a
- * revoke reaches the next resolve.
+ * The extension directories, read once, with the project's trust. Trust is
+ * read from the user config file now, by the one reader the TUI uses too, so
+ * a grant or a revoke reaches the next scan, and a user file that does not
+ * decode trusts no project: a revoke is never undone by a broken edit.
  */
-export const scanRuntimeProfileExtensions = (
-  inputs: { readonly cwd: string; readonly home: string },
-  trustedProjects: ReadonlyArray<string>,
-): Effect.Effect<ExtensionScan, never, FileSystem.FileSystem | Path.Path> =>
+const scanExtensions = Effect.fn("ExtensionLoader.scanExtensions")(function* (
+  dirs: ExtensionDirectories,
+) {
+  return yield* scanExtensionDirectories(dirs, yield* isProjectExtensionDirectoryTrusted(dirs))
+})
+
+/** The extension directories a profile for these inputs reads, read once. */
+export const scanRuntimeProfileExtensions = (inputs: {
+  readonly cwd: string
+  readonly home: string
+}): Effect.Effect<ExtensionScan, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
-    const dirs = extensionDirectories(path, inputs)
-    return yield* scanExtensionDirectories(
-      dirs,
-      yield* isProjectRootTrusted(trustedProjects, dirs.projectDir),
-    )
+    return yield* scanExtensions(extensionDirectories(path, inputs))
   })
 
 /**
@@ -1343,13 +1346,16 @@ export const configHealthStatuses = Effect.fn("ExtensionHealth.configHealthStatu
   )
 })
 
-/** Discover and load extensions from all configured directories. Per-file isolation — one broken file does not suppress siblings. */
+/**
+ * The profile's discovery over explicit directories: the same scan and load
+ * `SessionProfileCache` runs. Only tests call it, to reach discovery without
+ * building a profile. Per-file isolation: one broken file does not suppress
+ * its siblings.
+ */
 export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (
   dirs: ExtensionDirectories,
 ) {
-  return yield* loadExtensionScan(
-    yield* scanExtensionDirectories(dirs, yield* isProjectExtensionDirectoryTrusted(dirs)),
-  )
+  return yield* loadExtensionScan(yield* scanExtensions(dirs))
 })
 
 /** Load the extensions one scan found; see `discoverExtensions`. */
@@ -2284,10 +2290,9 @@ export class SessionProfileCache extends Context.Service<
                 // edit cannot put the older profile back.
                 const fresh = yield* restore(configService.getFresh(canonicalCwd))
                 const scan = yield* restore(
-                  scanRuntimeProfileExtensions(
-                    inputsFor(canonicalCwd),
-                    fresh.config.trustedProjects ?? [],
-                  ).pipe(Effect.provideContext(platformServicesContext)),
+                  scanRuntimeProfileExtensions(inputsFor(canonicalCwd)).pipe(
+                    Effect.provideContext(platformServicesContext),
+                  ),
                 )
                 const list = listKey(
                   place,
