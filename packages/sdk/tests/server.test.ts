@@ -14,17 +14,7 @@ import {
 import * as ChildProcessSpawnerNs from "effect/unstable/process/ChildProcessSpawner"
 import { dateFromMillis } from "@gent/core-internal/domain/message.js"
 import { GentPlatform } from "@gent/core-internal/runtime/gent-platform.js"
-import {
-  BuildFingerprint,
-  LaunchConfig,
-  readServerLock,
-  removeServerLock,
-  ServerLockEntry,
-  serverLockIdentityOf,
-  signalIfIdentityOwned,
-  validateServerLockEntry,
-  writeServerLock,
-} from "../src/server"
+import { BuildFingerprint, LaunchConfig, serverLock, ServerLockEntry } from "../src/server"
 import { BunServices } from "@effect/platform-bun"
 import { BunGentPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.js"
 import { hostname, tmpdir } from "node:os"
@@ -416,69 +406,68 @@ describe("Server Lock", () => {
               ConfigProvider.ConfigProvider,
               ConfigProvider.fromEnvRecord({ GENT_DATA_DIR: dataDir }),
             )
-          yield* isolated(writeServerLock(home, entry))
+          yield* isolated(serverLock.write(home, entry))
           const fs = yield* FileSystem.FileSystem
           expect(yield* fs.exists(`${dataDir}/server.lock`)).toBe(true)
           expect(yield* fs.exists(`${home}/.gent/server.lock`)).toBe(false)
           // the home-scoped reader does not see the isolated run's server
-          expect(yield* readServerLock(home)).toBeUndefined()
-          expect(yield* isolated(readServerLock(home))).toBeDefined()
+          expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+          expect(Option.isSome(yield* isolated(serverLock.read(home)))).toBe(true)
         }),
       ),
   )
 
-  it.scopedLive("writeServerLock + readServerLock roundtrip", () =>
+  it.scopedLive("a written lock reads back field for field", () =>
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const entry = makeEntry()
-        yield* writeServerLock(home, entry)
-        const read = yield* readServerLock(home)
-        expect(read).toBeDefined()
-        expect(read!.serverId).toBe(entry.serverId)
-        expect(read!.pid).toBe(entry.pid)
-        expect(read!.rpcUrl).toBe(entry.rpcUrl)
-        expect(read!.dbPath).toBe(entry.dbPath)
-        expect(read!.buildFingerprint).toBe(entry.buildFingerprint)
+        yield* serverLock.write(home, entry)
+        const read = Option.getOrThrow(yield* serverLock.read(home))
+        expect(read.serverId).toBe(entry.serverId)
+        expect(read.pid).toBe(entry.pid)
+        expect(read.rpcUrl).toBe(entry.rpcUrl)
+        expect(read.dbPath).toBe(entry.dbPath)
+        expect(read.buildFingerprint).toBe(entry.buildFingerprint)
       }),
     ),
   )
 
-  it.scopedLive("readServerLock returns undefined for missing or corrupt lock", () =>
+  it.scopedLive("a missing or corrupt lock reads as absent", () =>
     provideFs(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const path = yield* Path.Path
         const home = yield* makeTmpHomeScoped
-        expect(yield* readServerLock(home)).toBeUndefined()
+        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
         yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
         yield* fs.writeFileString(path.join(home, ".gent", "server.lock"), "not json")
-        expect(yield* readServerLock(home)).toBeUndefined()
+        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
       }),
     ),
   )
 
-  it.scopedLive("readServerLock rejects a lock from another host", () =>
+  it.scopedLive("a lock from another host reads as absent", () =>
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const entry = makeEntry({ hostname: "other-host.example.com" })
-        yield* writeServerLock(home, entry)
-        expect(yield* readServerLock(home)).toBeUndefined()
+        yield* serverLock.write(home, entry)
+        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
       }),
     ),
   )
 
-  it.scopedLive("removeServerLock removes only the matching server id", () =>
+  it.scopedLive("removing a lock needs its server id", () =>
     provideFs(
       Effect.gen(function* () {
         const home = yield* makeTmpHomeScoped
         const entry = makeEntry()
-        yield* writeServerLock(home, entry)
-        expect(yield* removeServerLock(home, "wrong-id")).toBe(false)
-        expect(yield* readServerLock(home)).toBeDefined()
-        expect(yield* removeServerLock(home, entry.serverId)).toBe(true)
-        expect(yield* readServerLock(home)).toBeUndefined()
+        yield* serverLock.write(home, entry)
+        expect(yield* serverLock.remove(home, "wrong-id")).toBe(false)
+        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
+        expect(yield* serverLock.remove(home, entry.serverId)).toBe(true)
+        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
       }),
     ),
   )
@@ -499,7 +488,13 @@ describe("Server Lock", () => {
                 if (new URL(request.url).pathname !== "/_gent/identity") {
                   return new Response("not found", { status: 404 })
                 }
-                return Response.json(serverLockIdentityOf(entry))
+                return Response.json({
+                  serverId: entry.serverId,
+                  pid: entry.pid,
+                  hostname: entry.hostname,
+                  dbPath: entry.dbPath,
+                  buildFingerprint: entry.buildFingerprint,
+                })
               },
             }),
           ),
@@ -510,7 +505,7 @@ describe("Server Lock", () => {
           ...entry,
           rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
         })
-        yield* writeServerLock(home, entryWithEndpoint)
+        yield* serverLock.write(home, entryWithEndpoint)
 
         const server = yield* Gent.server({
           cwd: `${process.cwd()}/other-workspace`,
@@ -560,27 +555,19 @@ describe("Server Lock", () => {
 })
 
 describe("Server Lock Ownership", () => {
-  it.live("validates lock host and PID", () =>
-    Effect.gen(function* () {
-      expect((yield* validateServerLockEntry(makeEntry())).valid).toBe(true)
-      expect((yield* validateServerLockEntry(makeEntry({ hostname: "alien-host" }))).reason).toBe(
-        "different-host",
-      )
-      expect((yield* validateServerLockEntry(makeEntry({ pid: 99999999 }))).reason).toBe("dead-pid")
-    }).pipe(Effect.provide(PlatformLayer)),
-  )
-
-  it.live("serverLockIdentityOf returns the owned identity tuple", () =>
-    Effect.sync(() => {
-      const entry = makeEntry()
-      expect(serverLockIdentityOf(entry)).toEqual({
-        serverId: entry.serverId,
-        pid: entry.pid,
-        hostname: entry.hostname,
-        dbPath: entry.dbPath,
-        buildFingerprint: entry.buildFingerprint,
-      })
-    }),
+  it.scopedLive("status reads a live pid as alive and a gone pid as stale", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        expect((yield* serverLock.status(home))._tag).toBe("None")
+        yield* serverLock.write(home, makeEntry())
+        expect((yield* serverLock.status(home))._tag).toBe("Alive")
+        yield* serverLock.write(home, makeEntry({ pid: 99999999 }))
+        expect((yield* serverLock.status(home))._tag).toBe("Stale")
+        yield* serverLock.write(home, makeEntry({ hostname: "alien-host" }))
+        expect((yield* serverLock.status(home))._tag).toBe("None")
+      }),
+    ),
   )
 
   it.scopedLive("PID-reused stale server locks are removed without SIGTERM", () =>
@@ -617,7 +604,7 @@ describe("Server Lock Ownership", () => {
           ...entry,
           rpcUrl: `${fakeOwnerUrl.origin}/rpc`,
         })
-        yield* writeServerLock(home, entryWithEndpoint)
+        yield* serverLock.write(home, entryWithEndpoint)
 
         const signals: Array<{ pid: number; signal: string | number }> = []
         // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
@@ -646,14 +633,18 @@ describe("Server Lock Ownership", () => {
         })
 
         expect(signals).toEqual([])
-        const after = yield* readServerLock(home)
-        expect(after?.serverId).not.toBe(entryWithEndpoint.serverId)
+        const after = Option.getOrThrow(yield* serverLock.read(home))
+        expect(after.serverId).not.toBe(entryWithEndpoint.serverId)
       }),
     ),
   )
 })
 
-describe("signalIfIdentityOwned", () => {
+describe("serverLock.stop", () => {
+  /**
+   * Trap SIGTERM to this process. A trapped SIGTERM marks the pid gone, so the
+   * liveness probe that follows sees the server exit.
+   */
   const withSignalTrap = <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<
@@ -666,13 +657,15 @@ describe("signalIfIdentityOwned", () => {
       // oxlint-disable-next-line typescript/unbound-method -- this test restores the exact host function after its signal trap
       const originalKill = process.kill
       const replacement: typeof process.kill = (pid: number, signal?: string | number) => {
-        if (pid === process.pid && signal === "SIGTERM") {
+        if (pid !== process.pid) return originalKill(pid, signal)
+        if (signal === "SIGTERM") {
           signals.push(signal)
           return true
         }
+        // oxlint-disable-next-line effect/noThrowStatement, effect/noNewError -- the trap keeps process.kill's contract: a gone pid throws ESRCH
+        if (signals.length > 0) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" })
         return originalKill(pid, signal)
       }
-
       yield* Effect.acquireRelease(
         Effect.sync(() => {
           process.kill = replacement
@@ -682,69 +675,98 @@ describe("signalIfIdentityOwned", () => {
             process.kill = originalKill
           }),
       )
-
       const result = yield* effect
       return { result, signals }
     })
 
-  it.live("skips when PID is not alive", () =>
+  /** An identity endpoint that answers with `identity`; the lock points at it. */
+  const lockWithEndpoint = (home: string, identity: (entry: ServerLockEntry) => object) =>
     Effect.gen(function* () {
-      let probeCalled = false
-      const result = yield* signalIfIdentityOwned(makeEntry({ pid: 99999999 }), () => {
-        probeCalled = true
-        return Effect.succeed(true)
+      const entry = makeEntry()
+      const endpoint = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          // oxlint-disable-next-line effect/noGlobals -- this test needs a raw Bun identity fixture server
+          Bun.serve({ port: 0, fetch: () => Response.json(identity(entry)) }),
+        ),
+        (server) => Effect.promise(() => server.stop(true)),
+      )
+      const locked = new ServerLockEntry({
+        ...entry,
+        rpcUrl: `${new URL(endpoint.url).origin}/rpc`,
       })
-      expect(result).toBe("skipped")
-      expect(probeCalled).toBe(false)
-    }).pipe(Effect.provide(PlatformLayer)),
+      yield* serverLock.write(home, locked)
+      return locked
+    })
+
+  const identityOf = (entry: ServerLockEntry) => ({
+    serverId: entry.serverId,
+    pid: entry.pid,
+    hostname: entry.hostname,
+    dbPath: entry.dbPath,
+    buildFingerprint: entry.buildFingerprint,
+  })
+
+  it.scopedLive("no lock, or a lock from another host, stops nothing", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        expect((yield* serverLock.stop(home))._tag).toBe("None")
+        yield* serverLock.write(home, makeEntry({ hostname: "other-host" }))
+        const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
+        expect(result._tag).toBe("None")
+        expect(signals).toEqual([])
+      }),
+    ),
   )
 
-  it.scopedLive("skips a lock from another host without probing", () =>
-    Effect.gen(function* () {
-      let probeCalled = false
-      const { result, signals } = yield* signalIfIdentityOwned(
-        makeEntry({ hostname: "other-host", pid: process.pid }),
-        () => {
-          probeCalled = true
-          return Effect.succeed(true)
-        },
-      ).pipe(withSignalTrap)
-      expect(result).toBe("skipped")
-      expect(probeCalled).toBe(false)
-      expect(signals).toEqual([])
-    }).pipe(Effect.provide(PlatformLayer)),
+  it.scopedLive("a gone pid keeps its lock unless the caller asks to remove it", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        yield* serverLock.write(home, makeEntry({ pid: 99999999 }))
+        expect((yield* serverLock.stop(home))._tag).toBe("NotRunning")
+        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
+        expect((yield* serverLock.stop(home, { removeStale: true }))._tag).toBe("Removed")
+        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+      }),
+    ),
   )
 
-  it.scopedLive("skips when probe says identity does not match", () =>
-    Effect.gen(function* () {
-      const { result, signals } = yield* signalIfIdentityOwned(
-        makeEntry({ pid: process.pid }),
-        () => Effect.succeed(false),
-      ).pipe(withSignalTrap)
-      expect(result).toBe("skipped")
-      expect(signals).toEqual([])
-    }).pipe(Effect.provide(PlatformLayer)),
+  it.scopedLive("a live pid whose endpoint names another process is not signalled", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        yield* lockWithEndpoint(home, (entry) => ({ ...identityOf(entry), pid: 99999999 }))
+        const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
+        expect(result._tag).toBe("NotOwned")
+        expect(signals).toEqual([])
+        expect(Option.isSome(yield* serverLock.read(home))).toBe(true)
+      }),
+    ),
   )
 
-  it.scopedLive("signals when probe confirms identity", () =>
-    Effect.gen(function* () {
-      const { result, signals } = yield* signalIfIdentityOwned(
-        makeEntry({ pid: process.pid }),
-        () => Effect.succeed(true),
-      ).pipe(withSignalTrap)
-      expect(result).toBe("signaled")
-      expect(signals).toEqual(["SIGTERM"])
-    }).pipe(Effect.provide(PlatformLayer)),
+  it.scopedLive("an unreachable identity endpoint is not signalled", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        yield* serverLock.write(home, makeEntry({ rpcUrl: "http://127.0.0.1:1/rpc" }))
+        const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
+        expect(result._tag).toBe("NotOwned")
+        expect(signals).toEqual([])
+      }),
+    ),
   )
 
-  it.scopedLive("skips when probe fails", () =>
-    Effect.gen(function* () {
-      const { result, signals } = yield* signalIfIdentityOwned(
-        makeEntry({ pid: process.pid }),
-        () => Effect.fail("probe boom"),
-      ).pipe(withSignalTrap)
-      expect(result).toBe("skipped")
-      expect(signals).toEqual([])
-    }).pipe(Effect.provide(PlatformLayer)),
+  it.scopedLive("a confirmed identity gets SIGTERM, and its lock goes once it exits", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        yield* lockWithEndpoint(home, identityOf)
+        const { result, signals } = yield* serverLock.stop(home).pipe(withSignalTrap)
+        expect(result._tag).toBe("Stopped")
+        expect(signals).toEqual(["SIGTERM"])
+        expect(Option.isNone(yield* serverLock.read(home))).toBe(true)
+      }),
+    ),
   )
 })

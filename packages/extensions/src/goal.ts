@@ -233,7 +233,8 @@ const validateBudget = (value: Option.Option<number>) =>
 const queueGoalMessage = (goal: GoalState, content: string) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    yield* ctx.Session.queueFollowUp({
+    yield* ctx.Session.send({
+      delivery: "queue",
       sourceId: goalContinuationSource(goal),
       content,
       metadata: { customType: GOAL_CONTEXT_MESSAGE_TYPE, extensionId: GOAL_EXTENSION_ID },

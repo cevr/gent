@@ -12,7 +12,7 @@ import { BunPlatformLive } from "@gent/core-internal/runtime/gent-platform-bun.j
 export { ModelContextCompactorLive } from "../../src/compaction.js"
 import { CELL_EXTENSION_ID } from "../../src/cell.js"
 import { AllBuiltinAgents } from "./builtin-agents.js"
-import type { E2ELayerConfig, ToolTestLayerConfig } from "@gent/core-internal/test-utils/index"
+import type { E2ELayerConfig } from "@gent/core-internal/test-utils/index"
 
 /**
  * The shipped composition: every builtin extension, and the branch-tool
@@ -35,10 +35,6 @@ export const e2ePreset = {
     (extension) => extension.manifest.id !== CELL_EXTENSION_ID,
   ),
 } satisfies Pick<E2ELayerConfig, "agents" | "extensionInputs">
-
-export const toolPreset = {
-  agents: AllBuiltinAgents,
-} satisfies Pick<ToolTestLayerConfig, "agents" | "extraLayers">
 
 /** Compile this checkout's cell worker into a scoped directory, as the release build ships it. */
 export const buildCellExecutable = Effect.gen(function* () {

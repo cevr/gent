@@ -1,8 +1,9 @@
 import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils/language-model"
 import { Terminal } from "@xterm/headless"
-import { Clock, Effect, Predicate, Schema } from "effect"
+import { Clock, Context, Effect, Layer, Predicate, Schema } from "effect"
 import { spawn, type IPty } from "zigpty"
-import { seedAuthBoundary } from "./auth-seed-boundary"
+import { BunServices } from "@effect/platform-bun"
+import { Auth, AuthApi } from "@gent/core-internal/runtime/provider"
 import { waitForProcessExit } from "./server-process-fixture"
 
 const CTRL_C = "\x03"
@@ -96,10 +97,22 @@ const spawnWithDir = (
   }
 }
 
+/**
+ * Writes test API keys into the auth store the child process reads
+ * (`GENT_AUTH_DIRECTORY`), so a spawned gent finds credentials without prompting.
+ */
+const seedAuth = (directory: string) =>
+  Effect.gen(function* () {
+    const services = yield* Layer.build(Auth.Live(directory).pipe(Layer.provide(BunServices.layer)))
+    const auth = Context.get(services, Auth)
+    yield* auth.set("anthropic", AuthApi.make({ type: "api", key: "test-key" }))
+    yield* auth.set("openai", AuthApi.make({ type: "api", key: "test-key" }))
+  }).pipe(Effect.scoped, Effect.orDie)
+
 export const seedAndSpawn = (extraArgs: string[] = [], size?: PtySize) =>
   Effect.gen(function* () {
     const tempDir = yield* makeTempDirectoryScoped("gent-e2e-")
-    yield* Effect.promise(() => seedAuthBoundary(`${tempDir}/auth`))
+    yield* seedAuth(`${tempDir}/auth`)
     return spawnWithDir(tempDir, extraArgs, {}, size)
   })
 
@@ -121,7 +134,7 @@ export const seedSkillAndSpawn = Effect.gen(function* () {
     ),
   )
 
-  yield* Effect.promise(() => seedAuthBoundary(`${tempDir}/auth`))
+  yield* seedAuth(`${tempDir}/auth`)
   return spawnWithDir(tempDir, [], { HOME: fakeHome })
 })
 

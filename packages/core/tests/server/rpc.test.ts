@@ -45,8 +45,8 @@ import {
   ModelDriverRef,
 } from "../../src/domain/agent"
 import { Gent } from "@gent/sdk"
-import { createE2ELayer, createRpcHarness, createToolTestLayer } from "../../src/test-utils/index"
-import { e2ePreset, toolPreset } from "../../../extensions/tests/helpers/test-preset"
+import { createE2ELayer, createRpcHarness } from "../../src/test-utils/index"
+import { e2ePreset } from "../../../extensions/tests/helpers/test-preset"
 import {
   BranchId,
   ExtensionId,
@@ -1077,9 +1077,12 @@ describe("extension command RPCs", () => {
       ],
     }),
   }
-  const layer = createToolTestLayer({ ...toolPreset, extensions: [TestCommandsExtension] }).pipe(
-    Layer.provideMerge(ApprovalService.Test()),
-  )
+  const layer = createE2ELayer({
+    agents: [],
+    providerLayer: LanguageModelLayers.debug(),
+    extensionInputs: [TestCommandsExtension],
+    toolRunner: "test",
+  })
   it.live("extension author API does not export capability authority providers", () =>
     Effect.sync(() => {
       expect("CapabilityAccess" in ExtensionApi).toBe(false)
@@ -1227,7 +1230,11 @@ describe("extension command RPCs", () => {
               execute: (input) =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
-                  yield* ctx.Session.queueFollowUp({ sourceId: "test-rpc-request", content: input })
+                  yield* ctx.Session.send({
+                    delivery: "queue",
+                    sourceId: "test-rpc-request",
+                    content: input,
+                  })
                 }).pipe(
                   Effect.mapError(
                     (cause) =>
@@ -1475,7 +1482,8 @@ describe("extension command RPCs", () => {
               execute: (input) =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
-                  yield* ctx.Session.queueFollowUp({
+                  yield* ctx.Session.send({
+                    delivery: "queue",
                     sourceId: "test-warm-request",
                     content: input,
                   })
@@ -1571,7 +1579,8 @@ describe("extension command RPCs", () => {
               execute: (input: string) =>
                 Effect.gen(function* () {
                   const ctx = yield* ExtensionContext
-                  yield* ctx.Session.queueFollowUp({
+                  yield* ctx.Session.send({
+                    delivery: "queue",
                     sourceId: "test-slash-request",
                     content: input,
                   })
@@ -1998,7 +2007,8 @@ describe("extension command RPCs", () => {
                     const extensionCtx = yield* ExtensionContext
                     const processExit = yield* Effect.exit(extensionCtx.Process.run("echo", ["hi"]))
                     const followUpExit = yield* Effect.exit(
-                      extensionCtx.Session.queueFollowUp({
+                      extensionCtx.Session.send({
+                        delivery: "queue",
                         sourceId: "rpc",
                         content: "queued",
                       }),

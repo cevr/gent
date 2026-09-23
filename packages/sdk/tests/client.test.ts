@@ -1,15 +1,21 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, Exit, Option, Predicate, Random, Schema, Scope, Stream } from "effect"
+import { Effect, Exit, Layer, Option, Predicate, Random, Schema, Scope, Stream } from "effect"
+import { BunChildProcessSpawner, BunServices } from "@effect/platform-bun"
+import { getToolId } from "@gent/core/extensions/api"
+import { BuiltinExtensions } from "@gent/extensions"
+import { setupExtension } from "@gent/core-internal/runtime/extension-host"
+import { GentPlatform } from "@gent/core-internal/runtime/gent-platform"
+import { narrowR } from "../../core/tests/helpers/effect"
 import { RpcClient } from "effect/unstable/rpc"
 import * as Prompt from "effect/unstable/ai/Prompt"
-import { extractImages, extractText, Gent } from "../src/client"
+import { Gent, makeNamespacedClient } from "../src/client"
 import type { Message as DomainMessage } from "../src/index"
-import { makeNamespacedClient } from "../src/namespaced-client"
 import { type GentRpcClient, GentRpcs } from "@gent/core-internal/server/rpc"
 import { BranchId, MessageId, SessionId, ToolCallId } from "@gent/core-internal/domain/ids"
 import {
   dateFromMillis,
   Message,
+  messagePartsText,
   projectMessagesWithToolInteractions,
 } from "@gent/core-internal/domain/message"
 import {
@@ -22,18 +28,6 @@ import { makeTempDirectoryScoped, waitFor } from "@gent/core-internal/test-utils
 // ── client.test ─────────────────────────────────────────────────────────────
 
 describe("sdk client helpers", () => {
-  test("extractText extracts text from message parts", () => {
-    const parts = [Prompt.textPart({ text: "Hello world" })]
-    expect(extractText(parts)).toBe("Hello world")
-  })
-
-  test("extractImages extracts image metadata", () => {
-    const parts = [Prompt.filePart({ data: "base64data", mediaType: "image/png" })]
-    const images = extractImages(parts)
-    expect(images.length).toBe(1)
-    expect(images[0]?.mediaType).toBe("image/png")
-  })
-
   test("canonical tool interactions expose running calls", () => {
     const message = Message.cases.regular.make({
       id: MessageId.make("m1"),
@@ -290,6 +284,79 @@ describe("Gent.server options", () => {
   )
 })
 
+interface SeededCall {
+  readonly name: string
+  readonly params: unknown
+}
+
+/**
+ * The seeded calls no shipped tool accepts: an unknown tool id, or params the
+ * tool's own schema rejects. Tools come from the builtin extensions' setup.
+ */
+const rejectedCalls = (calls: ReadonlyArray<SeededCall>) =>
+  narrowR(
+    Effect.gen(function* () {
+      const tools = new Map<string, Schema.Constraint>()
+      for (const extension of BuiltinExtensions) {
+        const loaded = yield* setupExtension(
+          { extension, scope: "builtin", sourcePath: "builtin" },
+          "/tmp",
+          "/tmp",
+        )
+        for (const tool of loaded.contributions.tools ?? []) {
+          tools.set(getToolId(tool), tool.parametersSchema)
+        }
+      }
+      const rejected: string[] = []
+      for (const call of calls) {
+        const schema = tools.get(call.name)
+        if (Predicate.isUndefined(schema)) {
+          rejected.push(`${call.name}: no shipped tool has this id`)
+          continue
+        }
+        // The seeded tools' params are plain structs: their type side is their JSON.
+        if (!Schema.is(schema)(call.params)) rejected.push(`${call.name}: params do not fit`)
+      }
+      return rejected
+    }),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        BunServices.layer,
+        BunChildProcessSpawner.layer.pipe(Layer.provide(BunServices.layer)),
+        GentPlatform.Test(),
+      ),
+    ),
+  )
+
+describe("Gent.server debug playground", () => {
+  it.live(
+    "seeds only calls to shipped tools, with params those tools accept",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDirectoryScoped("gent-debug-seed-")
+          const server = yield* Gent.server({
+            cwd,
+            debug: true,
+            state: Gent.state.memory(),
+            provider: Gent.provider.mock(),
+          })
+          const { client } = yield* Gent.client(server, { cwd })
+          const [session] = yield* client.session.list()
+          const branchId = yield* Effect.fromNullishOr(session?.activeBranchId)
+          const messages = yield* client.message.list({ branchId })
+          const calls = messages.flatMap((message) =>
+            message.parts.filter((part) => part.type === "tool-call"),
+          )
+          expect(calls.length).toBeGreaterThan(0)
+          expect(yield* rejectedCalls(calls)).toEqual([])
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    30_000,
+  )
+})
+
 describe("Gent.server idle shutdown counts in-process clients", () => {
   it.live(
     "an in-process client holds the server open, and closing it releases the hold",
@@ -348,7 +415,7 @@ describe("Gent.server workspace isolation", () => {
           })
 
           yield* waitFor(clientA.message.list({ branchId: created.branchId }), (messages) =>
-            messages.some((message) => extractText(message.parts) === "workspace-a-message"),
+            messages.some((message) => messagePartsText(message.parts) === "workspace-a-message"),
           )
 
           const sessionsB = yield* clientB.session.list()

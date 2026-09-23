@@ -37,6 +37,9 @@ import {
   type EventEnvelope,
   InteractionPresented,
   type MessageId,
+  messagePartsImages,
+  messagePartsReasoning,
+  messagePartsText,
   Model,
   type ModelContextMetrics,
   type ModelId,
@@ -72,9 +75,6 @@ import {
   transitionPromptSearch,
 } from "./pickers"
 import {
-  extractImages,
-  extractReasoning,
-  extractText,
   type MessageSegment,
   type ProjectedMessage,
   type QueueEntryInfo,
@@ -730,7 +730,6 @@ type AuthGateState = "checking" | "open" | "closed" | "error"
 
 interface SessionControllerState {
   readonly authGate: AuthGateState
-  // eslint-disable-next-line effect/noNullish -- reducer consumers expose the validated agent as an optional snapshot field.
   readonly validatedAgent?: string
   readonly authCheckVersion: number
   readonly queue: QueueState
@@ -1519,9 +1518,9 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
         _tag: "interjection-message",
         id: m.id,
         role: "user",
-        content: extractText(m.parts),
-        reasoning: extractReasoning(m.parts),
-        images: extractImages(m.parts),
+        content: messagePartsText(m.parts),
+        reasoning: messagePartsReasoning(m.parts),
+        images: messagePartsImages(m.parts),
         createdAt: m.createdAt.getTime(),
         toolCalls: Option.getOrUndefined(toolCallsOption),
         segments: Option.getOrUndefined(segments),
@@ -1531,9 +1530,9 @@ const buildMessages = (msgs: readonly ProjectedMessage[]): Message[] => {
       _tag: "regular-message",
       id: m.id,
       role: m.role,
-      content: extractText(m.parts),
-      reasoning: extractReasoning(m.parts),
-      images: extractImages(m.parts),
+      content: messagePartsText(m.parts),
+      reasoning: messagePartsReasoning(m.parts),
+      images: messagePartsImages(m.parts),
       createdAt: m.createdAt.getTime(),
       toolCalls: Option.getOrUndefined(toolCallsOption),
       segments: Option.getOrUndefined(segments),

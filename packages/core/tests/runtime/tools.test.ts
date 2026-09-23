@@ -602,7 +602,7 @@ describe("tool execution", () => {
             const ctx = yield* ExtensionContext
             const processExit = yield* Effect.exit(ctx.Process.run("echo", ["hi"]))
             const followUpExit = yield* Effect.exit(
-              ctx.Session.queueFollowUp({ sourceId: "read-tool", content: "nope" }),
+              ctx.Session.send({ delivery: "queue", sourceId: "read-tool", content: "nope" }),
             )
             const interactionExit = yield* Effect.exit(
               ctx.Interaction.present({ content: "nope", title: "read tool" }),

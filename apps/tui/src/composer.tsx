@@ -497,7 +497,6 @@ interface ComposerController {
   // eslint-disable-next-line effect/noNullish -- OpenTUI refs pass null before attachment and on cleanup.
   readonly attachTextarea: (renderable: TextareaRenderable | null) => void
   readonly handleTextareaKeyDown: (event: {
-    // eslint-disable-next-line effect/noNullish -- OpenTUI keyboard events omit these modifier fields.
     name?: string
     shift?: boolean
     ctrl?: boolean

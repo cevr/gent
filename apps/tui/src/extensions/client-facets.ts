@@ -733,7 +733,6 @@ type MutableClientContributions = {
   -readonly [Key in keyof ClientContributions]: ClientContributions[Key]
 }
 
-// eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
 const append = <A>(
   // eslint-disable-next-line effect/noNullish -- contribution buckets preserve omitted optional arrays.
   left: ReadonlyArray<A> | undefined,

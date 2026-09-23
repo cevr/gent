@@ -186,7 +186,7 @@ describe("Capability factory-shape locks (compile-time)", () => {
       execute: () =>
         Effect.gen(function* () {
           const ctx = yield* ExtensionContext
-          yield* ctx.Session.queueFollowUp({ sourceId: "lock", content: "x" })
+          yield* ctx.Session.send({ delivery: "queue", sourceId: "lock", content: "x" })
           return "ok"
         }).pipe(
           Effect.mapError(
@@ -301,7 +301,7 @@ describe("Effect-purity locks (compile-time)", () => {
             execute: () =>
               Effect.gen(function* () {
                 const ctx = yield* ExtensionContext
-                yield* ctx.Session.queueFollowUp({ sourceId: "lock", content: "x" })
+                yield* ctx.Session.send({ delivery: "queue", sourceId: "lock", content: "x" })
               }).pipe(
                 Effect.mapError(
                   (cause) =>
@@ -317,7 +317,7 @@ describe("Effect-purity locks (compile-time)", () => {
         yield* host.on("turnAfter", (_input: PublicExtensionApi.TurnAfterInput) =>
           Effect.gen(function* () {
             const ctx = yield* ExtensionContext
-            void ctx.Session.queueFollowUp
+            void ctx.Session.send
           }),
         )
       }),

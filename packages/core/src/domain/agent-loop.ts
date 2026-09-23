@@ -634,11 +634,8 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
     workspaceId: yield* CurrentWorkspaceId,
     message,
     // Actor operation payloads require optional fields explicitly.
-    // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
     agentOverride: input.agentOverride,
-    // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
     interactive: input.interactive,
-    // oxlint-disable-next-line effect/noNullish -- Actor operation payload requires this optional field explicitly.
     runSpec: input.runSpec,
   }
   const ref = yield* loopRefFor(input.sessionId, input.branchId)

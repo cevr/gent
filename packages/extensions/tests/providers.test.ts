@@ -76,7 +76,6 @@ describe("OpenAI-compatible provider drivers", () => {
       )
       expect(request.headers["authorization"]).toBe("Bearer google-key")
       expect(request.body).not.toContain("prompt_cache_key")
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer setup reads.
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -95,7 +94,6 @@ describe("OpenAI-compatible provider drivers", () => {
       expect(request.url).toBe("https://api.mistral.ai/v1/chat/completions")
       expect(request.headers["authorization"]).toBe("Bearer mistral-key")
       expect(request.body).not.toContain("prompt_cache_key")
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer setup reads.
     }).pipe(Effect.provide(platformLayer)),
   )
 })
@@ -236,7 +234,6 @@ describe("models.dev catalog", () => {
       expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
       expect(models[0]?.name).toBe("GPT-5.4")
       expect(yield* Ref.get(calls)).toBe(0)
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -272,7 +269,6 @@ describe("models.dev catalog", () => {
       const decoded = yield* Schema.decodeEffect(CachedModelsJson)(written)
       expect(decoded.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
       expect(written.includes('"openai":{"models"')).toBe(false)
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -289,7 +285,6 @@ describe("models.dev catalog", () => {
 
       expect(yield* Ref.get(calls)).toBe(1)
       expect(models.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -317,7 +312,6 @@ describe("models.dev catalog", () => {
 
       expect(yield* Ref.get(calls)).toBe(1)
       expect(models.map((model) => model.id)).toEqual([ModelId.make("openai/gpt-4.1")])
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -332,7 +326,6 @@ describe("models.dev catalog", () => {
       )
 
       expect(models).toEqual([])
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -348,7 +341,6 @@ describe("models.dev catalog", () => {
 
       const opus = models.find((model) => model.id === "anthropic/claude-opus-5")
       expect(opus?.releaseDate).toBe("2026-07-24")
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -372,7 +364,6 @@ describe("models.dev catalog", () => {
       expect(models[0]?.id).toBe(ModelId.make("openai/gpt-5.4"))
       expect(models[0]?.releaseDate).toBeUndefined()
       expect(yield* Ref.get(calls)).toBe(0)
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -387,7 +378,6 @@ describe("models.dev catalog", () => {
       )
 
       expect(anthropic.map((model) => model.id)).toEqual([ModelId.make("anthropic/claude-opus-5")])
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -421,7 +411,6 @@ describe("models.dev catalog", () => {
       expect(yield* Ref.get(calls)).toBe(1)
       expect(openai.map((model) => model.id)).toEqual([ModelId.make("openai/gpt-5.4")])
       expect(anthropic.map((model) => model.id)).toEqual([ModelId.make("anthropic/claude-opus-5")])
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
 
@@ -448,7 +437,6 @@ describe("models.dev catalog", () => {
 
       expect(yield* Ref.get(onlineCalls)).toBe(1)
       expect(online.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
-      // oxlint-disable-next-line effect/noInlineProvide -- This test composes the platform layer for this operation.
     }).pipe(Effect.provide(platformLayer)),
   )
 })

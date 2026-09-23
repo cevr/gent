@@ -254,13 +254,9 @@ export const missingRequired = (catalog: AuthCatalog): ReadonlyArray<AuthProvide
  */
 
 interface AuthProps {
-  // eslint-disable-next-line effect/noNullish -- route props omit a session outside an active session.
   sessionId?: SessionId
-  // eslint-disable-next-line effect/noNullish -- route props omit this policy when it is not enforced.
   enforceAuth?: boolean
-  // eslint-disable-next-line effect/noNullish -- route callbacks are optional at the UI boundary.
   onResolved?: () => void
-  // eslint-disable-next-line effect/noNullish -- route callbacks are optional at the UI boundary.
   onClose?: () => void
 }
 

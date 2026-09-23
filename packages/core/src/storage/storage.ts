@@ -1043,8 +1043,6 @@ const RowToRecord = InteractionRequestRow.pipe(
 
 const decodeRow = Schema.decodeUnknownEffect(RowToRecord)
 
-// oxlint-disable-next-line effect/noUnknownParameters -- SQL and schema effects expose unknown failure causes at this storage boundary.
-
 export interface InteractionStorageService {
   /** Startup recovery enumerates owners, then reads each workspace under its own scope. */
   readonly listPendingWorkspaces: Effect.Effect<ReadonlyArray<WorkspaceId>, StorageError>
