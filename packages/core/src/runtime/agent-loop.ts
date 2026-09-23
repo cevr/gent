@@ -2293,12 +2293,9 @@ const buildAgentLoopActorHandlers = (config: {
       yield* admitWithOrigin(item, Option.fromUndefinedOr(input.clientRequest), (admitted) =>
         handle.inbox.admit(admitted, { queueOnly: true }),
       )
-      if (yield* shouldWake(handle, input)) {
-        yield* Ref.set(wakeRequested, true)
-        // A retained facade can enqueue after its original turn has ended.
-        // The actor owns this wake; an active mutation releases its permit first.
-        yield* drainWake(handle).pipe(provideActorWorkspace, Effect.forkIn(actorScope))
-      }
+      // A retained facade can enqueue after its original turn has ended.
+      // The actor owns this wake; an active mutation releases its permit first.
+      if (yield* shouldWake(handle, input)) yield* wakeAfterPermit(handle)
     })
 
     /**
@@ -2318,6 +2315,16 @@ const buildAgentLoopActorHandlers = (config: {
         yield* startNextQueuedTurnIfIdle(handle)
       }
     })
+
+    /**
+     * Ask for a turn from inside a caller that holds the side-mutation permit.
+     * The start is forked, so it waits for that permit instead of deadlocking.
+     */
+    const wakeAfterPermit = (handle: AgentLoopBehavior): Effect.Effect<void> =>
+      Ref.set(wakeRequested, true).pipe(
+        Effect.andThen(drainWake(handle).pipe(provideActorWorkspace, Effect.forkIn(actorScope))),
+        Effect.asVoid,
+      )
 
     /** Start a queued turn requested by a re-entrant admission once the permit is free. */
     const drainWake = (handle: AgentLoopBehavior) =>
@@ -2550,9 +2557,42 @@ const buildAgentLoopActorHandlers = (config: {
     })
 
     /**
+     * Queue one steering item, and start a turn for it when the caller asked to
+     * wake an idle branch.
+     *
+     * Steering joins the running turn at its next step boundary; the open
+     * stream is not interrupted. An idle branch has no turn to join, so the
+     * item waits in the queue where `queue.get` can still show it. Only a
+     * caller that asked to wake gets a turn of its own — the same signal
+     * recovery uses at startup. `inbox.steer` answers with the state the queue
+     * had *before* the append, so the idle test is made on that: a caller that
+     * read the state first and steered second would race a turn that ended in
+     * between.
+     *
+     * `start` is the one difference between the two callers. The mailbox
+     * starts at once (`startNextQueuedTurnIfIdle`: `takeIfIdle` reserves the
+     * start, and `startTurn` claims it). A re-entrant caller holds the
+     * side-mutation permit, so its wake starts after the permit is released
+     * (`wakeAfterPermit`).
+     */
+    const interject = Effect.fn("AgentLoopActor.interject")(function* (
+      handle: AgentLoopBehavior,
+      commandId: ActorCommandId,
+      command: InterjectCommand,
+      clientRequest: Option.Option<ClientRequestGrant>,
+      start: (handle: AgentLoopBehavior) => Effect.Effect<void, AgentLoopError>,
+    ) {
+      const item = yield* interjectionItem(commandId, command)
+      const { result: before } = yield* admitWithOrigin(item, clientRequest, (admitted) =>
+        handle.inbox.steer(admitted),
+      )
+      if (command.wake !== true || Option.isNone(before) || before.value._tag !== "Idle") return
+      yield* start(handle)
+    })
+
+    /**
      * Re-entrant steer into this branch (see `admitFollowUp`). The origin is
-     * decided at admission, while the caller runs; a wake starts after the
-     * caller's permit is released.
+     * decided at admission, while the caller runs.
      */
     const admitInterjection = Effect.fn("AgentLoopActor.admitInterjection")(function* (
       handle: AgentLoopBehavior,
@@ -2561,13 +2601,13 @@ const buildAgentLoopActorHandlers = (config: {
     ) {
       yield* ensureTarget(command)
       yield* markWrite
-      const item = yield* interjectionItem(ActorCommandId.make(command.requestId), command)
-      const { result: before } = yield* admitWithOrigin(item, clientRequest, (admitted) =>
-        handle.inbox.steer(admitted),
+      yield* interject(
+        handle,
+        ActorCommandId.make(command.requestId),
+        command,
+        clientRequest,
+        wakeAfterPermit,
       )
-      if (command.wake !== true || Option.isNone(before) || before.value._tag !== "Idle") return
-      yield* Ref.set(wakeRequested, true)
-      yield* drainWake(handle).pipe(provideActorWorkspace, Effect.forkIn(actorScope))
     })
 
     const applySteer = Effect.fn("AgentLoopActor.applySteer")(function* (
@@ -2591,28 +2631,12 @@ const buildAgentLoopActorHandlers = (config: {
           }
           return
 
-        case "Interject": {
-          const item = yield* interjectionItem(commandId, command)
-          // Steering joins the running turn at its next step boundary; the open
-          // stream is not interrupted.
-          //
-          // An idle branch has no turn to join, so the item waits in the queue
-          // where `queue.get` can still show it. Only a caller that asked to
-          // wake gets a turn of its own — the same signal recovery uses at
-          // startup. `inbox.steer` answers with the state the queue had
-          // *before* the append, so the idle test is made on that. The start
-          // belongs here, inside the actor: a caller that read the state first
-          // and steered second would race a turn that ended in between.
-          // `takeIfIdle` reserves the start, and `startTurn` claims it under
-          // its own permit: a turn that began meanwhile gets the item back
-          // in its queue.
-          const before = yield* handle.inbox.steer(item)
-          if (command.wake !== true || Option.isNone(before) || before.value._tag !== "Idle") return
-          const next = yield* handle.inbox.takeIfIdle
-          if (Option.isNone(next)) return
-          yield* handle.startTurn(next.value).pipe(orCleanup(handle))
+        case "Interject":
+          // A mailbox steer carries no client grant: it came from outside the branch.
+          yield* interject(handle, commandId, command, Option.none(), (h) =>
+            startNextQueuedTurnIfIdle(h),
+          )
           return
-        }
       }
     })
 
