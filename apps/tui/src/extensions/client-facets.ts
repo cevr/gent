@@ -20,9 +20,11 @@ import {
   type Session,
   type SessionSnapshot,
   SessionId,
+  type GentClientRpcError,
+  type GentNamespacedClient,
 } from "@gent/core/protocol"
-import type { GentClientRpcError, GentNamespacedClient, GentRuntime } from "@gent/sdk"
-import { omitUndefined, type CapabilityRef, type DriverRef } from "@gent/core/extensions/api"
+import type { GentRuntime } from "@gent/sdk"
+import { omitUndefined, type CapabilityRef } from "@gent/core/extensions/api"
 import { createEffect, createRoot, createSignal, on } from "solid-js"
 import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
@@ -179,7 +181,7 @@ export interface ClientTransport {
   /** Route one agent to a driver; the server rejects unknown driver ids. */
   readonly driverSet: (input: {
     readonly agentName: AgentName
-    readonly driver: DriverRef
+    readonly driverId: string
   }) => Effect.Effect<void, ClientTransportRequestError>
   /** Remove one agent's driver override. */
   readonly driverClear: (input: {
@@ -219,9 +221,9 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   listMessages: (branchId) =>
     shellRead(payload, "message.list", (client) => client.message.list({ branchId })),
   // Drivers belong to the active session's profile: its project drivers count.
-  driverSet: (input) =>
+  driverSet: ({ agentName, driverId }) =>
     shellRead(payload, "driver.set", (client) =>
-      client.driver.set({ ...input, ...activeSessionPayload(payload) }),
+      client.driver.set({ agentName, driver: { id: driverId }, ...activeSessionPayload(payload) }),
     ).pipe(Effect.asVoid),
   driverClear: (input) =>
     shellRead(payload, "driver.clear", (client) => client.driver.clear(input)).pipe(Effect.asVoid),

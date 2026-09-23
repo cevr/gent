@@ -1010,6 +1010,8 @@ Production rule:
 
 A start that finds a confirmed server of another build on the database fails with a message that names its pid; it never signals it. `gent server stop` is the explicit way to stop it.
 
+A fixed port (`apps/server`, `GENT_PORT`) changes only the attach decision. A SQLite server on a fixed port still takes the kernel lock and writes its entry, so the TUI finds and attaches to it; it never attaches to another server itself, and fails with the holder's pid when the database is owned. The standalone server runs until a signal stops it: there is no idle shutdown and no shared launch mode.
+
 `packages/sdk/src/server.ts` resolves SQLite-backed clients through this single shared server record. Workspace isolation comes from the `x-gent-workspace-id` RPC header and workspace-prefixed AgentLoop actor entity IDs, not from per-workspace server processes.
 
 The old SDK worker supervisor and worker-http transport are deleted. E2E coverage that needs process boundaries uses focused server-process fixtures; transport contract tests run through the in-process direct transport.
@@ -1206,9 +1208,9 @@ Other notes:
   overrides, then config `agents[name]`, then the agent definition.
 - `createSession` accepts optional `initialPrompt` + `admission` for atomic create-and-send.
 
-### EventPublisher
+### Publishing events
 
-`EventPublisherLive` (`domain/event.ts`) appends an event to the `EventStore` and delivers the envelope to subscribers; `append` and `deliver` are also separate so a mutation can append inside its transaction and deliver after commit. The same layer provides `ExtensionStatePublisher`, which publishes `ExtensionStateChanged`. Publishing is cwd-agnostic; per-cwd extension behavior comes from the turn's profile.
+Runtime code yields `EventStore` (`domain/event.ts`) directly. `publish` appends an event and delivers the envelope to subscribers; `append` and `deliver` are also separate so a mutation can append inside its transaction and deliver after commit. `ExtensionStatePublisherLive` provides `ExtensionStatePublisher`, the extension facet over the store, which publishes only `ExtensionStateChanged`. Publishing is cwd-agnostic; per-cwd extension behavior comes from the turn's profile.
 
 ### TUI Extensions
 

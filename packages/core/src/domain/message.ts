@@ -25,7 +25,8 @@ interface HeadTailCharsResult {
 }
 
 /**
- * Truncate an array to head + tail. For when all items are known upfront.
+ * Truncate an array to head + tail, `maxItems` in all; an odd limit gives
+ * the extra item to the head. For when all items are known upfront.
  */
 export function headTail<T>(items: readonly T[], maxItems: number = 100): HeadTailResult<T> {
   const total = items.length
@@ -33,11 +34,13 @@ export function headTail<T>(items: readonly T[], maxItems: number = 100): HeadTa
     return { head: [...items], tail: [], truncatedCount: 0 }
   }
 
-  const half = Math.floor(maxItems / 2)
-  const head = items.slice(0, half)
-  const tail = items.slice(-half)
+  const headCount = Math.ceil(maxItems / 2)
+  const tailCount = maxItems - headCount
+  const head = items.slice(0, headCount)
+  // Not `slice(-tailCount)`: `slice(-0)` is every item.
+  const tail = items.slice(total - tailCount)
 
-  return { head, tail, truncatedCount: total - half * 2 }
+  return { head, tail, truncatedCount: total - maxItems }
 }
 
 /**
@@ -777,16 +780,6 @@ export const messagePartsTextLines = (parts: ReadonlyArray<MessagePart>): Readon
     if (Predicate.isUndefined(text)) return []
     return [text]
   })
-
-// oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-export const messageSingleText = (parts: ReadonlyArray<MessagePart>): string | undefined => {
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-  if (parts.length !== 1) return undefined
-  const [part] = parts
-  // oxlint-disable-next-line effect/noNullish -- This projection helper preserves the established public absence contract.
-  if (Predicate.isUndefined(part)) return undefined
-  return messagePartText(part)
-}
 
 export const messagePartsReasoning = (parts: ReadonlyArray<MessagePart>): string =>
   parts.flatMap((part) => messagePartReasoning(part) ?? []).join("")

@@ -1,3 +1,4 @@
+import { type ExtensionHealthIssue, type ExtensionHealthSnapshot } from "@gent/core/protocol"
 import { Database } from "bun:sqlite"
 import {
   Cause,
@@ -17,8 +18,6 @@ import {
 import {
   classifyLogFile,
   dataPaths,
-  type ExtensionHealthIssue,
-  type ExtensionHealthSnapshot,
   Gent,
   resolveLogDir,
   serverLock,

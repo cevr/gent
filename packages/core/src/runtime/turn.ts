@@ -76,7 +76,7 @@ import {
   type AgentEvent,
   ErrorOccurred,
   type EventEnvelope,
-  EventPublisher,
+  EventStore,
   StreamChunk as EventStreamChunk,
   MessageReceived,
   ModelContextProjected,
@@ -395,8 +395,8 @@ export interface CollectedTurnResponse {
 
 const publishEventOrDie = (event: AgentEvent) =>
   Effect.gen(function* () {
-    const eventPublisher = yield* EventPublisher
-    yield* eventPublisher.publish(event).pipe(Effect.orDie)
+    const eventStore = yield* EventStore
+    yield* eventStore.publish(event).pipe(Effect.orDie)
   })
 
 export const collectNormalizedResponse = (params: {
@@ -768,11 +768,11 @@ export const findPersistedToolResults = Effect.fn("TurnHelpers.findPersistedTool
 const commitWithEvent = Effect.fn("TurnHelpers.commitWithEvent")(function* <A, E, R>(
   mutation: Effect.Effect<CommittedMutation<A>, E, R>,
 ) {
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   const storageTransaction = yield* makeStorageTransaction
   const committed = yield* storageTransaction(mutation)
   if (!Predicate.isUndefined(committed.envelope)) {
-    yield* eventPublisher.deliver(committed.envelope)
+    yield* eventStore.deliver(committed.envelope)
   }
   return committed.result
 })
@@ -780,7 +780,7 @@ const commitWithEvent = Effect.fn("TurnHelpers.commitWithEvent")(function* <A, E
 export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageReceived")(
   function* (params: { message: Message }) {
     const messageStorage = yield* MessageStorage
-    const eventPublisher = yield* EventPublisher
+    const eventStore = yield* EventStore
     return yield* commitWithEvent(
       Effect.gen(function* () {
         const existing = yield* messageStorage.getMessage(params.message.id)
@@ -799,7 +799,7 @@ export const persistMessageReceived = Effect.fn("TurnHelpers.persistMessageRecei
         }
 
         yield* messageStorage.createMessageIfAbsent(params.message)
-        const envelope = yield* eventPublisher.append(
+        const envelope = yield* eventStore.append(
           MessageReceived.make({
             message: params.message,
           }),
@@ -824,7 +824,7 @@ const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProjections
   }) {
     if (params.parts.length === 0) return
     const eventStorage = yield* EventStorage
-    const eventPublisher = yield* EventPublisher
+    const eventStore = yield* EventStore
     // Only this step's own results are reconciled, so the anchored window
     // holds every terminal event that could already have closed one.
     const events = yield* eventStorage.listToolResultWindow({
@@ -853,7 +853,7 @@ const reconcileToolProjections = Effect.fn("TurnHelpers.reconcileToolProjections
       }
       let terminal: AgentEvent = ToolCallSucceeded.make(fields)
       if (part.isFailure) terminal = ToolCallFailed.make(fields)
-      yield* eventPublisher.publish(terminal)
+      yield* eventStore.publish(terminal)
       closed.add(toolCallId)
     }
   },
@@ -907,7 +907,7 @@ export const persistAssistantPartsWithBindings = Effect.fn(
 
   const messageStorage = yield* MessageStorage
   const bindingStorage = yield* ToolCallBindingStorage
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   const message = Message.cases.regular.make({
     id: params.messageId,
     sessionId: params.sessionId,
@@ -928,9 +928,7 @@ export const persistAssistantPartsWithBindings = Effect.fn(
       if (Predicate.isUndefined(existing)) {
         stored = yield* messageStorage.createMessageIfAbsent(message)
         inserted = true
-        envelope = Option.some(
-          yield* eventPublisher.append(MessageReceived.make({ message: stored })),
-        )
+        envelope = Option.some(yield* eventStore.append(MessageReceived.make({ message: stored })))
       } else {
         stored = existing
         envelope = Option.fromUndefinedOr(
@@ -961,7 +959,7 @@ export const persistAssistantPartsWithBindings = Effect.fn(
     }),
   )
   if (Option.isSome(committed.envelope)) {
-    yield* eventPublisher.deliver(committed.envelope.value)
+    yield* eventStore.deliver(committed.envelope.value)
   }
   return Option.some(committed.result)
 })
@@ -1133,7 +1131,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   const extensionRegistry = yield* ExtensionRegistry
   const messageStorage = yield* MessageStorage
   const sessionStorage = yield* SessionStorage
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   const hostCtx = yield* CurrentExtensionHostContext
   // The session names the agent every one of its turns runs as. A turn whose
   // session cannot be read fails rather than run as the default agent, which
@@ -1156,7 +1154,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     configAgents: Option.fromUndefinedOr(sessionConfig.agents),
   })
   if (Option.isNone(definition)) {
-    yield* eventPublisher
+    yield* eventStore
       .publish(
         ErrorOccurred.make({
           sessionId: params.sessionId,
@@ -1290,7 +1288,7 @@ type ModelTurnSource = {
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
     effect: Effect.Effect<CollectedTurnResponse, ProviderError | ProviderAuthError, R>,
-  ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R | EventPublisher>
+  ) => Effect.Effect<CollectedTurnResponse, ProviderAuthError, R | EventStore>
 }
 
 const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (params: {
@@ -1310,8 +1308,8 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   const extensionRegistry = yield* ExtensionRegistry
   const publishEventOrDie = (event: ErrorOccurred | ProviderRetrying) =>
     Effect.gen(function* () {
-      const eventPublisher = yield* EventPublisher
-      yield* eventPublisher.publish(event).pipe(Effect.orDie)
+      const eventStore = yield* EventStore
+      yield* eventStore.publish(event).pipe(Effect.orDie)
     })
   const { resolved } = params
   const operations = yield* SessionOperationStorage
@@ -1403,7 +1401,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
     reservedToolTokens: estimateToolSchemaTokens(resolved.tools),
     reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
   })
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   // Summaries and window markers persist the same way every durable message
   // does: once, with a delivered event.
   const persistDurableMessage = (message: Message) => persistMessageReceived({ message })
@@ -1461,7 +1459,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   // Acknowledged only after the projection it shaped succeeded, so a failed
   // projection retries it and a successful one applies it exactly once.
   if (Option.isSome(directive)) yield* ledger.acknowledgeDirective(directive.value)
-  yield* eventPublisher.publish(
+  yield* eventStore.publish(
     ModelContextProjected.make({
       sessionId: params.sessionId,
       branchId: params.branchId,
@@ -1714,7 +1712,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
   Effect.gen(function* () {
     const messageStorage = yield* MessageStorage
     const operations = yield* SessionOperationStorage
-    const eventPublisher = yield* EventPublisher
+    const eventStore = yield* EventStore
     const storageTransaction = yield* makeStorageTransaction
     const configServiceForRun = yield* ConfigService
     const platform = yield* GentPlatform
@@ -2073,9 +2071,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         activeStream: params.activeStream,
       })
 
-      const eventPublisher = yield* EventPublisher
+      const eventStore = yield* EventStore
       const publishEventOrDie = (event: StreamStarted | StreamEnded) =>
-        eventPublisher.publish(event).pipe(Effect.orDie)
+        eventStore.publish(event).pipe(Effect.orDie)
 
       yield* publishEventOrDie(
         StreamStarted.make({
@@ -2273,7 +2271,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             candidate.event.messageId === params.messageId,
         })
         if (!Predicate.isUndefined(envelope)) {
-          yield* eventPublisher.deliver(envelope)
+          yield* eventStore.deliver(envelope)
         }
         return Option.none<TurnReceipt>()
       }
@@ -2291,7 +2289,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const envelope = yield* storageTransaction(
         Effect.gen(function* () {
           yield* messageStorage.updateMessageTurnDuration(params.messageId, durationMs)
-          return yield* eventPublisher.append(
+          return yield* eventStore.append(
             TurnCompleted.make({
               sessionId: scope.sessionId,
               branchId: scope.branchId,
@@ -2307,7 +2305,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           )
         }),
       )
-      yield* eventPublisher.deliver(envelope)
+      yield* eventStore.deliver(envelope)
       return Option.some<TurnReceipt>({ durationMs, metrics })
     })
 

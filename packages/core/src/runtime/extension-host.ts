@@ -100,13 +100,13 @@ import {
   type FreshConfig,
   GENT_CONFIG_DIRECTORY,
   isProjectExtensionDirectoryTrusted,
+  isProjectRootTrusted,
   RuntimeEnvironment,
   type UserConfig,
 } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
   EventId,
-  EventPublisher,
   EventStore,
   EventStoreError,
   ExtensionStatePublisher,
@@ -1081,47 +1081,62 @@ interface ExtensionDirectories {
 }
 
 /**
- * One read of the extension directories. A profile is keyed on it
- * (`extensionScanStamp`) and loaded from it, so its key names exactly the
- * file versions it loaded.
+ * One read of the extension directories and of the project's trust. A
+ * profile is keyed on it (`extensionScanStamp`) and loaded from it, so its
+ * key names exactly the file versions and the trust it loaded with.
  */
 interface ExtensionScan {
   readonly dirs: ExtensionDirectories
   readonly user: DirScan
   readonly project: DirScan
+  /** Whether the user config trusts the project root, so its scope may load. */
+  readonly projectTrusted: boolean
 }
 
 const scanExtensionDirectories = Effect.fn("ExtensionLoader.scanExtensionDirectories")(function* (
   dirs: ExtensionDirectories,
+  projectTrusted: boolean,
 ) {
   const scan: ExtensionScan = {
     dirs,
     user: yield* scanDir(dirs.userDir),
     project: yield* scanDir(dirs.projectDir),
+    projectTrusted,
   }
   return scan
 })
 
-/** The extension directories a profile for these inputs reads, read once. */
-export const scanRuntimeProfileExtensions = (inputs: {
-  readonly cwd: string
-  readonly home: string
-}): Effect.Effect<ExtensionScan, never, FileSystem.FileSystem | Path.Path> =>
+/**
+ * The extension directories a profile for these inputs reads, read once.
+ * Trust comes from the fresh config the caller already read, so a grant or a
+ * revoke reaches the next resolve.
+ */
+export const scanRuntimeProfileExtensions = (
+  inputs: { readonly cwd: string; readonly home: string },
+  trustedProjects: ReadonlyArray<string>,
+): Effect.Effect<ExtensionScan, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
-    return yield* scanExtensionDirectories(extensionDirectories(path, inputs))
+    const dirs = extensionDirectories(path, inputs)
+    return yield* scanExtensionDirectories(
+      dirs,
+      yield* isProjectRootTrusted(trustedProjects, dirs.projectDir),
+    )
   })
 
 /**
- * The extension files a scan found, each with its version, and the paths
- * that failed to read. A profile is keyed on it, so an added, removed, fixed
- * or edited extension file reaches the next resolve.
+ * The extension files a scan found, each with its version, the paths that
+ * failed to read, and the project's trust. A profile is keyed on it, so an
+ * added, removed, fixed or edited extension file, and a trust grant or
+ * revoke, reaches the next resolve.
  */
-const extensionScanStamp = (scan: ExtensionScan): ReadonlyArray<string> =>
-  [scan.user, scan.project].flatMap(({ paths, unreadable }) => [
+const extensionScanStamp = (scan: ExtensionScan): ReadonlyArray<string> => [
+  ...[scan.user, scan.project].flatMap(({ paths, unreadable }) => [
     ...paths.map((file) => `${file.path}@${file.version}`),
     ...unreadable.map((entry) => `!${entry.path}`),
-  ])
+  ]),
+  `?trusted=${String(scan.projectTrusted)}`,
+]
 
 /** The user and project extension directories a profile discovers. */
 const extensionDirectories = (
@@ -1332,7 +1347,9 @@ export const configHealthStatuses = Effect.fn("ExtensionHealth.configHealthStatu
 export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (
   dirs: ExtensionDirectories,
 ) {
-  return yield* loadExtensionScan(yield* scanExtensionDirectories(dirs))
+  return yield* loadExtensionScan(
+    yield* scanExtensionDirectories(dirs, yield* isProjectExtensionDirectoryTrusted(dirs)),
+  )
 })
 
 /** Load the extensions one scan found; see `discoverExtensions`. */
@@ -1344,7 +1361,7 @@ const loadExtensionScan = Effect.fn("ExtensionLoader.loadExtensionScan")(functio
   const project = yield* discoverDir(scan.project, "project")
   const userPaths = user.paths
   const projectPaths = project.paths
-  const projectTrusted = yield* isProjectExtensionDirectoryTrusted(scan.dirs)
+  const projectTrusted = scan.projectTrusted
 
   const loaded: DiscoveredExtension[] = []
   const failed: FailedExtension[] = [...user.failed]
@@ -1588,21 +1605,13 @@ const collectValidationFailures = (
     const byScope = new Map<LoadedExtension["scope"], Map<string, LoadedExtension[]>>()
     for (const ext of extensions) {
       const scopeMap = byScope.get(ext.scope) ?? new Map<string, LoadedExtension[]>()
-      const seen = new Set<string>()
+      // A key named twice by one extension is a package error that
+      // `validateExtensionPackage` owns; here each extension counts once per key.
       for (const item of pickItems(ext.contributions)) {
         const key = getKey(item)
         if (Option.isNone(key)) continue
-        // Resolution keeps one entry per key, so one extension naming a key
-        // twice would silently lose all but the last.
-        if (seen.has(key.value)) {
-          addFailure(
-            ext,
-            `Duplicate ${label} "${key.value}" in extension "${ext.manifest.id}" (scope "${ext.scope}")`,
-          )
-          continue
-        }
-        seen.add(key.value)
         const existing = scopeMap.get(key.value) ?? []
+        if (existing.includes(ext)) continue
         existing.push(ext)
         scopeMap.set(key.value, existing)
       }
@@ -1826,7 +1835,7 @@ const buildSessionProfile = (params: {
 // ── session-profile ─────────────────────────────────────────────────────────
 
 /**
- * SessionProfile — per-(workspace,cwd) live profile for shared server mode.
+ * SessionProfile — per-(workspace,cwd) live profile: one server serves many workspaces.
  *
  * Each cache entry is built once. Declarations are loaded, every extension's
  * process resources are built into a scope that closes with the server, and
@@ -2048,7 +2057,7 @@ export class SessionProfileCache extends Context.Service<
         const startProcessResources = (
           place: string,
           extensions: ReadonlyArray<LoadedExtension>,
-          files: ReadonlyArray<string>,
+          scan: ExtensionScan,
           held: Array<string>,
           restore: Restore,
         ): Effect.Effect<StartedProcessResources> =>
@@ -2057,16 +2066,21 @@ export class SessionProfileCache extends Context.Service<
             const chain = [place]
             const active: Array<LoadedExtension> = []
             const failed: Array<FailedExtension> = []
+            const versions = new Map<string, string>()
+            for (const file of [...scan.user.paths, ...scan.project.paths]) {
+              versions.set(file.path, file.version)
+            }
             for (const extension of sortExtensionsByScope(extensions)) {
               if (collectResourceEntries([extension], "process").length === 0) {
                 active.push(extension)
                 continue
               }
-              const source = Option.getOrElse(
-                Option.fromUndefinedOr(
-                  files.find((file) => file.startsWith(`${extension.sourcePath}@`)),
-                ),
-                () => extension.sourcePath,
+              const source = Option.match(
+                Option.fromUndefinedOr(versions.get(extension.sourcePath)),
+                {
+                  onNone: () => extension.sourcePath,
+                  onSome: (version) => `${extension.sourcePath}@${version}`,
+                },
               )
               const identity = `${extension.scope}:${extension.manifest.id}:${source}`
               const key = [...chain, identity].join("\u0000")
@@ -2124,7 +2138,7 @@ export class SessionProfileCache extends Context.Service<
           cwd: string,
           fresh: FreshConfig,
           declarations: RuntimeProfileDeclarations,
-          files: ReadonlyArray<string>,
+          scan: ExtensionScan,
           restore: Restore,
         ) =>
           Effect.gen(function* () {
@@ -2134,7 +2148,7 @@ export class SessionProfileCache extends Context.Service<
               const started = yield* startProcessResources(
                 place,
                 declarations.extensionDeclarations.active,
-                files,
+                scan,
                 held,
                 restore,
               )
@@ -2207,7 +2221,7 @@ export class SessionProfileCache extends Context.Service<
               aliases.set(list, key)
               return found.value
             }
-            const built = yield* buildProfile(place, cwd, fresh, declarations, files, restore).pipe(
+            const built = yield* buildProfile(place, cwd, fresh, declarations, scan, restore).pipe(
               Effect.orDie,
             )
             const entry: ProfileEntry = { key, place, ...built }
@@ -2271,9 +2285,10 @@ export class SessionProfileCache extends Context.Service<
                 // edit cannot put the older profile back.
                 const fresh = yield* restore(configService.getFresh(canonicalCwd))
                 const scan = yield* restore(
-                  scanRuntimeProfileExtensions(inputsFor(canonicalCwd)).pipe(
-                    Effect.provideContext(platformServicesContext),
-                  ),
+                  scanRuntimeProfileExtensions(
+                    inputsFor(canonicalCwd),
+                    fresh.config.trustedProjects ?? [],
+                  ).pipe(Effect.provideContext(platformServicesContext)),
                 )
                 const list = listKey(
                   place,
@@ -2347,7 +2362,7 @@ export class SessionProfileCache extends Context.Service<
 const makeApprovalInteractionService: Effect.Effect<
   InteractionService,
   never,
-  EventPublisher | GentPlatform | InteractionStorage
+  EventStore | GentPlatform | InteractionStorage
 > = Effect.gen(function* () {
   const store = yield* InteractionStorage
   const storage: InteractionStorageConfig = {
@@ -2371,10 +2386,10 @@ const makeApprovalInteractionService: Effect.Effect<
           ),
         ),
   }
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   return yield* makeInteractionService({
     onPresent: (requestId, params, ctx) =>
-      eventPublisher.publish(
+      eventStore.publish(
         InteractionPresented.make({
           sessionId: ctx.sessionId,
           branchId: ctx.branchId,
@@ -2385,7 +2400,7 @@ const makeApprovalInteractionService: Effect.Effect<
       ),
     // A dialog closed without an answer is dismissed, not declined.
     onDismiss: (requestId, ctx) =>
-      eventPublisher
+      eventStore
         .publish(
           InteractionResolved.make({
             sessionId: ctx.sessionId,
@@ -2409,11 +2424,8 @@ const makeApprovalInteractionService: Effect.Effect<
 export class ApprovalService extends Context.Service<ApprovalService, InteractionService>()(
   "@gent/core/src/runtime/extension-host/ApprovalService",
 ) {
-  static Live: Layer.Layer<
-    ApprovalService,
-    never,
-    EventPublisher | GentPlatform | InteractionStorage
-  > = Layer.effect(ApprovalService, makeApprovalInteractionService)
+  static Live: Layer.Layer<ApprovalService, never, EventStore | GentPlatform | InteractionStorage> =
+    Layer.effect(ApprovalService, makeApprovalInteractionService)
 
   static Test = (decisions?: ReadonlyArray<ApprovalDecision>): Layer.Layer<ApprovalService> => {
     const queue = [...(decisions ?? [{ approved: true }])]
@@ -2570,7 +2582,6 @@ export const makeExtensionHostContextProvider = (
     const host = input.host
     const control = via(Option.fromUndefinedOr(input.sessionControl), "SessionControl")
     const approval = yield* facet(ApprovalService, "ApprovalService")
-    const publisher = yield* facet(EventPublisher, "EventPublisher")
     const sql = yield* facet(SqlClient.SqlClient, "SqlClient")
     const sessions = yield* facet(SessionStorage, "SessionStorage")
     const branches = yield* facet(BranchStorage, "BranchStorage")
@@ -2919,12 +2930,12 @@ export const makeExtensionHostContextProvider = (
               const envelope = yield* sql((client) =>
                 messages((store) => store.createMessage(message)).pipe(
                   Effect.andThen(
-                    publisher((events) => events.append(MessageReceived.make({ message }))),
+                    eventStore((events) => events.append(MessageReceived.make({ message }))),
                   ),
                   client.withTransaction,
                 ),
               )
-              yield* publisher((events) => events.deliver(envelope))
+              yield* eventStore((events) => events.deliver(envelope))
             }),
           ),
       },

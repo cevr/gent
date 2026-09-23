@@ -1,5 +1,4 @@
 import {
-  Clock,
   Context,
   Crypto,
   DateTime,
@@ -9,7 +8,6 @@ import {
   Option,
   Path,
   Predicate,
-  Ref,
   Schema,
   type Scope,
   Stream,
@@ -93,9 +91,8 @@ import {
   BranchSwitched,
   type EventEnvelope,
   EventId,
-  EventPublisher,
-  EventPublisherLive,
   EventStore,
+  ExtensionStatePublisherLive,
   type EventStoreError,
   InteractionResolved,
   SessionNameUpdated,
@@ -168,56 +165,18 @@ const clientSteer = (command: TransportSteerCommand): TransportSteerCommand => {
   return { ...command, metadata: clientMetadata(command.metadata) }
 }
 
-// ── connection-tracker ──────────────────────────────────────────────────────
-
-/**
- * ConnectionTracker — tracks active WebSocket connections for idle shutdown.
- */
-
-export interface ConnectionTrackerService {
-  readonly increment: Effect.Effect<void>
-  readonly decrement: Effect.Effect<void>
-  readonly count: Effect.Effect<number>
-}
-
-export class ConnectionTracker extends Context.Service<
-  ConnectionTracker,
-  ConnectionTrackerService
->()("@gent/core/src/server/server/ConnectionTracker") {
-  static Live: Layer.Layer<ConnectionTracker> = Layer.effect(
-    ConnectionTracker,
-    Effect.gen(function* () {
-      const ref = yield* Ref.make(0)
-      return ConnectionTracker.of({
-        increment: Ref.update(ref, (n) => n + 1),
-        decrement: Ref.update(ref, (n) => Math.max(0, n - 1)),
-        count: Ref.get(ref),
-      })
-    }),
-  )
-}
-
 // ── server-identity ─────────────────────────────────────────────────────────
 
 /**
- * ServerIdentity — provides server identity info for status/identity routes.
- * Populated by the server app at startup.
+ * What `/_gent/identity` serves, verbatim. Registry validation compares it
+ * field for field, so it holds nothing that varies across a restart.
  */
-
 export interface ServerIdentityApi {
   readonly serverId: string
   readonly pid: number
   readonly hostname: string
   readonly dbPath: string
   readonly buildFingerprint: string
-  readonly startedAt: number
-}
-
-export class ServerIdentity extends Context.Service<ServerIdentity, ServerIdentityApi>()(
-  "@gent/core/src/server/server/ServerIdentity",
-) {
-  static Live = (config: ServerIdentityApi): Layer.Layer<ServerIdentity> =>
-    Layer.succeed(ServerIdentity, ServerIdentity.of(config))
 }
 
 // ── session-utils ───────────────────────────────────────────────────────────
@@ -376,7 +335,6 @@ const makeSessionMutationsService: Effect.Effect<
   never,
   | SqlClient.SqlClient
   | EventStore
-  | EventPublisher
   | SessionStorage
   | BranchStorage
   | MessageStorage
@@ -402,7 +360,7 @@ const makeSessionMutationsService: Effect.Effect<
    * that must not hold the write lock, and that a replay must not repeat,
    * because the receipt already answers the retry.
    */
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   const once = <A, E, R>(
     operation: DurableOperation<A>,
     { requestId }: { readonly requestId?: RequestId },
@@ -437,13 +395,12 @@ const makeSessionMutationsService: Effect.Effect<
         }),
       )
       if (Option.isNone(committed.envelope)) return { result: committed.result, fresh: false }
-      yield* eventPublisher.deliver(committed.envelope.value)
+      yield* eventStore.deliver(committed.envelope.value)
       return { result: committed.result, fresh: true }
     })
   const platform = yield* GentPlatform
   const sessionRuntime = yield* SessionRuntime
   const governance = yield* AgentLoopSessionGovernance
-  const eventStore = yield* EventStore
 
   /**
    * Run `mutation` (its reads and its writes) in one storage transaction and
@@ -461,11 +418,11 @@ const makeSessionMutationsService: Effect.Effect<
         Effect.gen(function* () {
           const { result, events } = yield* mutation
           const envelopes: Array<EventEnvelope> = []
-          for (const event of events) envelopes.push(yield* eventPublisher.append(event))
+          for (const event of events) envelopes.push(yield* eventStore.append(event))
           return { result, envelopes }
         }),
       )
-      for (const envelope of committed.envelopes) yield* eventPublisher.deliver(envelope)
+      for (const envelope of committed.envelopes) yield* eventStore.deliver(envelope)
       return committed.result
     })
 
@@ -734,7 +691,7 @@ const makeSessionMutationsService: Effect.Effect<
             )
           }
         }
-        const envelope = yield* eventPublisher.append(SessionStarted.make({ sessionId, branchId }))
+        const envelope = yield* eventStore.append(SessionStarted.make({ sessionId, branchId }))
         const result: StoredCreateSessionResult = {
           sessionId,
           branchId,
@@ -774,7 +731,7 @@ const makeSessionMutationsService: Effect.Effect<
           createdAt: yield* DateTime.nowAsDate,
         })
         yield* branchStorage.createBranch(branch)
-        const envelope = yield* eventPublisher.append(
+        const envelope = yield* eventStore.append(
           BranchCreated.make({
             sessionId: branch.sessionId,
             branchId: branch.id,
@@ -828,7 +785,7 @@ const makeSessionMutationsService: Effect.Effect<
             }),
           )
         }
-        const envelope = yield* eventPublisher.append(
+        const envelope = yield* eventStore.append(
           BranchCreated.make({
             sessionId: branch.sessionId,
             branchId: branch.id,
@@ -874,7 +831,7 @@ const makeSessionMutationsService: Effect.Effect<
           input.toBranchId,
           yield* DateTime.nowAsDate,
         )
-        const envelope = yield* eventPublisher.append(
+        const envelope = yield* eventStore.append(
           BranchSwitched.make({
             sessionId: input.sessionId,
             fromBranchId: input.fromBranchId,
@@ -1092,7 +1049,7 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
 ) {
   const approvalService = yield* ApprovalService
   const sessionRuntime = yield* SessionRuntime
-  const eventPublisher = yield* EventPublisher
+  const eventStore = yield* EventStore
   yield* resolveExistingSessionBranch({
     sessionId: input.sessionId,
     branchId: input.branchId,
@@ -1121,7 +1078,7 @@ const respondInteraction = Effect.fn("InteractionCommands.respond")(function* (
     requestId: input.requestId,
   })
   // 3. Publish resolution event
-  yield* eventPublisher
+  yield* eventStore
     .publish(
       InteractionResolved.make({
         sessionId: input.sessionId,
@@ -1195,8 +1152,6 @@ const RpcHandlers = GentRpcs.toLayer(
     const relationshipStorage = yield* RelationshipStorage
     const branchStorage = yield* BranchStorage
     const messageStorage = yield* MessageStorage
-    const connectionTrackerOpt = yield* Effect.serviceOption(ConnectionTracker)
-    const serverIdentity = yield* ServerIdentity
     // Touching these Tags at layer-build keeps their requirements visible on the
     // RpcHandlers layer. RpcGroup.toLayer erases handler-residual R, so Tags only
     // yielded inside returned handler Effects would otherwise become deferred
@@ -1410,13 +1365,10 @@ const RpcHandlers = GentRpcs.toLayer(
         Effect.gen(function* () {
           const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
           const resolved = registry.getResolved()
-          if (!Predicate.isUndefined(driver.id)) {
-            const found = resolved.modelDrivers.get(driver.id)
-            if (Predicate.isUndefined(found)) {
-              return yield* new NotFoundError({
-                message: `Unknown model driver "${driver.id}"`,
-              })
-            }
+          if (!resolved.modelDrivers.has(driver.id)) {
+            return yield* new NotFoundError({
+              message: `Unknown model driver "${driver.id}"`,
+            })
           }
           yield* configService.setDriverOverride(agentName, driver)
         }).pipe(Effect.scoped),
@@ -1581,26 +1533,6 @@ const RpcHandlers = GentRpcs.toLayer(
               }),
           )
         }).pipe(Effect.scoped),
-
-      // ----------------------------------------------------------------------
-      // Runtime status
-      // ----------------------------------------------------------------------
-      "runtime.status": () =>
-        Effect.gen(function* () {
-          let connectionCount = 0
-          if (Option.isSome(connectionTrackerOpt)) {
-            connectionCount = yield* connectionTrackerOpt.value.count
-          }
-          return {
-            serverId: serverIdentity.serverId,
-            pid: serverIdentity.pid,
-            hostname: serverIdentity.hostname,
-            uptime: (yield* Clock.currentTimeMillis) - serverIdentity.startedAt,
-            connectionCount,
-            dbPath: serverIdentity.dbPath,
-            buildFingerprint: serverIdentity.buildFingerprint,
-          }
-        }),
     }
   }),
 )
@@ -1627,7 +1559,7 @@ interface DependencyOverrides {
   readonly approvalLayer?: Layer.Layer<
     ApprovalService,
     never,
-    EventPublisher | GentPlatform | InteractionStorage
+    EventStore | GentPlatform | InteractionStorage
   >
   readonly configServiceLayer?: Layer.Layer<ConfigService>
   readonly modelRegistryLayer?: Layer.Layer<ModelRegistry>
@@ -1817,8 +1749,7 @@ export const createDependencies = (config: DependenciesConfig) => {
 
   const modelResolverLive = makeModelResolverLayer(config, authDeps)
 
-  const eventPublisherLive = EventPublisherLive
-  const eventServicesLive = Layer.provideMerge(eventPublisherLive, baseEventStoreLive)
+  const eventServicesLive = Layer.provideMerge(ExtensionStatePublisherLive, baseEventStoreLive)
 
   const baseServicesLive = Layer.provideMerge(
     Layer.mergeAll(
@@ -1942,9 +1873,6 @@ export const createDependencies = (config: DependenciesConfig) => {
  *   - `ws.connect` log with url + remoteAddress on open
  *   - `ws.session` span wrapping the connection lifetime
  *   - `ws.disconnect` log on close
- *
- * Also increments/decrements `ConnectionTracker` when present, so the
- * server can shut down on idle.
  */
 const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRouter.use((router) =>
   router.addGlobalMiddleware((handler) =>
@@ -1954,9 +1882,6 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
       const isUpgrade = upgradeHeader?.toLowerCase() === "websocket"
 
       if (!isUpgrade) return yield* handler
-
-      const trackerOpt = yield* Effect.serviceOption(ConnectionTracker)
-      if (Option.isSome(trackerOpt)) yield* trackerOpt.value.increment
 
       yield* Effect.logInfo("ws.connect").pipe(
         Effect.annotateLogs({
@@ -1973,15 +1898,12 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
           },
         }),
         Effect.ensuring(
-          Effect.gen(function* () {
-            if (Option.isSome(trackerOpt)) yield* trackerOpt.value.decrement
-            yield* Effect.logInfo("ws.disconnect").pipe(
-              Effect.annotateLogs({
-                url: request.url,
-                remoteAddress: request.remoteAddress ?? "unknown",
-              }),
-            )
-          }),
+          Effect.logInfo("ws.disconnect").pipe(
+            Effect.annotateLogs({
+              url: request.url,
+              remoteAddress: request.remoteAddress ?? "unknown",
+            }),
+          ),
         ),
       )
     }),
@@ -1991,12 +1913,8 @@ const wsTracingLayer: Layer.Layer<never, never, HttpRouter.HttpRouter> = HttpRou
 // ── Route Assembly ──
 
 interface ServerRoutesConfig {
-  /**
-   * The identity `/_gent/identity` serves, verbatim. `startedAt` is excluded:
-   * registry validation compares a stable identity, and a restart-varying
-   * field would make every comparison a mismatch.
-   */
-  readonly identity: Omit<ServerIdentityApi, "startedAt">
+  /** The identity `/_gent/identity` serves, verbatim. */
+  readonly identity: ServerIdentityApi
 }
 
 /**

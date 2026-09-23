@@ -15,13 +15,7 @@ import {
   type Scope,
   Stream,
 } from "effect"
-import {
-  EventId,
-  type EventPublisher,
-  EventStore,
-  EventStoreError,
-  makeEventStore,
-} from "../domain/event.js"
+import { EventId, EventStore, EventStoreError, makeEventStore } from "../domain/event.js"
 import {
   type AgentLoopQueueStorage,
   type BranchStorage,
@@ -59,12 +53,8 @@ import type { PromptSection } from "../domain/capability.js"
 import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "./agent-loop.js"
 import {
   AgentLoopError,
-  type DequeueFollowUpPayload,
-  dequeueFollowUpOn,
   entityIdOf,
   listWorkspaceLoops,
-  type QueueFollowUpPayload,
-  queueFollowUpOn,
   type SendUserMessagePayload,
   type SessionRuntimeState,
   steerLoop,
@@ -141,7 +131,7 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
 // ── request-dedup ───────────────────────────────────────────────────────────
 
 // Dedup cache: bound success entries by both time and count so a
-// long-running shared server does not accumulate one entry per user
+// long-running server does not accumulate one entry per user
 // prompt + per session create indefinitely.
 const DEDUP_SUCCESS_TTL: Duration.Input = Duration.seconds(60)
 const DEDUP_MAX_ENTRIES = 1024
@@ -166,8 +156,6 @@ const DEDUP_MAX_ENTRIES = 1024
 export const makeRequestDeduper = <In, A, E>(opts: {
   readonly body: (input: In) => Effect.Effect<A, E>
   readonly keyOf: (input: In) => Option.Option<string>
-  readonly maxEntries?: number
-  readonly successTtl?: Duration.Input
 }): Effect.Effect<(input: In) => Effect.Effect<A, E>> =>
   Effect.gen(function* () {
     // Body bridge: `Cache.lookup` takes only the key, but each call has a
@@ -176,9 +164,6 @@ export const makeRequestDeduper = <In, A, E>(opts: {
     // and removes it on exit via `Effect.ensuring`, which keeps `pending`
     // free of stale-body leaks under interruption and same-key races.
     const pending = yield* Ref.make(new Map<string, Effect.Effect<A, E>>())
-    const successTtl = Duration.fromInputUnsafe(
-      Option.getOrElse(Option.fromUndefinedOr(opts.successTtl), () => DEDUP_SUCCESS_TTL),
-    )
     const cache = yield* Cache.makeWith<string, A, E>(
       (key) =>
         Effect.gen(function* () {
@@ -188,13 +173,10 @@ export const makeRequestDeduper = <In, A, E>(opts: {
           return yield* body.value
         }),
       {
-        capacity: Option.getOrElse(
-          Option.fromUndefinedOr(opts.maxEntries),
-          () => DEDUP_MAX_ENTRIES,
-        ),
+        capacity: DEDUP_MAX_ENTRIES,
         timeToLive: (exit) => {
           if (Exit.isSuccess(exit)) {
-            return successTtl
+            return DEDUP_SUCCESS_TTL
           }
           return Duration.zero
         },
@@ -324,7 +306,7 @@ type SessionRuntimeLayerRequirements =
   | ClusterMessageStorage.MessageStorage
   | EventStorage
   | EventStore
-  | EventPublisher
+  | EventStore
   | ExtensionRegistry
   | ModelRegistry
   | GentPlatform
@@ -355,11 +337,6 @@ export interface SessionRuntimeService {
   readonly respondInteraction: (
     input: SessionRuntimeTarget & { readonly requestId: InteractionRequestId },
   ) => Effect.Effect<void, SessionRuntimeError>
-  readonly queueFollowUp: (input: QueueFollowUpPayload) => Effect.Effect<void, SessionRuntimeError>
-  /** True when the follow-up left the queue; false when it was absent or already running. */
-  readonly dequeueFollowUp: (
-    input: DequeueFollowUpPayload,
-  ) => Effect.Effect<boolean, SessionRuntimeError>
   readonly requestExtension: (
     input: ExtensionRequestPayload,
   ) => Effect.Effect<unknown, SessionRuntimeError>
@@ -532,17 +509,6 @@ const makeLiveSessionRuntime = Effect.gen(function* () {
     respondInteraction: (input) =>
       actorCommand("respondInteraction", input, (ref, { workspaceId }) =>
         ref.execute(AgentLoopActor.RespondInteraction.make({ ...input, workspaceId })),
-      ),
-
-    queueFollowUp: (input) =>
-      actorCommand("queueFollowUp", input, () =>
-        queueFollowUpOn(input).pipe(Effect.provideContext(loopClientServices)),
-      ),
-
-    dequeueFollowUp: (input) =>
-      requireSessionBranch(input).pipe(
-        Effect.andThen(dequeueFollowUpOn(input).pipe(Effect.provideContext(loopClientServices))),
-        Effect.catchCause((cause) => Effect.fail(wrapError("dequeueFollowUp failed", cause))),
       ),
 
     requestExtension: (input) =>

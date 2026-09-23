@@ -27,6 +27,7 @@ import {
   ToolCallId,
   ToolInteraction,
   OutputCut,
+  emptyQueueSnapshot,
 } from "@gent/core/protocol"
 import { ExtensionId } from "@gent/core/extensions/api"
 import {
@@ -40,7 +41,6 @@ import {
   transitionSessionState,
   useClient,
 } from "../src/client"
-import { emptyQueueSnapshot } from "@gent/sdk"
 import { createRoot, createSignal, onMount } from "solid-js"
 import { createMockClient, createMockRuntime, renderWithProviders } from "./render-harness-boundary"
 import { inRuntime, waitForFrame, waitUntil } from "./helpers-boundary"

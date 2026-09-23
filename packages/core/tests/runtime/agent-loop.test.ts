@@ -43,6 +43,7 @@ import {
   wantsWakeOnRecovery,
 } from "../../src/runtime/agent-loop"
 import { TestClock } from "effect/testing"
+import { SqlClient } from "effect/unstable/sql"
 import {
   AgentDefinition,
   AgentName,
@@ -129,7 +130,7 @@ import {
   makeAgentLoopService,
   makeExtRegistry,
   makeLayer,
-  makeLayerWithEventPublisher,
+  makeLayerWithEventStore,
   makeCountingEventStore,
   makeLayerWithEvents,
   makeLiveToolLayer,
@@ -149,9 +150,9 @@ import {
   AgentEvent,
   EventEnvelope,
   EventId,
-  EventPublisher,
-  EventPublisherLive,
+  EventStore,
   EventStoreError,
+  ExtensionStatePublisherLive,
   MessageReceived,
   ToolCallStarted,
   ToolCallSucceeded,
@@ -2195,6 +2196,8 @@ const makeHarness = (
     readonly answered?: ReadonlySet<InteractionRequestId>
     readonly sessionAgent?: Effect.Effect<AgentName, AgentLoopError>
     readonly completeFailedTurn?: (state: RunningState) => Effect.Effect<void>
+    /** Settle the in-flight slot after each turn, as the real `runTurn` does. */
+    readonly settles?: boolean
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -2243,6 +2246,7 @@ const makeHarness = (
           yield* Ref.update(ranTurns, (ids) => [...ids, String(state.message.id)])
           const interrupted = yield* turnInterruption.interrupted
           yield* Ref.update(interruptedTurns, (all) => [...all, interrupted])
+          if (options.settles === true) yield* inbox.settle(state.message.id).pipe(Effect.orDie)
           return TurnOutcome.cases.Done.make({})
         }),
       sessionAgent: options.sessionAgent ?? Effect.succeed(DEFAULT_AGENT_NAME),
@@ -2252,7 +2256,9 @@ const makeHarness = (
     const setPhase = (next: LoopState) => inbox.moveToPhase(next)
     return {
       worker,
+      inbox,
       phase,
+      loop: TxSubscriptionRef.get(loopRef),
       queue,
       setPhase,
       ranTurns,
@@ -2351,6 +2357,137 @@ describe("a turn whose agent cannot be read", () => {
         expect((yield* Ref.get(harness.interruptedTurns))[0]).toBe(false)
         yield* Fiber.interrupt(loop)
       }),
+  )
+})
+
+describe("a wake and a submit that race for an idle loop", () => {
+  it.live("the submit a wake beat to the start is queued and runs next", () =>
+    Effect.gen(function* () {
+      const steered = queuedItem("steer-from-slash-command")
+      const submitted = queuedItem("user-submit")
+      const harness = yield* makeHarness(
+        { state: buildIdleState(), queue: { ...emptyLoopQueueState(), steering: [steered] } },
+        { settles: true },
+      )
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      // An extension request holds the loop while it runs.
+      yield* harness.sideMutationSemaphore.take(1)
+      // Its own-branch wake takes the item, then waits for the permit.
+      const wake = yield* Effect.forkChild(
+        Effect.gen(function* () {
+          const next = yield* harness.inbox.takeIfIdle
+          if (Option.isSome(next)) yield* harness.worker.startTurn(next.value)
+        }),
+      )
+      yield* harness.queue.pipe(
+        Effect.repeat({
+          until: (queue) => Predicate.isNotUndefined(queue.inFlight),
+          schedule: Schedule.spaced("1 millis"),
+        }),
+        Effect.timeout("2 seconds"),
+      )
+      // A user's Submit arrives in that window.
+      const reserved = yield* harness.inbox.admit(submitted, { queueOnly: false })
+      // The wake reserved the start when it took its item, so the submit queues.
+      expect(Option.isNone(reserved)).toBe(true)
+      const submit = yield* Effect.forkChild(
+        Effect.gen(function* () {
+          if (Option.isSome(reserved)) yield* harness.worker.startTurn(submitted)
+        }),
+      )
+      yield* harness.sideMutationSemaphore.release(1)
+      yield* Fiber.join(wake)
+      yield* Fiber.join(submit)
+      yield* Ref.get(harness.ranTurns).pipe(
+        Effect.repeat({ until: (ids) => ids.length >= 2, schedule: Schedule.spaced("5 millis") }),
+        Effect.timeout("1 second"),
+        Effect.ignore,
+      )
+      expect(yield* Ref.get(harness.ranTurns)).toEqual(["steer-from-slash-command", "user-submit"])
+      yield* Fiber.interrupt(loop)
+    }),
+  )
+
+  it.effect("a start that finds the loop busy puts its item back in the queue", () =>
+    Effect.gen(function* () {
+      const running = queuedItem("running")
+      const late = queuedItem("late")
+      const harness = yield* makeHarness({
+        state: buildRunningState(running, { startedAtMs: 1 }),
+        queue: emptyLoopQueueState(),
+      })
+      yield* harness.worker.startTurn(late)
+      expect((yield* harness.queue).followUp.map((item) => String(item.message.id))).toEqual([
+        "late",
+      ])
+      expect((yield* harness.phase)._tag).toBe("Running")
+    }),
+  )
+})
+
+describe("a start interrupted while it waits for the loop", () => {
+  // Each item runs exactly once; an idle admit starts ahead of queued items.
+  const runsOf = (harness: Effect.Success<ReturnType<typeof makeHarness>>, count: number) =>
+    Ref.get(harness.ranTurns).pipe(
+      Effect.repeat({
+        until: (ids) => ids.length >= count,
+        schedule: Schedule.spaced("5 millis"),
+      }),
+      Effect.timeout("2 seconds"),
+    )
+
+  it.live("an idle take strands nothing, and both items run once", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("queued-first")
+      const second = queuedItem("submitted-second")
+      const harness = yield* makeHarness(
+        { state: buildIdleState(), queue: { ...emptyLoopQueueState(), followUp: [first] } },
+        { settles: true },
+      )
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      // Something holds the loop, so the starter waits for it.
+      yield* harness.sideMutationSemaphore.take(1)
+      const starter = yield* Effect.forkChild(harness.worker.startNextIfIdle(), {
+        startImmediately: true,
+      })
+      yield* Fiber.interrupt(starter)
+      yield* harness.sideMutationSemaphore.release(1)
+
+      const loopState = yield* harness.loop
+      expect(loopState.startingState).toBeUndefined()
+      yield* harness.worker.admitAndStart(second, { queueOnly: false })
+      yield* harness.worker.startNextIfIdle()
+      expect((yield* runsOf(harness, 2)).toSorted()).toEqual(["queued-first", "submitted-second"])
+      expect((yield* harness.queue).followUp).toEqual([])
+      yield* Fiber.interrupt(loop)
+    }),
+  )
+
+  it.live("an admitted start strands nothing, and both items run once", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("admitted-first")
+      const second = queuedItem("submitted-second")
+      const harness = yield* makeHarness(
+        { state: buildIdleState(), queue: emptyLoopQueueState() },
+        { settles: true },
+      )
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      yield* harness.sideMutationSemaphore.take(1)
+      const starter = yield* Effect.forkChild(
+        harness.worker.admitAndStart(first, { queueOnly: false }),
+        { startImmediately: true },
+      )
+      yield* Fiber.interrupt(starter)
+      yield* harness.sideMutationSemaphore.release(1)
+
+      const loopState = yield* harness.loop
+      expect(loopState.startingState).toBeUndefined()
+      yield* harness.worker.admitAndStart(second, { queueOnly: false })
+      yield* harness.worker.startNextIfIdle()
+      expect((yield* runsOf(harness, 2)).toSorted()).toEqual(["admitted-first", "submitted-second"])
+      expect((yield* harness.queue).followUp).toEqual([])
+      yield* Fiber.interrupt(loop)
+    }),
   )
 })
 
@@ -4238,13 +4375,13 @@ const makeRuntimeLayer = (
     GentPlatform.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, baseDeps)
   const approvalLayer = ApprovalService.Live.pipe(
-    Layer.provide(Layer.merge(baseDeps, eventPublisherLayer)),
+    Layer.provide(Layer.merge(baseDeps, statePublisherLayer)),
   )
   return Layer.provideMerge(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.mergeAll(baseDeps, eventPublisherLayer, approvalLayer, ProcessLocalToolReplay.Live),
+    Layer.mergeAll(baseDeps, statePublisherLayer, approvalLayer, ProcessLocalToolReplay.Live),
   )
 }
 
@@ -6740,8 +6877,10 @@ describe("streaming", () => {
         [textDeltaPart("not committed"), finishPart({ finishReason: "stop" })],
       ])
       const failingPublisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) => {
             if (event._tag === "MessageReceived" && event.message.role === "assistant") {
               return Effect.fail(new EventStoreError({ message: "append failed" }))
@@ -6770,7 +6909,7 @@ describe("streaming", () => {
         const assistant = yield* messageStorage.getMessage(assistantMessageIdForTurn(message.id, 1))
         expect(exit._tag).toBe("Failure")
         expect(assistant).toBeUndefined()
-      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
+      }).pipe(Effect.provide(makeLayerWithEventStore(providerLayer, failingPublisherLayer)))
     }),
   )
   it.live("a turn a phase failure stops ends with one failed TurnCompleted after its error", () =>
@@ -6783,8 +6922,10 @@ describe("streaming", () => {
       // The assistant line's append fails: a storage failure inside a turn
       // phase, which the model stream never sees.
       const failingPublisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) => {
             if (event._tag === "MessageReceived" && event.message.role === "assistant") {
               return Effect.fail(new EventStoreError({ message: "append failed" }))
@@ -6823,7 +6964,7 @@ describe("streaming", () => {
         // The stored duration is the receipt's mark: the turn is complete.
         const stored = yield* messageStorage.getMessage(message.id)
         expect(stored?.turnDurationMs).toBeDefined()
-      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
+      }).pipe(Effect.provide(makeLayerWithEventStore(providerLayer, failingPublisherLayer)))
     }),
   )
   it.live("a failure after the turn stored its receipt appends no second TurnCompleted", () =>
@@ -6835,8 +6976,10 @@ describe("streaming", () => {
       // The receipt is stored, then its delivery breaks: the turn fails after
       // its completion is durable.
       const publisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) =>
             Effect.gen(function* () {
               yield* Ref.update(appended, (events) => [...events, event])
@@ -6866,7 +7009,7 @@ describe("streaming", () => {
         )
         expect(completions).toEqual([expect.objectContaining({ messageId: message.id })])
         expect(completions[0]).not.toHaveProperty("streamFailed", true)
-      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, publisherLayer)))
+      }).pipe(Effect.provide(makeLayerWithEventStore(providerLayer, publisherLayer)))
     }),
   )
   it.live("a waiting caller is not failed by an earlier turn's failure", () =>
@@ -6895,8 +7038,10 @@ describe("streaming", () => {
         )
       })
       const failFirstAssistant = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) => {
             if (
               event._tag === "MessageReceived" &&
@@ -6936,7 +7081,7 @@ describe("streaming", () => {
         expect(streamCalls).toBe(2)
       }).pipe(
         Effect.timeout("4 seconds"),
-        Effect.provide(makeLayerWithEventPublisher(providerLayer, failFirstAssistant)),
+        Effect.provide(makeLayerWithEventStore(providerLayer, failFirstAssistant)),
       )
     }),
   )
@@ -7015,8 +7160,10 @@ describe("streaming", () => {
         )
       })
       const failSecondUserMessage = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) => {
             if (event._tag === "MessageReceived" && event.message.id === second.id) {
               secondAttempts += 1
@@ -7063,7 +7210,7 @@ describe("streaming", () => {
         expect(streamCalls).toBe(2)
       }).pipe(
         Effect.timeout("4 seconds"),
-        Effect.provide(makeLayerWithEventPublisher(providerLayer, failSecondUserMessage)),
+        Effect.provide(makeLayerWithEventStore(providerLayer, failSecondUserMessage)),
       )
     }),
   )
@@ -7364,8 +7511,10 @@ describe("streaming", () => {
         [textDeltaPart("committed before finalize"), finishPart({ finishReason: "stop" })],
       ])
       const failingPublisherLayer = Layer.succeed(
-        EventPublisher,
-        EventPublisher.of({
+        EventStore,
+        EventStore.of({
+          subscribe: () => Stream.empty,
+          removeSession: () => Effect.void,
           append: (event: AgentEvent) => {
             if (event._tag === "TurnCompleted") {
               return Effect.fail(new EventStoreError({ message: "append failed" }))
@@ -7394,7 +7543,7 @@ describe("streaming", () => {
         const user = yield* messageStorage.getMessage(message.id)
         expect(exit._tag).toBe("Failure")
         expect(user?.turnDurationMs).toBeUndefined()
-      }).pipe(Effect.provide(makeLayerWithEventPublisher(providerLayer, failingPublisherLayer)))
+      }).pipe(Effect.provide(makeLayerWithEventStore(providerLayer, failingPublisherLayer)))
     }),
   )
   it.live("persists assistant image parts from provider response streams", () =>
@@ -8381,7 +8530,7 @@ describe("tool binding replay", () => {
       Effect.provide(
         Layer.mergeAll(
           SqliteStorage.TestWithSql(() => Layer.empty, {}),
-          EventPublisher.Test(),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -8454,7 +8603,7 @@ describe("tool binding replay", () => {
       Effect.provide(
         Layer.mergeAll(
           SqliteStorage.TestWithSql(() => Layer.empty, {}),
-          EventPublisher.Test(),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -8495,7 +8644,7 @@ describe("tool binding replay", () => {
       Effect.provide(
         Layer.mergeAll(
           SqliteStorage.TestWithSql(() => Layer.empty, {}),
-          EventPublisher.Test(),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -8568,7 +8717,7 @@ describe("tool binding replay", () => {
       Effect.provide(
         Layer.mergeAll(
           SqliteStorage.TestWithSql(() => Layer.empty, {}),
-          EventPublisher.Test(),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -8632,7 +8781,7 @@ describe("tool binding replay", () => {
       Effect.provide(
         Layer.mergeAll(
           SqliteStorage.TestWithSql(() => Layer.empty, {}),
-          EventPublisher.Test(),
+          EventStore.Memory,
         ),
       ),
     ),
@@ -8710,7 +8859,11 @@ describe("tool binding replay", () => {
 describe("session depth guard", () => {
   const depthStorage = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
   const run = <A, E>(
-    effect: Effect.Effect<A, E, SessionStorage | BranchStorage | RelationshipStorage>,
+    effect: Effect.Effect<
+      A,
+      E,
+      SessionStorage | BranchStorage | RelationshipStorage | SqlClient.SqlClient
+    >,
   ) => effect.pipe(Effect.timeout("4 seconds"), Effect.provide(depthStorage))
 
   const makeSession = (id: string, parentSessionId?: string) => {
@@ -8819,6 +8972,43 @@ describe("session depth guard", () => {
           SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`),
         )
         expect(depth).toBe(DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
+      }),
+    ),
+  )
+  it.live("a thread of many handoffs still admits a spawn, counted from its real root", () =>
+    run(
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        yield* sessions.createSession(makeSession("h0"))
+        yield* branches.createBranch(makeBranch("h0"))
+        // Each handoff joins the root's thread: an edge, not a spawn.
+        const handoffs = 25
+        for (let i = 1; i <= handoffs; i++) {
+          yield* sessions.createSession(
+            new Session({ ...makeSession(`h${i}`, `h${i - 1}`), threadId: SessionId.make("h0") }),
+          )
+          yield* branches.createBranch(makeBranch(`h${i}`))
+        }
+        expect(yield* admitChildSessionDepth(SessionId.make(`h${handoffs}`))).toBe(0)
+        yield* sessions.createSession(makeSession("spawned", `h${handoffs}`))
+        yield* branches.createBranch(makeBranch("spawned"))
+        expect(yield* admitChildSessionDepth(SessionId.make("spawned"))).toBe(1)
+      }),
+    ),
+  )
+  it.live("a parent cycle fails closed instead of walking forever", () =>
+    run(
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const sql = yield* SqlClient.SqlClient
+        yield* sessions.createSession(makeSession("loop-a"))
+        yield* branches.createBranch(makeBranch("loop-a"))
+        yield* sessions.createSession(makeSession("loop-b", "loop-a"))
+        yield* sql`UPDATE sessions SET parent_session_id = 'loop-b' WHERE id = 'loop-a'`
+        const error = yield* admitChildSessionDepth(SessionId.make("loop-b")).pipe(Effect.flip)
+        expect(error.message).toContain("ancestry is missing or incomplete")
       }),
     ),
   )

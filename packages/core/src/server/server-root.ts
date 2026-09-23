@@ -1,14 +1,11 @@
-import { Clock, Context, Effect, Layer } from "effect"
-import type { Scope } from "effect"
+import { Effect, Layer } from "effect"
+import type { Context, Scope } from "effect"
 import type { FileSystem } from "effect/FileSystem"
 import {
   buildServerRoutes,
-  ConnectionTracker,
-  type ConnectionTrackerService,
   createDependencies,
   type DependenciesConfig,
   RpcHandlersLive,
-  ServerIdentity,
   type ServerIdentityApi,
 } from "./server.js"
 
@@ -17,20 +14,16 @@ import type { BunPlatformLive } from "../runtime/gent-platform-bun.js"
 type BuiltRpcHandlers = Layer.Success<typeof RpcHandlersLive>
 type DependenciesLayer = ReturnType<typeof createDependencies>
 type DependencyError = Layer.Error<DependenciesLayer>
-type ServerRootServices =
-  | Layer.Success<DependenciesLayer>
-  | Layer.Success<typeof ConnectionTracker.Live>
-  | ServerIdentity
+type ServerRootServices = Layer.Success<DependenciesLayer>
 
 interface ServerRootConfig {
   readonly dependencies: DependenciesConfig
   /** Logger, log level, and tracer for this root; the composition root owns the vendor wiring. */
   readonly observability: Layer.Layer<never, never, FileSystem>
-  readonly identity: Omit<ServerIdentityApi, "startedAt">
+  readonly identity: ServerIdentityApi
 }
 
 interface BuiltServerRoot {
-  readonly connectionTracker: ConnectionTrackerService
   readonly coreServices: Context.Context<ServerRootServices>
   readonly coreServicesLive: Layer.Layer<ServerRootServices>
   readonly httpRoutes: ReturnType<typeof buildServerRoutes<ServerRootServices>>
@@ -51,28 +44,15 @@ export const buildServerRoot = (
     const depsLive = createDependencies(config.dependencies).pipe(
       Layer.provide(config.observability),
     )
-    // `startedAt` varies per restart, so the identity route serves only the
-    // stable half, which registry validation compares.
-    const stableIdentity = config.identity
-    const identity = { ...stableIdentity, startedAt: yield* Clock.currentTimeMillis }
-
-    const connectionTrackerCtx = yield* Layer.buildWithScope(ConnectionTracker.Live, scope)
-    const connectionTracker = Context.get(connectionTrackerCtx, ConnectionTracker)
-    const depsServices = yield* Layer.buildWithScope(depsLive, scope)
-    const serverIdentityCtx = yield* Layer.buildWithScope(ServerIdentity.Live(identity), scope)
-    const allServices = Context.merge(
-      Context.merge(depsServices, connectionTrackerCtx),
-      serverIdentityCtx,
-    )
+    const allServices = yield* Layer.buildWithScope(depsLive, scope)
     const coreServicesLive = Layer.succeedContext(allServices)
-    const httpRoutes = buildServerRoutes(coreServicesLive, { identity: stableIdentity })
+    const httpRoutes = buildServerRoutes(coreServicesLive, { identity: config.identity })
     const rpcHandlersContext = yield* Layer.buildWithScope(
       Layer.provide(RpcHandlersLive, coreServicesLive),
       scope,
     )
 
     return {
-      connectionTracker,
       coreServices: allServices,
       coreServicesLive,
       httpRoutes,

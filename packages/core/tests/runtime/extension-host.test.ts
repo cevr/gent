@@ -151,7 +151,7 @@ import {
 } from "../../src/domain/extension"
 import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/tools"
 import { SingleRunner } from "effect/unstable/cluster"
-import { AgentEvent, EventPublisher, EventPublisherLive, EventStore } from "../../src/domain/event"
+import { AgentEvent, EventStore, ExtensionStatePublisherLive } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
@@ -259,7 +259,7 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provide(
         Layer.provideMerge(
-          EventPublisherLive,
+          ExtensionStatePublisherLive,
           Layer.mergeAll(
             SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
             EventStore.Memory,
@@ -313,7 +313,7 @@ describe("ambient extension host context", () => {
         yield* ensureStorageParents({ sessionId, branchId }).pipe(
           Effect.provideService(CurrentWorkspaceId, runWorkspace),
         )
-        const publisher = yield* EventPublisher
+        const publisher = yield* EventStore
         yield* publisher
           .publish(AgentEvent.cases.SessionStarted.make({ sessionId, branchId }))
           .pipe(Effect.provideService(CurrentWorkspaceId, runWorkspace))
@@ -337,7 +337,7 @@ describe("ambient extension host context", () => {
         // under the workspace in scope at pull time; the memory store reads none.
         Effect.provide(
           Layer.provideMerge(
-            EventPublisherLive,
+            ExtensionStatePublisherLive,
             Layer.provideMerge(
               EventStoreLive,
               SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
@@ -353,7 +353,7 @@ describe("ambient extension host context", () => {
       yield* ensureStorageParents({ sessionId, branchId }).pipe(
         Effect.provideService(CurrentWorkspaceId, workspace),
       )
-      const publisher = yield* EventPublisher
+      const publisher = yield* EventStore
       const publish = (event: AgentEvent) =>
         publisher.publish(event).pipe(Effect.provideService(CurrentWorkspaceId, workspace))
       yield* publish(AgentEvent.cases.SessionStarted.make({ sessionId, branchId }))
@@ -384,7 +384,7 @@ describe("ambient extension host context", () => {
     }).pipe(
       Effect.provide(
         Layer.provideMerge(
-          EventPublisherLive,
+          ExtensionStatePublisherLive,
           Layer.provideMerge(
             EventStoreLive,
             SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations),
@@ -486,6 +486,114 @@ const markerExtension = (id: string, value: string, stop: Effect.Effect<void> = 
   })
 
 describe("session profile resolution", () => {
+  it.scopedLive("a trust grant and a trust revoke each reach the next resolve", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      // Under the repo, so the project module resolves `effect`.
+      const directory = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../../.."),
+        prefix: ".tmp-profile-trust-",
+      })
+      const home = path.join(directory, "home")
+      const project = path.join(directory, "project")
+      const userConfig = path.join(home, ".gent", "config.json")
+      yield* fs.makeDirectory(path.join(home, ".gent"), { recursive: true })
+      yield* fs.makeDirectory(path.join(project, ".gent", "extensions"), { recursive: true })
+      const projectRoot = yield* fs.realPath(project)
+      yield* fs.writeFileString(
+        path.join(project, ".gent", "extensions", "entry.ts"),
+        `import { Effect } from "effect";
+export default { manifest: { id: "profile-trust" }, setup: Effect.void };`,
+      )
+      yield* fs.writeFileString(userConfig, "{}")
+      const activeIds = (profile: SessionProfile) =>
+        profile.resolved.extensions.map((extension) => String(extension.manifest.id))
+      const failedErrors = (profile: SessionProfile) =>
+        profile.resolved.failedExtensions.map((extension) => extension.error)
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        const resolve = Effect.scoped(cache.resolve(project))
+        const untrusted = yield* resolve
+        expect(activeIds(untrusted)).not.toContain("profile-trust")
+        expect(failedErrors(untrusted).join("\n")).toContain("not trusted")
+
+        yield* fs.writeFileString(userConfig, encodeJson({ trustedProjects: [projectRoot] }))
+        const granted = yield* resolve
+        expect(activeIds(granted)).toContain("profile-trust")
+
+        yield* fs.writeFileString(userConfig, encodeJson({ trustedProjects: [] }))
+        const revoked = yield* resolve
+        expect(activeIds(revoked)).not.toContain("profile-trust")
+        expect(failedErrors(revoked).join("\n")).toContain("not trusted")
+      }).pipe(
+        Effect.provide(
+          makeCacheLayer({ cwd: project, home, extensions: [], allowFailedExtensions: true }),
+        ),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("7".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  it.scopedLive("an edited extension file builds its process resource again", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      // Under the package, so the module resolves `effect` and `@gent/core`.
+      const directory = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../.."),
+        prefix: ".tmp-profile-version-",
+      })
+      const home = path.join(directory, "home")
+      const launch = path.join(directory, "launch")
+      const entry = path.join(home, ".gent", "extensions", "marker.ts")
+      yield* fs.makeDirectory(path.dirname(entry), { recursive: true })
+      yield* fs.makeDirectory(launch, { recursive: true })
+      const writeMarker = (value: string) =>
+        writeFileAtomic(
+          entry,
+          `import { Context, Effect, Layer } from "effect";
+import { defineExtension, defineResource, ExtensionHost } from "@gent/core/extensions/api";
+class Marker extends Context.Service<Marker, { readonly value: string }>()(
+  "@gent/core/tests/runtime/extension-host.test/SessionProfileResourceMarker",
+) {}
+export default defineExtension({
+  id: "profile-version",
+  setup: Effect.gen(function* () {
+    const host = yield* ExtensionHost;
+    yield* host.register("resource", defineResource({
+      id: "profile-version/marker",
+      scope: "process",
+      layer: Layer.succeed(Marker, Marker.of({ value: "${value}" })),
+    }));
+  }),
+});
+`,
+        )
+      const marker = (profile: SessionProfile) =>
+        Context.get(profile.layerContext, SessionProfileResourceMarker).value
+
+      yield* Effect.gen(function* () {
+        const cache = yield* SessionProfileCache
+        // A running turn holds the first profile, so its resource stays open
+        // and the second profile could share it.
+        const runningTurn = yield* Scope.make()
+        yield* writeMarker("first")
+        const first = yield* cache.resolve(launch).pipe(Scope.provide(runningTurn))
+        expect(marker(first)).toBe("first")
+
+        yield* writeMarker("second edit")
+        const second = yield* Effect.scoped(cache.resolve(launch))
+        expect(marker(second)).toBe("second edit")
+        yield* Scope.close(runningTurn, Exit.void)
+      }).pipe(
+        Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
+        Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("6".repeat(64))),
+      )
+    }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
   it.scopedLive("isolates profiles by workspace and reuses one per key", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -1776,25 +1884,44 @@ describe("extension activation isolation", () => {
   it.live("validation fails one extension whose own tool and request share an id", () =>
     Effect.gen(function* () {
       // One extension, one id twice: resolution would keep only the request.
-      const result = yield* validateLoadedExtensions([
-        makeLoaded("self-shadow", {
-          tools: [
-            tool({
-              id: "shared_name",
-              description: "model",
-              params: Schema.Struct({}),
-              output: Schema.Void,
-              execute: () => Effect.void,
-            }),
-          ],
-          requests: [rawRpcLeaf("shared_name")],
-        }),
-      ])
+      // Setup owns this check; the cross-extension pass never sees the package.
+      const result = yield* setupExtensions({
+        extensions: [
+          builtin(
+            makeBuiltin(
+              "self-shadow",
+              Effect.succeed({
+                tools: [
+                  tool({
+                    id: "shared_name",
+                    description: "model",
+                    params: Schema.Struct({}),
+                    output: Schema.Void,
+                    execute: () => Effect.void,
+                  }),
+                ],
+                requests: [
+                  request({
+                    id: "shared_name",
+                    input: Schema.Struct({}),
+                    output: Schema.String,
+                    execute: () => Effect.succeed("ok"),
+                  }),
+                ],
+              }),
+            ),
+          ),
+        ],
+        cwd: "/tmp",
+        home: "/tmp",
+        disabled: new Set(),
+      })
 
       expect(result.active).toEqual([])
       expect(result.failed.map((ext) => ext.manifest.id)).toEqual([ExtensionId.make("self-shadow")])
-      expect(result.failed[0]?.error).toContain('capability "shared_name"')
-    }),
+      expect(result.failed[0]?.phase).toBe("setup")
+      expect(result.failed[0]?.error).toContain("requests[0] (shared_name): duplicate id")
+    }).pipe(Effect.provide(fsLayer)),
   )
 
   it.live("a tool with a blank description keeps its extension out of the active set", () =>
@@ -4415,16 +4542,16 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, baseDeps)
   const sessionRuntimeLayer = Layer.provide(
     SessionRuntime.Live({ baseSections: [] }),
-    Layer.merge(baseDeps, eventPublisherLayer),
+    Layer.merge(baseDeps, statePublisherLayer),
   )
   const sessionMutationsLayer = Layer.provide(
     SessionMutationsLive,
-    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
+    Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer),
   )
-  return Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
+  return Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
 }
 const eventTags = (calls: ReadonlyArray<CallRecord>) =>
   calls
@@ -5052,7 +5179,7 @@ describe("live Profile", () => {
         }
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs),
+          yield* scanRuntimeProfileExtensions(inputs, []),
         )
         expect(events).toEqual([])
         expect(declarations.extensionDeclarations.failed).toContainEqual(
@@ -5102,7 +5229,7 @@ describe("live Profile", () => {
 
         const declarations = yield* loadRuntimeProfileDeclarations(
           inputs,
-          yield* scanRuntimeProfileExtensions(inputs),
+          yield* scanRuntimeProfileExtensions(inputs, []),
         )
         expect(declarations.extensionDeclarations.failed).toEqual([
           expect.objectContaining({
@@ -5127,7 +5254,7 @@ describe("live Profile", () => {
         // A disabled id silences its file.
         const quiet = yield* loadRuntimeProfileDeclarations(
           { ...inputs, disabledExtensions: ["broken", "folder-broken", "local"] },
-          yield* scanRuntimeProfileExtensions(inputs),
+          yield* scanRuntimeProfileExtensions(inputs, []),
         )
         expect(quiet.extensionDeclarations.failed).toEqual([])
 

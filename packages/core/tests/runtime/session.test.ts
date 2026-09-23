@@ -44,11 +44,12 @@ import {
   TEST_MODEL_CONTEXT_LIMIT_TOKENS,
 } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
-import { EventPublisherLive } from "../../src/domain/event"
+import { ExtensionStatePublisherLive } from "../../src/domain/event"
 import {
   baseLocalLayerWithProvider,
   createRpcHarness,
   RecordingEventStore,
+  runtimeHostContext,
   SequenceRecorder,
 } from "../../src/test-utils/harness"
 import {
@@ -156,16 +157,16 @@ const makeRuntimeLayer = (
   if (!Predicate.isUndefined(profileCacheLayer)) {
     baseDeps = Layer.merge(baseDepsWithoutProfile, profileCacheLayer)
   }
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, baseDeps)
+  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, baseDeps)
   const sessionRuntimeLayer = Layer.provide(
     sessionRuntimeLayers({ baseSections: [] }),
-    Layer.merge(baseDeps, eventPublisherLayer),
+    Layer.merge(baseDeps, statePublisherLayer),
   )
   const sessionMutationsLayer = Layer.provide(
     SessionMutationsLive,
-    Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer),
+    Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer),
   )
-  return Layer.mergeAll(baseDeps, eventPublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
+  return Layer.mergeAll(baseDeps, statePublisherLayer, sessionRuntimeLayer, sessionMutationsLayer)
 }
 const makeLiveToolRuntimeLayer = (
   providerLayer: Layer.Layer<LanguageModel.LanguageModel>,
@@ -192,10 +193,10 @@ const makeLiveToolRuntimeLayer = (
     AgentLoopSessionGovernance.Live,
   )
   const deps = Layer.mergeAll(baseDeps, Layer.provide(ToolRunner.Live, baseDeps))
-  const eventPublisherLayer = Layer.provide(EventPublisherLive, deps)
+  const statePublisherLayer = Layer.provide(ExtensionStatePublisherLive, deps)
   return Layer.provideMerge(
     sessionRuntimeLayers({ baseSections: [] }),
-    Layer.merge(deps, eventPublisherLayer),
+    Layer.merge(deps, statePublisherLayer),
   )
 }
 const createSessionBranch = Effect.gen(function* () {
@@ -348,8 +349,11 @@ describe("SessionRuntime", () => {
           sessionId: SessionId.make("runtime-queue-second"),
           branchId: BranchId.make("runtime-queue-second-branch"),
         })
+        // Follow-ups reach a branch through the extension session facade.
+        const facade = yield* runtimeHostContext(queueTarget)
         const queueExit = yield* Effect.exit(
-          sessionRuntime.queueFollowUp({
+          facade.Session.send({
+            delivery: "queue",
             sourceId: "wrong-branch",
             sessionId: queueTarget.sessionId,
             branchId: queueForeign.branchId,
@@ -357,9 +361,6 @@ describe("SessionRuntime", () => {
           }),
         )
         expect(queueExit._tag).toBe("Failure")
-        if (queueExit._tag === "Failure") {
-          expect(Cause.pretty(queueExit.cause)).toContain("Branch not found for session")
-        }
         const firstQueue = yield* sessionRuntime.getQueuedMessages(queueTarget)
         const secondQueue = yield* sessionRuntime.getQueuedMessages(queueForeign)
         expect(firstQueue).toEqual({ followUp: [], steering: [] } satisfies QueueSnapshot)
@@ -369,16 +370,15 @@ describe("SessionRuntime", () => {
           sessionId: SessionId.make("runtime-queue-direct"),
           branchId: BranchId.make("runtime-queue-direct-branch"),
         })
-        yield* sessionRuntime.queueFollowUp({
+        const targetFacade = yield* runtimeHostContext(target)
+        const queueDirect = targetFacade.Session.send({
+          delivery: "queue",
           ...target,
           sourceId: "direct-follow-up",
           content: "direct follow-up",
         })
-        yield* sessionRuntime.queueFollowUp({
-          ...target,
-          sourceId: "direct-follow-up",
-          content: "direct follow-up",
-        })
+        yield* queueDirect
+        yield* queueDirect
         const queue = yield* sessionRuntime.getQueuedMessages(target)
         expect(queue.steering).toEqual([])
         expect(queue.followUp).toEqual([
@@ -389,13 +389,13 @@ describe("SessionRuntime", () => {
           }),
         ])
         // The source id also names the item for removal; a second removal finds nothing.
-        expect(
-          yield* sessionRuntime.dequeueFollowUp({ ...target, sourceId: "direct-follow-up" }),
-        ).toBe(true)
+        const dequeueDirect = targetFacade.Session.dequeueFollowUp({
+          ...target,
+          sourceId: "direct-follow-up",
+        })
+        expect(yield* dequeueDirect).toBe(true)
         expect((yield* sessionRuntime.getQueuedMessages(target)).followUp).toEqual([])
-        expect(
-          yield* sessionRuntime.dequeueFollowUp({ ...target, sourceId: "direct-follow-up" }),
-        ).toBe(false)
+        expect(yield* dequeueDirect).toBe(false)
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
     }),
   )
@@ -612,7 +612,6 @@ describe("SessionRuntime", () => {
       ])
       const layer = makeRuntimeLayer(providerLayer)
       yield* Effect.gen(function* () {
-        const sessionRuntime = yield* SessionRuntime
         const messageStorage = yield* MessageStorage
         const workspaceId = yield* CurrentWorkspaceId
         const { sessionId, branchId } = yield* createSessionBranch
@@ -634,8 +633,10 @@ describe("SessionRuntime", () => {
             turnDurationMs: 5,
           }),
         )
+        const facade = yield* runtimeHostContext({ sessionId, branchId })
         const wake = (sourceId: string) =>
-          sessionRuntime.queueFollowUp({
+          facade.Session.send({
+            delivery: "queue",
             sessionId,
             branchId,
             sourceId,

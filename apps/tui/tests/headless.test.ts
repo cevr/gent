@@ -19,9 +19,9 @@ import {
   MessageId,
   SessionId,
   ToolCallId,
+  GentConnectionError,
 } from "@gent/core/protocol"
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
-import { GentConnectionError } from "@gent/sdk"
 import { makeCliTeardown, renderHeadlessToolCall, runHeadless } from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"
 class HeadlessRunnerTestError extends Schema.TaggedError<HeadlessRunnerTestError>()(

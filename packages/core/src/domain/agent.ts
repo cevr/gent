@@ -250,9 +250,8 @@ interface ResolvedAgentDriver {
  *   3. `undefined`                     — default; the loop derives a model
  *      driver from `agent.model`.
  *
- * Pure function — no Effect, no service dependency. Callers thread the
- * `overrides` map in from `ConfigService` (the loop yields it during turn
- * context resolution; auth-guard takes it as a param).
+ * Pure function — no Effect, no service dependency. The loop reads the
+ * `overrides` map from `ConfigService` during turn context resolution.
  */
 export const resolveAgentDriver = (
   agent: AgentDefinition,

@@ -1,5 +1,5 @@
 import { test } from "bun:test"
-import { Clock, Effect, Layer, Option, Predicate, Ref, Result, Schema } from "effect"
+import { Clock, Effect, Layer, Option, Predicate, Ref, Result, Schema, Stream } from "effect"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import {
   ActorCommandId,
@@ -58,7 +58,7 @@ import {
   SessionStorage,
 } from "../../src/storage/storage"
 import { baseLocalLayerWithProvider } from "../../src/test-utils/harness"
-import { type AgentEvent, EventEnvelope, EventId, EventPublisher } from "../../src/domain/event"
+import { type AgentEvent, EventEnvelope, EventId, EventStore } from "../../src/domain/event"
 import * as Response from "effect/unstable/ai/Response"
 
 interface TestMessageOptional {
@@ -907,8 +907,10 @@ const modelIdTurnWindow = ModelId.make("test/window-model")
 const recordingPublisher = Effect.map(Ref.make<ReadonlyArray<AgentEvent>>([]), (published) => ({
   published,
   layer: Layer.succeed(
-    EventPublisher,
-    EventPublisher.of({
+    EventStore,
+    EventStore.of({
+      subscribe: () => Stream.empty,
+      removeSession: () => Effect.void,
       append: (event) =>
         Effect.map(Clock.currentTimeMillis, (at) =>
           EventEnvelope.make({ id: EventId.make(0), event, createdAt: at }),

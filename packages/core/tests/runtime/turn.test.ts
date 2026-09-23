@@ -27,8 +27,7 @@ import {
   type AgentEvent,
   EventEnvelope,
   EventId,
-  EventPublisher,
-  EventPublisherLive,
+  EventStore,
   MessageReceived,
   ToolCallSucceeded,
   UsageSchema,
@@ -62,8 +61,10 @@ const captureEvents = () =>
   Effect.gen(function* () {
     const events = yield* Ref.make<ReadonlyArray<AgentEvent>>([])
     const layer = Layer.succeed(
-      EventPublisher,
-      EventPublisher.of({
+      EventStore,
+      EventStore.of({
+        subscribe: () => Stream.empty,
+        removeSession: () => Effect.void,
         append: () => Effect.die("append not exercised in turn response tests"),
         deliver: () => Effect.void,
         publish: (event) => Ref.update(events, (items) => [...items, event]),
@@ -278,10 +279,7 @@ describe("classifyStep", () => {
 const FIXED_NOW = dateFromMillis(1_767_225_600_000)
 
 const storage = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
-const layer = Layer.provideMerge(
-  Layer.provide(EventPublisherLive, Layer.provide(EventStoreLive, storage)),
-  storage,
-)
+const layer = Layer.provideMerge(Layer.provide(EventStoreLive, storage), storage)
 
 const assistantWithCall = (params: {
   readonly id: MessageId
@@ -468,8 +466,10 @@ const recordingPublisher = Effect.map(
   (state) => ({
     state,
     layer: Layer.succeed(
-      EventPublisher,
-      EventPublisher.of({
+      EventStore,
+      EventStore.of({
+        subscribe: () => Stream.empty,
+        removeSession: () => Effect.void,
         append: (event) =>
           Effect.gen(function* () {
             const at = yield* Clock.currentTimeMillis

@@ -84,6 +84,32 @@ describe("GentObservability", () => {
       expect(entry.sessionId).toBe("s-1")
     }).pipe(Effect.provide(BunFileSystem.layer)),
   )
+
+  it.scopedLive("a second logger for the same cwd keeps the first one's lines", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const logDir = yield* fs.makeTempDirectoryScoped()
+      const cwd = "/logger-test/two-servers"
+      const logOnce = (message: string) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(GentObservability(cwd, "Debug", logDir))
+            yield* Effect.logInfo(message).pipe(
+              Effect.annotateLogs({ sessionId: "s-1" }),
+              Effect.provideContext(context),
+            )
+          }),
+        )
+      // One process, two servers: both write the same log path.
+      yield* logOnce("first-server")
+      yield* logOnce("second-server")
+      const lines = (yield* fs.readFileString(buildLogPaths(cwd, logDir).log)).trim().split("\n")
+      expect(lines.map((line) => decodeLogEntry(line).msg)).toEqual([
+        "first-server",
+        "second-server",
+      ])
+    }).pipe(Effect.provide(BunFileSystem.layer)),
+  )
 })
 
 // ── tracer ──────────────────────────────────────────────────────────────────

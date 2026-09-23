@@ -3,7 +3,6 @@ import { Headers } from "effect/unstable/http"
 import {
   AgentDefinition,
   AgentName,
-  DriverRef,
   Model,
   ModelId,
   ReasoningEffort,
@@ -351,7 +350,9 @@ export class DriverListResult extends Schema.Class<DriverListResult>("DriverList
 
 export const SetDriverOverrideInput = Schema.Struct({
   agentName: AgentName,
-  driver: DriverRef,
+  /** A registered driver. An override that names none routes as no override
+   *  does, so `driver.clear` is the one way back to the default. */
+  driver: Schema.TaggedStruct("Model", { id: Schema.String }),
   /** Validate the driver against this session's profile; the launch profile without one. */
   sessionId: Schema.optional(SessionId),
 })
@@ -374,15 +375,11 @@ export class GentConnectionError extends Schema.TaggedError<GentConnectionError>
 export const ConnectionState = Schema.Union([
   Schema.TaggedStruct("Connecting", {}),
   Schema.TaggedStruct("Connected", {
-    pid: Schema.optional(Schema.Finite),
     generation: Schema.Finite,
   }),
   Schema.TaggedStruct("Reconnecting", {
     attempt: Schema.Finite,
     generation: Schema.Finite,
-  }),
-  Schema.TaggedStruct("Disconnected", {
-    reason: Schema.String,
   }),
 ]).pipe(Schema.toTaggedUnion("_tag"))
 export type ConnectionState = Schema.Schema.Type<typeof ConnectionState>
@@ -390,7 +387,6 @@ export type ConnectionState = Schema.Schema.Type<typeof ConnectionState>
 export interface GentLifecycle {
   readonly getState: () => ConnectionState
   readonly subscribe: (listener: (state: ConnectionState) => void) => () => void
-  readonly restart: Effect.Effect<void, GentConnectionError>
   readonly waitForReady: Effect.Effect<void>
 }
 
@@ -502,28 +498,6 @@ export class SessionRpcs extends RpcGroup.make(
 // ── rpcs/index ──────────────────────────────────────────────────────────────
 
 // ============================================================================
-// Runtime status
-// ============================================================================
-
-const RuntimeStatusResult = Schema.Struct({
-  serverId: Schema.String,
-  pid: Schema.Finite,
-  hostname: Schema.String,
-  uptime: Schema.Finite,
-  connectionCount: Schema.Finite,
-  dbPath: Schema.String,
-  buildFingerprint: Schema.String,
-})
-type RuntimeStatusResult = typeof RuntimeStatusResult.Type
-
-class RuntimeRpcs extends RpcGroup.make(
-  Rpc.make("runtime.status", {
-    success: RuntimeStatusResult,
-    error: GentRpcError,
-  }),
-) {}
-
-// ============================================================================
 // Auth
 // ============================================================================
 
@@ -601,7 +575,7 @@ class ExtensionRpcs extends RpcGroup.make(
 // ============================================================================
 
 export class GentRpcs extends RpcGroup.make()
-  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs, RuntimeRpcs)
+  .merge(SessionRpcs, ExtensionRpcs, AuthRpcs)
   .middleware(WorkspaceRpcMiddleware) {}
 
 // ============================================================================

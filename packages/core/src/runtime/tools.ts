@@ -61,12 +61,7 @@ import * as AiTool from "effect/unstable/ai/Tool"
 import { GentPlatform } from "./gent-platform.js"
 import type { FeatureMigrations } from "../storage/schema.js"
 import { InteractionPendingError } from "../domain/interaction.js"
-import {
-  EventPublisher,
-  ToolCallFailed,
-  ToolCallStarted,
-  ToolCallSucceeded,
-} from "../domain/event.js"
+import { EventStore, ToolCallFailed, ToolCallStarted, ToolCallSucceeded } from "../domain/event.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 import * as AiToolkit from "effect/unstable/ai/Toolkit"
 import * as AiError from "effect/unstable/ai/AiError"
@@ -692,7 +687,7 @@ interface ToolRunnerService {
   ) => Effect.Effect<
     Prompt.ToolResultPart,
     InteractionPendingError,
-    CurrentExtensionHostContext | ExtensionRegistry | EventPublisher
+    CurrentExtensionHostContext | ExtensionRegistry | EventStore
   >
 }
 
@@ -720,8 +715,8 @@ const assistantMessageId = Effect.gen(function* () {
 
 const publishStarted = (params: { ctx: ToolCapabilityContext; toolCall: ToolCall }) =>
   Effect.gen(function* () {
-    const eventPublisher = yield* EventPublisher
-    yield* eventPublisher
+    const eventStore = yield* EventStore
+    yield* eventStore
       .publish(
         ToolCallStarted.make({
           sessionId: params.ctx.sessionId,
@@ -743,7 +738,7 @@ const publishCompleted = (params: {
   result: Prompt.ToolResultPart
 }) =>
   Effect.gen(function* () {
-    const eventPublisher = yield* EventPublisher
+    const eventStore = yield* EventStore
     const outputSummary = toolResultSummary(params.tool, params.toolCall.input, params.result)
     const fields = {
       sessionId: params.ctx.sessionId,
@@ -757,10 +752,10 @@ const publishCompleted = (params: {
       assistantMessageId: yield* assistantMessageId,
     }
     if (params.result.isFailure) {
-      yield* eventPublisher.publish(ToolCallFailed.make(fields)).pipe(Effect.orDie)
+      yield* eventStore.publish(ToolCallFailed.make(fields)).pipe(Effect.orDie)
       return
     }
-    yield* eventPublisher.publish(ToolCallSucceeded.make(fields)).pipe(Effect.orDie)
+    yield* eventStore.publish(ToolCallSucceeded.make(fields)).pipe(Effect.orDie)
   })
 
 const makeExecutionToolkit = (params: {
@@ -1304,7 +1299,7 @@ export type ToolCallRecoveryOutcome = typeof ToolCallRecoveryOutcome.Type
 /** Recovery runs inside the turn and settles receipts with the turn's runtime services. */
 type ToolCallRecoveryServices =
   | CurrentAgentLoopTurnProfile
-  | EventPublisher
+  | EventStore
   | GentPlatform
   | MessageStorage
   | ToolRunner

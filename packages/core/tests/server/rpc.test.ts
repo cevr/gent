@@ -59,7 +59,6 @@ import {
   AgentDefinition,
   AgentName,
   DEFAULT_AGENT_NAME,
-  DriverRef,
   Model,
   ModelId,
   ProviderId,
@@ -78,7 +77,7 @@ import {
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
 import { BunServices } from "@effect/platform-bun"
 import type { ModelDriverContribution } from "../../src/domain/driver.js"
-import type { ExtensionHealthSnapshot } from "../../src/server/rpc.js"
+import { type ExtensionHealthSnapshot, SetDriverOverrideInput } from "../../src/server/rpc.js"
 import {
   defineResource,
   ExtensionLoadError,
@@ -110,7 +109,7 @@ import { BunPlatformLive } from "../../src/runtime/gent-platform-bun"
 import { CurrentInteractionOwner, encodeInteractionDecision } from "../../src/domain/interaction.js"
 import { EventStoreError } from "../../src/domain/event"
 import { MinimumLogLevel } from "effect/References"
-import { Message, messageSingleText } from "../../src/domain/message"
+import { Message, messagePartsText } from "../../src/domain/message"
 import { ConfigService, RuntimeEnvironment } from "../../src/runtime/config"
 import { type LogEvent, WideEventLogger } from "effect-wide-event"
 
@@ -214,12 +213,20 @@ describe("ExtensionRpcs", () => {
         }
         yield* client.driver.set({
           agentName: DEFAULT_AGENT_NAME,
-          driver: DriverRef.make({ id: someModel.id }),
+          driver: { id: someModel.id },
         })
         expect((yield* driverOverrides)[DEFAULT_AGENT_NAME]?.id).toBe(someModel.id)
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
+
+  test("driver.set names a driver; a ref with no id is not a second way to clear", () => {
+    const decode = Schema.decodeUnknownExit(SetDriverOverrideInput)
+    expect(Exit.isFailure(decode({ agentName: "main", driver: { _tag: "Model" } }))).toBe(true)
+    expect(
+      Exit.isSuccess(decode({ agentName: "main", driver: { _tag: "Model", id: "anthropic" } })),
+    ).toBe(true)
+  })
 
   it.live("driver.set rejects unknown driver id with NotFoundError", () =>
     Effect.scoped(
@@ -228,7 +235,7 @@ describe("ExtensionRpcs", () => {
         const result = yield* client.driver
           .set({
             agentName: DEFAULT_AGENT_NAME,
-            driver: DriverRef.make({ id: "definitely-not-registered" }),
+            driver: { id: "definitely-not-registered" },
           })
           .pipe(Effect.flip)
         expect(result._tag).toBe("NotFoundError")
@@ -246,7 +253,7 @@ describe("ExtensionRpcs", () => {
         }
         yield* client.driver.set({
           agentName: DEFAULT_AGENT_NAME,
-          driver: DriverRef.make({ id: someModel.id }),
+          driver: { id: someModel.id },
         })
         yield* client.driver.clear({ agentName: DEFAULT_AGENT_NAME })
         expect(yield* driverOverrides).toEqual({})
@@ -3513,7 +3520,7 @@ describe("extension command RPCs", () => {
           (messages) =>
             messages.some(
               (message) =>
-                message.role === "assistant" && messageSingleText(message.parts) === "synced reply",
+                message.role === "assistant" && messagePartsText(message.parts) === "synced reply",
             ),
           4000,
           "synced reply",
@@ -3674,7 +3681,7 @@ describe("extension command RPCs", () => {
           ) =>
             messages
               .filter((message) => message.role === "assistant")
-              .map((message) => messageSingleText(message.parts))
+              .map((message) => messagePartsText(message.parts))
           yield* client.message.send({ sessionId, branchId, content: "warm the branch" })
           yield* waitFor(
             client.message.list({ branchId }),
@@ -3702,7 +3709,7 @@ describe("extension command RPCs", () => {
           expect(
             messages.some(
               (message) =>
-                message.role === "user" && messageSingleText(message.parts) === "queued while idle",
+                message.role === "user" && messagePartsText(message.parts) === "queued while idle",
             ),
           ).toBe(true)
           yield* controls.assertDone

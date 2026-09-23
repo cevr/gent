@@ -48,6 +48,12 @@ import {
   projectMessage,
   ReasoningEffort,
   type SessionId,
+  type GentClientRpcError,
+  type MessageSegment,
+  type ProjectedMessage,
+  type QueueEntryInfo,
+  type QueueSnapshot,
+  type ToolInteraction,
 } from "@gent/core/protocol"
 import {
   formatConnectionIssue,
@@ -77,14 +83,6 @@ import {
   PromptSearchState as PromptSearchStateFactory,
   transitionPromptSearch,
 } from "./pickers"
-import {
-  type GentClientRpcError,
-  type MessageSegment,
-  type ProjectedMessage,
-  type QueueEntryInfo,
-  type QueueSnapshot,
-  type ToolInteraction,
-} from "@gent/sdk"
 import { useEnv, useWorkspace } from "./workspace"
 import { writeFileAtomic } from "@gent/core/host"
 import {
@@ -2768,13 +2766,7 @@ export function createSessionController(props: {
   ext.setActivityProvider(() => {
     const session = Option.fromNullishOr(client.session())
     const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))
-    const connection = Option.fromNullishOr(client.connectionState())
-    if (
-      client.isLoading() ||
-      client.isReconnecting() ||
-      (Option.isSome(connection) && connection.value._tag === "Disconnected")
-    )
-      return { sessionId, state: "unknown" }
+    if (client.isLoading() || client.isReconnecting()) return { sessionId, state: "unknown" }
     if (
       isBlockingAuthGate(authGateState()) ||
       composerState()._tag === "interaction" ||

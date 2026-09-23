@@ -129,21 +129,6 @@ describe("BuildFingerprint", () => {
         expect(result.fp1).toMatch(/^bin-/)
       }),
   )
-
-  it.live("Test layer returns deterministic fingerprint", () =>
-    Effect.gen(function* () {
-      const bf = yield* BuildFingerprint
-      expect(yield* bf.current).toBe("test-fingerprint")
-    }).pipe(Effect.provide(BuildFingerprint.Test())),
-  )
-
-  it.live("Test layer with override returns custom fingerprint", () =>
-    Effect.gen(function* () {
-      const bf = yield* BuildFingerprint
-      const fp = yield* bf.current
-      expect(fp).toBe("custom-fp")
-    }).pipe(Effect.provide(BuildFingerprint.Test("custom-fp"))),
-  )
 })
 
 // ── launch config ───────────────────────────────────────────────────────────
@@ -152,11 +137,10 @@ describe("BuildFingerprint", () => {
  * The launch values `apps/server/src/main.ts` reads its environment through.
  *
  * A launcher gets strings. Before this config, `Number()` accepted anything
- * finite and an unknown mode string fell through to the default, so two wrong
- * values ran instead of stopping: `GENT_IDLE_TIMEOUT_MS=-1` made the idle
- * watcher shut the server down on its first poll, and a misspelled
- * `GENT_PROVIDER_MODE` selected the live provider for a caller that asked for
- * the scripted one. Each test below names the value that used to pass.
+ * finite and an unknown mode string fell through to the default, so a wrong
+ * value ran instead of stopping: a misspelled `GENT_PROVIDER_MODE` selected
+ * the live provider for a caller that asked for the scripted one. Each test
+ * below names the value that used to pass.
  *
  * Every case drives the real `ConfigProvider`, so it exercises the same path
  * the launcher takes rather than a decoder called by hand.
@@ -178,54 +162,6 @@ const failureOf = (env: Record<string, string>) =>
     }
     return String(result.failure)
   })
-
-describe("GENT_IDLE_TIMEOUT_MS", () => {
-  it.effect("an unset variable takes the fallback", () =>
-    Effect.gen(function* () {
-      const launch = yield* launchWith({})
-      expect(launch.idleTimeoutMs).toBe(30_000)
-    }),
-  )
-
-  it.effect("a positive whole number is taken as given", () =>
-    Effect.gen(function* () {
-      const launch = yield* launchWith({ GENT_IDLE_TIMEOUT_MS: "250" })
-      expect(launch.idleTimeoutMs).toBe(250)
-    }),
-  )
-
-  it.effect("a negative timeout fails instead of shutting the server down at once", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_IDLE_TIMEOUT_MS: "-1" })
-      expect(failure).toContain("GENT_IDLE_TIMEOUT_MS")
-      expect(failure).toContain("greater than 0")
-    }),
-  )
-
-  it.effect("zero fails: an idle window of no length stops the server immediately", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_IDLE_TIMEOUT_MS: "0" })
-      expect(failure).toContain("GENT_IDLE_TIMEOUT_MS")
-      expect(failure).toContain("greater than 0")
-    }),
-  )
-
-  it.effect("a fractional timeout fails", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_IDLE_TIMEOUT_MS: "1.5" })
-      expect(failure).toContain("GENT_IDLE_TIMEOUT_MS")
-      expect(failure).toContain("an integer")
-    }),
-  )
-
-  it.effect("text that is not a number fails", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_IDLE_TIMEOUT_MS: "soon" })
-      expect(failure).toContain("GENT_IDLE_TIMEOUT_MS")
-      expect(failure).toContain("finite number")
-    }),
-  )
-})
 
 describe("GENT_PORT", () => {
   it.effect("an unset variable takes the fallback", () =>
@@ -273,7 +209,6 @@ describe("mode words", () => {
       const launch = yield* launchWith({})
       expect(launch.providerMode).toBe("live")
       expect(launch.persistenceMode).toBe("sqlite")
-      expect(launch.serverMode).toBe("standalone")
     }),
   )
 
@@ -297,22 +232,6 @@ describe("mode words", () => {
       const failure = yield* failureOf({ GENT_PERSISTENCE_MODE: "in-memory" })
       expect(failure).toContain("GENT_PERSISTENCE_MODE")
       expect(failure).toContain('"sqlite" | "memory"')
-    }),
-  )
-
-  it.effect("a misspelled server mode fails instead of running standalone forever", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_SERVER_MODE: "share" })
-      expect(failure).toContain("GENT_SERVER_MODE")
-      expect(failure).toContain('"standalone" | "shared"')
-    }),
-  )
-
-  it.effect("the mode comparison is exact, not a prefix", () =>
-    Effect.gen(function* () {
-      const failure = yield* failureOf({ GENT_SERVER_MODE: "shared-extra" })
-      expect(failure).toContain("GENT_SERVER_MODE")
-      expect(failure).toContain('"standalone" | "shared"')
     }),
   )
 })
@@ -573,7 +492,7 @@ describe("Server Lock", () => {
 
           const owner = yield* Gent.server(options)
           expect(owner._tag).toBe("Owned")
-          const ownerStatus = yield* (yield* Gent.client(owner)).client.runtime.status()
+          const ownerEntry = Option.getOrThrow(yield* serverLock.read(home))
 
           const attached = yield* Gent.server(options)
           expect(attached._tag).toBe("Attached")
@@ -589,8 +508,8 @@ describe("Server Lock", () => {
               ),
             ),
           )
-          expect(identity.serverId).toBe(ownerStatus.serverId)
-          expect(identity.pid).toBe(ownerStatus.pid)
+          expect(identity.serverId).toBe(ownerEntry.serverId)
+          expect(identity.pid).toBe(process.pid)
         }),
       ),
   )
@@ -666,6 +585,74 @@ describe("Server Lock", () => {
         }).pipe(withSignalTrap)
         expect(server._tag).toBe("Owned")
         expect(Option.getOrThrow(yield* serverLock.read(home)).dbPath).toBe(ownDb)
+      }),
+    ),
+  )
+
+  it.scopedLive("a fixed-port server takes the lock and names itself in the entry", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const owner = yield* Gent.server({
+          cwd: home,
+          port: 0,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        })
+        expect(owner._tag).toBe("Owned")
+        expect(Option.getOrThrow(yield* serverLock.read(home)).rpcUrl).toBe(owner.url)
+        // A client without a port finds that server and attaches to it.
+        const client = yield* Gent.server({
+          cwd: home,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        })
+        expect(client._tag).toBe("Attached")
+        expect(client.url).toBe(owner.url)
+      }),
+    ),
+  )
+
+  it.scopedLive("an attached client reads the workspace its cwd names", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const cwdA = yield* makeTmpHomeScoped
+        const cwdB = yield* makeTmpHomeScoped
+        const options = {
+          cwd: home,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        }
+        expect((yield* Gent.server(options))._tag).toBe("Owned")
+        const attached = yield* Gent.server(options)
+        expect(attached._tag).toBe("Attached")
+        const clientA = (yield* Gent.client(attached, { cwd: cwdA })).client
+        const clientB = (yield* Gent.client(attached, { cwd: cwdB })).client
+
+        const created = yield* clientA.session.create({ name: "Workspace A", cwd: cwdA })
+        const listed = (sessions: ReadonlyArray<{ readonly id: string }>) =>
+          sessions.map((session) => session.id)
+        expect(listed(yield* clientA.session.list())).toContain(created.sessionId)
+        expect(listed(yield* clientB.session.list())).not.toContain(created.sessionId)
+      }).pipe(Effect.timeout("20 seconds")),
+    ),
+  )
+
+  it.scopedLive("a fixed-port server does not start on a database another server owns", () =>
+    provideFs(
+      Effect.gen(function* () {
+        const home = yield* makeTmpHomeScoped
+        const options = {
+          cwd: home,
+          state: Gent.state.sqlite({ home }),
+          provider: Gent.provider.mock(),
+        }
+        const owner = yield* Gent.server(options)
+        expect(owner._tag).toBe("Owned")
+        const pid = Option.getOrThrow(yield* serverLock.read(home)).pid
+        const second = yield* Gent.server({ ...options, port: 0 }).pipe(Effect.flip)
+        expect(second.message).toContain(`PID ${pid}`)
       }),
     ),
   )

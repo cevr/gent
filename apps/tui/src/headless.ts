@@ -18,6 +18,8 @@ import {
   type BranchId,
   type Message,
   type SessionId,
+  GentConnectionError,
+  type GentNamespacedClient,
 } from "@gent/core/protocol"
 import {
   CellOperationReceipts,
@@ -26,7 +28,6 @@ import {
   toolArgSummary,
   type ToolInput,
 } from "./utils.js"
-import { GentConnectionError, type GentNamespacedClient } from "@gent/sdk"
 import { randomId } from "./utils"
 
 // ── headless tool renderers ─────────────────────────────────────────────────

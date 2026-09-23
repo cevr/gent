@@ -26,7 +26,7 @@ import {
   Schema,
   Scope,
 } from "effect"
-import { AgentName, BranchId, DriverRef, SessionId } from "@gent/core/protocol"
+import { AgentName, BranchId, SessionId } from "@gent/core/protocol"
 import {
   type AutocompleteItem,
   type ClientActivitySnapshot,
@@ -675,7 +675,7 @@ describe("driver routing through the client transport", () => {
       return Effect.gen(function* () {
         const { transport: service } = yield* ClientContext
         const error = yield* service
-          .driverSet({ agentName, driver: DriverRef.make({ id: "model:nope" }) })
+          .driverSet({ agentName, driverId: "model:nope" })
           .pipe(Effect.flip)
         expect(error._tag).toBe("ClientTransportRequestError")
         expect(error.tag).toBe("driver.set")

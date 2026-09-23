@@ -14,21 +14,11 @@ import {
   type Scope,
 } from "effect"
 import {
-  type Branch,
-  type BranchTreeNode,
   buildLogPaths,
-  ConnectionState,
   ensureLogDir,
   resolveLogDir,
-  type ExtensionHealthSnapshot,
-  type GentClientRpcError,
-  type GentNamespacedClient,
   type GentRuntime,
   makeJsonFileLogger,
-  type Message,
-  type QueueSnapshot,
-  type SessionSnapshot,
-  type SteerCommand,
 } from "@gent/sdk"
 import {
   type AgentDefinition,
@@ -46,6 +36,16 @@ import {
   SessionId,
   DEFAULT_MODEL_ID,
   resolveAgentModel,
+  type Branch,
+  type BranchTreeNode,
+  ConnectionState,
+  type ExtensionHealthSnapshot,
+  type GentClientRpcError,
+  type GentNamespacedClient,
+  type Message,
+  type QueueSnapshot,
+  type SessionSnapshot,
+  type SteerCommand,
 } from "@gent/core/protocol"
 import {
   createContext,
@@ -873,11 +873,6 @@ export function ClientProvider(props: ClientProviderProps) {
     const unsubscribe = runtime.lifecycle.subscribe((nextState) => {
       const connectionDetails: Record<string, string | number> = {}
       if ("generation" in nextState) connectionDetails["generation"] = nextState.generation
-      if ("reason" in nextState) connectionDetails["reason"] = nextState.reason
-      if ("pid" in nextState) {
-        const pid = Option.fromNullishOr(nextState.pid)
-        if (Option.isSome(pid)) connectionDetails["pid"] = pid.value
-      }
       log.info("connection.state", {
         tag: nextState._tag,
         ...connectionDetails,

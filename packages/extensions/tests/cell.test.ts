@@ -48,7 +48,6 @@ import {
   RuntimeEnvironment,
   BunGentPlatformLive,
   SqliteStorage,
-  EventPublisherLive,
   EventStore,
   CurrentWorkspaceId,
   WorkspaceId,
@@ -2266,11 +2265,7 @@ const host = testToolContext({
   branchId: branchIdToolCall,
   toolCallId,
 })
-const base = Layer.mergeAll(
-  BunServices.layer,
-  ToolRunner.Live,
-  EventPublisherLive.pipe(Layer.provide(EventStore.Memory)),
-)
+const base = Layer.mergeAll(BunServices.layer, ToolRunner.Live, EventStore.Memory)
 
 it.scopedLive("uses the exact selected capability and still enforces the input schema", () =>
   Effect.gen(function* () {

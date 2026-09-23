@@ -33,9 +33,9 @@ import {
   type ModelContextMetrics,
   ModelId,
   ProviderId,
+  type QueueEntryInfo,
 } from "@gent/core/protocol"
 import { BunServices } from "@effect/platform-bun"
-import type { QueueEntryInfo } from "@gent/sdk"
 import { RGBA } from "@opentui/core"
 
 // ── composer interaction state ──────────────────────────────────────────────

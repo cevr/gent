@@ -76,6 +76,11 @@ import {
 } from "../runtime/tools.js"
 import { type AgentLoopTurnProfile, runAgentLoopTurnProfile } from "../runtime/turn.js"
 import { SessionRuntime } from "../runtime/session.js"
+import {
+  type AgentLoopClientServices,
+  dequeueFollowUpOn,
+  queueFollowUpOn,
+} from "../domain/agent-loop.js"
 import { type ApprovalDecision, encodeInteractionDecision } from "../domain/interaction.js"
 import { LanguageModelLayers } from "./language-model.js"
 import { makeInProcessClient, RpcHandlersLive, StateLocation } from "../server/server.js"
@@ -93,7 +98,6 @@ import {
 import {
   EventEnvelope,
   EventId,
-  type EventPublisher,
   EventStore,
   type EventStoreService,
   getEventSessionId,
@@ -600,15 +604,17 @@ export const captureTurnTools = Effect.fn("test.captureTurnTools")(function* (ru
 
 /**
  * The host context a leaf sees on a branch whose session runtime is live: its
- * session facade queues, sends, and steers through that runtime.
+ * session facade sends and steers through that runtime, and queues through the
+ * branch's actor, as a loop's facade does for another branch.
  */
 export const runtimeHostContext = Effect.fn("test.runtimeHostContext")(function* (run: HarnessRun) {
   const runtime = yield* SessionRuntime
+  const loopClient = yield* Effect.context<AgentLoopClientServices>()
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
     sessionControl: {
-      queueFollowUp: (input) => runtime.queueFollowUp(input),
-      dequeueFollowUp: (input) => runtime.dequeueFollowUp(input),
+      queueFollowUp: (input) => queueFollowUpOn(input).pipe(Effect.provideContext(loopClient)),
+      dequeueFollowUp: (input) => dequeueFollowUpOn(input).pipe(Effect.provideContext(loopClient)),
       send: (input) => runtime.sendUserMessage(input),
       steer: (command) => runtime.steer(command),
     },
@@ -718,13 +724,13 @@ export interface E2ELayerConfig {
   readonly approvalLayer?: Layer.Layer<
     ApprovalService,
     never,
-    EventPublisher | GentPlatform | InteractionStorage
+    EventStore | GentPlatform | InteractionStorage
   >
   /** Use the production cold-interaction service with durable pending rows. */
   readonly durableApproval?: boolean
   /** File-backed SQLite path for restart/recovery tests. Defaults to in-memory SQLite. */
   readonly storagePath?: string
-  /** Optional per-cwd profile cache for shared-server routing tests. */
+  /** Optional per-cwd profile cache for per-workspace routing tests. */
   readonly sessionProfileCacheLayer?: Layer.Layer<SessionProfileCache>
   /** Extra layers to merge (e.g., additional service overrides) */
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>

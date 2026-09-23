@@ -251,20 +251,6 @@ export const makeJsonFileLogger = (
   })
 
 // =============================================================================
-// Config
-// =============================================================================
-
-const clearLogFile = (
-  dir: string,
-  path: string,
-): Effect.Effect<void, never, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
-    yield* ensureLogDir(dir)
-    const fs = yield* FileSystem.FileSystem
-    yield* Effect.ignore(fs.writeFileString(path, ""))
-  })
-
-// =============================================================================
 // Exported Layers
 // =============================================================================
 
@@ -282,7 +268,9 @@ const GentLogger = (
   Layer.unwrap(
     Effect.gen(function* () {
       const logFile = buildLogPaths(cwd, logDir).log
-      yield* clearLogFile(logDir, logFile)
+      // Appended, never cleared: the name is per process start, so the only
+      // earlier lines belong to another logger of this process.
+      yield* ensureLogDir(logDir)
       const jsonLogger = yield* makeJsonFileLogger(logFile)
       return Logger.layer([jsonLogger])
     }).pipe(Effect.orElseSucceed(() => Layer.empty)),

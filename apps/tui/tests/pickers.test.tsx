@@ -12,6 +12,7 @@ import {
   ModelId,
   ProviderId,
   SessionId,
+  type Branch,
 } from "@gent/core/protocol"
 import {
   BranchPicker,
@@ -24,7 +25,6 @@ import {
   reasoningRows,
   SettingsPicker,
 } from "../src/pickers"
-import type { Branch } from "@gent/sdk"
 import { createMockClient, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { waitForFrame } from "./helpers-boundary"
 

@@ -712,13 +712,7 @@ const makeCursorReplayStream = <E>(params: {
     }),
   )
 
-// ── event-publisher ─────────────────────────────────────────────────────────
-
-interface EventPublisherService {
-  readonly append: (event: AgentEvent) => Effect.Effect<EventEnvelope, EventStoreError>
-  readonly deliver: (envelope: EventEnvelope) => Effect.Effect<void>
-  readonly publish: (event: AgentEvent) => Effect.Effect<void, EventStoreError>
-}
+// ── extension-state-publisher ───────────────────────────────────────────────
 
 interface ExtensionStatePublisherService {
   readonly changed: (params: {
@@ -728,54 +722,19 @@ interface ExtensionStatePublisherService {
   }) => Effect.Effect<void, EventStoreError>
 }
 
-export class EventPublisher extends Context.Service<EventPublisher, EventPublisherService>()(
-  "@gent/core/src/domain/event/EventPublisher",
-) {
-  static Test = (): Layer.Layer<EventPublisher> =>
-    Layer.succeed(
-      EventPublisher,
-      EventPublisher.of({
-        append: (event) =>
-          Effect.map(Clock.currentTimeMillis, (createdAt) =>
-            EventEnvelope.make({ id: EventId.make(0), event, createdAt }),
-          ),
-        deliver: () => Effect.void,
-        publish: () => Effect.void,
-      }),
-    )
-}
-
+/** The extension facet over `EventStore`: an extension says its state changed, nothing more. */
 export class ExtensionStatePublisher extends Context.Service<
   ExtensionStatePublisher,
   ExtensionStatePublisherService
 >()("@gent/core/src/domain/event/ExtensionStatePublisher") {}
 
-const makePublisherContext = (publisher: EventPublisherService) =>
-  Context.empty().pipe(
-    Context.add(EventPublisher, publisher),
-    Context.add(ExtensionStatePublisher, {
-      changed: (params) => publisher.publish(ExtensionStateChanged.make(params)),
+export const ExtensionStatePublisherLive: Layer.Layer<ExtensionStatePublisher, never, EventStore> =
+  Layer.effect(
+    ExtensionStatePublisher,
+    Effect.gen(function* () {
+      const eventStore = yield* EventStore
+      return ExtensionStatePublisher.of({
+        changed: (params) => eventStore.publish(ExtensionStateChanged.make(params)),
+      })
     }),
   )
-
-export const EventPublisherLive: Layer.Layer<
-  EventPublisher | ExtensionStatePublisher,
-  never,
-  EventStore
-> = Layer.effectContext(
-  Effect.gen(function* () {
-    const baseEventStore = yield* EventStore
-
-    return makePublisherContext(
-      EventPublisher.of({
-        append: (event) => baseEventStore.append(event),
-        deliver: (envelope) => baseEventStore.deliver(envelope),
-        publish: (event) =>
-          Effect.gen(function* () {
-            const envelope = yield* baseEventStore.append(event)
-            yield* baseEventStore.deliver(envelope)
-          }),
-      }),
-    )
-  }),
-)

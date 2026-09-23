@@ -13,7 +13,6 @@ import { Message, MessageMetadata, QueueSnapshot, SteerCommand } from "./message
 import {
   ActorCommandId,
   BranchId,
-  ClientRequestGrant,
   ExtensionId,
   InteractionRequestId,
   type InteractionRequestId as InteractionRequestIdType,
@@ -371,7 +370,7 @@ export const SendUserMessagePayload = Schema.Struct({
 })
 export type SendUserMessagePayload = typeof SendUserMessagePayload.Type
 
-export const QueueFollowUpPayload = Schema.Struct({
+const QueueFollowUpPayload = Schema.Struct({
   sourceId: FollowUpSourceIdSchema,
   sessionId: SessionId,
   branchId: BranchId,
@@ -379,17 +378,15 @@ export const QueueFollowUpPayload = Schema.Struct({
   metadata: Schema.optional(MessageMetadata),
   /** Start a turn for the item even on a branch with no prior history. */
   wake: Schema.optional(Schema.Boolean),
-  /** The client request it was sent under; see `ClientRequestGrant`. */
-  clientRequest: Schema.optional(ClientRequestGrant),
 })
-export type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
+type QueueFollowUpPayload = typeof QueueFollowUpPayload.Type
 
-export const DequeueFollowUpPayload = Schema.Struct({
+const DequeueFollowUpPayload = Schema.Struct({
   sourceId: FollowUpSourceIdSchema,
   sessionId: SessionId,
   branchId: BranchId,
 })
-export type DequeueFollowUpPayload = typeof DequeueFollowUpPayload.Type
+type DequeueFollowUpPayload = typeof DequeueFollowUpPayload.Type
 
 const WorkspaceFields = {
   workspaceId: WorkspaceId,
@@ -405,8 +402,6 @@ const QueueFollowUpFields = {
   message: Message,
   /** Start a turn for this item even on a branch with no prior history. */
   wake: Schema.optional(Schema.Boolean),
-  /** The client request it was sent under; see `ClientRequestGrant`. */
-  clientRequest: Schema.optional(ClientRequestGrant),
 }
 
 const SteerFields = {
@@ -685,7 +680,6 @@ export const queueFollowUpOn = Effect.fn("AgentLoop.client.queueFollowUp")(funct
         workspaceId,
         message,
         wake: input.wake,
-        clientRequest: input.clientRequest,
       }),
     )
     .pipe(asAgentLoopError(`Failed to queue follow-up ${message.id}`))

@@ -17,7 +17,6 @@ import {
   messagePartsText,
   messagePartsTextLines,
   messagePartsToolCallParts,
-  messageSingleText,
   projectMessagesWithToolInteractions,
   projectResponsePartsToMessageParts,
   splitLines,
@@ -178,6 +177,17 @@ describe("headTail", () => {
     const result = headTail([1, 2, 3, 4], 4)
     expect(result.head).toEqual([1, 2, 3, 4])
     expect(result.truncatedCount).toBe(0)
+  })
+
+  test("an odd limit keeps exactly that many items, the extra one at the head", () => {
+    const one = headTail([1, 2, 3], 1)
+    expect(one.head).toEqual([1])
+    expect(one.tail).toEqual([])
+    expect(one.truncatedCount).toBe(2)
+    const five = headTail([1, 2, 3, 4, 5, 6, 7], 5)
+    expect(five.head).toEqual([1, 2, 3])
+    expect(five.tail).toEqual([6, 7])
+    expect(five.truncatedCount).toBe(2)
   })
 
   test("handles empty array", () => {
@@ -1291,7 +1301,6 @@ describe("message part projection", () => {
 
     expect(messagePartsText(parts)).toBe("hello")
     expect(messagePartsTextLines(parts)).toEqual(["hello"])
-    expect(messageSingleText(parts)).toBeUndefined()
     expect(messagePartsReasoning(parts)).toBe("")
     expect(messagePartsImages(parts)).toEqual([{ mediaType: "image/png" }])
     expect(messagePartsToolCallParts(parts)).toEqual([toolCallPart])
@@ -1301,7 +1310,6 @@ describe("message part projection", () => {
     const first = Prompt.textPart({ text: "one" })
     const parts = [first, Prompt.reasoningPart({ text: "think" }), Prompt.textPart({ text: "two" })]
 
-    expect(messageSingleText([first])).toBe("one")
     expect(messagePartsText(parts)).toBe("onetwo")
     expect(messagePartsTextLines(parts)).toEqual(["one", "two"])
     expect(messagePartsReasoning(parts)).toBe("think")

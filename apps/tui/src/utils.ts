@@ -1,8 +1,13 @@
 import { Effect, FileSystem, Match, Option, Path, Predicate, Random, Schema } from "effect"
 import { type Context, useContext } from "solid-js"
 import { textWidth } from "./text-width-adapter"
-import type { GentClientRpcError } from "@gent/sdk"
-import { GentConnectionError, GentRpcError, lineCount, splitLines } from "@gent/core/protocol"
+import {
+  GentConnectionError,
+  GentRpcError,
+  lineCount,
+  splitLines,
+  type GentClientRpcError,
+} from "@gent/core/protocol"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import type { ToolCall } from "./tool-renderers"
 

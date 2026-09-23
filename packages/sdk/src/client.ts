@@ -19,7 +19,6 @@ import {
   workspaceHeadersForCwd,
 } from "@gent/core/host"
 import {
-  awaitServerShutdown,
   resolveServer,
   getOwnedInternal,
   state as stateFactories,
@@ -40,9 +39,6 @@ const staticLifecycle = (state: ConnectionState): GentLifecycle => ({
     listener(state)
     return () => {}
   },
-  restart: Effect.fail(
-    new GentConnectionError({ message: "restart not supported on this transport" }),
-  ),
   waitForReady: Effect.void,
 })
 
@@ -159,11 +155,6 @@ const connectWs = (
           listeners.delete(listener)
         }
       },
-      restart: Effect.fail(
-        new GentConnectionError({
-          message: "restart not supported — WS transport reconnects automatically",
-        }),
-      ),
       waitForReady: Effect.callback<void>((resume, signal) => {
         if (currentState._tag === "Connected") {
           resume(Effect.void)
@@ -216,12 +207,6 @@ export const Gent = {
     options: GentServerOptions,
   ): Effect.Effect<GentServer, GentConnectionError, Scope.Scope> => resolveServer(options),
 
-  /**
-   * Block until the server stops. A server started with `idleShutdown`
-   * returns after its idle window; every other server blocks forever.
-   */
-  awaitShutdown: (server: GentServer): Effect.Effect<void> => awaitServerShutdown(server),
-
   /** Connect to a server. Owned servers use direct RPC; attached servers or RPC URLs use WS. */
   client: (
     serverOrUrl: GentServer | string,
@@ -233,6 +218,12 @@ export const Gent = {
         return yield* connectWs(serverOrUrl, workspaceHeadersForCwd(cwd))
       }
 
+      // One header rule for both transports: a client cwd names its
+      // workspace; without one, the client reads the server's workspace.
+      const headersOr = (serverHeaders: () => Record<string, string>) =>
+        Option.fromNullishOr(options?.cwd).pipe(
+          Option.match({ onNone: serverHeaders, onSome: workspaceHeadersForCwd }),
+        )
       return yield* Match.value(serverOrUrl).pipe(
         Match.tagsExhaustive({
           Owned: (ownedServer) =>
@@ -242,22 +233,16 @@ export const Gent = {
                   () => new GentConnectionError({ message: "owned server internal state missing" }),
                 ),
               )
-              // Idle shutdown counts clients, and an in-process one opens no
-              // socket for the transport tracker to see. Registering here keeps
-              // the server alive for as long as this client's scope is open.
-              yield* internal.trackInProcessClient
-              const headers = Option.fromNullishOr(options?.cwd).pipe(
-                Option.match({
-                  onNone: () => internal.headers,
-                  onSome: workspaceHeadersForCwd,
-                }),
+              return yield* inProcessBundle<Scope.Scope>(
+                internal.handlerContext,
+                headersOr(() => internal.headers),
               )
-              return yield* inProcessBundle<Scope.Scope>(internal.handlerContext, headers)
             }),
           Attached: (attachedServer) =>
-            connectWs(attachedServer.url, {
-              [WORKSPACE_ID_HEADER]: attachedServer.workspaceId,
-            }),
+            connectWs(
+              attachedServer.url,
+              headersOr(() => ({ [WORKSPACE_ID_HEADER]: attachedServer.workspaceId })),
+            ),
         }),
       )
     }),

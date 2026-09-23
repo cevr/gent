@@ -208,9 +208,9 @@ export class SessionStorage extends Context.Service<SessionStorage, SessionStora
                 })
               }
             }
-            // A session with no thread of its own starts one. Only a caller
-            // continuing existing work — a compaction handoff — passes the
-            // parent's thread; a spawn stays out of it by saying nothing.
+            // A session with no thread of its own starts one. Only a create
+            // with `continueThread` (the TUI `/handoff`) passes the parent's
+            // thread; a spawn stays out of it by saying nothing.
             const stored = Option.match(Option.fromUndefinedOr(session.threadId), {
               onNone: () => new Session({ ...session, threadId: session.id }),
               onSome: () => session,
@@ -903,6 +903,12 @@ interface RelationshipStorageService {
     parentSessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
 
+  /**
+   * The session and its persisted parent chain, nearest first, up to the
+   * real root however many handoffs it crosses. The walk stops at a missing
+   * or repeated parent, so a broken or cyclic chain ends on a session that
+   * still names a parent, and a caller can fail closed on it.
+   */
   readonly getSessionAncestors: (
     sessionId: SessionId,
   ) => Effect.Effect<ReadonlyArray<Session>, StorageError>
@@ -956,20 +962,30 @@ export class RelationshipStorage extends Context.Service<
         getSessionAncestors: Effect.fn("RelationshipStorage.getSessionAncestors")(
           function* (sessionId) {
             const workspaceId = yield* CurrentWorkspaceId
-            const rows =
-              yield* sql<SessionRow>`WITH RECURSIVE ancestors(${sql.literal(SESSION_COLUMNS)}, depth) AS (
-            SELECT ${sql.literal(SESSION_COLUMNS)}, 0
-            FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
-            UNION ALL
-            SELECT s.id, s.name, s.cwd, s.model_id, s.reasoning_level, s.active_branch_id, s.parent_session_id, s.parent_branch_id, s.thread_id, s.admission_json, s.created_at, s.updated_at, a.depth + 1
+            // `UNION` over ids alone ends on a cycle: a repeated id adds no row.
+            const rows = yield* sql<SessionRow>`WITH RECURSIVE ancestors(id) AS (
+            SELECT id FROM sessions WHERE id = ${sessionId} AND workspace_id = ${workspaceId}
+            UNION
+            SELECT s.parent_session_id
             FROM sessions s
-            JOIN ancestors a ON s.id = a.parent_session_id
-            WHERE a.depth < 20 AND s.workspace_id = ${workspaceId}
+            JOIN ancestors a ON s.id = a.id
+            WHERE s.workspace_id = ${workspaceId} AND s.parent_session_id IS NOT NULL
           )
           SELECT ${sql.literal(SESSION_COLUMNS)}
-          FROM ancestors
-          ORDER BY depth ASC`
-            return yield* Effect.forEach(rows, sessionFromRow)
+          FROM sessions
+          WHERE workspace_id = ${workspaceId} AND id IN (SELECT id FROM ancestors)`
+            const byId = new Map<string, SessionRow>(rows.map((row) => [row.id, row]))
+            const chain: SessionRow[] = []
+            let next = Option.fromNullishOr(byId.get(sessionId))
+            while (Option.isSome(next)) {
+              const row = next.value
+              chain.push(row)
+              byId.delete(row.id)
+              next = Option.flatMap(Option.fromNullishOr(row.parent_session_id), (parentId) =>
+                Option.fromNullishOr(byId.get(parentId)),
+              )
+            }
+            return yield* Effect.forEach(chain, sessionFromRow)
           },
           Effect.mapError(storageError("Failed to get session ancestors")),
         ),
