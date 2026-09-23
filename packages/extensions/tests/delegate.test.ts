@@ -260,7 +260,6 @@ describe("a child's completion", () => {
             private: false,
             submitted: true,
             delivered: true,
-            preview: "pong",
           })
           expect(entry?.completed).toEqual({})
         }).pipe(Effect.timeout("10 seconds")),
@@ -334,21 +333,6 @@ describe("a child's completion", () => {
         expect(tools.filter((name) => name.startsWith("delegate."))).toEqual([])
       }).pipe(Effect.timeout("8 seconds")),
     ),
-  )
-
-  it.live(
-    "a 300-char reply is clipped to one line in the registry",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const harness = yield* harnessWithHome(startThenEnd("p".repeat(300)))
-          yield* sendPrompt(harness, "delegate this task")
-          yield* afterCompletion(harness)
-          const [entry] = yield* harness.registryOf(harness.branchId)
-          expect(entry?.preview).toBe("p".repeat(200) + "…")
-        }).pipe(Effect.timeout("10 seconds")),
-      ),
-    12_000,
   )
 })
 
@@ -514,7 +498,6 @@ describe("a start nobody waits for", () => {
             private: false,
             submitted: true,
             delivered: true,
-            preview: "pong",
           })
           // A clean turn raised no flag; the shape is the same whichever writer recorded it.
           expect(entry?.completed).toEqual({})

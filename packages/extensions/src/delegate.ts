@@ -31,7 +31,6 @@ import {
   AgentName,
   BranchId,
   defineExtension,
-  defineRequests,
   defineResource,
   ExtensionContext,
   ExtensionHost,
@@ -42,7 +41,6 @@ import {
   type Message,
   makeRunSpec,
   MessageId,
-  request,
   RequestId,
   type RunSpec,
   RunSpecSchema,
@@ -123,7 +121,7 @@ export const DelegateEntry = Schema.Struct({
   completed: Schema.optionalKey(ChildOutcome),
   /** The parent has the completion: the message is on the parent branch, or the parent stopped the child. */
   delivered: Schema.Boolean,
-  /** Bounded copy of the child's answer, for the parent's view. */
+  /** Written by earlier versions for a client view that is gone; kept so stored rows decode. */
   preview: Schema.optionalKey(Schema.String),
   usage: Schema.optionalKey(ChildUsage),
 })
@@ -261,14 +259,6 @@ const childCompletionSourceId = (requestId: RequestId) => `delegate-complete:${r
 /** Bounded preview inside the parent message; the full output lives on the child branch. */
 const maximumPreviewChars = 4_000
 
-/** The registry keeps a one-line preview for the parent's view; the message carries the long one. */
-const registryPreviewChars = 200
-const clipPreview = (text: string) => {
-  const chars = [...text]
-  if (chars.length <= registryPreviewChars) return text
-  return `${chars.slice(0, registryPreviewChars).join("")}…`
-}
-
 /**
  * The message a parent reads when a child finishes.
  *
@@ -394,17 +384,10 @@ const usageField = (
   Option.match(usage, { onNone: () => ({}), onSome: (value) => ({ usage: value }) })
 
 /** The row once its completion is in the parent's hands, however it got there. */
-const settled = (
-  entry: DelegateEntry,
-  outcome: ChildOutcome,
-  usage: Option.Option<typeof ChildUsage.Type>,
-  text: string,
-): DelegateEntry => ({
+const settled = (entry: DelegateEntry, outcome: ChildOutcome): DelegateEntry => ({
   ...entry,
   completed: outcome,
   delivered: true,
-  preview: clipPreview(text),
-  ...usageField(usage),
 })
 
 /**
@@ -450,7 +433,7 @@ const deliverCompletion = (
       }),
       metadata: { customType: CHILD_COMPLETION_TYPE, details },
     })
-    return settled(entry, outcome, usage, text)
+    return settled(entry, outcome)
   })
 
 const CHILD_TASK_PREFIX = "Task from your parent session "
@@ -510,7 +493,7 @@ const settleIfGone = (entry: DelegateEntry) =>
     const ctx = yield* ExtensionContext
     const child = yield* ctx.Session.getSession(entry.sessionId)
     if (Predicate.isNotUndefined(child)) return entry
-    return settled(entry, { interrupted: true }, Option.none(), "")
+    return settled(entry, { interrupted: true })
   })
 
 /**
@@ -571,7 +554,7 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
  * hook may not know which parent it was writing to. A generation keeps a
  * reconcile that raced the failure from marking its branch clean. Without the
  * gate every model step replays each running child's event log.
- * `delegate.list` and `delegate.children` still reconcile on each call.
+ * `delegate.list` still reconciles on each call.
  */
 class ReconciledBranches extends Context.Service<
   ReconciledBranches,
@@ -737,7 +720,7 @@ const stopChild = (entry: DelegateEntry) =>
       .update((entries) => {
         const current = entries.find((row) => row.requestId === entry.requestId)
         if (Predicate.isUndefined(current) || current.delivered) return entries
-        return replaceEntry(entries, settled(current, { interrupted: true }, Option.none(), ""))
+        return replaceEntry(entries, settled(current, { interrupted: true }))
       })
       .pipe(Effect.ignore)
     yield* ctx.Session.stop({
@@ -978,51 +961,8 @@ export const ListChildren = tool({
 
 // ── client read model ───────────────────────────────────────────────────────
 
-const DELEGATE_EXTENSION_ID = ExtensionId.make("@gent/delegate")
-
-/** One child as a client renders it. `status` is a turn receipt, not task success. */
-export const DelegateChild = Schema.Struct({
-  requestId: RequestId,
-  sessionId: SessionId,
-  branchId: BranchId,
-  agentName: AgentName,
-  toolCallId: Schema.optionalKey(ToolCallId),
-  status: Schema.Literals(["running", "completed", "error"]),
-  preview: Schema.optionalKey(Schema.String),
-  usage: Schema.optionalKey(ChildUsage),
-})
-export type DelegateChild = typeof DelegateChild.Type
-
-/** A registry row read as running, completed, or errored, from its turn receipt. */
-const childStatus = (entry: DelegateEntry): DelegateChild["status"] => {
-  if (Predicate.isUndefined(entry.completed)) return "running"
-  if (failureNames(entry.completed).length > 0) return "error"
-  return "completed"
-}
-
-const toDelegateChild = (entry: DelegateEntry): DelegateChild => ({
-  requestId: entry.requestId,
-  sessionId: entry.sessionId,
-  branchId: entry.branchId,
-  agentName: entry.agentName,
-  ...Record.filter({ toolCallId: entry.toolCallId }, Predicate.isNotUndefined),
-  status: childStatus(entry),
-  ...Record.filter({ preview: entry.preview, usage: entry.usage }, Predicate.isNotUndefined),
-})
-
-/** The children a branch owns, for a client child view. Reconciles first so a crashed start is not missed. */
-export const DelegateRpc = defineRequests(DELEGATE_EXTENSION_ID, {
-  Children: request({
-    id: "delegate.children",
-    description: "Every child this branch owns, from the registry",
-    input: Schema.Struct({}),
-    output: Schema.Array(DelegateChild),
-    execute: Effect.fn("DelegateRpc.Children")(function* () {
-      yield* reconcile()
-      return (yield* registry.read()).map(toDelegateChild)
-    }),
-  }),
-})
+/** The extension id a client matches state pulses against. */
+export const DELEGATE_EXTENSION_ID = ExtensionId.make("@gent/delegate")
 
 // ── extension ───────────────────────────────────────────────────────────────
 
@@ -1045,14 +985,13 @@ const childrenSection = (agent: AgentDefinition) => {
   return [CHILDREN_SECTION]
 }
 
-/** Child admission and control: start, send, cancel, and list. */
+/** Child admission and control: start, cancel, and list. */
 export const DelegateExtension = defineExtension({
   id: "@gent/delegate",
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
     yield* host.register("agent", delegateAgent)
     yield* host.register("tool", StartChild, CancelChild, ListChildren)
-    yield* host.register("request", DelegateRpc.Children)
     yield* host.register("resource", ReconciledBranchesResource)
     // Every turn end is read twice: as a child's receipt for its parent, and
     // as a parent's interrupt for its children.

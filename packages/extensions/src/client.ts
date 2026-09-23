@@ -4,8 +4,7 @@ export {
   childOutcomeWords,
   childTaskBody,
   childTaskText,
-  DelegateChild,
-  DelegateRpc,
+  DELEGATE_EXTENSION_ID,
   readChildCompletionHeadline,
 } from "./delegate.js"
 export { SkillsRpc } from "./skills.js"
