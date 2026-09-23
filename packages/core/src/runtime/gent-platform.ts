@@ -278,6 +278,12 @@ export const runProcess = (
  * credential passes 0600), else the mode of the file it replaces, else the
  * default for a new file.
  */
+/** A string's UTF-8 bytes; bytes as given. */
+const contentBytes = (content: string | Uint8Array): Uint8Array => {
+  if (Predicate.isString(content)) return new TextEncoder().encode(content)
+  return content
+}
+
 export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
   path: string,
   content: string | Uint8Array,
@@ -351,11 +357,9 @@ export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
         yield* Effect.scoped(
           Effect.gen(function* () {
             const file = yield* fs.open(staging, { flag: "w" })
-            if (Predicate.isString(content)) {
-              yield* file.writeAll(new TextEncoder().encode(content))
-            } else {
-              yield* file.writeAll(content)
-            }
+            const bytes = contentBytes(content)
+            // An empty write reports zero bytes written, which writeAll fails; the staged file is already empty.
+            if (bytes.length > 0) yield* file.writeAll(bytes)
             yield* file.sync
           }),
         )
