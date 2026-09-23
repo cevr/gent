@@ -159,14 +159,13 @@ import type { Headers } from "effect/unstable/http"
 /**
  * A client's steer as the loop receives it: an interjection carries the
  * server's client origin over whatever the client set (`clientMetadata`), so
- * no client can claim an extension author, a client request's grant, or drop
- * its own origin.
+ * no client can claim an extension author or drop its own origin. A client
+ * request's grant is not part of the command at all: only the loop's own
+ * facade passes one.
  */
 const clientSteer = (command: TransportSteerCommand): TransportSteerCommand => {
   if (command._tag !== "Interject") return command
-  // A client request's grant is the loop's to hand out; a client cannot claim one.
-  const { clientRequest: _claimed, ...interject } = command
-  return { ...interject, metadata: clientMetadata(command.metadata) }
+  return { ...command, metadata: clientMetadata(command.metadata) }
 }
 
 // ── connection-tracker ──────────────────────────────────────────────────────
@@ -477,6 +476,9 @@ const makeSessionMutationsService: Effect.Effect<
     const queue: SessionId[] = [rootSessionId]
     const seen = new Set<SessionId>()
     let index = 0
+    // Same rule as the durable delete: a handoff that continues the deleted
+    // session's thread survives, so its runtime is not stopped.
+    const rootThread = (yield* sessionStorage.getSession(rootSessionId))?.threadId
 
     while (index < queue.length) {
       const sessionId = queue[index]
@@ -486,6 +488,7 @@ const makeSessionMutationsService: Effect.Effect<
       sessionIds.push(sessionId)
       const children = yield* relationshipStorage.getChildSessions(sessionId)
       for (const child of children) {
+        if (Predicate.isNotUndefined(rootThread) && child.threadId === rootThread) continue
         queue.push(child.id)
       }
     }
@@ -1394,22 +1397,13 @@ const RpcHandlers = GentRpcs.toLayer(
 
       "driver.list": ({ sessionId }: OptionalSessionPayload) =>
         Effect.gen(function* () {
-          const config = yield* configService.get()
           const registry = yield* resolveSessionRegistry(Option.fromUndefinedOr(sessionId))
           const resolved = registry.getResolved()
           const agents = [...resolved.agents.values()]
           const drivers = [...resolved.modelDrivers.values()].map((driver) =>
             DriverInfo.make({ id: driver.id }),
           )
-          const overrides = Option.getOrElse(
-            Option.fromUndefinedOr(config.driverOverrides),
-            () => ({}),
-          )
-          return new DriverListResult({
-            drivers,
-            overrides,
-            agents,
-          })
+          return new DriverListResult({ drivers, agents })
         }).pipe(Effect.scoped),
 
       "driver.set": ({ agentName, driver, sessionId }: SetDriverOverrideInput) =>

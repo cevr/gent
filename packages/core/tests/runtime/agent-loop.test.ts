@@ -2195,6 +2195,7 @@ const makeHarness = (
   options: {
     readonly answered?: ReadonlySet<InteractionRequestId>
     readonly sessionAgent?: Effect.Effect<AgentName, AgentLoopError>
+    readonly completeFailedTurn?: (state: RunningState) => Effect.Effect<void>
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -2211,6 +2212,8 @@ const makeHarness = (
         error: Option.none<AgentLoopError>(),
       }),
       startedRef: yield* Ref.make(true),
+      turnSettled: () => Effect.succeed(false),
+      messageStored: () => Effect.succeed(false),
     })
     const ranTurns = yield* Ref.make<ReadonlyArray<string>>([])
     const interruptedTurns = yield* Ref.make<ReadonlyArray<boolean>>([])
@@ -2234,7 +2237,7 @@ const makeHarness = (
       recordTurnFailure: (_cause, messageId) =>
         Ref.update(failedTurns, (ids) => [...ids, String(messageId)]),
       publishEvent: () => Effect.void,
-      completeFailedTurn: () => Effect.void,
+      completeFailedTurn: options.completeFailedTurn ?? (() => Effect.void),
       interactionAnswered: (requestId) => Effect.succeed(answered.has(requestId)),
       runTurn: (state) =>
         Effect.gen(function* () {
@@ -2305,6 +2308,50 @@ describe("a turn whose agent cannot be read", () => {
       expect(yield* Ref.get(harness.ranTurns)).toEqual(["second"])
       yield* Fiber.interrupt(loop)
     }),
+  )
+
+  it.live(
+    "an interrupt while its receipt and hooks run is not held, and spares the next turn",
+    () =>
+      Effect.gen(function* () {
+        const first = queuedItem("first")
+        const second = queuedItem("second")
+        const initial = admitted(first, [second])
+        const reads = yield* Ref.make(0)
+        const hooksStarted = yield* Deferred.make<void>()
+        const releaseHooks = yield* Deferred.make<void>()
+        const harness = yield* makeHarness(initial, {
+          sessionAgent: Ref.getAndUpdate(reads, (count) => count + 1).pipe(
+            Effect.flatMap((count) => {
+              if (count === 0) return Effect.fail(new AgentLoopError({ message: "database busy" }))
+              return Effect.succeed(DEFAULT_AGENT_NAME)
+            }),
+          ),
+          // The failed turn's receipt and `turnAfter` hooks: a hook still runs.
+          completeFailedTurn: () =>
+            Deferred.succeed(hooksStarted, void 0).pipe(
+              Effect.andThen(Deferred.await(releaseHooks)),
+            ),
+        })
+        yield* TxQueue.offer(harness.turnWorkerQueue, initial.state)
+        const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+        yield* Deferred.await(hooksStarted).pipe(Effect.timeout("2 seconds"))
+        // A normal turn's hooks run outside the interrupt permit; so do these.
+        const interrupt = yield* harness.worker
+          .interrupt()
+          .pipe(Effect.timeout("1 second"), Effect.exit)
+        yield* Deferred.succeed(releaseHooks, void 0)
+        expect(interrupt._tag).toBe("Success")
+        yield* Ref.get(harness.ranTurns).pipe(
+          Effect.repeat({ until: (ids) => ids.length > 0, schedule: Schedule.spaced("5 millis") }),
+          Effect.timeout("2 seconds"),
+        )
+        // The interrupt stopped the failed turn, not the one queued behind it.
+        // (The stub turn never settles, so the worker keeps handing it back.)
+        expect((yield* Ref.get(harness.ranTurns))[0]).toBe("second")
+        expect((yield* Ref.get(harness.interruptedTurns))[0]).toBe(false)
+        yield* Fiber.interrupt(loop)
+      }),
   )
 })
 
@@ -2624,6 +2671,42 @@ describe("turn lifecycle hooks", () => {
       expect(outcomes).toEqual([{ interrupted: false, streamFailed: true }])
       // Two continuations, then the third partial failure ends the turn.
       expect(yield* Ref.get(calls)).toBe(3)
+    }),
+  )
+
+  // A defect in the stream fails the turn phase, not the stream: the turn
+  // ends on its failed receipt, and its hooks run as a normal turn's do,
+  // outside the permit an interrupt takes.
+  const phaseFailingProvider = () =>
+    LanguageModelLayers.testStream(() => Effect.succeed(Stream.die("stream defect")))
+
+  // `Session.stop` sends the Cancel and returns, so this guards the path end
+  // to end; the worker test "an interrupt while its receipt and hooks run"
+  // proves the interrupt itself no longer waits for the hooks.
+  it.scopedLive("a phase-failed turn's hook can stop its own branch", () =>
+    Effect.gen(function* () {
+      const stopped = yield* Deferred.make<boolean>()
+      const extension = defineExtension({
+        id: "@gent/test-turn-after-stops-own-branch",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("turnAfter", (input: TurnAfterInput) =>
+            Effect.gen(function* () {
+              const ctx = yield* ExtensionContext
+              yield* ctx.Session.stop({}).pipe(Effect.ignore)
+              yield* Deferred.succeed(stopped, input.streamFailed)
+            }),
+          )
+        }),
+      })
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: phaseFailingProvider(),
+        extensionInputs: [...e2ePreset.extensionInputs, extension],
+      })
+
+      yield* client.message.send({ sessionId, branchId, content: "answer me" }).pipe(Effect.exit)
+      expect(yield* Deferred.await(stopped).pipe(Effect.timeout("5 seconds"))).toBe(true)
     }),
   )
 })
@@ -4537,6 +4620,8 @@ describe("wake admission", () => {
           error: Option.none<AgentLoopError>(),
         }),
         startedRef: yield* Ref.make(true),
+        turnSettled: (messageId) => Effect.succeed(messageId === MessageId.make("settled")),
+        messageStored: () => Effect.succeed(false),
       }).pipe(
         Effect.provideService(AgentLoopQueueStorage, {
           getQueueState: () => Ref.get(rows),
@@ -4600,6 +4685,26 @@ describe("wake admission", () => {
       (index) => inbox.admit({ message: queuedMessage(`full-${index}`, `item ${index}`) }),
       { discard: true },
     )
+
+  // A replayed follow-up whose turn runs or ran is not a new turn. The running
+  // turn gave up its in-flight slot when it started, so only the phase names it.
+  it.effect("re-admitting the running turn's id queues nothing", () =>
+    withInbox((inbox) =>
+      Effect.gen(function* () {
+        yield* inbox.admit({ message: queuedMessage("busy", "busy (replay)") })
+        expect((yield* inbox.queue).followUp).toEqual([])
+      }),
+    ),
+  )
+
+  it.effect("re-admitting a settled turn's id queues nothing", () =>
+    withInbox((inbox) =>
+      Effect.gen(function* () {
+        yield* inbox.admit({ message: queuedMessage("settled", "settled (replay)") })
+        expect((yield* inbox.queue).followUp).toEqual([])
+      }),
+    ),
+  )
 
   it.effect("a full follow-up queue accepts a retry of a queued id in place", () =>
     withInbox((inbox) =>

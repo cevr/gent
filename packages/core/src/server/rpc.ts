@@ -337,18 +337,15 @@ export type ExtensionHealthSnapshot = Schema.Schema.Type<typeof ExtensionHealthS
 // Driver routing
 // ---------------------------------------------------------------------------
 
-/** Per-driver descriptor returned by `driver.list`. The `_tag` matches `DriverRef`. */
-export const DriverInfo = Schema.TaggedStruct("Model", {
+/** Per-driver descriptor returned by `driver.list`. */
+export const DriverInfo = Schema.Struct({
   id: Schema.String,
 })
-export type DriverInfo = typeof DriverInfo.Type
 
-/** Snapshot returned by `driver.list`. Carries every registered driver
- *  and the active per-agent override map. The TUI joins these against
- *  the agent catalogue to render `/driver`. */
+/** Snapshot returned by `driver.list`: every registered driver and the
+ *  agent catalogue, as the session's profile sees them. */
 export class DriverListResult extends Schema.Class<DriverListResult>("DriverListResult")({
   drivers: Schema.Array(DriverInfo),
-  overrides: Schema.Record(AgentName, DriverRef),
   agents: Schema.Array(AgentDefinition),
 }) {}
 

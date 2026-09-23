@@ -8,6 +8,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Path,
   type PlatformError,
   Predicate,
@@ -58,7 +59,7 @@ import {
 } from "../domain/extension.js"
 import {
   type BranchId,
-  type ClientRequestGrant,
+  ClientRequestGrant,
   ExtensionId,
   MessageId,
   ProcessGenerationId,
@@ -1045,20 +1046,20 @@ const scanDir = Effect.fn("ExtensionLoader.scanDir")(function* (dir: string) {
     if (Option.isSome(found.success)) paths.push(found.success.value)
   }
 
-  return { paths: paths.toSorted((a, b) => a.path.localeCompare(b.path)), unreadable }
+  // Code-unit order, not the locale's: load order decides service conflicts.
+  return { paths: paths.toSorted((a, b) => Order.String(a.path, b.path)), unreadable }
 })
 
 /**
- * Discover extension files from a directory, sorted by name. An entry that
+ * A directory's scanned extension files, sorted by name. An entry that
  * cannot be read is a `load` failure for that path alone; its siblings are
  * still discovered.
  */
 const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
-  dir: string,
+  scanned: DirScan,
   scope: ExtensionScope,
 ) {
   const path = yield* Path.Path
-  const scanned = yield* scanDir(dir)
   const failed: FailedExtension[] = []
   for (const entry of scanned.unreadable) {
     const message = `Failed to read ${entry.path}: ${entry.error.message}`
@@ -1070,30 +1071,62 @@ const discoverDir = Effect.fn("ExtensionLoader.discoverDir")(function* (
   return { paths: scanned.paths, failed }
 })
 
+type DirScan = Effect.Success<ReturnType<typeof scanDir>>
+
+/** The user and project extension directories a profile discovers. */
+interface ExtensionDirectories {
+  readonly userDir: string
+  readonly projectDir: string
+}
+
 /**
- * The extension files a profile would load, each with its version, and the
- * paths that failed to read. A profile is keyed on it, so an added, removed,
- * fixed or edited extension file reaches the next resolve.
+ * One read of the extension directories. A profile is keyed on it
+ * (`extensionScanStamp`) and loaded from it, so its key names exactly the
+ * file versions it loaded.
  */
-const discoveredFilesStamp = (inputs: {
+interface ExtensionScan {
+  readonly dirs: ExtensionDirectories
+  readonly user: DirScan
+  readonly project: DirScan
+}
+
+const scanExtensionDirectories = Effect.fn("ExtensionLoader.scanExtensionDirectories")(function* (
+  dirs: ExtensionDirectories,
+) {
+  const scan: ExtensionScan = {
+    dirs,
+    user: yield* scanDir(dirs.userDir),
+    project: yield* scanDir(dirs.projectDir),
+  }
+  return scan
+})
+
+/** The extension directories a profile for these inputs reads, read once. */
+export const scanRuntimeProfileExtensions = (inputs: {
   readonly cwd: string
   readonly home: string
-}): Effect.Effect<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> =>
+}): Effect.Effect<ExtensionScan, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path
-    const dirs = extensionDirectories(path, inputs)
-    const found = [yield* scanDir(dirs.userDir), yield* scanDir(dirs.projectDir)]
-    return found.flatMap(({ paths, unreadable }) => [
-      ...paths.map((file) => `${file.path}@${file.version}`),
-      ...unreadable.map((entry) => `!${entry.path}`),
-    ])
+    return yield* scanExtensionDirectories(extensionDirectories(path, inputs))
   })
+
+/**
+ * The extension files a scan found, each with its version, and the paths
+ * that failed to read. A profile is keyed on it, so an added, removed, fixed
+ * or edited extension file reaches the next resolve.
+ */
+const extensionScanStamp = (scan: ExtensionScan): ReadonlyArray<string> =>
+  [scan.user, scan.project].flatMap(({ paths, unreadable }) => [
+    ...paths.map((file) => `${file.path}@${file.version}`),
+    ...unreadable.map((entry) => `!${entry.path}`),
+  ])
 
 /** The user and project extension directories a profile discovers. */
 const extensionDirectories = (
   path: Path.Path,
   inputs: { readonly cwd: string; readonly home: string },
-) => ({
+): ExtensionDirectories => ({
   userDir: path.join(inputs.home, GENT_CONFIG_DIRECTORY, "extensions"),
   projectDir: path.join(path.resolve(inputs.cwd), GENT_CONFIG_DIRECTORY, "extensions"),
 })
@@ -1106,7 +1139,11 @@ const importExtensionModule = (filePath: string) => import(filePath)
 /**
  * Load a single extension from a file path. The import names the file's
  * version, so an edited file is imported again instead of from Bun's module
- * cache.
+ * cache. Two limits follow from Bun's module cache. Bun never drops a module,
+ * so every version of an edited file stays in memory until the process
+ * exits. And only the entry file is versioned: a module it imports by a
+ * relative path keeps the first version this process loaded, for a file
+ * extension as for a directory extension's index.
  */
 const loadExtensionFile = Effect.fn("ExtensionLoader.loadExtensionFile")(function* (
   file: DiscoveredFile,
@@ -1255,16 +1292,22 @@ export const configHealthStatuses = Effect.fn("ExtensionHealth.configHealthStatu
 })
 
 /** Discover and load extensions from all configured directories. Per-file isolation — one broken file does not suppress siblings. */
-export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (opts: {
-  readonly userDir: string // ~/.gent/extensions
-  readonly projectDir: string // .gent/extensions
-}) {
+export const discoverExtensions = Effect.fn("ExtensionLoader.discoverExtensions")(function* (
+  dirs: ExtensionDirectories,
+) {
+  return yield* loadExtensionScan(yield* scanExtensionDirectories(dirs))
+})
+
+/** Load the extensions one scan found; see `discoverExtensions`. */
+const loadExtensionScan = Effect.fn("ExtensionLoader.loadExtensionScan")(function* (
+  scan: ExtensionScan,
+) {
   const path = yield* Path.Path
-  const user = yield* discoverDir(opts.userDir, "user")
-  const project = yield* discoverDir(opts.projectDir, "project")
+  const user = yield* discoverDir(scan.user, "user")
+  const project = yield* discoverDir(scan.project, "project")
   const userPaths = user.paths
   const projectPaths = project.paths
-  const projectTrusted = yield* isProjectExtensionDirectoryTrusted(opts)
+  const projectTrusted = yield* isProjectExtensionDirectoryTrusted(scan.dirs)
 
   const loaded: DiscoveredExtension[] = []
   const failed: FailedExtension[] = [...user.failed]
@@ -1644,6 +1687,7 @@ interface RuntimeProfileDeclarations {
 
 export const loadRuntimeProfileDeclarations = (
   inputs: RuntimeProfileInputs,
+  scan: ExtensionScan,
 ): Effect.Effect<
   RuntimeProfileDeclarations,
   never,
@@ -1658,7 +1702,7 @@ export const loadRuntimeProfileDeclarations = (
     const disabledSet = new Set(inputs.disabledExtensions ?? [])
 
     // 2. Discover external extensions (user + project dirs)
-    const discovery = yield* discoverExtensions(extensionDirectories(path, inputs)).pipe(
+    const discovery = yield* loadExtensionScan(scan).pipe(
       Effect.catchEager((error) =>
         Effect.logWarning("runtime-profile.extension.discovery.failed").pipe(
           Effect.annotateLogs({ error: String(error), cwd: canonicalCwd }),
@@ -1798,7 +1842,7 @@ const placeKey = (workspaceId: WorkspaceId, cwd: string): string =>
 
 /**
  * The raw disabled list as the config names it, and the extension files on
- * disk (`discoveredFilesStamp`). It only finds a profile the same inputs
+ * disk (`extensionScanStamp`). It only finds a profile the same inputs
  * resolved before; the profile itself is keyed by `profileKey`.
  */
 const listKey = (
@@ -1895,13 +1939,16 @@ export class SessionProfileCache extends Context.Service<
         const entries = new Map<string, ProfileEntry>()
         const leases = new Map<string, number>()
         // One extension's process resources, shared by every profile that
-        // builds them over the same context (`startProcessResources`), and
+        // builds them over the same context (`startProcessResources`), with
         // the number of profiles that hold them.
         const sharedResources = new Map<
           string,
-          { readonly scope: Scope.Closeable; readonly context: Context.Context<unknown> }
+          {
+            readonly scope: Scope.Closeable
+            readonly context: Context.Context<unknown>
+            holders: number
+          }
         >()
-        const resourceHolders = new Map<string, number>()
         // A raw disabled list seen before, to the profile it resolved to.
         const aliases = new Map<string, string>()
         // The profile the place's config selects now. Only a superseded
@@ -1935,12 +1982,11 @@ export class SessionProfileCache extends Context.Service<
          */
         const dropResources = (keys: ReadonlyArray<string>): ReadonlyArray<Scope.Closeable> =>
           keys.toReversed().flatMap((key) => {
-            const holders = (resourceHolders.get(key) ?? 1) - 1
-            resourceHolders.set(key, holders)
             const shared = Option.fromNullishOr(sharedResources.get(key))
-            if (holders > 0 || Option.isNone(shared)) return []
+            if (Option.isNone(shared)) return []
+            shared.value.holders -= 1
+            if (shared.value.holders > 0) return []
             sharedResources.delete(key)
-            resourceHolders.delete(key)
             return [shared.value.scope]
           })
 
@@ -1989,7 +2035,7 @@ export class SessionProfileCache extends Context.Service<
               const key = [...chain, identity].join("\u0000")
               const shared = Option.fromNullishOr(sharedResources.get(key))
               if (Option.isSome(shared)) {
-                resourceHolders.set(key, (resourceHolders.get(key) ?? 0) + 1)
+                shared.value.holders += 1
                 held.push(key)
                 context = Context.merge(context, shared.value.context)
                 chain.push(identity)
@@ -2004,8 +2050,11 @@ export class SessionProfileCache extends Context.Service<
                 ),
               ).pipe(Effect.exit)
               if (Exit.isSuccess(built)) {
-                sharedResources.set(key, { scope: extensionScope, context: built.value })
-                resourceHolders.set(key, 1)
+                sharedResources.set(key, {
+                  scope: extensionScope,
+                  context: built.value,
+                  holders: 1,
+                })
                 held.push(key)
                 context = Context.merge(context, built.value)
                 chain.push(identity)
@@ -2013,8 +2062,11 @@ export class SessionProfileCache extends Context.Service<
                 continue
               }
               yield* Scope.close(extensionScope, built)
-              // An interrupt stops the whole build; it is not a failed extension.
-              if (Cause.hasInterruptsOnly(built.cause)) return yield* Effect.failCause(built.cause)
+              // An interrupt of this resolve stops the whole build; it is not a
+              // failed extension. An extension that interrupts itself is. The
+              // cause cannot tell them apart, the fiber can: an interruptible
+              // no-op fails at once only when this fiber was interrupted.
+              if (Cause.hasInterruptsOnly(built.cause)) yield* restore(Effect.void)
               const error = Cause.pretty(built.cause)
               yield* Effect.logError("session-profile.resource.failed").pipe(
                 Effect.annotateLogs({ extensionId: extension.manifest.id, error }),
@@ -2095,7 +2147,7 @@ export class SessionProfileCache extends Context.Service<
         const entryFor = (
           place: string,
           list: string,
-          files: ReadonlyArray<string>,
+          scan: ExtensionScan,
           cwd: string,
           fresh: FreshConfig,
           restore: Restore,
@@ -2105,10 +2157,12 @@ export class SessionProfileCache extends Context.Service<
               Option.fromNullishOr(entries.get(key)),
             )
             if (Option.isSome(aliased)) return aliased.value
+            const files = extensionScanStamp(scan)
             const declarations = yield* restore(
-              loadRuntimeProfileDeclarations(effectiveInputs(inputsFor(cwd), fresh.config)).pipe(
-                Effect.provideContext(platformServicesContext),
-              ),
+              loadRuntimeProfileDeclarations(
+                effectiveInputs(inputsFor(cwd), fresh.config),
+                scan,
+              ).pipe(Effect.provideContext(platformServicesContext)),
             )
             const key = profileKey(place, declarations.extensionDeclarations, files)
             const found = Option.fromNullishOr(entries.get(key))
@@ -2179,17 +2233,17 @@ export class SessionProfileCache extends Context.Service<
                 // `current` in the order they read it: a read from before an
                 // edit cannot put the older profile back.
                 const fresh = yield* restore(configService.getFresh(canonicalCwd))
-                const files = yield* restore(
-                  discoveredFilesStamp(inputsFor(canonicalCwd)).pipe(
+                const scan = yield* restore(
+                  scanRuntimeProfileExtensions(inputsFor(canonicalCwd)).pipe(
                     Effect.provideContext(platformServicesContext),
                   ),
                 )
                 const list = listKey(
                   place,
                   effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
-                  files,
+                  extensionScanStamp(scan),
                 )
-                const entry = yield* entryFor(place, list, files, canonicalCwd, fresh, restore)
+                const entry = yield* entryFor(place, list, scan, canonicalCwd, fresh, restore)
                 leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
                 yield* Scope.addFinalizer(callerScope, release(entry, lock))
                 const previous = Option.fromNullishOr(current.get(place))
@@ -2373,7 +2427,11 @@ interface ExtensionSessionControlService {
   }) => Effect.Effect<boolean, Error>
   /** One user message on another branch's loop. */
   readonly send: (input: SendUserMessagePayload) => Effect.Effect<void, Error>
-  readonly steer: (command: SteerCommandType) => Effect.Effect<void, Error>
+  /** Steer a branch; `clientRequest` is the grant of the client request it runs under. */
+  readonly steer: (
+    command: SteerCommandType,
+    clientRequest?: ClientRequestGrant,
+  ) => Effect.Effect<void, Error>
 }
 
 /** Decoding entity ids is cheap; bound it so a large registry does not stall a listing. */
@@ -2387,30 +2445,25 @@ interface ExtensionHostContextInput {
 }
 
 /**
- * A client's extension request while it runs: the grant its branch's loop
- * holds live until the request ends (`ClientRequestGrant`).
- */
-interface ClientRequest {
-  readonly grant: ClientRequestGrant
-}
-
-/**
  * What opened a run. A turn knows whether a client sent its opening message.
  * A client's extension request (a slash command, say) is client-opened, and
  * while it runs a message it sends to its own branch keeps the client origin
+ * through the grant its branch's loop holds live until the request ends
  * (`clientRequestGrant`).
  */
-export type RunOpener =
-  | { readonly openedByClient: boolean }
-  | { readonly clientRequest: ClientRequest }
+export const RunOpener = Schema.TaggedUnion({
+  Turn: { openedByClient: Schema.Boolean },
+  ClientRequest: { grant: ClientRequestGrant },
+})
+export type RunOpener = typeof RunOpener.Type
 
-const clientRequestOf = (opener: RunOpener): Option.Option<ClientRequest> => {
-  if ("clientRequest" in opener) return Option.some(opener.clientRequest)
+const clientRequestOf = (opener: RunOpener): Option.Option<ClientRequestGrant> => {
+  if (opener._tag === "ClientRequest") return Option.some(opener.grant)
   return Option.none()
 }
 
 const runOpenedByClient = (opener: RunOpener): boolean => {
-  if ("clientRequest" in opener) return true
+  if (opener._tag === "ClientRequest") return true
   return opener.openedByClient
 }
 
@@ -2424,8 +2477,8 @@ interface MakeExtensionHostContextRunInfo {
    * an approval in it.
    */
   readonly interactive: boolean
-  /** Some when a client's extension request opened this run. */
-  readonly clientRequest: Option.Option<ClientRequest>
+  /** The live grant, when a client's extension request opened this run. */
+  readonly clientRequest: Option.Option<ClientRequestGrant>
 }
 
 /** Builds the `ExtensionHostContext` for one run of one branch. */
@@ -2557,7 +2610,7 @@ export const makeExtensionHostContextProvider = (
     ) =>
       Option.getOrUndefined(
         Option.filter(
-          Option.map(runInfo.clientRequest, (request) => request.grant),
+          runInfo.clientRequest,
           () => target.sessionId === runInfo.sessionId && target.branchId === runInfo.branchId,
         ),
       )
@@ -2696,15 +2749,17 @@ export const makeExtensionHostContextProvider = (
                     yield* requireTarget("send", target)
                     const requestId = steered.requestId ?? RequestId.make(yield* host.randomId)
                     yield* control((loop) =>
-                      loop.steer({
-                        _tag: "Interject",
-                        ...target,
-                        requestId,
-                        message: steered.content,
-                        metadata: steered.metadata,
-                        wake: steered.wake,
-                        ...omitUndefined({ clientRequest: clientRequestGrant(runInfo, target) }),
-                      }),
+                      loop.steer(
+                        {
+                          _tag: "Interject",
+                          ...target,
+                          requestId,
+                          message: steered.content,
+                          metadata: steered.metadata,
+                          wake: steered.wake,
+                        },
+                        clientRequestGrant(runInfo, target),
+                      ),
                     ).pipe(Effect.mapError(sessionError("send")))
                   }),
               }),
@@ -2888,15 +2943,14 @@ export const sessionWorkingDirectory = (
  * and the host defaults apply. A storage lookup failure falls back to them as well.
  * The caller's scope holds the profile's lease for as long as it uses it.
  */
-export const resolveTurnProfile = (
-  params: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-    readonly profileCache?: SessionProfileCacheService
-    readonly hostProvider: ExtensionHostContextProvider
-    readonly defaults: TurnProfileDefaults
-  } & RunOpener,
-): Effect.Effect<
+export const resolveTurnProfile = (params: {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
+  readonly profileCache?: SessionProfileCacheService
+  readonly hostProvider: ExtensionHostContextProvider
+  readonly defaults: TurnProfileDefaults
+  readonly opener: RunOpener
+}): Effect.Effect<
   AgentLoopTurnProfile,
   never,
   ExtensionRegistry | SessionStorage | ScopeType.Scope
@@ -2908,14 +2962,14 @@ export const resolveTurnProfile = (
     const sessionCwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
     const interactive = turnCanAsk({
       sessionIsSpawned: Option.exists(session, isSpawnedSession),
-      openedByClient: runOpenedByClient(params),
+      openedByClient: runOpenedByClient(params.opener),
     })
     const runInfo = {
       sessionId: params.sessionId,
       branchId: params.branchId,
       sessionCwd: Option.getOrUndefined(sessionCwd),
       interactive,
-      clientRequest: clientRequestOf(params),
+      clientRequest: clientRequestOf(params.opener),
     }
     const profile = yield* Option.match(
       Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),
