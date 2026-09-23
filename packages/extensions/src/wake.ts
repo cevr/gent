@@ -346,9 +346,10 @@ const alarmWork = (
       if (Predicate.isUndefined(entry.everySeconds)) return
       // The next tick is stored before the timer sleeps again, so a restart in between re-arms it.
       const next = { ...entry, dueAt: nextDueAt(entry.dueAt, entry.everySeconds, firedAt) }
+      // Only the pending alarm row moves; a notify fire's notice shares its wakeId and stays.
       yield* modifyWakeEntries((current) =>
         current.map((candidate) => {
-          if (candidate.wakeId === next.wakeId) return next
+          if (candidate._tag === "alarm" && candidate.wakeId === next.wakeId) return next
           return candidate
         }),
       )

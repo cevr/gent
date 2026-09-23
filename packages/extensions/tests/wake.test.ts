@@ -1048,6 +1048,49 @@ describe("wake store", () => {
       ),
   )
 
+  it.scopedLive("a repeating notify alarm keeps one alarm row and adds one notice per tick", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("wake-repeat-notify-")
+      const queued = yield* Ref.make<ReadonlyArray<string>>([])
+      const ctx = contextWith(home, queued)
+      const handle = yield* runToolWithCtx(
+        WakeTool,
+        { afterSeconds: 1, everySeconds: 2, mode: "notify", note: "stretch" },
+        ctx,
+      )
+      yield* WakeAlarms
+      const decode = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))
+      const stored = readFile(home).pipe(Effect.flatMap(decode), Effect.orDie)
+      yield* TestClock.adjust("1 second")
+      yield* eventually(
+        readFile(home).pipe(Effect.orDie),
+        (file) => file.includes(`"dueAt":3000`),
+        "tick 1 stored",
+      )
+      yield* TestClock.adjust("2 seconds")
+      yield* eventually(
+        readFile(home).pipe(Effect.orDie),
+        (file) => file.includes(`"dueAt":5000`),
+        "tick 2 stored",
+      )
+      const entries = yield* stored
+      const alarms = entries.filter((entry) => entry._tag === "alarm")
+      const notices = entries.filter((entry) => entry._tag === "notice")
+      expect(alarms.map((entry) => entry.wakeId)).toEqual([handle.wakeId])
+      // The prompt section lists each notice row, so the model reads both ticks.
+      expect(notices.length).toBe(2)
+      for (const notice of notices) {
+        expect(notice.wakeId).toBe(handle.wakeId)
+        if (notice._tag === "notice") expect(notice.content).toContain("stretch")
+      }
+      // Notify mode starts no turn.
+      expect(yield* Ref.get(queued)).toEqual([])
+    }).pipe(
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+      Effect.timeout("8 seconds"),
+    ),
+  )
+
   it.scopedLive(
     "an interrupted timer leaves its row for the next re-arm; a settled fire removes it",
     () =>
