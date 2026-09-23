@@ -2027,7 +2027,7 @@ describe("runtime slots", () => {
             unanswered: false,
 
             messageId: MessageId.make("turn-message"),
-            usage: { inputTokens: 0, outputTokens: 0 },
+            usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
           } satisfies TurnAfterInput)
           .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx)),
       )
@@ -2063,7 +2063,7 @@ describe("runtime slots", () => {
           unanswered: false,
 
           messageId: MessageId.make("turn-message"),
-          usage: { inputTokens: 0, outputTokens: 0 },
+          usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
         } satisfies TurnAfterInput)
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
 
@@ -2102,7 +2102,7 @@ describe("runtime slots", () => {
           unanswered: false,
 
           messageId: MessageId.make("turn-message"),
-          usage: { inputTokens: 0, outputTokens: 0 },
+          usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
         } satisfies TurnAfterInput)
         .pipe(
           Effect.provideService(CurrentExtensionHostContext, hostCtx),
@@ -3357,7 +3357,7 @@ const stubEvent: TurnAfterInput = {
   unanswered: false,
 
   messageId: MessageId.make("turn-message"),
-  usage: { inputTokens: 0, outputTokens: 0 },
+  usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
 }
 
 const extRuntimeHooks = (

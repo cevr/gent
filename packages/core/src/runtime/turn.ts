@@ -335,12 +335,13 @@ type TurnMetrics = {
   messageId: Option.Option<MessageId>
   agent: AgentNameType
   model: string
+  /** Tokens of the steps that reported usable counts: the known part of the turn's spend. */
   inputTokens: number
   outputTokens: number
   toolCallCount: number
   /** Model steps seen this turn; zero means no usage can be reported. */
   steps: number
-  /** False once any step reported no usage or an unusable count. */
+  /** False once any step reported no usage or an unusable count: the totals are then partial. */
   usageKnown: boolean
 }
 
@@ -685,9 +686,11 @@ export const collectExternalTurnResponse = <R>(params: {
  * model steps and are read once, at the end, to fill `TurnCompleted`. The
  * accumulator therefore outlives no turn: the next one starts from zero. A
  * turn parked on an interaction and resumed is the same turn, so its steps
- * before the park still count. Steps this process never saw (a turn resumed
- * after a restart) and steps cut short without usage make the total
- * unreportable rather than partial.
+ * before the park still count. The totals hold only what steps reported in
+ * usable counts. Steps this process never saw (a turn resumed after a
+ * restart) and steps cut short without usage add nothing and mark the totals
+ * partial: `TurnCompleted` then carries no total, and `turnAfter` gets the
+ * known part with `complete: false`.
  *
  * `beginTurn` is the reset, and a writer says what its step observed rather
  * than how to merge it; the fold (which totals to add, which counts make the
@@ -698,8 +701,8 @@ export const collectExternalTurnResponse = <R>(params: {
 
 /**
  * A token count this turn can report. A provider that returns a negative,
- * fractional or oversized number has told us nothing usable, and one
- * unusable step makes the turn's total unreportable rather than wrong.
+ * fractional or oversized number has told us nothing usable: that step adds
+ * nothing, and the turn's totals become partial rather than wrong.
  */
 const reportable = (count: number) => Number.isSafeInteger(count) && count >= 0
 
@@ -715,7 +718,7 @@ interface TurnLedger {
   }) => Effect.Effect<void>
   /**
    * One model step finished. `usage` is absent when the provider reported
-   * none, which makes this turn's total unreportable.
+   * none, which makes this turn's totals partial.
    */
   readonly noteStep: (params: {
     readonly agent: AgentNameType
@@ -743,25 +746,27 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
       Ref.update(metrics, (m) => ({ ...m, agent: params.agent, model: params.model })),
     noteStep: (params) =>
       Ref.update(metrics, (m) => {
-        const step = Option.getOrElse(params.usage, () => ({ inputTokens: 0, outputTokens: 0 }))
-        const inputTokens = m.inputTokens + step.inputTokens
-        const outputTokens = m.outputTokens + step.outputTokens
-        return {
+        const counted = {
           messageId: m.messageId,
           agent: params.agent,
           model: params.model,
-          inputTokens,
-          outputTokens,
+          inputTokens: m.inputTokens,
+          outputTokens: m.outputTokens,
           toolCallCount: m.toolCallCount + params.toolCallCount,
           steps: m.steps + 1,
-          usageKnown:
-            m.usageKnown &&
-            Option.isSome(params.usage) &&
-            reportable(step.inputTokens) &&
-            reportable(step.outputTokens) &&
-            reportable(inputTokens) &&
-            reportable(outputTokens),
+          usageKnown: false,
         }
+        if (Option.isNone(params.usage)) return counted
+        const step = params.usage.value
+        const inputTokens = m.inputTokens + step.inputTokens
+        const outputTokens = m.outputTokens + step.outputTokens
+        const usable =
+          reportable(step.inputTokens) &&
+          reportable(step.outputTokens) &&
+          reportable(inputTokens) &&
+          reportable(outputTokens)
+        if (!usable) return counted
+        return { ...counted, inputTokens, outputTokens, usageKnown: m.usageKnown }
       }),
     total: Ref.get(metrics),
   }
@@ -2443,7 +2448,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         interrupted: params.turnInterrupted,
         streamFailed: params.streamFailed,
         unanswered: params.unanswered,
-        ...omitUndefined({ usage: Option.getOrUndefined(usage) }),
+        usage: {
+          known: { inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens },
+          complete: metrics.usageKnown,
+        },
       })
       yield* Effect.logDebug("finalize.turn-after.done")
 

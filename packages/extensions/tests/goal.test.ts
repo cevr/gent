@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Cause, Effect, Exit, FileSystem, Option, PlatformError, Ref, Schema, Stream } from "effect"
 import {
+  finishPart,
   LanguageModelLayers,
   makeTempDirectoryScoped,
   textDeltaPart,
@@ -17,6 +18,8 @@ import {
   formatGoalUsage,
   GOAL_CONTEXT_MESSAGE_TYPE,
   GOAL_EXTENSION_ID,
+  GOAL_PAUSED_STREAM_FAILED,
+  GOAL_PAUSED_USAGE_UNKNOWN,
   goalContinuationSource,
   GoalSnapshot,
   type GoalState,
@@ -326,6 +329,9 @@ describe("goal stream failure", () => {
           "goal pauses on the stream failure",
         )
         expect(Option.map(paused, (goal) => goal.continuationsUsed)).toEqual(Option.some(0))
+        expect(Option.map(paused, (goal) => goal.pausedReason)).toEqual(
+          Option.some(GOAL_PAUSED_STREAM_FAILED),
+        )
 
         // Creating the goal queues the first continuation, which starts the turn
         // that then fails. The failed turn must not queue a second one: that is
@@ -338,6 +344,99 @@ describe("goal stream failure", () => {
         expect(goalMessages.length).toBe(1)
         // Two continuations inside the one turn, then the failure. No fourth call.
         expect(yield* Ref.get(calls)).toBe(3)
+      }).pipe(Effect.timeout("14 seconds")),
+    18_000,
+  )
+})
+
+// ── goal/goal-partial-usage.test ────────────────────────────────────────────
+
+/**
+ * A turn whose usage is partly unknown still spent its known tokens.
+ *
+ * One step without usage used to drop the whole turn's count, so the goal
+ * charged nothing and kept going on a budget it could no longer measure.
+ */
+
+describe("goal partial usage", () => {
+  it.scopedLive(
+    "a turn with one step of unknown usage charges the known steps and pauses a budgeted goal",
+    () =>
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0)
+        // Step one reports usage and is cut off at the output limit, so the
+        // loop continues the turn. Step two answers and reports no usage.
+        const providerLayer = LanguageModelLayers.testStream(() =>
+          Effect.gen(function* () {
+            const call = yield* Ref.updateAndGet(calls, (n) => n + 1)
+            if (call === 1) {
+              return Stream.fromIterable([
+                textDeltaPart("part one"),
+                finishPart({
+                  finishReason: "length",
+                  usage: { inputTokens: 30, outputTokens: 12 },
+                }),
+              ])
+            }
+            return Stream.fromIterable([
+              textDeltaPart("the answer"),
+              finishPart({ finishReason: "stop" }),
+            ])
+          }),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        const readGoal = () =>
+          client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: GOAL_EXTENSION_ID,
+              capabilityId: "goal.get",
+              input: {},
+            })
+            .pipe(
+              Effect.map((snapshot) =>
+                Option.fromUndefinedOr(Schema.decodeUnknownSync(GoalSnapshot)(snapshot).goal),
+              ),
+            )
+
+        yield* client.extension.request({
+          sessionId,
+          branchId,
+          extensionId: GOAL_EXTENSION_ID,
+          capabilityId: "goal-command",
+          input: "--budget 1000 Write the pelican poem",
+        })
+
+        const paused = yield* waitFor(
+          readGoal(),
+          (goal) =>
+            Option.contains(
+              Option.map(goal, (value) => value.status),
+              "paused",
+            ),
+          10_000,
+          "goal pauses on the partial usage",
+        )
+        expect(Option.map(paused, (goal) => goal.tokensUsed)).toEqual(Option.some(42))
+        expect(Option.map(paused, (goal) => goal.pausedReason)).toEqual(
+          Option.some(GOAL_PAUSED_USAGE_UNKNOWN),
+        )
+        expect(Option.map(paused, formatGoalUsage).pipe(Option.getOrElse(() => ""))).toContain(
+          GOAL_PAUSED_USAGE_UNKNOWN,
+        )
+
+        // The paused goal queues no continuation: only the first one exists.
+        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        expect(snapshot.runtime._tag).toBe("Idle")
+        const goalMessages = snapshot.messages.filter(
+          (message) => message.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE,
+        )
+        expect(goalMessages.length).toBe(1)
+        expect(yield* Ref.get(calls)).toBe(2)
       }).pipe(Effect.timeout("14 seconds")),
     18_000,
   )

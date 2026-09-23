@@ -67,6 +67,7 @@ export {
   LoadedArtifactIdentity,
   type SystemPromptInput,
   type TurnAfterInput,
+  type TurnUsage,
 } from "../domain/extension.js"
 export type { TurnExecutor, TurnContext, TurnStreamPart } from "../domain/driver.js"
 export { DEFAULT_RETRY_POLICY, ProviderAuthError, TurnError } from "../domain/driver.js"

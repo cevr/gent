@@ -371,13 +371,21 @@ export interface TurnAfterInput {
   readonly streamFailed: boolean
   /** The turn spent its continuations and never answered. */
   readonly unanswered: boolean
-  /**
-   * Provider-reported tokens summed over every model call of the turn. Absent
-   * when a step reported none, was cut short, or ran before a restart: a
-   * partial sum would read as the turn's true total. `TurnCompleted.usage`
-   * follows the same rule.
-   */
-  readonly usage?: { readonly inputTokens: number; readonly outputTokens: number }
+  /** What the turn's model calls spent, and whether that is all of it. */
+  readonly usage: TurnUsage
+}
+
+/**
+ * Provider-reported tokens of one turn.
+ *
+ * `known` sums the steps that reported usable counts. `complete` is false when
+ * a step reported none, was cut short, or ran before a restart: `known` is then
+ * a lower bound, not the turn's total. `TurnCompleted.usage` carries a total
+ * only when it is complete.
+ */
+export interface TurnUsage {
+  readonly known: { readonly inputTokens: number; readonly outputTokens: number }
+  readonly complete: boolean
 }
 
 // ── Lifecycle hooks ──
