@@ -43,6 +43,7 @@ import {
   wantsWakeOnRecovery,
 } from "../../src/runtime/agent-loop"
 import { TestClock } from "effect/testing"
+import { SqlClient } from "effect/unstable/sql"
 import {
   AgentDefinition,
   AgentName,
@@ -8808,7 +8809,11 @@ describe("tool binding replay", () => {
 describe("session depth guard", () => {
   const depthStorage = SqliteStorage.TestWithSql(noBranchTools.storage, noBranchTools.migrations)
   const run = <A, E>(
-    effect: Effect.Effect<A, E, SessionStorage | BranchStorage | RelationshipStorage>,
+    effect: Effect.Effect<
+      A,
+      E,
+      SessionStorage | BranchStorage | RelationshipStorage | SqlClient.SqlClient
+    >,
   ) => effect.pipe(Effect.timeout("4 seconds"), Effect.provide(depthStorage))
 
   const makeSession = (id: string, parentSessionId?: string) => {
@@ -8917,6 +8922,43 @@ describe("session depth guard", () => {
           SessionId.make(`s${DEFAULT_MAX_AGENT_RUN_DEPTH - 1}`),
         )
         expect(depth).toBe(DEFAULT_MAX_AGENT_RUN_DEPTH - 1)
+      }),
+    ),
+  )
+  it.live("a thread of many handoffs still admits a spawn, counted from its real root", () =>
+    run(
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        yield* sessions.createSession(makeSession("h0"))
+        yield* branches.createBranch(makeBranch("h0"))
+        // Each handoff joins the root's thread: an edge, not a spawn.
+        const handoffs = 25
+        for (let i = 1; i <= handoffs; i++) {
+          yield* sessions.createSession(
+            new Session({ ...makeSession(`h${i}`, `h${i - 1}`), threadId: SessionId.make("h0") }),
+          )
+          yield* branches.createBranch(makeBranch(`h${i}`))
+        }
+        expect(yield* admitChildSessionDepth(SessionId.make(`h${handoffs}`))).toBe(0)
+        yield* sessions.createSession(makeSession("spawned", `h${handoffs}`))
+        yield* branches.createBranch(makeBranch("spawned"))
+        expect(yield* admitChildSessionDepth(SessionId.make("spawned"))).toBe(1)
+      }),
+    ),
+  )
+  it.live("a parent cycle fails closed instead of walking forever", () =>
+    run(
+      Effect.gen(function* () {
+        const sessions = yield* SessionStorage
+        const branches = yield* BranchStorage
+        const sql = yield* SqlClient.SqlClient
+        yield* sessions.createSession(makeSession("loop-a"))
+        yield* branches.createBranch(makeBranch("loop-a"))
+        yield* sessions.createSession(makeSession("loop-b", "loop-a"))
+        yield* sql`UPDATE sessions SET parent_session_id = 'loop-b' WHERE id = 'loop-a'`
+        const error = yield* admitChildSessionDepth(SessionId.make("loop-b")).pipe(Effect.flip)
+        expect(error.message).toContain("ancestry is missing or incomplete")
       }),
     ),
   )
