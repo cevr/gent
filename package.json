@@ -17,9 +17,9 @@
     "build": "turbo run build",
     "test": "turbo run test --ui=stream",
     "test:e2e": "turbo run test:e2e",
-    "gate": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n type,style,build \"bun run typecheck\" \"bun run lint && bun run fmt\" \"bun run build\" && bun run test",
+    "gate": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n type,style,build \"bun run typecheck\" \"bun run lint && bun run fmt:check\" \"bun run build\" && bun run test",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
-    "smoke": "bun run --cwd apps/tui dev -H 'Say hi in 3 words'",
+    "smoke": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && GENT_DATA_DIR=\"$d\" bun run --cwd apps/tui dev --debug -H 'Say hi in 3 words'",
     "gamut": "bun testbeds/gamut/gamut.ts",
     "prepare": "lefthook install && effect-tsgo patch"
   },

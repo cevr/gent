@@ -1097,7 +1097,6 @@ export const findUnenabledPluginRules = (
 const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_LOG_LEVEL", "a developer sets this by hand to raise log verbosity"],
   ["GENT_PORT", "the operator of a standalone server picks its port"],
-  ["GENT_DATA_DIR", "the operator names the directory holding data.db"],
   ["GENT_AUTH_DIRECTORY", "the operator names the auth directory"],
   ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
   ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
