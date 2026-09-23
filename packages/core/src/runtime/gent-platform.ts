@@ -264,19 +264,40 @@ export const runProcess = (
  * path, so a reader (or a crash) never sees a half-written file. A symlink at
  * `path` is replaced as a directory entry; its target is left untouched.
  * The one atomic write: core's config and every extension use it.
+ *
+ * The file keeps its permission bits: `options.mode` when given (a
+ * credential passes 0600), else the mode of the file it replaces, else the
+ * default for a new file.
  */
 export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
   path: string,
   content: string,
+  options?: { readonly mode?: number },
 ) {
   const fs = yield* FileSystem.FileSystem
   const pathService = yield* Path.Path
+  const mode = yield* Option.fromUndefinedOr(options?.mode).pipe(
+    Option.match({
+      onSome: (explicit) => Effect.succeedSome(explicit),
+      onNone: () =>
+        fs.stat(path).pipe(
+          Effect.map((info) => Option.some(info.mode & 0o7777)),
+          Effect.catchIf(
+            (error) => error.reason._tag === "NotFound",
+            () => Effect.succeed(Option.none<number>()),
+          ),
+        ),
+    }),
+  )
   yield* Effect.scoped(
     Effect.gen(function* () {
       const staging = yield* fs.makeTempFileScoped({
         directory: pathService.dirname(path),
         prefix: ".gent-write-",
       })
+      // Set the mode before the content lands, so a secret is never readable
+      // under the default mode, even in the staged file.
+      if (Option.isSome(mode)) yield* fs.chmod(staging, mode.value)
       yield* fs.writeFileString(staging, content)
       yield* fs.rename(staging, path)
     }),
