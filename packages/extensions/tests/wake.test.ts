@@ -854,6 +854,39 @@ describe("monitor guardrail", () => {
       Effect.timeout("8 seconds"),
     ),
   )
+
+  it.scopedLive("the question names a cwd outside the session, and only then", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("wake-monitor-cwd-")
+      const asked = yield* Ref.make<ReadonlyArray<string>>([])
+      const base = contextWith(home, yield* Ref.make<ReadonlyArray<string>>([]))
+      const ctx = {
+        ...base,
+        Interaction: {
+          ...base.Interaction,
+          approve: ({ text }: { readonly text: string }) =>
+            Ref.update(asked, (all) => [...all, text]).pipe(Effect.as({ approved: false })),
+        },
+      }
+      const command = "rm -rf /nonexistent/gent-probe-x/build"
+      yield* Effect.exit(
+        runToolWithCtx(
+          MonitorTool,
+          { command, cwd: "/nonexistent/gent-probe-x", note: "gone" },
+          ctx,
+        ),
+      )
+      yield* Effect.exit(runToolWithCtx(MonitorTool, { command, cwd: ".", note: "gone" }, ctx))
+      const prompts = yield* Ref.get(asked)
+      expect(prompts[0]).toContain(
+        "This monitor command (in `/nonexistent/gent-probe-x`) is classified as destructive",
+      )
+      expect(prompts[1]).toContain("This monitor command is classified as destructive")
+    }).pipe(
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+      Effect.timeout("8 seconds"),
+    ),
+  )
 })
 
 describe("monitor command", () => {
