@@ -232,7 +232,9 @@ export const MessageMetadata = Schema.Struct({
   extensionId: Schema.optional(Schema.String),
   /**
    * Set by the server on every message a client sends (`clientMetadata`),
-   * over any value the client gave; an extension's `Session.send` removes it.
+   * over any value the client gave; an extension's `Session.send` removes it,
+   * except that a client's extension request sends to its own branch as the
+   * client while it runs (`clientRequestOrigin` in `extension-host.ts`).
    * A turn such a message opens has a user watching it (`turnCanAsk`).
    */
   fromClient: Schema.optional(Schema.Boolean),

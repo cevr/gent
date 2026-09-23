@@ -549,7 +549,11 @@ monitor opened declines. The origin is trusted: the server stamps
 `metadata.fromClient` on every message a client sends (`message.send`, a
 session's initial prompt, a `steer.command` interjection) over whatever the
 client set, and removes a client-supplied `extensionId`; an extension's
-`Session.send` stamps its own id and removes `fromClient`. A child row stored
+`Session.send` stamps its own id and removes `fromClient`. One exception keeps
+a slash command a user types in a spawned child able to ask: while a client's
+extension request runs, a message it sends to the request's own branch keeps
+the client origin. A send to any other branch, or one made after the request
+ended, is an extension send. Every extension gets the same rule. A child row stored
 before the stamp existed has no origin, so its turn declines on recovery. A
 declined turn's `approve` answers at once, and the tools that ask the user are
 withheld. The loop reads the fact from the turn's opening message and the

@@ -123,6 +123,7 @@ import {
   makeExtensionHostContextProvider,
   makeExtensionHostPlatform,
   resolveTurnProfile as resolveSessionTurnProfile,
+  type RunOpener,
   SessionProfileCache,
   type SessionProfileCacheService,
   sessionWorkingDirectory,
@@ -1220,10 +1221,8 @@ type AgentLoopBehavior = {
    * the withdrawal has to reach the admission gate as well.
    */
   withdrawFollowUp: (messageId: MessageId) => Effect.Effect<boolean, AgentLoopError>
-  /** The profile for one run; `openedByClient` says whether a client opened it (`turnCanAsk`). */
-  resolveTurnProfile: (run: {
-    readonly openedByClient: boolean
-  }) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
+  /** The profile for one run; its opener says whether a client opened it (`turnCanAsk`). */
+  resolveTurnProfile: (run: RunOpener) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
   /**
    * Branch-lifetime services: the cell kernel, the model context ledger, and
    * every extension Resource declared with `scope: "branch"`. Extension leaves
@@ -1393,12 +1392,12 @@ const makeAgentLoopBehavior = (
       },
     })
 
-    const resolveTurnProfile = (run: { readonly openedByClient: boolean }) =>
+    const resolveTurnProfile = (run: RunOpener) =>
       provideAgentLoopRuntimeContext(runtimeContext)(
         resolveSessionTurnProfile({
+          ...run,
           sessionId,
           branchId,
-          openedByClient: run.openedByClient,
           profileCache,
           hostProvider,
           defaults: { baseSections },
@@ -2468,8 +2467,13 @@ const buildAgentLoopActorHandlers = (config: {
           Effect.gen(function* () {
             yield* ensureTarget(operation)
             const handle = yield* ensureStarted
-            // A request comes from a client, which can answer.
-            const environment = yield* handle.resolveTurnProfile({ openedByClient: true })
+            // A request comes from a client, which can answer, and sends to
+            // its own branch as that client until the request ends.
+            const handling = yield* Ref.make(true)
+            yield* Effect.addFinalizer(() => Ref.set(handling, false))
+            const environment = yield* handle.resolveTurnProfile({
+              clientRequest: { handling },
+            })
             const rpcRegistry = environment.turnExtensionRegistry.getResolved().rpcRegistry
             const capabilityId = RpcId.make(operation.capabilityId)
             let input: unknown = Option.getOrUndefined(Option.none())

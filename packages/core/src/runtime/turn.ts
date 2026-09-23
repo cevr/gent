@@ -68,6 +68,7 @@ import {
   type ExtensionRegistryService,
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
+  type RunOpener,
 } from "./extension-host.js"
 import type * as Response from "effect/unstable/ai/Response"
 import { credentialFailureMessage, type ProviderAuthError } from "../domain/driver.js"
@@ -1674,9 +1675,9 @@ const endStep = (
 type AgentLoopTurnExecutionContext = {
   readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly resolveTurnProfile: (run: {
-    readonly openedByClient: boolean
-  }) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
+  readonly resolveTurnProfile: (
+    run: RunOpener,
+  ) => Effect.Effect<AgentLoopTurnProfile, never, Scope.Scope>
   readonly activeStreamRef: Ref.Ref<Option.Option<ActiveStreamHandle>>
   readonly turnLedger: TurnLedger
   readonly turnInterruption: TurnInterruption

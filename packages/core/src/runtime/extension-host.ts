@@ -11,6 +11,7 @@ import {
   Path,
   type PlatformError,
   Predicate,
+  Ref,
   Result,
   Schema,
   Scope,
@@ -2210,6 +2211,34 @@ interface ExtensionHostContextInput {
   readonly sessionControl?: ExtensionSessionControlService
 }
 
+/**
+ * A client's extension request while it runs. `handling` is true until the
+ * request ends, when the request's scope sets it false.
+ */
+interface ClientRequest {
+  readonly handling: Ref.Ref<boolean>
+}
+
+/**
+ * What opened a run. A turn knows whether a client sent its opening message.
+ * A client's extension request (a slash command, say) is client-opened, and
+ * while it runs a message it sends to its own branch keeps the client origin
+ * (`clientRequestOrigin`).
+ */
+export type RunOpener =
+  | { readonly openedByClient: boolean }
+  | { readonly clientRequest: ClientRequest }
+
+const clientRequestOf = (opener: RunOpener): Option.Option<ClientRequest> => {
+  if ("clientRequest" in opener) return Option.some(opener.clientRequest)
+  return Option.none()
+}
+
+const runOpenedByClient = (opener: RunOpener): boolean => {
+  if ("clientRequest" in opener) return true
+  return opener.openedByClient
+}
+
 interface MakeExtensionHostContextRunInfo {
   readonly sessionId: SessionId
   readonly branchId: BranchId
@@ -2220,6 +2249,8 @@ interface MakeExtensionHostContextRunInfo {
    * an approval in it.
    */
   readonly interactive: boolean
+  /** Some when a client's extension request opened this run. */
+  readonly clientRequest: Option.Option<ClientRequest>
 }
 
 /** Builds the `ExtensionHostContext` for one run of one branch. */
@@ -2332,6 +2363,30 @@ export const makeExtensionHostContextProvider = (
     ) => ({
       sessionId: params.sessionId ?? runInfo.sessionId,
       branchId: params.branchId ?? runInfo.branchId,
+    })
+
+    /**
+     * The envelope of a message a run sends. The extension boundary already
+     * removed any client origin the sender claimed (`extensionMetadata`).
+     * A client's extension request sends as its client while it runs, to its
+     * own branch only: the user who typed the slash command watches that
+     * branch. A send to any other branch, or one made after the request ended
+     * (from a fiber it left behind), stays an extension send. The rule is the
+     * same for every extension, since any request a client calls gets it.
+     */
+    const clientRequestOrigin = Effect.fn("ExtensionHost.clientRequestOrigin")(function* (
+      runInfo: MakeExtensionHostContextRunInfo,
+      target: { readonly sessionId: SessionId; readonly branchId: BranchId },
+    ) {
+      const none: MessageMetadata = {}
+      const request = Option.filter(
+        runInfo.clientRequest,
+        () => target.sessionId === runInfo.sessionId && target.branchId === runInfo.branchId,
+      )
+      if (Option.isNone(request)) return none
+      if (!(yield* Ref.get(request.value.handling))) return none
+      const client: MessageMetadata = { fromClient: true }
+      return client
     })
 
     const forRun = (runInfo: MakeExtensionHostContextRunInfo): ExtensionHostContext => ({
@@ -2447,34 +2502,34 @@ export const makeExtensionHostContextProvider = (
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))
                   }),
-                queue: (queued) => {
-                  const target = targetIn(runInfo, queued)
-                  return requireTarget("send", target).pipe(
-                    Effect.andThen(
-                      control((loop) =>
-                        loop.queueFollowUp({
-                          ...target,
-                          sourceId: queued.sourceId,
-                          content: queued.content,
-                          metadata: queued.metadata,
-                          wake: queued.wake,
-                        }),
-                      ).pipe(Effect.mapError(sessionError("send"))),
-                    ),
-                  )
-                },
+                queue: (queued) =>
+                  Effect.gen(function* () {
+                    const target = targetIn(runInfo, queued)
+                    yield* requireTarget("send", target)
+                    const origin = yield* clientRequestOrigin(runInfo, target)
+                    yield* control((loop) =>
+                      loop.queueFollowUp({
+                        ...target,
+                        sourceId: queued.sourceId,
+                        content: queued.content,
+                        metadata: { ...queued.metadata, ...origin },
+                        wake: queued.wake,
+                      }),
+                    ).pipe(Effect.mapError(sessionError("send")))
+                  }),
                 steer: (steered) =>
                   Effect.gen(function* () {
                     const target = targetIn(runInfo, steered)
                     yield* requireTarget("send", target)
                     const requestId = steered.requestId ?? RequestId.make(yield* host.randomId)
+                    const origin = yield* clientRequestOrigin(runInfo, target)
                     yield* control((loop) =>
                       loop.steer({
                         _tag: "Interject",
                         ...target,
                         requestId,
                         message: steered.content,
-                        metadata: steered.metadata,
+                        metadata: { ...steered.metadata, ...origin },
                         wake: steered.wake,
                       }),
                     ).pipe(Effect.mapError(sessionError("send")))
@@ -2660,15 +2715,15 @@ export const sessionWorkingDirectory = (
  * and the host defaults apply. A storage lookup failure falls back to them as well.
  * The caller's scope holds the profile's lease for as long as it uses it.
  */
-export const resolveTurnProfile = (params: {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  /** Whether a client opened this run (`openedByClient` of its opening message). */
-  readonly openedByClient: boolean
-  readonly profileCache?: SessionProfileCacheService
-  readonly hostProvider: ExtensionHostContextProvider
-  readonly defaults: TurnProfileDefaults
-}): Effect.Effect<
+export const resolveTurnProfile = (
+  params: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+    readonly profileCache?: SessionProfileCacheService
+    readonly hostProvider: ExtensionHostContextProvider
+    readonly defaults: TurnProfileDefaults
+  } & RunOpener,
+): Effect.Effect<
   AgentLoopTurnProfile,
   never,
   ExtensionRegistry | SessionStorage | ScopeType.Scope
@@ -2680,13 +2735,14 @@ export const resolveTurnProfile = (params: {
     const sessionCwd = Option.flatMap(session, (value) => Option.fromUndefinedOr(value.cwd))
     const interactive = turnCanAsk({
       sessionIsSpawned: Option.exists(session, isSpawnedSession),
-      openedByClient: params.openedByClient,
+      openedByClient: runOpenedByClient(params),
     })
     const runInfo = {
       sessionId: params.sessionId,
       branchId: params.branchId,
       sessionCwd: Option.getOrUndefined(sessionCwd),
       interactive,
+      clientRequest: clientRequestOf(params),
     }
     const profile = yield* Option.match(
       Option.all([Option.fromUndefinedOr(params.profileCache), sessionCwd]),

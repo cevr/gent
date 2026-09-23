@@ -1449,44 +1449,19 @@ describe("interaction.respondInteraction", () => {
   )
 
   it.live(
-    "an extension's turn asks in a top-level session and declines in a child; a client's turn in the child asks, and no client or extension forges the origin",
+    "an extension's turn asks in a top-level session and declines in a spawned child; a client's turn and slash command in the child ask, and no client or extension forges the origin",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const probeExtensionId = ExtensionId.make("@test/interaction-origin")
-          // A wake, a monitor, a child's task and a parent's message all reach
-          // a branch through `Session.send`, as this request does. It also
-          // claims the client origin, which the send removes.
-          const OriginExtension: LoadedExtension = {
-            ...InteractionProbeExtension,
-            manifest: { id: probeExtensionId },
-            artifactIdentity: LoadedArtifactIdentity.make("@test/interaction-origin@artifact-1"),
-            contributions: {
-              ...InteractionProbeExtension.contributions,
-              requests: [
-                request({
-                  id: "nudge",
-                  input: Schema.Struct({}),
-                  output: Schema.Void,
-                  execute: Effect.fn("nudge")(function* () {
-                    const ctx = yield* ExtensionContext
-                    yield* ctx.Session.send({
-                      delivery: "queue",
-                      sourceId: "nudge",
-                      content: "extension nudge",
-                      metadata: { fromClient: true },
-                      wake: true,
-                    })
-                  }),
-                }),
-              ],
-            },
-          }
           const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
-            toolCallStep("approval_probe", { text: "approve from the top-level nudge?" }),
-            textStep("top-level nudge done"),
-            toolCallStep("approval_probe", { text: "approve from the child's nudge?" }),
+            toolCallStep("approval_probe", { text: "approve in the top-level session?" }),
+            textStep("top-level wake done"),
+            toolCallStep("approval_probe", { text: "approve from the parent's nudge?" }),
             textStep("child nudge done"),
+            toolCallStep("approval_probe", { text: "approve from the child's slash command?" }),
+            textStep("child command done"),
+            toolCallStep("approval_probe", { text: "approve from a request that ended?" }),
+            textStep("late send done"),
             toolCallStep("approval_probe", { text: "approve from the client's steer?" }),
             textStep("child steer done"),
             toolCallStep("approval_probe", { text: "approve from the child's user?" }),
@@ -1496,89 +1471,76 @@ describe("interaction.respondInteraction", () => {
             createE2ELayer({
               ...e2ePreset,
               providerLayer,
-              extensions: [OriginExtension],
+              extensions: [makeOriginProbe()],
               approvalLayer: ApprovalService.Live,
             }),
           )
-          const nudge = (target: { sessionId: SessionId; branchId: BranchId }) =>
-            client.extension.request({
-              ...target,
-              extensionId: probeExtensionId,
-              capabilityId: "nudge",
-              input: {},
-            })
-          /** Start `trigger`, answer the dialog it opens, and wait for `reply`. */
-          const approves = <E>(
-            target: { sessionId: SessionId; branchId: BranchId },
-            trigger: Effect.Effect<unknown, E>,
-            question: string,
-            reply: string,
-          ) =>
-            Effect.gen(function* () {
-              const presented = yield* client.session.events(target).pipe(
-                Stream.filterMap((envelope) => {
-                  if (envelope.event._tag === "InteractionPresented")
-                    return Result.succeed(envelope.event)
-                  return Result.failVoid
-                }),
-                Stream.filter((event) => event.text === question),
-                Stream.take(1),
-                Stream.runCollect,
-                Effect.forkScoped,
-              )
-              yield* trigger
-              const dialog = Array.from(yield* Fiber.join(presented))[0]
-              if (Predicate.isUndefined(dialog)) return yield* Effect.die("no dialog")
-              yield* client.interaction.respondInteraction({
-                ...target,
-                requestId: dialog.requestId,
-                approved: true,
-              })
-              yield* waitForReply({ client, ...target, reply })
-            })
-
-          // A top-level session's user watches its extension turns: a wake
-          // or a child's completion there asks.
+          const origin = originClient(client)
           const top = yield* client.session.create({ cwd: "/tmp" })
-          yield* approves(
-            top,
-            nudge(top),
-            "approve from the top-level nudge?",
-            "top-level nudge done",
-          )
-
-          // In a child, the same turn declines at once, its claimed origin
-          // removed.
           const child = yield* client.session.create({
             cwd: "/tmp",
             parentSessionId: top.sessionId,
             parentBranchId: top.branchId,
           })
-          yield* nudge(child)
-          const nudged = yield* waitFor(
-            client.session.getSnapshot(child),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              current.messages.some((message) =>
-                message.parts.some(
-                  (part) => part.type === "text" && part.text === "child nudge done",
-                ),
-              ),
-            5_000,
-            "the child's nudge turn ended without a dialog",
+          const opening = (messages: ReadonlyArray<Message>, label: string) =>
+            messages.find((message) =>
+              message.parts.some((part) => part.type === "text" && part.text === label),
+            )
+
+          // A top-level session's user watches its extension turns: a wake
+          // or a child's completion there asks.
+          yield* origin.approves(
+            top,
+            origin.call("nudge", child, { label: "wake the parent", ...top }),
+            "approve in the top-level session?",
+            "top-level wake done",
           )
-          const opening = nudged.messages.find((message) =>
-            message.parts.some((part) => part.type === "text" && part.text === "extension nudge"),
+
+          // In the spawned child, an extension turn declines at once. The
+          // parent's request sends into another session, so its claimed
+          // client origin is removed.
+          const nudged = yield* origin.declines(
+            child,
+            origin.call("nudge", top, { label: "the parent's nudge", ...child }),
+            "child nudge done",
           )
-          expect(opening?.metadata?.extensionId).toBe(probeExtensionId)
-          expect(opening?.metadata?.fromClient).toBeUndefined()
-          const [declined] = toolResultTexts(nudged.messages)
-          expect(declined).toContain('"approved":false')
-          expect(declined).toContain("no user started this turn")
+          expect(opening(nudged, "the parent's nudge")?.metadata?.extensionId).toBe(originProbeId)
+          expect(opening(nudged, "the parent's nudge")?.metadata?.fromClient).toBeUndefined()
+          expect(toolResultTexts(nudged).at(-1)).toContain("no user started this turn")
+
+          // A slash command the user runs in the child sends to the child's
+          // own branch as that user: its turn asks.
+          yield* origin.approves(
+            child,
+            origin.call("nudge", child, { label: "/plan in the child" }),
+            "approve from the child's slash command?",
+            "child command done",
+          )
+          const commanded = opening(
+            (yield* client.session.getSnapshot(child)).messages,
+            "/plan in the child",
+          )
+          expect(commanded?.metadata).toMatchObject({
+            fromClient: true,
+            extensionId: originProbeId,
+          })
+
+          // The grant ends with the request: a context kept past it sends to
+          // the same branch as an extension, and the turn declines.
+          yield* origin.call("arm", child, {})
+          const late = yield* origin.declines(
+            child,
+            origin.call("fire", top, { label: "a send after the request ended" }),
+            "late send done",
+          )
+          expect(
+            opening(late, "a send after the request ended")?.metadata?.fromClient,
+          ).toBeUndefined()
+          expect(toolResultTexts(late).at(-1)).toContain("no user started this turn")
 
           // A client's steer that claims an extension author and denies its
           // own origin still carries the server's client origin: it asks.
-          yield* approves(
+          yield* origin.approves(
             child,
             client.steer.command({
               command: {
@@ -1586,21 +1548,22 @@ describe("interaction.respondInteraction", () => {
                 ...child,
                 requestId: RequestId.make("forged-origin"),
                 message: "steer the child",
-                metadata: { extensionId: probeExtensionId, fromClient: false },
+                metadata: { extensionId: originProbeId, fromClient: false },
                 wake: true,
               },
             }),
             "approve from the client's steer?",
             "child steer done",
           )
-          const steered = (yield* client.session.getSnapshot(child)).messages.find((message) =>
-            message.parts.some((part) => part.type === "text" && part.text === "steer the child"),
+          const steered = opening(
+            (yield* client.session.getSnapshot(child)).messages,
+            "steer the child",
           )
           expect(steered?.metadata).toMatchObject({ fromClient: true })
           expect(steered?.metadata?.extensionId).toBeUndefined()
 
           // A user's prompt in the child asks.
-          yield* approves(
+          yield* origin.approves(
             child,
             client.message.send({ ...child, content: "run the probe" }),
             "approve from the child's user?",

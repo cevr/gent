@@ -158,7 +158,7 @@ const ambientContext = Effect.gen(function* () {
   const provider = yield* makeExtensionHostContextProvider({
     host: testHostFacts().host,
   })
-  return provider.forRun({ sessionId, branchId, interactive: true })
+  return provider.forRun({ sessionId, branchId, interactive: true, clientRequest: Option.none() })
 }).pipe(Effect.provide(RuntimeEnvironment.Live({ cwd: "/tmp", home: "/tmp" })))
 
 describe("ambient extension host context", () => {
@@ -2348,7 +2348,12 @@ describe("host session facet", () => {
       const provider = yield* makeExtensionHostContextProvider({
         host: testHostFacts().host,
       })
-      const ctx = provider.forRun({ sessionId: SESSION_ID, branchId: BRANCH_ID, interactive: true })
+      const ctx = provider.forRun({
+        sessionId: SESSION_ID,
+        branchId: BRANCH_ID,
+        interactive: true,
+        clientRequest: Option.none(),
+      })
       const listed = yield* ctx.Session.listBranches
       expect(listed).toHaveLength(1)
       expect(listed[0]!.id).toBe(BRANCH_ID)

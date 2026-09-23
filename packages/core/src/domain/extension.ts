@@ -688,7 +688,8 @@ export const mapExtensionServiceError = <A, E, R>(
  * Every mode stamps the sending extension's id on the message's `metadata`,
  * over any the caller set, and removes the client origin only the server
  * stamps: a turn it opens in a spawned session has no user to ask
- * (`turnCanAsk`).
+ * (`turnCanAsk`). A client's extension request that sends to its own branch
+ * while it runs sends as that client instead.
  */
 export const SessionSendParams = Schema.Union([
   Schema.Struct({
