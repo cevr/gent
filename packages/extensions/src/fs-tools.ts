@@ -1,6 +1,7 @@
 import {
   Array as Arr,
   Context,
+  Duration,
   Effect,
   FileSystem,
   Layer,
@@ -9,6 +10,7 @@ import {
   Result,
   Schema,
   type Scope,
+  Stream,
 } from "effect"
 import picomatch from "picomatch"
 import { FileFinder as NativeFileFinder } from "@ff-labs/fff-bun"
@@ -21,7 +23,7 @@ import {
   tool,
   writeFileAtomic,
 } from "@gent/core/extensions/api"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process"
 
 // ── file index ──────────────────────────────────────────────────────────────
 
@@ -527,6 +529,67 @@ const makeNativeService = (
  * them, as git treats them. A nested repository or a submodule is listed by
  * its own git, with its own rules. `None` outside a work tree or without git.
  */
+/**
+ * A hook or `rebase -x` exports `GIT_DIR` and its kin for its own repository;
+ * the listing asks the repository that holds `cwd`.
+ */
+// oxlint-disable-next-line effect/noNullish -- Child-process environments use undefined to remove inherited variables.
+const unset = undefined
+const GIT_ENV = {
+  GIT_DIR: unset,
+  GIT_WORK_TREE: unset,
+  GIT_INDEX_FILE: unset,
+  GIT_COMMON_DIR: unset,
+}
+
+/** A git that does not answer within this long is treated as absent: the walk lists. */
+const GIT_TIMEOUT = Duration.seconds(10)
+
+/**
+ * `git ls-files -z` under `cwd`, read until `FALLBACK_MAX_FILES` entries at
+ * most: past the bound the process is stopped and the listing fails, so a
+ * huge tree never lands in memory whole. `None` when git fails or times out.
+ */
+const gitLsFiles = (
+  cwd: string,
+): Effect.Effect<
+  Option.Option<ReadonlyArray<string>>,
+  FileIndexError,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.gen(function* () {
+    const handle = yield* ChildProcess.make(
+      "git",
+      ["-C", cwd, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      { env: GIT_ENV, extendEnv: true, stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+    )
+    const chunks: Array<Uint8Array> = []
+    let entries = 0
+    yield* Stream.runForEachWhile(handle.stdout, (chunk) =>
+      Effect.sync(() => {
+        chunks.push(chunk)
+        for (const byte of chunk) if (byte === 0) entries++
+        return entries <= FALLBACK_MAX_FILES
+      }),
+    )
+    if (entries > FALLBACK_MAX_FILES) {
+      return yield* new FileIndexError({
+        message: `more than ${FALLBACK_MAX_FILES} files under ${cwd}; search a narrower path`,
+        cwd,
+      })
+    }
+    if ((yield* handle.exitCode) !== 0) return Option.none<ReadonlyArray<string>>()
+    const decoder = new TextDecoder()
+    const stdout = chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("")
+    const names = [...new Set(stdout.split("\0"))].filter((entry) => entry.length > 0)
+    return Option.some<ReadonlyArray<string>>(names)
+  }).pipe(
+    Effect.scoped,
+    Effect.catchTag("PlatformError", () => Effect.succeedNone),
+    Effect.timeoutOption(GIT_TIMEOUT),
+    Effect.map(Option.flatten),
+  )
+
 const listGitFiles: (
   cwd: string,
 ) => Effect.Effect<
@@ -536,19 +599,9 @@ const listGitFiles: (
 > = Effect.fn("FileIndex.listGitFiles")(function* (cwd: string) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
-  const listed = yield* runProcess("git", [
-    "-C",
-    cwd,
-    "ls-files",
-    "-z",
-    "--cached",
-    "--others",
-    "--exclude-standard",
-  ]).pipe(Effect.option)
-  if (Option.isNone(listed) || listed.value.exitCode !== 0) return Option.none()
-  const relativePaths = [...new Set(listed.value.stdout.split("\0"))].filter(
-    (entry) => entry.length > 0,
-  )
+  const listed = yield* gitLsFiles(cwd)
+  if (Option.isNone(listed)) return Option.none()
+  const relativePaths = listed.value
   // A deleted tracked file and a symbolic link are listed too; a directory
   // is a nested repository (`vendor/lib/`) or a submodule's gitlink.
   const nested = yield* Effect.forEach(
@@ -590,7 +643,11 @@ const listGitFiles: (
 const gitIgnoresDirectory = (
   cwd: string,
 ): Effect.Effect<Option.Option<boolean>, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  runProcess("git", ["-C", cwd, "check-ignore", "-q", "--no-index", "--", "."]).pipe(
+  runProcess("git", ["-C", cwd, "check-ignore", "-q", "--no-index", "--", "."], {
+    env: GIT_ENV,
+    extendEnv: true,
+    timeout: GIT_TIMEOUT,
+  }).pipe(
     Effect.map((result) => {
       if (result.exitCode === 0) return Option.some(true)
       if (result.exitCode === 1) return Option.some(false)

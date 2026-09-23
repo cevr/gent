@@ -14,6 +14,8 @@ import {
   Predicate,
 } from "effect"
 import { BunServices } from "@effect/platform-bun"
+import { TestClock } from "effect/testing"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { EditTool, FileIndexLive, GrepTool, ReadTool, WriteTool } from "../src/fs-tools.js"
 import { runToolWithCtx, testToolContext, RuntimeEnvironment } from "@gent/core/test-utils"
 import { runProcess } from "@gent/core/extensions/api"
@@ -1259,6 +1261,121 @@ describe("symbolic links", () => {
       )
     }
   }
+})
+
+/**
+ * The index over a platform whose spawner rewrites each command first. It
+ * stands in for what the index cannot choose: the environment gent inherits,
+ * or a git that misbehaves.
+ */
+const layerWithSpawner = (
+  rewrite: (command: ChildProcess.StandardCommand) => ChildProcess.StandardCommand,
+  options: { readonly native: boolean },
+) => {
+  const spawner = Layer.effect(
+    ChildProcessSpawner.ChildProcessSpawner,
+    Effect.gen(function* () {
+      const real = yield* ChildProcessSpawner.ChildProcessSpawner
+      return ChildProcessSpawner.make((command) => {
+        if (command._tag !== "StandardCommand") return real.spawn(command)
+        return real.spawn(rewrite(command))
+      })
+    }),
+  ).pipe(Layer.provide(BunServices.layer))
+  let platform = Layer.merge(BunServices.layer, spawner)
+  if (!options.native) platform = Layer.merge(platform, nativeOff)
+  return Layer.merge(platform, Layer.provide(FileIndexLive({ home: "/tmp" }), platform))
+}
+
+/** gent started by a hook: its environment names another repository. */
+const inheritedEnv = (env: Record<string, string>) => (command: ChildProcess.StandardCommand) =>
+  ChildProcess.make(command.command, command.args, {
+    ...command.options,
+    env: { ...env, ...command.options.env },
+    extendEnv: true,
+  })
+
+/** A git whose `ls-files` runs `script` instead; every other git command is real. */
+const fakeLsFiles = (script: string) => (command: ChildProcess.StandardCommand) => {
+  if (command.command !== "git" || !command.args.includes("ls-files")) return command
+  return ChildProcess.make("sh", ["-c", script], command.options)
+}
+
+describe("the git processes behind a listing", () => {
+  for (const { name, native } of [
+    { name: "fallback", native: false },
+    { name: "native-first", native: true },
+  ]) {
+    it.scopedLive(`${name}: a GIT_DIR from a hook does not redirect the listing`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const repo = yield* fs.makeTempDirectoryScoped()
+        const other = yield* fs.makeTempDirectoryScoped()
+        yield* runProcess("git", ["init", "-q", repo])
+        yield* runProcess("git", ["init", "-q", other])
+        yield* writeTree(repo, ["a.ts", "b.log"], { ".gitignore": "*.log\n" })
+        yield* writeTree(other, ["elsewhere.ts"], {})
+        const hook = inheritedEnv({
+          GIT_DIR: `${other}/.git`,
+          GIT_WORK_TREE: other,
+          GIT_INDEX_FILE: `${other}/.git/index`,
+        })
+
+        const files = yield* listed(repo).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- The spawner's environment names repositories this test creates.
+          Effect.provide(layerWithSpawner(hook, { native })),
+        )
+        expect(files).toEqual([".gitignore", "a.ts"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+    )
+  }
+
+  it.scopedLive("a listing that passes the file bound stops without reading the rest", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      yield* runProcess("git", ["init", "-q", tmpDir])
+      yield* writeTree(tmpDir, ["a.ts"], {})
+      const endless = fakeLsFiles(`yes x | tr '\\n' '\\000'`)
+
+      const failure = yield* runToolWithCtx(
+        GrepTool,
+        { pattern: "x", path: tmpDir },
+        testToolContext({ cwd: tmpDir }),
+      ).pipe(
+        Effect.flip,
+        // oxlint-disable-next-line effect/noInlineProvide -- This test composes the service layer for this operation.
+        Effect.provide(layerWithSpawner(endless, { native: false })),
+      )
+      expect(failure.message).toContain("more than 100000 files")
+    }).pipe(Effect.provide(BunServices.layer), Effect.timeout("4 seconds")),
+  )
+
+  it.scopedLive("a git that never answers times out, and the walk lists", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const tmpDir = yield* fs.makeTempDirectoryScoped()
+      const signals = yield* fs.makeTempDirectoryScoped()
+      yield* writeTree(tmpDir, ["a.ts"], {})
+      yield* runProcess("mkfifo", [`${signals}/started`])
+      const hung = fakeLsFiles(`echo started > ${signals}/started; exec sleep 30`)
+
+      const listing = yield* Effect.forkChild(
+        listed(tmpDir).pipe(
+          // oxlint-disable-next-line effect/noInlineProvide -- The fake git signals through a pipe this test creates.
+          Effect.provide(layerWithSpawner(hung, { native: false })),
+        ),
+      )
+      // Reading the pipe returns once git runs, so its timeout is already armed.
+      yield* fs.readFileString(`${signals}/started`)
+      yield* TestClock.adjust("1 minute")
+      expect(yield* Fiber.join(listing)).toEqual(["a.ts"])
+    }).pipe(
+      // The test clock runs the listing; the live clock bounds the test.
+      Effect.provide(Layer.merge(BunServices.layer, TestClock.layer())),
+      Effect.timeout("4 seconds"),
+    ),
+  )
 })
 
 describe("an ignored directory with tracked files", () => {
