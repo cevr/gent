@@ -65,12 +65,15 @@ updates this list in the same commit.
     `context.read`. Receipt: `maximumModelToolResultChars` in
     `packages/core/src/runtime/model-context.ts`.
 11. **A model change is a durable user-role notice the loop writes.** The
-    settings update only records the choice. At the next step boundary, a
-    settings change since the branch's last settled step plus a different
-    resolved model writes one `model-change` message, and that step reads it;
-    an effort change, an agent-override turn, or a branch with no settled step
-    writes nothing. Receipts: `modelChangeNotice` in
-    `packages/core/src/runtime/model-context.ts`, `pendingModelChange` in
+    settings update only records the choice. At each step boundary the loop
+    compares the model the branch's last settled step ran on (its
+    `StreamEnded`) with the model this step resolves; when they differ it
+    writes one `model-change` message, and that step reads it. The id names
+    both models, so a replay after a further switch writes the right one. A
+    turn under an agent or run-spec model override writes none; the turn after
+    it notices the change back. An effort change, or a branch with no settled
+    step, writes nothing. Receipts: `modelChangeNotice` in
+    `packages/core/src/runtime/model-context.ts`, `lastSettledModel` in
     `packages/core/src/runtime/turn.ts`.
 12. **Tool guidance lives on the tool and follows the active tool list.**
     `promptGuidelines` are deduped per turn from the post-policy tools only.

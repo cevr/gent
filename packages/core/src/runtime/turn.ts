@@ -119,12 +119,7 @@ import {
   type TurnInterruption,
 } from "./tools.js"
 import { ConfigService } from "./config.js"
-import {
-  AgentLoopError,
-  asAgentLoopError,
-  type ResolvedTurn,
-  type RunningState,
-} from "../domain/agent-loop.js"
+import { asAgentLoopError, type ResolvedTurn, type RunningState } from "../domain/agent-loop.js"
 import {
   driverRetryPolicy,
   ModelRegistry,
@@ -1653,15 +1648,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     const eventStorage = yield* EventStorage
 
     /**
-     * Whether a `/model` switch waits for its notice at this step boundary.
-     *
-     * The settings writer only records the choice (`SessionSettingsUpdated`);
-     * the loop writes the notice, so it never lands between a tool call and
-     * its result. A notice is due when a settings change follows the branch's
-     * last settled step and the step about to run uses another model. A turn
-     * under an agent override changes the model with no settings change, so
-     * it writes nothing, as before. The event log is the source; the cursor
-     * only bounds the read to the events since the last settled step.
+     * The model the branch's last settled step actually ran on, derived from
+     * its `StreamEnded`. The step boundary compares it with the model the
+     * next step resolves; where the settings event sits in the log does not
+     * matter. The cursor only bounds the read to the events since the last
+     * settled step it saw; the value is always re-derived from the log.
      */
     const settledStepModel = ({ event }: EventEnvelope): Option.Option<ModelIdType> => {
       if (event._tag !== "StreamEnded") return Option.none()
@@ -1671,7 +1662,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       readonly cursor: number
       readonly model: Option.Option<ModelIdType>
     }>({ cursor: 0, model: Option.none() })
-    const pendingModelChange = Effect.gen(function* () {
+    const lastSettledModel = Effect.gen(function* () {
       const known = yield* Ref.get(lastSettledStep)
       const events = yield* eventStorage.listEvents({
         sessionId: scope.sessionId,
@@ -1686,10 +1677,6 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         onSome: (envelope) => ({ cursor: envelope.id, model: settledStepModel(envelope) }),
       })
       yield* Ref.set(lastSettledStep, current)
-      const settingsChanged = events
-        .slice(settledIndex + 1)
-        .some(({ event }) => event._tag === "SessionSettingsUpdated")
-      if (!settingsChanged) return Option.none<ModelIdType>()
       return current.model
     })
     const clearProcessLocalReplayBindings = (assistantMessageId: string) =>
@@ -2336,8 +2323,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         )
         if (dispatching.length === 0) return params.toolBindings
         const resolved = yield* resolveForState(params.state, params.turnProfile)
+        // The turn's agent no longer exists: the resolve already published an
+        // error that names it. A removed agent grants nothing, so its
+        // dispatching calls lose their bindings and settle as failed; the next
+        // step meets the same missing agent and ends the turn unanswered.
         if (Predicate.isUndefined(resolved)) {
-          return yield* new AgentLoopError({ message: "Recovery requires a selected agent" })
+          for (const call of dispatching) params.toolBindings.delete(call.name)
+          return params.toolBindings
         }
         // A stored binding cannot restore authority the current agent policy
         // removed: a tool the agent no longer grants must not come back.
@@ -2704,8 +2696,13 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         resolved = { ...resolved, messages: [...resolved.messages, persisted] }
       })
       // A `/model` switch lands here, never between a tool call and its
-      // result: the settings writer only records the choice.
-      const previousModel = yield* pendingModelChange.pipe(
+      // result: the settings writer only records the choice. A turn under an
+      // agent or run-spec model override picks its own model on purpose and
+      // writes no notice; the turn after it notices the change back.
+      const overridesModel =
+        Predicate.isNotUndefined(params.state.agentOverride) ||
+        Predicate.isNotUndefined(params.state.runSpec?.overrides?.modelId)
+      const previousModel = yield* lastSettledModel.pipe(
         Effect.catch((cause) =>
           Effect.logWarning("turn.model-change-read-failed").pipe(
             Effect.annotateLogs({ error: String(cause) }),
@@ -2713,7 +2710,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           ),
         ),
       )
-      if (Option.isSome(previousModel) && previousModel.value !== resolved.modelId) {
+      if (
+        !overridesModel &&
+        Option.isSome(previousModel) &&
+        previousModel.value !== resolved.modelId
+      ) {
         yield* appendBoundaryLine(
           modelChangeNotice({
             sessionId: scope.sessionId,

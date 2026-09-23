@@ -188,11 +188,12 @@ export const CONTEXT_WINDOW_MESSAGE_TYPE: RuntimeUserMessageType = "context-wind
 export const MODEL_CHANGE_MESSAGE_TYPE: RuntimeUserMessageType = "model-change"
 
 /**
- * A user-role line the model reads when a session model switch since the
- * branch's last settled step changes the model the next step runs on, so
- * attribution of the turns above stays honest. The loop writes it at a step boundary, never
- * between a tool call and its result. The id names the turn and step, so a
- * replayed step writes it once.
+ * A user-role line the model reads when the step it is about to run uses
+ * another model than the branch's last settled step, so attribution of the
+ * turns above stays honest. The loop writes it at a step boundary, never
+ * between a tool call and its result. The id names the turn, the step and
+ * both models: a replayed step with the same switch writes it once, and a
+ * replay after a further switch writes the notice that switch needs.
  */
 export const modelChangeNotice = (params: {
   readonly sessionId: SessionId
@@ -204,7 +205,9 @@ export const modelChangeNotice = (params: {
   readonly createdAt: Date
 }): Message =>
   Message.cases.regular.make({
-    id: MessageId.make(`model-change:${params.turnMessageId}:${params.step}`),
+    id: MessageId.make(
+      `model-change:${params.turnMessageId}:${params.step}:${params.previousModelId}:${params.nextModelId}`,
+    ),
     sessionId: params.sessionId,
     branchId: params.branchId,
     role: "user",
