@@ -64,6 +64,7 @@ import {
 import {
   type ExtensionHostService,
   ProviderAuthError,
+  type ProviderHints,
   ProviderAuthInfo,
 } from "@gent/core/extensions/api"
 import { encodeExternalJson, externalWireNull } from "./helpers/external-wire.js"
@@ -1744,11 +1745,10 @@ describe("MODEL_CONFIG", () => {
 })
 
 describe("getModelOverride", () => {
-  test("haiku family disables effort and excludes interleaved-thinking", () => {
+  test("haiku family excludes interleaved-thinking", () => {
     const override = getModelOverride("claude-haiku-4-5")
     expect(Option.isSome(override)).toBe(true)
     if (Option.isSome(override)) {
-      expect(override.value.disableEffort).toBe(true)
       expect(override.value.exclude).toContain("interleaved-thinking-2025-05-14")
     }
   })
@@ -1772,7 +1772,8 @@ describe("getModelOverride", () => {
   test("matches case-insensitively", () => {
     const override = getModelOverride("CLAUDE-HAIKU-4-5")
     expect(Option.isSome(override)).toBe(true)
-    if (Option.isSome(override)) expect(override.value.disableEffort).toBe(true)
+    if (Option.isSome(override))
+      expect(override.value.exclude).toContain("interleaved-thinking-2025-05-14")
   })
 })
 
@@ -2543,7 +2544,11 @@ describe("buildAnthropicModelDriver — reasoning effort", () => {
         Schema.Struct({ output_config: Schema.optional(Schema.Struct({ effort: Schema.String })) }),
       ),
     )(Option.getOrElse(body, () => "{}")).output_config
-  const sentFor = (modelName: string, authInfo: ProviderAuthInfo) =>
+  const sentFor = (
+    modelName: string,
+    authInfo: ProviderAuthInfo,
+    reasoning: ProviderHints["reasoning"] = "high",
+  ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
         {
@@ -2555,7 +2560,7 @@ describe("buildAnthropicModelDriver — reasoning effort", () => {
       )
       const betaCellRef = yield* Ref.make<BetaExclusions>(new Map())
       const driver = buildAnthropicModelDriver(credentialCellRef, betaCellRef, Option.none())
-      const model = yield* driver.resolveModel(modelName, authInfo, { reasoning: "high" })
+      const model = yield* driver.resolveModel(modelName, authInfo, { reasoning })
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
       return sentOutputConfig(
@@ -2565,20 +2570,39 @@ describe("buildAnthropicModelDriver — reasoning effort", () => {
       )
     })
 
-  // Anthropic answers 400 when a haiku request names an effort.
-  it.live("a haiku request names no effort on either auth path", () =>
+  // Anthropic answers 400 when a model outside its effort table gets one.
+  it.live("a model that takes no effort gets none on either auth path", () =>
     Effect.gen(function* () {
-      expect(yield* sentFor("claude-haiku-4-5", makeApiAuthInfo("sk-test"))).toBeUndefined()
-      expect(yield* sentFor("claude-haiku-4-5", makeOAuthInfo())).toBeUndefined()
+      for (const model of ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-5-20250929"]) {
+        expect(yield* sentFor(model, makeApiAuthInfo("sk-test"))).toBeUndefined()
+        expect(yield* sentFor(model, makeOAuthInfo())).toBeUndefined()
+      }
     }),
   )
 
   it.live("a model that takes effort gets it on either auth path", () =>
     Effect.gen(function* () {
-      expect(yield* sentFor("claude-opus-4-6", makeApiAuthInfo("sk-test"))).toEqual({
-        effort: "high",
-      })
-      expect(yield* sentFor("claude-opus-4-6", makeOAuthInfo())).toEqual({ effort: "high" })
+      for (const model of [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-opus-4-5-20251101",
+        "claude-opus-5-5",
+        "claude-sonnet-5",
+        "claude-fable-5-1",
+      ]) {
+        expect(yield* sentFor(model, makeApiAuthInfo("sk-test"))).toEqual({ effort: "high" })
+        expect(yield* sentFor(model, makeOAuthInfo())).toEqual({ effort: "high" })
+      }
+    }),
+  )
+
+  it.live("a hint maps onto the levels the model accepts", () =>
+    Effect.gen(function* () {
+      const api = makeApiAuthInfo("sk-test")
+      expect(yield* sentFor("claude-opus-4-5", api, "max")).toEqual({ effort: "high" })
+      expect(yield* sentFor("claude-sonnet-4-6", api, "minimal")).toEqual({ effort: "low" })
+      expect(yield* sentFor("claude-sonnet-4-6", api, "medium")).toEqual({ effort: "medium" })
+      expect(yield* sentFor("claude-sonnet-4-6", api, "none")).toBeUndefined()
     }),
   )
 })

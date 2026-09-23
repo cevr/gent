@@ -87,8 +87,6 @@ interface ModelOverride {
   readonly exclude?: ReadonlyArray<string>
   /** Beta flags to add for this model on top of the base list. */
   readonly add?: ReadonlyArray<string>
-  /** Whether the model rejects `output_config.effort` (Anthropic answers 400). */
-  readonly disableEffort?: boolean
 }
 
 interface ModelConfig {
@@ -117,7 +115,6 @@ export const MODEL_CONFIG: ModelConfig = {
   modelOverrides: {
     haiku: {
       exclude: ["interleaved-thinking-2025-05-14"],
-      disableEffort: true,
     },
     "4-6": {
       add: ["effort-2025-11-24"],
@@ -2044,27 +2041,82 @@ export const buildKeychainTransformClient =
 // The OAuth path hands the cache to the keychain transform middleware,
 // which reads it per request via `mapRequestEffect`.
 
-// Maps gent reasoning level to Anthropic effort.
-//
-// The Anthropic API accepts `max` (and Sonnet 5 also accepts `xhigh`), but the
-// installed `@effect/ai-anthropic` config type is narrower than the wire
-// schema: `AnthropicLanguageModel.layer`'s `output_config.effort` is
-// `"low" | "medium" | "high"`, while `Generated.ts` `EffortLevel` is
-// `"low" | "medium" | "high" | "max"`. Passing `max` here fails typecheck
-// (TS2322). So `xhigh` and `max` clamp to `high` until that config type widens.
-// Verified against @effect/ai-anthropic@4.0.0-rc.112 on 2026-09-09.
-const ANTHROPIC_EFFORT = new Map<string, "low" | "medium" | "high">([
+/** Anthropic `output_config.effort` levels, lowest first. */
+const AnthropicEffort = Schema.Literals(["low", "medium", "high", "xhigh", "max"])
+type AnthropicEffort = typeof AnthropicEffort.Type
+const ANTHROPIC_EFFORT_ORDER = AnthropicEffort.literals
+
+/**
+ * The effort levels each model family accepts, lowest first; first match
+ * wins, by substring of the lowercased id. From the model table at
+ * platform.claude.com/docs/en/build-with-claude/effort (read 2026-09-23).
+ * A model no row matches takes no effort: Sonnet 4.5, Haiku 4.5 and older
+ * models answer HTTP 400 when a request names one, so a new family stays
+ * effort-free until it is added here.
+ */
+const ANTHROPIC_ACCEPTED_EFFORTS: ReadonlyArray<{
+  readonly pattern: RegExp
+  readonly accepts: ReadonlyArray<AnthropicEffort>
+}> = [
+  {
+    pattern: /(fable-5|mythos|opus-5|opus-4-[78]|sonnet-5)(-|$)/,
+    accepts: ["low", "medium", "high", "xhigh", "max"],
+  },
+  { pattern: /(opus|sonnet)-4-6(-|$)/, accepts: ["low", "medium", "high", "max"] },
+  { pattern: /opus-4-5(-|$)/, accepts: ["low", "medium", "high"] },
+]
+
+/** The level a gent reasoning hint asks for; `none` asks for no effort, so the model runs at its default. */
+const HINT_EFFORT = new Map<string, AnthropicEffort>([
   ["minimal", "low"],
   ["low", "low"],
   ["medium", "medium"],
   ["high", "high"],
-  ["xhigh", "high"],
-  ["max", "high"],
+  ["xhigh", "xhigh"],
+  ["max", "max"],
 ])
+
+/**
+ * The installed `@effect/ai-anthropic` config type is narrower than the wire
+ * schema: `output_config.effort` is `"low" | "medium" | "high"`, so `xhigh`
+ * and `max` send `high` until that type widens (verified against
+ * @effect/ai-anthropic@4.0.0-rc.112).
+ */
+const SDK_EFFORT = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "high",
+  max: "high",
+} satisfies Record<AnthropicEffort, "low" | "medium" | "high">
+
+/** The effort a request sends: the lowest level the model accepts at or above the hint, else its highest. */
+const anthropicEffort = (
+  modelName: string,
+  hint: ProviderHints["reasoning"],
+): Option.Option<"low" | "medium" | "high"> => {
+  const lower = modelName.toLowerCase()
+  return Option.fromUndefinedOr(
+    ANTHROPIC_ACCEPTED_EFFORTS.find((entry) => entry.pattern.test(lower)),
+  ).pipe(
+    Option.flatMap((family) =>
+      Option.fromUndefinedOr(hint).pipe(
+        Option.flatMap((level) => Option.fromUndefinedOr(HINT_EFFORT.get(level))),
+        Option.flatMap((effort) => {
+          const rank = ANTHROPIC_EFFORT_ORDER.indexOf(effort)
+          return Option.fromUndefinedOr(
+            family.accepts.find((level) => ANTHROPIC_EFFORT_ORDER.indexOf(level) >= rank),
+          ).pipe(Option.orElse(() => Option.fromUndefinedOr(family.accepts.at(-1))))
+        }),
+      ),
+    ),
+    Option.map((effort) => SDK_EFFORT[effort]),
+  )
+}
 
 type AnthropicConfig = Required<Parameters<typeof AnthropicLanguageModel.layer>[0]>["config"]
 
-/** Sampling limits and effort for one model; a model that rejects effort gets none. */
+/** Sampling limits and effort for one model; a model outside the effort table gets none. */
 const buildAnthropicConfig = (
   modelName: string,
   hints: Option.Option<ProviderHints>,
@@ -2075,15 +2127,8 @@ const buildAnthropicConfig = (
     if (Option.isSome(maxTokens)) config = { ...config, max_tokens: maxTokens.value }
     const temperature = Option.fromNullishOr(hints.value.temperature)
     if (Option.isSome(temperature)) config = { ...config, temperature: temperature.value }
-    const reasoning = Option.fromNullishOr(hints.value.reasoning)
-    const takesEffort = Option.match(getModelOverride(modelName), {
-      onNone: () => true,
-      onSome: (override) => override.disableEffort !== true,
-    })
-    if (takesEffort && Option.isSome(reasoning) && reasoning.value !== "none") {
-      const effort = Option.fromNullishOr(ANTHROPIC_EFFORT.get(reasoning.value))
-      if (Option.isSome(effort)) config = { ...config, output_config: { effort: effort.value } }
-    }
+    const effort = anthropicEffort(modelName, hints.value.reasoning)
+    if (Option.isSome(effort)) config = { ...config, output_config: { effort: effort.value } }
   }
   return config
 }
