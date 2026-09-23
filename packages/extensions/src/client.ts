@@ -1,4 +1,12 @@
-export { childTaskBody, childTaskText, DelegateChild, DelegateRpc } from "./delegate.js"
+export {
+  CHILD_COMPLETION_TYPE,
+  ChildCompletionDetails,
+  childOutcomeWords,
+  childTaskBody,
+  childTaskText,
+  DelegateChild,
+  DelegateRpc,
+} from "./delegate.js"
 export { SkillsRpc } from "./skills.js"
 export {
   GOAL_CONTEXT_MESSAGE_TYPE,

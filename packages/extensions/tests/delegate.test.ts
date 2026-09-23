@@ -261,6 +261,48 @@ describe("a child's completion", () => {
     12_000,
   )
 
+  it.live(
+    "the completion message carries the row it draws: agent, outcome, usage, and the child's calls",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              if (!promptToolCallIds(options.prompt).includes("child-read")) {
+                return Effect.succeed(
+                  toolStep("read", { path: "/tmp/no-such-file-for-a-child" }, "child-read"),
+                )
+              }
+              return Effect.succeed(reply("pong"))
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "delegate this task")
+          const snapshot = yield* afterCompletion(harness)
+          const [completion] = completionMessages(snapshot.messages)
+          expect(completion?.metadata?.details).toMatchObject({
+            requestId: "start-1",
+            agentName: DELEGATE_AGENT_NAME,
+            outcome: {},
+            tools: [{ name: "read", summary: "", status: "error" }],
+            toolCount: 1,
+          })
+          // The model still reads the same envelope.
+          expect(messageTexts([completion!])[0]).toContain(
+            `Child agent "${DELEGATE_AGENT_NAME}" completed.`,
+          )
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
   it.live("a child cannot delegate further", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -39,6 +39,7 @@ import {
   type ExtensionServiceError,
   headTailChars,
   latestAssistantText,
+  type Message,
   makeRunSpec,
   MessageId,
   request,
@@ -217,6 +218,13 @@ const failureNames = (outcome: ChildOutcome): ReadonlyArray<string> => {
   return names
 }
 
+/** How a child's turn ended, in the words the parent model and the completion row both show. */
+export const childOutcomeWords = (outcome: ChildOutcome): string => {
+  const failures = failureNames(outcome)
+  if (failures.length === 0) return "completed"
+  return `ended (${failures.join(", ")})`
+}
+
 /** The child branch's messages, from the session detail. */
 const childMessages = (target: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
   Effect.gen(function* () {
@@ -270,9 +278,7 @@ export const describeChildCompletion = (params: {
   readonly outcome: ChildOutcome
   readonly text: string
 }): string => {
-  const failures = failureNames(params.outcome)
-  let status = "completed"
-  if (failures.length > 0) status = `ended (${failures.join(", ")})`
+  const status = childOutcomeWords(params.outcome)
   const preview = headTailChars(params.text, maximumPreviewChars)
   return [
     `Child agent "${params.agentName}" ${status}. requestId ${params.requestId}; session ${params.sessionId}; branch ${params.branchId}.`,
@@ -281,6 +287,79 @@ export const describeChildCompletion = (params: {
     preview.text,
   ].join("\n")
 }
+
+export const CHILD_COMPLETION_TYPE = "child-completion"
+
+/** One call a child made, as its completion row draws it. */
+const ChildToolLine = Schema.Struct({
+  name: Schema.String,
+  summary: Schema.String,
+  status: Schema.Literals(["completed", "error", "incomplete"]),
+})
+type ChildToolLine = typeof ChildToolLine.Type
+
+/**
+ * `metadata.details` of a child-completion message. The row that draws it
+ * commits to scrollback once, after the child ends, so it carries everything
+ * the row shows. Only the three ids are required: older rows carry nothing
+ * else.
+ */
+export const ChildCompletionDetails = Schema.Struct({
+  requestId: RequestId,
+  sessionId: SessionId,
+  branchId: BranchId,
+  agentName: Schema.optionalKey(AgentName),
+  outcome: Schema.optionalKey(ChildOutcome),
+  usage: Schema.optionalKey(ChildUsage),
+  /** The child's last calls, oldest first. `toolCount` counts every call. */
+  tools: Schema.optionalKey(Schema.Array(ChildToolLine)),
+  toolCount: Schema.optionalKey(Schema.Finite),
+})
+
+/** The completion row shows the child's last calls; the child branch keeps them all. */
+const MAX_COMPLETION_TOOLS = 20
+
+/**
+ * The receipts a saved cell result carries under `operations`, read
+ * leniently. The cell extension writes them (`CellOperationReceipt`).
+ */
+const CellReceipts = Schema.Struct({
+  operations: Schema.Array(
+    Schema.Struct({
+      tool: Schema.String,
+      outcome: Schema.Literals(["succeeded", "failed", "incomplete"]),
+      summary: Schema.String,
+    }),
+  ),
+})
+const decodeCellReceipts = Schema.decodeUnknownOption(CellReceipts)
+
+const receiptStatus = (outcome: "succeeded" | "failed" | "incomplete"): ChildToolLine["status"] => {
+  if (outcome === "succeeded") return "completed"
+  if (outcome === "failed") return "error"
+  return "incomplete"
+}
+
+/** The calls a child made, from its saved tool results: a cell's receipts stand for the calls it admitted. */
+const childToolLines = (
+  messages: ReadonlyArray<{ readonly parts: ReadonlyArray<Message["parts"][number]> }>,
+): ReadonlyArray<ChildToolLine> =>
+  messages.flatMap((message) =>
+    message.parts.flatMap((part): ReadonlyArray<ChildToolLine> => {
+      if (part.type !== "tool-result") return []
+      const receipts = Option.filter(decodeCellReceipts(part.result), () => part.name === "cell")
+      if (Option.isSome(receipts)) {
+        return receipts.value.operations.map((receipt) => ({
+          name: receipt.tool,
+          summary: receipt.summary,
+          status: receiptStatus(receipt.outcome),
+        }))
+      }
+      let status: ChildToolLine["status"] = "completed"
+      if (part.isFailure) status = "error"
+      return [{ name: part.name, summary: "", status }]
+    }),
+  )
 
 /** An Option usage becomes a `usage` field, or nothing. */
 const usageField = (
@@ -316,7 +395,19 @@ const deliverCompletion = (
 ) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const text = latestAssistantText(yield* childMessages(entry))
+    const messages = yield* childMessages(entry)
+    const text = latestAssistantText(messages)
+    const tools = childToolLines(messages)
+    const details: typeof ChildCompletionDetails.Type = {
+      requestId: entry.requestId,
+      sessionId: entry.sessionId,
+      branchId: entry.branchId,
+      agentName: entry.agentName,
+      outcome,
+      ...usageField(usage),
+      tools: tools.slice(-MAX_COMPLETION_TOOLS),
+      toolCount: tools.length,
+    }
     yield* ctx.Session.send({
       delivery: "queue",
       ...parent,
@@ -331,14 +422,7 @@ const deliverCompletion = (
         outcome,
         text,
       }),
-      metadata: {
-        customType: "child-completion",
-        details: {
-          requestId: entry.requestId,
-          sessionId: entry.sessionId,
-          branchId: entry.branchId,
-        },
-      },
+      metadata: { customType: CHILD_COMPLETION_TYPE, details },
     })
     return settled(entry, outcome, usage, text)
   })
