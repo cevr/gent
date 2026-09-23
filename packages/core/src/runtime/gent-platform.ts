@@ -271,6 +271,9 @@ export const runProcess = (
  * names is replaced (staged in that file's directory) and the link stays. A
  * config under ~/.gent can be a link into a dotfiles checkout.
  *
+ * The staged file is synced to disk before the rename, so the rename never
+ * publishes text the disk does not hold yet.
+ *
  * The file keeps its permission bits: `options.mode` when given (a
  * credential passes 0600), else the mode of the file it replaces, else the
  * default for a new file.
@@ -343,7 +346,15 @@ export const writeFileAtomic = Effect.fn("writeFileAtomic")(function* (
     () =>
       Effect.gen(function* () {
         if (Option.isSome(mode)) yield* fs.chmod(staging, mode.value)
-        yield* fs.writeFileString(staging, content)
+        // The staged text reaches the disk before the rename publishes it, so
+        // a power loss after the rename cannot leave the file empty.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const file = yield* fs.open(staging, { flag: "w" })
+            yield* file.writeAll(new TextEncoder().encode(content))
+            yield* file.sync
+          }),
+        )
         yield* fs.rename(staging, target)
       }),
     (_, exit) => {
