@@ -955,8 +955,6 @@ export const findHookWithoutGuards = (
  * - An `.oxlintrc.json` override whose `files` glob matches no tracked file.
  *   The override for `packages/sdk/src/supervisor.ts` outlived that file and
  *   kept turning a rule off for nothing.
- * - A `tsconfig.locks.json` include that names no tracked file. Two deleted
- *   test files kept their entries; `tsc` never complained.
  * - A rule defined under `lint/` that the root config never enables. Five such
  *   rules accumulated; one of them (`no-make-unsafe`) could not be enabled at
  *   all, because shipped code would have failed it.
