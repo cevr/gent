@@ -29,14 +29,22 @@ import {
   SessionId,
   ToolCallId,
   projectMessagesWithToolInteractions,
+  AgentEvent,
+  EventEnvelope,
+  EventId,
 } from "@gent/core/protocol"
-import { type SessionMessageDetails, sessionMessageText } from "@gent/extensions/client"
+import { toolCallReceipts } from "@gent/core/test-utils"
+import {
+  CHILD_COMPLETION_TYPE,
+  type SessionMessageDetails,
+  sessionMessageText,
+} from "@gent/extensions/client"
 import { createSignal, onCleanup, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"
 import type { DisclosureLevel } from "../src/session"
 import { ToolCallIdentityProvider, ToolFrame } from "../src/ui"
 import { EditToolRenderer, ReadToolRenderer, useToolRenderers } from "../src/tool-renderers"
-import { renderFrame, renderWithProviders } from "./render-harness-boundary"
+import { destroyRenderSetup, renderFrame, renderWithProviders } from "./render-harness-boundary"
 import { makeSettleHold } from "./scrollback-hold-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
 import { useExtensionUI } from "../src/extensions/host"
@@ -527,6 +535,8 @@ const registeredFailureMessage = (id: string): ListMessage =>
     summary: "read failed",
     output: absent,
   })
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
 
 const cellMessage = (id: string, display = "hello from a.txt"): ListMessage =>
   assistantToolMessage("assistant-cell", {
@@ -1194,6 +1204,260 @@ describe("FX transcript treatment", () => {
     }),
   )
 
+  it.live("a reloaded cell draws its ops as the live feed drew them", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-reloaded-ops")
+      const branchId = BranchId.make("branch-reloaded-ops")
+      const cell = ToolCallId.make("call-cell-reload")
+      const editInput = {
+        path: "/workspace/src/module.ts",
+        oldString: `export const value = "${"a".repeat(120)}"`,
+        newString: `export const value = "${"b".repeat(120)}"\nexport const other = 1`,
+      }
+      const envelope = (id: number, event: AgentEvent) =>
+        EventEnvelope.make({ id: EventId.make(id), createdAt: id, event })
+      const op = (
+        id: number,
+        toolCallId: string,
+        toolName: string,
+        input: Readonly<Record<string, string>>,
+        output: string,
+      ) => [
+        envelope(
+          id,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make(toolCallId),
+            toolName,
+            input,
+            parentToolCallId: cell,
+          }),
+        ),
+        envelope(
+          id + 1,
+          AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make(toolCallId),
+            toolName,
+            summary: "done",
+            output,
+            parentToolCallId: cell,
+          }),
+        ),
+      ]
+      // The snapshot a reload reads: the cell's ops projected from its stored events.
+      const [projected] = projectMessagesWithToolInteractions(
+        [
+          Message.cases.regular.make({
+            id: MessageId.make("assistant-reloaded-cell"),
+            sessionId,
+            branchId,
+            role: "assistant",
+            parts: [
+              Prompt.toolCallPart({
+                id: cell,
+                name: "cell",
+                params: { code: "await tools.bash({command: 'bun test'})" },
+                providerExecuted: false,
+              }),
+            ],
+            createdAt: dateFromMillis(0),
+          }),
+        ],
+        toolCallReceipts([
+          ...op(
+            1,
+            "op-bash",
+            "bash",
+            { command: "bun test" },
+            encodeJson({ stdout: "1 fail", stderr: "", exitCode: 1 }),
+          ),
+          ...op(
+            3,
+            "op-edit",
+            "edit",
+            editInput,
+            encodeJson({ path: editInput.path, replacements: 1 }),
+          ),
+        ]),
+      )
+      const interaction = Option.fromNullishOr(projected?.toolInteractions[0])
+      if (Option.isNone(interaction)) return yield* Effect.die("no projected cell")
+      const { operations, ...call } = interaction.value
+      const reloaded: ToolCall = {
+        ...call,
+        status: "completed",
+        operations: (operations ?? []).map((operation) => ({ ...operation })),
+      }
+      // The same cell as the live feed carried it: each op with its whole
+      // input and output, before any reload projected it.
+      const live: ToolCall = {
+        ...reloaded,
+        operations: [
+          {
+            id: "op-bash",
+            toolName: "bash",
+            status: "completed",
+            input: { command: "bun test" },
+            summary: "done",
+            output: encodeJson({ stdout: "1 fail", stderr: "", exitCode: 1 }),
+          },
+          {
+            id: "op-edit",
+            toolName: "edit",
+            status: "completed",
+            input: editInput,
+            summary: "done",
+            output: encodeJson({ path: editInput.path, replacements: 1 }),
+          },
+        ],
+      }
+      const drawn = (call: ToolCall, label: string) =>
+        Effect.gen(function* () {
+          const setup = yield* Effect.promise(() =>
+            renderWithProviders(
+              () => (
+                <RegisteredToolMessageLists
+                  items={[assistantToolMessage("assistant-reloaded-cell", call)]}
+                  fullDetail
+                />
+              ),
+              { width: 110, height: 60 },
+            ),
+          )
+          const frame = yield* Effect.promise(() =>
+            waitForRenderedFrame(
+              setup,
+              (next) => next.includes("module.ts") && next.includes("other = 1"),
+              label,
+            ),
+          )
+          destroyRenderSetup(setup)
+          return frame
+        })
+      const liveFrame = yield* drawn(live, "live cell ops")
+      const frame = yield* drawn(reloaded, "reloaded cell ops")
+      // A reload opens each op body exactly as far as the live feed did.
+      expect(frame).toBe(liveFrame)
+      // A failed command reads as failed after a reload, not as a bare success header.
+      expect(frame).toContain("exit 1")
+      // The diff is built from the whole strings: the new text adds a line.
+      expect(frame).toContain("+1 -0")
+      expect(frame).toContain("+export const other = 1")
+    }),
+  )
+
+  it.live("a reloaded op cut to fit counts and numbers lines as in its whole output", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-cut-ops")
+      const branchId = BranchId.make("branch-cut-ops")
+      const cell = ToolCallId.make("call-cell-cut")
+      const envelope = (id: number, event: AgentEvent) =>
+        EventEnvelope.make({ id: EventId.make(id), createdAt: id, event })
+      const op = (
+        id: number,
+        toolCallId: string,
+        toolName: string,
+        input: Readonly<Record<string, string>>,
+        output: string,
+      ) => [
+        envelope(
+          id,
+          AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make(toolCallId),
+            toolName,
+            input,
+            parentToolCallId: cell,
+          }),
+        ),
+        envelope(
+          id + 1,
+          AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: ToolCallId.make(toolCallId),
+            toolName,
+            summary: "done",
+            output,
+            parentToolCallId: cell,
+          }),
+        ),
+      ]
+      const numbered = Array.from({ length: 3_000 }, (_, index) => `line ${index + 1}`)
+      const [projected] = projectMessagesWithToolInteractions(
+        [
+          Message.cases.regular.make({
+            id: MessageId.make("assistant-cut-cell"),
+            sessionId,
+            branchId,
+            role: "assistant",
+            parts: [
+              Prompt.toolCallPart({
+                id: cell,
+                name: "cell",
+                params: { code: "await tools.bash({command: 'seq'})" },
+                providerExecuted: false,
+              }),
+            ],
+            createdAt: dateFromMillis(0),
+          }),
+        ],
+        toolCallReceipts([
+          ...op(
+            1,
+            "op-bash-long",
+            "bash",
+            { command: "seq 3000" },
+            encodeJson({ stdout: numbered.join("\n"), stderr: "", exitCode: 0 }),
+          ),
+          ...op(
+            3,
+            "op-read-long",
+            "read",
+            { path: "/workspace/long.txt" },
+            encodeJson({
+              path: "/workspace/long.txt",
+              content: numbered.map((text, index) => `${index + 1}\t${text}`).join("\n"),
+              lineCount: 3_000,
+            }),
+          ),
+        ]),
+      )
+      const interaction = Option.fromNullishOr(projected?.toolInteractions[0])
+      if (Option.isNone(interaction)) return yield* Effect.die("no projected cell")
+      const { operations, ...call } = interaction.value
+      const reloaded: ToolCall = {
+        ...call,
+        status: "completed",
+        operations: (operations ?? []).map((operation) => ({ ...operation })),
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <RegisteredToolMessageLists
+              items={[assistantToolMessage("assistant-cut-cell", reloaded)]}
+              fullDetail
+            />
+          ),
+          { width: 110, height: 60 },
+        ),
+      )
+      const frame = yield* Effect.promise(() =>
+        waitForRenderedFrame(setup, (next) => next.includes("long.txt"), "cut cell ops"),
+      )
+      // bash: the whole count, its real last line, and the true number of hidden lines.
+      expect(frame).toContain("exit 0 · 3000 lines")
+      expect(frame).toContain("... [2994 lines truncated] ...")
+      // read: the tail keeps its real line numbers.
+      expect(frame).toMatch(/3000 │ line 3000/)
+      expect(frame).toContain("2994 more lines")
+    }),
+  )
+
   it.live("shows cell operation receipts in tree and detail frames", () =>
     Effect.gen(function* () {
       const setup = yield* Effect.promise(() =>
@@ -1576,6 +1840,128 @@ describe("native transcript markdown", () => {
       expect(history).not.toContain("## ")
       expect(history).not.toContain("`")
     }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
+// ── native-transcript-footer-room.test ──────────────────────────────────────
+
+/** A long resumed session: a model switch, four child completions, a cell with two ops. */
+const longHistory = (): SessionItem[] => {
+  const childCompletion = (index: number): ListMessage => ({
+    ...assistant(`child-${index}`, `child ${index} finished\nCHILD-${index} answer`),
+    role: "user",
+    segments: absent,
+    metadata: {
+      customType: CHILD_COMPLETION_TYPE,
+      details: { sessionId: `child-session-${index}`, agentName: "delegate", outcome: {} },
+    },
+  })
+  const cellWithOps = assistantToolMessage("assistant-cell-ops", {
+    id: "call-cell-ops",
+    toolName: "cell",
+    status: "completed",
+    input: { code: "await tools.read({path: 'a.md'}); await tools.bash({command: 'ls'})" },
+    summary: absent,
+    output: encodeJson({ display: "done" }),
+    operations: [
+      {
+        id: "op-read",
+        toolName: "read",
+        status: "completed",
+        input: { path: "a.md" },
+        summary: "3 lines",
+        output: absent,
+      },
+      {
+        id: "op-bash",
+        toolName: "bash",
+        status: "completed",
+        input: { command: "ls" },
+        summary: "exit 0",
+        output: absent,
+      },
+    ],
+  })
+  return [
+    assistant("a1", longBody("EARLY")),
+    {
+      ...compactionMessage(),
+      id: "model-change:b1:m2",
+      metadata: { customType: MODEL_CHANGE_MESSAGE_TYPE },
+    },
+    ...[1, 2, 3, 4].map(childCompletion),
+    cellWithOps,
+    assistant("a2", "one\ntwo\nthree"),
+    assistant("a3", "four\nfive"),
+    assistant("a4", "LAST-ANSWER"),
+  ]
+}
+
+describe("native transcript footer room", () => {
+  it.live(
+    "a long session leaves the status line and the tray on screen",
+    () =>
+      Effect.gen(function* () {
+        const firstCommit = yield* Deferred.make<void>()
+        const setup = yield* Effect.promise(() =>
+          renderWithProviders(
+            () => {
+              const renderer = useRenderer()
+              const capture = () => Deferred.doneUnsafe(firstCommit, Effect.void)
+              renderer.on("external_output", capture)
+              onCleanup(() => renderer.off("external_output", capture))
+              const [footer, setFooter] = createSignal(4)
+              return (
+                <box flexDirection="column" flexGrow={1}>
+                  <NativeTranscript
+                    items={longHistory()}
+                    streaming={false}
+                    footerHeight={footer()}
+                    expanded={false}
+                    disclosure="collapsed"
+                    displayRevision={0}
+                    overlayOpen={false}
+                    renderItems={(visible) => (
+                      <MessageList
+                        items={visible}
+                        disclosure="collapsed"
+                        syntaxStyle={syntaxStyle}
+                        streaming={false}
+                      />
+                    )}
+                  >
+                    <box />
+                  </NativeTranscript>
+                  <box
+                    flexDirection="column"
+                    flexShrink={0}
+                    onSizeChange={function () {
+                      setFooter(this.height)
+                    }}
+                  >
+                    <text>COMPOSER</text>
+                    <text>STATUS-LINE</text>
+                    <text>TRAY-ROW</text>
+                  </box>
+                </box>
+              )
+            },
+            { width: 107, height: 26 },
+          ),
+        )
+        yield* Deferred.await(firstCommit)
+        // The footer region is the terminal less the rows kept for scrollback:
+        // the live tail and the footer share it, so the last footer row stays on screen.
+        const frame = yield* Effect.promise(() =>
+          waitForRenderedFrame(
+            setup,
+            (next) => next.includes("LAST-ANSWER") && next.includes("TRAY-ROW"),
+            "footer on screen",
+          ),
+        )
+        expect(frame).toContain("STATUS-LINE")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 })
 

@@ -16,12 +16,14 @@ import {
   type ExtensionHealthIssue,
   type ExtensionHealthSnapshot,
   Gent,
-  LOG_DIR,
+  resolveLogDir,
   serverLock,
+  type ServerLockEntry,
   type ServerLockStatus,
 } from "@gent/sdk"
 import type { GentPlatform } from "@gent/core/host"
 import { Command, Flag } from "effect/unstable/cli"
+import * as Terminal from "effect/Terminal"
 
 // ── local health report ─────────────────────────────────────────────────────
 
@@ -151,12 +153,11 @@ export const inspectStorage = (
   })
 
 /**
- * Read a log directory. `dir` defaults to the one a live gent writes to; tests
- * pass a directory they own, so they never read or remove real logs.
+ * Read a log directory. The doctor passes the one this environment writes to
+ * (`resolveLogDir`); tests pass a directory they own, so they never read or
+ * remove real logs.
  */
-export const inspectLogs = (
-  dir: string = LOG_DIR,
-): Effect.Effect<LogHealth, never, FileSystem.FileSystem> =>
+export const inspectLogs = (dir: string): Effect.Effect<LogHealth, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const exists = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))
@@ -257,7 +258,7 @@ export const makeDoctorReport = (
       home,
       storage,
       server,
-      logs: yield* inspectLogs(),
+      logs: yield* inspectLogs(yield* resolveLogDir),
       extensions: Option.getOrElse(Option.fromNullishOr(extensions), defaultExtensions),
     }
   })
@@ -462,6 +463,55 @@ export const sessions = Command.make(
     }),
 )
 
+/**
+ * Lay out a table: each column is as wide as its widest cell, one space apart,
+ * so a long value (a scratch `GENT_DATA_DIR` database path) never pushes the
+ * columns after it out from under their headers. The rule spans the table.
+ */
+const formatTable = (
+  headers: ReadonlyArray<string>,
+  rows: ReadonlyArray<ReadonlyArray<string>>,
+): string => {
+  const widths = headers.map((header, column) =>
+    Math.max(header.length, ...rows.map((row) => (row[column] ?? "").length)),
+  )
+  const line = (cells: ReadonlyArray<string>) =>
+    cells
+      .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+      .join(" ")
+      .trimEnd()
+  const width = widths.reduce((sum, w) => sum + w, 0) + widths.length - 1
+  return [line(headers), "─".repeat(width), ...rows.map(line)].join("\n")
+}
+
+/**
+ * The `server status` report: a table (header, rule, the one server's row)
+ * when it fits in `columns`, else one `Field: value` line per field, so a long
+ * database path never wraps the table apart. Output with no terminal width
+ * (a pipe) keeps the table.
+ */
+export const formatServerStatus = (
+  label: string,
+  entry: ServerLockEntry,
+  columns: number,
+): string => {
+  const fields: ReadonlyArray<readonly [string, string, string]> = [
+    ["PID", "PID", String(entry.pid)],
+    ["STATUS", "Status", label],
+    ["SERVER ID", "Server ID", entry.serverId],
+    ["DB PATH", "DB path", entry.dbPath],
+    ["URL", "URL", entry.rpcUrl],
+  ]
+  const table = formatTable(
+    fields.map(([header]) => header),
+    [fields.map(([, , value]) => value)],
+  )
+  const width = Math.max(...table.split("\n").map((line) => line.length))
+  if (width <= columns) return table
+  const labelWidth = Math.max(...fields.map(([, name]) => name.length)) + 1
+  return fields.map(([, name, value]) => `${`${name}:`.padEnd(labelWidth)} ${value}`).join("\n")
+}
+
 const serverStatus = Command.make("status", {}, () =>
   Effect.gen(function* () {
     const status = yield* serverLock.status(yield* readHome)
@@ -475,17 +525,12 @@ const serverStatus = Command.make("status", {}, () =>
     }
 
     yield* Console.log("Shared server:\n")
-    yield* Console.log(
-      `${"PID".padEnd(8)} ${"STATUS".padEnd(10)} ${"SERVER ID".padEnd(40)} ${"DB PATH".padEnd(40)} ${"URL"}`,
-    )
-    yield* Console.log("─".repeat(120))
-
     let label = "alive"
     if (status._tag === "Stale") label = "dead"
-    const { entry } = status
-    yield* Console.log(
-      `${String(entry.pid).padEnd(8)} ${label.padEnd(10)} ${entry.serverId.padEnd(40)} ${entry.dbPath.padEnd(40)} ${entry.rpcUrl}`,
-    )
+    // Off a terminal (a pipe) the width is 0: keep the table.
+    let columns = yield* (yield* Terminal.Terminal).columns
+    if (columns === 0) columns = Number.POSITIVE_INFINITY
+    yield* Console.log(formatServerStatus(label, status.entry, columns))
   }),
 )
 

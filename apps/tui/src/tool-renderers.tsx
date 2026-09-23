@@ -4,7 +4,7 @@ import { Match, Option, Schema } from "effect"
 import { createContext, createMemo, For, type JSX as SolidJSX, Show, useContext } from "solid-js"
 import { buildSyntaxStyle, useTheme } from "./theme"
 import { GutterText, ToolCallIdentityProvider, ToolFrame } from "./ui"
-import { formatHeadTail, headTail } from "@gent/core/protocol"
+import { formatHeadTail, headTail, type OutputCut } from "@gent/core/protocol"
 import {
   CellOperationReceipts,
   decodeToolOutput,
@@ -43,6 +43,8 @@ export interface ToolCall {
   startedAt?: number
   /** Wall time from the started receipt to the terminal receipt. */
   durationMs?: number
+  /** Where a reloaded op's output strings were cut to fit the snapshot. */
+  cuts?: ReadonlyArray<OutputCut>
 }
 
 export interface ToolRendererProps {
@@ -237,6 +239,123 @@ export function GenericToolRenderer(props: ToolRendererProps) {
  * Expanded: head-100/tail-100 of the stored output
  */
 
+// ── output rows ─────────────────────────────────────────────────────────────
+
+/** A line of a tool output, numbered as in the whole output, or a run of lines left out. */
+type WindowedLine =
+  | { _tag: "line"; text: string; lineNum: number }
+  | { _tag: "elision"; count: number }
+
+interface OutputRows {
+  readonly rows: ReadonlyArray<WindowedLine>
+  /** Lines in the whole output, a final newline not counted. */
+  readonly total: number
+}
+
+/** The cut recorded for an output field; `None` names a plain-text output. */
+const cutFor = (call: ToolCall, field: Option.Option<string>): Option.Option<OutputCut> =>
+  Option.fromNullishOr((call.cuts ?? []).find((cut) => Option.getOrUndefined(field) === cut.field))
+
+/**
+ * An output string as numbered rows. A cut string's excerpt is its head lines,
+ * one marker line, then its tail lines from `cut.tailLine`; the marker becomes
+ * one elision of the lines left out, so counts and numbers match the whole
+ * output, before or after a reload.
+ */
+const outputRows = (text: string, cut: Option.Option<OutputCut>): OutputRows => {
+  const parts = text.split("\n")
+  const line = (lineText: string, lineNum: number): WindowedLine => ({
+    _tag: "line",
+    text: lineText,
+    lineNum,
+  })
+  const whole = Option.match(cut, {
+    onNone: () => ({
+      rows: parts.map((part, index) => line(part, index + 1)),
+      total: parts.length,
+    }),
+    onSome: ({ lines, tailLine }) => {
+      const tailCount = lines - tailLine + 1
+      const head = parts.slice(0, Math.max(0, parts.length - tailCount - 1))
+      const tail = parts.slice(parts.length - tailCount)
+      const gap: WindowedLine = { _tag: "elision", count: Math.max(0, tailLine - head.length - 1) }
+      return {
+        rows: [
+          ...head.map((part, index) => line(part, index + 1)),
+          gap,
+          ...tail.map((part, index) => line(part, tailLine + index)),
+        ],
+        total: lines,
+      }
+    },
+  })
+  const last = whole.rows.at(-1)
+  if (last?._tag === "line" && last.text.length === 0) {
+    return { rows: whole.rows.slice(0, -1), total: whole.total - 1 }
+  }
+  return whole
+}
+
+/** The lines of the whole output one row stands for. */
+const rowLines = (row: WindowedLine): number =>
+  Match.value(row).pipe(Match.tagsExhaustive({ line: () => 1, elision: (item) => item.count }))
+
+/** At most `max` line rows: the first and last halves, and one elision counting all between. */
+const windowRows = (
+  rows: ReadonlyArray<WindowedLine>,
+  max: number,
+): ReadonlyArray<WindowedLine> => {
+  const lineIndexes = rows
+    .map((row, index) => ({ row, index }))
+    .filter((entry) => entry.row._tag === "line")
+    .map((entry) => entry.index)
+  if (lineIndexes.length <= max) return rows
+  const half = Math.floor(max / 2)
+  const headEnd = (lineIndexes[half - 1] ?? -1) + 1
+  const tailStart = lineIndexes[lineIndexes.length - half] ?? rows.length
+  const hidden = rows.slice(headEnd, tailStart).reduce((sum, row) => sum + rowLines(row), 0)
+  return [...rows.slice(0, headEnd), { _tag: "elision", count: hidden }, ...rows.slice(tailStart)]
+}
+
+type GutterPart =
+  | { readonly _tag: "run"; readonly startLine: number; readonly lines: ReadonlyArray<string> }
+  | { readonly _tag: "elision"; readonly count: number }
+
+/** Rows as runs of consecutive lines, each drawn by a gutter from its first number, split at elisions. */
+const gutterParts = (rows: ReadonlyArray<WindowedLine>): ReadonlyArray<GutterPart> => {
+  const parts: Array<GutterPart> = []
+  let run: Array<string> = []
+  let runStart = 0
+  const flush = () => {
+    if (run.length > 0) parts.push({ _tag: "run", startLine: runStart, lines: run })
+    run = []
+  }
+  for (const row of rows) {
+    if (row._tag === "elision") {
+      flush()
+      parts.push(row)
+      continue
+    }
+    if (run.length === 0) runStart = row.lineNum
+    run.push(row.text)
+  }
+  flush()
+  return parts
+}
+
+/** Rows as plain text, an elision as the truncation marker `formatHeadTail` draws. */
+const rowsText = (rows: ReadonlyArray<WindowedLine>): string =>
+  rows
+    .flatMap((row) =>
+      Match.value(row).pipe(
+        Match.tagsExhaustive({
+          line: (item) => [item.text],
+          elision: (item) => ["", `... [${item.count} lines truncated] ...`, ""],
+        }),
+      ),
+    )
+    .join("\n")
+
 interface BashOutput {
   readonly stdout: string
   readonly stderr: string
@@ -269,16 +388,22 @@ function BashToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => parseBashOutput(props.toolCall.output))
   const command = createMemo(() => getCommand(props.toolCall.input))
 
-  const lines = createMemo(() => {
+  // stdout then stderr, each numbered and counted as in the whole output.
+  const output = createMemo((): OutputRows => {
     const d = data()
-    if (Option.isNone(d)) return []
-    let combined = d.value.stdout
-    if (d.value.stderr.length > 0) combined += `\n${d.value.stderr}`
-    return combined.split("\n").filter((l) => l.length > 0)
+    if (Option.isNone(d)) return { rows: [], total: 0 }
+    const streams = [
+      outputRows(d.value.stdout, cutFor(props.toolCall, Option.some("stdout"))),
+      outputRows(d.value.stderr, cutFor(props.toolCall, Option.some("stderr"))),
+    ]
+    return {
+      rows: streams.flatMap((stream) => stream.rows),
+      total: streams.reduce((sum, stream) => sum + stream.total, 0),
+    }
   })
 
-  const collapsedText = createMemo(() => formatHeadTail(lines(), 6))
-  const expandedText = createMemo(() => formatHeadTail(lines(), 100))
+  const collapsedText = createMemo(() => rowsText(windowRows(output().rows, 6)))
+  const expandedText = createMemo(() => rowsText(windowRows(output().rows, 100)))
 
   const exitCodeColor = () => {
     const d = data()
@@ -300,7 +425,7 @@ function BashToolRenderer(props: ToolRendererProps) {
               <span style={{ fg: exitCodeColor() }}>
                 exit {Option.getOrUndefined(data())?.exitCode}
               </span>
-              <span style={{ fg: theme.textMuted }}> · {lines().length} lines</span>
+              <span style={{ fg: theme.textMuted }}> · {output().total} lines</span>
             </text>
             <Show when={collapsedText().length > 0}>
               <text style={{ fg: theme.textMuted }}>{collapsedText()}</text>
@@ -315,7 +440,7 @@ function BashToolRenderer(props: ToolRendererProps) {
             <span style={{ fg: exitCodeColor() }}>
               exit {Option.getOrUndefined(data())?.exitCode}
             </span>
-            <span style={{ fg: theme.textMuted }}> · {lines().length} lines</span>
+            <span style={{ fg: theme.textMuted }}> · {output().total} lines</span>
           </text>
           <Show when={expandedText().length > 0}>
             <text style={{ fg: theme.text }}>{expandedText()}</text>
@@ -536,10 +661,6 @@ function CellToolRenderer(props: ToolRendererProps) {
  * Expanded: line-numbered content with GutterText
  */
 
-type WindowedLine =
-  | { _tag: "line"; text: string; lineNum: number }
-  | { _tag: "elision"; count: number }
-
 interface ReadOutput {
   readonly content: string
   readonly path: string
@@ -595,31 +716,30 @@ export function ReadToolRenderer(props: ToolRendererProps) {
   const data = createMemo(() => parseReadOutput(props.toolCall.output))
   const path = createMemo(() => getPath(props.toolCall.input))
 
-  const contentLines = createMemo(() => {
+  // Each content line numbered as in the file: the first line's own number,
+  // then its position in the whole content, which a cut does not change.
+  const contentRows = createMemo((): ReadonlyArray<WindowedLine> => {
     const d = data()
     if (Option.isNone(d)) return []
-    return parseContentLines(d.value.content)
+    const start = getStartLine(d.value.content)
+    return outputRows(d.value.content, cutFor(props.toolCall, Option.some("content"))).rows.map(
+      (row) =>
+        Match.value(row).pipe(
+          Match.tagsExhaustive({
+            line: (item): WindowedLine => ({
+              _tag: "line",
+              text: parseContentLines(item.text)[0] ?? "",
+              lineNum: start + item.lineNum - 1,
+            }),
+            elision: (item): WindowedLine => item,
+          }),
+        ),
+    )
   })
 
-  const startLine = createMemo(() => {
-    const d = data()
-    if (Option.isNone(d)) return 1
-    return getStartLine(d.value.content)
-  })
+  const collapsedLines = createMemo(() => windowRows(contentRows(), 6))
 
-  const collapsedLines = createMemo((): WindowedLine[] => {
-    const lines = contentLines()
-    if (lines.length === 0) return []
-    const start = startLine()
-    const indexed: WindowedLine[] = lines.map((text, i) => ({
-      _tag: "line",
-      text,
-      lineNum: start + i,
-    }))
-    const { head, tail, truncatedCount } = headTail(indexed, 6)
-    if (truncatedCount === 0) return head
-    return [...head, { _tag: "elision", count: truncatedCount }, ...tail]
-  })
+  const expandedParts = createMemo(() => gutterParts(contentRows()))
 
   return (
     <ToolFrame
@@ -670,9 +790,21 @@ export function ReadToolRenderer(props: ToolRendererProps) {
         </Show>
       }
     >
-      <Show when={contentLines().length > 0}>
-        <GutterText lines={contentLines()} startLine={startLine()} />
-      </Show>
+      <For each={expandedParts()}>
+        {(part) =>
+          Match.value(part).pipe(
+            Match.tagsExhaustive({
+              run: (item) => <GutterText lines={[...item.lines]} startLine={item.startLine} />,
+              elision: (item) => (
+                <text>
+                  <span style={{ fg: theme.border }}>{"· ··· "}</span>
+                  <span style={{ fg: theme.textMuted }}>{item.count} more lines</span>
+                </text>
+              ),
+            }),
+          )
+        }
+      </For>
     </ToolFrame>
   )
 }

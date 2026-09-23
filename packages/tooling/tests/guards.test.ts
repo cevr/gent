@@ -1939,6 +1939,33 @@ export const signal = () => {
     expect(findings[0]?.enforced).toBe(true)
     expect(findings[0]?.message).toContain("`DebugSlowLanguageModelDelayMs`")
   })
+
+  const TEST_UTILS_ENTRY = "packages/core/src/test-utils/index.ts"
+  const HARNESS_FILE = "packages/core/src/test-utils/harness.ts"
+
+  test("an entry import under an alias is a read, with a namesake beside it", () => {
+    const findings = findingsFor([
+      { file: TEST_UTILS_ENTRY, text: `export { zeta } from "./harness"\n` },
+      { file: HARNESS_FILE, text: `export const zeta = 1\n` },
+      {
+        file: "apps/tui/integration/session.test.tsx",
+        text: `import {\n  zeta as _zeta,\n} from "@gent/core/test-utils"\nconst zeta = () => _zeta\nconsole.log(zeta)\n`,
+      },
+    ])
+    expect(findings).toEqual([])
+  })
+
+  test("a member destructured off a namespace import is a read", () => {
+    const findings = findingsFor([
+      { file: TEST_UTILS_ENTRY, text: `export { beta, gamma } from "./harness"\n` },
+      { file: HARNESS_FILE, text: `export const beta = 1\nexport const gamma = 2\n` },
+      {
+        file: "apps/tui/tests/session.test.ts",
+        text: `import * as TU from "@gent/core/test-utils"\nconst { beta, gamma: g } = TU\nconsole.log(beta, g)\n`,
+      },
+    ])
+    expect(findings).toEqual([])
+  })
 })
 
 describe("public extension API entry point", () => {

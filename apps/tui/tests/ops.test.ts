@@ -25,6 +25,7 @@ import { makeClientTraceLogger } from "../src/client"
 import {
   extensionHealthFromSnapshot,
   formatDoctorReport,
+  formatServerStatus,
   inspectLogs,
   inspectServer,
   inspectStorage,
@@ -294,6 +295,62 @@ describe("local health", () => {
       expect(report).toContain("Migration table: missing")
       expect(report).toContain("Extensions:")
       expect(report).toContain("No live shared server.")
+    }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
+  )
+
+  test("server status fits each column to a long database path", () => {
+    const entry = ServerLockEntry.make({
+      serverId: "gent-server-3f9c2a1e-7b44-4d0e-9a5f-2c6e1b8d0f37",
+      pid: 48213,
+      hostname: "workbox",
+      rpcUrl: "http://127.0.0.1:52811/rpc",
+      dbPath: "/private/tmp/gent-gamut-scratch/data-dir-for-a-long-run/data.db",
+      buildFingerprint: "b",
+      startedAt: 0,
+    })
+    const [header = "", rule = "", row = ""] = formatServerStatus("alive", entry, 200).split("\n")
+    // Each value sits under its own header, and the URL column starts in the
+    // same place on both lines, so no value pushes the next one out of place.
+    const columns: ReadonlyArray<readonly [string, string]> = [
+      ["SERVER ID", entry.serverId],
+      ["DB PATH", entry.dbPath],
+      ["URL", entry.rpcUrl],
+    ]
+    for (const [title, value] of columns) {
+      expect(row.indexOf(value)).toBe(header.indexOf(title))
+    }
+    expect(row).toContain(` ${entry.dbPath} `)
+    expect(rule.length).toBe(row.length)
+  })
+
+  test("server status wider than the terminal prints one field per line", () => {
+    const entry = ServerLockEntry.make({
+      serverId: "gent-server-3f9c2a1e-7b44-4d0e-9a5f-2c6e1b8d0f37",
+      pid: 48213,
+      hostname: "workbox",
+      rpcUrl: "http://127.0.0.1:52811/rpc",
+      dbPath: "/private/tmp/gent-gamut-scratch/data-dir-for-a-long-run/data.db",
+      buildFingerprint: "b",
+      startedAt: 0,
+    })
+    expect(formatServerStatus("dead", entry, 107).split("\n")).toEqual([
+      "PID:       48213",
+      "Status:    dead",
+      `Server ID: ${entry.serverId}`,
+      `DB path:   ${entry.dbPath}`,
+      `URL:       ${entry.rpcUrl}`,
+    ])
+  })
+
+  it.scopedLive("a run with its own data directory reads its own logs", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const home = yield* fs.makeTempDirectoryScoped()
+      const dataDir = yield* fs.makeTempDirectoryScoped()
+      const report = yield* makeDoctorReport(home, absentServer).pipe(withDataDir(dataDir))
+      // The run writes its logs beside its database, so the doctor names that directory.
+      expect(report.logs.dir).toBe(`${dataDir}/logs`)
+      expect(formatDoctorReport(report)).toContain(`Directory: ${dataDir}/logs`)
     }).pipe(Effect.provide(Layer.merge(BunServices.layer, GentPlatform.Test()))),
   )
 

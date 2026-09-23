@@ -102,6 +102,7 @@ import {
 } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 import {
+  EventId,
   EventPublisher,
   EventStore,
   EventStoreError,
@@ -2194,6 +2195,13 @@ export const makeExtensionHostContextProvider = (
 
     const statePublisher = yield* facet(ExtensionStatePublisher, "ExtensionStatePublisher")
 
+    // `Session.events` from the start replays the history; from now it
+    // starts at the newest stored event.
+    const subscribeFrom = (from: "start" | "now"): EventId | "latest" => {
+      if (from === "now") return "latest"
+      return EventId.make(0)
+    }
+
     // An unnamed target is the run's own branch.
     const targetIn = (
       runInfo: MakeExtensionHostContextRunInfo,
@@ -2365,14 +2373,20 @@ export const makeExtensionHostContextProvider = (
           }).pipe(inWorkspace),
         // The subscription does its reads at pull time, so the workspace is
         // pinned on the stream, not on the effect that builds it.
-        events: (target) =>
+        events: ({ from, ...target }) =>
           Stream.unwrap(
             eventStore((store) =>
               Effect.succeed(
-                store.subscribe({ ...target, synchronize: true }).pipe(
-                  Stream.map((envelope) => envelope.event),
-                  Stream.mapError(sessionError("events")),
-                ),
+                store
+                  .subscribe({
+                    ...target,
+                    after: subscribeFrom(from ?? "start"),
+                    synchronize: true,
+                  })
+                  .pipe(
+                    Stream.map((envelope) => envelope.event),
+                    Stream.mapError(sessionError("events")),
+                  ),
               ),
             ),
           ).pipe(Stream.provideService(CurrentWorkspaceId, workspaceId)),

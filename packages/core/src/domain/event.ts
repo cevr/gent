@@ -360,7 +360,11 @@ export interface EventStoreService {
   readonly subscribe: (params: {
     sessionId: SessionId
     branchId?: BranchId
-    after?: EventId
+    /**
+     * Replay the events after this id; `"latest"` replays none and starts at
+     * the newest stored event, for a follower that wants only what comes next.
+     */
+    after?: EventId | "latest"
     /** Emit one `StreamSynchronized` marker between the durable replay and live delivery. */
     synchronize?: boolean
   }) => Stream.Stream<EventEnvelope, EventStoreError>
@@ -467,6 +471,11 @@ interface EventStoreBackend {
     sessionId: SessionId,
     afterId: EventId,
   ) => Effect.Effect<ReadonlyArray<EventEnvelope>, EventStoreError>
+  /** The newest stored event's id for the session (and branch), or 0 when there is none. */
+  readonly latest: (
+    sessionId: SessionId,
+    branchId: Option.Option<BranchId>,
+  ) => Effect.Effect<EventId, EventStoreError>
   /** Runs inside the subscription scope before replay starts. */
   readonly open?: (
     params: Parameters<EventStoreService["subscribe"]>[0],
@@ -501,10 +510,16 @@ export const makeEventStore = Effect.fn("makeEventStore")(function* (backend: Ev
             const { sessionId, branchId, after, synchronize } = params
             if (backend.open) yield* backend.open(params)
             const subscription = yield* registry.subscribe(sessionId)
+            // Resolved after subscribing, so an event appended in between is
+            // still loaded from the cursor.
+            let afterId = EventId.make(0)
+            if (after === "latest")
+              afterId = yield* backend.latest(sessionId, Option.fromUndefinedOr(branchId))
+            else if (Predicate.isNotUndefined(after)) afterId = after
             return makeCursorReplayStream({
               subscription,
               sessionId,
-              afterId: after ?? EventId.make(0),
+              afterId,
               branchId,
               synchronize,
               load: (afterId) => backend.load(sessionId, afterId),
@@ -539,6 +554,16 @@ const makeMemoryEventStore = Effect.gen(function* () {
       Ref.get(eventsRef).pipe(
         Effect.map((events) =>
           events.filter((env) => env.id > afterId && matchesEventFilter(env, sessionId)),
+        ),
+      ),
+    latest: (sessionId, branchId) =>
+      Ref.get(eventsRef).pipe(
+        Effect.map((events) =>
+          EventId.make(
+            events
+              .filter((env) => matchesEventFilter(env, sessionId, Option.getOrUndefined(branchId)))
+              .reduce((newest, env) => Math.max(newest, env.id), 0),
+          ),
         ),
       ),
   })

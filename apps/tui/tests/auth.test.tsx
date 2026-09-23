@@ -29,7 +29,6 @@ import {
   renderWithProviders,
 } from "./render-harness-boundary"
 import { waitForRenderedFrame } from "./helpers-boundary"
-import { runEffectBoundary } from "./run-effect-boundary"
 import { onMount } from "solid-js"
 
 // ── auth-state.test ─────────────────────────────────────────────────────────
@@ -225,16 +224,12 @@ function ClientProbe(props: { readonly onReady: (ctx: ClientContextValue) => voi
  */
 const servicesWithLinkOpener = (
   open: (url: string) => Effect.Effect<void, LinkOpenerError>,
-): Promise<Context.Context<unknown>> => {
-  const layer = Layer.merge(BunServices.layer, LinkOpener.Test({ open }))
-  return runEffectBoundary(
-    Effect.gen(function* () {
-      const scope = yield* Scope.make()
-      const built = yield* Layer.buildWithScope(layer, scope)
-      return Context.makeUnsafe<unknown>(Context.add(built, Scope.Scope, scope).mapUnsafe)
-    }),
-  )
-}
+): Effect.Effect<Context.Context<unknown>, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const built = yield* Layer.build(Layer.merge(BunServices.layer, LinkOpener.Test({ open })))
+    const scope = yield* Scope.Scope
+    return Context.makeUnsafe<unknown>(Context.add(built, Scope.Scope, scope).mapUnsafe)
+  })
 describe("Auth route", () => {
   const activeSessionId = SessionId.make("session-auth")
   it.live("loads providers for the selected agent", () =>
@@ -548,7 +543,7 @@ describe("Auth route", () => {
       setup.renderer.destroy()
     }),
   )
-  it.live("threads the active session through successful auto OAuth callbacks", () =>
+  it.scopedLive("threads the active session through successful auto OAuth callbacks", () =>
     Effect.gen(function* () {
       const authorizeCalls: Array<{
         provider: string
@@ -597,7 +592,7 @@ describe("Auth route", () => {
             }),
         },
       })
-      const services = yield* Effect.promise(() => servicesWithLinkOpener(() => Effect.void))
+      const services = yield* servicesWithLinkOpener(() => Effect.void)
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => <Auth sessionId={activeSessionId} />, {
@@ -630,7 +625,7 @@ describe("Auth route", () => {
       setup.renderer.destroy()
     }),
   )
-  it.live("ignores stale oauth opener failures after the selected agent changes", () =>
+  it.scopedLive("ignores stale oauth opener failures after the selected agent changes", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()
       let rejectOpen = Option.none<(error: LinkOpenerError) => void>()
@@ -686,12 +681,10 @@ describe("Auth route", () => {
           },
         },
       })
-      const services = yield* Effect.promise(() =>
-        servicesWithLinkOpener(() =>
-          Effect.callback<void, LinkOpenerError>((resume) => {
-            rejectOpen = Option.some((error) => resume(Effect.fail(error)))
-          }),
-        ),
+      const services = yield* servicesWithLinkOpener(() =>
+        Effect.callback<void, LinkOpenerError>((resume) => {
+          rejectOpen = Option.some((error) => resume(Effect.fail(error)))
+        }),
       )
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>
@@ -741,7 +734,7 @@ describe("Auth route", () => {
       setup.renderer.destroy()
     }),
   )
-  it.live("ignores stale oauth opener failures after cancelling the same auth flow", () =>
+  it.scopedLive("ignores stale oauth opener failures after cancelling the same auth flow", () =>
     Effect.gen(function* () {
       let rejectOpen = Option.none<(error: LinkOpenerError) => void>()
       const authorizeCalls: Array<{
@@ -777,12 +770,10 @@ describe("Auth route", () => {
           },
         },
       })
-      const services = yield* Effect.promise(() =>
-        servicesWithLinkOpener(() =>
-          Effect.callback<void, LinkOpenerError>((resume) => {
-            rejectOpen = Option.some((error) => resume(Effect.fail(error)))
-          }),
-        ),
+      const services = yield* servicesWithLinkOpener(() =>
+        Effect.callback<void, LinkOpenerError>((resume) => {
+          rejectOpen = Option.some((error) => resume(Effect.fail(error)))
+        }),
       )
       const runtime = createMockRuntime()
       const setup = yield* Effect.promise(() =>

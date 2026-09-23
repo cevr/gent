@@ -16,6 +16,7 @@ import {
   Stream,
 } from "effect"
 import {
+  EventId,
   type EventPublisher,
   EventStore,
   EventStoreError,
@@ -99,6 +100,18 @@ export const EventStoreLive: Layer.Layer<EventStore, never, EventStorage | Sessi
           eventStorage
             .listEvents({ sessionId, afterId })
             .pipe(Effect.mapError(toEventStoreError("Failed to load session events"))),
+        latest: (sessionId, branchId) =>
+          eventStorage
+            .getLatestEventId(
+              Option.match(branchId, {
+                onNone: () => ({ sessionId }),
+                onSome: (branch) => ({ sessionId, branchId: branch }),
+              }),
+            )
+            .pipe(
+              Effect.map((id) => EventId.make(id ?? 0)),
+              Effect.mapError(toEventStoreError("Failed to read the latest event id")),
+            ),
         open: ({ sessionId, branchId, after }) =>
           Effect.gen(function* () {
             const session = yield* sessionStorage

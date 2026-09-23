@@ -209,7 +209,18 @@ describe("headTailChars", () => {
     expect(result.totalChars).toBe(200)
     expect(result.text).toContain("characters truncated")
   })
+
+  test("a cut keeps every emoji whole and the marker inside the cap", () => {
+    const text = "😀".repeat(200)
+    for (const maxChars of [101, 150, 257]) {
+      const result = headTailChars(text, maxChars)
+      expect(result.text.length).toBeLessThanOrEqual(maxChars)
+      expect(LONE_SURROGATE.test(result.text)).toBe(false)
+    }
+  })
 })
+
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
 // ── message-part-projection.test ────────────────────────────────────────────
 
@@ -451,8 +462,8 @@ describe("message part projection", () => {
         status: "completed",
         input: { path: "a.md" },
         summary: "3 lines",
-        // A snapshot carries what the collapsed op row draws, never the full output.
-        output: noText,
+        // A short output is its own bounded excerpt.
+        output: "one\ntwo\nthree",
         durationMs: 30,
       },
       // The cell settled, so an operation that never ended is not running.
@@ -659,10 +670,209 @@ describe("message part projection", () => {
       toolCallReceipts(events),
     )
     const [operation] = projected[0]?.toolInteractions[0]?.operations ?? []
-    expect(operation?.output).toBeUndefined()
-    // The row keeps the fields a header reads, each cut to the receipt bound.
-    expect(operation?.input).toEqual({ path: "big.txt", content: `${"x".repeat(100)}...` })
+    // A field too large for the budget is left out whole, never cut: a cut
+    // string draws wrong content.
+    expect(operation?.input).toEqual({ path: "big.txt" })
     expect(operation?.summary).toBe(`${"x".repeat(100)}...`)
+    // The output keeps a bounded excerpt, not the full 50 KB: the whole
+    // operation fits one encoded budget.
+    expect(operation?.output?.startsWith("x")).toBe(true)
+    expect(
+      Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(operation).length,
+    ).toBeLessThanOrEqual(8_192)
+  })
+
+  test("an operation with many short fields stays within one encoded budget", () => {
+    const sessionId = SessionId.make("session-budget")
+    const branchId = BranchId.make("branch-budget")
+    const cell = ToolCallId.make("tc-cell-budget")
+    const op = ToolCallId.make("tc-op-budget")
+    // Short strings and numbers alike: each field's key costs as much as its value.
+    const many = Object.fromEntries([
+      ...Array.from({ length: 1_500 }, (_, index) => [`text_${index}`, "v"]),
+      ...Array.from({ length: 1_500 }, (_, index) => [`count_${index}`, index]),
+    ])
+    const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("a", "assistant", [
+          Prompt.toolCallPart({ id: cell, name: "cell", params: {}, providerExecuted: false }),
+        ]),
+      ],
+      toolCallReceipts([
+        EventEnvelope.make({
+          id: EventId.make(1),
+          createdAt: 1,
+          event: AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: op,
+            toolName: "bash",
+            input: many,
+            parentToolCallId: cell,
+          }),
+        }),
+        EventEnvelope.make({
+          id: EventId.make(2),
+          createdAt: 2,
+          event: AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: op,
+            toolName: "bash",
+            summary: "done",
+            output: encodeJson(many),
+            parentToolCallId: cell,
+          }),
+        }),
+      ]),
+    )
+    const [operation] = projected[0]?.toolInteractions[0]?.operations ?? []
+    // Keys and kept numbers count against the budget, not only strings.
+    expect(encodeJson(operation).length).toBeLessThanOrEqual(8_192)
+    expect(
+      Object.keys(
+        Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown))(operation?.input),
+      ).length,
+    ).toBeGreaterThan(0)
+  })
+
+  test("a cut output carries its whole line count and the line its tail starts on", () => {
+    const sessionId = SessionId.make("session-cut")
+    const branchId = BranchId.make("branch-cut")
+    const cell = ToolCallId.make("tc-cell-cut")
+    const op = ToolCallId.make("tc-op-cut")
+    const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+    // Every line is emoji, so any cut that splits a pair shows up.
+    const stdout = Array.from({ length: 3_000 }, (_, index) => `😀 line ${index + 1}`).join("\n")
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("a", "assistant", [
+          Prompt.toolCallPart({ id: cell, name: "cell", params: {}, providerExecuted: false }),
+        ]),
+      ],
+      toolCallReceipts([
+        EventEnvelope.make({
+          id: EventId.make(1),
+          createdAt: 1,
+          event: AgentEvent.cases.ToolCallStarted.make({
+            sessionId,
+            branchId,
+            toolCallId: op,
+            toolName: "bash",
+            input: { command: "seq" },
+            parentToolCallId: cell,
+          }),
+        }),
+        EventEnvelope.make({
+          id: EventId.make(2),
+          createdAt: 2,
+          event: AgentEvent.cases.ToolCallSucceeded.make({
+            sessionId,
+            branchId,
+            toolCallId: op,
+            toolName: "bash",
+            summary: "done",
+            output: encodeJson({ stdout, stderr: "", exitCode: 0 }),
+            parentToolCallId: cell,
+          }),
+        }),
+      ]),
+    )
+    const [operation] = projected[0]?.toolInteractions[0]?.operations ?? []
+    const output = Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({ stdout: Schema.String, stderr: Schema.String, exitCode: Schema.Finite }),
+      ),
+    )(operation?.output)
+    expect(output.exitCode).toBe(0)
+    expect(output.stderr).toBe("")
+    expect(LONE_SURROGATE.test(output.stdout)).toBe(false)
+    const [cut] = operation?.cuts ?? []
+    expect(cut?.field).toBe("stdout")
+    expect(cut?.lines).toBe(3_000)
+    const tailLine = cut?.tailLine ?? 0
+    // The excerpt is head lines, one marker line, then the tail from `tailLine` to the end.
+    const excerpt = output.stdout.split("\n")
+    const tail = excerpt.slice(-(3_000 - tailLine + 1))
+    expect(excerpt[0]).toBe("😀 line 1")
+    expect(tail.at(-1)).toBe("😀 line 3000")
+    expect(tail[1]).toBe(`😀 line ${tailLine + 1}`)
+    expect(encodeJson(operation).length).toBeLessThanOrEqual(8_192)
+  })
+
+  test("a reloaded operation keeps a bash exit code and the whole edit it drew", () => {
+    const sessionId = SessionId.make("session-projection")
+    const branchId = BranchId.make("branch-projection")
+    const cell = ToolCallId.make("tc-cell-row")
+    const bash = ToolCallId.make("tc-bash-row")
+    const edit = ToolCallId.make("tc-edit-row")
+    const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
+    const stdout = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join("\n")
+    const editInput = {
+      path: `/workspace/${"deeply/nested/".repeat(10)}module.ts`,
+      oldString: `export const value = "${"a".repeat(150)}"`,
+      newString: `export const value = "${"b".repeat(150)}"\nexport const other = 1`,
+    }
+    const started = (
+      id: number,
+      toolCallId: ToolCallId,
+      toolName: string,
+      input: Readonly<Record<string, string>>,
+    ) =>
+      EventEnvelope.make({
+        id: EventId.make(id),
+        createdAt: id,
+        event: AgentEvent.cases.ToolCallStarted.make({
+          sessionId,
+          branchId,
+          toolCallId,
+          toolName,
+          input,
+          parentToolCallId: cell,
+        }),
+      })
+    const succeeded = (id: number, toolCallId: ToolCallId, toolName: string, output: string) =>
+      EventEnvelope.make({
+        id: EventId.make(id),
+        createdAt: id,
+        event: AgentEvent.cases.ToolCallSucceeded.make({
+          sessionId,
+          branchId,
+          toolCallId,
+          toolName,
+          summary: "done",
+          output,
+          parentToolCallId: cell,
+        }),
+      })
+    const projected = projectMessagesWithToolInteractions(
+      [
+        makeMessage("a", "assistant", [
+          Prompt.toolCallPart({ id: cell, name: "cell", params: {}, providerExecuted: false }),
+        ]),
+      ],
+      toolCallReceipts([
+        started(1, bash, "bash", { command: "bun test" }),
+        succeeded(2, bash, "bash", encodeJson({ stdout, stderr: "1 fail", exitCode: 1 })),
+        started(3, edit, "edit", editInput),
+        succeeded(4, edit, "edit", encodeJson({ path: editInput.path, replacements: 1 })),
+      ]),
+    )
+    const [bashOp, editOp] = projected[0]?.toolInteractions[0]?.operations ?? []
+    const bashOutput = Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({ stdout: Schema.String, stderr: Schema.String, exitCode: Schema.Finite }),
+      ),
+    )(bashOp?.output)
+    // A failed command still reads as failed after a reload.
+    expect(bashOutput.exitCode).toBe(1)
+    expect(bashOutput.stderr).toBe("1 fail")
+    // Output within the size bound is kept whole: a cut would renumber the
+    // lines the row draws, so the reloaded row would differ from the live one.
+    expect(bashOutput.stdout).toBe(stdout)
+    // The edit keeps the whole strings its diff is built from, and its path.
+    expect(editOp?.input).toEqual(editInput)
   })
 
   test("projects Gent transcript parts without exposing persisted field names", () => {

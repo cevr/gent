@@ -1,7 +1,9 @@
-import { Effect, Option, Schema } from "effect"
+import { Context, Effect, FiberMap, Layer, Option, Ref, Schema, Stream } from "effect"
 import {
+  type AgentEvent,
   BranchId,
   defineExtension,
+  defineResource,
   defineRequests,
   ExtensionContext,
   ExtensionHost,
@@ -115,6 +117,10 @@ export const sectionOf = (live: Option.Option<LiveAgentRow>): AgentSection =>
         },
       }),
   })
+
+/** A read status that says the loop is working, as `sectionOf` reads it. */
+const isWorking = (status: Option.Option<string>): boolean =>
+  Option.exists(status, (value) => value !== "Idle")
 
 const SECTION_ORDER = { running: 0, idle: 1, inactive: 2 } satisfies Record<AgentSection, number>
 
@@ -264,6 +270,143 @@ export const projectAgentRows = (params: {
   return filterRows(tree, params.query ?? "")
 }
 
+// ── live activity ───────────────────────────────────────────────────────────
+
+/**
+ * What a running loop is doing now, folded from its event stream: the tools
+ * still running, in start order, and the reply text streamed since its step began.
+ */
+interface ActivityFold {
+  readonly tools: ReadonlyArray<{ readonly id: string; readonly name: string }>
+  readonly partial: string
+}
+
+export const emptyActivity: ActivityFold = { tools: [], partial: "" }
+
+/** Characters of the streamed line the tray keeps. */
+const ACTIVITY_CHARS = 80
+
+export const foldActivity = (state: ActivityFold, event: AgentEvent): ActivityFold => {
+  switch (event._tag) {
+    case "StreamStarted":
+      return { ...state, partial: "" }
+    case "StreamChunk":
+      return { ...state, partial: (state.partial + event.chunk).slice(-4 * ACTIVITY_CHARS) }
+    case "ToolCallStarted":
+      return {
+        ...state,
+        tools: [...state.tools, { id: event.toolCallId, name: event.toolName }],
+      }
+    case "ToolCallSucceeded":
+    case "ToolCallFailed":
+      return { ...state, tools: state.tools.filter((tool) => tool.id !== event.toolCallId) }
+    case "TurnCompleted":
+      return emptyActivity
+    default:
+      return state
+  }
+}
+
+/** One line for the tray: the newest running tool, else the last streamed line. */
+export const activityText = (state: ActivityFold): Option.Option<string> =>
+  Option.fromUndefinedOr(state.tools.at(-1)).pipe(
+    Option.map((tool) => `running ${tool.name}`),
+    Option.orElse(() =>
+      Option.fromUndefinedOr(
+        state.partial
+          .split("\n")
+          .map((text) => text.trim())
+          .findLast((text) => text.length > 0),
+      ).pipe(Option.map((line) => [...line].slice(0, ACTIVITY_CHARS).join(""))),
+    ),
+  )
+
+interface AgentActivityService {
+  /**
+   * Follow exactly these loops: start a follower for a new key and stop the
+   * followers, and forget the activity, of keys no longer listed.
+   */
+  readonly follow: (
+    loops: ReadonlyArray<AgentRowKey>,
+  ) => Effect.Effect<void, never, ExtensionContext>
+  readonly read: (key: AgentRowKey) => Effect.Effect<Option.Option<string>>
+}
+
+/**
+ * Process-scoped followers of running child loops. A follower reads the
+ * loop's events from now through `ExtensionContext.Session.events`, the same
+ * verb any extension has, and folds them into one line per loop. The resource scope
+ * owns the fibers, so shutdown stops them.
+ */
+class AgentActivity extends Context.Service<AgentActivity, AgentActivityService>()(
+  "@gent/extensions/src/agents-view/AgentActivity",
+) {}
+
+const AgentActivityLive: Layer.Layer<AgentActivity> = Layer.effect(
+  AgentActivity,
+  Effect.gen(function* () {
+    const followers = yield* FiberMap.make<string, void>()
+    const folds = yield* Ref.make<ReadonlyMap<string, ActivityFold>>(new Map())
+    const setFold = (key: string, change: (fold: ActivityFold) => ActivityFold) =>
+      Ref.update(folds, (all) => {
+        const next = new Map(all)
+        next.set(key, change(all.get(key) ?? emptyActivity))
+        return next
+      })
+    const followOne = (loop: AgentRowKey) =>
+      Effect.gen(function* () {
+        const ctx = yield* ExtensionContext
+        const key = rowKey(loop)
+        // From now: the fold needs only what the loop does next, so a
+        // follower never replays the child's whole history.
+        yield* ctx.Session.events({ ...loop, from: "now" }).pipe(
+          Stream.runForEach((event) => setFold(key, (fold) => foldActivity(fold, event))),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("agents-view.activity.follow-failed").pipe(
+              Effect.annotateLogs({ sessionId: loop.sessionId, error: String(cause) }),
+            ),
+          ),
+        )
+      })
+    return AgentActivity.of({
+      follow: (loops) =>
+        Effect.gen(function* () {
+          const ctx = yield* ExtensionContext
+          const wanted = new Map(loops.map((loop) => [rowKey(loop), loop]))
+          for (const key of [...followers].map(([followed]) => followed)) {
+            if (wanted.has(key)) continue
+            yield* FiberMap.remove(followers, key)
+            yield* Ref.update(folds, (all) => {
+              const next = new Map(all)
+              next.delete(key)
+              return next
+            })
+          }
+          for (const [key, loop] of wanted) {
+            yield* FiberMap.run(
+              followers,
+              key,
+              followOne(loop).pipe(Effect.provideService(ExtensionContext, ctx)),
+              { onlyIfMissing: true },
+            )
+          }
+        }),
+      read: (key) =>
+        Ref.get(folds).pipe(
+          Effect.map((all) =>
+            Option.flatMap(Option.fromUndefinedOr(all.get(rowKey(key))), activityText),
+          ),
+        ),
+    })
+  }),
+)
+
+const AgentActivityResource = defineResource({
+  id: "@gent/agents-view/activity",
+  scope: "process",
+  layer: AgentActivityLive,
+})
+
 // ── protocol ────────────────────────────────────────────────────────────────
 
 /**
@@ -295,6 +438,8 @@ export const AgentRowEntry = Schema.Struct({
   parentSessionId: Schema.optional(SessionId),
   /** The session opened a thread of its own under a parent; a handoff shares its parent's. */
   sideThread: Schema.Boolean,
+  /** A running loop's current tool or last streamed line. Wire only, never stored. */
+  activity: Schema.optional(Schema.String),
 })
 export type AgentRowEntry = typeof AgentRowEntry.Type
 
@@ -371,6 +516,18 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
     output: ListAgentsOutput,
     execute: Effect.fn("AgentsViewRpc.ListAgents")(function* (input) {
       const rows = yield* collectRows(input.query ?? "")
+      const activity = yield* AgentActivity
+      // Only the rows the tray draws are followed: running children. A root
+      // is never in the tray, and a parent forced into `running` by a busy
+      // child has nothing of its own to report.
+      yield* activity.follow(
+        rows.filter((row) => row.live && isWorking(row.status) && Option.isSome(row.parent)),
+      )
+      const lines = new Map<string, string>()
+      for (const row of rows) {
+        const line = yield* activity.read(row)
+        if (Option.isSome(line)) lines.set(rowKey(row), line.value)
+      }
       return {
         rows: rows.map((row) => ({
           sessionId: row.sessionId,
@@ -386,6 +543,7 @@ export const AgentsViewRpc = defineRequests(AGENTS_VIEW_EXTENSION_ID, {
             Option.map(row.parent, (parent) => parent.sessionId),
           ),
           sideThread: row.sideThread,
+          activity: lines.get(rowKey(row)),
         })),
       }
     }),
@@ -409,6 +567,7 @@ export const AgentsViewExtension = defineExtension({
   id: AGENTS_VIEW_EXTENSION_ID,
   setup: Effect.gen(function* () {
     const host = yield* ExtensionHost
+    yield* host.register("resource", AgentActivityResource)
     yield* host.register("request", AgentsViewRpc.ListAgents)
   }),
 })

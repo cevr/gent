@@ -51,7 +51,7 @@ import { FetchHttpClient, Headers, HttpClient, HttpRouter, HttpServer } from "ef
 import { BuiltinExtensions, CellBranchTools } from "@gent/extensions"
 import type { BranchToolFeature } from "@gent/core/extensions/branch-tools"
 import type { LanguageModel } from "effect/unstable/ai"
-import { GentLogLevel, GentObservability } from "./logger.js"
+import { GentLogLevel, GentObservability, LOG_DIR } from "./logger.js"
 
 // ── data-paths ──────────────────────────────────────────────────────────────
 
@@ -115,6 +115,19 @@ const resolveDataDir = (home: string): Effect.Effect<string> =>
  */
 export const dataPaths = (home: string): Effect.Effect<DataPaths> =>
   Effect.map(resolveDataDir(home), dataPathsIn)
+
+/**
+ * The log directory: `<GENT_DATA_DIR>/logs` for a run with a data directory of
+ * its own, else the shared {@link LOG_DIR}. An isolated run keeps its logs
+ * beside its database, and its `doctor` reads the logs that run wrote.
+ */
+export const resolveLogDir: Effect.Effect<string> = Effect.map(
+  optionalEnv("GENT_DATA_DIR"),
+  Option.match({
+    onNone: () => LOG_DIR,
+    onSome: (dataDir) => pathJoin(pathResolve(dataDir), "logs"),
+  }),
+)
 
 // ── build-fingerprint ───────────────────────────────────────────────────────
 
@@ -1103,7 +1116,7 @@ const buildOwnedServer = (
       ),
     )
     const serverRoot = yield* buildServerRoot({
-      observability: GentObservability(options.cwd, logLevel),
+      observability: GentObservability(options.cwd, logLevel, yield* resolveLogDir),
       dependencies: {
         cwd: options.cwd,
         // One broken user extension is reported, not fatal: the rest of the profile runs.

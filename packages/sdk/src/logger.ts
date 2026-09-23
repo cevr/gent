@@ -50,7 +50,10 @@ export const GentTracerLive: Layer.Layer<never> = Layer.unwrap(
 // ── log-paths ───────────────────────────────────────────────────────────────
 
 /**
- * Centralized log path resolution — all logs go to /tmp/gent/logs/
+ * Centralized log path resolution — logs go to /tmp/gent/logs/, or to
+ * `<GENT_DATA_DIR>/logs` for a run with a data directory of its own
+ * (`resolveLogDir` in server.ts, beside the data-path owner), so an isolated
+ * run keeps its logs beside its database and its doctor reads them.
  *
  * Files are named by a short hash of the cwd + process start timestamp so
  * multiple gent instances don't clobber each other and old logs are easy to
@@ -121,22 +124,21 @@ export const classifyLogFile = (name: string): Option.Option<"server" | "client"
  * directly; Effect-aware callers run {@link ensureLogDir} once at startup and
  * then call {@link buildLogPaths}.
  */
-export const buildLogPaths = (cwd: string = FALLBACK_CWD_IDENTITY): LogPaths => {
-  const prefix = `${hashCwd(cwd)}-${processStartTs()}`
+export const buildLogPaths = (cwd: string, dir: string): LogPaths => {
+  const prefix = `${hashCwd(cwd || FALLBACK_CWD_IDENTITY)}-${processStartTs()}`
   return {
-    dir: LOG_DIR,
-    log: `${LOG_DIR}/${prefix}${LOG_SUFFIX.server}`,
-    client: `${LOG_DIR}/${prefix}${LOG_SUFFIX.client}`,
+    dir,
+    log: `${dir}/${prefix}${LOG_SUFFIX.server}`,
+    client: `${dir}/${prefix}${LOG_SUFFIX.client}`,
   }
 }
 
 /** Create the log directory if it doesn't exist. Call once at startup. */
-export const ensureLogDir: Effect.Effect<void, never, FileSystem.FileSystem> = Effect.gen(
-  function* () {
+export const ensureLogDir = (dir: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    yield* Effect.ignore(fs.makeDirectory(LOG_DIR, { recursive: true }))
-  },
-)
+    yield* Effect.ignore(fs.makeDirectory(dir, { recursive: true }))
+  })
 
 // ── logger ──────────────────────────────────────────────────────────────────
 
@@ -252,9 +254,12 @@ export const makeJsonFileLogger = (
 // Config
 // =============================================================================
 
-const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
+const clearLogFile = (
+  dir: string,
+  path: string,
+): Effect.Effect<void, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
-    yield* ensureLogDir
+    yield* ensureLogDir(dir)
     const fs = yield* FileSystem.FileSystem
     yield* Effect.ignore(fs.writeFileString(path, ""))
   })
@@ -270,11 +275,14 @@ const clearLogFile = (path: string): Effect.Effect<void, never, FileSystem.FileS
  * path matches the launcher's resolved cwd. Falling back to ambient env
  * risked the two ends hashing different identities.
  */
-const GentLogger = (cwd: string): Layer.Layer<never, never, FileSystem.FileSystem> =>
+const GentLogger = (
+  cwd: string,
+  logDir: string,
+): Layer.Layer<never, never, FileSystem.FileSystem> =>
   Layer.unwrap(
     Effect.gen(function* () {
-      const logFile = buildLogPaths(cwd).log
-      yield* clearLogFile(logFile)
+      const logFile = buildLogPaths(cwd, logDir).log
+      yield* clearLogFile(logDir, logFile)
       const jsonLogger = yield* makeJsonFileLogger(logFile)
       return Logger.layer([jsonLogger])
     }).pipe(Effect.orElseSucceed(() => Layer.empty)),
@@ -318,9 +326,10 @@ export const GentLogLevel: Config.Config<LogLevel> = Config.literals(
   "GENT_LOG_LEVEL",
 ).pipe(Config.withDefault<LogLevelName>("debug"), Config.map(levelOf))
 
-/** File logger under `/tmp/gent/logs`, the `GENT_LOG_LEVEL` floor, and OTLP tracing when configured. */
+/** File logger under `logDir`, the `GENT_LOG_LEVEL` floor, and OTLP tracing when configured. */
 export const GentObservability = (
   cwd: string,
   logLevel: LogLevel,
+  logDir: string,
 ): Layer.Layer<never, never, FileSystem.FileSystem> =>
-  Layer.mergeAll(GentLogger(cwd), Layer.succeed(MinimumLogLevel, logLevel), GentTracerLive)
+  Layer.mergeAll(GentLogger(cwd, logDir), Layer.succeed(MinimumLogLevel, logLevel), GentTracerLive)

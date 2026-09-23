@@ -15,7 +15,7 @@ import {
   provideClientServices,
 } from "../extension-test-harness-boundary"
 import { createMockRuntime, renderWithProviders } from "../render-harness-boundary"
-import { runRuntimeEffectBoundary } from "../run-effect-boundary"
+import { inRuntime } from "../helpers-boundary"
 
 // ── ../extension-lifecycle.test ─────────────────────────────────────────────
 
@@ -208,21 +208,19 @@ describe("makeClientRuntime", () => {
       shell: runCast,
     })
     return Effect.gen(function* () {
-      const seen = yield* Effect.promise(() =>
-        runRuntimeEffectBoundary(
-          runtime,
-          Effect.gen(function* () {
-            const { shell, workspace: ws, lifecycle, activity, transport } = yield* ClientContext
-            shell.notify("ignored")
-            shell.switchSession({ ...session, name: "ignored" })
-            lifecycle.addCleanup(() => {})
-            return {
-              cwd: ws.cwd,
-              activity: activity.snapshot().state,
-              session: transport.currentSession(),
-            }
-          }),
-        ),
+      const seen = yield* inRuntime(
+        runtime,
+        Effect.gen(function* () {
+          const { shell, workspace: ws, lifecycle, activity, transport } = yield* ClientContext
+          shell.notify("ignored")
+          shell.switchSession({ ...session, name: "ignored" })
+          lifecycle.addCleanup(() => {})
+          return {
+            cwd: ws.cwd,
+            activity: activity.snapshot().state,
+            session: transport.currentSession(),
+          }
+        }),
       )
       expect(seen).toEqual({
         cwd: workspace.cwd,
@@ -244,16 +242,14 @@ describe("makeClientRuntime", () => {
       lifecycle: { addCleanup: (fn) => cleanups.push(fn) },
     })
     return Effect.gen(function* () {
-      const state = yield* Effect.promise(() =>
-        runRuntimeEffectBoundary(
-          runtime,
-          Effect.gen(function* () {
-            const { shell, lifecycle, activity } = yield* ClientContext
-            shell.notify("hello")
-            lifecycle.addCleanup(() => {})
-            return activity.snapshot().state
-          }),
-        ),
+      const state = yield* inRuntime(
+        runtime,
+        Effect.gen(function* () {
+          const { shell, lifecycle, activity } = yield* ClientContext
+          shell.notify("hello")
+          lifecycle.addCleanup(() => {})
+          return activity.snapshot().state
+        }),
       )
       expect(state).toEqual("working")
       expect(sent).toEqual(["hello"])

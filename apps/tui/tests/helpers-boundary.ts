@@ -1,9 +1,16 @@
 import { renderFrame, type renderWithProviders } from "./render-harness-boundary"
-import { Clock, Effect, Schema } from "effect"
+import { Clock, Effect, type ManagedRuntime, Schema } from "effect"
 
 export { renderFrame }
 
 type TestSetup = Awaited<ReturnType<typeof renderWithProviders>>
+
+/** Run `effect` against a managed runtime's services, inside the calling test's fiber. */
+export const inRuntime = <A, E, R, ER>(
+  runtime: ManagedRuntime.ManagedRuntime<R, ER>,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | ER> =>
+  runtime.contextEffect.pipe(Effect.flatMap((context) => Effect.provideContext(effect, context)))
 
 class RenderFrameTimeoutError extends Schema.TaggedError<RenderFrameTimeoutError>()(
   "RenderFrameTimeoutError",

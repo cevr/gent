@@ -1,13 +1,17 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import { Effect, Option, Schema } from "effect"
-import { BranchId, ref, SessionId } from "@gent/core/extensions/api"
+import { BranchId, ref, SessionId, ToolCallId } from "@gent/core/extensions/api"
+import { AgentEvent } from "@gent/core/protocol"
 import {
+  activityText,
   type AgentRow,
   AgentsViewExtension,
   AgentsViewRpc,
   buildRowTree,
   type DurableAgentRow,
+  emptyActivity,
   filterRows,
+  foldActivity,
   type LiveAgentRow,
   projectAgentRows,
   propagateRunning,
@@ -15,7 +19,7 @@ import {
   rowKey,
   sectionOf,
 } from "../src/agents-view.js"
-import { LanguageModelLayers, textStep, createRpcHarness } from "@gent/core/test-utils"
+import { LanguageModelLayers, textStep, createRpcHarness, waitFor } from "@gent/core/test-utils"
 import { e2ePreset } from "./helpers/test-preset"
 
 // ── agents-view/projection.test ─────────────────────────────────────────────
@@ -388,6 +392,52 @@ describe("agents view projection", () => {
 
 // ── agents-view/agents-view-rpc.test ────────────────────────────────────────
 
+// ── agents-view/activity.test ───────────────────────────────────────────────
+
+describe("agents view live activity", () => {
+  const sessionId = sid("activity-session")
+  const branchId = bid("activity-branch")
+  const fold = (events: ReadonlyArray<AgentEvent>) => events.reduce(foldActivity, emptyActivity)
+  const started = (id: string, toolName: string) =>
+    AgentEvent.cases.ToolCallStarted.make({
+      sessionId,
+      branchId,
+      toolCallId: ToolCallId.make(id),
+      toolName,
+    })
+  const chunk = (text: string) =>
+    AgentEvent.cases.StreamChunk.make({ sessionId, branchId, chunk: text })
+
+  test("a streamed reply shows its last line", () => {
+    const state = fold([chunk("Reading the loader.\nChecking"), chunk(" the tests")])
+    expect(Option.getOrUndefined(activityText(state))).toBe("Checking the tests")
+  })
+
+  test("a running tool wins over the text, and the newest running tool is named", () => {
+    const state = fold([chunk("thinking"), started("tc-cell", "cell"), started("tc-bash", "bash")])
+    expect(Option.getOrUndefined(activityText(state))).toBe("running bash")
+    const afterBash = foldActivity(
+      state,
+      AgentEvent.cases.ToolCallSucceeded.make({
+        sessionId,
+        branchId,
+        toolCallId: ToolCallId.make("tc-bash"),
+        toolName: "bash",
+      }),
+    )
+    expect(Option.getOrUndefined(activityText(afterBash))).toBe("running cell")
+  })
+
+  test("a completed turn reports nothing", () => {
+    const state = fold([
+      chunk("done"),
+      started("tc-read", "read"),
+      AgentEvent.cases.TurnCompleted.make({ sessionId, branchId, durationMs: 1 }),
+    ])
+    expect(Option.isNone(activityText(state))).toBe(true)
+  })
+})
+
 /**
  * Agents view RPC acceptance — exercises AgentsViewExtension through the full
  * request(...) path with per-request scopes, matching production behavior.
@@ -411,6 +461,7 @@ const ReplySchema = Schema.Struct({
       depth: Schema.Finite,
       parentSessionId: Schema.optional(Schema.String),
       sideThread: Schema.Boolean,
+      activity: Schema.optional(Schema.String),
     }),
   ),
 })
@@ -483,6 +534,63 @@ describe("AgentsViewExtension via RPC", () => {
           const row = rows.rows.find((candidate) => candidate["sessionId"] === sessionId)
           expect(row?.["live"]).toBe(true)
           expect(Object.keys(row ?? {})).not.toContain("agent")
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "a running child reports its streamed line, and the line clears when its turn ends",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.signal(
+            "Reading the loader. Checking the tests.",
+          )
+          // The shipped extensions, the agents among them, so the turn runs.
+          const harness = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            cwd: "/tmp/agents-view-rpc-activity",
+          })
+          const child = yield* harness.client.session.create({
+            cwd: "/tmp/agents-view-rpc-activity",
+            parentSessionId: harness.sessionId,
+            parentBranchId: harness.branchId,
+          })
+          yield* harness.client.message.send({
+            sessionId: child.sessionId,
+            branchId: child.branchId,
+            content: "look at the loader",
+          })
+          yield* controls.waitForStreamStart
+          const rowOf = (reply: typeof ReplySchema.Type, sessionId: string) =>
+            reply.rows.find((row) => row.sessionId === sessionId)
+          // The tray has listed the child once, so its follower is open before
+          // the line streams: it starts from now, not from the history.
+          yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => rowOf(reply, child.sessionId)?.section === "running",
+            5_000,
+            "child running",
+          )
+          yield* controls.emitNext
+          const busy = yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => rowOf(reply, child.sessionId)?.activity === "Reading the loader.",
+            5_000,
+            "streamed line in the child row",
+          )
+          // The root is not in the tray, so it is not followed.
+          expect(rowOf(busy.reply, harness.sessionId)?.activity).toBeUndefined()
+          yield* controls.emitAll
+          const idle = yield* waitFor(
+            requestRows(harness, {}),
+            ({ reply }) => rowOf(reply, child.sessionId)?.section === "idle",
+            5_000,
+            "child idle",
+          )
+          expect(rowOf(idle.reply, child.sessionId)?.activity).toBeUndefined()
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,

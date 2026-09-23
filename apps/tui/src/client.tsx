@@ -19,6 +19,7 @@ import {
   buildLogPaths,
   type ConnectionState,
   ensureLogDir,
+  resolveLogDir,
   type ExtensionHealthSnapshot,
   type GentClientRpcError,
   type GentNamespacedClient,
@@ -82,11 +83,14 @@ import { useWorkspace } from "./workspace"
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { appendFileSync, writeFileSync } from "node:fs" // eslint-disable-line effect/noNodeBuiltinImport -- Synchronous shutdown logging runs after the Effect runtime closes.
 
-// Client log path derives from `process.cwd()` — same source the launcher
-// threads into `GentObservability(cwd)` for the server. Both ends hash the same
-// cwd, so a single gent instance writes client + server logs under one
-// filename prefix.
-const CLIENT_LOG_PATH = buildLogPaths(process.cwd()).client
+// Client log path derives from `process.cwd()` and `resolveLogDir` — the same
+// sources the launcher threads into `GentObservability` for the server. Both
+// ends hash the same cwd into the same directory, so a single gent instance
+// writes client + server logs under one filename prefix, beside its own data
+// when `GENT_DATA_DIR` is set. Resolved once at load: `shutdownLog` writes
+// after the Effect runtime closes.
+const CLIENT_LOG_DIR = Effect.runSync(resolveLogDir)
+const CLIENT_LOG_PATH = buildLogPaths(process.cwd(), CLIENT_LOG_DIR).client
 
 // Clock-bypass: `shutdownLog` runs after Effect runtime teardown, so we
 // cannot yield `Clock.currentTimeMillis` here. `Date.now()` is the standard
@@ -185,7 +189,7 @@ export const clientTraceLogger: Effect.Effect<
   Logger.Logger<unknown, void>,
   PlatformError.PlatformError,
   FileSystem.FileSystem | Scope.Scope
-> = Effect.andThen(ensureLogDir, makeJsonFileLogger(CLIENT_LOG_PATH))
+> = Effect.andThen(ensureLogDir(CLIENT_LOG_DIR), makeJsonFileLogger(CLIENT_LOG_PATH))
 
 // ── agent state ─────────────────────────────────────────────────────────────
 
