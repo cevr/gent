@@ -330,6 +330,47 @@ describe("a child's completion", () => {
   )
 
   it.live(
+    "a long error reaches the parent as one line of at most 1,000 characters",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reason = `CHILD-LONG-ERROR ${"word ".repeat(600)}`
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              return Effect.fail(
+                AiError.make({
+                  module: "ChildProvider",
+                  method: "streamText",
+                  reason: new AiError.AuthenticationError({ kind: "Unknown", description: reason }),
+                }),
+              )
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "delegate this task")
+          const snapshot = yield* afterCompletion(harness)
+          const [completion] = completionMessages(snapshot.messages)
+          const decoded = Schema.decodeUnknownOption(Schema.Struct({ error: Schema.String }))(
+            completion?.metadata?.details,
+          )
+          const error = Option.getOrThrow(Option.map(decoded, (details) => details.error))
+          expect(error).toContain("CHILD-LONG-ERROR")
+          expect(error.endsWith("…")).toBe(true)
+          expect([...error].length).toBe(1_000)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
     "a child's later turns, from its own wake and from the parent's session.send, run as the delegate agent",
     () =>
       Effect.scoped(

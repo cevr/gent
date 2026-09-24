@@ -298,7 +298,7 @@ const childCompletionSourceId = (requestId: RequestId) => `delegate-complete:${r
 /** Bounded preview inside the parent message; the full output lives on the child branch. */
 const maximumPreviewChars = 4_000
 
-/** The error a completion carries is one line; the child's events keep it whole. */
+/** The error a completion carries is one line, `…` included; the child's events keep it whole. */
 const maximumErrorChars = 1_000
 
 /**
@@ -311,7 +311,7 @@ const completionError = (outcome: ChildOutcome, error: Option.Option<string>) =>
     Option.map((text) => {
       const chars = [...text.replace(/\s+/g, " ").trim()]
       if (chars.length <= maximumErrorChars) return chars.join("")
-      return `${chars.slice(0, maximumErrorChars).join("")}…`
+      return `${chars.slice(0, maximumErrorChars - 1).join("")}…`
     }),
     Option.filter((text) => text.length > 0),
   )
