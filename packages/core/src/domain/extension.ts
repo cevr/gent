@@ -176,11 +176,9 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
 // ── contribution ────────────────────────────────────────────────────────────
 
 /**
- * Contribution buckets — typed sub-arrays for `defineExtension`.
- *
- * Extensions declare their leaf values in homogeneously typed buckets. The
- * bucket name IS the discrimination — no `_kind` field on leaves, no wrapper
- * smart constructors, no `filterByKind`.
+ * Contribution buckets — the typed sub-arrays the loader seals from an
+ * extension's `host.register(domain, ...values)` and `host.on(kind, handler)`
+ * calls. The bucket name is the discrimination: a leaf carries no kind field.
  *
  * Capabilities are authored through the typed factories `tool({...})` and
  * `request({...})` in `domain/capability.ts`. Slash commands are requests
@@ -197,9 +195,8 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
 
 /**
  * The set of buckets an extension may contribute to. Every field is optional;
- * an extension that contributes nothing returns `{}`. Each bucket is
- * homogeneously typed — there is no discriminator, the field name is the
- * discrimination.
+ * an extension that registers nothing has none. Each bucket is homogeneously
+ * typed, and the field name is the discrimination.
  */
 export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
@@ -252,8 +249,8 @@ export interface LoadedExtension {
    * Typed contribution buckets produced by the extension's setup function.
    * Consumers (registries, workflow runtime, scheduler, lifecycle hooks,
    * etc.) read each bucket directly — `contributions.tools`,
-   * `contributions.requests`, `contributions.resources`, etc. The bucket name IS the discrimination;
-   * there is no `_kind` discriminator and no `filterByKind`.
+   * `contributions.requests`, `contributions.resources`, etc. The bucket name
+   * is the discrimination.
    */
   readonly contributions: ExtensionContributions
 }

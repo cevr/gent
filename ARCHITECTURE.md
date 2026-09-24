@@ -223,8 +223,6 @@ The app surface is split by concern:
 
 `message.send` request-id dedup lives in `server/server.ts` next to the handler; the runtime keys the actor command on the same request id.
 
-`SessionEvents` and `SessionSubscriptions` are inlined into `server/server.ts` — they are not separate services.
-
 The app services are one layer, `createDependencies` in `packages/core/src/server/server.ts`; no separate app-services layer exists. The SDK builds it in the server scope and hands the context to `buildServerRoutes`; the test harness provides it as a layer.
 
 `packages/core/src/server/server.ts` owns startup wiring:
@@ -694,7 +692,7 @@ loop close (server stop) while an owned call waits: the turn is interrupted,
   the cell then reports its worker state as lost
 ```
 
-**Event-driven UI.** The `@gent/interaction-tools` extension emits typed interaction events (`InteractionPresented` and friends on the session stream) and the client renders those directly. There is no `extensionSnapshots` cache and no projection mirror; source of truth is the storage row plus the durable interaction events (`derive-do-not-create-states`).
+**Event-driven UI.** The `@gent/interaction-tools` extension emits typed interaction events (`InteractionPresented` and friends on the session stream) and the client renders those directly. The source of truth is the storage row plus the durable interaction events (`derive-do-not-create-states`).
 
 Key properties:
 
@@ -1264,7 +1262,7 @@ Other notes:
   `sessions.admission_json`, migration 023) is fixed at creation,
   and every turn of the session runs under it: the first, a wake, a queued
   follow-up, a steer that starts a turn, and a recovered turn after a restart.
-  `sessionAgentDefinition` (`runtime/turn.ts`) resolves it once for the turn,
+  `resolveSessionRoute` (`runtime/turn.ts`) resolves it once for the turn,
   the snapshot (`SessionSnapshot.agent`) and the auth check. No queue item,
   steering command, turn record or loop state carries an agent. A handoff
   (`continueThread`) keeps its parent's admission unless it names one. A row
