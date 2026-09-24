@@ -259,6 +259,8 @@ const topLevel = (paths: ReadonlyArray<string>): ReadonlyArray<string> => {
 export const builtinFiles = defineClientExtension("@gent/files-ui", {
   setup: Effect.gen(function* () {
     const { workspace, transport, lifecycle } = yield* ClientContext
+    // The file-finder cache is keyed by path, not by run, so it does not
+    // follow `GENT_DATA_DIR`: every run that shares it loses nothing.
     const dbDir = `${workspace.home}/.gent/fff`
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path

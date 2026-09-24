@@ -1700,6 +1700,9 @@ export const createDependencies = (config: DependenciesConfig) => {
   // Auth lives in `~/.gent/auth/` (one URL-encoded file per provider).
   // The composition root owns FileSystem/Path; this dependency graph only
   // describes that Auth needs platform capabilities.
+  // It does not follow `GENT_DATA_DIR` on purpose: an isolated run (the
+  // gamut, a scratch database) signs in with the owner's credentials instead
+  // of asking again. `GENT_AUTH_DIRECTORY` separates it when a run must.
   const authDirectory = Option.getOrElse(
     Option.fromUndefinedOr(config.authDirectory),
     () => `${config.home}/.gent/auth`,
