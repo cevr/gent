@@ -3698,6 +3698,9 @@ const COMMIT_OPTIONS = options(
 const FILTER_BRANCH_SCRIPTS =
   "setup env-filter tree-filter index-filter parent-filter msg-filter commit-filter tag-name-filter"
 
+/** find primaries that write their output over the file they name. */
+const FIND_OUTPUTS = ["fprint", "fprint0", "fprintf", "fls"]
+
 /**
  * Every command the guard reads, by command path. A word in command position
  * after a `Command` run is a command again (`sudo git push`, `if git diff`,
@@ -3803,16 +3806,21 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ),
     // The primaries that take a value. find reads no abbreviation, but the
     // parser does: no name here starts with `a`, so the `-a` operator takes
-    // no value (`find x -a "$X"` still asks).
+    // no value (`find x -a "$X"` still asks). `-fprint`, `-fprint0`,
+    // `-fprintf` and `-fls` write over their file, read as a redirect is.
     find: spec(
       {
         long: names(
-          "name iname path ipath wholename iwholename regex iregex lname ilname type xtype newer cnewer mtime mmin ctime cmin size maxdepth mindepth user group uid gid perm links inum samefile fstype",
+          `name iname path ipath wholename iwholename regex iregex lname ilname type xtype newer cnewer mtime mmin ctime cmin size maxdepth mindepth user group uid gid perm links inum samefile fstype ${FIND_OUTPUTS.join(" ")}`,
         ),
         singleDash: true,
       },
       [Run.cases.FindExec.make({ actions: ["-exec", "-execdir", "-ok", "-okdir"] })],
       ({ texts }) => destructiveWhen(texts.includes("-delete"), "find -delete"),
+      ({ texts, parsed }) =>
+        Arr.findFirst(optionValues(parsed, "", FIND_OUTPUTS), (value) =>
+          sensitiveFile(valueText(texts, value)),
+        ),
     ),
     fd: spec({}, [Run.cases.FindExec.make({ actions: ["-x", "-X", "--exec", "--exec-batch"] })]),
     eval: spec({}, [joined()]),

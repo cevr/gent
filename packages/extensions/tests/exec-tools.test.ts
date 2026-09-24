@@ -1388,9 +1388,15 @@ describe("classifyBashCommand", () => {
       "sed -i '' s/a/b/ .env",
       "sed -i.bak s/a/b/ .env",
       "sed --in-place s/a/b/ secrets.yaml",
+      // find's file-output primaries write their file as a redirect does.
+      "find /nonexistent/gent-probe-x -fprint ~/.ssh/authorized_keys",
+      "find /nonexistent/gent-probe-x -fprint0 .env",
+      "find /nonexistent/gent-probe-x -fprintf .env '%p'",
+      "find /nonexistent/gent-probe-x -fls ~/.aws/credentials",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("sensitive")
     }
+    expect(classifyBashCommand("find /nonexistent/gent-probe-x -fprint out.txt").level).toBe("safe")
     for (const command of [
       "echo x > out.txt",
       "cat .env > /dev/null",
