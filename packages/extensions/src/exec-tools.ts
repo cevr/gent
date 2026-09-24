@@ -3670,6 +3670,10 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ),
     docker: spec(options("Hcl", "host context config log-level tlscacert tlscert tlskey")),
     ...each(["docker push", "docker image push"], risky(external("docker push"))),
+    ...each(
+      ["docker volume rm", "docker volume remove", "docker volume prune", "docker system prune"],
+      risky(({ resolved }) => destructive(`${resolved.path} (deletes volumes or containers)`)),
+    ),
     uv: spec(options("", "directory project")),
     "uv run": runner(options("", "with python package env-file extra group")),
     "op run": runner(options("", "env-file")),
@@ -3750,6 +3754,26 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         "git worktree remove --force (discards the worktree's changes)",
       ),
     ),
+    // Plumbing that does what `reset --hard` or `branch -D` does.
+    "git checkout-index": risky(({ parsed }) =>
+      destructiveWhen(
+        hasShort(parsed, "f") || hasLong(parsed, "force"),
+        "git checkout-index --force (overwrites working-tree files)",
+      ),
+    ),
+    "git read-tree": risky(({ parsed }) =>
+      destructiveWhen(
+        hasShort(parsed, "u") || hasLong(parsed, "reset"),
+        "git read-tree -u/--reset (overwrites the index or the working tree)",
+      ),
+    ),
+    "git update-ref": risky(() => destructive("git update-ref (moves or deletes a ref)")),
+    "git reflog": risky(({ parsed }) =>
+      destructiveWhen(
+        ["expire", "delete"].includes(parsed.operands[0] ?? ""),
+        "git reflog expire/delete (drops the record of lost commits)",
+      ),
+    ),
     // Commands that delete, kill, format or write secrets.
     rm: risky(rmRisk, sensitiveRisk),
     ...each(["cp", "mv", "chmod", "chown", "tee"], risky(sensitiveRisk)),
@@ -3760,6 +3784,27 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       risky(({ invocation }) => destructive(invocation.words[0]?.text ?? "")),
     ),
     mkfs: risky(() => destructive("mkfs (format filesystem)")),
+    ...each(
+      ["truncate", "shred", "rimraf", "dropdb"],
+      risky(({ resolved }) => destructive(`${resolved.path} (deletes content)`)),
+    ),
+    // `-e` names the program that runs the transfer.
+    rsync: spec(
+      options("efT", "rsh rsync-path filter exclude include files-from backup-dir temp-dir"),
+      [optionScript("e", ["rsh"])],
+      ({ parsed }) =>
+        destructiveWhen(
+          parsed.longs.some((name) => /^del(ete(-.+)?)?$/.test(name)),
+          "rsync --delete (deletes files the source lacks)",
+        ),
+    ),
+    // `-r` removes the whole table, and a file replaces it.
+    crontab: spec(options("u"), [], ({ parsed }) =>
+      destructiveWhen(
+        hasShort(parsed, "r") || parsed.operands.length > 0,
+        "crontab -r or a new table (drops the current one)",
+      ),
+    ),
     // `hash -p /bin/rm ls`: `ls` runs rm from then on.
     hash: spec(options("p"), [], ({ parsed }) =>
       destructiveWhen(hasShort(parsed, "p"), "hash -p (binds a command name to another program)"),

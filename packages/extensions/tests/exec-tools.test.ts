@@ -549,6 +549,25 @@ describe("classifyBashCommand", () => {
       "psql -c 'DROP TABLE users'",
       "sqlite3 app.db <<EOF\ntruncate table jobs;\nEOF",
       "echo 'drop table users' | mysql app",
+      "truncate -s 0 /nonexistent/gent-probe-x",
+      "shred -u /nonexistent/gent-probe-x",
+      "rsync -a --delete /nonexistent/gent-probe-a/ /nonexistent/gent-probe-x/",
+      "rsync -a --delete-after /nonexistent/gent-probe-a/ /nonexistent/gent-probe-x/",
+      "rsync -e 'rm -rf /nonexistent/gent-probe-x' a b:c",
+      "rimraf /nonexistent/gent-probe-x",
+      "npx rimraf /nonexistent/gent-probe-x",
+      "bunx rimraf /nonexistent/gent-probe-x",
+      "dropdb gent_probe_x",
+      "crontab -r",
+      "crontab /nonexistent/gent-probe-x",
+      "docker volume rm gent_probe_x",
+      "docker volume prune -f",
+      "docker system prune -af",
+      "git checkout-index -f -a",
+      "git read-tree -u --reset HEAD",
+      "git read-tree --reset HEAD",
+      "git update-ref -d refs/heads/gent-probe-x",
+      "git reflog expire --expire=now --all",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -564,6 +583,13 @@ describe("classifyBashCommand", () => {
       "kill 123",
       "grep -rn 'DROP TABLE' migrations",
       "git commit -m 'drop table users'",
+      "rsync -a /nonexistent/gent-probe-a/ /nonexistent/gent-probe-x/",
+      "crontab -l",
+      "docker volume ls",
+      "git checkout-index -a",
+      "git read-tree HEAD",
+      "git reflog",
+      "git reflog show main",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
