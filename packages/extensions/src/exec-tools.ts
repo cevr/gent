@@ -2961,18 +2961,14 @@ const killsHard = (args: ReadonlyArray<string>) =>
   })
 
 /**
- * A word that deletes, drops or truncates, or that builds and runs SQL the
- * guard cannot see (`PREPARE`, `EXECUTE`, `EXEC`, `sp_executesql`, a `DO`
- * block), in any case. No statement is parsed: a comment, a string, a body
- * or a WHERE does not change the answer, so `DELETE … WHERE id = 1` and
- * `SELECT 'drop'` ask too.
+ * A word that deletes, drops or truncates, that builds and runs SQL the
+ * guard cannot see (`PREPARE`, `EXECUTE`, a `DO` block), or that starts a
+ * program (`COPY … TO PROGRAM`), in any case. No statement is parsed: a
+ * comment, a string, a body or a WHERE does not change the answer, so
+ * `DELETE … WHERE id = 1` and `SELECT 'drop'` ask too.
  */
 const SQL_DESTRUCTIVE =
-  /\b(delete|drop|truncate|prepare|execute|exec|sp_executesql)\b|\b(do)\s+(?:\$|e?')/i
-
-/** A client command that runs a file: psql `\i`, `\ir`, `\include`; MySQL `\.`, `source`; SQLite `.read`. */
-const SQL_FILE_COMMAND =
-  /\\(?:i|ir|include|include_relative|\.)\s|(?:^|[;\n])\s*(?:source|\.read)\s/i
+  /\b(delete|drop|truncate|prepare|execute|program)\b|\b(do)\s+(?:\$|e?'|u&'|language\b)/i
 
 /** `text`, and each text after a letter of its leading short option cluster (`-XcDELETE`). */
 const sqlTexts = (text: string): ReadonlyArray<string> => {
@@ -2980,29 +2976,191 @@ const sqlTexts = (text: string): ReadonlyArray<string> => {
   return [text, ...Array.from({ length: Math.max(letters - 2, 0) }, (_, at) => text.slice(at + 2))]
 }
 
+/** How the guard reads one SQL client's words. */
+interface SqlClient {
+  readonly valued: ValueOptions
+  /** Options whose values name the connection (host, port, user, database, password), not SQL. */
+  readonly names: ValueOptions
+  /** How many leading operands name the database or the user. */
+  readonly nameOperands: number
+  /** Options whose values are SQL or client commands. */
+  readonly sql: ValueOptions
+  /** Options that write the output to a file or a program (`-o '|cmd'`, `--pager=cmd`). */
+  readonly output: ValueOptions
+  /** Each client command in `text` outside the client's read-only list. */
+  readonly commands: (text: string) => ReadonlyArray<string>
+}
+
+/** The names that match `pattern` in `text`: its first group, at each match. */
+const matchedNames = (text: string, pattern: RegExp) =>
+  Array.from(text.matchAll(pattern), (match) => match[1] ?? "")
+
 /**
- * A SQL client whose SQL the guard cannot see asks: a file it runs (`-f`,
- * `--file`, `-init`, a client file command, a `<` redirect) or input the
- * guard cannot read. Else it asks when its text holds a word of
+ * psql backslash commands that only describe, list or set the display. Any
+ * other (`\!`, `\copy`, `\gexec`, `\gset`, `\o`, `\i`, `\set`) asks, and so
+ * does a backquote beside one: psql runs backquoted text in a client
+ * command as a shell command.
+ */
+const PSQL_READS =
+  /^(?:d[A-Za-z]*|l|list|x|timing|conninfo|q|quit|\?|h|help|a|t|pset|echo|encoding)$/
+
+const psqlCommands = (text: string) => {
+  const found = matchedNames(text, /\\([A-Za-z]+|[^A-Za-z\s])/g)
+  const asks = found.filter((name) => !PSQL_READS.test(name))
+  if (found.length > 0 && text.includes("`")) asks.push("`")
+  return asks
+}
+
+/**
+ * MySQL client commands: a short form (`\!`) anywhere, a long form at the
+ * start of a statement. The ones that run a program, read a file or write
+ * one ask: `system`, `source`, `pager`, `tee`, `edit`. A backslash before a
+ * character that is not a command is a string escape (`'a\nb'`).
+ */
+const MYSQL_ASKS = { short: "!.PTe", long: new Set(["system", "source", "pager", "tee", "edit"]) }
+
+const mysqlCommands = (text: string) => [
+  ...matchedNames(text, /\\(.)/g).filter((name) => MYSQL_ASKS.short.includes(name)),
+  ...matchedNames(text, /(?:^|[;\n])\s*([A-Za-z_]+)/g).filter((name) =>
+    MYSQL_ASKS.long.has(name.toLowerCase()),
+  ),
+]
+
+/**
+ * SQLite and DuckDB dot-commands that only describe or set the display,
+ * written in full. Any other asks (`.shell`, `.system`, `.output`, `.once`,
+ * `.read`, `.restore`, `.open`), and so does an abbreviation: the shell
+ * reads `.rea` as `.read`.
+ */
+const DOT_READS = new Set([
+  ...["tables", "schema", "fullschema", "indexes", "indices", "databases", "show", "help"],
+  ...["mode", "headers", "header", "width", "nullvalue", "separator", "timer", "changes"],
+  ...["echo", "print", "quit", "exit"],
+])
+
+const dotCommands = (text: string) =>
+  matchedNames(text, /(?:^|[;\n])\s*\.([A-Za-z_]\w*)/g).filter((name) => !DOT_READS.has(name))
+
+const PSQL: SqlClient = {
+  valued: options(
+    "cdfhLoOpPTUv",
+    "command dbname file host log-file output port pset username variable set",
+  ),
+  names: options("dhpU", "dbname host port username"),
+  nameOperands: 2,
+  sql: options("c", "command"),
+  output: options("o", "output"),
+  commands: psqlCommands,
+}
+
+const MYSQL: SqlClient = {
+  valued: {
+    ...options("eDhPSu", "execute database host port socket user init-command"),
+    attached: "p",
+  },
+  names: { ...options("DhPSu", "database host port socket user password"), attached: "p" },
+  nameOperands: 1,
+  sql: options("e", "execute init-command"),
+  // `--pager` alone runs `$PAGER`.
+  output: options("", "pager tee"),
+  commands: mysqlCommands,
+}
+
+const SQLITE: SqlClient = {
+  valued: { long: names("cmd init separator newline nullvalue c s f"), singleDash: true },
+  names: {},
+  nameOperands: 1,
+  sql: { long: names("cmd c s"), singleDash: true },
+  output: {},
+  commands: dotCommands,
+}
+
+/** Indexes into a SQL client's arguments. */
+interface SqlWords {
+  /** The words that carry SQL or client commands, or may: every word but the connection names. */
+  readonly all: ReadonlyArray<number>
+  /** The operands among them. */
+  readonly operands: ReadonlyArray<number>
+}
+
+const sqlWords = (
+  texts: ReadonlyArray<string>,
+  parsed: ParsedArguments,
+  client: SqlClient,
+): SqlWords => {
+  const nameWords = new Set<number>()
+  const optionWords = new Set<number>()
+  for (const option of parsed.options) {
+    optionWords.add(option.at)
+    const named = isNamed(option, `${client.names.short ?? ""}${client.names.attached ?? ""}`, [
+      ...(client.names.long ?? []),
+    ])
+    for (const value of Option.toArray(option.value)) {
+      optionWords.add(value.word)
+      if (named) nameWords.add(value.word)
+    }
+  }
+  const operands = texts.flatMap((text, index) => {
+    if (optionWords.has(index) || text === "--") return []
+    return [index]
+  })
+  for (const index of operands.slice(0, client.nameOperands)) nameWords.add(index)
+  const all: Array<number> = []
+  for (let index = 0; index < texts.length; index++) {
+    if (!nameWords.has(index)) all.push(index)
+  }
+  return { all, operands: operands.slice(client.nameOperands) }
+}
+
+/**
+ * A SQL client asks when the guard cannot see what it runs: SQL from a
+ * file (`-f`, `--file`, `-init`, a `<` redirect), input the guard cannot
+ * read, SQL known only at run time (any word but a connection name holds a
+ * `$VAR` or `$(…)`), a client command outside its read-only list, or output
+ * sent to a file or a program. Else it asks when its text holds a word of
  * `SQL_DESTRUCTIVE`: any argument, option values as written, or its
  * readable input.
  */
-const sqlRisk: CommandRisk = ({ texts, parsed, invocation: { segment } }) => {
-  const input = segmentInputs(segment)
-  const sql = [...texts, ...input.scripts.map((word) => word.text)].flatMap(sqlTexts)
-  const fromFile =
-    hasShort(parsed, "f") ||
-    hasLong(parsed, "file", "init") ||
-    segment.reads.length > 0 ||
-    input.unreadable.length > 0 ||
-    sql.some((text) => SQL_FILE_COMMAND.test(text))
-  if (fromFile) return destructive("SQL the guard cannot read: a file or unreadable input")
-  return Arr.findFirst(sql, (text) =>
-    Option.flatMap(Option.fromNullishOr(SQL_DESTRUCTIVE.exec(text)), ([, word, block]) =>
-      destructive(`SQL ${(word ?? block ?? "").toUpperCase()}`),
-    ),
-  )
-}
+const sqlRisk =
+  (client: SqlClient): CommandRisk =>
+  ({ texts, parsed, resolved, invocation: { segment } }) => {
+    const input = segmentInputs(segment)
+    const inputTexts = input.scripts.map((word) => word.text)
+    if (
+      hasShort(parsed, "f") ||
+      hasLong(parsed, "file", "init") ||
+      segment.reads.length > 0 ||
+      input.unreadable.length > 0
+    ) {
+      return destructive("SQL the guard cannot read: a file or unreadable input")
+    }
+    const words = sqlWords(texts, parsed, client)
+    if (words.all.some((index) => resolved.words[index + 1]?.dynamic === true)) {
+      return destructive("SQL known only at run time")
+    }
+    const outputs = parsed.options.filter((option) =>
+      isNamed(option, client.output.short ?? "", client.output.long),
+    )
+    if (outputs.length > 0) return destructive("SQL client output to a file or a program")
+    // Client commands: in the values of the SQL options, the operands that
+    // are not names, and the input.
+    const commandTexts = [
+      ...optionValues(parsed, client.sql.short ?? "", client.sql.long).map((value) =>
+        valueText(texts, value),
+      ),
+      ...words.operands.map((index) => texts[index] ?? ""),
+      ...inputTexts,
+    ]
+    const command = Arr.findFirst(commandTexts, (text) => Arr.head(client.commands(text)))
+    if (Option.isSome(command)) {
+      return destructive(`a SQL client command outside the read-only list: ${command.value}`)
+    }
+    return Arr.findFirst([...texts, ...inputTexts].flatMap(sqlTexts), (text) =>
+      Option.flatMap(Option.fromNullishOr(SQL_DESTRUCTIVE.exec(text)), ([, word, block]) =>
+        destructive(`SQL ${(word ?? block ?? "").toUpperCase()}`),
+      ),
+    )
+  }
 
 /**
  * Files that hold keys or secrets: anything under `.ssh`, `.gnupg` or `.aws`,
@@ -3343,31 +3501,10 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
         "dd (raw disk write)",
       ),
     ),
-    // The options that take a value, so that one is not read as `-f` or `--file`.
-    psql: spec(
-      options(
-        "cdfhLoOpPTUv",
-        "command dbname file host log-file output port pset username variable set",
-      ),
-      [],
-      sqlRisk,
-    ),
-    ...each(
-      ["mysql", "mariadb"],
-      spec(
-        { ...options("eDhPSu", "execute database host port socket user"), attached: "p" },
-        [],
-        sqlRisk,
-      ),
-    ),
-    ...each(
-      ["sqlite3", "duckdb"],
-      spec(
-        { long: names("cmd init separator newline nullvalue c s f"), singleDash: true },
-        [],
-        sqlRisk,
-      ),
-    ),
+    // Each client's options that take a value, so that one is not read as `-f` or `--file`.
+    psql: spec(PSQL.valued, [], sqlRisk(PSQL)),
+    ...each(["mysql", "mariadb"], spec(MYSQL.valued, [], sqlRisk(MYSQL))),
+    ...each(["sqlite3", "duckdb"], spec(SQLITE.valued, [], sqlRisk(SQLITE))),
   }),
 )
 

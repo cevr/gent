@@ -1849,10 +1849,11 @@ describe("classifyBashCommand", () => {
       `mysql -e "SET @s=0x44454c455445; PREPARE q FROM @s; EXECUTE q"`,
       "psql -c 'EXECUTE p'",
       "psql -cEXECUTE",
-      `mysql -e "EXEC sp_executesql N'SELECT 1'"`,
       "psql -c 'DO $$ BEGIN PERFORM 1; END $$'",
       `psql -c "DO 'BEGIN PERFORM 1; END'"`,
       "psql -c \"DO E'BEGIN PERFORM 1; END'\"",
+      `psql -c "DO LANGUAGE plpgsql 'BEGIN PERFORM 1; END'"`,
+      "psql <<'EOF'\nSELECT 'DEL' || 'ETE FROM gent_probe_x' \\gexec\nEOF",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -1862,6 +1863,85 @@ describe("classifyBashCommand", () => {
       "mysql -h localhost -u me -pfoo -e 'SHOW TABLES'",
       `sqlite3 -separator , ${db} 'select 1'`,
       "psql -c 'SELECT source FROM t'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("SQL known only at run time asks; a dynamic connection name does not", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      `Q='DELETE FROM gent_probe_x'; psql -c "$Q"`,
+      `psql --command="$Q"`,
+      `psql -c "$(cat ${x}.sql)"`,
+      "psql -c `cat /nonexistent/gent-probe-x.sql`",
+      `psql -c "$(printf 'DEL%s FROM gent_probe_x' ETE)"`,
+      `psql -v q="$SQL" -c 'select :q'`,
+      `mysql -e "$SQL"`,
+      `mysql --init-command="$SQL" app`,
+      `sqlite3 ${x}.db "$SQL"`,
+      `sqlite3 -cmd "$SQL" ${x}.db`,
+      `duckdb -c "$SQL"`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      `psql -h "$PGHOST" -U "$PGUSER" -d "$PGDATABASE" -c 'select 1'`,
+      `psql "$DATABASE_URL" -c 'select 1'`,
+      "psql --host=$H --dbname=$DB -c 'select 1'",
+      `mysql -h "$H" -u "$U" -p"$P" "$DB" -e 'SHOW TABLES'`,
+      `sqlite3 "$DB" 'select 1'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  // Client commands outside a read-only list ask: they run a program,
+  // read or write a file, or run SQL built at run time.
+  test("a SQL client command outside the read-only list, or output to a program, asks", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `sqlite3 ${x}.db '.shell ${r}'`,
+      `sqlite3 ${x}.db '.system ${r}'`,
+      `sqlite3 -cmd '.shell ${r}' ${x}.db`,
+      `duckdb -c '.shell ${r}'`,
+      `sqlite3 ${x}.db '.output |${r}' 'select 1'`,
+      `sqlite3 ${x}.db '.rea ${x}.sql'`,
+      `sqlite3 ${x}.db '.restore ${x}.bak'`,
+      `echo '.shell ${r}' | sqlite3 ${x}.db`,
+      `psql -c '\\! ${r}'`,
+      `psql -o '|${r}' -c 'select 1'`,
+      `psql --output=${x}.out -c 'select 1'`,
+      `psql -c "\\copy (select 1) to program '${r}'"`,
+      `psql -c "COPY (select 1) TO PROGRAM '${r}'"`,
+      `psql -c "select 'x' \\gexec"`,
+      `psql -c "select 'x' AS q \\gset"`,
+      `psql -c '\\echo \`${r}\`'`,
+      `mysql -e 'system ${r}'`,
+      `mysql -e 'select 1; SYSTEM ${r}'`,
+      `mysql -e '\\! ${r}'`,
+      `mysql --pager='${r}' -e 'select 1'`,
+      `mysql --tee=${x}.log -e 'select 1'`,
+      `mysql -e 'pager ${r}'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      `sqlite3 ${x}.db '.schema t'`,
+      `sqlite3 -header -column ${x}.db 'select 1'`,
+      `sqlite3 ${x}.db '.mode csv' '.headers on' 'select 1'`,
+      `echo '.tables' | sqlite3 ${x}.db`,
+      "psql -c '\\dt'",
+      "psql -c '\\d+ t'",
+      "psql -c '\\l'",
+      "psql -c '\\x' -c 'select 1'",
+      "psql -c '\\timing on' -c 'select 1'",
+      "psql -F '\\t' -c 'select 1'",
+      "mysql -e 'use app; select 1'",
+      "mysql -e 'select 1\\G'",
+      `mysql -e "select 'a\\nb'"`,
+      `psql -c 'select 1' > ${x}.out`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
