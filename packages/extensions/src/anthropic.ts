@@ -54,10 +54,10 @@ import {
   readOptionalEnv,
   withHeaders,
 } from "./providers.js"
-import type { ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcessSpawner } from "effect/unstable/process"
 import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { AnthropicClient, AnthropicLanguageModel, Generated } from "@effect/ai-anthropic"
-import { BunCrypto, BunServices } from "@effect/platform-bun"
+import { BunCrypto } from "@effect/platform-bun"
 import { type AiError, Model as AiModel } from "effect/unstable/ai"
 
 // Test seam: only tests read these exports. The model table and its lookups
@@ -1064,14 +1064,20 @@ const realIO: AnthropicCredentialIO = {
   refresh: refreshClaudeCodeCredentials,
 }
 
-/** The production credential cache over the Claude Code keychain and the real platform. */
+/**
+ * What the driver runs on: the host's files, paths and processes, captured
+ * once at setup, plus the Claude Code platform facts. The driver provides no
+ * platform of its own, so a test host's services reach the keychain reads.
+ */
+type AnthropicDriverServices = Context.Context<AnthropicCredentialIORequirements>
+
+/** The production credential cache over the Claude Code keychain and the host's platform. */
 const buildLiveCredentialCache = (
   cellRef: CredentialCacheCellRef<ClaudeCredentials>,
-  platform: AnthropicPlatformApi,
+  services: AnthropicDriverServices,
 ): Effect.Effect<CredentialCache<ClaudeCredentials>> =>
   Effect.suspend(() => makeAnthropicCredentialCache(cellRef, realIO)).pipe(
-    // @effect-diagnostics-next-line strictEffectProvide:off
-    Effect.provide(Layer.merge(BunServices.layer, Layer.succeed(AnthropicPlatform, platform))),
+    Effect.provideContext(services),
   )
 
 /** What the user does when the Claude Code sign-in no longer works. */
@@ -2165,9 +2171,9 @@ const makeOauthAnthropicLayer = (
   modelName: string,
   request: AnthropicRequest,
   creds: CredentialCache<ClaudeCredentials>,
-  platform: AnthropicPlatformApi,
+  services: AnthropicDriverServices,
 ) => {
-  const keychain = buildKeychainTransformClient(creds, platform.env)
+  const keychain = buildKeychainTransformClient(creds, Context.get(services, AnthropicPlatform).env)
   const wrappedClient = anthropicClientLayer(
     request.plan,
     claudeCodeClientPath(creds),
@@ -2176,11 +2182,10 @@ const makeOauthAnthropicLayer = (
   ).pipe(
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(BunCrypto.layer),
-    Layer.provide(Layer.succeed(AnthropicPlatform, platform)),
+    Layer.provide(Layer.succeedContext(services)),
   )
   return AnthropicLanguageModel.layer({ model: modelName, config: request.config }).pipe(
     Layer.provide(wrappedClient),
-    Layer.provide(BunServices.layer),
   )
 }
 
@@ -2194,7 +2199,7 @@ const makeOauthAnthropicLayer = (
 export const buildAnthropicModelDriver = (
   credentialCellRef: CredentialCacheCellRef<ClaudeCredentials>,
   envApiKey: Option.Option<string>,
-  platform: AnthropicPlatformApi,
+  services: AnthropicDriverServices,
   catalog: CatalogSource,
 ): ModelDriverContribution => ({
   id: "anthropic",
@@ -2220,12 +2225,12 @@ export const buildAnthropicModelDriver = (
         // The credential cache is built over the extension-closure-owned
         // cell, so credential reuse survives. The credentials are checked before the
         // layer exists, so an expired sign-in fails with its own message.
-        const creds = yield* buildLiveCredentialCache(credentialCellRef, platform)
+        const creds = yield* buildLiveCredentialCache(credentialCellRef, services)
         yield* checkCredentials(creds)
         return AiModel.make(
           "anthropic",
           modelName,
-          makeOauthAnthropicLayer(modelName, request, creds, platform),
+          makeOauthAnthropicLayer(modelName, request, creds, services),
         )
       }
 
@@ -2289,8 +2294,7 @@ export const buildAnthropicModelDriver = (
             }),
           ),
         ),
-        // @effect-diagnostics-next-line strictEffectProvide:off
-        Effect.provide(Layer.merge(BunServices.layer, Layer.succeed(AnthropicPlatform, platform))),
+        Effect.provideContext(services),
       ),
   },
 })
@@ -2307,7 +2311,19 @@ export const AnthropicExtension = defineExtension({
     })
 
     const envApiKey = yield* readOptionalEnv("ANTHROPIC_API_KEY")
-    const platform = AnthropicPlatform.fromSetup(ctx, env)
+    // The host's platform, not one of the driver's own: a shipped provider
+    // is never more privileged than a user extension.
+    const services: AnthropicDriverServices = Context.make(
+      FileSystem.FileSystem,
+      yield* FileSystem.FileSystem,
+    ).pipe(
+      Context.add(Path.Path, yield* Path.Path),
+      Context.add(
+        ChildProcessSpawner.ChildProcessSpawner,
+        yield* ChildProcessSpawner.ChildProcessSpawner,
+      ),
+      Context.add(AnthropicPlatform, AnthropicPlatform.fromSetup(ctx, env)),
+    )
 
     // Cache cells are hoisted to extension-closure scope so they
     // survive across `resolveModel` calls. Lifetime: one extension
@@ -2321,7 +2337,7 @@ export const AnthropicExtension = defineExtension({
 
     yield* ctx.register(
       "modelDriver",
-      buildAnthropicModelDriver(credentialCellRef, envApiKey, platform, catalog),
+      buildAnthropicModelDriver(credentialCellRef, envApiKey, services, catalog),
     )
   }),
 })

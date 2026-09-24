@@ -2,6 +2,7 @@ import { describe, expect, it, test } from "effect-bun-test"
 import {
   ConfigProvider,
   Clock,
+  Context,
   Deferred,
   Effect,
   Fiber,
@@ -29,7 +30,8 @@ import {
 } from "@gent/core/test-utils"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { TestClock } from "effect/testing"
-import { BunFileSystem } from "@effect/platform-bun"
+import { BunFileSystem, BunServices } from "@effect/platform-bun"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
   type CredentialCacheCell,
   driverCatalog,
@@ -351,13 +353,19 @@ describe("models.dev catalog", () => {
             claude("claude-sonnet-6", 1_000_000),
           ]),
         )
-        const platform = yield* Effect.context<FileSystem.FileSystem | Path.Path>()
+        const platform = yield* Effect.context<
+          FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+        >()
         const driver = buildAnthropicModelDriver(
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
             EMPTY_CREDENTIAL_CELL,
           ),
           Option.none(),
-          AnthropicPlatform.of({ platform: "darwin", home, env: {} }),
+          Context.add(
+            platform,
+            AnthropicPlatform,
+            AnthropicPlatform.of({ platform: "darwin", home, env: {} }),
+          ),
           { home, platform },
         )
         const listModels = Option.getOrThrow(Option.fromUndefinedOr(driver.listModels))
@@ -371,7 +379,7 @@ describe("models.dev catalog", () => {
           "anthropic/claude-haiku-4-5 200000",
           "anthropic/claude-sonnet-6 200000",
         ])
-      }).pipe(Effect.provide(platformLayer)),
+      }).pipe(Effect.provide(BunServices.layer)),
   )
 
   it.scopedLive("a cache older than a day refetches and rewrites the canonical models", () =>
