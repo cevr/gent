@@ -11,6 +11,7 @@ import {
   Semaphore,
   Stream,
 } from "effect"
+import { AsyncLocalStorage } from "node:async_hooks"
 import { createRequire } from "node:module"
 import { inspect } from "node:util"
 import {
@@ -199,9 +200,29 @@ export class CellWorkerEnvironment extends Context.Service<
      * feeds them from the process's uncaught handlers, so they reach the cell
      * output instead of ending the worker.
      */
-    readonly uncaught: Stream.Stream<unknown>
+    readonly uncaught: Stream.Stream<UncaughtError>
   }
 >()("@gent/extensions/src/cell-worker-boundary/CellWorkerEnvironment") {}
+
+/**
+ * The cell whose code is running. Each evaluation runs under its own number,
+ * and timers and promise continuations the cell starts keep it. Bun runs the
+ * `unhandledRejection` handler, and the handler for a throw in a microtask,
+ * without it: those errors have no known origin.
+ */
+const cellOrigin = new AsyncLocalStorage<number>()
+
+/** An error cell code raised outside any awaited path, with the cell that raised it when known. */
+interface UncaughtError {
+  readonly cause: unknown
+  readonly origin: Option.Option<number>
+}
+
+/** Read in the process's uncaught handler, while the throwing callback's context is still current. */
+const uncaughtError = (cause: unknown): UncaughtError => ({
+  cause,
+  origin: Option.fromUndefinedOr(cellOrigin.getStore()),
+})
 
 /** The worker transport supplies this proxy. It never supplies Gent host services. */
 export class CellHost extends Context.Service<
@@ -435,17 +456,25 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       () => installConsole(hostConsole),
     )
 
-  // An uncaught error goes to the running cell's output; one raised between
-  // cells waits for the next cell. The wait is bounded, like the output.
-  let evaluating = false
+  // An uncaught error is shown only where its origin is known. One from the
+  // running cell goes to that cell's output. One from an earlier cell, or
+  // with no known origin, waits for the next cell with its label: it is never
+  // the running cell's error. The wait is bounded, like the output.
+  let cellNumber = 0
+  let running = Option.none<number>()
   let strays: Array<string> = []
-  const uncaughtText = (cause: unknown) =>
-    `Uncaught (a timer or an unawaited promise): ${errorText(cause)}`
-  const reportUncaught = (cause: unknown) =>
+  const reportUncaught = (error: UncaughtError) =>
     Effect.sync(() => {
-      const text = uncaughtText(cause)
-      if (evaluating) return append(text)
-      if (strays.length < maximumStrayErrors) strays.push(text)
+      const text = errorText(error.cause)
+      if (Option.isSome(error.origin) && Option.contains(running, error.origin.value)) {
+        return append(`Uncaught: ${text}`)
+      }
+      if (strays.length >= maximumStrayErrors) return
+      if (Option.isSome(error.origin)) {
+        strays.push(`Uncaught (from cell ${error.origin.value}): ${text}`)
+        return
+      }
+      strays.push(`Uncaught (origin unknown: an unawaited promise or microtask): ${text}`)
     })
 
   const evaluate = Effect.fn("BunCellEvaluator.evaluate")(function* (source: string) {
@@ -459,10 +488,12 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       try: () => transpiler.transformSync(source),
       catch: (cause) => failure("compile", cause),
     })
-    evaluating = true
+    const origin = ++cellNumber
+    running = Option.some(origin)
     const result = yield* Effect.gen(function* () {
       const started = yield* Effect.try({
-        try: (): unknown => evaluateInRealm(compiled),
+        // Timers and continuations the cell starts keep its number.
+        try: (): unknown => cellOrigin.run(origin, () => evaluateInRealm(compiled)),
         catch: (cause) => failure("execute", cause),
       })
       if (!Predicate.isPromiseLike(started)) return started
@@ -474,7 +505,7 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
       captureConsole,
       Effect.ensuring(
         Effect.sync(() => {
-          evaluating = false
+          running = Option.none()
         }),
       ),
     )
@@ -772,9 +803,11 @@ if (import.meta.main) {
       Effect.gen(function* () {
         // Cell code runs in this process, so an error it raises outside its
         // awaited code would end the worker. It goes to the cell output instead.
-        const uncaught = yield* Queue.unbounded<unknown>()
+        const uncaught = yield* Queue.unbounded<UncaughtError>()
+        // The origin is read here, inside the handler, where the throwing
+        // callback's context is still current.
         const report = (cause: unknown) => {
-          Queue.offerUnsafe(uncaught, cause)
+          Queue.offerUnsafe(uncaught, uncaughtError(cause))
         }
         process.on("uncaughtException", report)
         process.on("unhandledRejection", report)

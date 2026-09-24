@@ -1068,21 +1068,35 @@ describe("cell worker process", () => {
         const run = (source: string) =>
           kernel.evaluate(source).pipe(Effect.provideService(CellOperationHost, host))
         const settle = "await new Promise((resolve) => setTimeout(resolve, 150))"
-        // A timer throws after its cell ended; the next cell carries the error.
-        const timer = yield* run(
-          "var kept = 5; setTimeout(() => { throw new Error('late timer') }, 20); 1",
+        // A timer throws while its own cell runs: that cell's output carries it.
+        const own = yield* run(
+          `var kept = 5; setTimeout(() => { throw new Error('own timer') }, 20); ${settle}; 1`,
         )
-        const afterTimer = yield* run(`${settle}; kept`)
-        expect(`${timer.display}\n${afterTimer.display}`).toContain("late timer")
-        expect(afterTimer.display).toContain("5")
-        // A rejection nobody awaits.
-        const dropped = yield* run("Promise.reject(new Error('dropped promise')); 2")
-        const afterDropped = yield* run(`${settle}; kept`)
-        expect(`${dropped.display}\n${afterDropped.display}`).toContain("dropped promise")
-        // A host call the cell never awaits fails while the cell still runs.
+        expect(own.display).toContain("own timer")
+        // A timer from cell A throws while cell B runs: B does not claim it,
+        // and the next cell names A as its origin.
+        yield* run("setTimeout(() => { throw new Error('late timer') }, 40); 1")
+        const whileLate = yield* run(`${settle}; kept`)
+        expect(whileLate.display).not.toContain("late timer")
+        expect(whileLate.display).toContain("5")
+        const afterTimer = yield* run("2")
+        expect(afterTimer.display).toMatch(/Uncaught \(from cell \d+\): .*late timer/)
+        // A rejection nobody awaits has no known origin: it is never the
+        // running cell's error, and the next cell reports it as unknown.
+        const dropped = yield* run(`Promise.reject(new Error('dropped promise')); ${settle}; 2`)
+        expect(dropped.display).not.toContain("dropped promise")
+        const afterDropped = yield* run("kept")
+        expect(afterDropped.display).toContain(
+          "Uncaught (origin unknown: an unawaited promise or microtask): ",
+        )
+        expect(afterDropped.display).toContain("dropped promise")
+        // A host call the cell never awaits fails while the cell still runs:
+        // an unhandled rejection, so it too waits for the next cell, unattributed.
         const orphan = yield* run(`tools.broken({}); ${settle}; 3`)
-        expect(orphan.display).toContain("service down")
-        expect(orphan.display).toContain("3")
+        expect(orphan.display).toBe("3")
+        const afterOrphan = yield* run("4")
+        expect(afterOrphan.display).toContain("Uncaught (origin unknown")
+        expect(afterOrphan.display).toContain("service down")
         yield* kernel.close
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
     10000,
