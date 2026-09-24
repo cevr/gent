@@ -38,6 +38,8 @@
     "gent/no-with-wrapper-call": "error",
     // Custom — a bare `it(...)` from effect-bun-test registers no test; use `test(...)` or `it.live`
     "gent/no-inert-it": "error",
+    // Custom — a child-session writer admits the depth in its own function
+    "gent/child-session-writer-admits": "error",
 
     // Effect — complete recommended preset
     "effect/maxCognitiveComplexity": ["error", { "max": 21 }],

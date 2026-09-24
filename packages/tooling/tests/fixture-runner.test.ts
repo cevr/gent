@@ -324,6 +324,18 @@ const CASES: ReadonlyArray<RuleCase> = [
     // Arrow body + function reference + the renamed import + a namespace import
     expectedCount: 4,
   },
+  {
+    // A child-session writer admits the depth in its own function, first.
+    rule: "gent/child-session-writer-admits",
+    invalid: "packages/core/src/server/child-session-writer-admits.invalid.ts",
+    valid: [
+      "packages/core/src/server/child-session-writer-admits.valid.ts",
+      "packages/core/src/storage/child-session-writer-admits.valid.ts",
+    ],
+    // no admission, a sibling's admission, a nested arrow, a method shorthand,
+    // and an admission after the write
+    expectedCount: 5,
+  },
 ]
 
 /** Each fixture file once: a run lints a path it is given once, however many cases name it. */
