@@ -3196,6 +3196,23 @@ describe("a declared dependency must have a use", () => {
       'packages/core/package.json peerDependencies["@effect/sql-pg"]',
     ])
   })
+
+  test("the root installs a peer a workspace's used dependency asks for, undeclared there", () => {
+    const root = dependencyScope({
+      manifest: "package.json",
+      packageJson: { devDependencies: { react: "19", "react-dom": "19" } },
+    })
+    const web = dependencyScope({
+      manifest: "apps/web/package.json",
+      packageJson: { dependencies: { "react-dom": "19" } },
+      files: new Map([["apps/web/src/main.tsx", 'import { createRoot } from "react-dom/client"']]),
+      installed: installedMap([["react-dom", { peerDependencies: { react: "^19" } }]]),
+    })
+    // The root copy of react-dom is still dead: the workspace declares it itself.
+    expect(findingNames(findUnusedDependencies({ root, workspaces: [web] }))).toEqual([
+      'package.json devDependencies["react-dom"]',
+    ])
+  })
 })
 
 describe("a catalog entry must be taken", () => {

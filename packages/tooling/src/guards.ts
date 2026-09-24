@@ -3366,9 +3366,11 @@ const DEPENDENCY_FIELDS: ReadonlyArray<DependencyField> = [
 interface ScopeUse {
   readonly declared: ReadonlyArray<{ readonly field: DependencyField; readonly name: string }>
   readonly used: ReadonlySet<string>
+  /** The peers the scope needs installed: its used peers and every peer its used dependencies ask for. */
+  readonly peers: ReadonlySet<string>
 }
 
-/** The declared dependencies of one scope, and the ones it uses. */
+/** The declared dependencies of one scope, the ones it uses, and the peers it needs. */
 const scopeUse = (scope: DependencyScope, providedPeers: ReadonlySet<string>): ScopeUse => {
   const declared = DEPENDENCY_FIELDS.flatMap((field) =>
     Object.keys(scope.packageJson[field] ?? {}).map((name) => ({ field, name })),
@@ -3387,20 +3389,24 @@ const scopeUse = (scope: DependencyScope, providedPeers: ReadonlySet<string>): S
           Option.exists(typedPackage(name), (typed) => named.has(typed)),
       ),
   )
+  const peers = new Set(
+    Object.keys(scope.packageJson.peerDependencies ?? {}).filter((name) => used.has(name)),
+  )
   // A peer of a used dependency is used through it; follow the chain.
   const frontier = [...used]
   while (frontier.length > 0) {
-    const peers = Option.match(installed(frontier.pop() ?? ""), {
+    const asked = Option.match(installed(frontier.pop() ?? ""), {
       onNone: (): ReadonlyArray<string> => [],
       onSome: (dependency) => dependency.peers,
     })
-    for (const peer of peers) {
+    for (const peer of asked) {
+      peers.add(peer)
       if (used.has(peer)) continue
       used.add(peer)
       frontier.push(peer)
     }
   }
-  return { declared, used }
+  return { declared, used, peers }
 }
 
 const unusedFindings = (scope: DependencyScope, use: ScopeUse): ReadonlyArray<Finding> => {
@@ -3422,7 +3428,8 @@ const unusedFindings = (scope: DependencyScope, use: ScopeUse): ReadonlyArray<Fi
  * types a used package (`@types/x`), or it is a peer of a used dependency (a
  * workspace dependency's peers included). Peers are checked the same way: a
  * dead peer would keep the root's copy and its catalog entry alive. The root
- * installs every peer a workspace uses, and only those.
+ * installs the peers the workspaces need (declared or asked for by a used
+ * dependency), and only those.
  */
 export const findUnusedDependencies = (input: {
   readonly root: DependencyScope
@@ -3432,11 +3439,7 @@ export const findUnusedDependencies = (input: {
     scope,
     use: scopeUse(scope, new Set()),
   }))
-  const providedPeers = new Set(
-    workspaceUses.flatMap(({ scope, use }) =>
-      Object.keys(scope.packageJson.peerDependencies ?? {}).filter((name) => use.used.has(name)),
-    ),
-  )
+  const providedPeers = new Set(workspaceUses.flatMap(({ use }) => [...use.peers]))
   return [
     ...unusedFindings(input.root, scopeUse(input.root, providedPeers)),
     ...workspaceUses.flatMap(({ scope, use }) => unusedFindings(scope, use)),
