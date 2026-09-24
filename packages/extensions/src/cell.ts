@@ -22,11 +22,13 @@ import {
 import {
   BranchId,
   defineExtension,
+  ExtensionContext,
   ExtensionHost,
   ExtensionId,
   getToolId,
   getToolPrompt,
   InteractionPendingError,
+  isSpawnedSession,
   type Message,
   MessageId,
   SessionId,
@@ -646,7 +648,15 @@ interface CellNamespaceStorageService {
     address: CellNamespaceAddress,
     snapshot: CellSnapshot,
   ) => Effect.Effect<void, StorageError>
-  readonly clear: (address: CellNamespaceAddress) => Effect.Effect<void, StorageError>
+}
+
+/** What a reset leaves: a saved namespace with nothing in it, so nothing is inherited later. */
+const emptyNamespace: CellSnapshot = { bindings: [], omitted: [] }
+
+/** A namespace to restore, and the previous session of the thread it came from, if any. */
+interface SavedNamespace {
+  readonly snapshot: CellSnapshot
+  readonly previousSession: Option.Option<SessionId>
 }
 
 const namespaceStorageFailure = cellStorageFailure("Failed to record cell namespace")
@@ -681,13 +691,7 @@ const makeNamespaceStorage = Effect.gen(function* () {
           `
     }).pipe(Effect.mapError(namespaceStorageFailure))
   })
-  const clear = Effect.fn("CellNamespaceStorage.clear")(function* (address: CellNamespaceAddress) {
-    yield* sql`
-          DELETE FROM cell_namespaces
-          WHERE session_id = ${address.sessionId} AND branch_id = ${address.branchId}
-        `.pipe(Effect.mapError(namespaceStorageFailure))
-  })
-  return { get, set, clear } satisfies CellNamespaceStorageService
+  return { get, set } satisfies CellNamespaceStorageService
 })
 
 // ── cell storage ────────────────────────────────────────────────────────────
@@ -2128,13 +2132,14 @@ const CellFailure = Schema.Union([CellEvaluationError, CellKernelError, CellProc
 type Kernel = Effect.Success<ReturnType<typeof openCellKernel>>
 
 interface CellExecutionService {
+  /** The caller's `ExtensionContext` reads the session a first kernel start may inherit from. */
   readonly run: (call: {
     readonly assistantMessageId: MessageId
     readonly toolCallId: ToolCallId
   }) => Effect.Effect<
     Prompt.ToolResultPart,
     StorageError | CellExecutionIncomplete,
-    CellOperationHost
+    CellOperationHost | ExtensionContext
   >
   readonly cancel: Effect.Effect<void>
   /** The loop closes: end the running cell and record nothing, as a crash would. */
@@ -2210,16 +2215,67 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         // Report for the first evaluation after a host-owned restore.
         let restoreReport = Option.none<CellRestoreReport>()
         const namespaceAddress = { sessionId: input.sessionId, branchId: input.branchId }
-        /** Put the last good namespace back into a fresh worker. Missing values are named. */
+        /**
+         * A handoff session continues its predecessor's thread, so a branch of
+         * it with no namespace of its own starts from the one the predecessor
+         * saved on the branch it was handed off from. The snapshot is copied
+         * into this branch's row, not shared: later writes on either side stay
+         * on their own branch. One hop: the predecessor's own inheritance was
+         * copied into its row the same way. A spawned session (a delegate
+         * child, a `/btw` fork) does not join the thread and starts empty.
+         */
+        const inheritNamespace = Effect.fn("CellExecution.inheritNamespace")(function* () {
+          const ctx = yield* ExtensionContext
+          const session = yield* ctx.Session.getSession(input.sessionId).pipe(
+            Effect.mapError(namespaceStorageFailure),
+          )
+          const predecessor = Option.fromUndefinedOr(session).pipe(
+            Option.filter((value) => !isSpawnedSession(value)),
+            Option.flatMap((value) =>
+              Option.all({
+                sessionId: Option.fromUndefinedOr(value.parentSessionId),
+                branchId: Option.fromUndefinedOr(value.parentBranchId),
+              }),
+            ),
+          )
+          if (Option.isNone(predecessor)) return Option.none<SavedNamespace>()
+          const saved = yield* namespaces.get(predecessor.value)
+          if (Option.isNone(saved)) return Option.none<SavedNamespace>()
+          yield* namespaces.set(namespaceAddress, saved.value)
+          return Option.some<SavedNamespace>({
+            snapshot: saved.value,
+            previousSession: Option.some(predecessor.value.sessionId),
+          })
+        })
+        /**
+         * Put the last good namespace back into a fresh worker: this branch's
+         * own, else the one a handoff inherits. Missing values are named; an
+         * inherited namespace also names the session it came from.
+         */
         const restoreNamespace = Effect.fn("CellExecution.restoreNamespace")(function* (
           current: Kernel,
         ) {
-          const saved = yield* namespaces.get(namespaceAddress)
+          const saved = yield* namespaces.get(namespaceAddress).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: inheritNamespace,
+                onSome: (snapshot) =>
+                  Effect.succeedSome<SavedNamespace>({ snapshot, previousSession: Option.none() }),
+              }),
+            ),
+          )
           if (Option.isNone(saved)) return
-          const restored = yield* current.restore(saved.value.bindings)
+          const { snapshot, previousSession } = saved.value
+          const restored = yield* current.restore(snapshot.bindings)
           // An empty namespace has nothing to report.
-          if (restored.length === 0 && saved.value.omitted.length === 0) return
-          restoreReport = Option.some({ restored, omitted: saved.value.omitted })
+          if (restored.length === 0 && snapshot.omitted.length === 0) return
+          const report: CellRestoreReport = { restored, omitted: snapshot.omitted }
+          restoreReport = Option.some(
+            Option.match(previousSession, {
+              onNone: () => report,
+              onSome: (sessionId) => ({ ...report, previousSession: sessionId }),
+            }),
+          )
         })
         /** Keep the namespace after each good cell. A failed snapshot only loses recency. */
         const saveNamespace = Effect.fn("CellExecution.saveNamespace")(function* (current: Kernel) {
@@ -2263,14 +2319,18 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
             ),
           )
         })
-        /** Reset on request clears the saved namespace; reset after loss restores it. */
+        /**
+         * Reset on request saves an empty namespace, so a later restart
+         * neither restores the old one nor inherits a predecessor's; reset
+         * after loss restores it.
+         */
         const prepare = Effect.fn("CellExecution.prepare")(function* (
           current: Kernel,
           reset: boolean,
         ) {
           if (reset) {
             yield* current.reset
-            yield* namespaces.clear(namespaceAddress)
+            yield* namespaces.set(namespaceAddress, emptyNamespace)
             recoveryPending = false
             restoreReport = Option.none()
             return
@@ -2474,7 +2534,7 @@ export const CellTool = tool({
   params: CellInput,
   output: Schema.Json,
   promptGuidelines: [
-    "Top-level variables stay bound in later cells on this branch. The host saves them after each cell and restores them after a worker restart; a result then carries restored (names) and omitted (functions, class instances, cycles, oversized values).",
+    "Top-level variables stay bound in later cells on this branch. The host saves them after each cell and restores them after a worker restart; a result then carries restored (names) and omitted (functions, class instances, cycles, oversized values). They also carry into a /handoff session, which continues the thread: its first cell starts with the previous session's saved values, and restored.previousSession names that session. Keep a scratchpad for long work in a binding.",
     "Call a host tool through its id path: await tools.read({ path }), await tools.delegate.start({ todo }). Run independent calls concurrently with Promise.all; chain dependent calls with sequential awaits.",
     "The cell is a full Bun process in the working directory with your user's privileges; nothing is sandboxed. Bun (Bun.file, Bun.write, Bun.$, Bun.spawn), bun:sqlite, fetch, process (cwd, env), node builtins through await import('node:fs/promises') or require('node:path'), and packages resolved from the working directory are all available. Use it directly to read, search, parse, and transform data.",
     "Network reads are plain fetch in the cell; parse HTML or JSON there. Past sessions live in data.db under process.env.GENT_DATA_DIR, else ~/.gent (bun:sqlite; tables sessions, messages, message_chunks, content_chunks, events), so search them with SQL instead of a host tool.",

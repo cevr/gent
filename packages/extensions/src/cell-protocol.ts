@@ -340,10 +340,15 @@ export class CellEvaluationError extends Schema.TaggedError<CellEvaluationError>
   },
 ) {}
 
-/** Restored names and named omissions from the last host-owned snapshot. */
+/**
+ * Restored names and named omissions from the last host-owned snapshot.
+ * `previousSession` is present when the snapshot came from the previous
+ * session of the thread, as after a handoff; absent, it is this branch's own.
+ */
 export const CellRestoreReport = Schema.Struct({
   restored: Schema.Array(Schema.String),
   omitted: Schema.Array(SnapshotOmission),
+  previousSession: Schema.optional(Schema.String),
 })
 export type CellRestoreReport = typeof CellRestoreReport.Type
 

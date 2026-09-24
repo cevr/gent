@@ -35,6 +35,7 @@ import {
   ensureStorageParents,
   runToolWithCtx,
   testToolContext,
+  testLeafContext,
   finishPart,
   LanguageModelLayers,
   multiToolCallStep,
@@ -201,9 +202,25 @@ export const buildCellExecutable = Effect.gen(function* () {
 // ── recorded cell execution ─────────────────────────────────────────────────
 
 const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)
-const testLayer = SqliteStorage.MemoryWithSql(
-  CellBranchTools.storage,
-  CellBranchTools.migrations,
+/** The caller's extension context, reading sessions from the test's own storage. */
+const storedSessionContext = Layer.effect(
+  ExtensionContext,
+  Effect.gen(function* () {
+    const sessions = yield* SessionStorage
+    const ctx = testToolContext()
+    return testLeafContext(
+      testToolContext({
+        Session: {
+          ...ctx.Session,
+          getSession: (id) => sessions.getSession(id ?? ctx.sessionId).pipe(Effect.orDie),
+        },
+      }),
+    )
+  }),
+)
+const testLayer = Layer.provideMerge(
+  storedSessionContext,
+  SqliteStorage.MemoryWithSql(CellBranchTools.storage, CellBranchTools.migrations),
 ).pipe(Layer.provideMerge(platform))
 const sessionId = SessionId.make("cell-execution-session")
 const branchId = BranchId.make("cell-execution-branch")
@@ -221,14 +238,39 @@ const hostCatalog = (...names: ReadonlyArray<string>) => ({
   tools: names.map((name) => ({ name, description: name, guidelines: [], parameters: {} })),
 })
 
+/** The session a handoff continues: the test session joins its thread. */
+const predecessor = {
+  sessionId: SessionId.make("cell-predecessor-session"),
+  branchId: BranchId.make("cell-predecessor-branch"),
+}
+
 const setupCalls = Effect.fn("test.setupCells")(function* (
   sources: ReadonlyArray<string>,
   resetAt: ReadonlyArray<number> = [],
+  handoff = false,
 ) {
   const sessions = yield* SessionStorage
   const branches = yield* BranchStorage
   const messages = yield* MessageStorage
-  yield* sessions.createSession(new Session({ id: sessionId, createdAt: now, updatedAt: now }))
+  const session = new Session({ id: sessionId, createdAt: now, updatedAt: now })
+  if (handoff) {
+    yield* sessions.createSession(
+      new Session({ id: predecessor.sessionId, createdAt: now, updatedAt: now }),
+    )
+    yield* branches.createBranch(
+      new Branch({ id: predecessor.branchId, sessionId: predecessor.sessionId, createdAt: now }),
+    )
+    yield* sessions.createSession(
+      new Session({
+        ...session,
+        parentSessionId: predecessor.sessionId,
+        parentBranchId: predecessor.branchId,
+        threadId: predecessor.sessionId,
+      }),
+    )
+  } else {
+    yield* sessions.createSession(session)
+  }
   yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
   return yield* Effect.forEach(sources, (code, index) =>
     Effect.gen(function* () {
@@ -722,6 +764,58 @@ describe("recorded cell execution", () => {
         const cleared = yield* run(fresh, gone)
         expect(cleared.result).toMatchObject({ display: "undefined" })
         expect(cleared.result).not.toHaveProperty("restored")
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
+    15000,
+  )
+
+  it.scopedLive(
+    "a handoff copies its predecessor's namespace on first start, and a reset does not inherit it again",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [unsaved, copied, wipe, gone] = yield* setupCalls(
+          [
+            "notes.push('beta'); throw new Error('unsaved')",
+            "notes.join(',')",
+            "throw new Error('fresh start')",
+            "typeof notes",
+          ],
+          [2],
+          true,
+        )
+        if (!unsaved || !copied || !wipe || !gone) return yield* Effect.die("Missing test cells")
+        const namespaces = (yield* CellStorage).namespaces
+        const saveForPredecessor = (notes: ReadonlyArray<string>) =>
+          namespaces.set(predecessor, { bindings: [{ name: "notes", value: notes }], omitted: [] })
+        yield* saveForPredecessor(["alpha"])
+        const host = CellOperationHost.of({ catalog: hostCatalog(), call: () => Effect.never })
+        const open = Effect.gen(function* () {
+          const context = yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          )
+          return Context.get(context, CellExecution)
+        })
+        const run = (owner: typeof cells, call: Parameters<typeof cells.run>[0]) =>
+          owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
+        const cells = yield* open
+        // The first start inherits; the failed cell saves nothing of its own.
+        expect(yield* run(cells, unsaved)).toMatchObject({ isFailure: true })
+        // The predecessor moves on. A restart restores the copy taken at the
+        // first start, not the predecessor's newer namespace.
+        yield* saveForPredecessor(["changed"])
+        const restarted = yield* run(yield* open, copied)
+        expect(restarted.result).toMatchObject({
+          display: "alpha",
+          restored: { restored: ["notes"], omitted: [] },
+        })
+        expect(restarted.result).not.toHaveProperty("restored.previousSession")
+        // A reset whose cell fails still leaves an empty namespace: a restart
+        // neither restores the old values nor inherits the predecessor's.
+        const reopened = yield* open
+        expect(yield* run(reopened, wipe)).toMatchObject({ isFailure: true })
+        const fresh = yield* run(yield* open, gone)
+        expect(fresh.result).toMatchObject({ display: "undefined" })
+        expect(fresh.result).not.toHaveProperty("restored")
       }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
     15000,
   )
@@ -3627,6 +3721,155 @@ describe("child cell", () => {
         expect(childResults[0]).toMatchObject({ isFailure: false, result: { display: "2" } })
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
     20000,
+  )
+})
+
+// ── thread namespace ────────────────────────────────────────────────────────
+
+describe("thread namespace", () => {
+  it.scopedLive(
+    "a handoff session starts with its predecessor's namespace; a delegate child starts empty",
+    () =>
+      Effect.gen(function* () {
+        // Each branch runs its own script, chosen by its first user text: the
+        // woken parent turn and the child turn never race for one script.
+        const firstText = (prompt: Prompt.Prompt) =>
+          prompt.content.flatMap((message) => {
+            if (message.role !== "user") return []
+            return message.content.flatMap((part) => {
+              if (part.type !== "text") return []
+              return [part.text]
+            })
+          })[0] ?? ""
+        const step = <A>(parts: ReadonlyArray<A>) => Effect.succeed(Stream.fromIterable(parts))
+        const cell = (code: string) =>
+          step([toolCallPart("cell", { code }), finishPart({ finishReason: "tool-calls" })])
+        const reply = (text: string) =>
+          step([textDeltaPart(text), finishPart({ finishReason: "stop" })])
+        const scripts: ReadonlyArray<
+          readonly [string, ReadonlyArray<() => ReturnType<typeof reply>>]
+        > = [
+          [
+            "scratch A",
+            [
+              () => cell("const notes = ['alpha']; notes.length"),
+              () =>
+                cell(
+                  "const h = await tools.delegate.start({ todo: 'child-probe' }); typeof h.requestId",
+                ),
+              () => reply("A started"),
+              () => reply("A woke"),
+            ],
+          ],
+          ["child-probe", [() => cell("typeof notes"), () => reply("child done")]],
+          ["scratch B", [() => cell("notes.push('beta'); notes.join(',')"), () => reply("B done")]],
+          ["scratch C", [() => cell("notes.join(',')"), () => reply("C done")]],
+        ]
+        const calls = new Map<string, number>()
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          const text = firstText(options.prompt)
+          const script = scripts.find(([key]) => text.endsWith(key))
+          if (Predicate.isUndefined(script)) return reply(`no script for ${text}`)
+          const index = calls.get(script[0]) ?? 0
+          calls.set(script[0], index + 1)
+          const next = script[1][index] ?? (() => reply(`${script[0]} extra`))
+          return next()
+        })
+        const fixture = defineExtension({
+          id: "cell-thread-namespace-fixture",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+            yield* host.register("tool", CellTool)
+          }),
+        })
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          providerLayer,
+          agents: [],
+          extensionInputs: [
+            {
+              ...fixture,
+              artifactIdentity: LoadedArtifactIdentity.make("cell-thread-namespace-source"),
+            },
+            {
+              ...DelegateExtension,
+              artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
+            },
+          ],
+          branchTools: CellBranchTools,
+        })
+        const cellResults = (branch: BranchId) =>
+          client.message
+            .list({ branchId: branch })
+            .pipe(
+              Effect.map((messages) =>
+                messages
+                  .flatMap((message) => message.parts)
+                  .filter(
+                    (part): part is Prompt.ToolResultPart =>
+                      part.type === "tool-result" && part.name === "cell",
+                  ),
+              ),
+            )
+        const replied = (branch: BranchId, text: string) =>
+          waitFor(
+            client.message.list({ branchId: branch }),
+            (items) =>
+              items.some(
+                (item) => item.role === "assistant" && messagePartsText(item.parts) === text,
+              ),
+            12_000,
+            `reply ${text}`,
+          )
+
+        yield* client.message.send({ sessionId, branchId, content: "scratch A" })
+        yield* replied(branchId, "A woke")
+        // A delegate child is side work: it does not join the thread, so its
+        // cell starts empty.
+        const child = (yield* client.session.list()).find(
+          (session) => session.parentSessionId === sessionId,
+        )
+        if (Predicate.isUndefined(child?.activeBranchId)) {
+          return yield* Effect.die("Missing child session")
+        }
+        const childResults = yield* cellResults(child.activeBranchId)
+        expect(childResults).toMatchObject([{ isFailure: false, result: { display: "undefined" } }])
+        expect(childResults[0]?.result).not.toHaveProperty("restored")
+
+        // A handoff continues the thread: its first cell reads A's notes, and
+        // the report names A as the session they came from.
+        const handoff = { parentSessionId: sessionId, parentBranchId: branchId }
+        const b = yield* client.session.create({ ...handoff, continueThread: true })
+        yield* client.message.send({
+          sessionId: b.sessionId,
+          branchId: b.branchId,
+          content: "scratch B",
+        })
+        yield* replied(b.branchId, "B done")
+        const [bResult] = yield* cellResults(b.branchId)
+        expect(bResult).toMatchObject({
+          isFailure: false,
+          result: { display: "alpha,beta", restored: { previousSession: sessionId } },
+        })
+        expect(bResult?.result).toHaveProperty(
+          "restored.restored",
+          expect.arrayContaining(["notes"]),
+        )
+
+        // B's write went to its own namespace: a second handoff from A still
+        // reads A's saved notes.
+        const c = yield* client.session.create({ ...handoff, continueThread: true })
+        yield* client.message.send({
+          sessionId: c.sessionId,
+          branchId: c.branchId,
+          content: "scratch C",
+        })
+        yield* replied(c.branchId, "C done")
+        expect(yield* cellResults(c.branchId)).toMatchObject([
+          { isFailure: false, result: { display: "alpha" } },
+        ])
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30000,
   )
 })
 
