@@ -40,6 +40,7 @@ import {
   buildServerRoutes,
   createDependencies,
   BunPlatformLive,
+  ModelResolver,
   ScriptedLanguageModel,
   StateLocation,
 } from "@gent/core/host"
@@ -1042,7 +1043,9 @@ const buildOwnedServer = (
         }),
         extensions: options.extensions ?? BuiltinExtensions,
         branchTools: options.branchTools ?? CellBranchTools,
-        languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
+        modelResolverOverride: Option.getOrUndefined(
+          Option.map(languageModelLayer, ModelResolver.fromLanguageModel),
+        ),
       }).pipe(Layer.provide(observability)),
       scope,
     ).pipe(

@@ -142,7 +142,6 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http"
-import type { LanguageModel } from "effect/unstable/ai"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { PromptSection } from "../domain/capability.js"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
@@ -1642,9 +1641,9 @@ interface DependenciesConfig {
   state: StateLocation
   /** A failed extension fails the profile build. Test roots set it; production leaves one broken extension out and runs. */
   failOnExtensionFailure: boolean
-  /** Language model layer override. When set, replaces the auth-backed live resolver.
+  /** Model resolver override. When set, replaces the auth-backed live resolver.
    *  Must be a fully-provided layer (no requirements, no errors). */
-  languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>
+  modelResolverOverride?: Layer.Layer<ModelResolver, never, never>
   /** Extensions to load. Composition roots pass this in. */
   extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /**
@@ -1693,9 +1692,9 @@ const makeModelResolverLayer = <A, E, R>(
   config: DependenciesConfig,
   authDeps: Layer.Layer<A, E, R>,
 ) =>
-  Option.match(Option.fromUndefinedOr(config.languageModelLayerOverride), {
+  Option.match(Option.fromUndefinedOr(config.modelResolverOverride), {
     onNone: () => Layer.provide(ModelResolver.Live, authDeps),
-    onSome: ModelResolver.fromLanguageModel,
+    onSome: (override) => override,
   })
 
 export const createDependencies = (config: DependenciesConfig) => {

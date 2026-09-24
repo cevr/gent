@@ -116,7 +116,7 @@ import {
   type ProviderResolution,
 } from "../../src/domain/driver"
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
-import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
+import { ModelRegistry } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
@@ -4604,7 +4604,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     storageLayer,
     clusterRunnerLayer,
     providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
+    LanguageModelLayers.resolver(providerLayer),
     eventStoreLayer,
     recorderLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),

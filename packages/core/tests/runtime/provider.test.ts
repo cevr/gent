@@ -1308,7 +1308,7 @@ describe("Provider model resolution", () => {
     }).pipe(
       Effect.provide(
         Layer.merge(
-          ModelResolver.fromLanguageModel(LanguageModelLayers.failing),
+          LanguageModelLayers.resolver(LanguageModelLayers.failing),
           ExtensionRegistry.Test(),
         ),
       ),

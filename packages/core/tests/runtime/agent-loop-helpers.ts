@@ -14,7 +14,7 @@ import { AgentDefinition, AgentName, type Model, ModelId } from "../../src/domai
 import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
 import {
   ModelRegistry,
-  ModelResolver,
+  type ModelResolver,
   finishPart,
   type LanguageModelStreamPart,
 } from "../../src/runtime/provider"
@@ -271,7 +271,7 @@ type ActorTestModel =
 
 const actorTestModelLayer = (model: ActorTestModel) => {
   if ("resolver" in model) return model.resolver
-  return Layer.merge(model.provider, ModelResolver.fromLanguageModel(model.provider))
+  return Layer.merge(model.provider, LanguageModelLayers.resolver(model.provider))
 }
 
 /**

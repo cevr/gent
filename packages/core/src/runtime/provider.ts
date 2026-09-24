@@ -678,14 +678,6 @@ export interface ResolveModelRequest {
   readonly driverId?: string
 }
 
-export const CurrentResolveModelAssertion = Context.Reference<
-  // oxlint-disable-next-line effect/noNullish -- The optional assertion is test-only instrumentation at this service boundary.
-  ((request: ResolveModelRequest) => Effect.Effect<void, ProviderError>) | undefined
->("@gent/core/src/runtime/provider/CurrentResolveModelAssertion", {
-  // oxlint-disable-next-line effect/noNullish -- The optional assertion is test-only instrumentation.
-  defaultValue: () => undefined,
-})
-
 interface ModelResolverService {
   readonly resolve: (
     request: ResolveModelRequest,
@@ -772,14 +764,7 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
       ModelResolver,
       Effect.gen(function* () {
         const model = yield* LanguageModel.LanguageModel
-        const assertRequest = yield* CurrentResolveModelAssertion
-        return ModelResolver.of({
-          resolve: (request) =>
-            Effect.gen(function* () {
-              if (!Predicate.isUndefined(assertRequest)) yield* assertRequest(request)
-              return model
-            }),
-        })
+        return ModelResolver.of({ resolve: () => Effect.succeed(model) })
       }),
     ).pipe(Layer.provide(layer))
 

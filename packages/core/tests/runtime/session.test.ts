@@ -40,7 +40,6 @@ import {
   textDeltaPart,
   toolCallPart,
   ModelRegistry,
-  ModelResolver,
   TEST_MODEL_CONTEXT_LIMIT_TOKENS,
 } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
@@ -139,7 +138,7 @@ const makeRuntimeLayer = (
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
+    LanguageModelLayers.resolver(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     eventStoreLayer,
     recorderLayer,
@@ -175,7 +174,7 @@ const makeLiveToolRuntimeLayer = (
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
+    LanguageModelLayers.resolver(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     eventStoreLayer,
     recorderLayer,
