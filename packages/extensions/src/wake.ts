@@ -332,16 +332,13 @@ const noticeSections = Effect.fn("WakeTool.notices")(function* () {
 
 /**
  * Drops the notices an answered turn read: those that fired before it
- * started, and every `blocked` one, which the turn's own projection made and
- * showed at once. A later fire shows again next turn. Nothing dropped leaves
- * the file unwritten.
+ * started. A later one shows again next turn: a fire during the turn, or a
+ * `blocked` notice from a `loopOpen` re-arm that ran beside the turn (the
+ * hooks do not hold turns back). Nothing dropped leaves the file unwritten.
  */
 const clearReadNotices = Effect.fn("WakeTool.clearNotices")(function* (turnStartedAt: number) {
   return yield* store.modify((current: ReadonlyArray<WakeEntry>) => {
-    const kept = current.filter(
-      (entry) =>
-        entry._tag !== "notice" || (entry.outcome !== "blocked" && entry.firedAt > turnStartedAt),
-    )
+    const kept = current.filter((entry) => entry._tag !== "notice" || entry.firedAt > turnStartedAt)
     const cleared = current.length - kept.length
     if (cleared === 0) return Effect.succeed({ next: current, result: 0 })
     return Effect.succeed({ next: kept, result: cleared })

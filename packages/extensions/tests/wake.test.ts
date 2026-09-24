@@ -852,6 +852,15 @@ describe("notices", () => {
               content: "Alarm earlier fired. stand up",
               note: "stand up",
             },
+            // A re-arm beside the turn's first step blocked this one after the turn started.
+            {
+              _tag: "notice",
+              wakeId: "late-blocked",
+              outcome: "blocked",
+              firedAt: Number.MAX_SAFE_INTEGER,
+              content: "Monitor late-blocked was not re-armed. check",
+              note: "check",
+            },
             { _tag: "alarm", wakeId: "later", dueAt: Number.MAX_SAFE_INTEGER, note: "much later" },
           ]),
         )
@@ -907,8 +916,9 @@ describe("notices", () => {
         const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
           yield* fs.readFileString(file),
         )
-        // The turn read the notice and answered, so it is gone; the alarm row stays.
-        expect(stored.map((entry) => entry.wakeId)).toEqual(["later"])
+        // The turn read the earlier notice and answered, so it is gone; the
+        // alarm row stays, and so does the notice made after the turn started.
+        expect(stored.map((entry) => entry.wakeId)).toEqual(["late-blocked", "later"])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
     10_000,
   )
@@ -963,6 +973,15 @@ describe("notices", () => {
                   ),
                 ),
               )
+          // Opening the loop re-arms, and the re-arm blocks the monitor. The
+          // hooks run beside turns, so the test waits for the notice.
+          yield* client.session.getSnapshot({ sessionId, branchId })
+          yield* waitFor(
+            fs.readFileString(file),
+            (text) => text.includes("never approved"),
+            5_000,
+            "the re-arm blocked the monitor",
+          )
           yield* answer("I'm back", "reply 1")
           expect(systemPrompts[0]).toContain("never approved")
           const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(

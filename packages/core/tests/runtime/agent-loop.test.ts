@@ -2952,7 +2952,7 @@ const hasAssistantText = (messages: ReadonlyArray<Message>, text: string) =>
 
 describe("loop open hooks", () => {
   it.scopedLive(
-    "a loop rebuilt after a restart runs its loopOpen hooks once, before any turn",
+    "a loop rebuilt after a restart runs its loopOpen hooks once, and a turn does not run them again",
     () =>
       Effect.gen(function* () {
         const tempDir = yield* makeTempDirectoryScoped("gent-loop-open-")
