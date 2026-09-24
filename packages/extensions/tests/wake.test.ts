@@ -55,6 +55,7 @@ import {
   WakeRpc,
   WakeExtension,
   WakeTool,
+  ShownWakeNotices,
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
 import type { LanguageModel } from "effect/unstable/ai"
@@ -64,6 +65,7 @@ import {
   RequestId,
   ExtensionContext,
   type ExtensionContextService,
+  makeShownNotices,
 } from "@gent/core/extensions/api"
 
 /**
@@ -771,6 +773,95 @@ describe("wake.list", () => {
   )
 })
 
+/**
+ * The wake extension's projection and turn-end hooks over one branch file,
+ * run the way a turn runs them. The branch resource failed, so nothing can
+ * schedule a stored alarm.
+ */
+const wakeTurnHooks = (home: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const file = `${home}/.gent/wakes/${branchId}.json`
+    yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
+    const contributions = yield* collectTestContributions(WakeExtension.setup)
+    const hooks = contributions.hooks ?? []
+    const projection = Option.getOrThrow(
+      Option.fromUndefinedOr(
+        hooks.find(
+          (slot): slot is Extract<typeof slot, { readonly kind: "turnProjection" }> =>
+            slot.kind === "turnProjection",
+        ),
+      ),
+    )
+    const after = Option.getOrThrow(
+      Option.fromUndefinedOr(
+        hooks.find(
+          (slot): slot is Extract<typeof slot, { readonly kind: "turnAfter" }> =>
+            slot.kind === "turnAfter",
+        ),
+      ),
+    )
+    const failedAlarms = Layer.succeed(
+      WakeAlarms,
+      WakeAlarms.of({
+        schedule: () => Effect.die("the branch resource failed"),
+        cancel: () => Effect.succeed(false),
+        pending: Effect.succeed([]),
+      }),
+    )
+    const shownNotices = Layer.effect(ShownWakeNotices, makeShownNotices)
+    const turnLayer = Layer.merge(failedAlarms, shownNotices)
+    const ctx = testLeafContext({
+      ...contextWith(home, yield* Ref.make<ReadonlyArray<string>>([])),
+      cwd: home,
+    })
+    const services = yield* Layer.build(turnLayer)
+    const decode = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))
+    return {
+      write: (entries: ReadonlyArray<WakeEntry>) => fs.writeFileString(file, encodeAlarms(entries)),
+      stored: Effect.flatMap(fs.readFileString(file), decode),
+      /** One step's projection: the prompt text the wake sections add. */
+      project: projection.hook.handler({ agent: builtinAgent }).pipe(
+        Effect.map((projected) =>
+          (projected.promptSections ?? []).map((section) => section.content).join("\n"),
+        ),
+        Effect.provideService(ExtensionContext, ctx),
+        Effect.provideContext(services),
+      ),
+      /** The turn's end; an answered turn unless `ending` says otherwise. */
+      end: (
+        ending: Partial<{
+          readonly interrupted: boolean
+          readonly streamFailed: boolean
+          readonly unanswered: boolean
+        }>,
+      ) =>
+        after.hook
+          .handler({
+            sessionId: SessionId.make("wake-session"),
+            branchId,
+            messageId: MessageId.make("wake-message"),
+            durationMs: 10,
+            agentName: builtinAgent.name,
+            interrupted: false,
+            streamFailed: false,
+            unanswered: false,
+            ...ending,
+            usage: {
+              known: {
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+                costUsd: Option.none(),
+              },
+              complete: true,
+            },
+          })
+          .pipe(Effect.provideService(ExtensionContext, ctx), Effect.provideContext(services)),
+    }
+  })
+
 describe("notices", () => {
   it.live(
     "a notice stays in every step's prompt and survives an interrupted turn; an answered turn clears it",
@@ -910,100 +1001,67 @@ describe("notices", () => {
   )
 
   it.scopedLive(
-    "a failed branch resource still shows the notices, so the answered turn clears only what it read",
+    "a failed branch resource still shows the notices, and an answered turn clears only what it showed",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem
         const home = yield* makeTempDirectoryScoped("wake-rearm-failed-")
-        const file = `${home}/.gent/wakes/${branchId}.json`
-        yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
-        yield* fs.writeFileString(
-          file,
-          encodeAlarms([
-            {
-              _tag: "notice",
-              wakeId: "earlier",
-              outcome: "fired",
-              firedAt: 1_000,
-              content: "Alarm earlier fired. stand up",
-              note: "stand up",
-            },
-            // A re-arm beside the turn's first step blocked this one after the turn started.
-            {
-              _tag: "notice",
-              wakeId: "late-blocked",
-              outcome: "blocked",
-              firedAt: Number.MAX_SAFE_INTEGER,
-              content: "Monitor late-blocked was not re-armed. check",
-              note: "check",
-            },
-            { _tag: "alarm", wakeId: "later", dueAt: Number.MAX_SAFE_INTEGER, note: "much later" },
-          ]),
-        )
-        const contributions = yield* collectTestContributions(WakeExtension.setup)
-        const hooks = contributions.hooks ?? []
-        const projection = Option.getOrThrow(
-          Option.fromUndefinedOr(
-            hooks.find(
-              (slot): slot is Extract<typeof slot, { readonly kind: "turnProjection" }> =>
-                slot.kind === "turnProjection",
-            ),
-          ),
-        )
-        const after = Option.getOrThrow(
-          Option.fromUndefinedOr(
-            hooks.find(
-              (slot): slot is Extract<typeof slot, { readonly kind: "turnAfter" }> =>
-                slot.kind === "turnAfter",
-            ),
-          ),
-        )
-        // The branch resource failed, so the re-arm cannot schedule the stored alarm.
-        const failedAlarms = Layer.succeed(
-          WakeAlarms,
-          WakeAlarms.of({
-            schedule: () => Effect.die("the branch resource failed"),
-            cancel: () => Effect.succeed(false),
-            pending: Effect.succeed([]),
-          }),
-        )
-        const ctx = testLeafContext({
-          ...contextWith(home, yield* Ref.make<ReadonlyArray<string>>([])),
-          cwd: home,
-        })
-        const projected = yield* projection.hook
-          .handler({ agent: builtinAgent })
-          .pipe(Effect.provideService(ExtensionContext, ctx), Effect.provide(failedAlarms))
-        const shown = (projected.promptSections ?? []).map((section) => section.content)
-        expect(shown.join("\n")).toContain("stand up")
-        yield* after.hook
-          .handler({
-            sessionId: SessionId.make("wake-session"),
-            branchId,
-            messageId: MessageId.make("wake-message"),
-            durationMs: 10,
-            agentName: builtinAgent.name,
-            interrupted: false,
-            streamFailed: false,
-            unanswered: false,
-            usage: {
-              known: {
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
-                costUsd: Option.none(),
-              },
-              complete: true,
-            },
-          })
-          .pipe(Effect.provideService(ExtensionContext, ctx), Effect.provide(failedAlarms))
-        const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
-          yield* fs.readFileString(file),
-        )
+        const turn = yield* wakeTurnHooks(home)
+        yield* turn.write([
+          {
+            _tag: "notice",
+            wakeId: "earlier",
+            outcome: "fired",
+            firedAt: 1_000,
+            content: "Alarm earlier fired. stand up",
+            note: "stand up",
+          },
+          { _tag: "alarm", wakeId: "later", dueAt: Number.MAX_SAFE_INTEGER, note: "much later" },
+        ])
+        expect(yield* turn.project).toContain("stand up")
+        // A fire the step did not read: its write landed after the projection,
+        // though it fired before the turn started.
+        yield* turn.write([
+          ...(yield* turn.stored),
+          {
+            _tag: "notice",
+            wakeId: "unread",
+            outcome: "fired",
+            firedAt: 1_000,
+            content: "Alarm unread fired. check CI",
+            note: "check CI",
+          },
+        ])
+        yield* turn.end({})
         // The turn read the earlier notice and answered, so it is gone; the
-        // alarm row stays, and so does the notice made after the turn started.
-        expect(stored.map((entry) => entry.wakeId)).toEqual(["late-blocked", "later"])
+        // alarm row stays, and so does the notice the turn never showed.
+        expect((yield* turn.stored).map((entry) => entry.wakeId)).toEqual(["later", "unread"])
+      }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
+    10_000,
+  )
+
+  it.scopedLive(
+    "a turn that never answered keeps the notices it showed",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("wake-unanswered-")
+        const turn = yield* wakeTurnHooks(home)
+        yield* turn.write([
+          {
+            _tag: "notice",
+            wakeId: "earlier",
+            outcome: "fired",
+            firedAt: 1_000,
+            content: "Alarm earlier fired. stand up",
+            note: "stand up",
+          },
+        ])
+        expect(yield* turn.project).toContain("stand up")
+        yield* turn.end({ unanswered: true })
+        expect((yield* turn.stored).map((entry) => entry.wakeId)).toEqual(["earlier"])
+        // The next turn shows it again, answers, and clears it.
+        expect(yield* turn.project).toContain("stand up")
+        yield* turn.end({})
+        expect(yield* turn.stored).toEqual([])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
     10_000,
   )
