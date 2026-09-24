@@ -3051,13 +3051,17 @@ const gitRuns = ({ words }: Invocation): SegmentRuns => {
  * `alias w='rm -rf x'`: the value of each `name=value` runs where the name
  * is a command word, once the shell expands aliases (`shopt -s
  * expand_aliases`). As with a git alias, it is read where it is defined.
+ * The shell appends the words typed after the name to the value, so the
+ * value is read as `value "$@"`: those words are run-time words, and
+ * `alias w=rm` then `w -rf x` asks. A derived word has no insertion point,
+ * so no git trailer is written into an alias value.
  */
 const shellAliasRuns = ({ words }: Invocation): SegmentRuns =>
   scriptRuns(
     words.slice(1).flatMap((word) => {
       const equals = word.text.indexOf("=")
       if (equals <= 0 || word.text.startsWith("-")) return []
-      return [wordFrom(word, equals + 1)]
+      return [derivedWord(`${word.text.slice(equals + 1)} "$@"`, word.dynamic)]
     }),
   )
 

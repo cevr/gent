@@ -749,10 +749,27 @@ describe("classifyBashCommand", () => {
       `builtin alias w='rm -rf ${x}'`,
       'alias w="$CMD"',
       `hash -p /bin/rm ls; ls -rf ${x}`,
+      // The words after an alias where it is used follow its value.
+      `shopt -s expand_aliases\nalias w=rm\nw -rf ${x}`,
+      "shopt -s expand_aliases\nalias w='git reset'\nw --hard",
+      "shopt -s expand_aliases\nalias g=git\ng reset --hard",
+      "shopt -s expand_aliases\nalias p=psql\np -c 'UPDATE t SET a=1'",
+      // An indexed assignment to the alias or command table asks.
+      `shopt -s expand_aliases\nBASH_ALIASES[w]='rm -rf ${x}'\nw`,
+      `BASH_CMDS[ls]=/bin/rm; ls -rf ${x}`,
+      `declare -A BASH_ALIASES=([w]='rm -rf ${x}')`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
-    for (const command of ["alias ll='ls -la'", "alias", "alias -p", "hash", "hash -r"]) {
+    for (const command of [
+      "alias ll='ls -la'",
+      "alias gs='git status'",
+      `shopt -s expand_aliases\nalias ll='ls -la'\nll ${x}`,
+      "alias",
+      "alias -p",
+      "hash",
+      "hash -r",
+    ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
   })
