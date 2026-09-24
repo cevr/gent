@@ -24,7 +24,9 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, Exit, FileSystem, Option, Path, Schema } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import {
+  labeledDiagnostics,
   lintWithoutOverrideOffs,
+  probeConfig,
   runOxlint,
   type Diagnostic,
   type OxlintReport,
@@ -440,24 +442,80 @@ effectDescribe("custom lint rules", () => {
     () =>
       Effect.gen(function* () {
         const { configText, config, run } = yield* lintWithoutOverrideOffs()
-        const diagnostics = run.report.diagnostics.flatMap((diagnostic) =>
-          Option.toArray(
-            Option.all({
-              file: Option.fromNullishOr(diagnostic.filename),
-              code: Option.fromNullishOr(diagnostic.code),
-            }),
-          ),
-        )
-        // A run that lints nothing would make every "off" look unneeded.
+        const { labeled, unlabeled } = labeledDiagnostics(run.report)
+        // A run that lints nothing, or a report whose diagnostics name no rule,
+        // would make every "off" look unneeded.
         expect(run.report.number_of_files, run.stderr).toBeGreaterThan(100)
+        expect(unlabeled, "diagnostics with no file or no rule id").toEqual([])
         expect(
-          findUnneededOverrideOffs(".oxlintrc.json", configText, config, diagnostics).map(
+          findUnneededOverrideOffs(".oxlintrc.json", configText, config, labeled).map(
             (finding) => `${finding.file}:${finding.line}: ${finding.message}`,
           ),
         ).toEqual([])
-      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+      }).pipe(Effect.scoped, Effect.timeout("60 seconds"), Effect.provide(BunServices.layer)),
     70_000,
   )
+})
+
+describe("the override probe", () => {
+  const diagnostic = (fields: Partial<Diagnostic>): Diagnostic => ({ message: "m", ...fields })
+  const report = (diagnostics: ReadonlyArray<Diagnostic>): OxlintReport => ({
+    diagnostics,
+    number_of_files: 1,
+  })
+
+  test("a diagnostic is labeled by its code, or by its rule id when it has no code", () => {
+    const { labeled, unlabeled } = labeledDiagnostics(
+      report([
+        diagnostic({ filename: "a.ts", code: "effect(noAs)" }),
+        diagnostic({ filename: "b.ts", rule_id: "effect(noGlobals)" }),
+      ]),
+    )
+    expect(labeled).toEqual([
+      { file: "a.ts", code: "effect(noAs)" },
+      { file: "b.ts", code: "effect(noGlobals)" },
+    ])
+    expect(unlabeled).toEqual([])
+  })
+
+  test("a diagnostic with no rule or no file is reported, not dropped", () => {
+    const { labeled, unlabeled } = labeledDiagnostics(
+      report([diagnostic({ filename: "a.ts" }), diagnostic({ code: "effect(noAs)" })]),
+    )
+    expect(labeled).toEqual([])
+    expect(unlabeled).toHaveLength(2)
+  })
+
+  test("the copy keeps every override key and removes only the offs", () => {
+    const copy = probeConfig(
+      {
+        jsPlugins: ["./plugin.ts", "effect-plugin"],
+        overrides: [
+          {
+            files: ["tests/**"],
+            rules: { "effect/noAs": "off", "effect/noGlobals": "error" },
+            env: { node: true },
+            plugins: ["node"],
+          },
+        ],
+        categories: { correctness: "error" },
+      },
+      "/repo",
+      (plugin) => `/resolved/${plugin}`,
+    )
+    expect(copy).toEqual({
+      jsPlugins: ["/repo/plugin.ts", "/resolved/effect-plugin"],
+      overrides: [
+        {
+          files: ["/repo/tests/**"],
+          rules: { "effect/noGlobals": "error" },
+          env: { node: true },
+          plugins: ["node"],
+        },
+      ],
+      categories: { correctness: "error" },
+    })
+  })
 })
 
 // ── what is a test ──────────────────────────────────────────────────────────

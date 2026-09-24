@@ -1,5 +1,5 @@
-import { Effect, FileSystem, Path, Schema } from "effect"
-import { overrideOffs } from "./guards"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
+import { type LintDiagnostic, overrideOffs } from "./guards"
 
 const DiagnosticSchema = Schema.Struct({
   code: Schema.optional(Schema.String),
@@ -32,9 +32,6 @@ const REPO_ROOT = Bun.fileURLToPath(new URL("../../..", import.meta.url)).replac
 
 /** The bound on one oxlint run over a fixture set; about a second on an idle machine. */
 const OXLINT_RUN_BOUND_MS = 20_000
-
-/** The bound on one type-aware oxlint run over the whole tree; about 6 s on an idle machine. */
-const REPO_RUN_BOUND_MS = 60_000
 
 const decodeOxlintReport = Schema.decodeUnknownEffect(Schema.fromJsonString(OxlintReportSchema))
 
@@ -84,22 +81,119 @@ export const runOxlint = (fixtureFiles: ReadonlyArray<string>) =>
     `${fixtureFiles.length} fixture files`,
   )
 
-/** The parts of the root config the copy rewrites. */
-const ProbedConfigSchema = Schema.Struct({
-  jsPlugins: Schema.Array(Schema.String),
-  overrides: Schema.Array(
-    Schema.Struct({
-      files: Schema.Array(Schema.String),
-      rules: Schema.Record(Schema.String, Schema.Unknown),
+const UnknownRecord = Schema.Record(Schema.String, Schema.Unknown)
+
+/**
+ * The parts of the root config the copy rewrites. Every other key, at the
+ * root and in each override, passes through unchanged, so the copy lints
+ * exactly as the real config does apart from the removed offs.
+ */
+const ProbedConfigSchema = Schema.StructWithRest(
+  Schema.Struct({
+    jsPlugins: Schema.Array(Schema.String),
+    overrides: Schema.Array(
+      Schema.StructWithRest(
+        Schema.Struct({
+          files: Schema.Array(Schema.String),
+          rules: UnknownRecord,
+        }),
+        [UnknownRecord],
+      ),
+    ),
+  }),
+  [UnknownRecord],
+)
+type ProbedConfig = typeof ProbedConfigSchema.Type
+
+/**
+ * The root config minus every override "off", for a copy that lives outside
+ * the repo: relative plugin paths and override globs become absolute under
+ * `root`, and a package plugin is resolved from it.
+ */
+export const probeConfig = (
+  config: ProbedConfig,
+  root: string,
+  resolvePlugin: (plugin: string) => string,
+): ProbedConfig => {
+  const offs = overrideOffs(config)
+  return {
+    ...config,
+    jsPlugins: config.jsPlugins.map((plugin) => {
+      if (plugin.startsWith("./")) return `${root}/${plugin.slice(2)}`
+      return resolvePlugin(plugin)
     }),
-  ),
+    overrides: config.overrides.map((override, index) => ({
+      ...override,
+      files: override.files.map((glob) => `${root}/${glob}`),
+      rules: Object.fromEntries(
+        Object.entries(override.rules).filter(([rule]) => !(offs[index] ?? []).includes(rule)),
+      ),
+    })),
+  }
+}
+
+/**
+ * Each diagnostic as the file it names and its rule, read from `code` or,
+ * when a report carries only that, `rule_id`. A diagnostic missing either is
+ * returned apart: dropping it would make the "off" it belongs to look unneeded.
+ */
+export const labeledDiagnostics = (report: OxlintReport) => {
+  const labeled: Array<LintDiagnostic> = []
+  const unlabeled: Array<Diagnostic> = []
+  for (const diagnostic of report.diagnostics) {
+    const label = Option.all({
+      file: Option.fromNullishOr(diagnostic.filename),
+      code: Option.firstSomeOf([
+        Option.fromNullishOr(diagnostic.code),
+        Option.fromNullishOr(diagnostic.rule_id),
+      ]),
+    })
+    if (Option.isSome(label)) labeled.push(label.value)
+    else unlabeled.push(diagnostic)
+  }
+  return { labeled, unlabeled }
+}
+
+/** One oxlint process whose wait an interruption stops: the process is killed on release. */
+const spawnOxlintInterruptibly = Effect.fn("Tooling.spawnOxlintInterruptibly")(function* (
+  args: ReadonlyArray<string>,
+  cwd: string,
+) {
+  const { stdout, stderr, exitCode } = yield* Effect.acquireUseRelease(
+    Effect.sync(() =>
+      Bun.spawn(["bunx", "oxlint", "--format=json", ...args], {
+        cwd,
+        stdout: "pipe",
+        stderr: "pipe",
+      }),
+    ),
+    (proc) =>
+      Effect.all(
+        {
+          stdout: Effect.promise(() => new Response(proc.stdout).text()),
+          stderr: Effect.promise(() => new Response(proc.stderr).text()),
+          exitCode: Effect.promise(() => proc.exited),
+        },
+        { concurrency: "unbounded" },
+      ),
+    (proc) => Effect.sync(() => proc.kill()),
+  )
+  const report = yield* decodeOxlintReport(stdout).pipe(
+    Effect.mapError(
+      (error) =>
+        new OxlintRunError({
+          message: `oxlint exited ${exitCode} without a JSON report: ${error.message}\nstderr:\n${stderr}`,
+        }),
+    ),
+  )
+  return { report, exitCode, stderr }
 })
 
 /**
- * Lint the whole tree with the root config minus every override "off".
- * The copy lives in a scoped temporary directory, so its relative plugin
- * paths and override globs are made absolute. The result is what each "off"
- * would let through; `findUnneededOverrideOffs` reads it.
+ * Lint the whole tree with `probeConfig`'s copy of the root config, from a
+ * scoped temporary directory. The result is what each "off" would let
+ * through; `findUnneededOverrideOffs` reads it. The caller bounds the run
+ * with `Effect.timeout`; the process is killed when it fires.
  */
 export const lintWithoutOverrideOffs = Effect.fn("Tooling.lintWithoutOverrideOffs")(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -107,31 +201,16 @@ export const lintWithoutOverrideOffs = Effect.fn("Tooling.lintWithoutOverrideOff
   const configText = yield* fs.readFileString(path.join(REPO_ROOT, ".oxlintrc.json"))
   const raw: unknown = Bun.JSONC.parse(configText)
   const config = yield* Schema.decodeUnknownEffect(ProbedConfigSchema)(raw)
-  const offs = overrideOffs(config)
-  const variant = {
-    ...(yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Unknown))(raw)),
-    jsPlugins: config.jsPlugins.map((plugin) => {
-      if (plugin.startsWith("./")) return path.join(REPO_ROOT, plugin)
-      return Bun.resolveSync(plugin, REPO_ROOT)
-    }),
-    overrides: config.overrides.map((override, index) => ({
-      files: override.files.map((glob) => path.join(REPO_ROOT, glob)),
-      rules: Object.fromEntries(
-        Object.entries(override.rules).filter(([rule]) => !(offs[index] ?? []).includes(rule)),
-      ),
-    })),
-  }
+  const variant = probeConfig(config, REPO_ROOT, (plugin) => Bun.resolveSync(plugin, REPO_ROOT))
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "gent-override-offs-" })
   const variantPath = path.join(directory, "oxlintrc.json")
   yield* fs.writeFileString(
     variantPath,
     yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(variant),
   )
-  const run = yield* spawnOxlint(
+  const run = yield* spawnOxlintInterruptibly(
     ["--ignore-path=.oxlintignore", "-c", variantPath],
     REPO_ROOT,
-    REPO_RUN_BOUND_MS,
-    "the tree",
   )
   return { configText, config, run }
 })
