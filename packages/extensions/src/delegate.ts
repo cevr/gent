@@ -620,12 +620,15 @@ const settleIfGone = (entry: DelegateEntry) =>
  * not marked sent is re-sent and its receipt still read, a finished child whose
  * completion never landed (the process died between the receipt and the
  * hook) is delivered now, a deleted child settles as interrupted, and a
- * private row is removed with its session, never delivered, and a child with
- * no receipt is re-sent its start so a child the previous process stopped
- * mid-turn resumes. Called from the parent's loop open, its turn, and its
- * listing tools.
+ * private row is removed with its session, never delivered. With `resume`, a
+ * child with no receipt is re-sent its start so a child the previous process
+ * stopped mid-turn resumes. Only the gated reconcile of the parent's loop open
+ * and turns (`reconcileOnce`) resumes; the listing tools read receipts and
+ * never re-send a start that was sent.
  */
-const reconcile = Effect.fn("Delegate.reconcile")(function* () {
+const reconcile = Effect.fn("Delegate.reconcile")(function* (options: {
+  readonly resume: boolean
+}) {
   const ctx = yield* ExtensionContext
   const parent = { sessionId: ctx.sessionId, branchId: ctx.branchId }
   yield* registry.modify((entries) =>
@@ -662,7 +665,7 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
           // previous process stopped. The re-send carries the start's id, so
           // the loop admits nothing new, but it opens the child's loop, and
           // the open resumes the unfinished turn.
-          if (entry.submitted) yield* submitStart(entry)
+          if (entry.submitted && options.resume) yield* submitStart(entry)
           continue
         }
         const { receipt, error } = end.value
@@ -737,7 +740,7 @@ const reconcileOnce = Effect.gen(function* () {
   const key = `${ctx.sessionId}:${ctx.branchId}`
   if (yield* reconciled.has(key)) return
   const generation = yield* reconciled.generation
-  yield* reconcile()
+  yield* reconcile({ resume: true })
   yield* reconciled.add(key, generation)
 })
 
@@ -1106,7 +1109,7 @@ const observationOf = (entry: DelegateEntry) => {
 /** The registry row for a request on this branch, reconciled first. */
 const ownedChild = Effect.fn("Delegate.ownedChild")(function* (requestId: RequestId) {
   const ctx = yield* ExtensionContext
-  yield* reconcile()
+  yield* reconcile({ resume: false })
   const entry = (yield* registry.read()).find((row) => row.requestId === requestId)
   if (Predicate.isUndefined(entry)) {
     return yield* new DelegateError({ message: "No such child on this branch" })
@@ -1216,7 +1219,7 @@ export const ListChildren = tool({
   }),
   output: Schema.Array(ChildAgentRegistryEntry),
   execute: Effect.fn("ListChildren.execute")(function* (params) {
-    yield* reconcile()
+    yield* reconcile({ resume: false })
     const children = (yield* registry.read()).map((entry): ChildAgentRegistryEntry => ({
       requestId: entry.requestId,
       sessionId: entry.sessionId,
