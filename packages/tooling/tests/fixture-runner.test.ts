@@ -1,9 +1,10 @@
 /**
  * Lint fixture verification.
  *
- * For each custom oxlint rule scaffolded in , runs `oxlint` against a
- * positive fixture (must error) and a negative fixture (must pass). Verifies
- * each rule actually fires on the cases its docstring claims.
+ * For each custom oxlint rule in `../src/gent-rules.ts`, runs `oxlint` against
+ * a positive fixture (must error) and a negative fixture (must pass). Verifies
+ * each rule actually fires on the cases its docstring claims. The root config
+ * is checked too: every override "off" must suppress a diagnostic.
  *
  * Fixtures + their dedicated `.oxlintrc.json` live in `../fixtures/`. The
  * fixtures-local config enables every rule under test as `error` so the test
@@ -23,11 +24,13 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, Exit, FileSystem, Option, Path, Schema } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import {
+  lintWithoutOverrideOffs,
   runOxlint,
   type Diagnostic,
   type OxlintReport,
   type OxlintRun,
 } from "../src/fixture-runner"
+import { findUnneededOverrideOffs } from "../src/guards"
 import gentRules, {
   isTest,
   isTestCode,
@@ -430,6 +433,30 @@ effectDescribe("custom lint rules", () => {
 
       expect(oxlintConfig).not.toContain("gent/all-errors-are-tagged")
     }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.live(
+    'every override "off" in the root config suppresses a diagnostic',
+    () =>
+      Effect.gen(function* () {
+        const { configText, config, run } = yield* lintWithoutOverrideOffs()
+        const diagnostics = run.report.diagnostics.flatMap((diagnostic) =>
+          Option.toArray(
+            Option.all({
+              file: Option.fromNullishOr(diagnostic.filename),
+              code: Option.fromNullishOr(diagnostic.code),
+            }),
+          ),
+        )
+        // A run that lints nothing would make every "off" look unneeded.
+        expect(run.report.number_of_files, run.stderr).toBeGreaterThan(100)
+        expect(
+          findUnneededOverrideOffs(".oxlintrc.json", configText, config, diagnostics).map(
+            (finding) => `${finding.file}:${finding.line}: ${finding.message}`,
+          ),
+        ).toEqual([])
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    70_000,
   )
 })
 

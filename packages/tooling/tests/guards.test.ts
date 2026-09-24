@@ -23,6 +23,7 @@ import {
   findUnconsumedExports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
+  findUnneededOverrideOffs,
   findUnusedCatalogEntries,
   findUnusedDependencies,
   findUnusedSuppressionApprovals,
@@ -798,6 +799,73 @@ describe("an override must match a tracked file", () => {
       ["apps/tui/tests/deep/case.test.ts", "apps/tui/src/app.tsx"],
     )
     expect(findings).toEqual([])
+  })
+})
+
+describe('an override "off" must suppress a diagnostic', () => {
+  const configText = [
+    "{",
+    '  "overrides": [',
+    '    { "files": ["apps/tui/scripts/build.ts"],',
+    '      "rules": { "effect/noGlobals": "off", "gent/no-bun-outside-adapter": "off" } },',
+    '    { "files": ["**/tests/**"],',
+    '      "rules": {',
+    '        "typescript/no-explicit-any": "off"',
+    "      } }",
+    "  ]",
+    "}",
+  ].join("\n")
+  const config = {
+    overrides: [
+      {
+        files: ["apps/tui/scripts/build.ts"],
+        rules: { "effect/noGlobals": "off", "gent/no-bun-outside-adapter": "off" },
+      },
+      { files: ["**/tests/**"], rules: { "typescript/no-explicit-any": "off" } },
+    ],
+  }
+  const allHit = [
+    { file: "apps/tui/scripts/build.ts", code: "effect(noGlobals)" },
+    { file: "apps/tui/scripts/build.ts", code: "gent(no-bun-outside-adapter)" },
+    { file: "packages/core/tests/a.test.ts", code: "typescript(no-explicit-any)" },
+  ]
+
+  test("an off whose rule reports in the override's files is silent", () => {
+    expect(findUnneededOverrideOffs(CONFIG, configText, config, allHit)).toEqual([])
+  })
+
+  test("an off with no diagnostic is reported at its rule's line", () => {
+    const findings = findUnneededOverrideOffs(CONFIG, configText, config, allHit.slice(1))
+    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
+      [4, expect.stringContaining("turns off `effect/noGlobals`, which reports nothing")],
+    ])
+  })
+
+  test("a diagnostic in a file outside the override's globs does not count", () => {
+    const findings = findUnneededOverrideOffs(CONFIG, configText, config, [
+      ...allHit.slice(0, 2),
+      { file: "packages/core/src/a.ts", code: "typescript(no-explicit-any)" },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([7])
+  })
+
+  test("a diagnostic another override also turns off belongs to neither", () => {
+    const shared = {
+      overrides: [
+        ...config.overrides,
+        { files: ["packages/core/tests/**"], rules: { "typescript/no-explicit-any": "off" } },
+      ],
+    }
+    const findings = findUnneededOverrideOffs(CONFIG, configText, shared, allHit)
+    expect(findings.map((finding) => finding.message)).toEqual([
+      expect.stringContaining('"**/tests/**" turns off `typescript/no-explicit-any`'),
+      expect.stringContaining('"packages/core/tests/**" turns off `typescript/no-explicit-any`'),
+    ])
+  })
+
+  test("a rule an override sets to a severity is not an off", () => {
+    const enabling = { overrides: [{ files: ["**/tests/**"], rules: { "effect/noAs": "error" } }] }
+    expect(findUnneededOverrideOffs(CONFIG, configText, enabling, [])).toEqual([])
   })
 })
 

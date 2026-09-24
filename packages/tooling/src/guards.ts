@@ -1016,7 +1016,12 @@ const globMatcher = (glob: string): RegExp => {
  */
 export const OxlintConfigSchema = Schema.Struct({
   overrides: Schema.optional(
-    Schema.Array(Schema.Struct({ files: Schema.optional(Schema.Array(Schema.String)) })),
+    Schema.Array(
+      Schema.Struct({
+        files: Schema.optional(Schema.Array(Schema.String)),
+        rules: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+      }),
+    ),
   ),
   /** Rule names only; the severity values are the caller's business. */
   rules: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
@@ -1048,6 +1053,90 @@ export const findUnmatchedOverrideGlobs = (
         file: configFile,
         line: lineOfGlob(configText, glob),
         message: `oxlint override \`files: "${glob}"\` matches no tracked file; delete the override, or fix the glob`,
+      })
+    }
+  }
+  return findings
+}
+
+// ---------------------------------------------------------------------------
+// (a2) An override "off" that suppresses nothing
+// ---------------------------------------------------------------------------
+
+/** One diagnostic of a lint run: the file it names and its `plugin(rule)` code. */
+export interface LintDiagnostic {
+  readonly file: string
+  readonly code: string
+}
+
+/** The code oxlint reports for a configured rule: `effect/noAs` is `effect(noAs)`. */
+const diagnosticCode = (rule: string): string => {
+  const slash = rule.indexOf("/")
+  if (slash === -1) return `eslint(${rule})`
+  return `${rule.slice(0, slash)}(${rule.slice(slash + 1)})`
+}
+
+const isOff = Schema.is(Schema.Literals(["off", 0]))
+
+/** Each rule an override turns off, keyed by the override's index. */
+export const overrideOffs = (config: OxlintConfig): ReadonlyArray<ReadonlyArray<string>> =>
+  (config.overrides ?? []).map((override) =>
+    Object.entries(override.rules ?? {})
+      .filter(([, severity]) => isOff(severity))
+      .map(([rule]) => rule),
+  )
+
+/** The line of `rule`'s key inside the override whose first glob is `glob`. */
+const lineOfOverrideRule = (configText: string, glob: string, rule: string): number => {
+  const lines = configText.split("\n")
+  const start = lineOfGlob(configText, glob) - 1
+  const offset = lines.slice(start).findIndex((line) => line.includes(`"${rule}":`))
+  return start + Math.max(offset, 0) + 1
+}
+
+/**
+ * An override "off" is a suppression: it must hide at least one diagnostic.
+ * `diagnostics` come from a run of the same config with every override "off"
+ * removed. Such a diagnostic belongs to an override when the override's
+ * globs match its file and no other override turns the same rule off for
+ * that file: removing that override alone would bring it back. An "off" that
+ * owns no diagnostic suppresses nothing today, and it would hide the next
+ * real hit without review.
+ */
+export const findUnneededOverrideOffs = (
+  configFile: string,
+  configText: string,
+  config: OxlintConfig,
+  diagnostics: ReadonlyArray<LintDiagnostic>,
+): ReadonlyArray<Finding> => {
+  const overrides = (config.overrides ?? []).map((override, index) => ({
+    globs: override.files ?? [],
+    matchers: (override.files ?? []).map(globMatcher),
+    offs: new Set(overrideOffs(config)[index] ?? []),
+  }))
+  const matches = (matchers: ReadonlyArray<RegExp>, file: string): boolean =>
+    matchers.some((matcher) => matcher.test(file))
+  const findings: Array<Finding> = []
+  for (const [index, override] of overrides.entries()) {
+    for (const rule of override.offs) {
+      const code = diagnosticCode(rule)
+      const owned = diagnostics.some(
+        (diagnostic) =>
+          diagnostic.code === code &&
+          matches(override.matchers, diagnostic.file) &&
+          !overrides.some(
+            (other, otherIndex) =>
+              otherIndex !== index &&
+              other.offs.has(rule) &&
+              matches(other.matchers, diagnostic.file),
+          ),
+      )
+      if (owned) continue
+      const firstGlob = override.globs[0] ?? ""
+      findings.push({
+        file: configFile,
+        line: lineOfOverrideRule(configText, firstGlob, rule),
+        message: `oxlint override for "${firstGlob}" turns off \`${rule}\`, which reports nothing in its files; delete the "off"`,
       })
     }
   }

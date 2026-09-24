@@ -170,17 +170,12 @@
       }
     },
     {
-      // The TUI build is a plain Bun script run by `bun scripts/build.ts`, not
-      // an Effect program; every other rule, the workspace imports included,
-      // still reads it.
+      // The TUI build is an Effect program run by `bun scripts/build.ts`. Only
+      // its `Bun.build` call needs the exemption; every other rule, the
+      // workspace imports included, still reads it.
       "files": ["apps/tui/scripts/build.ts"],
       "rules": {
-        "effect/noAsyncFunction": "off",
-        "effect/noGlobals": "off",
-        "effect/noNodeBuiltinImport": "off",
-        "effect/noTryCatch": "off",
-        "gent/no-bun-outside-adapter": "off",
-        "node/no-process-env": "off"
+        "gent/no-bun-outside-adapter": "off"
       }
     },
     {
@@ -197,12 +192,10 @@
         "effect/noNewError": "off",
         "effect/noNodeBuiltinImport": "off",
         "effect/noNullish": "off",
-        "effect/noRuntimeTypeof": "off",
         "effect/noTernary": "off",
         "effect/noThrowStatement": "off",
         "effect/noTryCatch": "off",
         "effect/noUnknownParameters": "off",
-        "effect/noUnsafeDictionaryType": "off",
         "eslint/no-await-in-loop": "off",
         "gent/no-bun-outside-adapter": "off"
       }
@@ -219,7 +212,6 @@
       "rules": {
         "effect/noInlineProvide": "off",
         "typescript/no-non-null-assertion": "off",
-        "typescript/no-explicit-any": "off",
         "typescript/no-unsafe-type-assertion": "off"
       }
     }
