@@ -524,11 +524,13 @@ const settleIfGone = (entry: DelegateEntry) =>
 
 /**
  * Bring the current branch's registry up to date without a hook: a start
- * whose prompt never reached the child is re-sent, a finished child whose
+ * not marked sent is re-sent and its receipt still read, a finished child whose
  * completion never landed (the process died between the receipt and the
  * hook) is delivered now, a deleted child settles as interrupted, and a
- * private row is removed with its session, never delivered. Called from the
- * parent's turn and its listing tools.
+ * private row is removed with its session, never delivered, and a child with
+ * no receipt is re-sent its start so a child the previous process stopped
+ * mid-turn resumes. Called from the parent's loop open, its turn, and its
+ * listing tools.
  */
 const reconcile = Effect.fn("Delegate.reconcile")(function* () {
   const ctx = yield* ExtensionContext
@@ -549,19 +551,30 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
           next = replaceEntry(next, current)
           continue
         }
+        // The flag does not say whether the child ran: a crash after its
+        // start was admitted but before the flag was saved leaves `false` on
+        // a child that may have finished. So the start is re-sent either way
+        // (a repeat of its id admits nothing new) and the receipt decides.
+        const sent = { ...entry, submitted: true }
         if (!entry.submitted) {
           yield* submitStart(entry)
-          next = replaceEntry(next, { ...entry, submitted: true })
-          continue
+          next = replaceEntry(next, sent)
         }
         const receipt = yield* turnReceipt({
           ...entry,
           messageId: startMessageId(entry.requestId),
         })
-        if (Option.isNone(receipt)) continue
+        if (Option.isNone(receipt)) {
+          // No receipt yet: the child is running, or it was mid-turn when the
+          // previous process stopped. The re-send carries the start's id, so
+          // the loop admits nothing new, but it opens the child's loop, and
+          // the open resumes the unfinished turn.
+          if (entry.submitted) yield* submitStart(entry)
+          continue
+        }
         const delivered = yield* deliverCompletion(
           parent,
-          entry,
+          sent,
           outcomeOf(receipt.value),
           usageOf(Option.fromUndefinedOr(receipt.value.usage)),
         )
@@ -1038,8 +1051,18 @@ export const DelegateExtension = defineExtension({
         ),
       ),
     )
-    // A crash between a child's receipt and its hook leaves an undelivered
-    // entry; the parent's first turn in the new process picks it up.
+    // A crash leaves children mid-turn or an undelivered entry. The parent's
+    // loop open picks both up in the new process, before any turn; the
+    // first turn reconciles again only if that failed.
+    yield* host.on("loopOpen", () =>
+      reconcileOnce.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("delegate.reconcile.failed").pipe(
+            Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+          ),
+        ),
+      ),
+    )
     yield* host.on("turnProjection", ({ agent }) =>
       reconcileOnce.pipe(
         Effect.catchCause((cause) =>

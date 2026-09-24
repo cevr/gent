@@ -291,6 +291,7 @@ interface CompiledExtensionHooks {
   readonly emitTurnAfter: (
     input: TurnAfterInput,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
+  readonly emitLoopOpen: Effect.Effect<void, never, CurrentExtensionHostContext>
 }
 
 interface ExtensionTurnProjection {
@@ -396,6 +397,7 @@ const collectHookSlot = (
     systemPrompt: RegisteredSystemPromptRewrite[]
     turnProjection: HookTurnProjectionSlot[]
     turnAfter: RegisteredHook<TurnAfterInput>[]
+    loopOpen: RegisteredHook<void>[]
   },
 ) => {
   switch (slot.kind) {
@@ -414,6 +416,12 @@ const collectHookSlot = (
         handler: slot.hook.handler,
       })
       return
+    case "loopOpen":
+      slots.loopOpen.push({
+        extensionId: ext.manifest.id,
+        handler: slot.hook.handler,
+      })
+      return
   }
 }
 
@@ -424,10 +432,12 @@ export const compileExtensionHooks = (
   const systemPromptSlots: RegisteredSystemPromptRewrite[] = []
   const turnProjectionSlots: HookTurnProjectionSlot[] = []
   const turnAfterSlots: RegisteredHook<TurnAfterInput>[] = []
+  const loopOpenSlots: RegisteredHook<void>[] = []
   const hookSlots = {
     systemPrompt: systemPromptSlots,
     turnProjection: turnProjectionSlots,
     turnAfter: turnAfterSlots,
+    loopOpen: loopOpenSlots,
   }
 
   for (const ext of sorted) {
@@ -490,6 +500,13 @@ export const compileExtensionHooks = (
       Effect.gen(function* () {
         for (const slot of turnAfterSlots) yield* runHook(input, slot)
       }),
+
+    // Each hook runs on its own: one that never returns holds up no other.
+    // The slots are fixed when the registry compiles, one per registration.
+    emitLoopOpen: Effect.forEach(loopOpenSlots, (slot) => runHook(void 0, slot), {
+      concurrency: Math.max(loopOpenSlots.length, 1),
+      discard: true,
+    }),
   }
 }
 
@@ -2282,35 +2299,43 @@ export class SessionProfileCache extends Context.Service<
             // Finding or building the entry, its lease, and `current` are one
             // step no interrupt can split: an entry stored without its lease
             // and not current would never retire. Only the reads and the
-            // build inside it (`restore`) can be interrupted.
+            // build inside it (`restore`) can be interrupted. The lease's
+            // release joins the caller's scope after the lock is let go: a
+            // scope that already closed (a loop that closed while one of its
+            // fibers resolved) runs the release at once, and the release
+            // takes the lock.
             const { entry, retired } = yield* Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
-                // The config is read under the place lock, so resolves set
-                // `current` in the order they read it: a read from before an
-                // edit cannot put the older profile back.
-                const fresh = yield* restore(configService.getFresh(canonicalCwd))
-                const scan = yield* restore(
-                  scanRuntimeProfileExtensions(inputsFor(canonicalCwd)).pipe(
-                    Effect.provideContext(platformServicesContext),
-                  ),
-                )
-                const list = listKey(
-                  place,
-                  effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
-                  extensionScanStamp(scan),
-                )
-                const entry = yield* entryFor(place, list, scan, canonicalCwd, fresh, restore)
-                leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
-                yield* Scope.addFinalizer(callerScope, release(entry, lock))
-                const previous = Option.fromNullishOr(current.get(place))
-                current.set(place, entry.key)
-                const retired = Option.flatMap(
-                  Option.filter(previous, (key) => key !== entry.key),
-                  retireIfUnused,
-                )
-                return { entry, retired }
+                yield* restore(lock.take(1))
+                const leased = yield* Effect.gen(function* () {
+                  // The config is read under the place lock, so resolves set
+                  // `current` in the order they read it: a read from before an
+                  // edit cannot put the older profile back.
+                  const fresh = yield* restore(configService.getFresh(canonicalCwd))
+                  const scan = yield* restore(
+                    scanRuntimeProfileExtensions(inputsFor(canonicalCwd)).pipe(
+                      Effect.provideContext(platformServicesContext),
+                    ),
+                  )
+                  const list = listKey(
+                    place,
+                    effectiveInputs(inputsFor(canonicalCwd), fresh.config).disabledExtensions ?? [],
+                    extensionScanStamp(scan),
+                  )
+                  const entry = yield* entryFor(place, list, scan, canonicalCwd, fresh, restore)
+                  leases.set(entry.key, (leases.get(entry.key) ?? 0) + 1)
+                  const previous = Option.fromNullishOr(current.get(place))
+                  current.set(place, entry.key)
+                  const retired = Option.flatMap(
+                    Option.filter(previous, (key) => key !== entry.key),
+                    retireIfUnused,
+                  )
+                  return { entry, retired }
+                }).pipe(Effect.ensuring(lock.release(1)))
+                yield* Scope.addFinalizer(callerScope, release(leased.entry, lock))
+                return leased
               }),
-            ).pipe(lock.withPermits(1))
+            )
             yield* closeRetired(retired)
             return entry.profile
           })

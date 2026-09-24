@@ -614,6 +614,17 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
   }
   const ref = yield* loopRefFor(input.sessionId, input.branchId)
   if (input.completion === "admission") {
+    // A repeat of a durable submit is answered from its stored reply and
+    // never reaches the loop. The state read opens the loop first, so a
+    // repeat still resumes a turn the previous process left unfinished.
+    yield* ref.execute(
+      AgentLoop.GetState.make({
+        workspaceId: payload.workspaceId,
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        commandId,
+      }),
+    )
     yield* ref.execute(AgentLoop.SubmitDurable.make(payload))
   } else if (shouldHoldCompletion) {
     yield* ref.execute(AgentLoop.SubmitAndWait.make(payload))

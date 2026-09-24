@@ -637,6 +637,32 @@ export default defineExtension({
     }).pipe(Effect.provide(BunPlatformLive)),
   )
 
+  // A branch's loop closes while one of its fibers resolves: the lease lands
+  // on a scope that is already closed, and is released at once.
+  it.scopedLive(
+    "a resolve whose caller scope already closed returns and releases its lease",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const launch = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const closed = yield* Scope.make()
+          yield* Scope.close(closed, Exit.void)
+          const profile = yield* cache.resolve(launch).pipe(Scope.provide(closed))
+          // The place still works: the next resolve takes its lock.
+          const again = yield* Effect.scoped(cache.resolve(launch))
+          expect(again).toBe(profile)
+        }).pipe(
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("5".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+    5_000,
+  )
+
   it.scopedLive("isolates profiles by workspace and reuses one per key", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
