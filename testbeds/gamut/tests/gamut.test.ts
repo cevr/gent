@@ -4,6 +4,7 @@ import {
   decodeState,
   failureText,
   isSettled,
+  sendAwaitsTurn,
   latestEventId,
   openTurnSessions,
   encodeState,
@@ -99,15 +100,18 @@ describe("gamut state file", () => {
     binary: "/checkout/apps/tui/bin/gent",
     preset: "sol-luna",
     sendMark: 7,
+    awaitsTurn: false,
   }
 
   test("round trips every field", () => {
     expect(decodeState(encodeState(state))).toEqual(state)
   })
 
-  test("a state file from before any send reads its send mark as zero", () => {
-    const { sendMark: _mark, ...older } = state
-    expect(decodeState(JSON.stringify(older)).sendMark).toBe(0)
+  test("a state file from before any send reads its send mark as zero, awaiting a turn", () => {
+    const { sendMark: _mark, awaitsTurn: _awaits, ...older } = state
+    const decoded = decodeState(JSON.stringify(older))
+    expect(decoded.sendMark).toBe(0)
+    expect(decoded.awaitsTurn).toBe(true)
   })
 
   test("a missing field is refused rather than read as undefined", () => {
@@ -147,24 +151,31 @@ describe("a settled run", () => {
   const finished = { started: true, open: [] }
   test("an idle status line with every turn ended is settled", () => {
     expect(
-      isSettled("  Done.\n\nidle · work (main) · GPT-5.6 Sol · medium   ctx 1%\n", finished),
+      isSettled("  Done.\n\nidle · work (main) · GPT-5.6 Sol · medium   ctx 1%\n", finished, true),
     ).toBe(true)
   })
   // The footer's first slot holds a held error or an extension notice in
   // place of the phase word (apps/tui/src/app.tsx, phaseLabels).
   test("a held error in the footer still settles once every turn has ended", () => {
     expect(
-      isSettled("  Done.\n\nprovider rejected the key · work (main) · GPT-5.6 Sol\n", finished),
+      isSettled(
+        "  Done.\n\nprovider rejected the key · work (main) · GPT-5.6 Sol\n",
+        finished,
+        true,
+      ),
     ).toBe(true)
   })
   test("an extension notice in the footer still settles once every turn has ended", () => {
-    expect(isSettled("wake alarm set for 10:00 · work (main) · GPT-5.6 Sol\n", finished)).toBe(true)
+    expect(
+      isSettled("wake alarm set for 10:00 · work (main) · GPT-5.6 Sol\n", finished, true),
+    ).toBe(true)
   })
   test("an idle root with a working background child is not settled", () => {
     expect(
       isSettled(
         "idle · work (main) · GPT-5.6 Sol\n ◆ main working · Task 2. Read-only audit  ^t agents\n",
         finished,
+        true,
       ),
     ).toBe(false)
   })
@@ -173,14 +184,29 @@ describe("a settled run", () => {
       isSettled(
         "┃ Reply with the word idle · ready\n  Generating (3s)\nwork (main) · GPT-5.6 Sol\n",
         finished,
+        true,
       ),
     ).toBe(false)
   })
   test("an open turn in the record is not settled, whatever the pane shows", () => {
-    expect(isSettled("idle · work (main)\n", { started: true, open: ["child"] })).toBe(false)
+    expect(isSettled("idle · work (main)\n", { started: true, open: ["child"] }, true)).toBe(false)
   })
   test("a run with no turn started yet is not settled", () => {
-    expect(isSettled("ready · work (main)\n", { started: false, open: [] })).toBe(false)
+    expect(isSettled("ready · work (main)\n", { started: false, open: [] }, true)).toBe(false)
+  })
+  // `/model …` and `/goal status` run in the client; waiting for a turn after
+  // one timed out after the whole bound.
+  test("after a slash command an idle pane with no open turn settles with no turn started", () => {
+    expect(isSettled("idle · work (main)\n", { started: false, open: [] }, false)).toBe(true)
+  })
+  test("after a slash command that starts a turn, the open turn still holds the wait", () => {
+    expect(isSettled("idle · work (main)\n", { started: true, open: ["main"] }, false)).toBe(false)
+  })
+  test("a slash command is told from a prompt by its leading slash", () => {
+    expect(sendAwaitsTurn("/model openai/gpt-5.6")).toBe(false)
+    expect(sendAwaitsTurn("  /goal status")).toBe(false)
+    expect(sendAwaitsTurn("also run typecheck")).toBe(true)
+    expect(sendAwaitsTurn("use the path a/b")).toBe(true)
   })
 })
 

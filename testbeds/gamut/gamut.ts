@@ -132,11 +132,20 @@ export interface GamutState {
    * finished cannot pass for the one just sent.
    */
   readonly sendMark: number
+  /**
+   * Whether the last thing typed starts a turn. A prompt does; a slash
+   * command (`/model …`, `/goal status`) runs in the client and may start
+   * none, so `wait` settles on an idle pane and no open turn alone.
+   */
+  readonly awaitsTurn: boolean
 }
 
 export const encodeState = (state: GamutState): string => `${JSON.stringify(state, null, 2)}\n`
 
-/** The state file as written. `sendMark` is absent in a file an older `up` wrote. */
+/**
+ * The state file as written. `sendMark` and `awaitsTurn` are absent in a file
+ * an older `up` wrote.
+ */
 const StateFile = Schema.fromJsonString(
   Schema.Struct({
     root: Schema.String,
@@ -146,12 +155,13 @@ const StateFile = Schema.fromJsonString(
     binary: Schema.String,
     preset: Schema.String,
     sendMark: Schema.optional(Schema.Finite),
+    awaitsTurn: Schema.optional(Schema.Boolean),
   }),
 )
 
 export const decodeState = (text: string): GamutState => {
   const state = Schema.decodeSync(StateFile)(text)
-  return { ...state, sendMark: state.sendMark ?? 0 }
+  return { ...state, sendMark: state.sendMark ?? 0, awaitsTurn: state.awaitsTurn ?? true }
 }
 
 // ── State file ──────────────────────────────────────────────────────────
@@ -381,6 +391,7 @@ const prepareAndLaunch = async (
     binary: BINARY,
     preset: presetName,
     sendMark: 0,
+    awaitsTurn: true,
   }
   await Bun.write(STATE_FILE, encodeState(state))
 
@@ -511,10 +522,20 @@ export const testSummary = (output: string): string => {
 
 // ── the rest ────────────────────────────────────────────────────────────
 
+/** A prompt starts a turn; a slash command runs in the client and may start none. */
+export const sendAwaitsTurn = (text: string): boolean => !text.trimStart().startsWith("/")
+
 const send = async (text: string) => {
   const state = await readState()
   // Mark before typing: the message is stored after this id.
-  await Bun.write(STATE_FILE, encodeState({ ...state, sendMark: latestEventIn(state.data) }))
+  await Bun.write(
+    STATE_FILE,
+    encodeState({
+      ...state,
+      sendMark: latestEventIn(state.data),
+      awaitsTurn: sendAwaitsTurn(text),
+    }),
+  )
   // The pane is running the TUI, not a shell: the text goes into the composer
   // verbatim and Enter submits it. No shell quoting — that would be typed too.
   await $`herdr pane send-text ${state.pane} ${text}`.quiet()
@@ -594,18 +615,19 @@ const runRecordIn = (dataDir: string, sendMark: number): RunRecord =>
 const latestEventIn = (dataDir: string): number => readRunDb(dataDir, 0, latestEventId)
 
 /**
- * Whether the run is finished: a turn has started, every turn has ended, and
- * the pane shows no busy row. The footer is only a hint: its first slot
+ * Whether the run is finished: a turn has started (unless the last send was a
+ * slash command, which may start none), every turn has ended, and the pane
+ * shows no busy row. The footer is only a hint: its first slot
  * shows `idle`, `ready`, a held error or an extension notice
  * (`apps/tui/src/app.tsx`, `phaseLabels`), and the error and notice texts
  * are free text, so the footer cannot say idle on its own. The prompt text is
  * echoed in the transcript, so matching on a word the reply should contain
  * proves nothing either.
  */
-export const isSettled = (paneText: string, record: RunRecord): boolean => {
+export const isSettled = (paneText: string, record: RunRecord, awaitsTurn: boolean): boolean => {
   const lines = paneText.split("\n").map((line) => line.trim())
   const busy = lines.some((line) => / working · /.test(line) || /^Generating\b/.test(line))
-  return record.started && record.open.length === 0 && !busy
+  return (record.started || !awaitsTurn) && record.open.length === 0 && !busy
 }
 
 /** A positive whole count (seconds, lines) from the command line; anything else is refused. */
@@ -625,7 +647,7 @@ const wait = async (timeoutSeconds: number) => {
   while (Date.now() < deadline) {
     const text = await $`herdr pane read ${state.pane} --lines 12`.text()
     record = runRecordIn(state.data, state.sendMark)
-    settledReads = isSettled(text, record) ? settledReads + 1 : 0
+    settledReads = isSettled(text, record, state.awaitsTurn) ? settledReads + 1 : 0
     // Two reads in a row: a background child's result starts a new turn by
     // itself, and a message just sent may not be stored yet.
     if (settledReads >= 2) return
