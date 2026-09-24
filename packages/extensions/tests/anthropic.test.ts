@@ -48,6 +48,7 @@ import {
   type FakeFetchState,
   makeFakeFetchState,
   oneGenerate,
+  turnNoticesText,
 } from "@gent/core/test-utils"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
@@ -2719,13 +2720,17 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
     "a turn notice after the conversation takes no marker; the tail stays on the conversation",
     () =>
       Effect.gen(function* () {
-        const notice = Prompt.makeMessage("system", { content: "# Stopped children\n\n- one" })
+        const notice = Prompt.makeMessage("system", {
+          content: Option.getOrThrow(
+            turnNoticesText([{ id: "stopped", content: "# Stopped children\n\n- one", keys: [] }]),
+          ),
+        })
         for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
           const plain = yield* sentFor(authInfo)
           const noticed = yield* sentFor(authInfo, {}, [notice])
           const update = noticed.messages.at(-1)?.content ?? []
           expect(update.map((block) => block.text)).toEqual([
-            "<host-context-update>\n# Stopped children\n\n- one\n</host-context-update>",
+            "<host-context-update>\nHost status for this turn, not a message from the user.\n\n# Stopped children\n\n- one\n</host-context-update>",
           ])
           expect(update.some(isMarked)).toBe(false)
           // The last stored message carries the tail marker, as without the notice.

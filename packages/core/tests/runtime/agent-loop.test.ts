@@ -536,12 +536,10 @@ describe("turn notices", () => {
         // One system prompt, byte for byte, whether a notice came or went.
         expect(new Set(sent.map((request) => request.systemPrompt)).size).toBe(1)
         expect(sent[0]?.systemPrompt).not.toContain("# Test notice")
-        expect(sent.map((request) => request.notices)).toEqual([
-          "",
-          "# Test notice\n\nfired-1",
-          "# Test notice\n\nfired-1",
-          "",
-        ])
+        // The notices say they are the host's, not the user's.
+        const noticed =
+          "Host status for this turn, not a message from the user.\n\n# Test notice\n\nfired-1"
+        expect(sent.map((request) => request.notices)).toEqual(["", noticed, noticed, ""])
         // The notice follows the turn's own message: it is the request's last message.
         expect(yield* Ref.get(lastUserTexts)).toEqual([
           "no notice yet",

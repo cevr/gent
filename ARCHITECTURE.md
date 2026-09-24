@@ -319,7 +319,11 @@ stores none (`toPrompt` in `runtime/model-context.ts`). The Anthropic driver
 sends it as a `<host-context-update>` user message, which takes no cache
 marker, so the tail marker stays on the last conversation block; the OpenAI
 driver sends it as a developer message after the conversation, so the prefix
-it caches is unchanged. The turn ledger records the keys each step's request
+it caches is unchanged. The message opens with "Host status for this turn,
+not a message from the user." Both drivers send it in a role below the
+system prompt, so a user instruction wins over a notice; the opening line
+keeps the model from reading host facts as the user speaking. A notice with
+blank content is dropped, so it is never recorded as shown. The turn ledger records the keys each step's request
 carried, per extension; `turnAfter` hands an extension back its own keys as
 `readNotices` when the turn answered, and an empty set for an interrupted,
 failed or unanswered turn. The marks live in the turn's memory: a turn a

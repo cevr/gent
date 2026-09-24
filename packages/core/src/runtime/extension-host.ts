@@ -369,10 +369,12 @@ const runTurnProjectionHook = (slot: HookTurnProjectionSlot, input: TurnProjecti
             if (!Predicate.isUndefined(projection.toolPolicy)) {
               policyFragments = [projection.toolPolicy]
             }
-            const notices = Option.getOrElse(
-              Option.fromUndefinedOr(projection.notices),
-              () => [],
-            ).map((notice): ExtensionTurnNotice => ({ extensionId: slot.extensionId, notice }))
+            // A notice with no text shows nothing, so it is dropped here: every
+            // notice core keeps is one a step's request carries, and only
+            // those keys can come back as read.
+            const notices = Option.getOrElse(Option.fromUndefinedOr(projection.notices), () => [])
+              .filter((notice) => notice.content.trim() !== "")
+              .map((notice): ExtensionTurnNotice => ({ extensionId: slot.extensionId, notice }))
             return Option.some({ promptSections, policyFragments, notices })
           }),
         )

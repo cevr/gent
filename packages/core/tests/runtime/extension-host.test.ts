@@ -4542,6 +4542,29 @@ describe("runtime hooks", () => {
       expect(read.get("quiet")).toEqual([])
     }))
 
+  test("a notice with no text is not shown, so no turn reads its keys", () =>
+    Effect.gen(function* () {
+      const compiled = compileExtensionHooks([
+        extRuntimeHooks("blank", "builtin", {
+          hooks: [
+            hook("turnProjection", () =>
+              Effect.succeed({
+                notices: [
+                  { id: "blank", content: "", keys: ["unseen"] },
+                  { id: "spaces", content: "  \n", keys: ["also-unseen"] },
+                  { id: "real", content: "# Real", keys: ["seen"] },
+                ],
+              }),
+            ),
+          ],
+        }),
+      ])
+      const projection = yield* compiled
+        .resolveTurnProjection({ agent: AgentDefinition.make({ name: AgentName.make("cowork") }) })
+        .pipe(Effect.provideService(CurrentExtensionHostContext, stubCtx))
+      expect(projection.notices.map(({ notice }) => notice.keys)).toEqual([["seen"]])
+    }))
+
   test("a turn's notices keep their extension, and a later notice with the same id replaces one", () =>
     Effect.gen(function* () {
       const notices = (keys: ReadonlyArray<string>, content: string) => [

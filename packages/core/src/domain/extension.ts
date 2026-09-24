@@ -496,6 +496,7 @@ export interface ToolPolicyFragment {
 export interface TurnNotice {
   /** Names the notice; a later extension's notice with the same id replaces it. */
   readonly id: string
+  /** Blank content shows nothing: the runtime drops the notice, and its keys never come back as read. */
   readonly content: string
   /** What the notice shows, in the extension's own terms. */
   readonly keys: ReadonlyArray<string>

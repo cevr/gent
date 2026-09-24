@@ -51,6 +51,7 @@ import {
   makeFakeFetchState,
   createRpcHarness,
   oneGenerate,
+  turnNoticesText,
   waitFor,
 } from "@gent/core/test-utils"
 import { SessionId } from "@gent/core/protocol"
@@ -1504,6 +1505,36 @@ describe("codexTransformClient — URL/body/beta rewrite", () => {
       expect(second["instructions"]).toBe(first["instructions"])
       expect(first["input"]).toEqual(history)
       expect(second["input"]).toEqual([...history, { ...update, role: "developer" }])
+    }),
+  )
+  it.scopedLive("a turn notice arrives after the conversation as the host, not the user", () =>
+    Effect.gen(function* () {
+      const state = okResponse()
+      const wrapped = yield* buildWrapped(state)
+      const conversation = [{ role: "user", content: "What is running?" }]
+      const notice = Option.getOrThrow(
+        turnNoticesText([{ id: "stopped", content: "# Stopped children\n\n- one", keys: [] }]),
+      )
+      for (const tail of [conversation, [...conversation, { role: "system", content: notice }]]) {
+        yield* wrapped.post("https://api.openai.com/v1/responses", {
+          body: jsonBody({
+            model: "gpt-5.6-luna",
+            input: [{ role: "system", content: "Fixed session instructions." }, ...tail],
+          }),
+        })
+      }
+      const [plain, noticed] = yield* Effect.forEach(state.captured, (request) =>
+        decodeJsonRecord(Option.getOrThrow(Option.fromUndefinedOr(request.body))),
+      )
+      expect(noticed?.["instructions"]).toBe(plain?.["instructions"])
+      expect(noticed?.["input"]).toEqual([
+        ...conversation,
+        {
+          role: "developer",
+          content:
+            "Host status for this turn, not a message from the user.\n\n# Stopped children\n\n- one",
+        },
+      ])
     }),
   )
   it.scopedLive("drops sampling limits the Codex backend rejects", () =>

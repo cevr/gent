@@ -198,12 +198,19 @@ export const toPromptMessages = (
   return result
 }
 
+/** Opens the notices message, so the model does not read host facts as the user speaking. */
+const TURN_NOTICES_HEADING = "Host status for this turn, not a message from the user."
+
 /**
- * The turn's notices as one text, in projection order; none when there are
- * none.
+ * The turn's notices as one text, in projection order, under
+ * `TURN_NOTICES_HEADING`; none when there are none. The extension host
+ * already dropped any notice with no text.
  */
 export const turnNoticesText = (notices: ReadonlyArray<TurnNotice>): Option.Option<string> =>
-  Option.liftPredicate(notices.map((notice) => notice.content).join("\n\n"), (text) => text !== "")
+  Option.map(
+    Option.liftPredicate(notices, (all) => all.length > 0),
+    (all) => [TURN_NOTICES_HEADING, ...all.map((notice) => notice.content)].join("\n\n"),
+  )
 
 /**
  * The request a step sends: the system prompt, the conversation, then the
@@ -215,6 +222,8 @@ export const turnNoticesText = (notices: ReadonlyArray<TurnNotice>): Option.Opti
  * speaking, not the user: a driver sends it as a context update after the
  * conversation (the Anthropic driver as a `<host-context-update>` block,
  * which takes no cache marker; the OpenAI driver as a developer message).
+ * Both roles rank below the system prompt, so a user instruction wins over a
+ * notice, and `TURN_NOTICES_HEADING` says the text is the host's.
  */
 export const toPrompt = (
   messages: ReadonlyArray<Message>,
