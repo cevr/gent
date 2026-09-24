@@ -15,6 +15,7 @@ import {
   Stream,
 } from "effect"
 import {
+  addBackgroundBashColumn,
   BackgroundBashLayer,
   BackgroundBashStorage,
   BackgroundBashStorageError,
@@ -2504,6 +2505,24 @@ const onQueue =
   }
 const now = dateFromMillis(0)
 
+/** The jobs table as it was before interrupted jobs had a read mark. */
+const oldBackgroundBashTable = `
+  CREATE TABLE background_bash_jobs (
+    session_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    command TEXT NOT NULL,
+    cwd TEXT,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    exit_code INTEGER,
+    message TEXT,
+    owner_generation TEXT,
+    PRIMARY KEY (session_id, branch_id, tool_call_id)
+  )
+`
+
 describe("BashTool summary", () => {
   test("names the exit code and the printed line count", () => {
     const summary = (stdout: string, stderr: string, exitCode: number) =>
@@ -3134,32 +3153,40 @@ describe("BashTool execution", () => {
     ),
   )
 
+  it.live("a column another process added after this one read the table is no failure", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      yield* sql.unsafe(oldBackgroundBashTable)
+      // This process read the old table; then the other one added the column.
+      const staleColumns = ["session_id", "branch_id", "tool_call_id", "owner_generation"]
+      yield* sql.unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN notice_read_at INTEGER`)
+      const added = yield* Effect.exit(
+        addBackgroundBashColumn(staleColumns, "notice_read_at", "INTEGER"),
+      )
+      expect(added._tag).toBe("Success")
+      // A failure that leaves the column missing still fails.
+      yield* sql.unsafe(`DROP TABLE background_bash_jobs`)
+      const missing = yield* Effect.exit(addBackgroundBashColumn([], "notice_read_at", "INTEGER"))
+      expect(missing._tag).toBe("Failure")
+    }).pipe(
+      Effect.provide(
+        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+      ),
+    ),
+  )
+
   it.live(
-    "a job interrupted before notices had a read mark stays read; one interrupted after is unread",
+    "a job interrupted before notices had a read mark is shown once more, never dropped",
     () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient
-        yield* sql.unsafe(`
-        CREATE TABLE background_bash_jobs (
-          session_id TEXT NOT NULL,
-          branch_id TEXT NOT NULL,
-          tool_call_id TEXT NOT NULL,
-          command TEXT NOT NULL,
-          cwd TEXT,
-          status TEXT NOT NULL,
-          started_at INTEGER NOT NULL,
-          completed_at INTEGER,
-          exit_code INTEGER,
-          message TEXT,
-          owner_generation TEXT,
-          PRIMARY KEY (session_id, branch_id, tool_call_id)
-        )
-      `)
-        // The earlier code told the branch of `told` in a message on its
-        // loop open; `running` belongs to a server that is gone.
+        yield* sql.unsafe(oldBackgroundBashTable)
+        // The earlier code may or may not have told the branch of `earlier`:
+        // it did only when the branch's loop opened. `running` belongs to a
+        // server that is gone.
         yield* sql`
         INSERT INTO background_bash_jobs (session_id, branch_id, tool_call_id, command, status, started_at, completed_at)
-        VALUES ('s', 'b', 'told', 'sleep 8', 'interrupted', 0, 5),
+        VALUES ('s', 'b', 'earlier', 'sleep 8', 'interrupted', 0, 5),
                ('s', 'b', 'running', 'sleep 9', 'running', 1, NULL)
       `
         const branch = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
@@ -3167,10 +3194,14 @@ describe("BashTool execution", () => {
           const storage = yield* BackgroundBashStorage
           yield* storage.reconcileInterrupted
           const before = yield* storage.interruptedJobs(branch)
-          yield* storage.markNoticesRead(branch, [ToolCallId.make("running")])
+          yield* storage.markNoticesRead(branch, [
+            ToolCallId.make("earlier"),
+            ToolCallId.make("running"),
+          ])
           return { before, after: yield* storage.interruptedJobs(branch) }
         }).pipe(Effect.provide(BackgroundBashStorage.Live))
         expect(unread.before).toEqual([
+          { toolCallId: ToolCallId.make("earlier"), command: "sleep 8" },
           { toolCallId: ToolCallId.make("running"), command: "sleep 9" },
         ])
         expect(unread.after).toEqual([])

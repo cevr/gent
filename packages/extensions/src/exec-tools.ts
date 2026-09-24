@@ -41,7 +41,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
 // Test seam: only tests read these exports. BackgroundBashStorage, its error,
 // BackgroundBashSupervisorLive and BackgroundBashLayer let a test inject a
-// storage fault. BashParams encodes a model's tool input. splitCdCommand,
+// storage fault; addBackgroundBashColumn lets it replay a migration race.
+// BashParams encodes a model's tool input. splitCdCommand,
 // stripBackground and injectGitTrailers are pure transforms with unit tests.
 
 // ── background bash storage ─────────────────────────────────────────────────
@@ -155,6 +156,38 @@ const terminalState = (row: BackgroundBashJobRow): BackgroundBashTerminalState =
   }
 }
 
+const backgroundBashColumns = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql<{ readonly name: string }>`
+    SELECT name FROM pragma_table_info('background_bash_jobs')
+  `
+  return rows.map((row) => row.name)
+}).pipe(Effect.mapError(mapError("Failed to read background bash jobs columns")))
+
+/**
+ * Adds a column the table read as `columns` lacks. Another process may have
+ * read the same old table and added it first: when the add fails, the table
+ * is read again, and a column that is there now is no failure.
+ */
+export const addBackgroundBashColumn = (
+  columns: ReadonlyArray<string>,
+  name: string,
+  type: "TEXT" | "INTEGER",
+) =>
+  Effect.gen(function* () {
+    if (columns.includes(name)) return
+    const sql = yield* SqlClient.SqlClient
+    yield* sql.unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN ${name} ${type}`).pipe(
+      Effect.catchCause((cause) =>
+        Effect.flatMap(backgroundBashColumns, (current) => {
+          if (current.includes(name)) return Effect.void
+          return Effect.failCause(cause)
+        }),
+      ),
+      Effect.mapError(mapError(`Failed to add background bash jobs column ${name}`)),
+    )
+  })
+
 export class BackgroundBashStorage extends Context.Service<
   BackgroundBashStorage,
   BackgroundBashStorageService
@@ -186,32 +219,13 @@ export class BackgroundBashStorage extends Context.Service<
           `,
           )
           .pipe(Effect.mapError(mapError("Failed to create background bash jobs table")))
-        // A table from before `owner_generation` gets the column; its rows keep NULL.
-        const columns = yield* sql<{ readonly name: string }>`
-          SELECT name FROM pragma_table_info('background_bash_jobs')
-        `.pipe(Effect.mapError(mapError("Failed to read background bash jobs columns")))
-        if (!columns.some((column) => column.name === "owner_generation")) {
-          yield* sql
-            .unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN owner_generation TEXT`)
-            .pipe(Effect.mapError(mapError("Failed to add background bash jobs owner column")))
-        }
-        // A table from before `notice_read_at` gets the column. Its interrupted
-        // jobs count as read: that code told a branch in a message when its
-        // loop opened, so they do not come back as a prompt notice. A job whose
-        // branch did not open before the upgrade is not reported.
-        if (!columns.some((column) => column.name === "notice_read_at")) {
-          yield* Effect.gen(function* () {
-            yield* sql.unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN notice_read_at INTEGER`)
-            yield* sql`
-              UPDATE background_bash_jobs
-              SET notice_read_at = COALESCE(completed_at, started_at)
-              WHERE status = 'interrupted'
-            `
-          }).pipe(
-            sql.withTransaction,
-            Effect.mapError(mapError("Failed to add background bash jobs notice column")),
-          )
-        }
+        // A table from before `owner_generation` gets the column; its rows keep
+        // NULL. One from before `notice_read_at` gets it too, and its
+        // interrupted jobs stay unread: the earlier code told a branch only
+        // when its loop opened, so a job is shown once more at worst, never lost.
+        const columns = yield* backgroundBashColumns
+        yield* addBackgroundBashColumn(columns, "owner_generation", "TEXT")
+        yield* addBackgroundBashColumn(columns, "notice_read_at", "INTEGER")
         // The server process that owns the jobs this layer starts: every
         // profile in one process shares it, a restarted server has another.
         const generation = yield* Effect.sync(() => String(performance.timeOrigin))
