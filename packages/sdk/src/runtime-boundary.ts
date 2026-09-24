@@ -8,8 +8,7 @@
  * same captured `services` context — the runtime IS the boundary surface.
  *
  * Per `gent/no-runpromise-outside-boundary`, the Promise edge lives in
- * a `*-boundary.ts` module. The export NAMES the specific external seam
- * — there is no generic `runAnyEffect` trampoline.
+ * a `*-boundary.ts` module. The export names the specific external seam.
  */
 
 import { Effect, type Context, type Fiber } from "effect"

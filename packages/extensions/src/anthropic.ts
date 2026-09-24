@@ -1455,8 +1455,13 @@ export const transformPayload = (
  *      message (it moves there, before the user's own text, and the
  *      billing and identity blocks take no marker). A new session and
  *      every sibling child read the prompt back from this entry;
- *   2. the last cacheable block of the last message, so each step reads
- *      the previous step's conversation back from the cache.
+ *   2. the last cacheable block of the last conversation message, so each
+ *      step reads the previous step's conversation back from the cache. A
+ *      host context update after it (a later system message, which the SDK
+ *      sends as a `<host-context-update>` user message: the runtime's turn
+ *      notices) takes no marker. It changes from turn to turn, so a marker
+ *      on it would write an entry no later request reads, and the next step
+ *      would find no entry at the conversation's end.
  *
  * The tool list takes no marker of its own: it renders first, so the
  * system prompt's marker caches it, and alone it is below the minimum
@@ -1481,6 +1486,23 @@ const CACHEABLE_BLOCK_TYPES: ReadonlySet<unknown> = new Set([
 ])
 
 const hasCacheMarker = (block: JsonRecord): boolean => isRecord(block["cache_control"])
+
+/** How the SDK opens a later system message's text: see `prepareMessages` in `@effect/ai-anthropic`. */
+const HOST_CONTEXT_UPDATE_OPEN = "<host-context-update>\n"
+
+/** A user message the SDK built from a later system message, not from the conversation. */
+const isHostContextUpdate = (message: JsonRecord): boolean => {
+  const content = message["content"]
+  if (message["role"] !== "user" || !isRecordArray(content) || content.length === 0) return false
+  return content.every((block) => {
+    const text = block["text"]
+    return (
+      block["type"] === "text" &&
+      Predicate.isString(text) &&
+      text.startsWith(HOST_CONTEXT_UPDATE_OPEN)
+    )
+  })
+}
 
 const isCacheableBlock = (block: JsonRecord): boolean =>
   CACHEABLE_BLOCK_TYPES.has(block["type"]) && !(block["type"] === "text" && block["text"] === "")
@@ -1565,7 +1587,10 @@ const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): J
       (content) => markBlockAt(content, systemPromptBlockIndex(content)),
     )
   }
-  markMessage(messages.length - 1, markLastCacheable)
+  markMessage(
+    messages.findLastIndex((message) => !isHostContextUpdate(message)),
+    markLastCacheable,
+  )
   if (isRecordArray(payload["messages"])) result["messages"] = messages
   return result
 }

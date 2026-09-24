@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Option, Schema } from "effect"
 import {
-  AgentDefinition,
   AgentName,
   calculateCost,
   DEFAULT_AGENT_NAME,
@@ -12,7 +11,6 @@ import {
   parseModelId,
   parseModelProvider,
   ProviderId,
-  resolveAgentDriver,
 } from "../../src/domain/agent"
 import { ApprovalDecisionSchema, ApprovalRequestSchema } from "../../src/domain/interaction"
 
@@ -43,74 +41,10 @@ describe("ApprovalRequest / ApprovalDecision schemas", () => {
 // ── agent driver routing ────────────────────────────────────────────────────
 
 /**
- * resolveAgentDriver — pure precedence tests.
  * effectiveModelDriver — the one derivation of driver id and catalog model id.
+ * The precedence between an agent's driver and a config override is
+ * `resolveSessionRoute`'s, tested in tests/runtime/turn.test.ts.
  */
-
-const makeAgent = (
-  name: string,
-  overrides: Partial<ConstructorParameters<typeof AgentDefinition>[0]> = {},
-): AgentDefinition => AgentDefinition.make({ name: AgentName.make(name), ...overrides })
-
-describe("agent driver precedence", () => {
-  test("agent.driver wins — config override is ignored when the agent hardcodes a driver", () => {
-    const agent = makeAgent("special", {
-      driver: DriverRef.make({ id: "anthropic-proxy" }),
-    })
-    const overrides = {
-      [AgentName.make("special")]: DriverRef.make({ id: "openai-proxy" }),
-    } satisfies Record<string, DriverRef>
-    const result = resolveAgentDriver(agent, overrides)
-    expect(result.driver?._tag).toBe("Model")
-    expect(result.driver).toEqual(DriverRef.make({ id: "anthropic-proxy" }))
-    expect(result.source).toBe("agent")
-  })
-
-  test("config override applies when the agent has no hardcoded driver", () => {
-    const agent = makeAgent("cowork")
-    const overrides = {
-      [AgentName.make("cowork")]: DriverRef.make({ id: "anthropic-proxy" }),
-    } satisfies Record<string, DriverRef>
-    const result = resolveAgentDriver(agent, overrides)
-    expect(result.driver?._tag).toBe("Model")
-    expect(result.driver).toEqual(DriverRef.make({ id: "anthropic-proxy" }))
-    expect(result.source).toBe("config")
-  })
-
-  test("default — no agent driver, no override, returns undefined driver", () => {
-    const agent = makeAgent("cowork")
-    const result = resolveAgentDriver(agent)
-    expect(result.driver).toBeUndefined()
-    expect(result.source).toBe("default")
-  })
-
-  test("default — empty overrides record falls through to default source", () => {
-    const agent = makeAgent("cowork")
-    const result = resolveAgentDriver(agent, {})
-    expect(result.driver).toBeUndefined()
-    expect(result.source).toBe("default")
-  })
-
-  test("override for a different agent does not match", () => {
-    const agent = makeAgent("cowork")
-    const overrides = {
-      [AgentName.make("deepwork")]: DriverRef.make({ id: "anthropic-proxy" }),
-    } satisfies Record<string, DriverRef>
-    const result = resolveAgentDriver(agent, overrides)
-    expect(result.driver).toBeUndefined()
-    expect(result.source).toBe("default")
-  })
-
-  test("a model-driver override without an agent driver comes from config", () => {
-    const agent = makeAgent("cowork")
-    const overrides = {
-      [AgentName.make("cowork")]: DriverRef.make({ id: "anthropic" }),
-    } satisfies Record<string, DriverRef>
-    const result = resolveAgentDriver(agent, overrides)
-    expect(result.driver?._tag).toBe("Model")
-    expect(result.source).toBe("config")
-  })
-})
 
 describe("effective model driver", () => {
   const modelId = ModelId.make("anthropic/claude-sonnet-5")

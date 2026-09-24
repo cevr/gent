@@ -26,10 +26,8 @@ import {
   ExtensionHost,
   ExtensionId,
   type ExtensionServiceError,
-  makeShownNotices,
   omitUndefined,
   request,
-  type ShownNotices,
   tool,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
@@ -37,8 +35,7 @@ import { approveBashCommand, classifyBashCommand, runBashCommand } from "./exec-
 
 // Test seam: only tests read these exports. WakeAlarms, WakeAlarmsService and
 // WakeAlarmsLive let a test hold and cancel timers; rearmPendingAlarms runs the
-// restart path directly; ShownWakeNotices lets a hook test hold the marks.
-// wakeMessage, monitorMessage, nextDueAt and dueAtOf are pure functions with
+// restart path directly. wakeMessage, monitorMessage, nextDueAt and dueAtOf are pure functions with
 // unit tests. WakeTool, MonitorTool and CancelTool are the
 // capabilities the cell signature tests render.
 
@@ -319,40 +316,22 @@ type NoticeEntry = Extract<WakeEntry, { readonly _tag: "notice" }>
 const noticeKey = (notice: NoticeEntry) => `${notice.wakeId}@${notice.firedAt}`
 
 /**
- * The notices each turn put in its prompt. Only these clear, and only when
- * the turn answered: a notice written after the turn's last step read the
- * file stays for the next turn.
+ * Every notice as one turn notice; none gives none. The projection runs on
+ * every step, so the notice stays for the whole turn; nothing is cleared
+ * here. Only the notices a step showed clear, and only when the turn
+ * answered: a notice written after the turn's last step read the file stays
+ * for the next turn.
  */
-export class ShownWakeNotices extends Context.Service<ShownWakeNotices, ShownNotices>()(
-  "@gent/extensions/src/wake/ShownWakeNotices",
-) {}
-
-const ShownWakeNoticesResource = defineResource({
-  id: "@gent/wake/shown-notices",
-  scope: "process",
-  layer: Layer.effect(ShownWakeNotices, makeShownNotices),
-})
-
-/**
- * Every notice as one prompt section; none gives no section. The projection
- * runs on every step, so the section stays for the whole turn, and marks what
- * it showed; nothing is cleared here.
- */
-const noticeSections = Effect.fn("WakeTool.notices")(function* () {
-  const ctx = yield* ExtensionContext
+const turnNotices = Effect.fn("WakeTool.notices")(function* () {
   const notices = (yield* readWakeEntries()).flatMap((entry) => {
     if (entry._tag === "notice") return [entry]
     return []
   })
   if (notices.length === 0) return []
-  yield* (yield* ShownWakeNotices).record(
-    { sessionId: ctx.sessionId, branchId: ctx.branchId },
-    notices.map(noticeKey),
-  )
   return [
     {
       id: "wake-notices",
-      priority: 85,
+      keys: notices.map(noticeKey),
       content: `# Notices\n\nThese fired while you were idle; nothing has answered them yet.\n\n${notices.map((notice) => `- ${notice.content}`).join("\n")}`,
     },
   ]
@@ -1037,7 +1016,6 @@ export const WakeExtension = defineExtension({
     const host = yield* ExtensionHost
     yield* host.register("tool", WakeTool, MonitorTool, CancelTool, ListTool)
     yield* host.register("request", WakeRpc.Pending)
-    yield* host.register("resource", ShownWakeNoticesResource)
     // The branch resource starts without a session facade, so the loop's open
     // is where stored entries get their timers back: after a restart or a
     // branch close, as soon as anything reaches the branch. A past-due alarm
@@ -1054,7 +1032,7 @@ export const WakeExtension = defineExtension({
     // Every step reads the notices that have not been answered yet.
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
-        return { promptSections: yield* noticeSections() }
+        return { notices: yield* turnNotices() }
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("wake.notices.read.failed").pipe(
@@ -1067,9 +1045,8 @@ export const WakeExtension = defineExtension({
     // A turn that answered has read every notice its steps were shown.
     yield* host.on("turnAfter", (input) =>
       Effect.gen(function* () {
-        const shown = yield* (yield* ShownWakeNotices).takeRead(input)
-        if (shown.size === 0) return
-        const cleared = yield* clearReadNotices(shown)
+        if (input.readNotices.size === 0) return
+        const cleared = yield* clearReadNotices(input.readNotices)
         if (cleared > 0) yield* (yield* ExtensionContext).State.changed()
       }).pipe(
         Effect.catchCause((cause) =>

@@ -8,7 +8,6 @@ import {
   Order,
   Path,
   Predicate,
-  Ref,
   Schema,
   type Stream,
   TxRef,
@@ -176,11 +175,9 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
 // ── contribution ────────────────────────────────────────────────────────────
 
 /**
- * Contribution buckets — typed sub-arrays for `defineExtension`.
- *
- * Extensions declare their leaf values in homogeneously typed buckets. The
- * bucket name IS the discrimination — no `_kind` field on leaves, no wrapper
- * smart constructors, no `filterByKind`.
+ * Contribution buckets — the typed sub-arrays the loader seals from an
+ * extension's `host.register(domain, ...values)` and `host.on(kind, handler)`
+ * calls. The bucket name is the discrimination: a leaf carries no kind field.
  *
  * Capabilities are authored through the typed factories `tool({...})` and
  * `request({...})` in `domain/capability.ts`. Slash commands are requests
@@ -197,9 +194,8 @@ export const defineResource = <A, S extends ResourceScope, R = never, E = never>
 
 /**
  * The set of buckets an extension may contribute to. Every field is optional;
- * an extension that contributes nothing returns `{}`. Each bucket is
- * homogeneously typed — there is no discriminator, the field name is the
- * discrimination.
+ * an extension that registers nothing has none. Each bucket is homogeneously
+ * typed, and the field name is the discrimination.
  */
 export interface ExtensionContributions {
   readonly resources?: ReadonlyArray<AnyResourceContribution>
@@ -252,8 +248,8 @@ export interface LoadedExtension {
    * Typed contribution buckets produced by the extension's setup function.
    * Consumers (registries, workflow runtime, scheduler, lifecycle hooks,
    * etc.) read each bucket directly — `contributions.tools`,
-   * `contributions.requests`, `contributions.resources`, etc. The bucket name IS the discrimination;
-   * there is no `_kind` discriminator and no `filterByKind`.
+   * `contributions.requests`, `contributions.resources`, etc. The bucket name
+   * is the discrimination.
    */
   readonly contributions: ExtensionContributions
 }
@@ -378,6 +374,13 @@ export interface TurnAfterInput {
   readonly unanswered: boolean
   /** What the turn's model calls spent, and whether that is all of it. */
   readonly usage: TurnUsage
+  /**
+   * The keys of this extension's notices (`TurnProjection.notices`) that
+   * reached the model in one of the turn's steps, when the turn answered.
+   * An interrupted, failed or unanswered turn read nothing: the set is
+   * empty, and every notice shows again next turn.
+   */
+  readonly readNotices: ReadonlySet<string>
 }
 
 /**
@@ -390,9 +393,10 @@ export interface TurnAfterInput {
  *
  * `cacheReadTokens` and `cacheWriteTokens` are the parts of `inputTokens` the
  * provider read from and wrote to its prompt cache. `costUsd` prices the
- * steps and any compaction summary the turn wrote; it is none when one of
- * them could not be priced (its model has no price, or its counts are
- * unknown), so it is never a partial sum.
+ * steps and any compaction summary the turn wrote or tried to write; it is
+ * none when one of them could not be priced (its model has no price, or its
+ * counts are unknown, as for a summary that failed after its model was
+ * admitted), so it is never a partial sum.
  */
 export interface TurnUsage {
   readonly known: {
@@ -404,58 +408,6 @@ export interface TurnUsage {
   }
   readonly complete: boolean
 }
-
-// ── Shown notices ──
-
-/**
- * The notices each turn put in its prompt, per branch, until that turn ends.
- * A notice an extension keeps until a turn has read it is shown by the
- * extension's `turnProjection` hook, which records the keys it showed; its
- * `turnAfter` hook takes them back and clears only those. `takeRead` returns
- * the keys only for a turn that answered: an interrupted, failed, or
- * unanswered turn keeps every notice. The marks drop either way, and a notice
- * the turn never showed stays for the next turn. The marks live in memory: a
- * lost process loses them, and its notices show again.
- */
-export interface ShownNotices {
-  readonly record: (
-    branch: { readonly sessionId: SessionId; readonly branchId: BranchId },
-    keys: Iterable<string>,
-  ) => Effect.Effect<void>
-  readonly takeRead: (
-    turn: Pick<
-      TurnAfterInput,
-      "sessionId" | "branchId" | "interrupted" | "streamFailed" | "unanswered"
-    >,
-  ) => Effect.Effect<ReadonlySet<string>>
-}
-
-/** A fresh `ShownNotices`; an extension holds one in a process resource of its own. */
-type ShownNoticeMarks = ReadonlyMap<string, ReadonlySet<string>>
-
-export const makeShownNotices: Effect.Effect<ShownNotices> = Effect.map(
-  Ref.make<ShownNoticeMarks>(new Map()),
-  (state): ShownNotices => {
-    const keyOf = (branch: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
-      `${branch.sessionId}:${branch.branchId}`
-    return {
-      record: (branch, keys) =>
-        Ref.update(state, (current) => {
-          const key = keyOf(branch)
-          const shown = new Set([...(current.get(key) ?? []), ...keys])
-          return new Map([...current, [key, shown]])
-        }),
-      takeRead: (turn) =>
-        Ref.modify(state, (current): readonly [ReadonlySet<string>, ShownNoticeMarks] => {
-          const key = keyOf(turn)
-          const rest = new Map(current)
-          rest.delete(key)
-          if (turn.interrupted || turn.streamFailed || turn.unanswered) return [new Set(), rest]
-          return [current.get(key) ?? new Set<string>(), rest]
-        }),
-    }
-  },
-)
 
 // ── Lifecycle hooks ──
 //
@@ -532,10 +484,30 @@ export interface ToolPolicyFragment {
   readonly modelSet?: ReadonlyArray<string>
 }
 
+/**
+ * Something the model must see until a turn has read it: a fire nobody
+ * answered, a child an interrupt stopped. It changes from turn to turn, so
+ * it stays out of the system prompt, whose cached prefix it would break:
+ * the runtime places every notice after the conversation, in each step's
+ * request only, and stores none. A turn that answered with a notice in view
+ * hands its `keys` back in `TurnAfterInput.readNotices`; the extension
+ * clears exactly those.
+ */
+export interface TurnNotice {
+  /** Names the notice; a later extension's notice with the same id replaces it. */
+  readonly id: string
+  /** Blank content shows nothing: the runtime drops the notice, and its keys never come back as read. */
+  readonly content: string
+  /** What the notice shows, in the extension's own terms. */
+  readonly keys: ReadonlyArray<string>
+}
+
 /** Turn-time projection — needs agent/tool context, used during prompt assembly */
 export interface TurnProjection {
   readonly toolPolicy?: ToolPolicyFragment
+  /** Standing prompt content: the same from turn to turn while nothing changes. */
   readonly promptSections?: ReadonlyArray<PromptSection>
+  readonly notices?: ReadonlyArray<TurnNotice>
 }
 
 // Extension — the core primitive

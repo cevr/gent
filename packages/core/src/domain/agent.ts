@@ -1,4 +1,4 @@
-import { Option, Predicate, Schema, SchemaGetter } from "effect"
+import { Option, Schema, SchemaGetter } from "effect"
 import { branded, SessionId } from "./ids.js"
 import { omitUndefined } from "./guards.js"
 
@@ -229,43 +229,6 @@ export const resolveAgentModel = (agent: AgentDefinition): ModelId =>
   agent.model ?? DEFAULT_MODEL_ID
 
 // ── Runtime driver routing ──
-
-/** Where the resolved driver came from; a config-routed driver is checked against the registry. */
-type DriverSource = "agent" | "config" | "default"
-
-interface ResolvedAgentDriver {
-  /** The driver to dispatch through. `undefined` ⇒ default model path
-   *  (the loop derives a model driver from the agent's model id). */
-  readonly driver: AgentDefinition["driver"]
-  readonly source: DriverSource
-}
-
-/**
- * Resolve which driver an agent should dispatch through. Precedence:
- *
- *   1. `AgentDefinition.driver`        — hardcoded by the extension author.
- *      Not overridable (the author opted into a specific backend).
- *   2. `overrides[agent.name]`         — runtime config (`UserConfig.driverOverrides`,
- *      project shadows user). Used by the `/driver` command.
- *   3. `undefined`                     — default; the loop derives a model
- *      driver from `agent.model`.
- *
- * Pure function — no Effect, no service dependency. The loop reads the
- * `overrides` map from `ConfigService` during turn context resolution.
- */
-export const resolveAgentDriver = (
-  agent: AgentDefinition,
-  overrides?: Readonly<Record<AgentName, DriverRef>>,
-): ResolvedAgentDriver => {
-  if (Predicate.isNotUndefined(agent.driver)) {
-    return { driver: agent.driver, source: "agent" }
-  }
-  const fromConfig = overrides?.[agent.name]
-  if (Predicate.isNotUndefined(fromConfig)) {
-    return { driver: fromConfig, source: "config" }
-  }
-  return { driver: agent.driver, source: "default" }
-}
 
 /** The model driver a turn dispatches through, and the catalog id of the model it reaches. */
 export interface EffectiveModelDriver {

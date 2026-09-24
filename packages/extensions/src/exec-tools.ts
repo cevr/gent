@@ -29,10 +29,8 @@ import {
   ExtensionId,
   headTailChars,
   lineCount,
-  makeShownNotices,
   maximumModelToolResultChars,
   type SessionId,
-  type ShownNotices,
   tool,
   ToolCallId,
   type TurnAfterInput,
@@ -4280,19 +4278,8 @@ const queueTerminalFollowUp = (target: BackgroundBashTarget, state: BackgroundBa
 //
 // A job the server stopped has no output and no end to report. Opening its
 // session must not spend a turn with no user present, so the job wakes
-// nobody: every step of the branch's next turn shows it in the prompt, and
-// the turn that answered with it shown marks it read on its row.
-
-/** The notices each turn put in its prompt, by tool call id. */
-class ShownInterruptedJobs extends Context.Service<ShownInterruptedJobs, ShownNotices>()(
-  "@gent/extensions/src/exec-tools/ShownInterruptedJobs",
-) {}
-
-const ShownInterruptedJobsResource = defineResource({
-  id: "@gent/exec-tools/shown-interrupted-jobs",
-  scope: "process",
-  layer: Layer.effect(ShownInterruptedJobs, makeShownNotices),
-})
+// nobody: every step of the branch's next turn shows it as a turn notice,
+// and the turn that answered with it shown marks it read on its row.
 
 const maximumNoticeJobs = 10
 const maximumNoticeCommandChars = 200
@@ -4305,11 +4292,11 @@ const noticeCommand = (command: string) => {
 }
 
 /**
- * The branch's unread interrupted jobs as one prompt section, the oldest
- * first, at most `maximumNoticeJobs`; the rest are a count. It marks what it
- * showed, so an answered turn clears exactly that.
+ * The branch's unread interrupted jobs as one turn notice, the oldest first,
+ * at most `maximumNoticeJobs`; the rest are a count. Its keys are the tool
+ * call ids it names, so an answered turn clears exactly those.
  */
-const interruptedJobSections = Effect.fn("ExecTools.interruptedJobNotices")(function* () {
+const interruptedJobNotices = Effect.fn("ExecTools.interruptedJobNotices")(function* () {
   const ctx = yield* ExtensionContext
   const storage = yield* BackgroundBashStorage
   const branch = { sessionId: ctx.sessionId, branchId: ctx.branchId }
@@ -4321,32 +4308,27 @@ const interruptedJobSections = Effect.fn("ExecTools.interruptedJobNotices")(func
   if (unnamed > 0) {
     lines.push(`- and ${unnamed} more interrupted commands, named once you have read these.`)
   }
-  yield* (yield* ShownInterruptedJobs).record(
-    branch,
-    named.map((job) => job.toolCallId),
-  )
   return [
     {
       id: "exec-tools-interrupted",
-      priority: 86,
+      keys: named.map((job) => job.toolCallId),
       content: `# Interrupted background commands\n\nThe previous server stopped before these background commands finished. They are not running, and no output was captured. Tell the user which commands did not finish; start one again only when the user asks for it.\n\n${lines.join("\n")}`,
     },
   ]
 })
 
 /**
- * Marks read the interrupted jobs an answered turn showed. A turn that was
- * interrupted, failed, or never answered keeps them, and so does every job
- * the turn did not show.
+ * Marks read the interrupted jobs the turn read. The runtime hands back only
+ * what an answered turn showed: an interrupted, failed or unanswered turn
+ * keeps them, and so does every job the turn did not show.
  */
 const markReadInterruptedJobs = Effect.fn("ExecTools.markInterruptedJobsRead")(function* (
   input: TurnAfterInput,
 ) {
-  const shown = yield* (yield* ShownInterruptedJobs).takeRead(input)
-  if (shown.size === 0) return
+  if (input.readNotices.size === 0) return
   yield* (yield* BackgroundBashStorage).markNoticesRead(
     { sessionId: input.sessionId, branchId: input.branchId },
-    [...shown].map((id) => ToolCallId.make(id)),
+    [...input.readNotices].map((id) => ToolCallId.make(id)),
   )
 })
 
@@ -4637,17 +4619,16 @@ export const ExecToolsExtension = defineExtension({
         scope: "process",
         layer: BackgroundBashLayer,
       }),
-      ShownInterruptedJobsResource,
     )
     yield* host.on("turnProjection", () =>
-      interruptedJobSections().pipe(
+      interruptedJobNotices().pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("exec-tools.interrupted-notice.read.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
             Effect.as([]),
           ),
         ),
-        Effect.map((promptSections) => ({ promptSections })),
+        Effect.map((notices) => ({ notices })),
       ),
     )
     yield* host.on("turnAfter", (input) =>
