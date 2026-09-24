@@ -153,7 +153,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
     return " "
   }
   return (
-    <Show when={!props.controller.open() && running().length > 0}>
+    <Show when={running().length > 0}>
       <TrayFrame>
         <For each={lines()}>
           {(line, index) => (

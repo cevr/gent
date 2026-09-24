@@ -226,12 +226,14 @@ interface ChromePanelBodyProps {
 }
 
 function ChromePanelBody(props: ChromePanelBodyProps) {
+  const sticky = () => props.stickToBottom === true
+  const stickyStart = () => Option.filter(Option.some<"bottom">("bottom"), sticky)
   return (
     <scrollbox
       ref={props.ref}
       flexGrow={1}
-      stickyScroll={props.stickToBottom === true}
-      stickyStart="bottom"
+      stickyScroll={sticky()}
+      stickyStart={Option.getOrUndefined(stickyStart())}
       verticalScrollbarOptions={{ visible: false }}
       horizontalScrollbarOptions={{ visible: false }}
       paddingLeft={props.paddingLeft ?? 1}
@@ -402,7 +404,7 @@ export const usePickerGeometry = (): PickerGeometry => {
 // ── docked panes ────────────────────────────────────────────────────────────
 
 /**
- * Which docked panes are open. The footer that holds them provides it; a
+ * Which docked panes are open. `DockProvider` wraps the whole app; a
  * `PickerFrame` counts itself while it is mounted, and a `TrayFrame` hides
  * while any is open. Without a provider nothing is counted and trays show.
  */
@@ -414,7 +416,7 @@ interface DockState {
 
 const DockContext = createContext<Option.Option<DockState>>(Option.none())
 
-/** The footer's dock: the panes the reader opened win its rows over the trays. */
+/** The app's dock: the panes the reader opened win the footer's rows over the trays. */
 export function DockProvider(props: { children: JSX.Element }) {
   const [panes, setPanes] = createSignal(0)
   const dock: DockState = {
