@@ -1447,8 +1447,9 @@ describe("App auth gate", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
   // At 14 rows the composer takes six of the footer's twelve, and the agents
-  // pane's rules, title, filter and detail line take five more: one row is
-  // left for the list. The trays and the key hint give way for it.
+  // pane's rules and title take three more: three rows are left for the
+  // filter row, the section heading and the cursor row. The trays, the key
+  // hint and the detail line give way for them.
   it.live("the agents pane keeps its cursor row in view at the smallest height that holds it", () =>
     Effect.gen(function* () {
       const setup = yield* mountShortTerminalWithTrays(14)
@@ -1480,6 +1481,42 @@ describe("App auth gate", () => {
       )
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // Below 14 rows the pane has fewer rows than its fixed lines. It drops its
+  // optional lines in order (the detail line, the section headings, the
+  // filter row) and keeps one row for the cursor; at 11 rows the frame's
+  // title gives way too. Rows are cut, never drawn over each other or over
+  // the rule.
+  for (const height of [13, 12, 11]) {
+    it.live(`the agents pane at ${height} rows keeps its cursor row and overdraws nothing`, () =>
+      Effect.gen(function* () {
+        const setup = yield* mountShortTerminalWithTrays(height)
+        yield* waitForFrame(setup, (frame) => frame.includes("alarm in now"), "the alarm tray")
+        setup.mockInput.pressKey("t", { ctrl: true })
+        yield* waitForFrame(setup, (frame) => !frame.includes("alarm in now"), "the agents pane")
+        const frame = yield* waitForFrame(
+          setup,
+          (current) => current.includes("delegate: task 3  ·  running"),
+          `the cursor row at ${height} rows`,
+        )
+        const drawn = frame.split("\n").filter((line) => line.trim().length > 0)
+        const ruled = drawn
+          .map((line, index) => ({ line, index }))
+          .filter(({ line }) => line.startsWith("─"))
+          .map(({ index }) => index)
+        const pane = drawn.slice(ruled.at(-2))
+        // Each rule is only rule: no row of text drawn over it.
+        const rules = pane.filter((line) => line.startsWith("─"))
+        expect(rules).toHaveLength(2)
+        for (const rule of rules) expect(rule.trim()).toMatch(/^─+$/)
+        // The cursor row holds only its own text, not the detail line's.
+        const cursor = pane.filter((line) => line.includes("delegate: task 3"))
+        expect(cursor).toHaveLength(1)
+        expect(cursor[0]).not.toContain("turn ")
+        // The pane closes inside the terminal: its bottom rule is the last row drawn.
+        expect(pane.at(-1)?.startsWith("─")).toBe(true)
+      }).pipe(Effect.timeout("10 seconds")),
+    )
+  }
   // The live run: an alarm and three working children filled the trays, and
   // the btw pane showed its question but not the fork's stored answer.
   it.live("the btw pane keeps the fork's answer in view on a short terminal with full trays", () =>

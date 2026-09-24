@@ -24,6 +24,7 @@ import {
   textWidth,
   TrayFrame,
   truncate,
+  usePickerBodyRows,
   usePickerGeometry,
   useScopedKeyboard,
   useSpinnerClock,
@@ -390,6 +391,30 @@ const paneItems = (rows: ReadonlyArray<AgentRowEntry>): ReadonlyArray<PaneItem> 
   return items
 }
 
+/**
+ * The pane's optional lines that fit the rows its frame has. Its fixed lines
+ * can outnumber them on a short terminal, so it drops them in order: the
+ * detail line, then the section headings, then the filter row. One row stays
+ * for the cursor. An unmeasured frame and a list that fits keep every line.
+ */
+const paneLines = (bodyRows: Option.Option<number>, drawnItems: number) => {
+  // The filter row, the items, the detail line.
+  const full = drawnItems + 2
+  const fits = (lines: number) =>
+    Option.match(bodyRows, {
+      onNone: () => true,
+      onSome: (rows) => rows >= full || rows >= lines,
+    })
+  return {
+    // The filter row, a heading, the cursor row and the detail line.
+    detail: fits(4),
+    // The filter row, a heading and the cursor row.
+    headings: fits(3),
+    // The filter row and the cursor row.
+    filter: fits(2),
+  }
+}
+
 /** "1 running, 0 idle, 3 inactive" for the pane title: each loop counted by its section, its own state. */
 const countsLabel = (rows: ReadonlyArray<AgentRowEntry>): string => {
   const count = (state: AgentRowEntry["section"]) =>
@@ -593,15 +618,21 @@ export function AgentsPane(props: {
     return theme.textMuted
   }
 
-  const rows = (): ReadonlyArray<SelectListRow<AgentRowEntry>> =>
+  /**
+   * The list's rows. A heading that gives way draws nothing but stays a row,
+   * so the list's values, and with them its cursor, do not change with it.
+   */
+  const rows = (headings: () => boolean): ReadonlyArray<SelectListRow<AgentRowEntry>> =>
     paneItems(visible()).map((item) => {
       if (item.kind === "heading") {
         return decoration<AgentRowEntry>(() => (
-          <box paddingLeft={1}>
-            <text style={{ fg: theme.textMuted }}>
-              {`${SECTION_TITLE[item.section]} (${item.count})`}
-            </text>
-          </box>
+          <Show when={headings()}>
+            <box paddingLeft={1}>
+              <text style={{ fg: theme.textMuted }}>
+                {`${SECTION_TITLE[item.section]} (${item.count})`}
+              </text>
+            </box>
+          </Show>
         ))
       }
       return selectable(item.row, (selected, id) => {
@@ -642,18 +673,21 @@ export function AgentsPane(props: {
   const paneHeight = () =>
     pickerHeight(pickerLines(paneItems(visible()).length, 1), dimensions().height)
 
-  return (
-    <Show when={props.open}>
-      <PickerFrame
-        height={paneHeight()}
-        title={`Agents · ${countsLabel(visible())}`}
-        footer={"↑↓ move   ↵ open   ^x delete   esc close   ^t hide"}
-      >
+  // Inside the frame, so it reads the rows the frame actually has.
+  const Body = () => {
+    const bodyRows = usePickerBodyRows()
+    const lines = () => paneLines(bodyRows(), paneItems(visible()).length)
+    const headings = () => lines().headings
+    return (
+      <>
         <SelectList
           id="agents"
           open={props.open}
-          rows={rows}
-          filter={{ onQueryChange: (query) => props.controller.refresh(query) }}
+          rows={() => rows(headings)}
+          filter={{
+            onQueryChange: (query) => props.controller.refresh(query),
+            showInput: lines().filter,
+          }}
           sticky={sticky}
           // One detail read per selection, not per keystroke batch: the
           // controller ignores a repeat of the row it is already fetching.
@@ -674,7 +708,7 @@ export function AgentsPane(props: {
           onDismiss={props.onClose}
         />
 
-        <Show when={visible().length > 0}>
+        <Show when={visible().length > 0 && lines().detail}>
           <ChromePanel.Section>
             <text style={{ fg: theme.textMuted }}>
               {truncate(detailLabel(props.controller.detail()), sectionWidth())}
@@ -683,6 +717,18 @@ export function AgentsPane(props: {
         </Show>
 
         <ChromePanel.Error error={Option.getOrUndefined(props.controller.error())} />
+      </>
+    )
+  }
+
+  return (
+    <Show when={props.open}>
+      <PickerFrame
+        height={paneHeight()}
+        title={`Agents · ${countsLabel(visible())}`}
+        footer={"↑↓ move   ↵ open   ^x delete   esc close   ^t hide"}
+      >
+        <Body />
       </PickerFrame>
     </Show>
   )

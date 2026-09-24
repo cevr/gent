@@ -429,6 +429,19 @@ export function DockProvider(props: { children: JSX.Element }) {
   return <DockContext.Provider value={Option.some(dock)}>{props.children}</DockContext.Provider>
 }
 
+/**
+ * The rows a `PickerFrame` body has between its title and its bottom rule,
+ * once the frame is measured. A pane whose fixed lines can outnumber them
+ * drops its optional lines against this count.
+ */
+const PickerBodyRowsContext = createContext<() => Option.Option<number>>(() => Option.none())
+
+export const usePickerBodyRows = (): (() => Option.Option<number>) =>
+  useContext(PickerBodyRowsContext)
+
+/** Two rules, the title and one body row: below this the title gives way. */
+const PICKER_ROWS_WITH_TITLE = 4
+
 export function PickerFrame(props: {
   height: number
   /** The muted heading row. A picker that carries counts puts them in here. */
@@ -442,10 +455,20 @@ export function PickerFrame(props: {
   // The height is what the frame asks for. When the footer it docks in runs
   // out of rows, the trays are already hidden (`TrayFrame`) and the frame is
   // the one box that gives way, in whole rows. Squeezed, it drops its key
-  // hint before its body's last row: the rows the reader opened it for win.
-  // A change of either the measured or the requested height re-decides it.
+  // hint, then its title, before its body's last row: the rows the reader
+  // opened it for win. A change of either the measured or the requested
+  // height re-decides it. The body reads the rows it has from
+  // `usePickerBodyRows`, so a pane can drop its own optional lines to fit.
   const [measured, setMeasured] = createSignal(Option.none<number>())
   const squeezed = () => Option.exists(measured(), (rows) => rows < props.height)
+  const titled = () => !Option.exists(measured(), (rows) => rows < PICKER_ROWS_WITH_TITLE)
+  const bodyRows = () =>
+    Option.map(measured(), (rows) => {
+      let chrome = 2
+      if (titled()) chrome += 1
+      if (!squeezed()) chrome += 1
+      return Math.max(0, rows - chrome)
+    })
   return (
     <box
       flexDirection="column"
@@ -463,12 +486,16 @@ export function PickerFrame(props: {
         border={["top", "bottom"]}
         borderColor={theme.border}
       >
-        <box height={1} flexShrink={0} overflow="hidden">
-          <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-            {props.title}
-          </text>
-        </box>
-        {props.children}
+        <Show when={titled()}>
+          <box height={1} flexShrink={0} overflow="hidden">
+            <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+              {props.title}
+            </text>
+          </box>
+        </Show>
+        <PickerBodyRowsContext.Provider value={bodyRows}>
+          {props.children}
+        </PickerBodyRowsContext.Provider>
       </box>
       <Show when={!squeezed()}>
         <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>
