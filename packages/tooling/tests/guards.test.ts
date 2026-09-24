@@ -3041,6 +3041,40 @@ describe("a declared dependency must have a use", () => {
     expect(unusedNames(scope)).toEqual([])
   })
 
+  test("a commented-out import is not a use", () => {
+    const scope = dependencyScope({
+      packageJson: { dependencies: { ghost: "1", "ghost-block": "1", live: "1" } },
+      files: new Map([
+        [
+          "packages/core/src/x.ts",
+          [
+            '// import { Machine } from "ghost"',
+            '/* const b = require("ghost-block") */',
+            'const url = "https://example.com/a" // a string keeps its slashes',
+            'import { y } from "live"',
+          ].join("\n"),
+        ],
+      ]),
+    })
+    expect(unusedNames(scope)).toEqual(['dependencies["ghost"]', 'dependencies["ghost-block"]'])
+  })
+
+  test("a commented-out config entry is not a use", () => {
+    const scope = dependencyScope({
+      packageJson: { devDependencies: { "json-ghost": "1", "yaml-ghost": "1", kept: "1" } },
+      files: new Map([
+        ["packages/core/.oxlintrc.json", '{\n  // "jsPlugins": ["json-ghost"]\n  "x": "kept"\n}'],
+        ["packages/core/ci.yml", '# run: "yaml-ghost"\nname: "a # b"'],
+      ]),
+      commands: ["# yaml-ghost is not run here"],
+      installed: installedMap([["yaml-ghost", { bin: { "yaml-ghost": "./bin.js" } }]]),
+    })
+    expect(unusedNames(scope)).toEqual([
+      'devDependencies["json-ghost"]',
+      'devDependencies["yaml-ghost"]',
+    ])
+  })
+
   test("a config string and a script word count as a use; the manifest's own keys do not", () => {
     const scope = dependencyScope({
       packageJson: {

@@ -3278,31 +3278,63 @@ const packageOfSpecifier = (specifier: string): Option.Option<string> => {
   return Option.some(segments.slice(0, 1).join("/"))
 }
 
-/** A module a source file loads: `import`, `export … from`, `import()`, `require()`, a types reference. */
+/** A module a source file loads: `import`, `export … from`, `import()`, `require()`. */
 const SOURCE_SPECIFIER =
-  /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*|\bmock\.module\s*\(\s*|<reference\s+types=)["']([^"'\s]+)["']/g
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*|\bmock\.module\s*\(\s*)["']([^"'\s]+)["']/g
+/** A triple-slash types reference: a comment by syntax, a load by meaning. */
+const TYPES_REFERENCE = /^\s*\/\/\/\s*<reference\s+types=["']([^"'\s]+)["']/gm
 /** A quoted string in a config file (tsconfig `types`, bunfig `preload`, a lint plugin). */
 const CONFIG_STRING = /["']([^"'\s]+)["']/g
 
-/** A manifest names its own dependencies as keys; only its scripts count, as commands. */
-const dependencyPatternFor = (file: string): Option.Option<RegExp> => {
-  if (/\.[cm]?[jt]sx?$/.test(file)) return Option.some(SOURCE_SPECIFIER)
-  if (/\.(?:jsonc?|toml|ya?ml)$/.test(file) && !/(?:^|\/)package\.json$/.test(file)) {
-    return Option.some(CONFIG_STRING)
+/** Blank each `#` comment (YAML, TOML, a shell line) that starts outside a quoted string. */
+const withoutHashComments = (text: string): string =>
+  text
+    .split("\n")
+    .map((line) => {
+      let quote = ""
+      for (const [index, char] of [...line].entries()) {
+        if (quote !== "") {
+          if (char === quote) quote = ""
+          continue
+        }
+        if (char === '"' || char === "'") quote = char
+        if (char === "#" && (index === 0 || /\s/.test(line.charAt(index - 1)))) {
+          return line.slice(0, index)
+        }
+      }
+      return line
+    })
+    .join("\n")
+
+const matchedGroups = (text: string, pattern: RegExp): ReadonlyArray<string> =>
+  [...text.matchAll(pattern)].map((match) => match[1] ?? "")
+
+/**
+ * The module specifiers a file loads or names, read with its comments blanked
+ * so a commented-out import keeps nothing alive. A manifest names its own
+ * dependencies as keys; only its scripts count, as commands.
+ */
+const specifiersIn = (file: string, text: string): ReadonlyArray<string> => {
+  if (/\.[cm]?[jt]sx?$/.test(file)) {
+    return [
+      ...matchedGroups(withoutComments(text), SOURCE_SPECIFIER),
+      ...matchedGroups(text, TYPES_REFERENCE),
+    ]
   }
-  return Option.none()
+  if (/(?:^|\/)package\.json$/.test(file)) return []
+  if (/\.jsonc?$/.test(file)) return matchedGroups(withoutComments(text), CONFIG_STRING)
+  if (/\.(?:toml|ya?ml)$/.test(file)) return matchedGroups(withoutHashComments(text), CONFIG_STRING)
+  return []
 }
 
 const commandWords = (command: string): ReadonlyArray<string> =>
-  command.split(/[\s"'\\;&|()]+/).filter((word) => word.length > 0)
+  withoutHashComments(command)
+    .split(/[\s"'\\;&|()]+/)
+    .filter((word) => word.length > 0)
 
 /** Every package the scope's files load or name. */
 const namedPackages = (scope: DependencyScope): ReadonlySet<string> => {
-  const specifiers = [...scope.files].flatMap(([file, text]) =>
-    Option.toArray(dependencyPatternFor(file)).flatMap((pattern) =>
-      [...text.matchAll(pattern)].map((match) => match[1] ?? ""),
-    ),
-  )
+  const specifiers = [...scope.files].flatMap(([file, text]) => specifiersIn(file, text))
   // A command word can be a module too: `bun --preload @opentui/solid/preload`.
   return new Set(
     [...specifiers, ...scope.commands.flatMap(commandWords)].flatMap((specifier) =>
