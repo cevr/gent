@@ -155,7 +155,8 @@ export const AgentEvent = Schema.TaggedUnion({
      * USD over the same steps, plus any compaction summary the turn wrote,
      * frozen at emit time. Present only beside `usage`, and only when every
      * step and summary was priced: a turn that mixed a priced and an unpriced
-     * model has no cost, not the priced part.
+     * model, or whose summary failed after its model was admitted, has no
+     * cost, not the priced part.
      */
     costUsd: Schema.optional(Schema.Finite),
   },

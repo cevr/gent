@@ -91,7 +91,7 @@ import {
   SqliteStorage,
 } from "../../src/storage/storage"
 import { SessionRuntime } from "../../src/runtime/session"
-import { ModelContextCompactor } from "../../src/runtime/model-context"
+import { ModelCompactionError, ModelContextCompactor } from "../../src/runtime/model-context"
 import { makeTurnLedger } from "../../src/runtime/turn"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import { e2ePreset } from "../helpers/test-preset"
@@ -1033,12 +1033,24 @@ describe("session metrics", () => {
     }),
   )
 
+  /** A compactor whose summary receipt names `summaryModelId` and one million input tokens. */
+  const stubSummary =
+    (summaryModelId: ModelId): ModelContextCompactor["Service"]["compact"] =>
+    () =>
+      Effect.succeed({
+        notice: "stub summary",
+        modelId: summaryModelId,
+        usage: { inputTokens: 1_000_000, outputTokens: 0 },
+      })
+
   /**
    * Two turns on a small window, so the second turn's projection overflows
-   * and the stub compactor writes a summary whose receipt names
-   * `summaryModelId`. Returns the stored events of the branch.
+   * and `compact` runs. Returns the stored events of the branch.
    */
-  const runCompactingTurns = (summaryModelId: ModelId, summaryModels: readonly Model[]) =>
+  const runCompactingTurns = (
+    compact: ModelContextCompactor["Service"]["compact"],
+    summaryModels: readonly Model[],
+  ) =>
     Effect.gen(function* () {
       const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
         textStep("first reply"),
@@ -1053,17 +1065,7 @@ describe("session metrics", () => {
             defineResource({
               id: "@test/stub-compactor/compactor",
               scope: "process",
-              layer: Layer.succeed(
-                ModelContextCompactor,
-                ModelContextCompactor.of({
-                  compact: () =>
-                    Effect.succeed({
-                      notice: "stub summary",
-                      modelId: summaryModelId,
-                      usage: { inputTokens: 1_000_000, outputTokens: 0 },
-                    }),
-                }),
-              ),
+              layer: Layer.succeed(ModelContextCompactor, ModelContextCompactor.of({ compact })),
             }),
           )
         }),
@@ -1119,7 +1121,7 @@ describe("session metrics", () => {
         contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
         pricing: { input: 1, output: 1 },
       })
-      const events = yield* runCompactingTurns(summaryModel.id, [summaryModel])
+      const events = yield* runCompactingTurns(stubSummary(summaryModel.id), [summaryModel])
       const projected = events.find(
         (event) => event._tag === "ModelContextProjected" && event.compacted,
       )
@@ -1136,7 +1138,7 @@ describe("session metrics", () => {
         provider: ProviderId.make("test"),
         contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
       })
-      const events = yield* runCompactingTurns(unpricedSummary.id, [unpricedSummary])
+      const events = yield* runCompactingTurns(stubSummary(unpricedSummary.id), [unpricedSummary])
       expect(
         events.some((event) => event._tag === "ModelContextProjected" && event.compacted),
       ).toBe(true)
@@ -1145,6 +1147,32 @@ describe("session metrics", () => {
       const [first, second] = receipts
       // The first turn priced every step; the second cannot price its summary,
       // so a sum of its step alone would read as the turn's whole cost.
+      expect(first?._tag === "TurnCompleted" && first.costUsd).toBeGreaterThan(0)
+      expect(second?._tag === "TurnCompleted" && second.usage).toBeDefined()
+      expect(second?._tag === "TurnCompleted" && second.costUsd).toBeUndefined()
+    }),
+  )
+
+  it.live("a summary that fails after its model was admitted leaves the turn without a cost", () =>
+    Effect.gen(function* () {
+      // The summary model is admitted, so its call may have spent tokens that
+      // no receipt reports; the turn's step alone is not its whole cost.
+      const failAfterAdmission: ModelContextCompactor["Service"]["compact"] = (request) =>
+        request
+          .summaryModel(1_000)
+          .pipe(
+            Effect.orDie,
+            Effect.andThen(
+              new ModelCompactionError({ modelId: request.modelId, reason: "SummaryEmpty" }),
+            ),
+          )
+      const events = yield* runCompactingTurns(failAfterAdmission, [])
+      expect(events.some((event) => event._tag === "ErrorOccurred" && event.notice === true)).toBe(
+        true,
+      )
+      const receipts = events.filter((event) => event._tag === "TurnCompleted")
+      expect(receipts).toHaveLength(2)
+      const [first, second] = receipts
       expect(first?._tag === "TurnCompleted" && first.costUsd).toBeGreaterThan(0)
       expect(second?._tag === "TurnCompleted" && second.usage).toBeDefined()
       expect(second?._tag === "TurnCompleted" && second.costUsd).toBeUndefined()

@@ -647,8 +647,9 @@ interface TurnLedger {
     readonly toolCallCount: number
   }) => Effect.Effect<void>
   /**
-   * A compaction summary this turn wrote, and its price: none when its model
-   * has no price, which leaves the turn without a cost. Its tokens are not a
+   * A compaction summary this turn wrote or tried to write, and its price:
+   * none when its model has no price or the summary failed after its model
+   * was admitted, which leaves the turn without a cost. Its tokens are not a
    * step's.
    */
   readonly noteCompaction: (costUsd: Option.Option<number>) => Effect.Effect<void>
@@ -1507,6 +1508,9 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }
       return projection.success
     })
+  // Set once a summary model is admitted: from then on its call may spend
+  // tokens whether or not a summary comes back.
+  const summaryAdmitted = yield* Ref.make(false)
   const { durableMessages, compacted, summary } = yield* projectContextWindow({
     sessionId: params.sessionId,
     branchId: params.branchId,
@@ -1523,12 +1527,19 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       resolveAdmittedModel({
         ...modelRequest,
         hints: { ...modelRequest.hints, maxTokens, reasoning: "none" },
-      }),
+      }).pipe(Effect.tap(() => Ref.set(summaryAdmitted, true))),
   })
 
-  // A summary is priced by the model its receipt names, as a step is by its own.
+  // A summary is priced by the model its receipt names, as a step is by its
+  // own. A summary that failed after its model was admitted has no receipt,
+  // so its spend is unknown: the turn's cost is then absent, never partial.
   const compaction = yield* Option.match(summary, {
-    onNone: () => Effect.succeedNone,
+    onNone: () =>
+      Ref.get(summaryAdmitted).pipe(
+        Effect.map((admitted) =>
+          Option.liftPredicate({ costUsd: Option.none<number>() }, () => admitted),
+        ),
+      ),
     onSome: (value) =>
       computeStreamEndedCost({
         modelId: value.modelId,
