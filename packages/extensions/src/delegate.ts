@@ -524,7 +524,7 @@ const settleIfGone = (entry: DelegateEntry) =>
 
 /**
  * Bring the current branch's registry up to date without a hook: a start
- * whose prompt never reached the child is re-sent, a finished child whose
+ * not marked sent is re-sent and its receipt still read, a finished child whose
  * completion never landed (the process died between the receipt and the
  * hook) is delivered now, a deleted child settles as interrupted, and a
  * private row is removed with its session, never delivered, and a child with
@@ -551,10 +551,14 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
           next = replaceEntry(next, current)
           continue
         }
+        // The flag does not say whether the child ran: a crash after its
+        // start was admitted but before the flag was saved leaves `false` on
+        // a child that may have finished. So the start is re-sent either way
+        // (a repeat of its id admits nothing new) and the receipt decides.
+        const sent = { ...entry, submitted: true }
         if (!entry.submitted) {
           yield* submitStart(entry)
-          next = replaceEntry(next, { ...entry, submitted: true })
-          continue
+          next = replaceEntry(next, sent)
         }
         const receipt = yield* turnReceipt({
           ...entry,
@@ -565,12 +569,12 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
           // previous process stopped. The re-send carries the start's id, so
           // the loop admits nothing new, but it opens the child's loop, and
           // the open resumes the unfinished turn.
-          yield* submitStart(entry)
+          if (entry.submitted) yield* submitStart(entry)
           continue
         }
         const delivered = yield* deliverCompletion(
           parent,
-          entry,
+          sent,
           outcomeOf(receipt.value),
           usageOf(Option.fromUndefinedOr(receipt.value.usage)),
         )

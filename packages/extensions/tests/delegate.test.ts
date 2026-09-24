@@ -2202,7 +2202,9 @@ const restartableHome = Effect.gen(function* () {
     })
   const registryOf = (branchId: BranchId) =>
     fs.readFileString(`${home}/.gent/delegates/${branchId}.json`).pipe(Effect.map(decodeRegistry))
-  return { layerFor, registryOf }
+  const writeRegistry = (branchId: BranchId, entries: ReadonlyArray<DelegateEntry>) =>
+    fs.writeFileString(`${home}/.gent/delegates/${branchId}.json`, encodeRegistry(entries))
+  return { layerFor, registryOf, writeRegistry }
 }).pipe(Effect.provide(BunFileSystem.layer))
 
 type RestartableHome = Effect.Success<typeof restartableHome>
@@ -2338,5 +2340,89 @@ describe("a child running when the server stopped", () => {
         }).pipe(Effect.timeout("30 seconds")),
       ),
     35_000,
+  )
+
+  it.live(
+    "that finished before its start was marked sent still wakes the parent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* restartableHome
+          // First process: the child finishes, but the process stops before
+          // its row was marked submitted and before its completion landed.
+          // The row is held out of the file while the child's turn ends, so
+          // the child's own hook finds nothing to deliver.
+          const parent = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const childCalled = yield* Deferred.make<void>()
+              const release = yield* Deferred.make<void>()
+              const providerLayer = LanguageModelLayers.testStream((options) => {
+                const texts = promptTexts(options.prompt)
+                if (texts[0]?.endsWith(childTask) === true) {
+                  return Deferred.succeed(childCalled, void 0).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.as(reply("pong")),
+                  )
+                }
+                if (promptToolCallIds(options.prompt).includes("start-1")) {
+                  return Effect.succeed(reply("started, ending my turn"))
+                }
+                return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+              })
+              const { client } = yield* createRpcClient(home.layerFor(providerLayer))
+              const created = yield* client.session.create({ cwd: "/tmp" })
+              const parent = { sessionId: created.sessionId, branchId: created.branchId }
+              yield* client.message.send({ ...parent, content: "delegate this" })
+              yield* Deferred.await(childCalled)
+              yield* waitFor(
+                client.session.getSnapshot(parent),
+                (current) =>
+                  current.runtime._tag === "Idle" &&
+                  messageTexts(current.messages).includes("started, ending my turn"),
+                5_000,
+                "the parent ended its turn",
+              )
+              const [row] = yield* home.registryOf(parent.branchId)
+              if (Predicate.isUndefined(row)) return yield* Effect.die("no child row")
+              yield* home.writeRegistry(parent.branchId, [])
+              yield* Deferred.succeed(release, void 0)
+              yield* waitFor(
+                client.session.getSnapshot({ sessionId: row.sessionId, branchId: row.branchId }),
+                (current) =>
+                  current.runtime._tag === "Idle" &&
+                  messageTexts(current.messages).includes("pong"),
+                5_000,
+                "the child finished",
+              )
+              yield* home.writeRegistry(parent.branchId, [
+                { ...row, submitted: false, delivered: false },
+              ])
+              const before = yield* client.session.getSnapshot(parent)
+              expect(completionMessages(before.messages)).toHaveLength(0)
+              return parent
+            }),
+          )
+
+          // Second process: opening the parent reads the child's receipt and
+          // delivers its completion.
+          const providerLayer = LanguageModelLayers.testStream(() =>
+            Effect.succeed(reply("read it")),
+          )
+          const { client } = yield* createRpcClient(home.layerFor(providerLayer))
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot(parent),
+            (current) =>
+              completionMessages(current.messages).length === 1 &&
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).includes("read it"),
+            8_000,
+            "the finished child's completion woke the parent",
+          )
+          expect(messageTexts(completionMessages(snapshot.messages)).join("\n")).toContain("pong")
+          const [entry] = yield* home.registryOf(parent.branchId)
+          expect(entry).toMatchObject({ submitted: true, delivered: true })
+        }).pipe(Effect.timeout("20 seconds")),
+      ),
+    25_000,
   )
 })
