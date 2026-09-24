@@ -2156,6 +2156,63 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       expect(keychain).toContain("refreshed-refresh")
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
+  it.live("a sign-in written during the refresh survives, and the request uses it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      yield* fs.makeDirectory(path.join(home, ".claude"))
+      const credentialsFile = path.join(home, ".claude", ".credentials.json")
+      yield* fs.writeFileString(
+        credentialsFile,
+        encodeExternalJson({
+          claudeAiOauth: { accessToken: "old-access", refreshToken: "old-refresh", expiresAt: 0 },
+        }),
+      )
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildAnthropicModelDriverLive(
+        credentialCellRef,
+        Option.none(),
+        AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+        testCatalogSource(),
+      )
+      const newerSignIn = encodeExternalJson({
+        claudeAiOauth: {
+          accessToken: "signed-in-access",
+          refreshToken: "signed-in-refresh",
+          expiresAt: FUTURE_MS,
+        },
+      })
+      const fetchState = makeFakeFetchState()
+      const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+        if (!request.url.endsWith("/v1/oauth/token")) return anthropicHappyResponse()
+        // The user signs in again (`claude` writes the keychain) while the
+        // refresh of the old token is in flight: the token POST answers only
+        // after the new sign-in is on disk.
+        return fs.writeFileString(credentialsFile, newerSignIn).pipe(
+          Effect.orDie,
+          Effect.as({
+            status: 200,
+            body: encodeExternalJson({
+              access_token: "refreshed-access",
+              refresh_token: "refreshed-refresh",
+              expires_in: 3600,
+            }),
+          }),
+        )
+      })
+      const model = yield* driver
+        .resolveModel("claude-opus-4-6", makeOAuthInfo())
+        .pipe(Effect.provide(fetchLayer))
+      yield* runOne(model, fetchState)
+
+      expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer signed-in-access")
+      const keychain = yield* fs.readFileString(credentialsFile)
+      expect(keychain).toContain("signed-in-refresh")
+      expect(keychain).not.toContain("refreshed-refresh")
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
 })
 describe("buildAnthropicModelDriver — credential order", () => {
   it.live("a stored Claude Code sign-in beats ANTHROPIC_API_KEY", () =>

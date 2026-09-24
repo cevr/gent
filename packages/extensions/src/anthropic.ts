@@ -538,9 +538,50 @@ const readCredentialsFile: Effect.Effect<
   return yield* decodeCredentials(raw)
 })
 
+/** Two stored credentials, or their absence, are the same sign-in at the same rotation. */
+const sameStoredCredential = Option.makeEquivalence(Schema.toEquivalence(ClaudeCredentials))
+
+/**
+ * What a write-back found. `Kept` means the store still held the credential
+ * the refresh started from, so the refreshed one is the one to use (whether
+ * or not the blob took the splice). `Superseded` means another writer
+ * changed the store during the refresh; its credential wins.
+ */
+const WriteBack = Schema.TaggedUnion({
+  Kept: {},
+  Superseded: { stored: Schema.Option(ClaudeCredentials) },
+})
+type WriteBack = typeof WriteBack.Type
+
+/**
+ * Splice `creds` into the stored blob `raw`, but only while it still holds
+ * `expected`, the credential the refresh started from. Another writer (a
+ * new sign-in, the `claude` CLI's own refresh) wins over this refresh.
+ */
+const compareAndWrite = <E, R>(
+  raw: string,
+  creds: ClaudeCredentials,
+  expected: Option.Option<ClaudeCredentials>,
+  write: (blob: string) => Effect.Effect<void, E, R>,
+): Effect.Effect<WriteBack, E, R> =>
+  Effect.gen(function* () {
+    const stored = yield* Effect.option(decodeCredentials(raw))
+    if (!sameStoredCredential(stored, expected)) {
+      return WriteBack.cases.Superseded.make({ stored })
+    }
+    const updated = updateCredentialBlob(raw, creds)
+    if (Option.isSome(updated)) yield* write(updated.value)
+    return WriteBack.cases.Kept.make({})
+  })
+
 const writeCredentialsFile = (
   creds: ClaudeCredentials,
-): Effect.Effect<void, ProviderAuthError, AnthropicPlatform | FileSystem.FileSystem | Path.Path> =>
+  expected: Option.Option<ClaudeCredentials>,
+): Effect.Effect<
+  WriteBack,
+  ProviderAuthError,
+  AnthropicPlatform | FileSystem.FileSystem | Path.Path
+> =>
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     const fs = yield* FileSystem.FileSystem
@@ -555,12 +596,14 @@ const writeCredentialsFile = (
     if (exists) {
       raw = yield* fs.readFileString(credentialsFile).pipe(Effect.mapError(mapFsError))
     }
-    const updated = updateCredentialBlob(raw, creds)
-    if (Option.isNone(updated)) return
-    yield* fs.writeFileString(credentialsFile, updated.value).pipe(Effect.mapError(mapFsError))
-    // chmod 0600 after write so the credentials file is not
-    // world-readable on first creation.
-    yield* fs.chmod(credentialsFile, 0o600).pipe(Effect.mapError(mapFsError))
+    return yield* compareAndWrite(raw, creds, expected, (blob) =>
+      fs.writeFileString(credentialsFile, blob).pipe(
+        // chmod 0600 after write so the credentials file is not
+        // world-readable on first creation.
+        Effect.andThen(fs.chmod(credentialsFile, 0o600)),
+        Effect.mapError(mapFsError),
+      ),
+    )
   })
 
 // ── oauth keychain ──────────────────────────────────────────────────────────
@@ -700,21 +743,27 @@ const readClaudeCodeCredentials: Effect.Effect<
  * the stale `accessToken` straight back from disk/keychain. The
  * `acct` field is preserved by reading the existing entry first.
  *
+ * The write is a compare-and-swap: it re-reads the stored blob and writes
+ * only while it still holds `expected`, the credential read before the
+ * refresh. A sign-in (or a CLI refresh) written meanwhile is newer than
+ * this refresh, so it survives and the result names it.
+ *
  * Errors are surfaced as `ProviderAuthError` for the caller to log:
  * write-back is best-effort; the in-memory creds are authoritative for
  * the in-flight request.
  */
 const writeBackCredentials = (
   creds: ClaudeCredentials,
+  expected: Option.Option<ClaudeCredentials>,
 ): Effect.Effect<
-  void,
+  WriteBack,
   ProviderAuthError,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     if (platform.platform !== "darwin") {
-      return yield* writeCredentialsFile(creds)
+      return yield* writeCredentialsFile(creds, expected)
     }
 
     // A read failure surfaces as a typed error, so the refresh call site
@@ -738,13 +787,15 @@ const writeBackCredentials = (
         ),
       ),
     )
-    const updated = updateCredentialBlob(raw, creds)
-    if (Option.isNone(updated)) return
-    const accountName = Option.getOrElse(
-      yield* getKeychainAccountName(CLAUDE_KEYCHAIN_SERVICE),
-      () => CLAUDE_KEYCHAIN_SERVICE,
+    return yield* compareAndWrite(raw, creds, expected, (blob) =>
+      Effect.gen(function* () {
+        const accountName = Option.getOrElse(
+          yield* getKeychainAccountName(CLAUDE_KEYCHAIN_SERVICE),
+          () => CLAUDE_KEYCHAIN_SERVICE,
+        )
+        yield* writeKeychainEntry(CLAUDE_KEYCHAIN_SERVICE, accountName, blob)
+      }),
     )
-    yield* writeKeychainEntry(CLAUDE_KEYCHAIN_SERVICE, accountName, updated.value)
   })
 
 // ── oauth refresh ───────────────────────────────────────────────────────────
@@ -897,13 +948,20 @@ const refreshClaudeCodeCredentials = (
         // Best-effort write-back so subsequent processes pick up the
         // new token. A failure here doesn't lose the refresh — the
         // caller has it in memory.
-        yield* writeBackCredentials(refreshed.value).pipe(
+        const expected = Exit.getSuccess(current)
+        const outcome = yield* writeBackCredentials(refreshed.value, expected).pipe(
           Effect.catchEager((e: ProviderAuthError) =>
             Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
               Effect.annotateLogs({ error: String(e) }),
+              Effect.as(WriteBack.cases.Kept.make({})),
             ),
           ),
         )
+        // A sign-in written during the refresh is newer: use it, and drop
+        // this refresh rather than overwrite it.
+        if (outcome._tag === "Superseded" && Option.isSome(outcome.stored)) {
+          return outcome.stored.value
+        }
         return refreshed.value
       }
       const error = Cause.findErrorOption(refreshed.cause)
