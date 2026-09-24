@@ -28,7 +28,6 @@ import cacheExtension, {
   makeCacheScan,
   missCostUsd,
   missText,
-  scanCacheMisses,
   showsMissRow,
 } from "../../src/extensions/cache.client"
 import type { AnyExtensionClientModule, NoticeRow } from "../../src/extensions/client-facets"
@@ -70,6 +69,17 @@ const priceOf = (model: string) =>
   Option.flatMap(Option.fromUndefinedOr(models.find((entry) => entry.id === model)), (entry) =>
     Option.fromUndefinedOr(entry.pricing),
   )
+
+/** Every counted miss in one branch's history, in order: one scan over the envelopes. */
+const scanCacheMisses = (envelopes: Iterable<EventEnvelope>): ReadonlyArray<CacheMiss> => {
+  const scan = makeCacheScan()
+  const misses: Array<CacheMiss> = []
+  for (const envelope of envelopes) {
+    const miss = scan.fold(envelope)
+    if (Option.isSome(miss)) misses.push(miss.value)
+  }
+  return misses
+}
 
 interface Usage {
   readonly inputTokens: number

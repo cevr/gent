@@ -99,7 +99,7 @@ import {
   fileVersion,
   type FreshConfig,
   GENT_CONFIG_DIRECTORY,
-  hasProjectExtensionScope,
+  hasProjectScope,
   isProjectExtensionDirectoryTrusted,
   RuntimeEnvironment,
   type UserConfig,
@@ -1117,7 +1117,8 @@ const scanExtensionDirectories = Effect.fn("ExtensionLoader.scanExtensionDirecto
   const user = yield* scanDir(dirs.userDir)
   // Launched from home, the project directory is the user's: one scope, read once.
   let project: DirScan = { paths: [], unreadable: [] }
-  if (yield* hasProjectExtensionScope(dirs)) project = yield* scanDir(dirs.projectDir)
+  if (yield* hasProjectScope({ user: dirs.userDir, project: dirs.projectDir }))
+    project = yield* scanDir(dirs.projectDir)
   const scan: ExtensionScan = { dirs, user, project, projectTrusted }
   return scan
 })

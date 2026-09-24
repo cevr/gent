@@ -317,17 +317,6 @@ export const makeCacheScan = (): CacheScan => {
   return { fold }
 }
 
-/** Every counted miss in one branch's history, in order. */
-export const scanCacheMisses = (envelopes: Iterable<EventEnvelope>): ReadonlyArray<CacheMiss> => {
-  const scan = makeCacheScan()
-  const misses: Array<CacheMiss> = []
-  for (const envelope of envelopes) {
-    const miss = scan.fold(envelope)
-    if (Option.isSome(miss)) misses.push(miss.value)
-  }
-  return misses
-}
-
 // ── price and text ──────────────────────────────────────────────────────────
 
 type ModelPricing = NonNullable<Model["pricing"]>

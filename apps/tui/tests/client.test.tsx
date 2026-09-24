@@ -1294,6 +1294,21 @@ describe("ClientProvider session lifecycle", () => {
 
 type FeedClient = Parameters<typeof useSessionFeed>[2]
 
+/** A feed client whose every member a test does not name does nothing. */
+const feedClientStub = (
+  parts: Pick<FeedClient, "sessionIdentity" | "client" | "runtime"> & Partial<FeedClient>,
+): FeedClient => ({
+  log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+  setConnectionIssue: () => {},
+  waitForTransportReady: Effect.void,
+  applySessionRuntime: () => {},
+  applySessionSnapshot: () => {},
+  applySessionEvent: () => {},
+  resetSessionEvents: () => {},
+  applyBufferedSessionEvent: () => {},
+  ...parts,
+})
+
 const snapshotFor = (
   sessionId: SessionId,
   branchId: BranchId,
@@ -1711,7 +1726,7 @@ describe("useSessionFeed", () => {
       const dispose = createRoot((disposeRoot) => {
         const [active, setActive] = createSignal(makeSession(sessionId, branchId))
         const runtime = createMockRuntime()
-        const client = {
+        const client = feedClientStub({
           sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
@@ -1734,18 +1749,12 @@ describe("useSessionFeed", () => {
             },
           }),
           runtime,
-          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-          setConnectionIssue: () => {},
-          waitForTransportReady: Effect.void,
-          applySessionRuntime: () => {},
           applySessionSnapshot: () => {
             snapshotCount += 1
             setActive(makeSession(sessionId, branchId))
           },
           applySessionEvent: () => setActive(makeSession(sessionId, nextBranchId)),
-          resetSessionEvents: () => {},
-          applyBufferedSessionEvent: () => {},
-        } satisfies FeedClient
+        })
         useSessionFeed(
           () => sessionId,
           () => branchId,
@@ -1870,7 +1879,7 @@ describe("useSessionFeed", () => {
 
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = {
+        const client = feedClientStub({
           sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
@@ -1893,16 +1902,10 @@ describe("useSessionFeed", () => {
                 client.runtime.cast(Deferred.succeed(errorSeen, void 0))
             },
           },
-          setConnectionIssue: () => {},
-          waitForTransportReady: Effect.void,
-          applySessionRuntime: () => {},
-          applySessionSnapshot: () => {},
           applySessionEvent: () => {
             appliedEvents += 1
           },
-          resetSessionEvents: () => {},
-          applyBufferedSessionEvent: () => {},
-        } satisfies FeedClient
+        })
 
         feed = Option.some(
           useSessionFeed(
@@ -1989,7 +1992,7 @@ describe("useSessionFeed", () => {
       let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = {
+        const client = feedClientStub({
           sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
@@ -1999,15 +2002,7 @@ describe("useSessionFeed", () => {
             },
           }),
           runtime: createMockRuntime(),
-          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-          setConnectionIssue: () => {},
-          waitForTransportReady: Effect.void,
-          applySessionRuntime: () => {},
-          applySessionSnapshot: () => {},
-          applySessionEvent: () => {},
-          resetSessionEvents: () => {},
-          applyBufferedSessionEvent: () => {},
-        } satisfies FeedClient
+        })
         feed = Option.some(
           useSessionFeed(
             () => sessionId,
@@ -2123,7 +2118,7 @@ describe("useSessionFeed", () => {
       let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = {
+        const client = feedClientStub({
           sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
@@ -2133,15 +2128,7 @@ describe("useSessionFeed", () => {
             },
           }),
           runtime: createMockRuntime(),
-          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-          setConnectionIssue: () => {},
-          waitForTransportReady: Effect.void,
-          applySessionRuntime: () => {},
-          applySessionSnapshot: () => {},
-          applySessionEvent: () => {},
-          resetSessionEvents: () => {},
-          applyBufferedSessionEvent: () => {},
-        } satisfies FeedClient
+        })
         feed = Option.some(
           useSessionFeed(
             () => sessionId,
@@ -2177,7 +2164,7 @@ describe("useSessionFeed", () => {
     let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
     const dispose = createRoot((disposeRoot) => {
       const [active] = createSignal(makeSession(snapshot.sessionId, snapshot.branchId))
-      const client = {
+      const client = feedClientStub({
         sessionIdentity: identityOf(active),
         client: createMockClient({
           session: {
@@ -2187,15 +2174,7 @@ describe("useSessionFeed", () => {
           },
         }),
         runtime: createMockRuntime(),
-        log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-        setConnectionIssue: () => {},
-        waitForTransportReady: Effect.void,
-        applySessionRuntime: () => {},
-        applySessionSnapshot: () => {},
-        applySessionEvent: () => {},
-        resetSessionEvents: () => {},
-        applyBufferedSessionEvent: () => {},
-      } satisfies FeedClient
+      })
       feed = Option.some(
         useSessionFeed(
           () => snapshot.sessionId,
@@ -2435,7 +2414,7 @@ describe("useSessionFeed", () => {
 
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = {
+        const client = feedClientStub({
           sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
@@ -2451,20 +2430,14 @@ describe("useSessionFeed", () => {
             },
           }),
           runtime: createMockRuntime(),
-          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-          setConnectionIssue: () => {},
-          waitForTransportReady: Effect.void,
-          applySessionRuntime: () => {},
-          applySessionSnapshot: () => {},
           applySessionEvent: (envelope) => {
             if (envelope.id === liveEvent.id)
               client.runtime.cast(Deferred.succeed(liveSeen, void 0))
           },
-          resetSessionEvents: () => {},
           applyBufferedSessionEvent: (envelope) => {
             bufferedTags.push(envelope.event._tag)
           },
-        } satisfies FeedClient
+        })
 
         useSessionFeed(
           () => sessionId,
@@ -2597,7 +2570,7 @@ describe("useSessionFeed", () => {
         let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
         const dispose = createRoot((disposeRoot) => {
           const [active] = createSignal(makeSession(sessionId, branchId))
-          const client = {
+          const client = feedClientStub({
             sessionIdentity: identityOf(active),
             client: createMockClient({
               session: {
@@ -2613,19 +2586,13 @@ describe("useSessionFeed", () => {
               },
             }),
             runtime: createMockRuntime(),
-            log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-            setConnectionIssue: () => {},
-            waitForTransportReady: Effect.void,
-            applySessionRuntime: () => {},
-            applySessionSnapshot: () => {},
             applySessionEvent: () => {
               applied += 1
             },
-            resetSessionEvents: () => {},
             applyBufferedSessionEvent: () => {
               applied += 1
             },
-          } satisfies FeedClient
+          })
           feed = Option.some(
             useSessionFeed(
               () => sessionId,
@@ -2708,7 +2675,7 @@ describe("useSessionFeed", () => {
       let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = {
+        const client = feedClientStub({
           sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
@@ -2724,19 +2691,13 @@ describe("useSessionFeed", () => {
             },
           }),
           runtime: createMockRuntime(),
-          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-          setConnectionIssue: () => {},
-          waitForTransportReady: Effect.void,
-          applySessionRuntime: () => {},
-          applySessionSnapshot: () => {},
           applySessionEvent: () => {
             applied += 1
           },
-          resetSessionEvents: () => {},
           applyBufferedSessionEvent: () => {
             applied += 1
           },
-        } satisfies FeedClient
+        })
         feed = Option.some(
           useSessionFeed(
             () => sessionId,
@@ -2801,7 +2762,7 @@ describe("useSessionFeed", () => {
       let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = {
+        const client = feedClientStub({
           sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
@@ -2815,15 +2776,7 @@ describe("useSessionFeed", () => {
             },
           }),
           runtime: createMockRuntime(),
-          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-          setConnectionIssue: () => {},
-          waitForTransportReady: Effect.void,
-          applySessionRuntime: () => {},
-          applySessionSnapshot: () => {},
-          applySessionEvent: () => {},
-          resetSessionEvents: () => {},
-          applyBufferedSessionEvent: () => {},
-        } satisfies FeedClient
+        })
         feed = Option.some(
           useSessionFeed(
             () => sessionId,
@@ -2890,7 +2843,7 @@ describe("useSessionFeed", () => {
       let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = {
+        const client = feedClientStub({
           sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
@@ -2904,15 +2857,7 @@ describe("useSessionFeed", () => {
             },
           }),
           runtime: createMockRuntime(),
-          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-          setConnectionIssue: () => {},
-          waitForTransportReady: Effect.void,
-          applySessionRuntime: () => {},
-          applySessionSnapshot: () => {},
-          applySessionEvent: () => {},
-          resetSessionEvents: () => {},
-          applyBufferedSessionEvent: () => {},
-        } satisfies FeedClient
+        })
         feed = Option.some(
           useSessionFeed(
             () => sessionId,
@@ -2980,7 +2925,7 @@ describe("useSessionFeed", () => {
       let feed: Option.Option<ReturnType<typeof useSessionFeed>> = Option.none()
       const dispose = createRoot((disposeRoot) => {
         const [active] = createSignal(makeSession(sessionId, branchId))
-        const client = {
+        const client = feedClientStub({
           sessionIdentity: identityOf(active),
           client: createMockClient({
             session: {
@@ -2995,15 +2940,7 @@ describe("useSessionFeed", () => {
             },
           }),
           runtime: createMockRuntime(),
-          log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-          setConnectionIssue: () => {},
-          waitForTransportReady: Effect.void,
-          applySessionRuntime: () => {},
-          applySessionSnapshot: () => {},
-          applySessionEvent: () => {},
-          resetSessionEvents: () => {},
-          applyBufferedSessionEvent: () => {},
-        } satisfies FeedClient
+        })
         feed = Option.some(
           useSessionFeed(
             () => sessionId,

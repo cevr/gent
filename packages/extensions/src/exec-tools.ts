@@ -29,16 +29,20 @@ import {
   ExtensionId,
   headTailChars,
   lineCount,
+  makeShownNotices,
   maximumModelToolResultChars,
   type SessionId,
+  type ShownNotices,
   tool,
   ToolCallId,
+  type TurnAfterInput,
 } from "@gent/core/extensions/api"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
 // Test seam: only tests read these exports. BackgroundBashStorage, its error,
 // BackgroundBashSupervisorLive and BackgroundBashLayer let a test inject a
-// storage fault. BashParams encodes a model's tool input. splitCdCommand,
+// storage fault; addBackgroundBashColumn lets it replay a migration race.
+// BashParams encodes a model's tool input. splitCdCommand,
 // stripBackground and injectGitTrailers are pure transforms with unit tests.
 
 // ── background bash storage ─────────────────────────────────────────────────
@@ -119,14 +123,23 @@ interface BackgroundBashStorageService {
   ) => Effect.Effect<void, BackgroundBashStorageError>
   /** Marks the running jobs an earlier server process started as interrupted. */
   readonly reconcileInterrupted: Effect.Effect<void, BackgroundBashStorageError>
-  /** The branch's jobs that did not finish, oldest first. */
-  readonly interruptedJobs: (branch: {
-    readonly sessionId: SessionId
-    readonly branchId: BranchId
-  }) => Effect.Effect<
+  /** The branch's jobs that did not finish and no answered turn has read, oldest first. */
+  readonly interruptedJobs: (
+    branch: BackgroundBashBranch,
+  ) => Effect.Effect<
     ReadonlyArray<{ readonly toolCallId: ToolCallId; readonly command: string }>,
     BackgroundBashStorageError
   >
+  /** Marks these interrupted jobs' notices read: an answered turn showed them. */
+  readonly markNoticesRead: (
+    branch: BackgroundBashBranch,
+    toolCallIds: ReadonlyArray<ToolCallId>,
+  ) => Effect.Effect<void, BackgroundBashStorageError>
+}
+
+interface BackgroundBashBranch {
+  readonly sessionId: SessionId
+  readonly branchId: BranchId
 }
 
 const mapError = (message: string) => (cause: unknown) =>
@@ -142,6 +155,38 @@ const terminalState = (row: BackgroundBashJobRow): BackgroundBashTerminalState =
     message: Option.getOrUndefined(Option.fromNullishOr(row.message)),
   }
 }
+
+const backgroundBashColumns = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient
+  const rows = yield* sql<{ readonly name: string }>`
+    SELECT name FROM pragma_table_info('background_bash_jobs')
+  `
+  return rows.map((row) => row.name)
+}).pipe(Effect.mapError(mapError("Failed to read background bash jobs columns")))
+
+/**
+ * Adds a column the table read as `columns` lacks. Another process may have
+ * read the same old table and added it first: when the add fails, the table
+ * is read again, and a column that is there now is no failure.
+ */
+export const addBackgroundBashColumn = (
+  columns: ReadonlyArray<string>,
+  name: string,
+  type: "TEXT" | "INTEGER",
+) =>
+  Effect.gen(function* () {
+    if (columns.includes(name)) return
+    const sql = yield* SqlClient.SqlClient
+    yield* sql.unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN ${name} ${type}`).pipe(
+      Effect.catchCause((cause) =>
+        Effect.flatMap(backgroundBashColumns, (current) => {
+          if (current.includes(name)) return Effect.void
+          return Effect.failCause(cause)
+        }),
+      ),
+      Effect.mapError(mapError(`Failed to add background bash jobs column ${name}`)),
+    )
+  })
 
 export class BackgroundBashStorage extends Context.Service<
   BackgroundBashStorage,
@@ -168,20 +213,19 @@ export class BackgroundBashStorage extends Context.Service<
               exit_code INTEGER,
               message TEXT,
               owner_generation TEXT,
+              notice_read_at INTEGER,
               PRIMARY KEY (session_id, branch_id, tool_call_id)
             )
           `,
           )
           .pipe(Effect.mapError(mapError("Failed to create background bash jobs table")))
-        // A table from before `owner_generation` gets the column; its rows keep NULL.
-        const columns = yield* sql<{ readonly name: string }>`
-          SELECT name FROM pragma_table_info('background_bash_jobs')
-        `.pipe(Effect.mapError(mapError("Failed to read background bash jobs columns")))
-        if (!columns.some((column) => column.name === "owner_generation")) {
-          yield* sql
-            .unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN owner_generation TEXT`)
-            .pipe(Effect.mapError(mapError("Failed to add background bash jobs owner column")))
-        }
+        // A table from before `owner_generation` gets the column; its rows keep
+        // NULL. One from before `notice_read_at` gets it too, and its
+        // interrupted jobs stay unread: the earlier code told a branch only
+        // when its loop opened, so a job is shown once more at worst, never lost.
+        const columns = yield* backgroundBashColumns
+        yield* addBackgroundBashColumn(columns, "owner_generation", "TEXT")
+        yield* addBackgroundBashColumn(columns, "notice_read_at", "INTEGER")
         // The server process that owns the jobs this layer starts: every
         // profile in one process shares it, a restarted server has another.
         const generation = yield* Effect.sync(() => String(performance.timeOrigin))
@@ -300,6 +344,7 @@ export class BackgroundBashStorage extends Context.Service<
                 WHERE session_id = ${branch.sessionId}
                   AND branch_id = ${branch.branchId}
                   AND status = 'interrupted'
+                  AND notice_read_at IS NULL
                 ORDER BY started_at, tool_call_id
               `
               return rows.map((row) => ({
@@ -308,6 +353,23 @@ export class BackgroundBashStorage extends Context.Service<
               }))
             },
             Effect.mapError(mapError("Failed to read interrupted background bash jobs")),
+          ),
+
+          markNoticesRead: Effect.fn("BackgroundBashStorage.markNoticesRead")(
+            function* (branch, toolCallIds) {
+              if (toolCallIds.length === 0) return
+              const readAt = (yield* DateTime.nowAsDate).getTime()
+              yield* sql`
+                UPDATE background_bash_jobs
+                SET notice_read_at = ${readAt}
+                WHERE session_id = ${branch.sessionId}
+                  AND branch_id = ${branch.branchId}
+                  AND tool_call_id IN ${sql.in(toolCallIds)}
+                  AND status = 'interrupted'
+                  AND notice_read_at IS NULL
+              `
+            },
+            Effect.mapError(mapError("Failed to mark background bash notices read")),
           ),
 
           reconcileInterrupted: Effect.gen(function* () {
@@ -4205,41 +4267,86 @@ const queueTerminalFollowUp = (target: BackgroundBashTarget, state: BackgroundBa
       })
       return
     }
-    // An interrupted job has no output: the process died with its server.
-    let content = `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``
-    if (state.status === "interrupted") {
-      content = `Background command did not finish before the previous server stopped:\n\`\`\`\n$ ${command}\n\`\`\`\nNo output was captured. Run it again if you still need it.`
-    }
+    // An interrupted job wakes nobody: the next turn reads it as a notice.
+    if (state.status === "interrupted") return
     yield* queueBackgroundFollowUp({
       target,
       sourceId: `bash:${target.toolCallId}:failure`,
-      content,
+      content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
     })
   })
 
+// ── interrupted job notices ──
+//
+// A job the server stopped has no output and no end to report. Opening its
+// session must not spend a turn with no user present, so the job wakes
+// nobody: every step of the branch's next turn shows it in the prompt, and
+// the turn that answered with it shown marks it read on its row.
+
+/** The notices each turn put in its prompt, by tool call id. */
+class ShownInterruptedJobs extends Context.Service<ShownInterruptedJobs, ShownNotices>()(
+  "@gent/extensions/src/exec-tools/ShownInterruptedJobs",
+) {}
+
+const ShownInterruptedJobsResource = defineResource({
+  id: "@gent/exec-tools/shown-interrupted-jobs",
+  scope: "process",
+  layer: Layer.effect(ShownInterruptedJobs, makeShownNotices),
+})
+
+const maximumNoticeJobs = 10
+const maximumNoticeCommandChars = 200
+
+const noticeCommand = (command: string) => {
+  const line = command.replace(/\s+/g, " ").trim()
+  const chars = Array.from(line)
+  if (chars.length <= maximumNoticeCommandChars) return line
+  return `${chars.slice(0, maximumNoticeCommandChars - 1).join("")}…`
+}
+
 /**
- * On a branch's loop open, one notice per background job on it that did not
- * finish. It is the job's terminal notice, keyed like a failure, so it wakes
- * the branch the way a completion does, and a later open or a repeated start
- * of the same call finds the key taken and adds nothing.
+ * The branch's unread interrupted jobs as one prompt section, the oldest
+ * first, at most `maximumNoticeJobs`; the rest are a count. It marks what it
+ * showed, so an answered turn clears exactly that.
  */
-const noticeInterruptedJobs = Effect.gen(function* () {
+const interruptedJobSections = Effect.fn("ExecTools.interruptedJobNotices")(function* () {
   const ctx = yield* ExtensionContext
   const storage = yield* BackgroundBashStorage
-  const jobs = yield* storage.interruptedJobs({ sessionId: ctx.sessionId, branchId: ctx.branchId })
-  yield* Effect.forEach(
-    jobs,
-    (job) =>
-      queueTerminalFollowUp(
-        {
-          sessionId: ctx.sessionId,
-          branchId: ctx.branchId,
-          toolCallId: job.toolCallId,
-          Session: ctx.Session,
-        },
-        { status: "interrupted", command: job.command },
-      ),
-    { discard: true },
+  const branch = { sessionId: ctx.sessionId, branchId: ctx.branchId }
+  const jobs = yield* storage.interruptedJobs(branch)
+  if (jobs.length === 0) return []
+  const named = jobs.slice(0, maximumNoticeJobs)
+  const lines = named.map((job) => `- \`${noticeCommand(job.command)}\` · call ${job.toolCallId}`)
+  const unnamed = jobs.length - named.length
+  if (unnamed > 0) {
+    lines.push(`- and ${unnamed} more interrupted commands, named once you have read these.`)
+  }
+  yield* (yield* ShownInterruptedJobs).record(
+    branch,
+    named.map((job) => job.toolCallId),
+  )
+  return [
+    {
+      id: "exec-tools-interrupted",
+      priority: 86,
+      content: `# Interrupted background commands\n\nThe previous server stopped before these background commands finished. They are not running, and no output was captured. Tell the user which commands did not finish; start one again only when the user asks for it.\n\n${lines.join("\n")}`,
+    },
+  ]
+})
+
+/**
+ * Marks read the interrupted jobs an answered turn showed. A turn that was
+ * interrupted, failed, or never answered keeps them, and so does every job
+ * the turn did not show.
+ */
+const markReadInterruptedJobs = Effect.fn("ExecTools.markInterruptedJobsRead")(function* (
+  input: TurnAfterInput,
+) {
+  const shown = yield* (yield* ShownInterruptedJobs).takeRead(input)
+  if (shown.size === 0) return
+  yield* (yield* BackgroundBashStorage).markNoticesRead(
+    { sessionId: input.sessionId, branchId: input.branchId },
+    [...shown].map((id) => ToolCallId.make(id)),
   )
 })
 
@@ -4364,7 +4471,7 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
         yield* runBackgroundJob(job, target).pipe(
           // The server stopped or the resource closed: the row must not stay
           // running under this process, where no reconcile would reach it.
-          // The notice waits for the branch's next loop open.
+          // The branch's next turn reads it as a notice.
           Effect.onInterrupt(() => storage.markInterrupted(keyFields).pipe(Effect.ignore)),
           Effect.catchTag("BashError", (e) => queueFailure(job, target, e.message)),
           Effect.catchCause((cause) => {
@@ -4530,11 +4637,23 @@ export const ExecToolsExtension = defineExtension({
         scope: "process",
         layer: BackgroundBashLayer,
       }),
+      ShownInterruptedJobsResource,
     )
-    yield* host.on("loopOpen", () =>
-      noticeInterruptedJobs.pipe(
+    yield* host.on("turnProjection", () =>
+      interruptedJobSections().pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("exec-tools.interrupted-notice.failed").pipe(
+          Effect.logWarning("exec-tools.interrupted-notice.read.failed").pipe(
+            Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+            Effect.as([]),
+          ),
+        ),
+        Effect.map((promptSections) => ({ promptSections })),
+      ),
+    )
+    yield* host.on("turnAfter", (input) =>
+      markReadInterruptedJobs(input).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("exec-tools.interrupted-notice.clear.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
           ),
         ),

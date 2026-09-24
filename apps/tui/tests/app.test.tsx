@@ -1,6 +1,19 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Deferred, Effect, Exit, Option, Queue, Schema, Stream } from "effect"
+import {
+  Cause,
+  Clock,
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Queue,
+  Schema,
+  Stream,
+} from "effect"
+import { TestClock } from "effect/testing"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import { SocketCloseError } from "effect/unstable/socket/Socket"
 import {
@@ -37,10 +50,10 @@ import {
   renderWithProviders,
   applySnapshotAgent,
 } from "./render-harness-boundary"
-import { onMount } from "solid-js"
+import { createSignal, onMount } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
-import { waitForFrame } from "./helpers-boundary"
+import { waitForFrame, waitUntilAdvancing } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
@@ -50,7 +63,11 @@ import {
   ClientContext,
   clientContributions,
   defineClientExtension,
+  type NoticeRow,
+  noticeRowContribution,
+  widgetContribution,
 } from "../src/extensions/client-facets"
+import { NOTICE_ROWS_BOUND, useSessionController } from "../src/session"
 
 // ── app bootstrap ───────────────────────────────────────────────────────────
 
@@ -669,6 +686,99 @@ function TerminalDimensionsProbe() {
   return <text>{`${dimensions().width}x${dimensions().height}`}</text>
 }
 
+describe("notice rows", () => {
+  // Native history waits for every notice-row source; one that never answers
+  // would hold it for good. The bound is on the hold: the source stays, and a
+  // late answer still draws its rows.
+  it.scopedLive("history stops waiting at the bound, and a late answer still draws its rows", () =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make()
+      // Only the session view's casts read this clock: the bound sleeps on it.
+      const withClock = <R,>() => Context.makeUnsafe<R>(new Map([[Clock.Clock.key, clock]]))
+      const runtime: GentRuntime = {
+        ...createMockRuntime(),
+        cast: (effect) => {
+          Effect.runForkWith(withClock())(effect)
+        },
+        fork: (effect) => Effect.runForkWith(withClock())(effect),
+      }
+      const [answer, setAnswer] = createSignal(Option.none<ReadonlyArray<NoticeRow>>())
+      let settled = () => false
+      // A widget inside the session view reads the hold native history obeys.
+      function SettledProbe() {
+        settled = useSessionController().itemsSettled
+        return <box />
+      }
+      const silent = defineClientExtension("@test/silent-notices", {
+        setup: Effect.succeed(
+          clientContributions(
+            noticeRowContribution({ id: "silent", rows: () => answer() }),
+            widgetContribution({
+              id: "settled-probe",
+              slot: "below-input",
+              component: SettledProbe,
+            }),
+          ),
+        ),
+      })
+      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+            </>
+          ),
+          {
+            client: createMockClient({
+              auth: { listProviders: () => Effect.succeed([]) },
+              branch: { getTree: () => Effect.succeed([]) },
+            }),
+            runtime,
+            builtins: [...builtinClientModules, silent],
+            initialSession: {
+              id: SessionId.make("session-silent"),
+              activeBranchId: BranchId.make("branch-silent"),
+              name: "Silent",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      const loaded = () => Option.exists(ext, (value) => value.loaded())
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·") && loaded(), "loaded")
+      const sources = (): ReadonlyArray<string> =>
+        Option.match(ext, {
+          onNone: () => [],
+          onSome: (value) => value.noticeRows().map((source) => source.id),
+        })
+      const failed = () =>
+        Option.exists(ext, (value) =>
+          value.failures().some((failure) => failure.id === "@test/silent-notices"),
+        )
+      yield* waitForFrame(setup, () => sources().includes("silent"), "the source")
+      expect(settled()).toBe(false)
+      // Inside the bound, history still waits for the source.
+      yield* clock.adjust(Duration.subtract(NOTICE_ROWS_BOUND, Duration.millis(1)))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(settled()).toBe(false)
+      yield* waitUntilAdvancing(clock.adjust("1 second"), settled, "history stopped waiting")
+      // The source did not fail: it stays, and its late answer draws.
+      expect(sources()).toContain("silent")
+      expect(failed()).toBe(false)
+      setAnswer(
+        Option.some([
+          { key: "late", createdAt: 1, glyph: "◌", color: "warning", text: "LATE-NOTICE-ROW" },
+        ]),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("LATE-NOTICE-ROW"), "the late row")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
+
 describe("App auth gate", () => {
   it.live("shares one terminal resize source across App and cleans it up", () =>
     Effect.gen(function* () {
@@ -1092,6 +1202,37 @@ describe("App auth gate", () => {
       view.setup.mockInput.pressKey("c", { ctrl: true })
       yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
       expect(view.steers).toEqual(["Cancel"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A key the btw ask line takes never reaches the session scope, and it is
+  // still another gesture: the second ctrl+c cancels the next turn.
+  it.live("a key the btw ask line takes between two ctrl+c presses makes the second cancel", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      yield* Effect.promise(() => view.setup.mockInput.typeText("/btw"))
+      view.setup.mockInput.pressEnter()
+      yield* waitForFrame(view.setup, (frame) => frame.includes("btw · fork"), "btw pane")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+      yield* Effect.promise(() => view.setup.mockInput.typeText("w"))
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A paste the btw ask line takes is another gesture too.
+  it.live("a paste the btw ask line takes between two ctrl+c presses makes the second cancel", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      yield* Effect.promise(() => view.setup.mockInput.typeText("/btw"))
+      view.setup.mockInput.pressEnter()
+      yield* waitForFrame(view.setup, (frame) => frame.includes("btw · fork"), "btw pane")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+      yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText("why"))
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
+      expect(view.shutdowns()).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
   // The quit window is for a press that follows the cancel; a draft made in

@@ -8,6 +8,7 @@ import {
   Order,
   Path,
   Predicate,
+  Ref,
   Schema,
   type Stream,
   TxRef,
@@ -403,6 +404,58 @@ export interface TurnUsage {
   }
   readonly complete: boolean
 }
+
+// ── Shown notices ──
+
+/**
+ * The notices each turn put in its prompt, per branch, until that turn ends.
+ * A notice an extension keeps until a turn has read it is shown by the
+ * extension's `turnProjection` hook, which records the keys it showed; its
+ * `turnAfter` hook takes them back and clears only those. `takeRead` returns
+ * the keys only for a turn that answered: an interrupted, failed, or
+ * unanswered turn keeps every notice. The marks drop either way, and a notice
+ * the turn never showed stays for the next turn. The marks live in memory: a
+ * lost process loses them, and its notices show again.
+ */
+export interface ShownNotices {
+  readonly record: (
+    branch: { readonly sessionId: SessionId; readonly branchId: BranchId },
+    keys: Iterable<string>,
+  ) => Effect.Effect<void>
+  readonly takeRead: (
+    turn: Pick<
+      TurnAfterInput,
+      "sessionId" | "branchId" | "interrupted" | "streamFailed" | "unanswered"
+    >,
+  ) => Effect.Effect<ReadonlySet<string>>
+}
+
+/** A fresh `ShownNotices`; an extension holds one in a process resource of its own. */
+type ShownNoticeMarks = ReadonlyMap<string, ReadonlySet<string>>
+
+export const makeShownNotices: Effect.Effect<ShownNotices> = Effect.map(
+  Ref.make<ShownNoticeMarks>(new Map()),
+  (state): ShownNotices => {
+    const keyOf = (branch: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
+      `${branch.sessionId}:${branch.branchId}`
+    return {
+      record: (branch, keys) =>
+        Ref.update(state, (current) => {
+          const key = keyOf(branch)
+          const shown = new Set([...(current.get(key) ?? []), ...keys])
+          return new Map([...current, [key, shown]])
+        }),
+      takeRead: (turn) =>
+        Ref.modify(state, (current): readonly [ReadonlySet<string>, ShownNoticeMarks] => {
+          const key = keyOf(turn)
+          const rest = new Map(current)
+          rest.delete(key)
+          if (turn.interrupted || turn.streamFailed || turn.unanswered) return [new Set(), rest]
+          return [current.get(key) ?? new Set<string>(), rest]
+        }),
+    }
+  },
+)
 
 // ── Lifecycle hooks ──
 //

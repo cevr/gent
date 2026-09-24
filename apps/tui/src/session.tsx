@@ -14,6 +14,7 @@ import {
   type Array as Arr,
   Clock,
   DateTime,
+  Duration,
   Effect,
   Equal,
   Fiber,
@@ -107,7 +108,7 @@ import {
 } from "./message-list"
 import type { ToolCall } from "./tool-renderers"
 import { useRenderer } from "@opentui/solid"
-import { type ScopedKeyboardEvent, useScopedKeyboard } from "./terminal"
+import { type ScopedKeyboardEvent, useInputWatch, useScopedKeyboard } from "./terminal"
 import { useExtensionUI } from "./extensions/host"
 import type { ActiveExtensionSession, NoticeRow } from "./extensions/client-facets"
 import type { ResolvedNoticeRows } from "./extensions/loader-boundary"
@@ -1629,9 +1630,17 @@ const compareSessionItems = (a: SessionItem, b: SessionItem): number => {
 
 interface NoticeRowItems {
   readonly items: ReadonlyMap<NoticeRow, SessionItem>
-  /** Every source answered its rows; one still deriving holds native history. */
-  readonly settled: boolean
+  /** The sources still deriving; native history holds for each until its bound. */
+  readonly pending: ReadonlyArray<ResolvedNoticeRows>
 }
+
+/**
+ * How long native history holds for a notice-row source still deriving for a
+ * branch once the client extensions loaded. After it, history commits without
+ * that source's rows; the source stays, and an answer that comes later draws
+ * its rows below whatever history already committed.
+ */
+export const NOTICE_ROWS_BOUND = Duration.seconds(5)
 
 /**
  * The client extensions' notice rows for one branch, merged into the feed's
@@ -1644,10 +1653,10 @@ export const noticeRowItems = (
   previous: ReadonlyMap<NoticeRow, SessionItem>,
 ): NoticeRowItems => {
   const next = new Map<NoticeRow, SessionItem>()
-  let settled = true
+  const pending: Array<ResolvedNoticeRows> = []
   for (const source of sources) {
     const rows = source.rows(session)
-    if (Option.isNone(rows)) settled = false
+    if (Option.isNone(rows)) pending.push(source)
     for (const row of Option.getOrElse(rows, () => [])) {
       next.set(
         row,
@@ -1663,7 +1672,7 @@ export const noticeRowItems = (
       )
     }
   }
-  return { items: next, settled }
+  return { items: next, pending }
 }
 
 // ── Build messages from raw ──
@@ -2560,7 +2569,10 @@ export function useSessionFeed(
 
 export interface SessionController {
   items: () => SessionItem[]
-  /** Every notice-row source answered: the items are final and may reach native history. */
+  /**
+   * Every notice-row source answered, or history stopped holding for it at
+   * `NOTICE_ROWS_BOUND`: the items may reach native history.
+   */
   itemsSettled: () => boolean
   messages: () => Message[]
   forkMessages: () => readonly DurableMessage[]
@@ -2922,8 +2934,45 @@ export function createSessionController(props: {
         { sessionId: props.sessionId, branchId: props.branchId },
         previous.items,
       ),
-    { items: new Map(), settled: true },
+    { items: new Map(), pending: [] },
   )
+  // A source that never answers would hold native history for good. Once the
+  // client extensions loaded, history holds NOTICE_ROWS_BOUND for each source
+  // still deriving for this branch, then stops holding for it. The source is
+  // not a failure: it stays, and a later answer draws its rows.
+  const noticeRowsHoldKey = (source: ResolvedNoticeRows) =>
+    `${props.sessionId}:${props.branchId}:${source.id}`
+  const noticeRowsHolds = new Map<string, Fiber.Fiber<void>>()
+  const [releasedNoticeRows, setReleasedNoticeRows] = createSignal<ReadonlySet<string>>(new Set())
+  onCleanup(() => {
+    for (const fiber of noticeRowsHolds.values()) client.runtime.cast(Fiber.interrupt(fiber))
+  })
+  createEffect(() => {
+    if (!ext.loaded()) return
+    for (const source of notices().pending) {
+      const key = noticeRowsHoldKey(source)
+      if (noticeRowsHolds.has(key)) continue
+      const release = Effect.sleep(NOTICE_ROWS_BOUND).pipe(
+        Effect.andThen(
+          Effect.sync(() => setReleasedNoticeRows((current) => new Set([...current, key]))),
+        ),
+        Effect.andThen(
+          Effect.logWarning("tui.notice-rows.bound").pipe(
+            Effect.annotateLogs({
+              extension: source.extensionId,
+              source: source.id,
+              bound: Duration.format(NOTICE_ROWS_BOUND),
+            }),
+          ),
+        ),
+      )
+      noticeRowsHolds.set(key, client.runtime.fork(release))
+    }
+  })
+  const noticeRowsSettled = () => {
+    const released = releasedNoticeRows()
+    return notices().pending.every((source) => released.has(noticeRowsHoldKey(source)))
+  }
   const items = createMemo<SessionItem[]>(() => {
     const rows = notices().items
     if (rows.size === 0) return feed.items()
@@ -3212,14 +3261,22 @@ export function createSessionController(props: {
     })
   }
 
+  // Any key or paste between two ctrl+c presses is another gesture (a keybind,
+  // a transcript toggle, a typed character, also one a docked pane takes), so
+  // it disarms their quit. Escape keeps its own arm, which its branch reads.
+  const disarmInterruptQuit = () => {
+    if (Option.exists(quitArmed, (armed) => armed.key === "interrupt")) disarmQuit()
+  }
+  useInputWatch({
+    key: (event) => {
+      if (event.ctrl === true && event.name === "c") return
+      disarmInterruptQuit()
+    },
+    paste: disarmInterruptQuit,
+  })
+
   useScopedKeyboard((event) => {
-    // Any key between two ctrl+c presses is another gesture (a keybind, a
-    // transcript toggle, a typed character), so it disarms their quit.
-    // Escape keeps its own arm, which its branch below reads.
     const interrupt = event.ctrl === true && event.name === "c"
-    if (!interrupt && Option.exists(quitArmed, (armed) => armed.key === "interrupt")) {
-      disarmQuit()
-    }
     // A keybind between two escapes is a different gesture, so it disarms the quit.
     if (command.handleKeybind(event, ext.commands())) {
       disarmQuit()
@@ -3254,7 +3311,7 @@ export function createSessionController(props: {
 
   return {
     items,
-    itemsSettled: () => notices().settled,
+    itemsSettled: noticeRowsSettled,
     messages: feed.messages,
     forkMessages: () => {
       const overlay = uiState().overlay

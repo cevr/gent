@@ -20,7 +20,7 @@ import {
 import {
   bindBunModules,
   extensionEntryModules,
-  hasProjectExtensionScope,
+  hasProjectScope,
   isProjectExtensionDirectoryTrusted,
   readDisabledExtensions,
   type RuntimeModuleSource,
@@ -140,7 +140,7 @@ const discoverTuiExtensions = (opts: {
   Effect.gen(function* () {
     const user = yield* discoverDir(opts.userDir, "user")
     // Launched from home, the project directory is the user's: one scope, read once.
-    if (!(yield* hasProjectExtensionScope(opts))) return user
+    if (!(yield* hasProjectScope({ user: opts.userDir, project: opts.projectDir }))) return user
     if (!(yield* isProjectExtensionDirectoryTrusted(opts))) return user
     const project = yield* discoverDir(opts.projectDir, "project")
     return [...user, ...project]
@@ -191,6 +191,8 @@ export interface ResolvedStatusLabel {
 /** One extension's transcript rows, under the notice id it won. */
 export interface ResolvedNoticeRows {
   readonly id: string
+  /** The extension that contributed them, named when they fail. */
+  readonly extensionId: string
   readonly rows: (session: ActiveExtensionSession) => Option.Option<ReadonlyArray<NoticeRow>>
 }
 
@@ -253,12 +255,15 @@ const resolveKeyed = <K, V>(
   sorted: ReadonlyArray<LoadedTuiExtension>,
   failures: Array<ClientExtensionFailure>,
   label: string,
-  entriesOf: (contributions: ClientContributions) => ReadonlyArray<KeyedEntry<K, V>>,
+  entriesOf: (
+    contributions: ClientContributions,
+    extensionId: string,
+  ) => ReadonlyArray<KeyedEntry<K, V>>,
 ): Map<K, V> => {
   const values = new Map<K, V>()
   const claims = new Map<K, Claim>()
   for (const ext of sorted) {
-    for (const entry of entriesOf(ext.contributions)) {
+    for (const entry of entriesOf(ext.contributions, ext.id)) {
       const held = Option.fromNullishOr(claims.get(entry.key))
       const claimant = { id: ext.id, scope: ext.scope, source: ext.filePath }
       if (collides(held, claimant, label, entry.name, failures)) continue
@@ -428,10 +433,10 @@ export const resolveTuiExtensions = (
       name: contribution.id,
     })),
   )
-  const noticeRows = resolveKeyed(sorted, failures, "notice row", (contributions) =>
+  const noticeRows = resolveKeyed(sorted, failures, "notice row", (contributions, extensionId) =>
     itemsOrEmpty(contributions.noticeRows).map((contribution) => ({
       key: contribution.id,
-      value: { id: contribution.id, rows: contribution.rows },
+      value: { id: contribution.id, extensionId, rows: contribution.rows },
       name: contribution.id,
     })),
   )

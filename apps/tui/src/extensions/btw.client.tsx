@@ -354,7 +354,7 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
         <UserRow
           {...props}
           header="btw · side question"
-          content={forkQuestionBody({ text: props.content, customType: BTW_QUESTION_TYPE })}
+          content={forkQuestionBody(props.content)}
         />
       )),
       widgetContribution({
