@@ -1022,7 +1022,7 @@ const stopNoticeSections = Effect.fn("Delegate.stopNotices")(function* () {
     {
       id: "delegate-stopped",
       priority: 86,
-      content: `# Stopped children\n\nYour interrupted turn stopped these children before they finished. They are not running, and no completion will come from them. Start a new child for a task that still needs doing.\n\n${lines.join("\n")}`,
+      content: `# Stopped children\n\nThe user interrupted your turn, and that stopped these children before they finished. They are not running, and no completion will come from them. Tell the user which children stopped; start one again only when the user asks for it.\n\n${lines.join("\n")}`,
     },
   ]
 })

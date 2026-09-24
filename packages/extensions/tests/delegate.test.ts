@@ -1097,6 +1097,10 @@ describe("a parent interrupt", () => {
           expect(next?.system).toContain("# Stopped children")
           expect(next?.system).toContain(childTask)
           expect(next?.system).toContain(child.sessionId)
+          // The user's interrupt stopped them: the notice asks for a report, not a restart.
+          expect(next?.system).toContain("Tell the user which children stopped")
+          expect(next?.system).toContain("only when the user asks for it")
+          expect(next?.system).not.toContain("Start a new child")
 
           // The answered turn read the notice; the one after it does not see it again.
           yield* sendPrompt(harness, "AND-NOW")

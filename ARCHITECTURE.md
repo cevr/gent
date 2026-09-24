@@ -372,7 +372,9 @@ Shape:
   interrupted, not failed, not unanswered) removes exactly those; a notice the
   turn did not show, because its read failed or the cap left it out, stays.
   The stop starts no turn; the parent's next turn,
-  whoever starts it, knows the children are not running.
+  whoever starts it, knows the children are not running. The section asks the
+  model to tell the user which children stopped and to start one again only
+  when the user asks: the user's interrupt stopped them.
   Prime-agent does not cascade a turn abort; opencode does, and the gamut
   testbed's six children editing files after an Escape decided it.
 - `delegate.cancel` interrupts the child's turn through the facade; a finished
