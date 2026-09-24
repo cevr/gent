@@ -1075,10 +1075,11 @@ describe("a start nobody waits for", () => {
     expect(row[0]?.submitted).toBe(true)
   })
 
-  test("a registry row an older binary wrote, private and claimed, still decodes", () => {
-    // The bytes an older binary wrote: a private extraction child its waiter still claimed.
+  test("a registry row an older binary wrote, private, claimed and previewed, still decodes", () => {
+    // The bytes an older binary wrote: a private extraction child its waiter still claimed,
+    // with the preview a deleted client view read.
     const row = Schema.decodeSync(registryCodec)(
-      `[{"requestId":"run:old-child","sessionId":"old-child","branchId":"old-child-branch","agentName":"${DELEGATE_AGENT_NAME}","prompt":"a side question","private":true,"submitted":true,"delivered":false,"waiter":"waiter:a-process-that-is-gone"}]`,
+      `[{"requestId":"run:old-child","sessionId":"old-child","branchId":"old-child-branch","agentName":"${DELEGATE_AGENT_NAME}","prompt":"a side question","private":true,"submitted":true,"delivered":false,"waiter":"waiter:a-process-that-is-gone","preview":"the child's last words"}]`,
     )
     expect(row[0]?.requestId).toBe(RequestId.make("run:old-child"))
     expect(row[0]?.private).toBe(true)

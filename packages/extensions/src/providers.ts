@@ -2,7 +2,8 @@ import {
   Cause,
   Clock,
   Config,
-  type Context,
+  Context,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -73,9 +74,9 @@ import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai-compat"
  *   serving anything, but only while the store still holds the credential
  *   that the rotation replaced.
  *
- * `invalidate` marks the cell so the next `getFresh` skips the cache
- * but keeps the held credential — its refresh token is the only copy a
- * provider without a keychain has.
+ * `invalidate` names the credential the server rejected. When the cell
+ * still holds it, the next `getFresh` skips the cache but keeps it — its
+ * refresh token is the only copy a provider without a keychain has.
  *
  * Providers own their credential schema, IO, and the hooks (`read` or
  * `store`, `refresh`); this module owns the cache.
@@ -166,8 +167,12 @@ export interface CredentialCache<C> {
    * passes.
    */
   readonly getFresh: Effect.Effect<C, CredentialFailure>
-  /** Skip the cache on the next `getFresh` without dropping the held credential. */
-  readonly invalidate: Effect.Effect<void>
+  /**
+   * The server rejected `rejected`. When the cell still holds it, skip the
+   * cache on the next `getFresh` without dropping it; its refresh token may
+   * be the only copy. When the cell holds another credential, do nothing.
+   */
+  readonly invalidate: (rejected: C) => Effect.Effect<void>
 }
 
 /**
@@ -209,6 +214,7 @@ export const makeCredentialCache = <C>(
 ): Effect.Effect<CredentialCache<C>> =>
   Effect.sync(() => {
     const Cell = CredentialCacheCell(config.credentials)
+    const sameCredential = Schema.toEquivalence(config.credentials)
     const durable = (creds: C, at: number, invalidated: boolean): CredentialCacheCell<C> =>
       Cell.cases.Durable.make({ creds, at, invalidated })
 
@@ -343,7 +349,18 @@ export const makeCredentialCache = <C>(
           // Without an external source the cell is the only copy.
           let fromSource = cached
           if (Option.isSome(config.read)) fromSource = yield* config.read.value(cached)
-          if (Option.isSome(fromSource) && freshEnoughAt(config.expiresAt(fromSource.value), now)) {
+          // After a 401 the source may still hold the rejected credential, and
+          // its expiry says nothing about a revocation: only a refresh helps.
+          const rejected =
+            current._tag !== "Empty" &&
+            current.invalidated &&
+            Option.isSome(fromSource) &&
+            sameCredential(fromSource.value, current.creds)
+          if (
+            !rejected &&
+            Option.isSome(fromSource) &&
+            freshEnoughAt(config.expiresAt(fromSource.value), now)
+          ) {
             return [Exit.succeed(fromSource.value), durable(fromSource.value, now, false)]
           }
 
@@ -356,10 +373,13 @@ export const makeCredentialCache = <C>(
         }),
     ).pipe(Effect.flatten)
 
-    const invalidate: Effect.Effect<void> = SynchronizedRef.update(config.cellRef, (cell) => {
-      if (cell._tag === "Empty") return cell
-      return { ...cell, invalidated: true }
-    })
+    // Compare, then invalidate: a 401 for a credential the cell already
+    // replaced says nothing about the one it holds now.
+    const invalidate = (rejected: C): Effect.Effect<void> =>
+      SynchronizedRef.update(config.cellRef, (cell) => {
+        if (cell._tag === "Empty" || !sameCredential(cell.creds, rejected)) return cell
+        return { ...cell, invalidated: true }
+      })
 
     return { getFresh, invalidate }
   })
@@ -421,7 +441,7 @@ const asRequestError = (
 }
 
 /** Fetch credentials for a request, surfacing a failure through the transport channel. */
-export const freshCredentials = <C>(
+const freshCredentials = <C>(
   creds: CredentialCache<C>,
   req: HttpClientRequest.HttpClientRequest,
 ): Effect.Effect<C, HttpClientError> =>
@@ -491,57 +511,62 @@ export const HttpResponseField = Schema.declare<HttpClientResponse.HttpClientRes
 )
 
 /**
- * Internal error driving 401 recovery. The credential cache TTL can outlive
- * a token's last minute, and tokens can be revoked server-side between cache
- * fill and wire send. Typed so the recovery fires only on this signal, not on
- * other 4xx that callers should see verbatim.
- */
-class Unauthorized401Error extends Schema.TaggedError<Unauthorized401Error>(
-  "@gent/extensions/src/providers/Unauthorized401Error",
-)("Unauthorized401Error", {
-  response: HttpResponseField,
-}) {}
-
-/**
- * 401 recovery: invalidate the credential cache and retry ONCE. On the
- * retry the request preprocess re-enters and `creds.getFresh` re-reads or
- * forces a refresh. A second 401 means a real auth failure — surface the
- * response so user-facing recovery can kick in.
+ * Sign each request with a fresh credential, and recover once from a 401.
  *
- * `tapError` runs the invalidate AFTER the failure but BEFORE `Effect.retry`
- * re-attempts, so the invalidate commits before the next preprocess reads
- * the cache.
+ * Signing and recovery are one combinator because recovery must name the
+ * credential the request carried. The credential cache TTL can outlive a
+ * token's last minute, and a token can be revoked between cache fill and
+ * wire send. On a 401 the cache invalidates the credential this request
+ * sent — only if it still holds it — and the request is signed and sent
+ * once more. A second 401 is a real auth failure: its response goes to the
+ * caller, so user-facing recovery can start. Two requests that sent the same
+ * old token therefore refresh it once: the later 401 names a credential the
+ * cache already replaced.
+ *
+ * Signing stays in the request chain, where the SDK's own request mapping
+ * (a base URL, its headers) wraps it. The SDK runs that chain inside the
+ * response side, so each attempt gives the chain a slot, and the signing
+ * step records there how to reject the credential it used.
  */
-export const recoverUnauthorized =
-  <C>(creds: CredentialCache<C>) =>
-  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
-    client.pipe(
-      HttpClient.transformResponse((effect) =>
-        effect.pipe(
-          Effect.flatMap(
-            (
-              response,
-            ): Effect.Effect<HttpClientResponse.HttpClientResponse, Unauthorized401Error> => {
-              switch (response.status) {
-                case 401:
-                  return Effect.fail(new Unauthorized401Error({ response }))
-                default:
-                  return Effect.succeed(response)
-              }
-            },
-          ),
-          Effect.tapError((e) => {
-            if (e._tag === "Unauthorized401Error") return creds.invalidate
-            return Effect.void
-          }),
-          Effect.retry({
-            while: (e) => e._tag === "Unauthorized401Error",
-            times: 1,
-          }),
-          Effect.catchTag("Unauthorized401Error", (e) => Effect.succeed(e.response)),
-        ),
-      ),
+export const authorizedClient =
+  <C>(
+    creds: CredentialCache<C>,
+    sign: (
+      request: HttpClientRequest.HttpClientRequest,
+      credential: C,
+    ) => HttpClientRequest.HttpClientRequest,
+  ) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient => {
+    const signed = HttpClient.mapRequestEffect(client, (request) =>
+      Effect.gen(function* () {
+        const credential = yield* freshCredentials(creds, request)
+        const slot = yield* CredentialRejection
+        if (Option.isSome(slot)) slot.value.reject = creds.invalidate(credential)
+        return sign(request, credential)
+      }),
     )
+    return HttpClient.makeWith((prepared) => {
+      const send = Effect.gen(function* () {
+        const slot = { reject: Effect.void }
+        const response = yield* signed.postprocess(
+          prepared.pipe(Effect.provideService(CredentialRejection, Option.some(slot))),
+        )
+        return { response, reject: slot.reject }
+      })
+      return Effect.gen(function* () {
+        const first = yield* send
+        if (first.response.status !== 401) return first.response
+        yield* first.reject
+        return (yield* send).response
+      })
+    }, signed.preprocess)
+  }
+
+/** Where one attempt's signing step records how to reject the credential it sent. */
+const CredentialRejection = Context.Reference<Option.Option<{ reject: Effect.Effect<void> }>>(
+  "@gent/extensions/src/providers/CredentialRejection",
+  { defaultValue: () => Option.none() },
+)
 
 // ── oauth token endpoint ────────────────────────────────────────────────────
 
@@ -847,31 +872,35 @@ type CatalogEffect = Effect.Effect<
  * during their own `listModels`, and the memo is what makes that one read and
  * at most one fetch rather than one per driver.
  *
- * A memo that resolved to a catalog holds for the life of the process. A memo
- * that resolved to nothing does not: `loadCatalog` degrades rather than fails,
- * so an offline start would otherwise pin an empty catalog until the process
- * ends. An empty result drops its own entry, and the next `listModels` loads
- * again.
+ * A memo that resolved to a catalog holds for `CATALOG_MEMO_TTL`, then the next
+ * `listModels` loads again. `loadCatalog` degrades rather than fails, so an
+ * offline start serves the stale disk cache (or nothing); the reload re-reads
+ * the disk and fetches only when the cache is still stale, so a long-lived
+ * process picks up the fresh catalog once the host is reachable. A memo that
+ * resolved to nothing drops its own entry at once, and the next `listModels`
+ * loads again.
  */
+const CATALOG_MEMO_TTL = Duration.minutes(5)
+
 const catalogsByHome = new Map<string, CatalogEffect>()
 
 /**
- * The models.dev catalog for `home`, loaded at most once per process while the
- * load produces models.
+ * The models.dev catalog for `home`, loaded at most once per `CATALOG_MEMO_TTL`
+ * while the load produces models.
  *
  * The memo is built the first time a home is asked for and stored before the
  * effect is handed back, so every driver that lists models for the same home
- * shares one read and at most one fetch. `Effect.cached` is a constructor: it
+ * shares one read and at most one fetch. `Effect.cachedWithTTL` is a constructor: it
  * allocates the latch and performs no IO, so building the memo here decides
  * nothing about when the catalog loads.
  */
 export const modelsDevCatalog = (home: string): CatalogEffect => {
   const existing = Option.fromUndefinedOr(catalogsByHome.get(home))
   if (Option.isSome(existing)) return existing.value
-  // `Effect.cached` only allocates the memo's latch — no IO, no failure — so
-  // running it here is allocation, not work. The catalog loads when a driver
-  // runs the effect this returns.
-  const memo = Effect.runSync(Effect.cached(loadCatalog(home))).pipe(
+  // `Effect.cachedWithTTL` only allocates the memo's latch — no IO, no failure —
+  // so running it here is allocation, not work. The catalog loads when a driver
+  // runs the effect this returns, and the TTL reads that driver's clock.
+  const memo = Effect.runSync(Effect.cachedWithTTL(loadCatalog(home), CATALOG_MEMO_TTL)).pipe(
     // An empty result means no cache and no reachable host. Forget it, so a
     // later call retries instead of serving nothing for the whole process.
     Effect.tap((models) =>

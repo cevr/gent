@@ -426,7 +426,8 @@ Shape:
   It is separate from the side-mutation permit held by the running turn, so
   cancellation can stop active work without waiting for that work to finish.
 - `RequestExtension` takes the side-mutation permit unless the request declared
-  `readonly: true`; a read-only request answers while the turn runs.
+  `answersDuringTurn: true`; such a request answers while the turn runs and
+  must not change the branch's loop state.
 - Targeted cancellation records `turn.cancel` in the existing workspace-scoped
   durable-operation table before the steering handler starts the branch owner.
   The receipt belongs to the child session/branch and survives until that branch

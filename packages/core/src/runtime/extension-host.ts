@@ -561,8 +561,8 @@ interface RegisteredRpcEntry {
 type RegisteredCapabilityEntry = RegisteredToolEntry | RegisteredRpcEntry
 
 interface CompiledRpcRegistry {
-  /** Whether the request declared itself read-only; false for an unknown request. */
-  readonly isReadonly: (extensionId: ExtensionId, capabilityId: RpcId | string) => boolean
+  /** Whether the request declared `answersDuringTurn`; false for an unknown request. */
+  readonly answersDuringTurn: (extensionId: ExtensionId, capabilityId: RpcId | string) => boolean
   readonly run: (
     extensionId: ExtensionId,
     capabilityId: RpcId | string,
@@ -727,10 +727,10 @@ const runExtensionCapability = (
 const compileRpcRegistry = (
   entries: ReadonlyArray<RegisteredCapabilityEntry>,
 ): CompiledRpcRegistry => ({
-  isReadonly: (extensionId, capabilityId) =>
+  answersDuringTurn: (extensionId, capabilityId) =>
     Option.match(resolveCapabilityEntry(entries, extensionId, capabilityId), {
       onNone: () => false,
-      onSome: (entry) => entry.kind === "rpc" && entry.capability.readonly === true,
+      onSome: (entry) => entry.kind === "rpc" && entry.capability.answersDuringTurn === true,
     }),
   run: Effect.fn("CompiledRpcRegistry.run")(function* (extensionId, capabilityId, input) {
     const entry = resolveCapabilityEntry(entries, extensionId, capabilityId)

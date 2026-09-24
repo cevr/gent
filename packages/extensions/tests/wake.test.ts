@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  Cause,
   Clock,
   DateTime,
   Deferred,
@@ -203,6 +204,11 @@ describe("wake", () => {
       expect(Exit.isFailure(garbage)).toBe(true)
       const tooFar = yield* Effect.exit(dueAtOf({ afterSeconds: 25 * 60 * 60 }, now))
       expect(Exit.isFailure(tooFar)).toBe(true)
+      const negative = yield* Effect.exit(dueAtOf({ afterSeconds: -5 }, now))
+      expect(Exit.isFailure(negative)).toBe(true)
+      const past = yield* Effect.exit(dueAtOf({ at: "1970-01-01T00:00:01Z" }, now))
+      expect(Exit.isFailure(past)).toBe(true)
+      expect(yield* dueAtOf({ afterSeconds: 0 }, now)).toBe(now)
       expect(wakeMessage({ _tag: "alarm", wakeId: "w1", dueAt: 1_200_000, note: "check CI" })).toBe(
         "Alarm w1 fired at 1970-01-01T00:20:00.000Z. check CI",
       )
@@ -223,6 +229,71 @@ describe("wake", () => {
       expect(nextDueAt(1_000, 10, 1_000)).toBe(11_000)
       expect(nextDueAt(1_000, 10, 35_000)).toBe(41_000)
     }),
+  )
+
+  it.live(
+    "an alarm set mid-turn is listed before the turn ends",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const secondStepStarted = yield* Deferred.make<void>()
+          const releaseTurn = yield* Deferred.make<void>()
+          let calls = 0
+          const providerLayer = LanguageModelLayers.testStream(() => {
+            calls += 1
+            if (calls === 1) {
+              return Effect.succeed(
+                Stream.fromIterable([
+                  toolCallPart(
+                    "wake",
+                    { afterSeconds: 600, mode: "notify", note: "stretch" },
+                    { toolCallId: ToolCallId.make("mid-turn-1") },
+                  ),
+                  finishPart({ finishReason: "tool-calls" }),
+                ]),
+              )
+            }
+            // The turn's next step holds until the listing is read.
+            return Effect.succeed(
+              Stream.fromEffect(
+                Deferred.succeed(secondStepStarted, void 0).pipe(
+                  Effect.andThen(Deferred.await(releaseTurn)),
+                ),
+              ).pipe(Stream.flatMap(() => replyStream("set"))),
+            )
+          })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "remind me" })
+          yield* Deferred.await(secondStepStarted)
+          const pending = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: WAKE_EXTENSION_ID,
+              capabilityId: WakeRpc.Pending.id,
+              input: {},
+            })
+            .pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(WakePending)),
+              Effect.timeoutOrElse({
+                duration: "2 seconds",
+                orElse: () => Effect.die(new Error("wake.pending waited for the turn")),
+              }),
+            )
+          expect(pending.entries).toMatchObject([{ note: "stretch" }])
+          yield* Deferred.succeed(releaseTurn, void 0)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle" && answered(current.messages, "set"),
+            5_000,
+            "the turn ended",
+          )
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
   )
 
   it.live(
@@ -1247,6 +1318,27 @@ describe("monitor command", () => {
         Effect.timeout("8 seconds"),
       ),
     10_000,
+  )
+  it.scopedLive("a negative timeout is refused, not timed out at once", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("wake-monitor-negative-")
+      const queued = yield* Ref.make<ReadonlyArray<string>>([])
+      const refused = yield* Effect.exit(
+        runToolWithCtx(
+          MonitorTool,
+          { command: "true", everySeconds: 1, timeoutSeconds: -5, note: "never" },
+          contextWith(home, queued, Option.none()),
+        ),
+      )
+      expect(Exit.isFailure(refused)).toBe(true)
+      if (Exit.isFailure(refused)) {
+        expect(Cause.pretty(refused.cause)).toContain("timeoutSeconds must not be negative")
+      }
+      expect(yield* Ref.get(queued)).toEqual([])
+    }).pipe(
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+      Effect.timeout("8 seconds"),
+    ),
   )
 })
 

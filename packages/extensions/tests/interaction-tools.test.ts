@@ -198,6 +198,19 @@ describe("Prompt Tool", () => {
       }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive("review mode: a title with no ASCII letters names the file prompt", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDirectoryScoped("prompt-review-title")
+      const ctx = testToolContext({ cwd, Interaction: interactionDeciding({ approved: true }) })
+      const result = yield* runToolWithCtx(
+        PromptTool,
+        { mode: "review", content: "draft", title: "計画" },
+        ctx,
+      )
+      if (result.mode !== "review") return yield* Effect.die("expected a review result")
+      expect(result.path.startsWith(`${cwd}/.gent/prompts/prompt-`)).toBe(true)
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
   it.scopedLive("review mode: an edit decision stores the edited content", () =>
     Effect.gen(function* () {
       const cwd = yield* makeTempDirectoryScoped("prompt-edit")

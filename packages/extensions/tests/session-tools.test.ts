@@ -6,7 +6,10 @@ import { type SystemPromptInput, messagePartsDisplayText } from "@gent/core/exte
 import {
   collectTestContributions,
   createRpcHarness,
+  finishPart,
   LanguageModelLayers,
+  textDeltaPart,
+  toolCallPart,
   toolCallStep,
   type MessagePart,
 } from "@gent/core/test-utils"
@@ -264,6 +267,106 @@ describe("Session tools via model turn", () => {
           expect(failed?.event._tag).toBe("ToolCallFailed")
           if (failed?.event._tag === "ToolCallFailed") {
             expect(failed.event.output).toContain("Failed to load session")
+          }
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+  it.live(
+    "read_session refuses a branch the session does not have",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let target = ""
+          let calls = 0
+          const providerLayer = LanguageModelLayers.testStream(() => {
+            calls += 1
+            if (calls > 1) {
+              return Effect.succeed(
+                Stream.fromIterable([textDeltaPart("done"), finishPart({ finishReason: "stop" })]),
+              )
+            }
+            return Effect.succeed(
+              Stream.fromIterable([
+                toolCallPart(
+                  "read_session",
+                  { sessionId: target, branchId: "no-such-branch" },
+                  { toolCallId: ToolCallId.make("read-unknown-branch") },
+                ),
+                finishPart({ finishReason: "tool-calls" }),
+              ]),
+            )
+          })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [AgentsExtension, SessionToolsExtension],
+          })
+          target = sessionId
+          const eventFiber = yield* toolEventsFor(
+            client.session.events({ sessionId, branchId }),
+            "read_session",
+          )
+          yield* client.message.send({ sessionId, branchId, content: "Read this session" })
+          const events = Array.from(yield* Fiber.join(eventFiber))
+          const failed = events.find((event) => event.event._tag === "ToolCallFailed")
+          expect(failed?.event._tag).toBe("ToolCallFailed")
+          if (failed?.event._tag === "ToolCallFailed") {
+            expect(failed.event.output).toContain("has no branch no-such-branch")
+          }
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+  it.live(
+    "a handoff session messages its predecessor as a session, not as its child",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let calls = 0
+          const providerLayer = LanguageModelLayers.testStream(() => {
+            calls += 1
+            if (calls > 1) {
+              return Effect.succeed(
+                Stream.fromIterable([textDeltaPart("ok"), finishPart({ finishReason: "stop" })]),
+              )
+            }
+            return Effect.succeed(
+              Stream.fromIterable([
+                toolCallPart(
+                  "session.send",
+                  { to: "parent", message: "picked up where you left off" },
+                  { toolCallId: ToolCallId.make("handoff-send") },
+                ),
+                finishPart({ finishReason: "tool-calls" }),
+              ]),
+            )
+          })
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [AgentsExtension, SessionToolsExtension],
+          })
+          const handoff = yield* client.session.create({
+            cwd: process.cwd(),
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+            continueThread: true,
+          })
+          const eventFiber = yield* toolEventsFor(
+            client.session.events({ sessionId: handoff.sessionId, branchId: handoff.branchId }),
+            "session.send",
+          )
+          yield* client.message.send({
+            sessionId: handoff.sessionId,
+            branchId: handoff.branchId,
+            content: "Tell the last session",
+          })
+          const events = Array.from(yield* Fiber.join(eventFiber))
+          const succeeded = events.find((event) => event.event._tag === "ToolCallSucceeded")
+          expect(succeeded?.event._tag).toBe("ToolCallSucceeded")
+          if (succeeded?.event._tag === "ToolCallSucceeded") {
+            expect(succeeded.event.output).toContain('"relation": "session"')
           }
         }).pipe(Effect.timeout("8 seconds")),
       ),
