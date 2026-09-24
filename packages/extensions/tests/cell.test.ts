@@ -3927,7 +3927,7 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
 })
 
 it.scopedLive(
-  "recovers saved cells through RPC without native replay and retains sibling results",
+  "recovers saved cells through RPC, and reports a call cut short as interrupted instead of running it again",
   () =>
     Effect.gen(function* () {
       for (const state of [
@@ -4224,11 +4224,10 @@ it.scopedLive(
           ).toHaveLength(1)
           expect(yield* controls.callCount).toBe(3)
         }
+        // A cell with no receipt was in flight too: it is not run again.
         if (state === "completed") expect(outer).toEqual(savedResult)
-        else if (state === "unadmitted")
-          expect(outer).toMatchObject({ isFailure: false, result: 1 })
-        else if (state === "revoked")
-          expect(outer).toMatchObject({ isFailure: true, result: { error: "Unknown tool: cell" } })
+        else if (state === "unadmitted" || state === "revoked")
+          expect(outer).toMatchObject({ isFailure: true, result: { reason: "Interrupted" } })
         else
           expect(outer).toMatchObject({
             isFailure: true,
@@ -4242,20 +4241,13 @@ it.scopedLive(
             },
           })
         }
+        // The native sibling was in flight when the process died: the model
+        // reads that it was interrupted, and it does not run again.
         expect(
           results?.find((part) => part.type === "tool-result" && part.id === "native-sibling"),
-        ).toMatchObject({ isFailure: false, result: 1 })
-        if (state === "unadmitted") {
-          expect(yield* Ref.get(cellCalls)).toBe(1)
-          expect(yield* Ref.get(selectedNames)).toEqual([
-            "approve",
-            "cell",
-            "delegate.cancel",
-            "delegate.start",
-            "sibling",
-          ])
-        } else expect(yield* Ref.get(cellCalls)).toBe(0)
-        expect(yield* Ref.get(nativeCalls)).toBe(1)
+        ).toMatchObject({ isFailure: true, result: { reason: "Interrupted" } })
+        expect(yield* Ref.get(cellCalls)).toBe(0)
+        expect(yield* Ref.get(nativeCalls)).toBe(0)
       }
     }).pipe(Effect.timeout("12 seconds")),
   15000,

@@ -2557,7 +2557,7 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
  * A cell that was mid-flight when the process died left receipts: an outer
  * admission, and one row per inner call. Those settle the call without running
  * it again. A tool call that is not a cell, or a cell that was never admitted,
- * is re-issued instead.
+ * is left to the loop, which reports it as interrupted.
  */
 
 const cellToolCallRecovery = Layer.effect(
@@ -2587,7 +2587,7 @@ const cellToolCallRecovery = Layer.effect(
               (cause) => new ToolCallRecoveryError({ message: "Cannot read the receipt", cause }),
             ),
           )
-        // Never admitted: nothing ran, so re-issue rather than settle.
+        // Never admitted: no receipt to settle from; the loop reports it.
         if (Option.isNone(saved)) return ToolCallRecoveryOutcome.cases.NotRecovered.make({})
         const profile = yield* CurrentAgentLoopTurnProfile
         return yield* recover({ cell, profile }).pipe(

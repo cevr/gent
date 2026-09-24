@@ -7,7 +7,6 @@ import type { BranchId, SessionId } from "../../src/domain/ids"
 import { Branch, dateFromMillis, emptyQueueSnapshot, Session } from "../../src/domain/message"
 import { AgentName } from "../../src/domain/agent"
 import { EventStore, EventStoreError } from "../../src/domain/event"
-import { ModelResolver } from "../../src/runtime/provider"
 import { GentPlatform } from "../../src/runtime/gent-platform"
 import { SessionRuntime, type SessionRuntimeService } from "../../src/runtime/session"
 import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
@@ -125,7 +124,7 @@ const buildFailingSessionMutationsLayer = () => {
     EventStore.Memory,
     failingPublisherLayer,
     LanguageModelLayers.debug(),
-    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )
@@ -176,7 +175,7 @@ const buildSessionMutationsLayer = () => {
     EventStore.Memory,
     EventStore.Memory,
     LanguageModelLayers.debug(),
-    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )
@@ -226,7 +225,7 @@ export const sessionMutationsLayerWithMachineProbe = (
     EventStore.Memory,
     EventStore.Memory,
     LanguageModelLayers.debug(),
-    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )
@@ -258,7 +257,7 @@ export const failingDeleteSessionMutationsLayerWithMachineProbe = (
     EventStore.Memory,
     EventStore.Memory,
     LanguageModelLayers.debug(),
-    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )
@@ -322,7 +321,7 @@ export const racySessionMutationsLayer = (params: {
     EventStore.Memory,
     EventStore.Memory,
     LanguageModelLayers.debug(),
-    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )
@@ -369,7 +368,7 @@ export const interleavedSessionMutationsLayer = (params: {
     EventStore.Memory,
     EventStore.Memory,
     LanguageModelLayers.debug(),
-    ModelResolver.fromLanguageModel(LanguageModelLayers.debug()),
+    LanguageModelLayers.resolver(LanguageModelLayers.debug()),
     GentPlatform.Test(),
     ExtensionRegistry.Test(),
   )

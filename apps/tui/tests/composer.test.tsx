@@ -868,6 +868,58 @@ describe("Composer submit", () => {
     }).pipe(Effect.timeout("10 seconds")),
   )
 
+  // A command as long as a paste comes back as its text, not a placeholder:
+  // the reader sees the command Enter would run.
+  submitTest("a long refused !cmd comes back as the command, not a paste placeholder", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const launchDir = yield* fs.makeTempDirectoryScoped()
+      let client = Option.none<ClientContextValue>()
+      const CaptureClient = () => {
+        client = Option.some(useClient())
+        return <box />
+      }
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <TestComposer onSubmit={() => {}}>
+              <CaptureClient />
+            </TestComposer>
+          ),
+          {
+            cwd: launchDir,
+            initialSession: {
+              sessionId: SessionId.make("session-gone-long"),
+              branchId: BranchId.make("branch-gone-long"),
+              name: "Gone",
+              modelId: Option.getOrUndefined(Option.none()),
+              reasoningLevel: Option.getOrUndefined(Option.none()),
+              cwd: "/nonexistent/gent-probe-x",
+            },
+          },
+        ),
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("!"))
+      yield* Effect.promise(() => setup.mockInput.typeText(`echo ${"z".repeat(160)}`))
+      yield* Effect.promise(() => setup.renderOnce())
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        () =>
+          Option.exists(client, (c) =>
+            Option.exists(Option.fromNullishOr(c.error()), (m) => m.startsWith("Shell:")),
+          ),
+        "error shown",
+      )
+      const frame = yield* waitForFrame(
+        setup,
+        (current) => current.includes("$ echo") && current.includes("zzzzzzzzzz"),
+        "command restored",
+      )
+      expect(frame).not.toContain("[Pasted")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
   submitTest("a second Enter while !cmd runs neither runs it again nor sends twice", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

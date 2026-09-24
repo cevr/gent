@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Deferred, Effect, Exit, Option, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Option, Schema, Stream } from "effect"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import { SocketCloseError } from "effect/unstable/socket/Socket"
 import {
@@ -10,6 +10,7 @@ import {
   DEFAULT_AGENT_NAME,
   GentRpcError,
   MessageId,
+  ModelId,
   ProviderId,
   Session,
   SessionId,
@@ -44,6 +45,12 @@ import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
 import { useExtensionUI } from "../src/extensions/host"
+import { builtinClientModules } from "../src/extensions/builtins"
+import {
+  ClientContext,
+  clientContributions,
+  defineClientExtension,
+} from "../src/extensions/client-facets"
 
 // ── app bootstrap ───────────────────────────────────────────────────────────
 
@@ -457,6 +464,103 @@ function ClientProbe(props: { readonly onReady: (client: ClientContextValue) => 
   return <box />
 }
 
+/**
+ * The session view over a turn that runs, with an error on screen from a
+ * `/model` that matched nothing. The runtime stream says Running once and then
+ * stays quiet, as it does through a long generation or a long tool call.
+ */
+const mountRunningTurnWithError = Effect.gen(function* () {
+  const sessionId = SessionId.make("session-running")
+  const branchId = BranchId.make("branch-running")
+  const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
+  const steers: Array<string> = []
+  const sent: Array<string> = []
+  let shutdowns = 0
+  let readActivity = () => "unmounted"
+  const activityProbe = defineClientExtension("@test/activity-probe", {
+    setup: Effect.gen(function* () {
+      const { activity } = yield* ClientContext
+      readActivity = () => activity.snapshot().state
+      return clientContributions()
+    }),
+  })
+  const client = createMockClient({
+    auth: { listProviders: () => Effect.succeed([]) },
+    branch: { getTree: () => Effect.succeed([]) },
+    session: {
+      getSnapshot: () =>
+        Effect.succeed({
+          sessionId,
+          branchId,
+          messages: [],
+          lastEventId: nullValue,
+          reasoningLevel: absent,
+          resolvedModelId: ModelId.make("anthropic/claude-sonnet-5"),
+          agent: AgentName.make("main"),
+          runtime: running,
+          metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+        }),
+      watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+    },
+    steer: {
+      command: (input: { readonly command: { readonly _tag: string } }) =>
+        Effect.sync(() => {
+          steers.push(input.command._tag)
+        }),
+    },
+    message: {
+      send: (input: { readonly content: string }) =>
+        Effect.sync(() => {
+          sent.push(input.content)
+        }),
+    },
+  })
+  let ctx = Option.none<ClientContextValue>()
+  const setup = yield* Effect.promise(() =>
+    renderWithProviders(
+      () => (
+        <>
+          <App missingAuthProviders={[]} />
+          <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+        </>
+      ),
+      {
+        client,
+        runtime: createMockRuntime(),
+        builtins: [...builtinClientModules, activityProbe],
+        initialSession: {
+          id: sessionId,
+          activeBranchId: branchId,
+          name: "Running",
+          createdAt: dateFromMillis(0),
+          updatedAt: dateFromMillis(0),
+        },
+      },
+    ),
+  )
+  setup.renderer.destroy = () => {
+    shutdowns += 1
+  }
+  yield* waitForFrame(
+    setup,
+    () => ctx.pipe(Option.exists((value) => value.isStreaming())),
+    "running turn",
+  )
+  yield* waitForFrame(setup, () => readActivity() !== "unmounted", "activity probe loaded")
+  yield* Effect.promise(() => setup.mockInput.typeText("/model typo"))
+  setup.mockInput.pressEnter()
+  yield* waitForFrame(setup, (frame) => frame.includes("No model matches"), "error shown")
+  const clientValue = yield* requireClient(ctx)
+  return {
+    setup,
+    client: clientValue,
+    steers,
+    sent,
+    shutdowns: () => shutdowns,
+    activity: () => readActivity(),
+  }
+})
+
 function ExtensionUIProbe(props: {
   readonly onReady: (ext: ReturnType<typeof useExtensionUI>) => void
 }) {
@@ -840,6 +944,48 @@ describe("App auth gate", () => {
       expect(shutdowns).toBe(1)
       setup.renderer.destroy()
     }),
+  )
+  it.live("an error shown during a running turn leaves the turn running", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      expect(view.client.isStreaming()).toBe(true)
+      expect(view.client.error()).toBe('No model matches "typo"')
+      expect(view.activity()).toBe("working")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("escape cancels a running turn while an error shows, and never quits", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+      view.setup.mockInput.pressEscape()
+      yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
+      expect(view.steers).toEqual(["Cancel", "Cancel"])
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("ctrl+c with an empty draft cancels a running turn while an error shows", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
+      expect(view.steers).toEqual(["Cancel"])
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("an interjection steers a running turn while an error shows", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      yield* Effect.promise(() => view.setup.mockInput.typeText("steer this"))
+      view.setup.mockInput.pressEnter({ meta: true })
+      yield* waitForFrame(
+        view.setup,
+        () => view.steers.length + view.sent.length === 1,
+        "interjection",
+      )
+      expect(view.steers).toEqual(["Interject"])
+      expect(view.sent).toEqual([])
+    }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("escape in the boot branch picker quits, because no branch was chosen", () =>
     Effect.gen(function* () {

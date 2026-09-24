@@ -34,7 +34,6 @@ import {
 } from "@gent/core/protocol"
 import { ExtensionId } from "@gent/core/extensions/api"
 import {
-  AgentStatus,
   type ClientContextValue,
   reduceAgentLifecycle,
   type Session,
@@ -68,19 +67,17 @@ const makeMessage = (role: "user" | "assistant") =>
   })
 
 describe("reduceAgentLifecycle", () => {
-  test("marks a turn as streaming when the stream starts", () => {
+  test("a stream start says a turn runs", () => {
     const event = StreamStarted.make({
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
     })
 
-    expect(reduceAgentLifecycle(event)).toEqual({
-      status: { _tag: "Streaming" },
-    })
-    expect(Schema.is(AgentStatus.cases.Streaming)(reduceAgentLifecycle(event).status)).toBe(true)
+    expect(reduceAgentLifecycle(event).running).toEqual(Option.some(true))
+    expect(reduceAgentLifecycle(event).error).toEqual(Option.none())
   })
 
-  test("keeps streaming until TurnCompleted", () => {
+  test("the turn runs until TurnCompleted", () => {
     const streamEnded = StreamEnded.make({
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
@@ -94,41 +91,31 @@ describe("reduceAgentLifecycle", () => {
       durationMs: 42,
     })
 
-    expect(reduceAgentLifecycle(streamEnded)).toEqual({})
-    expect(reduceAgentLifecycle(assistantMessage)).toEqual({})
-    expect(reduceAgentLifecycle(turnCompleted)).toEqual({
-      status: { _tag: "Idle" },
-    })
-    expect(Schema.is(AgentStatus.cases.Idle)(reduceAgentLifecycle(turnCompleted).status)).toBe(true)
+    expect(reduceAgentLifecycle(streamEnded).running).toEqual(Option.none())
+    expect(reduceAgentLifecycle(assistantMessage).running).toEqual(Option.none())
+    expect(reduceAgentLifecycle(turnCompleted).running).toEqual(Option.some(false))
   })
 
-  test("uses user messages to enter streaming immediately", () => {
+  test("a user message starts the turn at once", () => {
     const userMessage = MessageReceived.make({
       message: makeMessage("user"),
     })
 
-    expect(reduceAgentLifecycle(userMessage)).toEqual({
-      status: { _tag: "Streaming" },
-    })
-    expect(Schema.is(AgentStatus.cases.Streaming)(reduceAgentLifecycle(userMessage).status)).toBe(
-      true,
-    )
+    expect(reduceAgentLifecycle(userMessage).running).toEqual(Option.some(true))
   })
 
-  test("surfaces errors", () => {
+  test("an error shows and leaves the turn as it is", () => {
     const errored = ErrorOccurred.make({
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
       error: "boom",
     })
 
-    expect(reduceAgentLifecycle(errored)).toEqual({
-      status: { _tag: "Error", error: "boom" },
-    })
-    expect(Schema.is(AgentStatus.cases.Error)(reduceAgentLifecycle(errored).status)).toBe(true)
+    expect(reduceAgentLifecycle(errored).error).toEqual(Option.some("boom"))
+    expect(reduceAgentLifecycle(errored).running).toEqual(Option.none())
   })
 
-  test("a notice leaves the status as it is", () => {
+  test("a notice shows no error", () => {
     const notice = ErrorOccurred.make({
       sessionId: SessionId.make("s1"),
       branchId: BranchId.make("b1"),
@@ -136,7 +123,8 @@ describe("reduceAgentLifecycle", () => {
       notice: true,
     })
 
-    expect(reduceAgentLifecycle(notice)).toEqual({})
+    expect(reduceAgentLifecycle(notice).error).toEqual(Option.none())
+    expect(reduceAgentLifecycle(notice).running).toEqual(Option.none())
   })
 })
 
@@ -294,7 +282,7 @@ describe("ClientProvider contract", () => {
       })
       expect(client.isReconnecting()).toBe(false)
       expect(client.isActive()).toBe(false)
-      expect(client.agentStatus()._tag).toBe("Idle")
+      expect(client.isError()).toBe(false)
       expect(client.isStreaming()).toBe(false)
 
       // An action writes; the agent facet on the same value reports it.
@@ -307,7 +295,8 @@ describe("ClientProvider contract", () => {
       yield* settle(setup)
       expect(client.isActive()).toBe(true)
       // switchSession also resets the agent facet, from the same value.
-      expect(client.agentStatus()._tag).toBe("Idle")
+      expect(client.isError()).toBe(false)
+      expect(client.isStreaming()).toBe(false)
       expect(client.cost()).toBe(0)
 
       unsubscribe()
@@ -1571,6 +1560,108 @@ describe("ClientProvider errors", () => {
       client.applySessionSnapshot(snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }))
       client.setErrorIn(FIRST, "send refused")
       expect(client.error()).toBe("send refused")
+    }),
+  )
+
+  // The feed skips the lifecycle events a snapshot covers, so a turn that
+  // started while the connection was down reaches the client only inside the
+  // snapshot. It is still a turn start, and it clears the error.
+  it.live("a turn that started during a disconnect drops the held error", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      const idle = snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 })
+      client.applySessionSnapshot(idle)
+      client.setErrorIn(FIRST, "send refused")
+      // The connection drops; a queued message starts the next turn meanwhile.
+      const running: SessionSnapshot["runtime"] = { _tag: "Running", queue: emptyQueueSnapshot() }
+      client.applySessionSnapshot({ ...idle, runtime: running })
+      expect(client.isStreaming()).toBe(true)
+      expect(client.error()).toBeNull()
+    }),
+  )
+
+  it.live("a snapshot of the turn the error was shown in keeps the error", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      const running: SessionSnapshot["runtime"] = { _tag: "Running", queue: emptyQueueSnapshot() }
+      const midTurn = { ...snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }), runtime: running }
+      client.applySessionSnapshot(midTurn)
+      client.setErrorIn(FIRST, "interject refused")
+      // The same turn still runs when the feed hydrates again.
+      client.applySessionSnapshot(midTurn)
+      expect(client.error()).toBe("interject refused")
+      // It ends while the connection is down; no new turn starts.
+      client.applySessionSnapshot({
+        ...midTurn,
+        runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+        metrics: { ...midTurn.metrics, turns: midTurn.metrics.turns + 1 },
+      })
+      expect(client.error()).toBe("interject refused")
+    }),
+  )
+
+  it.live("an error leaves the turn running; the next turn start clears it", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      const running: SessionSnapshot["runtime"] = { _tag: "Running", queue: emptyQueueSnapshot() }
+      client.applySessionRuntime({ ...FIRST, runtime: running })
+      client.setError('No model matches "typo"')
+      expect(client.isStreaming()).toBe(true)
+      // A queue change re-emits Running; the turn did not start again.
+      client.applySessionRuntime({ ...FIRST, runtime: running })
+      expect(client.error()).toBe('No model matches "typo"')
+      // The turn ends; the error stays until a turn starts.
+      client.applySessionEvent(
+        makeEnvelope(
+          1,
+          TurnCompleted.make({
+            sessionId: FIRST.sessionId,
+            branchId: FIRST.branchId,
+            durationMs: 1,
+          }),
+        ),
+      )
+      expect(client.isStreaming()).toBe(false)
+      expect(client.error()).toBe('No model matches "typo"')
+      client.applySessionRuntime({ ...FIRST, runtime: running })
+      expect(client.isStreaming()).toBe(true)
+      expect(client.error()).toBeNull()
     }),
   )
 })

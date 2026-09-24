@@ -1831,6 +1831,13 @@ export class ToolCallBindingStorage extends Context.Service<
 export const PendingToolCall = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
+  /**
+   * The call's last run ended by parking on an interaction, before any work
+   * it asked about. Only such a call runs again when its turn resumes; a call
+   * without the mark was cut short while it ran, and is reported as
+   * interrupted instead. Absent on rows written before the mark existed.
+   */
+  parked: Schema.optional(Schema.Boolean),
 })
 export type PendingToolCall = typeof PendingToolCall.Type
 

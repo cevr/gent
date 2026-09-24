@@ -3,7 +3,7 @@
 ## Gotchas
 
 - **jsxImportSource** - Must be `@opentui/solid`, not `solid-js`. Set in tsconfig.json.
-- **Preload required** - Dev only: `bun --preload @opentui/solid/preload`. Binary doesn't need it.
+- **Preload required** - Source runs only: `apps/tui/bunfig.toml` declares `@opentui/solid/preload` for `bun` (top level) and `bun test` (`[test]`); run from `apps/tui`. Binary doesn't need it.
 - **No shorthand props** - Use `marginTop`/`marginBottom` not `marginY`.
 - **Border placement** - `border` prop goes on `<box>`, not `<input>`.
 - **autoloadBunfig: false** - Required in `Bun.build` compile options, else binary tries to load bunfig at runtime.
@@ -63,15 +63,15 @@ Startup blocks before render — `main.tsx` calls `waitForReady` + `resolveInter
 Providers wrap app in `main.tsx`:
 
 ```
-WorkspaceProvider → ClientProvider → ExtensionUIProvider → SessionShellProvider → App
+WorkspaceProvider → ClientProvider → ExtensionUIProvider → ComposerMemoryProvider → App
 ```
 
 | Provider                   | Purpose                                             |
 | -------------------------- | --------------------------------------------------- |
 | `WorkspaceProvider`        | cwd, gitRoot, gitStatus - static workspace info     |
-| `SessionShellProvider`     | the startup prompt, held until a session takes it   |
 | `ClientProvider`           | transport client, session state, event stream       |
 | `ExtensionUIProvider`      | extension loading, command list, composer dispatch  |
+| `ComposerMemoryProvider`   | drafts, refusals, prompt history, startup prompt    |
 | `SessionControllerContext` | session-scoped: auth gate, overlays, composer state |
 
 State ownership rules:
@@ -167,10 +167,10 @@ Special prefixes at input start trigger different modes:
 
 - A submit leaves the composer before it is sent. A send the server refuses, or a `!cmd` that cannot spawn, comes back to the draft of the branch it was sent from, with its reason (`ComposerRefusals` in `session.tsx`)
 - A `!cmd` that ran but whose output the server refused comes back as that output, a plain message, and the reason says the command ran. Enter sends the output; it never runs the command again. Once back it is an ordinary draft: an `@path` in it expands on that send, as in any draft
-- A refused text as large as a paste (`isLargePaste`) comes back into the composer on screen as a paste placeholder; a kept draft of a branch the reader left holds the text itself
+- A refused message as large as a paste (`isLargePaste`) comes back into the composer on screen as a paste placeholder; a kept draft of a branch the reader left holds the text itself, and a kept block that joins a composer on screen is written the same way. A refused command always comes back as its text, so the reader sees the command Enter would run
 - A lost connection is not a refusal: the send may have landed. It retries four times under its first request id (`SEND_RETRY` in `utils.ts`, shared with the startup prompt and the headless send's predicate), and the text comes back only after the last try. That text keeps the request id: Enter on it unchanged sends it under the same id, so the server's dedup runs it once. An edited text, a draft that joins several refused texts, or a text the server answered goes under a new id. The `-p` startup prompt is a submission too: it is sent once, and a failed send comes back to the draft of its branch with its reason
 - None is lost: refused texts come back in send order, ahead of what the reader has typed since. A draft of refused commands only stays in shell mode; a mixed draft writes each command with its `!`
-- A refusal for a session the reader has left waits there: its text joins that branch's kept draft, and its reason (`client.setErrorIn`) shows when the reader returns. The session in view shows neither. A reason for the session in view shows at once. Every reason is held until a later status replaces it, so each snapshot (which writes the status: a return, a switch, a feed that hydrates again after a reconnect) shows it again
+- A refusal for a session the reader has left waits there: its text joins that branch's kept draft, and its reason (`client.setErrorIn`) shows when the reader returns. The session in view shows neither. A reason for the session in view shows at once. Every reason is held until a later error or a turn start replaces it, so each snapshot (which writes the error on screen: a return, a switch, a feed that hydrates again after a reconnect) shows it again. A turn that started while the connection was down arrives only inside a snapshot; the held reason remembers how many turns the branch had started when it showed, and a snapshot that counts more drops it. An error on screen never stops a running turn: the client keeps whether a turn runs apart from the error it shows, so Esc, Ctrl+C and an interjection act on the turn while an error shows
 - Large output (>2000 lines or 50KB) truncated, full saved to `shell-output/` in the data directory (`GENT_DATA_DIR`, else `~/.gent`)
 
 ### File References

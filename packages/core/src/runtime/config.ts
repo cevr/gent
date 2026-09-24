@@ -71,6 +71,24 @@ const readDisabledFromFile = (filePath: string) =>
   }).pipe(Effect.catchEager(() => Effect.succeed<ReadonlyArray<string>>([])))
 
 /**
+ * Whether the project side is a scope of its own. Launched from home, the
+ * project's `.gent` is the user's, so there is one scope, read once: no
+ * project config and no project extensions. Every reader of project files
+ * asks this, with the two roots or the two extension directories. Paths
+ * compare canonically; one that does not resolve compares as written.
+ */
+const hasProjectScope = Effect.fn("ExtensionLoader.projectScope")(function* (sides: {
+  readonly user: string
+  readonly project: string
+}) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const canonical = (dir: string) =>
+    fs.realPath(path.resolve(dir)).pipe(Effect.orElseSucceed(() => path.resolve(dir)))
+  return (yield* canonical(sides.project)) !== (yield* canonical(sides.user))
+})
+
+/**
  * Read disabled extensions from user + project config.
  * Same merge semantics as ConfigService: union of user + project lists.
  */
@@ -84,7 +102,9 @@ export const readDisabledExtensions = (params: {
     const userConfigPath = path.join(params.home, GENT_CONFIG_DIRECTORY, GENT_CONFIG_FILENAME)
     const projectConfigPath = path.join(params.cwd, GENT_CONFIG_DIRECTORY, GENT_CONFIG_FILENAME)
     const userDisabled = yield* readDisabledFromFile(userConfigPath)
-    const projectDisabled = yield* readDisabledFromFile(projectConfigPath)
+    let projectDisabled: ReadonlyArray<string> = []
+    if (yield* hasProjectScope({ user: params.home, project: params.cwd }))
+      projectDisabled = yield* readDisabledFromFile(projectConfigPath)
     return new Set([...(params.extra ?? []), ...userDisabled, ...projectDisabled])
   })
 
@@ -513,12 +533,18 @@ export class ConfigService extends Context.Service<ConfigService, ConfigServiceS
           failures.push(userRead.failure)
           user = yield* SynchronizedRef.get(userConfigRef)
         }
-        const projectRead = yield* Effect.result(
-          readConfigFresh(path.join(cwd, ConfigService.CONFIG_RELATIVE)),
-        )
         let project = new UserConfig({})
-        if (Result.isSuccess(projectRead)) project = projectRead.success
-        else failures.push(projectRead.failure)
+        const projectScope = yield* hasProjectScope({ user: home, project: cwd }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+        )
+        if (projectScope) {
+          const projectRead = yield* Effect.result(
+            readConfigFresh(path.join(cwd, ConfigService.CONFIG_RELATIVE)),
+          )
+          if (Result.isSuccess(projectRead)) project = projectRead.success
+          else failures.push(projectRead.failure)
+        }
         return { config: mergeConfigs(user, project), failures }
       })
 
@@ -607,6 +633,15 @@ const isProjectRootTrusted = Effect.fn("ExtensionLoader.projectRootTrust")(funct
     Effect.orElseSucceed(() => false),
   )
 })
+
+/**
+ * Whether a project extension directory is a scope of its own, not the user
+ * directory reached again from a launch in home (see `hasProjectScope`).
+ */
+export const hasProjectExtensionScope = (directories: {
+  readonly userDir: string
+  readonly projectDir: string
+}) => hasProjectScope({ user: directories.userDir, project: directories.projectDir })
 
 /** Only user configuration can authorize project module execution. */
 export const isProjectExtensionDirectoryTrusted = Effect.fn("ExtensionLoader.projectTrust")(

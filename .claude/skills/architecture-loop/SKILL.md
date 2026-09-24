@@ -1,6 +1,6 @@
 ---
 name: architecture-loop
-description: Run the gent reduction loop — sweep every package against prior art, apply, counsel, live-check, until a pass finds polish only.
+description: Run the gent reduction loop — sweep every package against prior art and per-task token cost, apply, counsel, live-check, until a pass finds polish only.
 disable-model-invocation: true
 ---
 
@@ -20,7 +20,7 @@ The ledger is `plans/architecture-loop-<date>.md`. It is the single source of tr
 
 3. **Prior art, first pass only.** Read [`prior-art.md`](prior-art.md). Survey only what it does not already answer. Done when each new idea is a ledger row: adopt, or rejected with a reason.
 
-4. **Sweep.** Launch read-only agents from [`prompts/sweep.md`](prompts/sweep.md), one per area, in one message. Each writes a report file. Done when every area has a report, including the areas that report no findings.
+4. **Sweep.** Launch read-only agents from [`prompts/sweep.md`](prompts/sweep.md), one per area, in one message. Each writes a report file. One more area every pass is **efficiency**: what the harness sends to the model, measured as cost per task. Its prompt adds [`efficiency.md`](efficiency.md) to the read-first list. Done when every area has a report, including the areas that report no findings, and the ledger has an efficiency baseline row.
 
 5. **Apply.** One rift per pass (`rift create --copy-all --name <pass>`). Launch apply agents from [`prompts/apply.md`](prompts/apply.md). Agents that share a rift run one after the other, because the pre-commit hook gates the whole tree. Done when the rift tree is clean and its last gate log ends `GATE EXIT 0`.
 
@@ -34,7 +34,7 @@ The ledger is `plans/architecture-loop-<date>.md`. It is the single source of tr
 
 ## Close rule
 
-Close when one pass holds all three: the coverage table has no unswept directory, the sweeps report polish only (under about 5 lines of value each), and the loop reader names no structural change. Then write the HTML report and the final message. A pass that finds a guard blind spot is never the last: close the blind spot, run the guard, and sweep what it reveals.
+Close when one pass holds all three: the coverage table has no unswept directory, the sweeps report polish only (under about 5 lines of value each), the efficiency sweep has no measured saving left that it can change directly, and the loop reader names no structural change. Then write the HTML report and the final message. A pass that finds a guard blind spot is never the last: close the blind spot, run the guard, and sweep what it reveals.
 
 ## What pays late
 
