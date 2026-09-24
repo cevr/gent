@@ -40,6 +40,7 @@ import {
   buildServerRoutes,
   createDependencies,
   BunPlatformLive,
+  ModelResolver,
   ScriptedLanguageModel,
   StateLocation,
 } from "@gent/core/host"
@@ -906,7 +907,6 @@ export type GentServer = Schema.Schema.Type<typeof GentServer>
 
 interface OwnedServerInternal {
   readonly handlerContext: Context.Context<BuiltRpcHandlers>
-  readonly port: number
   readonly serverId: string
 }
 
@@ -1042,7 +1042,9 @@ const buildOwnedServer = (
         }),
         extensions: options.extensions ?? BuiltinExtensions,
         branchTools: options.branchTools ?? CellBranchTools,
-        languageModelLayerOverride: Option.getOrUndefined(languageModelLayer),
+        modelResolverOverride: Option.getOrUndefined(
+          Option.map(languageModelLayer, ModelResolver.fromLanguageModel),
+        ),
       }).pipe(Layer.provide(observability)),
       scope,
     ).pipe(
@@ -1091,7 +1093,6 @@ const buildOwnedServer = (
     })
     ownedInternals.set(server, {
       handlerContext: rpcHandlersContext,
-      port,
       serverId,
     })
 

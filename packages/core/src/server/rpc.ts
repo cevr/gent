@@ -399,7 +399,7 @@ export interface GentLifecycle {
 
 // ── rpcs/session ────────────────────────────────────────────────────────────
 
-export class SessionRpcs extends RpcGroup.make(
+class SessionRpcs extends RpcGroup.make(
   Rpc.make("session.create", {
     payload: CreateSessionInput.fields,
     success: Schema.Struct({

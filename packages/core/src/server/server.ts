@@ -129,7 +129,7 @@ import {
   resolveExistingSessionBranch,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import type { AgentName } from "../domain/agent.js"
+import { type AgentName, effectiveModelDriver, resolveAgentDriver } from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
 import { resolveSessionSettings, sessionAgentDefinition } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
@@ -142,7 +142,6 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http"
-import type { LanguageModel } from "effect/unstable/ai"
 import { ChildProcessSpawner as ProcessSpawner } from "effect/unstable/process"
 import type { PromptSection } from "../domain/capability.js"
 import { type BranchToolFeature, CurrentBranchToolFeature, ToolRunner } from "../runtime/tools.js"
@@ -328,12 +327,6 @@ const createSessionResult = (operation: StoredCreateSessionResult): CreateSessio
   branchId: operation.branchId,
   name: operation.name,
 })
-
-/** One setting after a change: left out keeps `stored`, `Some` sets, `None` clears. */
-const mergeSetting = <A>(
-  change: Option.Option<Option.Option<A>>,
-  stored: Option.Option<A>,
-): Option.Option<A> => Option.getOrElse(change, () => stored)
 
 const makeSessionMutationsService: Effect.Effect<
   SessionMutationsService,
@@ -926,17 +919,16 @@ const makeSessionMutationsService: Effect.Effect<
             return yield* new NotFoundError({ message: "Session not found" })
           }
           // Merged inside the transaction: a field the change leaves out keeps
-          // the stored value, whatever the caller last saw.
+          // the stored value, whatever the caller last saw; `Some` sets and
+          // `None` clears.
           const settings = {
             modelId: Option.getOrUndefined(
-              mergeSetting(
-                Option.fromUndefinedOr(input.modelId),
+              Option.getOrElse(Option.fromUndefinedOr(input.modelId), () =>
                 Option.fromUndefinedOr(session.modelId),
               ),
             ),
             reasoningLevel: Option.getOrUndefined(
-              mergeSetting(
-                Option.fromUndefinedOr(input.reasoningLevel),
+              Option.getOrElse(Option.fromUndefinedOr(input.reasoningLevel), () =>
                 Option.fromUndefinedOr(session.reasoningLevel),
               ),
             ),
@@ -1263,7 +1255,10 @@ const RpcHandlers = GentRpcs.toLayer(
         rpc("session.getSnapshot", getSessionSnapshot(input), () => input),
 
       "session.updateSettings": (input: UpdateSessionSettingsInput) =>
-        rpc("session.updateSettings", mutations.updateSettings(input), () => input),
+        rpc("session.updateSettings", mutations.updateSettings(input), (result) => ({
+          sessionId: input.sessionId,
+          ...result,
+        })),
 
       "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) => {
         const subscription = { sessionId, branchId, synchronize: true }
@@ -1419,22 +1414,30 @@ const RpcHandlers = GentRpcs.toLayer(
             ),
           )
           const agents = [...registry.getResolved().agents.values()]
-          const modelFor = (admission: Option.Option<SessionAdmission>) =>
-            resolveSessionSettings(
-              sessionAgentDefinition({
-                agents,
-                admission,
-                configAgents: Option.fromUndefinedOr(config.agents),
-              }).definition,
+          // The driver a turn routes through: the agent's driver, else the
+          // config override, else the model id's provider segment.
+          const driverFor = (admission: Option.Option<SessionAdmission>) => {
+            const { definition } = sessionAgentDefinition({
+              agents,
+              admission,
+              configAgents: Option.fromUndefinedOr(config.agents),
+            })
+            const { modelId } = resolveSessionSettings(
+              definition,
               Option.getOrElse(session, () => ({})),
-            ).modelId
+            )
+            const driver = Option.flatMap(definition, (agent) =>
+              Option.fromUndefinedOr(resolveAgentDriver(agent, config.driverOverrides).driver),
+            )
+            return effectiveModelDriver(driver, modelId).driverId
+          }
           // The session's own agent, then an agent the caller asks about.
-          const modelIds = [
-            modelFor(Option.flatMap(session, (found) => Option.fromUndefinedOr(found.admission))),
+          const admissions = [
+            Option.flatMap(session, (found) => Option.fromUndefinedOr(found.admission)),
           ]
-          if (!Predicate.isUndefined(agentName))
-            modelIds.push(modelFor(Option.some({ agent: agentName })))
-          return yield* listAuthProviders(modelIds).pipe(
+          if (!Predicate.isUndefined(agentName)) admissions.push(Option.some({ agent: agentName }))
+          const driverIds = admissions.flatMap((admission) => Option.toArray(driverFor(admission)))
+          return yield* listAuthProviders(driverIds).pipe(
             Effect.provideService(ExtensionRegistry, registry),
             Effect.provideService(Auth, authStore),
             Effect.mapError((error) => authPersistenceError("read", "*", error)),
@@ -1634,9 +1637,9 @@ interface DependenciesConfig {
   state: StateLocation
   /** A failed extension fails the profile build. Test roots set it; production leaves one broken extension out and runs. */
   failOnExtensionFailure: boolean
-  /** Language model layer override. When set, replaces the auth-backed live resolver.
+  /** Model resolver override. When set, replaces the auth-backed live resolver.
    *  Must be a fully-provided layer (no requirements, no errors). */
-  languageModelLayerOverride?: Layer.Layer<LanguageModel.LanguageModel, never, never>
+  modelResolverOverride?: Layer.Layer<ModelResolver, never, never>
   /** Extensions to load. Composition roots pass this in. */
   extensions: ReadonlyArray<GentExtension<ExtensionSetupServices>>
   /**
@@ -1685,9 +1688,9 @@ const makeModelResolverLayer = <A, E, R>(
   config: DependenciesConfig,
   authDeps: Layer.Layer<A, E, R>,
 ) =>
-  Option.match(Option.fromUndefinedOr(config.languageModelLayerOverride), {
+  Option.match(Option.fromUndefinedOr(config.modelResolverOverride), {
     onNone: () => Layer.provide(ModelResolver.Live, authDeps),
-    onSome: ModelResolver.fromLanguageModel,
+    onSome: (override) => override,
   })
 
 export const createDependencies = (config: DependenciesConfig) => {

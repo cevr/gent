@@ -40,7 +40,6 @@ import {
   textDeltaPart,
   toolCallPart,
   ModelRegistry,
-  ModelResolver,
   TEST_MODEL_CONTEXT_LIMIT_TOKENS,
 } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
@@ -67,7 +66,7 @@ import {
   resolveExtensions,
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
-import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import {
   ActorCommandId,
   BranchId,
@@ -119,8 +118,8 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
     },
   ])
 }
-const sessionRuntimeLayers = (baseSections: Parameters<typeof SessionRuntime.Live>[0]) =>
-  SessionRuntime.Live(baseSections)
+const sessionRuntimeLayers = (config: Parameters<typeof AgentLoopLiveActor>[0]) =>
+  Layer.provideMerge(AgentLoopLiveActor(config), SessionRuntime.Client)
 const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof SqliteStorage.TestWithSql<A>>) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),
@@ -139,7 +138,7 @@ const makeRuntimeLayer = (
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
+    LanguageModelLayers.resolver(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     eventStoreLayer,
     recorderLayer,
@@ -175,7 +174,7 @@ const makeLiveToolRuntimeLayer = (
     storageLayer,
     makeClusterRunnerLayer(storageLayer),
     providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
+    LanguageModelLayers.resolver(providerLayer),
     ExtensionRegistry.fromResolved(resolvedExtensions),
     eventStoreLayer,
     recorderLayer,
