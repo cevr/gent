@@ -55,7 +55,6 @@ import {
 export {
   AgentDefinition,
   AgentName,
-  DEFAULT_AGENT_NAME,
   makeRunSpec,
   type RunSpec,
   RunSpecSchema,
