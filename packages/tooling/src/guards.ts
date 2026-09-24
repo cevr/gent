@@ -267,8 +267,9 @@ export const findAliasTestLayers = (file: string, text: string): ReadonlyArray<F
  *
  * `DEFAULT_MAX_AGENT_RUN_DEPTH` is enforced in one place,
  * `admitChildSessionDepth` (`packages/core/src/runtime/session.ts`).
- * A file that builds a `new Session({ ... parentSessionId: ... })` row is a
- * child-session writer and must call that admission, or a new writer (the
+ * A function that builds a `new Session({ ... parentSessionId: ... })` row is
+ * a child-session writer and must call that admission before the write,
+ * directly or through a same-file function that admits, or a new writer (the
  * compaction handoff once did) nests sessions without bound.
  *
  * Storage readers rebuild rows from the database and test fixtures seed
@@ -281,17 +282,57 @@ const CORE_SRC = "packages/core/src/"
 const EXEMPT_PREFIXES = [`${CORE_SRC}storage/`, `${CORE_SRC}test-utils/`]
 const SHARED_CHECK = "admitChildSessionDepth"
 const SESSION_LITERAL = /new Session\(\{/g
-const SHARED_CHECK_CALL = new RegExp(`\\b${SHARED_CHECK}\\(`)
-const TOP_LEVEL_DECLARATION = /(?:^|\n)(?:export\s+)?(?:const|let|function|class)\s/g
+/** A line that opens a function: a `function` keyword or an arrow. */
+const FUNCTION_HEAD = /\bfunction\b|=>/
+/** The name a function head binds: `const admitParent = Effect.fn(...)(function* (`. */
+const BOUND_NAME = /^\s*(?:export\s+)?(?:const|let|function\*?)\s+([A-Za-z_$][\w$]*)/
 
-/** Offset of the last column-0 declaration head in `text`, or 0. */
-const lastDeclarationStart = (text: string): number => {
-  let start = 0
-  for (const match of text.matchAll(TOP_LEVEL_DECLARATION)) start = match.index
-  return start
+const indentOf = (line: string): number => line.length - line.trimStart().length
+
+/**
+ * The line that opens the nearest function around line `index`: the last
+ * earlier line, at a lower indent, that holds a function head. The formatter
+ * keeps a body indented past its head, so indent reads the nesting.
+ */
+const enclosingFunctionStart = (lines: ReadonlyArray<string>, index: number): number => {
+  const indent = indentOf(lines[index] ?? "")
+  for (let at = index - 1; at >= 0; at--) {
+    const line = lines[at] ?? ""
+    if (line.trim().length === 0) continue
+    if (indentOf(line) < indent && FUNCTION_HEAD.test(line)) return at
+  }
+  return 0
 }
 
-/** Report `new Session({...parentSessionId...})` in a core file that never admits depth. */
+const lineIndexAt = (text: string, offset: number): number =>
+  text.slice(0, offset).split("\n").length - 1
+
+const callsAny = (window: string, names: ReadonlySet<string>): boolean =>
+  [...names].some((name) => new RegExp(`\\b${name}\\(`).test(window))
+
+/**
+ * `admitChildSessionDepth` plus every function in this file that calls an
+ * admitting function in its own body: `admitParent` in `server.ts` checks
+ * the parent and then admits, so a writer that calls it admits too.
+ */
+const admittingNames = (lines: ReadonlyArray<string>): ReadonlySet<string> => {
+  const names = new Set([SHARED_CHECK])
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const [index, line] of lines.entries()) {
+      if (!callsAny(line, names)) continue
+      const head = enclosingFunctionStart(lines, index)
+      const bound = Option.fromNullishOr(BOUND_NAME.exec(lines[head] ?? "")?.[1])
+      if (Option.isNone(bound) || names.has(bound.value)) continue
+      names.add(bound.value)
+      grew = true
+    }
+  }
+  return names
+}
+
+/** Report `new Session({...parentSessionId...})` in a core file whose writer never admits depth. */
 export const findUnadmittedChildSessionWriters = (
   file: string,
   text: string,
@@ -299,6 +340,7 @@ export const findUnadmittedChildSessionWriters = (
   if (!file.startsWith(CORE_SRC)) return []
   if (EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix))) return []
 
+  const lines = text.split("\n")
   const findings: Finding[] = []
   for (const match of text.matchAll(SESSION_LITERAL)) {
     const start = match.index
@@ -307,15 +349,16 @@ export const findUnadmittedChildSessionWriters = (
     const literal = text.slice(start, end)
     // A field (`parentSessionId: x`) or a shorthand (`parentSessionId,`).
     if (!/\bparentSessionId\s*(?:[:,]|$)/.test(literal)) continue
-    // The admission must run before the write, in the same top-level
-    // declaration. A whole-file escape let one admission anywhere in a
-    // 700-line file cover every writer in it.
-    const before = text.slice(0, start)
-    if (SHARED_CHECK_CALL.test(before.slice(lastDeclarationStart(before)))) continue
+    // The admission must run before the write, in the writer's own function.
+    // A per-declaration window let one admission anywhere in a 620-line
+    // service factory cover every writer in it.
+    const index = lineIndexAt(text, start)
+    const window = lines.slice(enclosingFunctionStart(lines, index), index + 1).join("\n")
+    if (callsAny(window, admittingNames(lines))) continue
     findings.push({
       file,
-      line: text.slice(0, start).split("\n").length,
-      message: `child-session writer never calls \`${SHARED_CHECK}\`; every \`parentSessionId\` writer admits the nesting cap through \`runtime/session.ts\``,
+      line: index + 1,
+      message: `child-session writer never calls \`${SHARED_CHECK}\` in its own function before the write; every \`parentSessionId\` writer admits the nesting cap through \`runtime/session.ts\``,
     })
   }
   return findings

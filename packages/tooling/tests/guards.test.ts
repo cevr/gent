@@ -303,6 +303,42 @@ describe("child-session depth guard", () => {
     expect(findings).toHaveLength(1)
   })
 
+  // The service factory in server.ts is one 620-line declaration; a
+  // per-declaration window let its one admission cover any later writer.
+  const factory = (writerBody: ReadonlyArray<string>) =>
+    [
+      "export const makeSessionMutations = Effect.gen(function* () {",
+      "  const admitParent = Effect.fn(function* (input) {",
+      "    if (input.continueThread !== true) {",
+      "      yield* admitChildSessionDepth(input.parentSessionId)",
+      "    }",
+      "    return input",
+      "  })",
+      "",
+      "  const createSession = Effect.fn(function* (input) {",
+      ...writerBody,
+      "    return new Session({ id, parentSessionId: input.parentSessionId, createdAt: now })",
+      "  })",
+      "  return { createSession }",
+      "})",
+    ].join("\n")
+
+  test("an admission in a sibling function of one factory does not cover a writer", () => {
+    const findings = findUnadmittedChildSessionWriters(
+      "packages/core/src/server/server.ts",
+      factory(["    const now = yield* DateTime.nowAsDate"]),
+    )
+    expect(findings.map((finding) => finding.line)).toEqual([11])
+  })
+
+  test("a writer that calls a same-file function which admits is accepted", () => {
+    const findings = findUnadmittedChildSessionWriters(
+      "packages/core/src/server/server.ts",
+      factory(["    const admitted = yield* admitParent(input)"]),
+    )
+    expect(findings).toEqual([])
+  })
+
   test("flags a writer that names parentSessionId by shorthand", () => {
     for (const literal of [
       "new Session({ id, parentSessionId, createdAt: now })",
