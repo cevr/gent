@@ -513,6 +513,10 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   branch delivers every receipt as one ordinary user message on the parent
   branch (metadata `customType: "child-completion"`) with the outcome and a
   bounded preview, and the message wakes the parent. Nothing waits on a child.
+  A turn that ended badly also carries the error it ended on (the last
+  non-notice `ErrorOccurred` since the previous receipt, one line of at most
+  1,000 characters) in the text and in the optional `details.error`, so a
+  parent tells a sign-in that will fail again from a flake.
   Lazy reconcile covers the crash window between the
   receipt and the hook: the delegate reconciles its registry when the parent's
   loop opens, on its first turn, and on every `delegate.list`, so a caller that died mid-op leaves a
