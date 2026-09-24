@@ -276,25 +276,36 @@ export const binaryProcessPattern = (binary: string): string => {
   return `^${literal}( |$)`
 }
 
+const binaryRunning = async (binary: string): Promise<boolean> =>
+  (await $`pgrep -f ${binaryProcessPattern(binary)}`.quiet().nothrow()).exitCode === 0
+
 /** Poll until no process is running the binary, so a relaunch gets a shell. */
 const waitForBinaryGone = async (binary: string): Promise<void> => {
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    const alive = await $`pgrep -f ${binaryProcessPattern(binary)}`.quiet().nothrow()
-    if (alive.exitCode !== 0) return
+    if (!(await binaryRunning(binary))) return
     await Bun.sleep(500)
   }
   throw new Error(`${binary} is still running after 15s; kill it before relaunching`)
 }
 
 /**
- * Quit the TUI: two Ctrl-C (the first interrupts a turn, the second exits),
+ * Ctrl-C presses that reach exit from the deepest state: each press peels one
+ * layer (an expanded transcript, a draft in the composer, a running turn),
+ * and the last one exits.
+ */
+const QUIT_PRESSES = 4
+
+/**
+ * Quit the TUI: Ctrl-C until the binary is gone, at most `QUIT_PRESSES`,
  * then wait for the process to release the PTY. `pkill` returns before the
  * process is gone, and herdr writes into whatever is attached at that moment.
  */
 const quitTui = async (state: GamutState): Promise<void> => {
-  await $`herdr pane send-text ${state.pane} ${CTRL_C}`.quiet().nothrow()
-  await Bun.sleep(300)
-  await $`herdr pane send-text ${state.pane} ${CTRL_C}`.quiet().nothrow()
+  for (let press = 0; press < QUIT_PRESSES; press += 1) {
+    await $`herdr pane send-text ${state.pane} ${CTRL_C}`.quiet().nothrow()
+    await Bun.sleep(300)
+    if (!(await binaryRunning(state.binary))) return
+  }
   await waitForBinaryGone(state.binary)
 }
 
