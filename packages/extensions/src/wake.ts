@@ -646,7 +646,11 @@ const WakeResult = Schema.Struct({
   note: Schema.String,
 })
 
-/** Resolves `afterSeconds` or `at` to an epoch-millisecond due time. */
+/**
+ * Resolves `afterSeconds` or `at` to an epoch-millisecond due time. An `at`
+ * written to the second names the whole second, so one within the current
+ * second is now, not the past.
+ */
 export const dueAtOf = (
   params: Pick<typeof WakeParams.Type, "afterSeconds" | "at">,
   now: number,
@@ -654,9 +658,14 @@ export const dueAtOf = (
   const fromAfter = Option.fromUndefinedOr(params.afterSeconds).pipe(
     Option.map((seconds) => now + seconds * 1000),
   )
+  const startOfSecond = now - (now % 1000)
   const fromAt = Option.fromUndefinedOr(params.at).pipe(
     Option.flatMap((at) => DateTime.make(at)),
     Option.map(DateTime.toEpochMillis),
+    Option.map((at) => {
+      if (at >= startOfSecond) return Math.max(at, now)
+      return at
+    }),
   )
   if (Option.isSome(fromAfter) && Option.isSome(fromAt)) {
     return Effect.fail(new WakeError({ message: "Give afterSeconds or at, not both" }))

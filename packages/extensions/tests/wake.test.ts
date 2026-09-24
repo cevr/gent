@@ -209,6 +209,11 @@ describe("wake", () => {
       const past = yield* Effect.exit(dueAtOf({ at: "1970-01-01T00:00:01Z" }, now))
       expect(Exit.isFailure(past)).toBe(true)
       expect(yield* dueAtOf({ afterSeconds: 0 }, now)).toBe(now)
+      // An ISO time names a second: the current second is now, the one before is past.
+      const midSecond = 1_000_500
+      expect(yield* dueAtOf({ at: "1970-01-01T00:16:40Z" }, midSecond)).toBe(midSecond)
+      const lastSecond = yield* Effect.exit(dueAtOf({ at: "1970-01-01T00:16:39Z" }, midSecond))
+      expect(Exit.isFailure(lastSecond)).toBe(true)
       expect(wakeMessage({ _tag: "alarm", wakeId: "w1", dueAt: 1_200_000, note: "check CI" })).toBe(
         "Alarm w1 fired at 1970-01-01T00:20:00.000Z. check CI",
       )
