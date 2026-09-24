@@ -343,8 +343,10 @@ type TurnMetrics = {
   cacheReadTokens: number
   cacheWriteTokens: number
   /**
-   * USD of the priced steps, and of the compaction summaries this turn wrote.
-   * None until one is priced; a model with no price adds nothing.
+   * USD of the steps and of the compaction summaries this turn wrote. None
+   * once one of them could not be priced (its model has no price, or it
+   * reported no usable counts): a sum of the rest would read as the turn's
+   * whole cost, the same rule `usageKnown` keeps for the tokens.
    */
   costUsd: Option.Option<number>
   toolCallCount: number
@@ -362,7 +364,7 @@ const emptyTurnMetrics = (): TurnMetrics => ({
   outputTokens: 0,
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
-  costUsd: Option.none(),
+  costUsd: Option.some(0),
   toolCallCount: 0,
   steps: 0,
   usageKnown: true,
@@ -381,7 +383,12 @@ const usageComplete = (metrics: TurnMetrics): boolean => metrics.steps > 0 && me
  */
 const turnMetricsFor = (metrics: TurnMetrics, messageId: MessageId): TurnMetrics => {
   if (Option.contains(metrics.messageId, messageId)) return metrics
-  return { ...emptyTurnMetrics(), messageId: Option.some(messageId), usageKnown: false }
+  return {
+    ...emptyTurnMetrics(),
+    messageId: Option.some(messageId),
+    usageKnown: false,
+    costUsd: Option.none(),
+  }
 }
 
 /** How a turn ended, as its receipt and its `turnAfter` hooks record it. */
@@ -638,7 +645,11 @@ interface TurnLedger {
     readonly costUsd: Option.Option<number>
     readonly toolCallCount: number
   }) => Effect.Effect<void>
-  /** A compaction summary this turn wrote cost this much. Its tokens are not a step's. */
+  /**
+   * A compaction summary this turn wrote, and its price: none when its model
+   * has no price, which leaves the turn without a cost. Its tokens are not a
+   * step's.
+   */
   readonly noteCompaction: (costUsd: Option.Option<number>) => Effect.Effect<void>
   /** What this turn spent, as `TurnCompleted` reports it. */
   readonly total: Effect.Effect<TurnMetrics>
@@ -647,12 +658,9 @@ interface TurnLedger {
 /** A cache count the receipt records: zero is left out, as the steps leave it out. */
 const positiveCount = (count: number) => Option.liftPredicate(count, (value) => value > 0)
 
-/** Two optional prices summed: none only when both are. */
+/** Two prices summed: none when either is unknown. */
 const addCost = (total: Option.Option<number>, cost: Option.Option<number>) =>
-  Option.match(cost, {
-    onNone: () => total,
-    onSome: (value) => Option.some(Option.getOrElse(total, () => 0) + value),
-  })
+  Option.zipWith(total, cost, (sum, value) => sum + value)
 
 export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* () {
   const metrics = yield* Ref.make(emptyTurnMetrics())
@@ -664,7 +672,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
       }),
     noteUnseenSteps: Ref.update(metrics, (m) => {
       if (m.steps > 0) return m
-      return { ...m, usageKnown: false }
+      return { ...m, usageKnown: false, costUsd: Option.none() }
     }),
     noteModel: (params) =>
       Ref.update(metrics, (m) => ({ ...m, agent: params.agent, model: params.model })),
@@ -678,7 +686,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           outputTokens: m.outputTokens,
           cacheReadTokens: m.cacheReadTokens,
           cacheWriteTokens: m.cacheWriteTokens,
-          costUsd: m.costUsd,
+          costUsd: Option.none<number>(),
           toolCallCount: m.toolCallCount + params.toolCallCount,
           steps: m.steps + 1,
           usageKnown: false,
@@ -1351,8 +1359,8 @@ const toolCallsFromResponseParts = (
   })
 
 type ModelTurnSource = {
-  /** What the compaction summary written for this step cost, when one was written and priced. */
-  readonly compactionCostUsd: Option.Option<number>
+  /** The compaction summary written for this step, and its price when its model has one. */
+  readonly compaction: Option.Option<{ readonly costUsd: Option.Option<number> }>
   readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
@@ -1515,11 +1523,16 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }),
   })
 
-  // The summary ran on the turn's model, so the step's price applies to it.
-  const compactionCostUsd = yield* computeStreamEndedCost({
-    modelId: contextModelId,
-    usage: Option.flatMap(summary, (value) => Option.fromUndefinedOr(value.usage)),
+  // A summary is priced by the model its receipt names, as a step is by its own.
+  const compaction = yield* Option.match(summary, {
+    onNone: () => Effect.succeedNone,
+    onSome: (value) =>
+      computeStreamEndedCost({
+        modelId: value.modelId,
+        usage: Option.fromUndefinedOr(value.usage),
+      }).pipe(Effect.map((costUsd) => Option.some({ costUsd }))),
   })
+  const compactionCostUsd = Option.flatMap(compaction, (value) => value.costUsd)
 
   const finalWindow = messagesInCurrentWindow(durableMessages)
   const projection = yield* project(finalWindow)
@@ -1573,7 +1586,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   )
 
   return {
-    compactionCostUsd,
+    compaction,
     stream: rawStream.pipe(
       Stream.mapError(
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
@@ -2216,7 +2229,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         activeStream: params.activeStream,
       })
-      yield* scope.turnLedger.noteCompaction(source.compactionCostUsd)
+      if (Option.isSome(source.compaction))
+        yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
 
       const eventStore = yield* EventStore
       const publishEventOrDie = (event: StreamStarted | StreamEnded) =>
