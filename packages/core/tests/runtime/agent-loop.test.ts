@@ -382,6 +382,13 @@ describe("system prompt date", () => {
     "a turn after local midnight tells the model the new date",
     () =>
       Effect.gen(function* () {
+        // One second before local midnight, set before the runtime starts: crossing midnight
+        // later takes a two-second step, not a day of every runtime timer's ticks.
+        const beforeMidnight = yield* DateTime.makeZoned(
+          { year: 2026, month: 6, day: 15, hour: 23, minute: 59, second: 59 },
+          { timeZone: DateTime.zoneMakeLocal(), adjustForTimeZone: true },
+        ).pipe(Effect.fromOption)
+        yield* TestClock.setTime(DateTime.toEpochMillis(beforeMidnight))
         const systemTexts = yield* Ref.make<ReadonlyArray<string>>([])
         const secondCall = yield* Deferred.make<void>()
         const providerLayer = LanguageModelLayers.testStream((options) =>
@@ -420,7 +427,7 @@ describe("system prompt date", () => {
         yield* client.message.send({ sessionId, branchId, content: "first" })
         yield* Fiber.join(firstCompleted)
         // The process keeps running past local midnight.
-        yield* TestClock.adjust("1 day")
+        yield* TestClock.adjust("2 seconds")
         const tomorrow = yield* localDate
         yield* client.message.send({ sessionId, branchId, content: "second" })
         yield* Deferred.await(secondCall)
