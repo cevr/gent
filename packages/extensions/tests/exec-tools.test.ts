@@ -707,6 +707,25 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand("git config alias.st status").level).toBe("safe")
   })
 
+  // bash -c expands aliases once `expand_aliases` is set, and `hash -p`
+  // binds a command name to another program: `ls` may run rm.
+  test("a shell alias value is a script, and hash -p asks", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      `shopt -s expand_aliases\nalias w='rm -rf ${x}'\nw`,
+      "alias w='git reset --hard'",
+      `alias -g W='rm -rf ${x}'`,
+      `builtin alias w='rm -rf ${x}'`,
+      'alias w="$CMD"',
+      `hash -p /bin/rm ls; ls -rf ${x}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of ["alias ll='ls -la'", "alias", "alias -p", "hash", "hash -r"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("a shell script the guard cannot read takes its input as the script, or asks", () => {
     for (const command of [
       "echo 'git reset --hard' | xargs -I{} sh -c '{}'",

@@ -2970,6 +2970,20 @@ const gitRuns = ({ words }: Invocation): SegmentRuns => {
 }
 
 /**
+ * `alias w='rm -rf x'`: the value of each `name=value` runs where the name
+ * is a command word, once the shell expands aliases (`shopt -s
+ * expand_aliases`). As with a git alias, it is read where it is defined.
+ */
+const shellAliasRuns = ({ words }: Invocation): SegmentRuns =>
+  scriptRuns(
+    words.slice(1).flatMap((word) => {
+      const equals = word.text.indexOf("=")
+      if (equals <= 0 || word.text.startsWith("-")) return []
+      return [wordFrom(word, equals + 1)]
+    }),
+  )
+
+/**
  * The scripts one command's words run: the argument after a shell's `-c`,
  * what a shell with no script argument reads on stdin, what its path's runs
  * run (`eval`, `ssh host`, `su -c`, the input of `xargs`), and what git
@@ -2995,6 +3009,7 @@ const commandRuns = (invocation: Invocation): SegmentRuns => {
     resolved.spec.runs.map((run) => specRuns(invocation, resolved, run)),
   )
   if (name === "git") runs.push(gitRuns(invocation))
+  if (name === "alias") runs.push(shellAliasRuns(invocation))
   return mergeRuns(runs)
 }
 
@@ -3699,6 +3714,10 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       risky(({ invocation }) => destructive(invocation.words[0]?.text ?? "")),
     ),
     mkfs: risky(() => destructive("mkfs (format filesystem)")),
+    // `hash -p /bin/rm ls`: `ls` runs rm from then on.
+    hash: spec(options("p"), [], ({ parsed }) =>
+      destructiveWhen(hasShort(parsed, "p"), "hash -p (binds a command name to another program)"),
+    ),
     dd: risky(({ texts }) =>
       destructiveWhen(
         texts.some((arg) => /^(if|of)=/.test(arg)),
