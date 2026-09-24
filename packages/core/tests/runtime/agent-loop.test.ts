@@ -3206,6 +3206,67 @@ describe("loop open hooks", () => {
   )
 
   it.scopedLive(
+    "a loop rebuilt with a turn to resume runs its loopOpen hooks while that turn streams",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-loop-open-resume-")
+        const dbPath = `${tempDir}/gent.db`
+        const armed = yield* Ref.make(false)
+        const opened = yield* Deferred.make<void>()
+        const extension = defineExtension({
+          id: "@gent/test-loop-open-resume",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("loopOpen", () =>
+              Effect.gen(function* () {
+                if (yield* Ref.get(armed)) yield* Deferred.succeed(opened, void 0)
+              }),
+            )
+          }),
+        })
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [...e2ePreset.extensionInputs, extension],
+            storagePath: dbPath,
+          })
+
+        // First process: the turn starts streaming, and the process stops.
+        const first = yield* LanguageModelLayers.signal("never sent.")
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layerFor(first.layer))
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message.send({ sessionId, branchId, content: "hello" })
+            yield* first.controls.waitForStreamStart
+            return { sessionId, branchId }
+          }),
+        )
+        yield* Ref.set(armed, true)
+
+        // Second process: a snapshot rebuilds the loop, which resumes the
+        // turn. The resumed stream is held; the hook runs beside it.
+        const second = yield* LanguageModelLayers.signal("resumed reply.")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layerFor(second.layer))
+            yield* client.session.getSnapshot(started)
+            yield* second.controls.waitForStreamStart
+            const ranDuringTurn = yield* Deferred.await(opened).pipe(
+              Effect.timeout("3 seconds"),
+              Effect.as(true),
+              Effect.catchTag("TimeoutError", () => Effect.succeed(false)),
+            )
+            yield* second.controls.emitAll
+            expect(ranDuringTurn).toBe(true)
+          }),
+        )
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
     "a loopOpen hook that queues on its own branch wakes it without stalling the rebuild",
     () =>
       Effect.gen(function* () {
