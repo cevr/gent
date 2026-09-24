@@ -1256,6 +1256,10 @@ const RETIRED_PATHS: ReadonlyArray<string> = [
   "packages/sdk/src/server-registry.ts",
   "packages/sdk/src/worker-http.ts",
   "packages/core/src/server/server-root.ts",
+  "packages/core/src/cell.ts",
+  "packages/core/src/runtime/cell-execution.ts",
+  "packages/core/src/runtime/cell/cell-worker.ts",
+  "packages/core/src/cell/index.ts",
 ]
 
 describe("retired surface guard", () => {
@@ -1287,6 +1291,17 @@ describe("retired surface guard", () => {
       })
     }
     expect(rowsHit.size).toBe(RETIRED_SURFACES.length)
+  })
+
+  test("a core path that only contains the letters of the cell feature is not reported", () => {
+    for (const file of [
+      "packages/core/src/runtime/cellular.ts",
+      "packages/core/src/domain/excellent.ts",
+      "packages/extensions/src/cell.ts",
+      "packages/core/tests/runtime/cell.test.ts",
+    ]) {
+      expect(findRetiredSurfaces(file, "")).toEqual([])
+    }
   })
 
   test("a test file is reported only for the shipped-and-tests rows", () => {

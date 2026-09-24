@@ -269,7 +269,9 @@ export const findAliasTestLayers = (file: string, text: string): ReadonlyArray<F
  * loop (`packages/extensions/src/cell.ts`), so core carries it through
  * agnostic seams and never imports it. The import side is the
  * `gent/declared-workspace-imports` lint rule: core declares no
- * `@gent/extensions` dependency, and no relative path leaves a workspace.
+ * `@gent/extensions` dependency, and no relative path leaves a workspace. The
+ * module side is a `RETIRED_SURFACES` path row: no file or directory under
+ * `packages/core/src/` names the cell.
  *
  * This guard holds the rule for a feature's data: a feature's tables and a
  * catalog host belong to the extension that owns them, so core must not name
@@ -1628,6 +1630,14 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     scope: "shipped",
     message:
       "server-root.ts is folded away; the SDK root and the test harness build the routes and RPC handlers from createDependencies",
+  },
+  {
+    // A core file or directory whose name has `cell` as a whole word.
+    on: "path",
+    match: /^packages\/core\/src\/(?:[^/]+\/)*(?:[^/]*[-_])?cell(?:[-_.][^/]*)?(?:\/|$)/,
+    scope: "shipped",
+    message:
+      "The code cell lives in @gent/extensions (packages/extensions/src/cell.ts); core carries no cell module",
   },
 ]
 
