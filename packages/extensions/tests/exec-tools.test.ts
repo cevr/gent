@@ -875,9 +875,11 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand("diff <(ls a) <(ls b)").level).toBe("safe")
   })
 
-  // A risk reads the flags as written. An unquoted expansion splits into
-  // words the guard cannot see, and `"$@"` passes on a function's or `set
-  // --`'s arguments: either may hold `-rf` or `--hard`.
+  // A risk reads the flags as written. A word known only at run time may be
+  // one: an unquoted expansion splits into more words, `"$@"` passes on a
+  // function's or `set --`'s arguments, and a quoted `"$F"` stays one word
+  // that the command still reads as `-rf`. Only after `--`, or as the value
+  // of an option the table names, is such a word no flag.
   test("a risky command with options known only at run time asks", () => {
     const x = "/nonexistent/gent-probe-x"
     for (const command of [
@@ -891,22 +893,37 @@ describe("classifyBashCommand", () => {
       `wipe() { rm "$@"; }; wipe -rf ${x}`,
       'r() { git reset "$@"; }; r --hard',
       `a=(-rf ${x}); rm "\${a[@]}"`,
-      // Accepted over-asks: an unquoted operand may be a flag too.
+      `F=-rf; rm "$F" ${x}`,
+      'M=--hard; git reset "$M"',
+      `rm "$(printf -- -rf)" ${x}`,
+      // An unquoted option value still splits.
+      `cp -t $D ${x}`,
+      // Accepted over-asks: any dynamic operand may be a flag too.
       "kill $PID",
       "cp $a $b",
+      'rm "$f"',
+      'kill "$PID"',
+      'git checkout "$b"',
+      `psql "$DATABASE_URL" -c 'select 1'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
-      'rm "$f"',
       "rm -- $TMP",
-      'kill "$PID"',
-      'git checkout "$b"',
+      'rm -- "$f"',
       "ls $DIR",
+      'ls "$DIR"',
       "echo $HOME",
+      // The value of an option the table names.
+      `psql -d "$DB" -c 'select 1'`,
+      'git -C "$dir" status',
+      `cp -t "$D" ${x}`,
+      `cp --target-directory="$D" ${x}`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
+    // A named option value is still a path the secret-file check reads.
+    expect(classifyBashCommand(`cp -t ${x}/.ssh ${x}`).level).toBe("sensitive")
   })
 
   test("quoted text and heredoc notes that describe git work are data", () => {
@@ -2062,7 +2079,7 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  test("SQL known only at run time asks; a quoted dynamic connection name does not", () => {
+  test("SQL known only at run time asks; a quoted dynamic option value does not", () => {
     const x = "/nonexistent/gent-probe-x"
     for (const command of [
       `Q='DELETE FROM gent_probe_x'; psql -c "$Q"`,
@@ -2088,18 +2105,22 @@ describe("classifyBashCommand", () => {
       "mysql -D $ARGS",
       "mysql $ARGS",
       "sqlite3 $ARGS",
+      // A quoted dynamic operand stays one word, but it may be an option
+      // (`-f file`, `-cDROP …`): only a named option's value is a name.
+      `psql "$DATABASE_URL" -c 'select 1'`,
+      `mysql -h "$H" -u "$U" -p"$P" "$DB" -e 'SHOW TABLES'`,
+      `sqlite3 "$DB" 'select 1'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
       `psql -h "$PGHOST" -U "$PGUSER" -d "$PGDATABASE" -c 'select 1'`,
       `psql -d "$DB" -c 'select 1'`,
-      `psql "$DATABASE_URL" -c 'select 1'`,
+      `psql --dbname="$DATABASE_URL" -c 'select 1'`,
       `psql --host="$H" --dbname="$DB" -c 'select 1'`,
       `psql -d "$(cat ${x})" -c 'select 1'`,
-      `mysql -h "$H" -u "$U" -p"$P" "$DB" -e 'SHOW TABLES'`,
+      `mysql -h "$H" -u "$U" -p"$P" -D "$DB" -e 'SHOW TABLES'`,
       `mysql -D "$DB" -e 'select 1'`,
-      `sqlite3 "$DB" 'select 1'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -2154,7 +2175,7 @@ describe("classifyBashCommand", () => {
       "psql -c '\\x' -c 'select 1'",
       "psql -c '\\timing on' -c 'select 1'",
       "psql -F '\\t' -c 'select 1'",
-      `psql -F , app "$PGUSER" -c 'select 1'`,
+      `psql -F , app -U "$PGUSER" -c 'select 1'`,
       "psql -v n=1 -c 'select :n'",
       "mysql -e 'use app; select 1'",
       "mysql -e 'select 1\\G'",

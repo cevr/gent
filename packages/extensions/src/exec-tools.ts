@@ -3448,9 +3448,18 @@ const sensitiveFile = (path: string): Option.Option<BashRisk> =>
     ([, reason]): BashRisk => ({ level: "sensitive", reason }),
   )
 
-/** A command that writes, moves or deletes a key or secret file. */
-const sensitiveRisk: CommandRisk = ({ parsed }) =>
-  Arr.findFirst([...parsed.operands, ...parsed.pathspecs], (operand) => sensitiveFile(operand))
+/** A command that writes, moves or deletes a key or secret file: an operand or an option value (`cp -t ~/.ssh`). */
+const sensitiveRisk: CommandRisk = ({ texts, parsed }) =>
+  Arr.findFirst(
+    [
+      ...parsed.operands,
+      ...parsed.pathspecs,
+      ...parsed.options.flatMap((option) =>
+        Option.toArray(option.value).map((value) => valueText(texts, value)),
+      ),
+    ],
+    (operand) => sensitiveFile(operand),
+  )
 
 /** `sed -i` rewrites its files in place. */
 const sedRisk: CommandRisk = (args) => {
@@ -3776,7 +3785,8 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ),
     // Commands that delete, kill, format or write secrets.
     rm: risky(rmRisk, sensitiveRisk),
-    ...each(["cp", "mv", "chmod", "chown", "tee"], risky(sensitiveRisk)),
+    ...each(["cp", "mv"], spec(options("tS", "target-directory suffix"), [], sensitiveRisk)),
+    ...each(["chmod", "chown", "tee"], risky(sensitiveRisk)),
     sed: risky(sedRisk),
     kill: risky(({ texts }) => destructiveWhen(killsHard(texts), "kill -9")),
     ...each(
@@ -3834,16 +3844,35 @@ const SPEC_PARENTS: ReadonlySet<string> = new Set(
 const EXPANDS_TO_WORDS = /^\$(?:[@*]|\{[@*]\}|\{\w+\[[@*]\]\})$/
 
 /**
- * A word before `--` whose words are known only at run time: an unquoted
- * expansion splits (`rm $F`), and `"$@"` passes on the words of a function's
- * caller or of `set --`. Either may hold a flag a risk reads (`-rf`, `--hard`).
+ * A word before `--` known only at run time, where the command may read it
+ * as a flag a risk reads (`-rf`, `--hard`): an unquoted expansion splits
+ * (`rm $F`), `"$@"` passes on the words of a function's caller or of `set
+ * --`, and a quoted `"$F"` stays one word that may still be `-rf`. Only the
+ * value of an option the table names (`cp -t "$d"`, `psql -d "$DB"`) is no
+ * flag, and only when it does not split.
  */
-const runTimeOptions = (resolved: ResolvedCommand): Option.Option<BashRisk> => {
+const runTimeOptions = (
+  resolved: ResolvedCommand,
+  { texts, parsed }: Pick<CommandArgs, "texts" | "parsed">,
+): Option.Option<BashRisk> => {
   const args = resolved.words.slice(1)
   let end = args.findIndex((word) => word.text === "--")
   if (end === -1) end = args.length
+  const values = new Set(
+    parsed.options.flatMap((option) =>
+      Option.toArray(option.value).flatMap((value) => {
+        // `-t"$d"`: the option letters before the value must be written out.
+        if (DYNAMIC_TEXT.test((texts[value.word] ?? "").slice(0, value.from))) return []
+        return [value.word]
+      }),
+    ),
+  )
   return Option.map(
-    Arr.findFirst(args.slice(0, end), (word) => word.splits || EXPANDS_TO_WORDS.test(word.text)),
+    Arr.findFirst(
+      args.slice(0, end),
+      (word, index) =>
+        word.splits || EXPANDS_TO_WORDS.test(word.text) || (word.dynamic && !values.has(index)),
+    ),
     (word): BashRisk => ({
       level: "destructive",
       reason: `${resolved.path} with options known only at run time: ${word.text}`,
@@ -3863,7 +3892,7 @@ const invocationRisks = (invocation: Invocation): Array<BashRisk> =>
     }
     return [
       ...resolved.spec.risks.flatMap((risk) => Option.toArray(risk(args))),
-      ...Option.toArray(runTimeOptions(resolved)),
+      ...Option.toArray(runTimeOptions(resolved, args)),
     ]
   })
 
