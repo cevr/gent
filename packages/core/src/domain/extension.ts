@@ -386,9 +386,20 @@ export interface TurnAfterInput {
  * a step reported none, was cut short, or ran before a restart: `known` is then
  * a lower bound, not the turn's total. `TurnCompleted.usage` carries a total
  * only when it is complete.
+ *
+ * `cacheReadTokens` and `cacheWriteTokens` are the parts of `inputTokens` the
+ * provider read from and wrote to its prompt cache. `costUsd` prices the
+ * steps and any compaction summary the turn wrote; it is none when no model
+ * the turn used has a price.
  */
 export interface TurnUsage {
-  readonly known: { readonly inputTokens: number; readonly outputTokens: number }
+  readonly known: {
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly cacheReadTokens: number
+    readonly cacheWriteTokens: number
+    readonly costUsd: Option.Option<number>
+  }
   readonly complete: boolean
 }
 

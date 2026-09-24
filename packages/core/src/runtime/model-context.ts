@@ -1184,6 +1184,8 @@ const summarizedRange = (history: ReadonlyArray<Message>, summary: CompactionSum
 type WindowProjection = {
   readonly durableMessages: ReadonlyArray<Message>
   readonly compacted: boolean
+  /** The summary this projection paid for, whether or not a marker kept it. */
+  readonly summary: Option.Option<CompactionSummary>
 }
 
 /**
@@ -1276,7 +1278,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   // summary call, and report a compaction that changed nothing.
   const summarizable = history.some((message) => Option.isNone(windowDetails(message)))
   if (!(requested || overflowing) || !summarizable || Option.isNone(compactor)) {
-    return { durableMessages, compacted: false } satisfies WindowProjection
+    return { durableMessages, compacted: false, summary: Option.none() } satisfies WindowProjection
   }
   const summary = yield* compactor.value
     .compact({
@@ -1316,7 +1318,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
     ),
   )
   if (Option.isNone(handoff))
-    return { durableMessages, compacted: false } satisfies WindowProjection
+    return { durableMessages, compacted: false, summary } satisfies WindowProjection
   const marker = yield* params.persist(
     windowMarkerMessage({
       sessionId: params.sessionId,
@@ -1330,5 +1332,6 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   return {
     durableMessages: [...durableMessages, marker],
     compacted: true,
+    summary,
   } satisfies WindowProjection
 })

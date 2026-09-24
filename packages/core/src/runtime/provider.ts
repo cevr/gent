@@ -22,6 +22,7 @@ import {
   byReleaseDateDesc,
   Model,
   ModelId,
+  type ModelPricing,
   parseModelId,
   parseModelProvider,
   ProviderId,
@@ -907,7 +908,14 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
     }),
   )
 
-  static Test = (models: readonly Model[] = []): Layer.Layer<ModelRegistry> =>
+  /**
+   * A registry of `models`, or, with none, one that knows every id. `pricing`
+   * prices each model the second form makes up; without it they are free.
+   */
+  static Test = (
+    models: readonly Model[] = [],
+    pricing: Option.Option<ModelPricing> = Option.none(),
+  ): Layer.Layer<ModelRegistry> =>
     Layer.succeed(
       ModelRegistry,
       ModelRegistry.of({
@@ -924,6 +932,7 @@ export class ModelRegistry extends Context.Service<ModelRegistry, ModelRegistryS
               name: modelId,
               provider,
               contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
+              pricing: Option.getOrUndefined(pricing),
             }),
           )
         },
@@ -1102,7 +1111,12 @@ export const reasoningDeltaPart = (
 
 export const finishPart = (params: {
   finishReason: Response.FinishReason
-  usage?: { inputTokens: number; outputTokens: number }
+  usage?: {
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
 }): LanguageModelStreamPart =>
   Response.makePart("finish", {
     reason: params.finishReason,
@@ -1111,10 +1125,8 @@ export const finishPart = (params: {
         // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
         uncached: undefined,
         total: params.usage?.inputTokens,
-        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
-        cacheRead: undefined,
-        // oxlint-disable-next-line effect/noNullish -- Effect AI requires the absent token count in this wire fixture.
-        cacheWrite: undefined,
+        cacheRead: params.usage?.cacheReadTokens,
+        cacheWrite: params.usage?.cacheWriteTokens,
       },
       outputTokens: {
         total: params.usage?.outputTokens,

@@ -120,8 +120,9 @@ export type ModelContextMetrics = typeof ModelContextMetrics.Type
 export const SessionRuntimeMetrics = Schema.Struct({
   turns: Schema.Finite,
   durationMs: Schema.Finite,
-  /** Cumulative USD cost: sum of `StreamEnded.costUsd` across the session's
-   * event log. Cost is frozen into each event at emit time against the
+  /** Cumulative USD cost: sum of `StreamEnded.costUsd` and of the compaction
+   * summaries' `ModelContextProjected.costUsd` across the session's event
+   * log. Cost is frozen into each event at emit time against the
    * pricing snapshot available then, so replays always sum to the same
    * total regardless of later registry refreshes. */
   costUsd: Schema.Finite,
@@ -156,6 +157,7 @@ export const foldSessionMetrics = (
         // A new step's projection: the last count belongs to the step before it.
         lastInputTokens = 0
         if (event.compacted) compactions++
+        if (Predicate.isNotUndefined(event.costUsd)) costUsd += event.costUsd
         context = Option.some({
           estimatedTokens: event.estimatedTokens,
           availableInputTokens: event.availableInputTokens,

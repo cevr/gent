@@ -2766,7 +2766,16 @@ describe("runtime slots", () => {
             unanswered: false,
 
             messageId: MessageId.make("turn-message"),
-            usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
+            usage: {
+              known: {
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+                costUsd: Option.none(),
+              },
+              complete: true,
+            },
           } satisfies TurnAfterInput)
           .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx)),
       )
@@ -2802,7 +2811,16 @@ describe("runtime slots", () => {
           unanswered: false,
 
           messageId: MessageId.make("turn-message"),
-          usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
+          usage: {
+            known: {
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              costUsd: Option.none(),
+            },
+            complete: true,
+          },
         } satisfies TurnAfterInput)
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
 
@@ -2841,7 +2859,16 @@ describe("runtime slots", () => {
           unanswered: false,
 
           messageId: MessageId.make("turn-message"),
-          usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
+          usage: {
+            known: {
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              costUsd: Option.none(),
+            },
+            complete: true,
+          },
         } satisfies TurnAfterInput)
         .pipe(
           Effect.provideService(CurrentExtensionHostContext, hostCtx),
@@ -4346,7 +4373,16 @@ const stubEvent: TurnAfterInput = {
   unanswered: false,
 
   messageId: MessageId.make("turn-message"),
-  usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
+  usage: {
+    known: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: Option.none(),
+    },
+    complete: true,
+  },
 }
 
 const extRuntimeHooks = (

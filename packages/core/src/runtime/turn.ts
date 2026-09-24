@@ -338,6 +338,14 @@ type TurnMetrics = {
   /** Tokens of the steps that reported usable counts: the known part of the turn's spend. */
   inputTokens: number
   outputTokens: number
+  /** Parts of `inputTokens` the provider read from, and wrote to, its prompt cache. */
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  /**
+   * USD of the priced steps, and of the compaction summaries this turn wrote.
+   * None until one is priced; a model with no price adds nothing.
+   */
+  costUsd: Option.Option<number>
   toolCallCount: number
   /** Model steps seen this turn; zero means no usage can be reported. */
   steps: number
@@ -351,6 +359,9 @@ const emptyTurnMetrics = (): TurnMetrics => ({
   model: "",
   inputTokens: 0,
   outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  costUsd: Option.none(),
   toolCallCount: 0,
   steps: 0,
   usageKnown: true,
@@ -615,11 +626,25 @@ interface TurnLedger {
     readonly agent: AgentNameType
     readonly model: ModelIdType
     readonly usage: Option.Option<Usage>
+    /** The step's price, frozen on its `StreamEnded`. */
+    readonly costUsd: Option.Option<number>
     readonly toolCallCount: number
   }) => Effect.Effect<void>
+  /** A compaction summary this turn wrote cost this much. Its tokens are not a step's. */
+  readonly noteCompaction: (costUsd: Option.Option<number>) => Effect.Effect<void>
   /** What this turn spent, as `TurnCompleted` reports it. */
   readonly total: Effect.Effect<TurnMetrics>
 }
+
+/** A cache count the receipt records: zero is left out, as the steps leave it out. */
+const positiveCount = (count: number) => Option.liftPredicate(count, (value) => value > 0)
+
+/** Two optional prices summed: none only when both are. */
+const addCost = (total: Option.Option<number>, cost: Option.Option<number>) =>
+  Option.match(cost, {
+    onNone: () => total,
+    onSome: (value) => Option.some(Option.getOrElse(total, () => 0) + value),
+  })
 
 export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* () {
   const metrics = yield* Ref.make(emptyTurnMetrics())
@@ -643,22 +668,50 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           model: params.model,
           inputTokens: m.inputTokens,
           outputTokens: m.outputTokens,
+          cacheReadTokens: m.cacheReadTokens,
+          cacheWriteTokens: m.cacheWriteTokens,
+          costUsd: m.costUsd,
           toolCallCount: m.toolCallCount + params.toolCallCount,
           steps: m.steps + 1,
           usageKnown: false,
         }
         if (Option.isNone(params.usage)) return counted
         const step = params.usage.value
+        const stepCacheRead = Option.getOrElse(
+          Option.fromUndefinedOr(step.cacheReadTokens),
+          () => 0,
+        )
+        const stepCacheWrite = Option.getOrElse(
+          Option.fromUndefinedOr(step.cacheWriteTokens),
+          () => 0,
+        )
         const inputTokens = m.inputTokens + step.inputTokens
         const outputTokens = m.outputTokens + step.outputTokens
-        const usable =
-          reportable(step.inputTokens) &&
-          reportable(step.outputTokens) &&
-          reportable(inputTokens) &&
-          reportable(outputTokens)
+        const cacheReadTokens = m.cacheReadTokens + stepCacheRead
+        const cacheWriteTokens = m.cacheWriteTokens + stepCacheWrite
+        const usable = [
+          step.inputTokens,
+          step.outputTokens,
+          stepCacheRead,
+          stepCacheWrite,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+        ].every(reportable)
         if (!usable) return counted
-        return { ...counted, inputTokens, outputTokens, usageKnown: m.usageKnown }
+        return {
+          ...counted,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheWriteTokens,
+          costUsd: addCost(m.costUsd, params.costUsd),
+          usageKnown: m.usageKnown,
+        }
       }),
+    noteCompaction: (costUsd) =>
+      Ref.update(metrics, (m) => ({ ...m, costUsd: addCost(m.costUsd, costUsd) })),
     total: Ref.get(metrics),
   }
 })
@@ -1290,6 +1343,8 @@ const toolCallsFromResponseParts = (
   })
 
 type ModelTurnSource = {
+  /** What the compaction summary written for this step cost, when one was written and priced. */
+  readonly compactionCostUsd: Option.Option<number>
   readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
@@ -1433,7 +1488,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }
       return projection.success
     })
-  const { durableMessages, compacted } = yield* projectContextWindow({
+  const { durableMessages, compacted, summary } = yield* projectContextWindow({
     sessionId: params.sessionId,
     branchId: params.branchId,
     modelId: contextModelId,
@@ -1450,6 +1505,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
         ...modelRequest,
         hints: { ...modelRequest.hints, maxTokens, reasoning: "none" },
       }),
+  })
+
+  // The summary ran on the turn's model, so the step's price applies to it.
+  const compactionCostUsd = yield* computeStreamEndedCost({
+    modelId: contextModelId,
+    usage: Option.flatMap(summary, (value) => Option.fromUndefinedOr(value.usage)),
   })
 
   const finalWindow = messagesInCurrentWindow(durableMessages)
@@ -1475,6 +1536,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       omittedMessages: projection.omittedMessageIds.length,
       handoffMessageId,
       compacted,
+      costUsd: Option.getOrUndefined(compactionCostUsd),
     }),
   )
   const prompt = toPrompt(projection.messages, { systemPrompt: resolved.systemPrompt })
@@ -1503,6 +1565,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   )
 
   return {
+    compactionCostUsd,
     stream: rawStream.pipe(
       Stream.mapError(
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
@@ -2077,6 +2140,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         activeStream: params.activeStream,
       })
+      yield* scope.turnLedger.noteCompaction(source.compactionCostUsd)
 
       const eventStore = yield* EventStore
       const publishEventOrDie = (event: StreamStarted | StreamEnded) =>
@@ -2156,6 +2220,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           agent: params.resolved.currentTurnAgent,
           model: params.resolved.modelId,
           usage,
+          costUsd: streamEndedCost,
           toolCallCount,
         })
         yield* persistAssistantPartsWithBindingsAt(responseAddress, assistantParts)
@@ -2223,6 +2288,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             agent: params.resolved.currentTurnAgent,
             model: params.resolved.modelId,
             usage: Option.none(),
+            costUsd: Option.none(),
             toolCallCount: 0,
           })
         })
@@ -2289,10 +2355,16 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const metrics = turnMetricsFor(yield* scope.turnLedger.total, params.messageId)
       // Token totals are a receipt only when every step reported usable
       // counts; a partial sum would read as the turn's true total.
-      const usage = Option.map(flagWhenTrue(metrics.steps > 0 && metrics.usageKnown), () => ({
+      const total = flagWhenTrue(metrics.steps > 0 && metrics.usageKnown)
+      const usage = Option.map(total, () => ({
         inputTokens: metrics.inputTokens,
         outputTokens: metrics.outputTokens,
+        ...omitUndefined({
+          cacheReadTokens: Option.getOrUndefined(positiveCount(metrics.cacheReadTokens)),
+          cacheWriteTokens: Option.getOrUndefined(positiveCount(metrics.cacheWriteTokens)),
+        }),
       }))
+      const costUsd = Option.flatMap(total, () => metrics.costUsd)
 
       const envelope = yield* storageTransaction(
         Effect.gen(function* () {
@@ -2308,6 +2380,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
                 interrupted: Option.getOrUndefined(flagWhenTrue(params.turnInterrupted)),
                 unanswered: Option.getOrUndefined(flagWhenTrue(params.unanswered)),
                 usage: Option.getOrUndefined(usage),
+                costUsd: Option.getOrUndefined(costUsd),
               }),
             }),
           )
@@ -2335,6 +2408,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           known: {
             inputTokens: params.metrics.inputTokens,
             outputTokens: params.metrics.outputTokens,
+            cacheReadTokens: params.metrics.cacheReadTokens,
+            cacheWriteTokens: params.metrics.cacheWriteTokens,
+            costUsd: params.metrics.costUsd,
           },
           complete: params.metrics.usageKnown,
         },
