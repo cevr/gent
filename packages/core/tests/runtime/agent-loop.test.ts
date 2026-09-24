@@ -9609,3 +9609,95 @@ describe("a repeated durable send", () => {
     20_000,
   )
 })
+
+describe("a tool call a restart cut short", () => {
+  it.scopedLive(
+    "is reported to the model as interrupted, and does not run again",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-cut-short-")
+        const dbPath = `${tempDir}/gent.db`
+        const runs = yield* Ref.make(0)
+        const running = yield* Deferred.make<void>()
+        // The first run never returns: the process stops while it runs.
+        const sideEffect = tool({
+          id: "side_effect",
+          description: "Does something that must not happen twice",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: () =>
+            Ref.updateAndGet(runs, (n) => n + 1).pipe(
+              Effect.flatMap((n) => {
+                if (n > 1) return Effect.succeed("ran again")
+                return Deferred.succeed(running, void 0).pipe(Effect.andThen(Effect.never))
+              }),
+            ),
+        })
+        // A build identity gives the call a durable binding, as a shipped tool has.
+        const extension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/cut-short") },
+          scope: "builtin",
+          sourcePath: "test",
+          artifactIdentity: LoadedArtifactIdentity.make("@test/cut-short@artifact-1"),
+          contributions: { tools: [sideEffect] },
+        }
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [extension],
+            storagePath: dbPath,
+          })
+
+        // First process: the model calls the tool, and the process stops while it runs.
+        const target = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+              toolCallStep("side_effect", {}),
+            ])
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message.send({ sessionId, branchId, content: "do it once" })
+            yield* Deferred.await(running)
+            return { sessionId, branchId }
+          }),
+        )
+
+        // Second process: the turn resumes; the model reads what happened.
+        const seen = yield* Ref.make(Option.none<Prompt.Prompt>())
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const providerLayer = LanguageModelLayers.testStream((options) =>
+              Ref.set(seen, Option.some(Prompt.make(options.prompt))).pipe(
+                Effect.as(
+                  Stream.fromIterable([
+                    textDeltaPart("told it was cut short"),
+                    finishPart({ finishReason: "stop" }),
+                  ] satisfies LanguageModelStreamPart[]),
+                ),
+              ),
+            )
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            yield* waitFor(
+              client.session.getSnapshot(target),
+              (snapshot) =>
+                snapshot.runtime._tag === "Idle" &&
+                hasAssistantText(snapshot.messages, "told it was cut short"),
+              5_000,
+              "the resumed turn answered",
+            )
+          }),
+        )
+        expect(yield* Ref.get(runs)).toBe(1)
+        const prompt = Option.getOrThrow(yield* Ref.get(seen))
+        const results = prompt.content.flatMap((message) => {
+          if (message.role !== "tool") return []
+          return message.content.filter((part) => part.type === "tool-result")
+        })
+        expect(results).toHaveLength(1)
+        expect(results[0]?.isFailure).toBe(true)
+        expect(results[0]?.result).toMatchObject({ reason: "Interrupted" })
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+})

@@ -1273,19 +1273,21 @@ const applyDenyFilter = (
  * Recovering a tool call that was in flight when the process died.
  *
  * The loop knows a call was admitted and never recorded a result. It does not
- * know whether the tool kept a durable receipt it can settle from, or whether
- * the call should simply be re-issued to the model. A tool that keeps such
- * receipts answers here; anything else is re-issued.
+ * know whether the tool kept a durable receipt it can settle from. A tool that
+ * keeps such receipts answers here. Any other call is reported to the model as
+ * interrupted and does not run again, unless its last run parked on an
+ * interaction (the turn record marks it), in which case it runs again to take
+ * the answer.
  *
- * Core defines the question. No implementation means every pending call is
- * re-issued, which is the correct behavior for a tool with no durable state.
+ * Core defines the question. No implementation means every pending call that
+ * did not park is reported as interrupted.
  */
 
 /**
  * What recovering one pending call produced.
  *
  * `NotRecovered` covers both "not my call" and "no receipt for it", because
- * the loop treats them identically: re-issue.
+ * the loop treats them identically: interrupted, or run again if it parked.
  */
 export const ToolCallRecoveryOutcome = Schema.TaggedUnion({
   NotRecovered: {},

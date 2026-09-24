@@ -1868,6 +1868,35 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }))
     })
 
+    /**
+     * The step parked on an interaction. `parked` names the calls whose run
+     * ended at the ask; they run again when the turn resumes. The whole
+     * pending list is restated, so a mark never depends on an earlier write.
+     */
+    const markParkedCalls = Effect.fn("AgentLoop.markParkedCalls")(function* (params: {
+      readonly messageId: RunningState["message"]["id"]
+      readonly toolCalls: ReadonlyArray<Prompt.ToolCallPart>
+      readonly parked: ReadonlySet<string>
+    }) {
+      const pendingToolCalls: ReadonlyArray<PendingToolCall> = params.toolCalls.map((toolCall) => {
+        if (!params.parked.has(toolCall.id)) return { id: toolCall.id, name: toolCall.name }
+        return { id: toolCall.id, name: toolCall.name, parked: true }
+      })
+      yield* updateTurnRecord(params.messageId, () => ({ pendingToolCalls }))
+    })
+
+    /**
+     * A resumed step is about to run its parked calls again. Their marks go
+     * first: a restart during that run finds calls cut short, not parked.
+     */
+    const clearParkedCalls = (messageId: RunningState["message"]["id"]) =>
+      updateTurnRecord(messageId, (current) => ({
+        pendingToolCalls: current.pendingToolCalls.map((call) => ({
+          id: call.id,
+          name: call.name,
+        })),
+      }))
+
     /** The step closed: every message it owns has committed. */
     const closeTurnStep = Effect.fn("AgentLoop.closeTurnStep")(function* (params: {
       readonly messageId: RunningState["message"]["id"]
@@ -1988,12 +2017,26 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           currentTurnAgent: params.currentTurnAgent,
           toolBindings: params.toolBindings,
         }).pipe(
-          Effect.tapError((error) => {
-            if (error.completedResults.length === 0) return Effect.void
-            const partial = new Map(localResults)
-            for (const result of error.completedResults) partial.set(result.id, result)
-            return processLocalReplay.setResults(resultKey, partial)
-          }),
+          Effect.tapError((error) =>
+            Effect.gen(function* () {
+              const completed = new Set(error.completedResults.map((result) => result.id))
+              // Every call runs to an exit, so a call with no result parked.
+              // Only a parked call runs again when the turn resumes.
+              yield* markParkedCalls({
+                messageId: params.messageId,
+                toolCalls: params.toolCalls,
+                parked: new Set(
+                  pendingToolCalls
+                    .filter((toolCall) => !completed.has(toolCall.id))
+                    .map((toolCall) => toolCall.id),
+                ),
+              })
+              if (error.completedResults.length === 0) return
+              const partial = new Map(localResults)
+              for (const result of error.completedResults) partial.set(result.id, result)
+              yield* processLocalReplay.setResults(resultKey, partial)
+            }),
+          ),
         )
         const executedById = new Map(executedResults.map((part) => [part.id, part]))
         const toolResults = params.toolCalls.flatMap((toolCall) => {
@@ -2477,6 +2520,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         step: 0,
         pendingAssistant: Option.none<Message>(),
         pendingToolCalls: settled,
+        // No call of a step the record does not name may run again.
+        parkedCallIds: new Set<string>(),
       }
       const record = yield* readTurnRecord(messageId)
       if (record.pendingToolCalls.length > 0) {
@@ -2491,6 +2536,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             step: record.step,
             pendingAssistant: Option.some(assistant),
             pendingToolCalls: toolCallsFromMessage(assistant),
+            parkedCallIds: new Set(
+              record.pendingToolCalls.filter((call) => call.parked === true).map((call) => call.id),
+            ),
           }
         }
       } else if (record.step > 0 || record.continuations > 0) {
@@ -2546,7 +2594,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         () => ({ step: lastCompletedStep, pendingToolCalls: derivedPending }),
         Option.some(record),
       )
-      return { step: lastCompletedStep, pendingAssistant, pendingToolCalls }
+      return {
+        step: lastCompletedStep,
+        pendingAssistant,
+        pendingToolCalls,
+        parkedCallIds: noPendingStep.parkedCallIds,
+      }
     })
 
     const resumeTurn = Effect.fn("AgentLoop.resumeTurn")(function* (params: {
@@ -2611,8 +2664,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const recoveredResults: Array<Prompt.ToolResultPart> = []
       const nativeToolCalls: Array<Prompt.ToolCallPart> = []
       // A tool that keeps durable receipts can settle a call the crash left in
-      // flight; anything else is re-issued to the model. Which tools those are
-      // is not the loop's business — no recovery service means re-issue all.
+      // flight. Which tools those are is not the loop's business; every other
+      // call is decided below by the parked mark.
       const recovery = yield* Effect.serviceOption(ToolCallRecoveryService)
       for (const toolCall of pendingToolCalls) {
         const outcome: ToolCallRecoveryOutcome = yield* Option.match(recovery, {
@@ -2659,11 +2712,38 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         recoveredResults,
       })
       if (Option.isNone(known)) return { step: pendingStep, interaction: Option.none() }
-      const knownResults = known.value.knownResults
-      const unsettledCalls = nativeToolCalls.filter((toolCall) => !knownResults.has(toolCall.id))
+      const unsettledCalls = nativeToolCalls.filter(
+        (toolCall) => !known.value.knownResults.has(toolCall.id),
+      )
+      // Only a call that parked on an interaction runs again: its last run
+      // stopped at the ask. Any other unsettled call was cut short while it
+      // ran (the process stopped), and running it again could repeat what it
+      // already did. The model reads that it was interrupted instead.
+      const cutShort = unsettledCalls.filter((toolCall) => !position.parkedCallIds.has(toolCall.id))
+      for (const toolCall of cutShort) {
+        recoveredResults.push(
+          Prompt.toolResultPart({
+            id: toolCall.id,
+            name: toolCall.name,
+            isFailure: true,
+            providerExecuted: false,
+            result: {
+              error:
+                "The tool did not finish: the server stopped while it ran. It did not run again; check its effects before you retry it.",
+              reason: "Interrupted",
+            },
+          }),
+        )
+      }
+      const cutShortIds = new Set(cutShort.map((toolCall) => toolCall.id))
+      const rerunCalls = unsettledCalls.filter((toolCall) => !cutShortIds.has(toolCall.id))
+      const knownResults = new Map(known.value.knownResults)
+      for (const result of recoveredResults) {
+        if (!knownResults.has(result.id)) knownResults.set(result.id, result)
+      }
       const toolBindings = yield* captureReplayToolBindings({
         assistantMessageId: pendingAssistant.value.id,
-        toolCalls: unsettledCalls,
+        toolCalls: rerunCalls,
         turnProfile: params.turnProfile,
       }).pipe(
         Effect.catchIf(Schema.is(ToolBindingReplayError), (error) =>
@@ -2693,9 +2773,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const hostToolBindings = yield* resolveReplayHostBindings({
         state: params.state,
         turnProfile: params.turnProfile,
-        nativeToolCalls,
+        nativeToolCalls: nativeToolCalls.filter((toolCall) => !cutShortIds.has(toolCall.id)),
         toolBindings,
       })
+      if (rerunCalls.length > 0) yield* clearParkedCalls(params.messageId)
       const interactionSignal = yield* executeTools({
         hostToolBindings,
         messageId: params.messageId,

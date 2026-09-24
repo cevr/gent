@@ -390,8 +390,14 @@ Shape:
   its `ToolCallSucceeded`/`ToolCallFailed` event from `reconcileToolProjections`
   when the result is persisted, before the turn reads the transcript for new
   model work. Clients replaying `ToolCallStarted` never keep a stale running
-  projection. Ambiguous side effects are not replayed; the exact binding replay
-  rules decide whether a native call runs again or fails.
+  projection. Ambiguous side effects are not replayed. When a turn resumes, a
+  pending call runs again only if its last run parked on an interaction: the
+  turn record marks it `parked` (an optional field on its pending entry) and
+  clears the mark before the call runs again. Any other pending call was cut
+  short while it ran; the model reads a failed result with reason
+  `Interrupted` and the call does not run again (a cell with a receipt still
+  settles from it first). The binding replay rules then decide whether a
+  parked call can run again or fails.
 - Narrow retry: `retryProviderCall` retries transient provider failures with
   bounded exponential backoff plus jitter, and only before observable output.
   The policy lives on the `ModelDriverContribution` (`retry: RetryPolicy`),
