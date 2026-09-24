@@ -1097,6 +1097,10 @@ describe("a parent interrupt", () => {
           expect(next?.system).toContain("# Stopped children")
           expect(next?.system).toContain(childTask)
           expect(next?.system).toContain(child.sessionId)
+          // The user's interrupt stopped them: the notice asks for a report, not a restart.
+          expect(next?.system).toContain("Tell the user which children stopped")
+          expect(next?.system).toContain("only when the user asks for it")
+          expect(next?.system).not.toContain("Start a new child")
 
           // The answered turn read the notice; the one after it does not see it again.
           yield* sendPrompt(harness, "AND-NOW")
@@ -1834,6 +1838,64 @@ describe("turn-time reconcile", () => {
           const [entry] = yield* harness.registryOf(branchId)
           expect(entry?.submitted).toBe(false)
           expect(yield* client.message.list(child)).toHaveLength(0)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "delegate.list reads a running child's row and sends its start no second time",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) return Effect.succeed(reply("pong"))
+            if (!texts.includes("list them")) return Effect.succeed(reply("first"))
+            if (promptToolCallIds(options.prompt).includes("list-1")) {
+              return Effect.succeed(reply("listed"))
+            }
+            return Effect.succeed(toolStep("delegate.list", {}, "list-1"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          const idleAfter = (text: string) =>
+            waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (current) =>
+                current.runtime._tag === "Idle" && messageTexts(current.messages).includes(text),
+              5_000,
+              `the parent answered ${text}`,
+            )
+          // The parent's loop is open and reconciled in this process.
+          yield* sendPrompt(harness, "one")
+          yield* idleAfter("first")
+          // A child whose start was sent and has no receipt: it runs. Its
+          // start is planted as sent with no message, so a re-send shows.
+          const child = yield* client.session.create({
+            cwd: "/tmp",
+            parentSessionId: sessionId,
+            parentBranchId: branchId,
+          })
+          yield* harness.writeRegistry(branchId, [
+            {
+              requestId: RequestId.make("running-start"),
+              sessionId: child.sessionId,
+              branchId: child.branchId,
+              agentName: DELEGATE_AGENT_NAME,
+              prompt: childTask,
+              private: false,
+              submitted: true,
+              delivered: false,
+            },
+          ])
+          yield* sendPrompt(harness, "list them")
+          yield* idleAfter("listed")
+          // The listing sent the child nothing, and its row still waits for a receipt.
+          expect(yield* client.message.list(child)).toHaveLength(0)
+          const [entry] = yield* harness.registryOf(branchId)
+          expect(entry).toMatchObject({ submitted: true, delivered: false })
+          expect(entry?.completed).toBeUndefined()
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,

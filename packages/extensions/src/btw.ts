@@ -1,7 +1,10 @@
 import {
   Context,
+  type Duration,
   Effect,
+  Equal,
   Fiber,
+  Latch,
   Layer,
   Option,
   Predicate,
@@ -25,7 +28,8 @@ import {
 } from "@gent/core/extensions/api"
 
 // Test seam: only tests read these exports. foldForkEvent is the pure fold the
-// fork follower runs per event; ForkProgress is the output of the progress
+// fork follower runs per event; makeThrottledPulse paces its streamed-text
+// pulses; ForkProgress is the output of the progress
 // request, which the tests decode.
 
 // ── protocol ────────────────────────────────────────────────────────────────
@@ -57,17 +61,12 @@ export const forkQuestionText = (parentSessionId: SessionId, question: string): 
   ].join("\n")
 
 /**
- * The question without its header. The message's type says whether it has
- * one, never its text: a message a person typed that starts with the same
- * words is returned whole.
+ * The question without its header, for the text of a message of type
+ * `BTW_QUESTION_TYPE`. The caller reads the type; the text alone never says
+ * whether a header is there, so a person's message never comes here.
  */
-export const forkQuestionBody = (message: {
-  readonly text: string
-  readonly customType?: string
-}): string => {
-  const text = message.text
-  if (message.customType !== BTW_QUESTION_TYPE) return text
-  return Option.liftPredicate(text, (value) => value.startsWith(FORK_QUESTION_PREFIX)).pipe(
+export const forkQuestionBody = (text: string): string =>
+  Option.liftPredicate(text, (value) => value.startsWith(FORK_QUESTION_PREFIX)).pipe(
     Option.flatMap((value) =>
       Option.liftPredicate(value.indexOf("\n\n"), (split) => split !== -1).pipe(
         Option.map((split) => value.slice(split + 2)),
@@ -75,7 +74,6 @@ export const forkQuestionBody = (message: {
     ),
     Option.getOrElse(() => text),
   )
-}
 
 /** One exchange on the fork; `answer` is the streamed text while the fork is replying. */
 const ForkTurn = Schema.Struct({
@@ -150,11 +148,20 @@ interface OpenFork {
   readonly follower: Option.Option<Fiber.Fiber<void>>
 }
 
+interface ForkChange {
+  readonly before: OpenFork
+  readonly after: OpenFork
+}
+
 interface OpenForksService {
   readonly get: (branchId: string) => Effect.Effect<Option.Option<OpenFork>>
   /** Replaces the branch's open fork; the one it replaces stops being followed. */
   readonly set: (branchId: string, fork: OpenFork) => Effect.Effect<void>
-  readonly update: (branchId: string, change: (fork: OpenFork) => OpenFork) => Effect.Effect<void>
+  /** Changes the branch's open fork; the fork before and after the change, when there is one. */
+  readonly update: (
+    branchId: string,
+    change: (fork: OpenFork) => OpenFork,
+  ) => Effect.Effect<Option.Option<ForkChange>>
   /** Runs the effect on the resource's own scope so the request can return. */
   readonly spawn: (effect: Effect.Effect<void>) => Effect.Effect<Fiber.Fiber<void>>
 }
@@ -192,13 +199,17 @@ const OpenForksLive: Layer.Layer<OpenForks> = Layer.effect(
           ),
         ),
       update: (branchId, change) =>
-        Ref.update(forks, (all) => {
-          const current = Option.fromNullishOr(all.get(branchId))
-          if (Option.isNone(current)) return all
-          const next = new Map(all)
-          next.set(branchId, change(current.value))
-          return next
-        }),
+        Ref.modify(
+          forks,
+          (all): readonly [Option.Option<ForkChange>, ReadonlyMap<string, OpenFork>] => {
+            const current = Option.fromNullishOr(all.get(branchId))
+            if (Option.isNone(current)) return [Option.none(), all]
+            const after = change(current.value)
+            const next = new Map(all)
+            next.set(branchId, after)
+            return [Option.some({ before: current.value, after }), next]
+          },
+        ),
       spawn: (effect) => Effect.forkIn(effect, scope),
     })
   }),
@@ -235,10 +246,9 @@ const forkTurns = (messages: ReadonlyArray<Message>, partial: string): ReadonlyA
   const turns: Array<ForkTurn> = []
   for (const message of messages) {
     if (isAskedTurn(message)) {
-      const question = forkQuestionBody({
-        text: textOf(message),
-        ...Record.filter({ customType: message.metadata?.customType }, Predicate.isNotUndefined),
-      })
+      // The header is stripped by the message's type, never by its text.
+      let question = textOf(message)
+      if (message.metadata?.customType === BTW_QUESTION_TYPE) question = forkQuestionBody(question)
       turns.push({ question, answer: "" })
       continue
     }
@@ -296,33 +306,74 @@ export const foldForkEvent = <Fork extends Pick<OpenFork, "partial" | "replying"
 
 // ── Requests ──
 
+/** Streamed text pulses the pane at most this often. */
+const TEXT_PULSE_INTERVAL = "250 millis"
+
+/**
+ * A pulse that runs at most once per interval. The first signal pulses at
+ * once; the signals inside the interval fold into one pulse at its end, so
+ * the last change always gets a pulse. `flush` pulses a signal still
+ * waiting, for a follower whose stream ends inside an interval.
+ */
+export const makeThrottledPulse = (pulse: Effect.Effect<void>, interval: Duration.Input) =>
+  Effect.gen(function* () {
+    const signalled = yield* Latch.make(false)
+    yield* signalled.await.pipe(
+      Effect.andThen(signalled.close),
+      Effect.andThen(pulse),
+      Effect.andThen(Effect.sleep(interval)),
+      Effect.forever,
+      Effect.forkScoped,
+    )
+    return {
+      signal: signalled.open.pipe(Effect.asVoid),
+      flush: Effect.when(pulse, signalled.close),
+    }
+  })
+
+/** Whether the pane would draw the fork differently: its text, replying, or error. */
+const viewChanged = (change: ForkChange): boolean =>
+  change.before.partial !== change.after.partial ||
+  change.before.replying !== change.after.replying ||
+  !Equal.equals(change.before.error, change.after.error)
+
 /**
  * Follows the fork's live stream into the pane's view. The reply text is
  * kept only until its message is durable; the view reads finished turns
- * from the fork's history.
+ * from the fork's history. Each pulse is a stored event on this branch and a
+ * re-read of the fork in the open pane, so an event that leaves the view as
+ * it was pulses nothing, and streamed text pulses at most once per interval.
  */
 const followFork = (parentBranchId: string, fork: { sessionId: SessionId; branchId: BranchId }) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const forks = yield* OpenForks
     const pulse = ctx.State.changed().pipe(Effect.ignore)
+    const textPulse = yield* makeThrottledPulse(pulse, TEXT_PULSE_INTERVAL)
     // A newer fork on the same branch has its own follower; this one never writes over it.
-    const apply = (change: (current: OpenFork) => OpenFork) =>
+    const apply = (event: AgentEvent) =>
       forks
         .update(parentBranchId, (current) => {
           if (current.sessionId !== fork.sessionId) return current
-          return change(current)
+          return foldForkEvent(current, event)
         })
-        .pipe(Effect.andThen(pulse))
+        .pipe(
+          Effect.flatMap((change) => {
+            if (!Option.exists(change, viewChanged)) return Effect.void
+            if (event._tag === "StreamChunk") return textPulse.signal
+            return pulse
+          }),
+        )
     yield* ctx.Session.events(fork).pipe(
-      Stream.runForEach((event) => apply((current) => foldForkEvent(current, event))),
+      Stream.runForEach(apply),
+      Effect.andThen(textPulse.flush),
       Effect.catchCause((cause) =>
         Effect.logWarning("btw.follow.failed").pipe(
           Effect.annotateLogs({ sessionId: fork.sessionId, error: String(cause) }),
         ),
       ),
     )
-  })
+  }).pipe(Effect.scoped)
 
 /**
  * Admits the question on the fork's loop and marks the fork replying until its

@@ -77,7 +77,7 @@ const readDisabledFromFile = (filePath: string) =>
  * asks this, with the two roots or the two extension directories. Paths
  * compare canonically; one that does not resolve compares as written.
  */
-const hasProjectScope = Effect.fn("ExtensionLoader.projectScope")(function* (sides: {
+export const hasProjectScope = Effect.fn("ExtensionLoader.projectScope")(function* (sides: {
   readonly user: string
   readonly project: string
 }) {
@@ -633,15 +633,6 @@ const isProjectRootTrusted = Effect.fn("ExtensionLoader.projectRootTrust")(funct
     Effect.orElseSucceed(() => false),
   )
 })
-
-/**
- * Whether a project extension directory is a scope of its own, not the user
- * directory reached again from a launch in home (see `hasProjectScope`).
- */
-export const hasProjectExtensionScope = (directories: {
-  readonly userDir: string
-  readonly projectDir: string
-}) => hasProjectScope({ user: directories.userDir, project: directories.projectDir })
 
 /** Only user configuration can authorize project module execution. */
 export const isProjectExtensionDirectoryTrusted = Effect.fn("ExtensionLoader.projectTrust")(

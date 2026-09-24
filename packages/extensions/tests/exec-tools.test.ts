@@ -15,6 +15,7 @@ import {
   Stream,
 } from "effect"
 import {
+  addBackgroundBashColumn,
   BackgroundBashLayer,
   BackgroundBashStorage,
   BackgroundBashStorageError,
@@ -36,7 +37,9 @@ import {
   Session,
 } from "@gent/core/protocol"
 import {
+  finishPart,
   LanguageModelLayers,
+  textDeltaPart,
   textStep,
   toolCallStep,
   waitFor,
@@ -57,6 +60,7 @@ import { e2ePreset } from "./helpers/test-preset"
 import { SqlClient } from "effect/unstable/sql"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import type * as Prompt from "effect/unstable/ai/Prompt"
+import * as AiError from "effect/unstable/ai/AiError"
 
 // ── bash command parsing ────────────────────────────────────────────────────
 
@@ -2501,6 +2505,24 @@ const onQueue =
   }
 const now = dateFromMillis(0)
 
+/** The jobs table as it was before interrupted jobs had a read mark. */
+const oldBackgroundBashTable = `
+  CREATE TABLE background_bash_jobs (
+    session_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    command TEXT NOT NULL,
+    cwd TEXT,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    exit_code INTEGER,
+    message TEXT,
+    owner_generation TEXT,
+    PRIMARY KEY (session_id, branch_id, tool_call_id)
+  )
+`
+
 describe("BashTool summary", () => {
   test("names the exit code and the printed line count", () => {
     const summary = (stdout: string, stderr: string, exitCode: number) =>
@@ -2976,7 +2998,7 @@ describe("BashTool execution", () => {
   )
 
   it.live(
-    "background job interrupted by restart is reconciled once",
+    "a repeated start of a job a restart interrupted sends no message and leaves the job unread",
     () =>
       Effect.gen(function* () {
         const sent = yield* Deferred.make<{ sourceId: string; content: string }>()
@@ -3033,10 +3055,23 @@ describe("BashTool execution", () => {
         ).pipe(Effect.provide(makeProcessLayer(storageLayer)))
         expect(retried.exitCode).toBe(0)
 
-        const message = yield* Deferred.await(sent).pipe(Effect.timeout("2 seconds"))
-        expect(message.sourceId).toBe("bash:tc-restart:failure")
-        expect(message.content).toContain("did not finish before the previous server stopped")
-        expect(message.content).not.toContain("Background command completed")
+        // The replay path is synchronous: a Terminal claim would queue its
+        // message before `start` returns.
+        expect(yield* Deferred.isDone(sent)).toBe(false)
+        // The job waits, unread, for the branch's next turn to show it.
+        const unread = yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          return yield* storage.interruptedJobs({
+            sessionId: stubCtx.sessionId,
+            branchId: stubCtx.branchId,
+          })
+        }).pipe(Effect.provide(BackgroundBashStorage.Live.pipe(Layer.provide(storageLayer))))
+        expect(unread).toEqual([
+          {
+            toolCallId: ToolCallId.make("tc-restart"),
+            command: "sleep 2; printf should-not-arrive",
+          },
+        ])
       }).pipe(withProcessTimeout),
     processTestTimeout,
   )
@@ -3116,6 +3151,65 @@ describe("BashTool execution", () => {
         SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
       ),
     ),
+  )
+
+  it.live("a column another process added after this one read the table is no failure", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      yield* sql.unsafe(oldBackgroundBashTable)
+      // This process read the old table; then the other one added the column.
+      const staleColumns = ["session_id", "branch_id", "tool_call_id", "owner_generation"]
+      yield* sql.unsafe(`ALTER TABLE background_bash_jobs ADD COLUMN notice_read_at INTEGER`)
+      const added = yield* Effect.exit(
+        addBackgroundBashColumn(staleColumns, "notice_read_at", "INTEGER"),
+      )
+      expect(added._tag).toBe("Success")
+      // A failure that leaves the column missing still fails.
+      yield* sql.unsafe(`DROP TABLE background_bash_jobs`)
+      const missing = yield* Effect.exit(addBackgroundBashColumn([], "notice_read_at", "INTEGER"))
+      expect(missing._tag).toBe("Failure")
+    }).pipe(
+      Effect.provide(
+        SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+      ),
+    ),
+  )
+
+  it.live(
+    "a job interrupted before notices had a read mark is shown once more, never dropped",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        yield* sql.unsafe(oldBackgroundBashTable)
+        // The earlier code may or may not have told the branch of `earlier`:
+        // it did only when the branch's loop opened. `running` belongs to a
+        // server that is gone.
+        yield* sql`
+        INSERT INTO background_bash_jobs (session_id, branch_id, tool_call_id, command, status, started_at, completed_at)
+        VALUES ('s', 'b', 'earlier', 'sleep 8', 'interrupted', 0, 5),
+               ('s', 'b', 'running', 'sleep 9', 'running', 1, NULL)
+      `
+        const branch = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
+        const unread = yield* Effect.gen(function* () {
+          const storage = yield* BackgroundBashStorage
+          yield* storage.reconcileInterrupted
+          const before = yield* storage.interruptedJobs(branch)
+          yield* storage.markNoticesRead(branch, [
+            ToolCallId.make("earlier"),
+            ToolCallId.make("running"),
+          ])
+          return { before, after: yield* storage.interruptedJobs(branch) }
+        }).pipe(Effect.provide(BackgroundBashStorage.Live))
+        expect(unread.before).toEqual([
+          { toolCallId: ToolCallId.make("earlier"), command: "sleep 8" },
+          { toolCallId: ToolCallId.make("running"), command: "sleep 9" },
+        ])
+        expect(unread.after).toEqual([])
+      }).pipe(
+        Effect.provide(
+          SqliteStorage.MemoryWithSql(() => Layer.empty, {}).pipe(Layer.provide(BunPlatformLive)),
+        ),
+      ),
   )
 
   it.live(
@@ -3316,7 +3410,7 @@ describe("a background job the server stopped", () => {
   )
 
   it.scopedLive.layer(BunFileSystem.layer)(
-    "tells the branch once when it opens after a restart, and the notice starts a turn",
+    "opening a session after a restart starts no turn; the next turns read the job until one answers",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -3325,7 +3419,6 @@ describe("a background job the server stopped", () => {
         // The job waits for a file nobody writes, so it is running when the
         // first process stops.
         const command = `while ! test -f ${directory}/never; do sleep 0.02; done`
-        const lostNotice = "did not finish before the previous server stopped"
         const textOf = (message: { readonly parts: ReadonlyArray<Prompt.Part> }) =>
           message.parts
             .map((part) => {
@@ -3333,9 +3426,12 @@ describe("a background job the server stopped", () => {
               return ""
             })
             .join("")
-        const noticesIn = <M extends { readonly parts: ReadonlyArray<Prompt.Part> }>(
+        const noticesIn = <
+          M extends { readonly role: string; readonly parts: ReadonlyArray<Prompt.Part> },
+        >(
           messages: ReadonlyArray<M>,
-        ) => messages.filter((message) => textOf(message).includes(lostNotice))
+        ) =>
+          messages.filter((message) => message.role === "user" && textOf(message).includes(command))
 
         // First process: the turn starts the job and ends; then the server stops.
         const target = yield* Effect.scoped(
@@ -3363,58 +3459,97 @@ describe("a background job the server stopped", () => {
           }),
         )
 
-        // Second process: opening the session tells the branch, and the
-        // notice starts a turn.
-        yield* Effect.scoped(
+        // A model that records each call's system prompt. A call listed in
+        // `failing` fails its stream, so that turn never answers.
+        const recordingModel = (failing: ReadonlySet<number>) =>
           Effect.gen(function* () {
-            const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-              textStep("the job was lost"),
-            ])
-            const { client } = yield* createRpcClient(
-              createE2ELayer({ ...e2ePreset, providerLayer, storagePath }),
+            const systems = yield* Ref.make<ReadonlyArray<string>>([])
+            const providerLayer = LanguageModelLayers.testStream((options) =>
+              Effect.gen(function* () {
+                const system = options.prompt.content
+                  .map((message) => {
+                    if (message.role === "system") return message.content
+                    return ""
+                  })
+                  .join("\n")
+                const call = (yield* Ref.updateAndGet(systems, (all) => [...all, system])).length
+                if (failing.has(call)) {
+                  return yield* AiError.make({
+                    module: "Test",
+                    method: "streamText",
+                    reason: new AiError.AuthenticationError({
+                      kind: "Unknown",
+                      description: "the keychain is locked",
+                    }),
+                  })
+                }
+                return Stream.fromIterable([
+                  textDeltaPart(`reply ${call}`),
+                  finishPart({ finishReason: "stop" }),
+                ])
+              }),
             )
-            const snapshot = yield* waitFor(
-              client.session.getSnapshot(target),
-              (current) =>
-                current.runtime._tag === "Idle" &&
-                current.messages.some(
-                  (message) =>
-                    message.role === "assistant" &&
-                    message.parts.some(
-                      (part) => part.type === "text" && part.text === "the job was lost",
-                    ),
+            return { systems, providerLayer }
+          })
+        const ask = (
+          client: Effect.Success<ReturnType<typeof createRpcClient>>["client"],
+          systems: Ref.Ref<ReadonlyArray<string>>,
+          calls: number,
+        ) =>
+          client.message
+            .send({ ...target, content: "what happened?" })
+            .pipe(
+              Effect.andThen(
+                waitFor(
+                  Effect.all([client.session.getSnapshot(target), Ref.get(systems)]),
+                  ([snapshot, all]) => snapshot.runtime._tag === "Idle" && all.length === calls,
+                  5_000,
+                  `model call ${calls} and the turn ended`,
                 ),
-              5_000,
-              "the notice started a turn",
+              ),
+              Effect.andThen(Ref.get(systems)),
             )
-            yield* controls.waitForCall(0)
-            const notices = noticesIn(snapshot.messages)
-            expect(notices).toHaveLength(1)
-            expect(notices[0]?.role).toBe("user")
-            expect(notices[0]?.id).toContain(":bash:")
-            expect(notices[0]?.id).toMatch(/:failure$/)
-            expect(notices.map(textOf).join("")).toContain(`$ ${command}`)
-          }),
-        )
+        const heading = "# Interrupted background commands"
 
-        // Third process: the key is taken, so no second notice and no turn.
+        // Second process: opening the session starts no turn. The next turns
+        // read the job until one answers with it shown.
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-              textStep("should not run"),
-            ])
+            const { systems, providerLayer } = yield* recordingModel(new Set([1]))
             const { client } = yield* createRpcClient(
               createE2ELayer({ ...e2ePreset, providerLayer, storagePath }),
             )
             yield* client.session.getSnapshot(target)
-            // Absence has no event to wait for: a repeated notice would start
-            // the first model call within this window.
-            const answered = yield* Effect.exit(
-              controls.waitForCall(0).pipe(Effect.timeout("1 second")),
+            // Absence has no event to wait for: a notice that starts a turn
+            // makes the first model call within this window.
+            const woke = yield* Effect.exit(
+              waitFor(Ref.get(systems), (all) => all.length > 0, 1_000, "a turn started"),
             )
-            expect(answered._tag).toBe("Failure")
+            expect(woke._tag).toBe("Failure")
+            // The first turn shows the job, but its stream fails: it stays unread.
+            const failed = yield* ask(client, systems, 1)
+            expect(failed[0]).toContain(heading)
+            expect(failed[0]).toContain(command)
+            expect(failed[0]).toContain("start one again only when the user asks for it")
+            const answered = yield* ask(client, systems, 2)
+            expect(answered[1]).toContain(heading)
+            const after = yield* ask(client, systems, 3)
+            expect(after[2]).not.toContain(heading)
+            // No message carries the notice: it lived in the prompt only.
             const snapshot = yield* client.session.getSnapshot(target)
-            expect(noticesIn(snapshot.messages)).toHaveLength(1)
+            expect(noticesIn(snapshot.messages)).toHaveLength(0)
+          }),
+        )
+
+        // Third process: the read mark is on the row, so a new turn shows nothing.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { systems, providerLayer } = yield* recordingModel(new Set())
+            const { client } = yield* createRpcClient(
+              createE2ELayer({ ...e2ePreset, providerLayer, storagePath }),
+            )
+            const prompts = yield* ask(client, systems, 1)
+            expect(prompts[0]).not.toContain(heading)
           }),
         )
       }).pipe(Effect.timeout("20 seconds")),

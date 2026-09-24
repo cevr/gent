@@ -43,11 +43,13 @@ import {
   latestAssistantText,
   type Message,
   makeRunSpec,
+  makeShownNotices,
   MessageId,
   RequestId,
   type RunSpec,
   RunSpecSchema,
   SessionId,
+  type ShownNotices,
   ToolCallId,
   tool,
   type TurnUsage,
@@ -620,12 +622,15 @@ const settleIfGone = (entry: DelegateEntry) =>
  * not marked sent is re-sent and its receipt still read, a finished child whose
  * completion never landed (the process died between the receipt and the
  * hook) is delivered now, a deleted child settles as interrupted, and a
- * private row is removed with its session, never delivered, and a child with
- * no receipt is re-sent its start so a child the previous process stopped
- * mid-turn resumes. Called from the parent's loop open, its turn, and its
- * listing tools.
+ * private row is removed with its session, never delivered. With `resume`, a
+ * child with no receipt is re-sent its start so a child the previous process
+ * stopped mid-turn resumes. Only the gated reconcile of the parent's loop open
+ * and turns (`reconcileOnce`) resumes; the listing tools read receipts and
+ * never re-send a start that was sent.
  */
-const reconcile = Effect.fn("Delegate.reconcile")(function* () {
+const reconcile = Effect.fn("Delegate.reconcile")(function* (options: {
+  readonly resume: boolean
+}) {
   const ctx = yield* ExtensionContext
   const parent = { sessionId: ctx.sessionId, branchId: ctx.branchId }
   yield* registry.modify((entries) =>
@@ -662,7 +667,7 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
           // previous process stopped. The re-send carries the start's id, so
           // the loop admits nothing new, but it opens the child's loop, and
           // the open resumes the unfinished turn.
-          if (entry.submitted) yield* submitStart(entry)
+          if (entry.submitted && options.resume) yield* submitStart(entry)
           continue
         }
         const { receipt, error } = end.value
@@ -737,7 +742,7 @@ const reconcileOnce = Effect.gen(function* () {
   const key = `${ctx.sessionId}:${ctx.branchId}`
   if (yield* reconciled.has(key)) return
   const generation = yield* reconciled.generation
-  yield* reconcile()
+  yield* reconcile({ resume: true })
   yield* reconciled.add(key, generation)
 })
 
@@ -964,41 +969,18 @@ const noticeTask = (prompt: string) => {
 const stopNoticeKey = (row: DelegateEntry) => `${row.requestId}@${row.stopNoticeAt}`
 
 /**
- * The stop notices each turn put in its prompt, per `sessionId:branchId`,
- * until that turn ends. Only these clear, and only when the turn answered: a
- * notice the turn never showed (its read failed, or the cap left it out) stays
- * for the next turn. A lost process loses the marks, and the notices show again.
+ * The stop notices each turn put in its prompt. Only these clear, and only
+ * when the turn answered: a notice the turn never showed (its read failed, or
+ * the cap left it out) stays for the next turn.
  */
-class ShownStopNotices extends Context.Service<
-  ShownStopNotices,
-  {
-    readonly record: (key: string, notices: ReadonlyArray<string>) => Effect.Effect<void>
-    /** The notices the turn showed; the marks drop either way. */
-    readonly take: (key: string) => Effect.Effect<ReadonlySet<string>>
-  }
->()("@gent/extensions/src/delegate/ShownStopNotices") {}
+class ShownStopNotices extends Context.Service<ShownStopNotices, ShownNotices>()(
+  "@gent/extensions/src/delegate/ShownStopNotices",
+) {}
 
 const ShownStopNoticesResource = defineResource({
   id: "@gent/delegate/shown-stop-notices",
   scope: "process",
-  layer: Layer.effect(
-    ShownStopNotices,
-    Effect.map(Ref.make<ReadonlyMap<string, ReadonlySet<string>>>(new Map()), (state) =>
-      ShownStopNotices.of({
-        record: (key, notices) =>
-          Ref.update(state, (current) => {
-            const shown = new Set([...(current.get(key) ?? []), ...notices])
-            return new Map([...current, [key, shown]])
-          }),
-        take: (key) =>
-          Ref.modify(state, (current) => {
-            const rest = new Map(current)
-            rest.delete(key)
-            return [current.get(key) ?? new Set<string>(), rest]
-          }),
-      }),
-    ),
-  ),
+  layer: Layer.effect(ShownStopNotices, makeShownNotices),
 })
 
 /**
@@ -1033,14 +1015,14 @@ const stopNoticeSections = Effect.fn("Delegate.stopNotices")(function* () {
     lines.push(`- and ${unnamed} more stopped children, named once you have read these.`)
   }
   yield* (yield* ShownStopNotices).record(
-    `${ctx.sessionId}:${ctx.branchId}`,
+    { sessionId: ctx.sessionId, branchId: ctx.branchId },
     named.flat().map(stopNoticeKey),
   )
   return [
     {
       id: "delegate-stopped",
       priority: 86,
-      content: `# Stopped children\n\nYour interrupted turn stopped these children before they finished. They are not running, and no completion will come from them. Start a new child for a task that still needs doing.\n\n${lines.join("\n")}`,
+      content: `# Stopped children\n\nThe user interrupted your turn, and that stopped these children before they finished. They are not running, and no completion will come from them. Tell the user which children stopped; start one again only when the user asks for it.\n\n${lines.join("\n")}`,
     },
   ]
 })
@@ -1057,8 +1039,8 @@ const clearReadStopNotices = Effect.fn("Delegate.clearStopNotices")(function* (i
   readonly streamFailed: boolean
   readonly unanswered: boolean
 }) {
-  const shown = yield* (yield* ShownStopNotices).take(`${input.sessionId}:${input.branchId}`)
-  if (input.interrupted || input.streamFailed || input.unanswered || shown.size === 0) return
+  const shown = yield* (yield* ShownStopNotices).takeRead(input)
+  if (shown.size === 0) return
   const read = (row: DelegateEntry) =>
     Predicate.isNotUndefined(row.stopNoticeAt) && shown.has(stopNoticeKey(row))
   yield* registry.at(input.branchId).update((entries) => {
@@ -1106,7 +1088,7 @@ const observationOf = (entry: DelegateEntry) => {
 /** The registry row for a request on this branch, reconciled first. */
 const ownedChild = Effect.fn("Delegate.ownedChild")(function* (requestId: RequestId) {
   const ctx = yield* ExtensionContext
-  yield* reconcile()
+  yield* reconcile({ resume: false })
   const entry = (yield* registry.read()).find((row) => row.requestId === requestId)
   if (Predicate.isUndefined(entry)) {
     return yield* new DelegateError({ message: "No such child on this branch" })
@@ -1216,7 +1198,7 @@ export const ListChildren = tool({
   }),
   output: Schema.Array(ChildAgentRegistryEntry),
   execute: Effect.fn("ListChildren.execute")(function* (params) {
-    yield* reconcile()
+    yield* reconcile({ resume: false })
     const children = (yield* registry.read()).map((entry): ChildAgentRegistryEntry => ({
       requestId: entry.requestId,
       sessionId: entry.sessionId,

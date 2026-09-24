@@ -61,8 +61,15 @@ interface KeyboardScopeEntry {
   paste?: ScopedPasteHandler
 }
 
+/** Sees every key and paste before any scope does, and never takes one. */
+interface InputWatch {
+  readonly key: (event: KeyInput) => void
+  readonly paste: () => void
+}
+
 interface KeyboardScopeContextValue {
   register: (entry: Omit<KeyboardScopeEntry, "order">) => () => void
+  watch: (watch: InputWatch) => () => void
 }
 
 const KeyboardScopeContext = createContext<KeyboardScopeContextValue>()
@@ -79,9 +86,11 @@ interface ScopedKeyboardOptions {
 
 export function KeyboardScopeProvider(props: ParentProps) {
   const entries: KeyboardScopeEntry[] = []
+  const watches: InputWatch[] = []
   let order = 0
 
   useKeyboard((event) => {
+    for (const watch of [...watches]) watch.key(event)
     const stack = [...entries].sort((left, right) => right.order - left.order)
     for (const entry of stack) {
       if (entry.when?.() === false) continue
@@ -96,6 +105,7 @@ export function KeyboardScopeProvider(props: ParentProps) {
   // The same stack, newest first: the first live scope that takes the paste
   // keeps it from the focused renderable.
   usePaste((event) => {
+    for (const watch of [...watches]) watch.paste()
     const stack = [...entries].sort((left, right) => right.order - left.order)
     const text = new TextDecoder().decode(event.bytes)
     for (const entry of stack) {
@@ -119,8 +129,16 @@ export function KeyboardScopeProvider(props: ParentProps) {
     }
   }
 
+  const watch = (entry: InputWatch) => {
+    watches.push(entry)
+    return () => {
+      const index = watches.indexOf(entry)
+      if (index >= 0) watches.splice(index, 1)
+    }
+  }
+
   return (
-    <KeyboardScopeContext.Provider value={{ register }}>
+    <KeyboardScopeContext.Provider value={{ register, watch }}>
       {props.children}
     </KeyboardScopeContext.Provider>
   )
@@ -140,5 +158,20 @@ export function useScopedKeyboard(handler: ScopedKeyHandler, options?: ScopedKey
       paste: options?.paste,
     })
     onCleanup(unregister)
+  })
+}
+
+/**
+ * Watches every key and paste, also those a scope takes, before any scope
+ * runs. It cannot take one: a gesture a docked pane consumes still reaches it.
+ */
+export function useInputWatch(watch: InputWatch) {
+  const context = useRequiredContext(
+    KeyboardScopeContext,
+    "useInputWatch must be used within KeyboardScopeProvider",
+  )
+
+  onMount(() => {
+    onCleanup(context.watch(watch))
   })
 }

@@ -1,5 +1,17 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Deferred, Effect, Exit, Option, Predicate, Queue, Schema, Stream } from "effect"
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Option,
+  Predicate,
+  Queue,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
+import { TestClock } from "effect/testing"
 import * as AiError from "effect/unstable/ai/AiError"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
@@ -16,10 +28,10 @@ import { e2ePreset } from "./helpers/test-preset"
 import { AgentEvent } from "@gent/core/protocol"
 import {
   BTW_EXTENSION_ID,
-  BTW_QUESTION_TYPE,
   ForkProgress,
   foldForkEvent,
   forkQuestionBody,
+  makeThrottledPulse,
 } from "../src/btw.js"
 
 /**
@@ -40,7 +52,7 @@ const lastText = (options: ProviderOptions): string =>
   Option.getOrElse(Option.fromUndefinedOr(promptTexts(options).at(-1)), () => "")
 
 /** A prompt text read as a question the pane sent; any other text comes back whole. */
-const asked = (text: string): string => forkQuestionBody({ text, customType: BTW_QUESTION_TYPE })
+const asked = (text: string): string => forkQuestionBody(text)
 
 type Harness = Effect.Success<ReturnType<typeof createRpcHarness>>
 
@@ -542,5 +554,100 @@ describe("btw forks", () => {
         }
       }).pipe(Effect.timeout("4 seconds")),
     ),
+  )
+})
+
+// ── pulses ──────────────────────────────────────────────────────────────────
+
+/** Every `@gent/btw` state pulse stored on a branch so far. */
+const storedPulses = (harness: Harness) =>
+  Effect.gen(function* () {
+    const target = { sessionId: harness.sessionId, branchId: harness.branchId }
+    const snapshot = yield* harness.client.session.getSnapshot(target)
+    const last = snapshot.lastEventId ?? 0
+    if (last === 0) return 0
+    const stored = yield* harness.client.session.events(target).pipe(
+      Stream.takeUntil((envelope) => envelope.id >= last),
+      Stream.runCollect,
+    )
+    return Array.from(stored).filter(
+      (envelope) =>
+        envelope.event._tag === "ExtensionStateChanged" &&
+        envelope.event.extensionId === BTW_EXTENSION_ID,
+    ).length
+  })
+
+describe("btw pulses", () => {
+  it.live(
+    "a fork answer of many chunks stores a few pulses on the branch, not one per chunk",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const chunks = Array.from({ length: 200 }, (_, index) => `w${index} `)
+          const providerLayer = LanguageModelLayers.testStream(() =>
+            Effect.succeed(
+              Stream.fromIterable([
+                ...chunks.map((chunk) => textDeltaPart(chunk)),
+                finishPart({ finishReason: "stop" }),
+              ]),
+            ),
+          )
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const pane = btw(harness)
+          yield* pane.fork("Explain the whole plan")
+          const replied = yield* pane.replied(1)
+          // The last text lands: the pane reads the whole answer.
+          expect(Option.map(replied, (fork) => fork.turns.at(-1)?.answer)).toEqual(
+            Option.some(chunks.join("")),
+          )
+          // One pulse per view change (the fork, done) plus streamed text at most
+          // once per interval: a handful, not one per chunk, and none for
+          // an event that leaves the view as it was.
+          const pulses = yield* storedPulses(harness)
+          expect(pulses).toBeGreaterThan(0)
+          expect(pulses).toBeLessThanOrEqual(6)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "streamed text pulses at once, then at most once per interval, and the last change lands",
+    () =>
+      Effect.gen(function* () {
+        const pulses = yield* Ref.make(0)
+        const counted = Ref.get(pulses)
+        const text = yield* makeThrottledPulse(
+          Ref.update(pulses, (n) => n + 1),
+          "250 millis",
+        )
+        // The first signal pulses at once.
+        yield* text.signal
+        yield* TestClock.adjust("1 millis")
+        expect(yield* counted).toBe(1)
+        // Two more inside the interval wait for its end, and fold into one pulse.
+        yield* text.signal
+        yield* text.signal
+        yield* TestClock.adjust("100 millis")
+        expect(yield* counted).toBe(1)
+        yield* TestClock.adjust("200 millis")
+        expect(yield* counted).toBe(2)
+        // Nothing new: the next interval ends with no pulse.
+        yield* TestClock.adjust("1 second")
+        expect(yield* counted).toBe(2)
+        // After a quiet interval, a signal pulses at once again.
+        yield* text.signal
+        yield* TestClock.adjust("1 millis")
+        expect(yield* counted).toBe(3)
+        // A signal still waiting when the follower's stream ends pulses on the flush.
+        yield* text.signal
+        yield* TestClock.adjust("1 millis")
+        expect(yield* counted).toBe(3)
+        yield* text.flush
+        expect(yield* counted).toBe(4)
+        // Nothing waits any more: a second flush pulses nothing.
+        yield* text.flush
+        expect(yield* counted).toBe(4)
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.timeout("2 seconds")),
   )
 })

@@ -26,8 +26,10 @@ import {
   ExtensionHost,
   ExtensionId,
   type ExtensionServiceError,
+  makeShownNotices,
   omitUndefined,
   request,
+  type ShownNotices,
   tool,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
@@ -35,8 +37,9 @@ import { approveBashCommand, classifyBashCommand, runBashCommand } from "./exec-
 
 // Test seam: only tests read these exports. WakeAlarms, WakeAlarmsService and
 // WakeAlarmsLive let a test hold and cancel timers; rearmPendingAlarms runs the
-// restart path directly. wakeMessage, monitorMessage, nextDueAt and dueAtOf are
-// pure functions with unit tests. WakeTool, MonitorTool and CancelTool are the
+// restart path directly; ShownWakeNotices lets a hook test hold the marks.
+// wakeMessage, monitorMessage, nextDueAt and dueAtOf are pure functions with
+// unit tests. WakeTool, MonitorTool and CancelTool are the
 // capabilities the cell signature tests render.
 
 // ── protocol ────────────────────────────────────────────────────────────────
@@ -130,8 +133,8 @@ export type WakeDetails = typeof WakeDetails.Type
  * A repeating alarm advances its stored due time on every fire; ticks missed
  * while the process was down collapse into one fire. In `notify` mode a fire
  * starts no turn: it leaves a `notice` entry in the same file, the tray shows
- * it at once, and the next turn's projection reads every notice into a prompt
- * section and clears them.
+ * it at once, every step of the next turns reads every notice into a prompt
+ * section, and a turn that answered clears the notices it showed.
  */
 
 const MAXIMUM_WAKE_DELAY_MS = 24 * 60 * 60 * 1000
@@ -310,17 +313,42 @@ const queueWake = (
     yield* modifyWakeEntries(settle)
   })
 
+type NoticeEntry = Extract<WakeEntry, { readonly _tag: "notice" }>
+
+/** One notice: a fire of one entry. A repeat's later fire is a new notice. */
+const noticeKey = (notice: NoticeEntry) => `${notice.wakeId}@${notice.firedAt}`
+
+/**
+ * The notices each turn put in its prompt. Only these clear, and only when
+ * the turn answered: a notice written after the turn's last step read the
+ * file stays for the next turn.
+ */
+export class ShownWakeNotices extends Context.Service<ShownWakeNotices, ShownNotices>()(
+  "@gent/extensions/src/wake/ShownWakeNotices",
+) {}
+
+const ShownWakeNoticesResource = defineResource({
+  id: "@gent/wake/shown-notices",
+  scope: "process",
+  layer: Layer.effect(ShownWakeNotices, makeShownNotices),
+})
+
 /**
  * Every notice as one prompt section; none gives no section. The projection
- * runs on every step, so the section stays for the whole turn, and nothing is
- * cleared here: a turn that fails or is interrupted keeps its notices.
+ * runs on every step, so the section stays for the whole turn, and marks what
+ * it showed; nothing is cleared here.
  */
 const noticeSections = Effect.fn("WakeTool.notices")(function* () {
+  const ctx = yield* ExtensionContext
   const notices = (yield* readWakeEntries()).flatMap((entry) => {
     if (entry._tag === "notice") return [entry]
     return []
   })
   if (notices.length === 0) return []
+  yield* (yield* ShownWakeNotices).record(
+    { sessionId: ctx.sessionId, branchId: ctx.branchId },
+    notices.map(noticeKey),
+  )
   return [
     {
       id: "wake-notices",
@@ -331,14 +359,14 @@ const noticeSections = Effect.fn("WakeTool.notices")(function* () {
 })
 
 /**
- * Drops the notices an answered turn read: those that fired before it
- * started. A later one shows again next turn: a fire during the turn, or a
- * `blocked` notice from a `loopOpen` re-arm that ran beside the turn (the
- * hooks do not hold turns back). Nothing dropped leaves the file unwritten.
+ * Drops the notices an answered turn showed. Any other shows again next turn:
+ * a fire the turn's steps did not read, or a `blocked` notice from a
+ * `loopOpen` re-arm that ran beside the turn (the hooks do not hold turns
+ * back). Nothing dropped leaves the file unwritten.
  */
-const clearReadNotices = Effect.fn("WakeTool.clearNotices")(function* (turnStartedAt: number) {
+const clearReadNotices = Effect.fn("WakeTool.clearNotices")(function* (shown: ReadonlySet<string>) {
   return yield* store.modify((current: ReadonlyArray<WakeEntry>) => {
-    const kept = current.filter((entry) => entry._tag !== "notice" || entry.firedAt > turnStartedAt)
+    const kept = current.filter((entry) => entry._tag !== "notice" || !shown.has(noticeKey(entry)))
     const cleared = current.length - kept.length
     if (cleared === 0) return Effect.succeed({ next: current, result: 0 })
     return Effect.succeed({ next: kept, result: cleared })
@@ -646,7 +674,11 @@ const WakeResult = Schema.Struct({
   note: Schema.String,
 })
 
-/** Resolves `afterSeconds` or `at` to an epoch-millisecond due time. */
+/**
+ * Resolves `afterSeconds` or `at` to an epoch-millisecond due time. An `at`
+ * written to the second names the whole second, so one within the current
+ * second is now, not the past.
+ */
 export const dueAtOf = (
   params: Pick<typeof WakeParams.Type, "afterSeconds" | "at">,
   now: number,
@@ -654,9 +686,14 @@ export const dueAtOf = (
   const fromAfter = Option.fromUndefinedOr(params.afterSeconds).pipe(
     Option.map((seconds) => now + seconds * 1000),
   )
+  const startOfSecond = now - (now % 1000)
   const fromAt = Option.fromUndefinedOr(params.at).pipe(
     Option.flatMap((at) => DateTime.make(at)),
     Option.map(DateTime.toEpochMillis),
+    Option.map((at) => {
+      if (at >= startOfSecond) return Math.max(at, now)
+      return at
+    }),
   )
   if (Option.isSome(fromAfter) && Option.isSome(fromAt)) {
     return Effect.fail(new WakeError({ message: "Give afterSeconds or at, not both" }))
@@ -1000,6 +1037,7 @@ export const WakeExtension = defineExtension({
     const host = yield* ExtensionHost
     yield* host.register("tool", WakeTool, MonitorTool, CancelTool, ListTool)
     yield* host.register("request", WakeRpc.Pending)
+    yield* host.register("resource", ShownWakeNoticesResource)
     // The branch resource starts without a session facade, so the loop's open
     // is where stored entries get their timers back: after a restart or a
     // branch close, as soon as anything reaches the branch. A past-due alarm
@@ -1029,9 +1067,9 @@ export const WakeExtension = defineExtension({
     // A turn that answered has read every notice its steps were shown.
     yield* host.on("turnAfter", (input) =>
       Effect.gen(function* () {
-        if (input.interrupted || input.streamFailed) return
-        const now = yield* Clock.currentTimeMillis
-        const cleared = yield* clearReadNotices(now - input.durationMs)
+        const shown = yield* (yield* ShownWakeNotices).takeRead(input)
+        if (shown.size === 0) return
+        const cleared = yield* clearReadNotices(shown)
         if (cleared > 0) yield* (yield* ExtensionContext).State.changed()
       }).pipe(
         Effect.catchCause((cause) =>
