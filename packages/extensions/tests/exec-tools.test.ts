@@ -1838,6 +1838,33 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("a SQLite dot-command that writes the database from a file asks", () => {
+    const db = "/nonexistent/gent-probe-x/db"
+    const backup = "/nonexistent/gent-probe-x/backup.db"
+    const rows = "/nonexistent/gent-probe-x/rows.csv"
+    for (const command of [
+      // `.restore` replaces the whole database with the file.
+      `sqlite3 ${db} '.restore ${backup}'`,
+      `sqlite3 ${db} '.restore main ${backup}'`,
+      `sqlite3 ${db} -cmd '.restore ${backup}'`,
+      `echo '.restore ${backup}' | sqlite3 ${db}`,
+      `sqlite3 ${db} 'select 1; .restore ${backup}'`,
+      // `.import` writes the file's rows into a table the guard cannot see.
+      `sqlite3 ${db} '.import ${rows} t'`,
+      `sqlite3 ${db} '.import --csv --skip 1 ${rows} t'`,
+      `sqlite3 ${db} -cmd '.IMPORT ${rows} t'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      `sqlite3 ${db} '.schema'`,
+      `sqlite3 ${db} "select 'restore', 'import'"`,
+      `sqlite3 ${db} 'select restored_at from t'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("package runners, fd -x, SQL drops, gh deletes and git config from the environment are read", () => {
     for (const command of [
       "npm x -- rm -rf x",

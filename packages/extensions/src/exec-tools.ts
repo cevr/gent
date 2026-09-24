@@ -2988,6 +2988,13 @@ const SQL_DESTRUCTIVE =
 const SQL_FILE_COMMAND =
   /\\(?:i|ir|include|include_relative|\.)\s|(?:^|[;\n])\s*(?:source|\.read)\s/i
 
+/**
+ * A SQLite dot-command that writes the database from a file: `.restore`
+ * replaces the whole database, `.import` writes a file's rows into a table.
+ * The guard cannot see what either writes, so both ask (fail closed).
+ */
+const SQLITE_WRITE_COMMAND = /(?:^|[;\n])\s*\.(restore|import)\s/i
+
 /** `text`, and each text after a letter of its leading short option cluster (`-XcDELETE`). */
 const sqlTexts = (text: string): ReadonlyArray<string> => {
   const letters = /^-[A-Za-z]+/.exec(text)?.[0].length ?? 0
@@ -2997,7 +3004,8 @@ const sqlTexts = (text: string): ReadonlyArray<string> => {
 /**
  * A SQL client whose SQL the guard cannot see asks: a file it runs (`-f`,
  * `--file`, `-init`, a client file command, a `<` redirect) or input the
- * guard cannot read. Else it asks when its text holds a word of
+ * guard cannot read. A SQLite `.restore` or `.import` asks. Else it asks
+ * when its text holds a word of
  * `SQL_DESTRUCTIVE`: any argument, option values as written, or its
  * readable input.
  */
@@ -3011,6 +3019,12 @@ const sqlRisk: CommandRisk = ({ texts, parsed, invocation: { segment } }) => {
     input.unreadable.length > 0 ||
     sql.some((text) => SQL_FILE_COMMAND.test(text))
   if (fromFile) return destructive("SQL the guard cannot read: a file or unreadable input")
+  const sqliteWrite = Arr.findFirst(sql, (text) =>
+    Option.flatMap(Option.fromNullishOr(SQLITE_WRITE_COMMAND.exec(text)), ([, command]) =>
+      destructive(`SQLite .${(command ?? "").toLowerCase()} writes the database from a file`),
+    ),
+  )
+  if (Option.isSome(sqliteWrite)) return sqliteWrite
   return Arr.findFirst(sql, (text) =>
     Option.flatMap(Option.fromNullishOr(SQL_DESTRUCTIVE.exec(text)), ([, word, block]) =>
       destructive(`SQL ${(word ?? block ?? "").toUpperCase()}`),
