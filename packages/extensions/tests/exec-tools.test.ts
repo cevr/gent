@@ -974,6 +974,11 @@ describe("classifyBashCommand", () => {
       // A glob matches names of files; a brace after `--` makes operands.
       "rm *.log",
       "rm -- {a,b}.log",
+      // A quoted brace is text, beside an unquoted glob too.
+      "rm *'{a,b}'",
+      `rm *"{-rf,x}" ${x}`,
+      "git reset *'{--hard,}'",
+      `docker volume *'{rm,ls}' ${x}`,
       // The value of an option the table names.
       `psql -d "$DB" -c 'select 1'`,
       'git -C "$dir" status',

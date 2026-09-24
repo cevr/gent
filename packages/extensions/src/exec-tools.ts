@@ -440,6 +440,8 @@ interface ShellWord {
   readonly splits: boolean
   /** The word holds an unquoted glob or brace pattern: the shell expands it to other words. */
   readonly pattern: boolean
+  /** The word holds an unquoted brace expansion (`{-rf,x}`): one word becomes several. */
+  readonly braces: boolean
 }
 
 interface ShellSegment {
@@ -571,6 +573,7 @@ const sourceWord = (
     dynamic: expands && DYNAMIC_TEXT.test(text),
     splits: false,
     pattern: false,
+    braces: false,
   }
 }
 
@@ -673,6 +676,7 @@ const endWord = (reader: CommandReader) => {
       dynamic: reader.dynamic,
       splits: reader.splits,
       pattern: PATTERN_TEXT.test(reader.plain),
+      braces: BRACE_TEXT.test(reader.plain),
     }
     if (reader.role === "argument") readCompoundWord(reader, word)
     if (reader.role === "argument" && !readCaseWord(reader, word)) reader.segment.words.push(word)
@@ -1229,6 +1233,7 @@ const parseCommand = (command: string): Array<ShellSegment> =>
       dynamic: false,
       splits: false,
       pattern: false,
+      braces: false,
     },
     Option.none(),
   )
@@ -1246,6 +1251,7 @@ const derivedWord = (text: string, dynamic: boolean): ShellWord => ({
   dynamic,
   splits: dynamic,
   pattern: false,
+  braces: false,
 })
 
 /** The characters of `word` from `start` on, keeping their offsets and safety. */
@@ -1282,6 +1288,7 @@ const joinWords = (words: ReadonlyArray<ShellWord>): Option.Option<ShellWord> =>
     dynamic: words.some((word) => word.dynamic),
     splits: words.some((word) => word.splits),
     pattern: words.some((word) => word.pattern),
+    braces: words.some((word) => word.braces),
   })
 }
 
@@ -1682,9 +1689,7 @@ const runTimeChild = (resolved: ResolvedCommand, next: number): Option.Option<Re
   Option.map(
     Option.filter(
       Option.fromUndefinedOr(resolved.words[next]),
-      (word) =>
-        RISKY_PARENTS.has(resolved.path) &&
-        (word.dynamic || (word.pattern && BRACE_TEXT.test(word.text))),
+      (word) => RISKY_PARENTS.has(resolved.path) && (word.dynamic || word.braces),
     ),
     (word): ResolvedCommand => ({
       path: `${resolved.path} ${word.text}`,
@@ -4073,7 +4078,7 @@ const runTimeOptions = (
       (word, index) =>
         word.splits ||
         EXPANDS_TO_WORDS.test(word.text) ||
-        (word.pattern && BRACE_TEXT.test(word.text)) ||
+        word.braces ||
         (word.dynamic && !values.has(index)),
     ),
     (word): BashRisk => ({
