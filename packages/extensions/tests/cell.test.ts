@@ -35,6 +35,7 @@ import {
   ensureStorageParents,
   runToolWithCtx,
   testToolContext,
+  testLeafContext,
   finishPart,
   LanguageModelLayers,
   multiToolCallStep,
@@ -79,6 +80,8 @@ import {
   InteractionPendingError,
   defineExtension,
   ExtensionContext,
+  type ExtensionContextService,
+  ExtensionServiceError,
   ExtensionHost,
   tool,
   type ToolCapability,
@@ -201,13 +204,35 @@ export const buildCellExecutable = Effect.gen(function* () {
 // ── recorded cell execution ─────────────────────────────────────────────────
 
 const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)
-const testLayer = SqliteStorage.MemoryWithSql(
-  CellBranchTools.storage,
-  CellBranchTools.migrations,
-).pipe(Layer.provideMerge(platform))
 const sessionId = SessionId.make("cell-execution-session")
 const branchId = BranchId.make("cell-execution-branch")
 const now = dateFromMillis(1_767_225_600_000)
+/**
+ * The test session's extension context, reading sessions and branches from
+ * the test's own storage. `getSession` can be replaced to fail a lookup.
+ */
+const storedSessionContext = Effect.fn("test.storedSessionContext")(function* (
+  getSession?: ExtensionContextService["Session"]["getSession"],
+) {
+  const sessions = yield* SessionStorage
+  const branches = yield* BranchStorage
+  const ctx = testToolContext({ sessionId, branchId })
+  return testLeafContext(
+    testToolContext({
+      sessionId,
+      branchId,
+      Session: {
+        ...ctx.Session,
+        getSession: getSession ?? ((id) => sessions.getSession(id ?? sessionId).pipe(Effect.orDie)),
+        listBranches: branches.listBranches(sessionId).pipe(Effect.orDie),
+      },
+    }),
+  )
+})
+const testLayer = Layer.provideMerge(
+  Layer.effect(ExtensionContext, storedSessionContext()),
+  SqliteStorage.MemoryWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+).pipe(Layer.provideMerge(platform))
 
 /** A worker the test never launches: the cell settles before it needs one. */
 const unusedWorker = CellWorker.cases.Script.make({
@@ -221,41 +246,107 @@ const hostCatalog = (...names: ReadonlyArray<string>) => ({
   tools: names.map((name) => ({ name, description: name, guidelines: [], parameters: {} })),
 })
 
+/** The session a handoff continues: the test session joins its thread. */
+const predecessor = {
+  sessionId: SessionId.make("cell-predecessor-session"),
+  branchId: BranchId.make("cell-predecessor-branch"),
+}
+
 const setupCalls = Effect.fn("test.setupCells")(function* (
   sources: ReadonlyArray<string>,
   resetAt: ReadonlyArray<number> = [],
+  handoff = false,
 ) {
   const sessions = yield* SessionStorage
   const branches = yield* BranchStorage
-  const messages = yield* MessageStorage
-  yield* sessions.createSession(new Session({ id: sessionId, createdAt: now, updatedAt: now }))
+  const session = new Session({ id: sessionId, createdAt: now, updatedAt: now })
+  if (handoff) {
+    yield* sessions.createSession(
+      new Session({ id: predecessor.sessionId, createdAt: now, updatedAt: now }),
+    )
+    yield* branches.createBranch(
+      new Branch({ id: predecessor.branchId, sessionId: predecessor.sessionId, createdAt: now }),
+    )
+    yield* sessions.createSession(
+      new Session({
+        ...session,
+        parentSessionId: predecessor.sessionId,
+        parentBranchId: predecessor.branchId,
+        threadId: predecessor.sessionId,
+      }),
+    )
+  } else {
+    yield* sessions.createSession(session)
+  }
   yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
   return yield* Effect.forEach(sources, (code, index) =>
-    Effect.gen(function* () {
-      const call = {
-        assistantMessageId: MessageId.make(`cell-message-${index}`),
-        toolCallId: ToolCallId.make(`cell-call-${index}`),
-      }
-      yield* messages.createMessage(
-        Message.cases.regular.make({
-          id: call.assistantMessageId,
-          sessionId,
-          branchId,
-          role: "assistant",
-          parts: [
-            Prompt.toolCallPart({
-              id: call.toolCallId,
-              name: "cell",
-              params: { code, reset: resetAt.includes(index) },
-              providerExecuted: false,
-            }),
-          ],
-          createdAt: now,
-        }),
-      )
-      return call
+    recordCellCall({ branch: branchId, key: `${index}`, code, reset: resetAt.includes(index) }),
+  )
+})
+
+/** Save a namespace holding `notes` for the predecessor's branch. */
+const saveForPredecessor = (notes: ReadonlyArray<string>) =>
+  Effect.flatMap(Effect.service(CellStorage), (storage) =>
+    storage.namespaces.set(predecessor, {
+      bindings: [{ name: "notes", value: notes }],
+      omitted: [],
     }),
   )
+
+/** A cell owner for one branch of the test session; a new owner stands in for a restart. */
+const openCellOwner = (
+  worker: Parameters<typeof CellExecution.Live>[0]["worker"],
+  branch: BranchId = branchId,
+) =>
+  Effect.map(
+    Layer.build(CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId: branch })),
+    (context) => Context.get(context, CellExecution),
+  )
+
+/** Run a recorded cell with a host that selects no tools. */
+const runCell = (
+  owner: typeof CellExecution.Service,
+  call: Parameters<typeof CellExecution.Service.run>[0],
+) =>
+  owner
+    .run(call)
+    .pipe(
+      Effect.provideService(
+        CellOperationHost,
+        CellOperationHost.of({ catalog: hostCatalog(), call: () => Effect.never }),
+      ),
+    )
+
+/** One recorded `cell` call on a branch of the test session. */
+const recordCellCall = Effect.fn("test.recordCellCall")(function* (cell: {
+  readonly branch: BranchId
+  readonly key: string
+  readonly code: string
+  readonly reset?: boolean
+}) {
+  const messages = yield* MessageStorage
+  const call = {
+    assistantMessageId: MessageId.make(`cell-message-${cell.key}`),
+    toolCallId: ToolCallId.make(`cell-call-${cell.key}`),
+  }
+  yield* messages.createMessage(
+    Message.cases.regular.make({
+      id: call.assistantMessageId,
+      sessionId,
+      branchId: cell.branch,
+      role: "assistant",
+      parts: [
+        Prompt.toolCallPart({
+          id: call.toolCallId,
+          name: "cell",
+          params: { code: cell.code, reset: cell.reset === true },
+          providerExecuted: false,
+        }),
+      ],
+      createdAt: now,
+    }),
+  )
+  return call
 })
 
 describe("recorded cell execution", () => {
@@ -722,6 +813,153 @@ describe("recorded cell execution", () => {
         const cleared = yield* run(fresh, gone)
         expect(cleared.result).toMatchObject({ display: "undefined" })
         expect(cleared.result).not.toHaveProperty("restored")
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
+    15000,
+  )
+
+  it.scopedLive(
+    "a handoff copies its predecessor's namespace on first start, and a reset does not inherit it again",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [unsaved, copied, wipe, gone] = yield* setupCalls(
+          [
+            "notes.push('beta'); throw new Error('unsaved')",
+            "notes.join(',')",
+            "throw new Error('fresh start')",
+            "typeof notes",
+          ],
+          [2],
+          true,
+        )
+        if (!unsaved || !copied || !wipe || !gone) return yield* Effect.die("Missing test cells")
+        yield* saveForPredecessor(["alpha"])
+        const open = openCellOwner(worker)
+        // The first start inherits; the failed cell saves nothing of its own.
+        expect(yield* runCell(yield* open, unsaved)).toMatchObject({ isFailure: true })
+        // The predecessor moves on. A restart restores the copy taken at the
+        // first start, not the predecessor's newer namespace.
+        yield* saveForPredecessor(["changed"])
+        const restarted = yield* runCell(yield* open, copied)
+        expect(restarted.result).toMatchObject({
+          display: "alpha",
+          restored: { restored: ["notes"], omitted: [] },
+        })
+        expect(restarted.result).not.toHaveProperty("restored.previousSession")
+        // A reset whose cell fails still leaves an empty namespace: a restart
+        // neither restores the old values nor inherits the predecessor's.
+        const reopened = yield* open
+        expect(yield* runCell(reopened, wipe)).toMatchObject({ isFailure: true })
+        const fresh = yield* runCell(yield* open, gone)
+        expect(fresh.result).toMatchObject({ display: "undefined" })
+        expect(fresh.result).not.toHaveProperty("restored")
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
+    15000,
+  )
+
+  it.scopedLive(
+    "a handoff whose predecessor saved nothing keeps its empty start after a restart",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [failed, later] = yield* setupCalls(
+          ["throw new Error('before any save')", "typeof notes"],
+          [],
+          true,
+        )
+        if (!failed || !later) return yield* Effect.die("Missing test cells")
+        expect(yield* runCell(yield* openCellOwner(worker), failed)).toMatchObject({
+          isFailure: true,
+        })
+        // The predecessor saves only after the handoff's first start.
+        yield* saveForPredecessor(["late"])
+        const restarted = yield* runCell(yield* openCellOwner(worker), later)
+        expect(restarted.result).toMatchObject({ display: "undefined" })
+        expect(restarted.result).not.toHaveProperty("restored")
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
+    15000,
+  )
+
+  it.scopedLive(
+    "only the handoff session's first branch inherits; a new or forked branch starts empty",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        yield* setupCalls([], [], true)
+        yield* saveForPredecessor(["alpha"])
+        const branches = yield* BranchStorage
+        const created = BranchId.make("cell-execution-created")
+        const forked = BranchId.make("cell-execution-forked")
+        yield* branches.createBranch(
+          new Branch({ id: created, sessionId, createdAt: dateFromMillis(now.getTime() + 1_000) }),
+        )
+        yield* branches.createBranch(
+          new Branch({
+            id: forked,
+            sessionId,
+            parentBranchId: branchId,
+            createdAt: dateFromMillis(now.getTime() + 2_000),
+          }),
+        )
+        for (const branch of [created, forked]) {
+          const call = yield* recordCellCall({ branch, key: branch, code: "typeof notes" })
+          const result = yield* runCell(yield* openCellOwner(worker, branch), call)
+          expect(result.result).toMatchObject({ display: "undefined" })
+          expect(result.result).not.toHaveProperty("restored")
+        }
+        const first = yield* recordCellCall({
+          branch: branchId,
+          key: "first",
+          code: "notes.join(',')",
+        })
+        expect((yield* runCell(yield* openCellOwner(worker), first)).result).toMatchObject({
+          display: "alpha",
+          restored: { previousSession: predecessor.sessionId },
+        })
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
+    15000,
+  )
+
+  it.scopedLive(
+    "a failed session lookup at first start leaves no worker behind, and the next cell restores",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [failed, retried] = yield* setupCalls(
+          ["notes.join(',')", "notes.join(',')"],
+          [],
+          true,
+        )
+        if (!failed || !retried) return yield* Effect.die("Missing test cells")
+        yield* saveForPredecessor(["alpha"])
+        const sessions = yield* SessionStorage
+        const lookups = yield* Ref.make(0)
+        // The first lookup fails; every later one reads storage.
+        const flaky = yield* storedSessionContext((id) =>
+          Effect.gen(function* () {
+            if ((yield* Ref.getAndUpdate(lookups, (count) => count + 1)) === 0) {
+              return yield* new ExtensionServiceError({
+                service: "Session",
+                operation: "getSession",
+                message: "lookup unavailable",
+              })
+            }
+            return yield* sessions.getSession(id ?? sessionId).pipe(Effect.orDie)
+          }),
+        )
+        const owner = yield* openCellOwner(worker)
+        const lost = yield* runCell(owner, failed).pipe(
+          Effect.provideService(ExtensionContext, flaky),
+          Effect.flip,
+        )
+        expect(lost).toMatchObject({ _tag: "StorageError" })
+        const next = yield* runCell(owner, retried).pipe(
+          Effect.provideService(ExtensionContext, flaky),
+        )
+        expect(next.result).toMatchObject({
+          display: "alpha",
+          restored: { restored: ["notes"], previousSession: predecessor.sessionId },
+        })
       }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
     15000,
   )
@@ -3627,6 +3865,155 @@ describe("child cell", () => {
         expect(childResults[0]).toMatchObject({ isFailure: false, result: { display: "2" } })
       }).pipe(Effect.timeout("15 seconds"), Effect.provide(platformLayer)),
     20000,
+  )
+})
+
+// ── thread namespace ────────────────────────────────────────────────────────
+
+describe("thread namespace", () => {
+  it.scopedLive(
+    "a handoff session starts with its predecessor's namespace; a delegate child starts empty",
+    () =>
+      Effect.gen(function* () {
+        // Each branch runs its own script, chosen by its first user text: the
+        // woken parent turn and the child turn never race for one script.
+        const firstText = (prompt: Prompt.Prompt) =>
+          prompt.content.flatMap((message) => {
+            if (message.role !== "user") return []
+            return message.content.flatMap((part) => {
+              if (part.type !== "text") return []
+              return [part.text]
+            })
+          })[0] ?? ""
+        const step = <A>(parts: ReadonlyArray<A>) => Effect.succeed(Stream.fromIterable(parts))
+        const cell = (code: string) =>
+          step([toolCallPart("cell", { code }), finishPart({ finishReason: "tool-calls" })])
+        const reply = (text: string) =>
+          step([textDeltaPart(text), finishPart({ finishReason: "stop" })])
+        const scripts: ReadonlyArray<
+          readonly [string, ReadonlyArray<() => ReturnType<typeof reply>>]
+        > = [
+          [
+            "scratch A",
+            [
+              () => cell("const notes = ['alpha']; notes.length"),
+              () =>
+                cell(
+                  "const h = await tools.delegate.start({ todo: 'child-probe' }); typeof h.requestId",
+                ),
+              () => reply("A started"),
+              () => reply("A woke"),
+            ],
+          ],
+          ["child-probe", [() => cell("typeof notes"), () => reply("child done")]],
+          ["scratch B", [() => cell("notes.push('beta'); notes.join(',')"), () => reply("B done")]],
+          ["scratch C", [() => cell("notes.join(',')"), () => reply("C done")]],
+        ]
+        const calls = new Map<string, number>()
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          const text = firstText(options.prompt)
+          const script = scripts.find(([key]) => text.endsWith(key))
+          if (Predicate.isUndefined(script)) return reply(`no script for ${text}`)
+          const index = calls.get(script[0]) ?? 0
+          calls.set(script[0], index + 1)
+          const next = script[1][index] ?? (() => reply(`${script[0]} extra`))
+          return next()
+        })
+        const fixture = defineExtension({
+          id: "cell-thread-namespace-fixture",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.register("agent", new AgentDefinition({ name: DEFAULT_AGENT_NAME }))
+            yield* host.register("tool", CellTool)
+          }),
+        })
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          providerLayer,
+          agents: [],
+          extensionInputs: [
+            {
+              ...fixture,
+              artifactIdentity: LoadedArtifactIdentity.make("cell-thread-namespace-source"),
+            },
+            {
+              ...DelegateExtension,
+              artifactIdentity: LoadedArtifactIdentity.make("delegate-source"),
+            },
+          ],
+          branchTools: CellBranchTools,
+        })
+        const cellResults = (branch: BranchId) =>
+          client.message
+            .list({ branchId: branch })
+            .pipe(
+              Effect.map((messages) =>
+                messages
+                  .flatMap((message) => message.parts)
+                  .filter(
+                    (part): part is Prompt.ToolResultPart =>
+                      part.type === "tool-result" && part.name === "cell",
+                  ),
+              ),
+            )
+        const replied = (branch: BranchId, text: string) =>
+          waitFor(
+            client.message.list({ branchId: branch }),
+            (items) =>
+              items.some(
+                (item) => item.role === "assistant" && messagePartsText(item.parts) === text,
+              ),
+            12_000,
+            `reply ${text}`,
+          )
+
+        yield* client.message.send({ sessionId, branchId, content: "scratch A" })
+        yield* replied(branchId, "A woke")
+        // A delegate child is side work: it does not join the thread, so its
+        // cell starts empty.
+        const child = (yield* client.session.list()).find(
+          (session) => session.parentSessionId === sessionId,
+        )
+        if (Predicate.isUndefined(child?.activeBranchId)) {
+          return yield* Effect.die("Missing child session")
+        }
+        const childResults = yield* cellResults(child.activeBranchId)
+        expect(childResults).toMatchObject([{ isFailure: false, result: { display: "undefined" } }])
+        expect(childResults[0]?.result).not.toHaveProperty("restored")
+
+        // A handoff continues the thread: its first cell reads A's notes, and
+        // the report names A as the session they came from.
+        const handoff = { parentSessionId: sessionId, parentBranchId: branchId }
+        const b = yield* client.session.create({ ...handoff, continueThread: true })
+        yield* client.message.send({
+          sessionId: b.sessionId,
+          branchId: b.branchId,
+          content: "scratch B",
+        })
+        yield* replied(b.branchId, "B done")
+        const [bResult] = yield* cellResults(b.branchId)
+        expect(bResult).toMatchObject({
+          isFailure: false,
+          result: { display: "alpha,beta", restored: { previousSession: sessionId } },
+        })
+        expect(bResult?.result).toHaveProperty(
+          "restored.restored",
+          expect.arrayContaining(["notes"]),
+        )
+
+        // B's write went to its own namespace: a second handoff from A still
+        // reads A's saved notes.
+        const c = yield* client.session.create({ ...handoff, continueThread: true })
+        yield* client.message.send({
+          sessionId: c.sessionId,
+          branchId: c.branchId,
+          content: "scratch C",
+        })
+        yield* replied(c.branchId, "C done")
+        expect(yield* cellResults(c.branchId)).toMatchObject([
+          { isFailure: false, result: { display: "alpha" } },
+        ])
+      }).pipe(Effect.timeout("25 seconds"), Effect.provide(platformLayer)),
+    30000,
   )
 })
 
