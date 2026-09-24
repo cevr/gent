@@ -830,6 +830,40 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand("diff <(ls a) <(ls b)").level).toBe("safe")
   })
 
+  // A risk reads the flags as written. An unquoted expansion splits into
+  // words the guard cannot see, and `"$@"` passes on a function's or `set
+  // --`'s arguments: either may hold `-rf` or `--hard`.
+  test("a risky command with options known only at run time asks", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      `F='-rf ${x}'; rm $F`,
+      `rm $FLAGS ${x}`,
+      `rm \${FLAGS} ${x}`,
+      `rm $(printf -- -rf) ${x}`,
+      "git reset $MODE",
+      `set -- -rf ${x}; rm "$@"`,
+      `set -- -rf ${x}; rm $*`,
+      `wipe() { rm "$@"; }; wipe -rf ${x}`,
+      'r() { git reset "$@"; }; r --hard',
+      `a=(-rf ${x}); rm "\${a[@]}"`,
+      // Accepted over-asks: an unquoted operand may be a flag too.
+      "kill $PID",
+      "cp $a $b",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      'rm "$f"',
+      "rm -- $TMP",
+      'kill "$PID"',
+      'git checkout "$b"',
+      "ls $DIR",
+      "echo $HOME",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("quoted text and heredoc notes that describe git work are data", () => {
     for (const command of [
       "git commit -m 'undo git reset --hard'",

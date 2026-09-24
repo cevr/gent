@@ -3720,8 +3720,30 @@ const SPEC_PARENTS: ReadonlySet<string> = new Set(
   }),
 )
 
+/** `"$@"`, `$*`, `"${a[@]}"`: the positional parameters or the array elements, each a word of its own. */
+const EXPANDS_TO_WORDS = /^\$(?:[@*]|\{[@*]\}|\{\w+\[[@*]\]\})$/
+
+/**
+ * A word before `--` whose words are known only at run time: an unquoted
+ * expansion splits (`rm $F`), and `"$@"` passes on the words of a function's
+ * caller or of `set --`. Either may hold a flag a risk reads (`-rf`, `--hard`).
+ */
+const runTimeOptions = (resolved: ResolvedCommand): Option.Option<BashRisk> => {
+  const args = resolved.words.slice(1)
+  let end = args.findIndex((word) => word.text === "--")
+  if (end === -1) end = args.length
+  return Option.map(
+    Arr.findFirst(args.slice(0, end), (word) => word.splits || EXPANDS_TO_WORDS.test(word.text)),
+    (word): BashRisk => ({
+      level: "destructive",
+      reason: `${resolved.path} with options known only at run time: ${word.text}`,
+    }),
+  )
+}
+
 const invocationRisks = (invocation: Invocation): Array<BashRisk> =>
   resolveReadings(invocation.words).flatMap((resolved) => {
+    if (resolved.spec.risks.length === 0) return []
     const texts = resolved.words.slice(1).map((word) => word.text)
     const args: CommandArgs = {
       texts,
@@ -3729,7 +3751,10 @@ const invocationRisks = (invocation: Invocation): Array<BashRisk> =>
       resolved,
       invocation,
     }
-    return resolved.spec.risks.flatMap((risk) => Option.toArray(risk(args)))
+    return [
+      ...resolved.spec.risks.flatMap((risk) => Option.toArray(risk(args))),
+      ...Option.toArray(runTimeOptions(resolved)),
+    ]
   })
 
 const RISK_RANK = {
