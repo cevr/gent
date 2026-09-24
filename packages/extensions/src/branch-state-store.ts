@@ -50,13 +50,16 @@ export const makeBranchStateStore = <A, E>(input: BranchStateStoreInput<A, E>) =
     })
 
     /**
-     * One read, no existence check first: a plain read takes no lock, so an
-     * empty write can remove the file at any moment, and a missing file is
-     * the empty value.
+     * A missing file is the empty value. A plain read takes no lock, so an
+     * empty write can remove the file between the existence check and the
+     * read; that read's not-found is the empty value too. The check stays in
+     * front because most branches keep no file, and a failed read costs an
+     * error with its trace on every turn.
      */
     const read = Effect.fn(`${input.name}.read`)(function* () {
       const fs = yield* FileSystem.FileSystem
       const { file } = yield* location
+      if (!(yield* fs.exists(file))) return input.empty
       const text = yield* fs.readFileString(file).pipe(
         Effect.asSome,
         Effect.catchIf(
