@@ -7,6 +7,7 @@ import {
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
   effectiveModelDriver,
+  type EffectiveModelDriver,
   type ModelId,
   type ModelId as ModelIdType,
   type ReasoningEffort,
@@ -123,7 +124,7 @@ import {
   ToolInteractionPending,
   type TurnInterruption,
 } from "./tools.js"
-import { ConfigService } from "./config.js"
+import { ConfigService, type UserConfig } from "./config.js"
 import { asAgentLoopError, type ResolvedTurn, type RunningState } from "../domain/agent-loop.js"
 import {
   driverRetryPolicy,
@@ -1122,17 +1123,39 @@ const applyAgentOverrides = (
   })
 }
 
+interface SessionSettingsSource {
+  readonly modelId?: ModelId
+  readonly reasoningLevel?: ReasoningEffort
+}
+
+/** How a session's next turn routes; see `resolveSessionRoute`. */
+interface SessionRoute {
+  /** The agent the session names; the default one when it names none. */
+  readonly name: AgentNameType
+  /** That agent as the turn dispatches it; none when no loaded agent has the name. */
+  readonly definition: Option.Option<AgentDefinition>
+  readonly modelId: ModelId
+  readonly reasoningLevel: Option.Option<ReasoningEffort>
+  /** The driver the model dispatches through, and the catalog id it reaches. */
+  readonly modelDriver: EffectiveModelDriver
+}
+
 /**
- * The agent a session's turns run as: the agent its admission names (the
- * default one when it names none), reshaped by config `agents[name]` and then
- * by the admission's run overrides. The turn, the snapshot and the auth check
- * all read it here, so a child session is its agent everywhere.
+ * How a session's next turn routes, derived once. The agent is the one its
+ * admission names (the default when it names none), reshaped by config
+ * `agents[name]` and then by the admission's run overrides; a config driver
+ * override routes it when the agent names no driver of its own. The
+ * session's own model and reasoning win over the agent's; an unknown agent
+ * falls back to the default model. The turn, the snapshot footer and the
+ * auth gate all read it here, so a child session is its agent everywhere and
+ * the three cannot disagree on a model or driver.
  */
-export const sessionAgentDefinition = (params: {
+export const resolveSessionRoute = (params: {
   readonly agents: ReadonlyArray<AgentDefinition>
   readonly admission: Option.Option<SessionAdmission>
-  readonly configAgents: Option.Option<Readonly<Record<string, AgentRunOverrides>>>
-}) => {
+  readonly config: Pick<UserConfig, "agents" | "driverOverrides">
+  readonly session: SessionSettingsSource
+}): SessionRoute => {
   const name = Option.getOrElse(
     Option.flatMap(params.admission, (admission) => Option.fromUndefinedOr(admission.agent)),
     () => DEFAULT_AGENT_NAME,
@@ -1142,17 +1165,36 @@ export const sessionAgentDefinition = (params: {
   ).pipe(
     Option.map((agent) =>
       applyAgentOverrides(
-        applyAgentOverrides(
-          agent,
-          Option.flatMap(params.configAgents, (agents) => Option.fromUndefinedOr(agents[name])),
-        ),
+        applyAgentOverrides(agent, Option.fromUndefinedOr(params.config.agents?.[name])),
         Option.flatMap(params.admission, (admission) =>
           Option.fromUndefinedOr(admission.runSpec?.overrides),
         ),
       ),
     ),
+    Option.map((agent) => {
+      const routed = resolveAgentDriver(agent, params.config.driverOverrides)
+      if (routed.source !== "config") return agent
+      return AgentDefinition.make({ ...agent, driver: routed.driver })
+    }),
   )
-  return { name, definition }
+  const modelId = Option.getOrElse(Option.fromUndefinedOr(params.session.modelId), () =>
+    Option.match(definition, {
+      onNone: () => DEFAULT_MODEL_ID,
+      onSome: resolveAgentModel,
+    }),
+  )
+  return {
+    name,
+    definition,
+    modelId,
+    reasoningLevel: Option.orElse(Option.fromUndefinedOr(params.session.reasoningLevel), () =>
+      Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.reasoningEffort)),
+    ),
+    modelDriver: effectiveModelDriver(
+      Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.driver)),
+      modelId,
+    ),
+  }
 }
 
 /** The agent a session's turns run as, by name; the default when the session names none. */
@@ -1164,36 +1206,6 @@ export const sessionAgentName = Effect.fn("TurnHelpers.sessionAgentName")(functi
     Option.fromUndefinedOr(session?.admission?.agent),
     () => DEFAULT_AGENT_NAME,
   )
-})
-
-interface SessionSettingsSource {
-  readonly modelId?: ModelId
-  readonly reasoningLevel?: ReasoningEffort
-}
-
-interface ResolvedSessionSettings {
-  readonly modelId: ModelId
-  readonly reasoningLevel: Option.Option<ReasoningEffort>
-}
-
-/**
- * What the next turn on a session would use. The session's own settings win
- * over the effective agent (definition plus config and run overrides); a
- * session whose agent is unknown falls back to the default model.
- */
-export const resolveSessionSettings = (
-  effectiveAgent: Option.Option<AgentDefinition>,
-  session: SessionSettingsSource,
-): ResolvedSessionSettings => ({
-  modelId: Option.getOrElse(Option.fromUndefinedOr(session.modelId), () =>
-    Option.match(effectiveAgent, {
-      onNone: () => DEFAULT_MODEL_ID,
-      onSome: resolveAgentModel,
-    }),
-  ),
-  reasoningLevel: Option.orElse(Option.fromUndefinedOr(session.reasoningLevel), () =>
-    Option.flatMap(effectiveAgent, (agent) => Option.fromUndefinedOr(agent.reasoningEffort)),
-  ),
 })
 
 const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function* (params: {
@@ -1222,12 +1234,13 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   // Overrides come from the session's cwd, so a multi-cwd server reads each
   // project's own config. `get(undefined)` reads the launch-cwd config.
   const sessionConfig = yield* configService.get(hostCtx.cwd)
-  // Config `agents[name]` reshapes the definition; the session's run overrides win.
-  const { name: currentAgent, definition } = sessionAgentDefinition({
+  const route = resolveSessionRoute({
     agents: [...resolvedExtensions.agents.values()],
     admission,
-    configAgents: Option.fromUndefinedOr(sessionConfig.agents),
+    config: sessionConfig,
+    session: Option.getOrElse(session, (): SessionSettingsSource => ({})),
   })
+  const { name: currentAgent, definition } = route
   if (Option.isNone(definition)) {
     yield* eventStore
       .publish(
@@ -1241,19 +1254,8 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
     return undefined
   }
-  const effectiveAgent = definition.value
+  const dispatchAgent = definition.value
   const interactive = params.interactive
-
-  // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
-  // then `UserConfig.driverOverrides[agent.name]`, else default.
-  const driverOverrides = sessionConfig.driverOverrides
-  const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
-  // If config-routed and the agent had no hardcoded driver, the
-  // override replaces it — `effectiveAgent` is otherwise unchanged.
-  let dispatchAgent = effectiveAgent
-  if (driverResolution.source === "config") {
-    dispatchAgent = AgentDefinition.make({ ...effectiveAgent, driver: driverResolution.driver })
-  }
 
   // Derive extension projections from explicit prompt/message slots.
   const allToolEntries = staticToolEntries(extensionRegistry)
@@ -1276,7 +1278,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     tools: hostTools,
     modelTools: tools,
     promptSections: extensionSections,
-  } = compileToolPolicy(allTools, effectiveAgent, { interactive }, extensionProjections)
+  } = compileToolPolicy(allTools, dispatchAgent, { interactive }, extensionProjections)
   const entriesByToolId = new Map<string, ResolvedToolCapability>()
   for (const entry of allToolEntries) {
     const bound = yield* attachToolBindingIdentity(entry, resolvedExtensions.extensions)
@@ -1294,7 +1296,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   // which receive the compiled `basePrompt`.
   const sections = buildTurnPromptSections(
     params.baseSections,
-    effectiveAgent,
+    dispatchAgent,
     tools,
     extensionSections,
   )
@@ -1306,12 +1308,6 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     tools,
     hostTools,
   })
-  // The session's own settings win over the agent definition and config.
-  const settings = resolveSessionSettings(
-    Option.some(dispatchAgent),
-    Option.getOrElse(session, (): SessionSettingsSource => ({})),
-  )
-
   return {
     currentTurnAgent: currentAgent,
     messages,
@@ -1320,14 +1316,11 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     toolBindings,
     hostToolBindings,
     systemPrompt,
-    modelId: settings.modelId,
-    reasoning: Option.getOrUndefined(settings.reasoningLevel),
+    modelId: route.modelId,
+    reasoning: Option.getOrUndefined(route.reasoningLevel),
     temperature: dispatchAgent.temperature,
     driver: dispatchAgent.driver,
-    modelDriver: effectiveModelDriver(
-      Option.fromUndefinedOr(dispatchAgent.driver),
-      settings.modelId,
-    ),
+    modelDriver: route.modelDriver,
   }
 })
 

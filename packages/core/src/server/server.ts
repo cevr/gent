@@ -129,9 +129,9 @@ import {
   resolveExistingSessionBranch,
   SessionProfileCache,
 } from "../runtime/extension-host.js"
-import { type AgentName, effectiveModelDriver, resolveAgentDriver } from "../domain/agent.js"
+import type { AgentName } from "../domain/agent.js"
 import { foldSessionMetrics, type SendUserMessagePayload } from "../domain/agent-loop.js"
-import { resolveSessionSettings, sessionAgentDefinition } from "../runtime/turn.js"
+import { resolveSessionRoute } from "../runtime/turn.js"
 import { WideEvent, WideEventBoundary, withWideEvent } from "effect-wide-event"
 
 import { omitUndefined } from "../domain/guards.js"
@@ -1027,12 +1027,12 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
   )
   const configService = yield* ConfigService
   const config = yield* configService.get(session.cwd)
-  const agent = sessionAgentDefinition({
+  const route = resolveSessionRoute({
     agents: [...registry.getResolved().agents.values()],
     admission: Option.fromUndefinedOr(session.admission),
-    configAgents: Option.fromUndefinedOr(config.agents),
+    config,
+    session,
   })
-  const settings = resolveSessionSettings(agent.definition, session)
 
   // Extension state is no longer hydrated through the session snapshot —
   // clients call the extension's typed `client.extension.request(...)` on
@@ -1047,9 +1047,9 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     lastEventId: Option.getOrNull(Option.fromUndefinedOr(snapshotState.lastEventId)),
     modelId: session.modelId,
     reasoningLevel: session.reasoningLevel,
-    agent: agent.name,
-    resolvedModelId: settings.modelId,
-    resolvedReasoningLevel: Option.getOrUndefined(settings.reasoningLevel),
+    agent: route.name,
+    resolvedModelId: route.modelId,
+    resolvedReasoningLevel: Option.getOrUndefined(route.reasoningLevel),
     runtime,
     metrics: snapshotState.metrics,
   })
@@ -1416,21 +1416,13 @@ const RpcHandlers = GentRpcs.toLayer(
           const agents = [...registry.getResolved().agents.values()]
           // The driver a turn routes through: the agent's driver, else the
           // config override, else the model id's provider segment.
-          const driverFor = (admission: Option.Option<SessionAdmission>) => {
-            const { definition } = sessionAgentDefinition({
+          const driverFor = (admission: Option.Option<SessionAdmission>) =>
+            resolveSessionRoute({
               agents,
               admission,
-              configAgents: Option.fromUndefinedOr(config.agents),
-            })
-            const { modelId } = resolveSessionSettings(
-              definition,
-              Option.getOrElse(session, () => ({})),
-            )
-            const driver = Option.flatMap(definition, (agent) =>
-              Option.fromUndefinedOr(resolveAgentDriver(agent, config.driverOverrides).driver),
-            )
-            return effectiveModelDriver(driver, modelId).driverId
-          }
+              config,
+              session: Option.getOrElse(session, () => ({})),
+            }).modelDriver.driverId
           // The session's own agent, then an agent the caller asks about.
           const admissions = [
             Option.flatMap(session, (found) => Option.fromUndefinedOr(found.admission)),
