@@ -150,7 +150,6 @@ export const SkillEntry = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
   filePath: Schema.String,
-  content: Schema.String,
   level: SkillLevel,
 })
 export type SkillEntry = typeof SkillEntry.Type
@@ -383,7 +382,7 @@ export function parseSkillFile(content: string, filename: string) {
     Option.getOrElse(() => `Skill: ${name}`),
   )
 
-  return { name, description, content: body }
+  return { name, description }
 }
 
 // Format skills for system prompt

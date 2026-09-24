@@ -443,6 +443,13 @@ describe("EditTool matching", () => {
     { name: "a literal \\t", file: "col1\tcol2", oldString: "col1\\tcol2", newString: "X" },
     { name: "a literal \\r", file: "before\rafter", oldString: "before\\rafter", newString: "X" },
     { name: "an escaped backslash", file: "a\\b", oldString: "a\\\\b", newString: "X" },
+    // One pass: `\\n` reads as a backslash and an n, not a backslash and a newline.
+    {
+      name: "a double-escaped \\n",
+      file: "a\\nb",
+      oldString: "a\\\\nb",
+      newString: "X",
+    },
   ]) {
     editTest(`${name} is refused and the file stays`, () =>
       Effect.gen(function* () {
