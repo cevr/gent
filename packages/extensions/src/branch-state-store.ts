@@ -1,5 +1,7 @@
 /**
- * One JSON file per branch under `~/.gent/<directory>`.
+ * One JSON file per branch under `<data directory>/<directory>`: the directory
+ * `GENT_DATA_DIR` names, else `~/.gent`, resolved as the server resolves the
+ * database it sits beside.
  *
  * Every store that keeps branch state on disk has the same three needs: a
  * missing file reads as the empty value, a write replaces the file atomically
@@ -13,12 +15,17 @@
  * and writes its parent's record.
  */
 import { Effect, FileSystem, Option, Path, Schema } from "effect"
-import { type BranchId, ExtensionContext, writeFileAtomic } from "@gent/core/extensions/api"
+import {
+  type BranchId,
+  ExtensionContext,
+  resolveDataDir,
+  writeFileAtomic,
+} from "@gent/core/extensions/api"
 
 interface BranchStateStoreInput<A, E> {
   /** Span prefix, e.g. `GoalStore`. */
   readonly name: string
-  /** Directory under `~/.gent` that holds one `<branchId>.json` per branch. */
+  /** Directory under the data directory that holds one `<branchId>.json` per branch. */
   readonly directory: string
   readonly codec: Schema.Codec<A, string>
   /** What a missing file reads as. */
@@ -35,7 +42,7 @@ export const makeBranchStateStore = <A, E>(input: BranchStateStoreInput<A, E>) =
     const location = Effect.gen(function* () {
       const ctx = yield* ExtensionContext
       const path = yield* Path.Path
-      const directory = path.join(ctx.home, ".gent", input.directory)
+      const directory = path.resolve(yield* resolveDataDir(ctx.home), input.directory)
       const branchId = Option.getOrElse(branch, () => ctx.branchId)
       return { directory, file: path.join(directory, `${branchId}.json`) }
     })

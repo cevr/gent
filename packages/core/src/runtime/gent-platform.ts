@@ -1,4 +1,5 @@
 import {
+  Config,
   Context,
   type Duration,
   Effect,
@@ -413,3 +414,20 @@ const stagingName = (basename: string, suffix: string): string => {
   }
   return `.${clipped}${STAGING_TAG}${suffix}`
 }
+
+// ── data-directory ──────────────────────────────────────────────────────────
+
+/**
+ * Where gent keeps its durable state: `GENT_DATA_DIR` as given when set,
+ * else `<home>/.gent`. The one rule: the server that opens the database, the
+ * `doctor` and `storage reset` commands, and every extension that keeps files
+ * beside the database resolve through here, so an isolated run never writes
+ * into another run's directory. The caller makes the path absolute with its
+ * own path service. A malformed value is no value: the fallback under `home`
+ * still applies.
+ */
+export const resolveDataDir = (home: string): Effect.Effect<string> =>
+  Config.option(Config.string("GENT_DATA_DIR")).pipe(
+    Effect.orElseSucceed(() => Option.none<string>()),
+    Effect.map(Option.getOrElse(() => `${home}/.gent`)),
+  )
