@@ -66,13 +66,27 @@ const toUserMessage = (message: Message): Option.Option<Prompt.UserMessage> => {
   return Option.some(Prompt.userMessage({ content }))
 }
 
-const toAssistantMessage = (message: Message): Option.Option<Prompt.AssistantMessage> => {
+/**
+ * Whether an assistant message's reasoning goes back with its provider state
+ * (a thinking signature, encrypted reasoning). That state is valid only for
+ * the model that produced it, so a message above the latest model-change
+ * notice sends its reasoning as text alone, which the providers drop.
+ */
+type ReasoningReplay = "with-provider-state" | "text-only"
+
+const toAssistantMessage = (
+  message: Message,
+  reasoning: ReasoningReplay,
+): Option.Option<Prompt.AssistantMessage> => {
   const content: Prompt.AssistantMessagePart[] = []
 
   for (const part of message.parts) {
     switch (part.type) {
-      case "text":
       case "reasoning":
+        if (reasoning === "with-provider-state") content.push(part)
+        else content.push(Prompt.reasoningPart({ text: part.text }))
+        break
+      case "text":
       case "file":
       case "tool-call":
       case "tool-approval-request":
@@ -134,17 +148,26 @@ const toToolMessage = (message: Message): Option.Option<Prompt.ToolMessage> => {
   return Option.some(Prompt.toolMessage({ content }))
 }
 
-const toPromptMessage = (message: Message): Option.Option<Prompt.Message> => {
+const toPromptMessage = (
+  message: Message,
+  reasoning: ReasoningReplay,
+): Option.Option<Prompt.Message> => {
   switch (message.role) {
     case "system":
       return toSystemMessage(message)
     case "user":
       return toUserMessage(message)
     case "assistant":
-      return toAssistantMessage(message)
+      return toAssistantMessage(message, reasoning)
     case "tool":
       return toToolMessage(message)
   }
+}
+
+/** Only a message after the latest model-change notice was produced by the current model. */
+const reasoningReplayAt = (index: number, lastModelChange: number): ReasoningReplay => {
+  if (index > lastModelChange) return "with-provider-state"
+  return "text-only"
 }
 
 export const toPromptMessages = (
@@ -152,10 +175,13 @@ export const toPromptMessages = (
   options?: Pick<PromptTranscriptOptions, "includeHidden">,
 ): ReadonlyArray<Prompt.Message> => {
   const result: Prompt.Message[] = []
+  const lastModelChange = messages.findLastIndex(
+    (message) => message.metadata?.customType === MODEL_CHANGE_MESSAGE_TYPE,
+  )
 
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
     if (options?.includeHidden !== true && !isAiVisibleMessage(message)) continue
-    const promptMessage = toPromptMessage(message)
+    const promptMessage = toPromptMessage(message, reasoningReplayAt(index, lastModelChange))
     if (Option.isSome(promptMessage)) result.push(promptMessage.value)
   }
 

@@ -1007,6 +1007,78 @@ describe("empty final step", () => {
   )
 })
 
+// ── reasoning replay ────────────────────────────────────────────────────────
+
+/**
+ * A provider signs its reasoning (an Anthropic thinking signature, OpenAI
+ * encrypted reasoning) so a later step can send it back. The loop stores the
+ * step's parts and rebuilds the next prompt from storage, so the signature
+ * must survive both.
+ */
+describe("reasoning replay", () => {
+  const sessionId = SessionId.make("reasoning-replay-session")
+  const branchId = BranchId.make("reasoning-replay-branch")
+  const signature: Response.ReasoningDeltaPartMetadata = {
+    anthropic: { info: { type: "thinking", signature: "sig-1" } },
+  }
+
+  const echoTool = tool({
+    id: "echo",
+    description: "Echoes input",
+    params: Schema.Struct({ text: Schema.String }),
+    output: Schema.Struct({ text: Schema.String }),
+    execute: (params) => Effect.succeed({ text: params.text }),
+  })
+
+  it.live("the next step sends back the signed reasoning of the step before it", () =>
+    Effect.gen(function* () {
+      const replayed: Array<Prompt.ReasoningPart> = []
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          parts: [
+            Response.makePart("reasoning-start", { id: "0" }),
+            Response.makePart("reasoning-delta", { id: "0", delta: "plan the call" }),
+            Response.makePart("reasoning-delta", { id: "0", delta: "", metadata: signature }),
+            Response.makePart("reasoning-end", { id: "0" }),
+            toolCallPart("echo", { text: "hi" }),
+            finishPart({ finishReason: "tool-calls", usage: { inputTokens: 1, outputTokens: 1 } }),
+          ],
+        },
+        {
+          ...textStep("done"),
+          assertOptions: (options) => {
+            for (const message of Prompt.make(options.prompt).content) {
+              if (message.role !== "assistant") continue
+              for (const part of message.content) {
+                if (part.type === "reasoning") replayed.push(part)
+              }
+            }
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(
+          agentLoop,
+          Message.cases.regular.make({
+            id: MessageId.make("reasoning-replay-msg"),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: "call echo" })],
+            createdAt: dateFromMillis(1_767_225_600_000),
+          }),
+        )
+        yield* controls.assertDone
+        expect(replayed.map((part) => [part.text, part.options])).toEqual([
+          ["plan the call", signature],
+        ])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+})
+
 // ── max turn steps ──────────────────────────────────────────────────────────
 
 /**
