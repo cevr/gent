@@ -45,14 +45,13 @@ import {
   effortAtOrAbove,
   EMPTY_CREDENTIAL_CELL,
   explainCredentialFailure,
-  freshCredentials,
+  authorizedClient,
   freshEnoughAt,
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
   apiKeyFrom,
   readOptionalEnv,
-  recoverUnauthorized,
   withHeaders,
 } from "./providers.js"
 import type { ChildProcessSpawner } from "effect/unstable/process"
@@ -1735,23 +1734,14 @@ const buildOauthHeaders = (
  * returned client to have an empty requirement channel. Each request
  * invokes `creds.getFresh`, which consults the live `Ref` cache.
  */
-export const buildKeychainTransformClient =
-  (
-    creds: CredentialCache<ClaudeCredentials>,
-    env: AnthropicKeychainEnv,
-  ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
-  (client) =>
-    client.pipe(
-      HttpClient.mapRequestEffect((req) =>
-        Effect.gen(function* () {
-          const fresh = yield* freshCredentials(creds, req)
-          const modelId = parseModelIdFromBody(requestBodyText(req))
-          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env)
-          return withHeaders(req, headers)
-        }),
-      ),
-      recoverUnauthorized(creds),
-    )
+export const buildKeychainTransformClient = (
+  creds: CredentialCache<ClaudeCredentials>,
+  env: AnthropicKeychainEnv,
+): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
+  authorizedClient(creds, (req, fresh) => {
+    const modelId = parseModelIdFromBody(requestBodyText(req))
+    return withHeaders(req, buildOauthHeaders(req, fresh.accessToken, modelId, env))
+  })
 
 // ── extension ───────────────────────────────────────────────────────────────
 

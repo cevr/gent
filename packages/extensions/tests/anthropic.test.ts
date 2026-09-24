@@ -819,6 +819,58 @@ describe("keychainTransformClient — 401 recovery", () => {
       expect(held).toEqual([Option.some(makeCredsKeychain("revoked"))])
     }),
   )
+  it.scopedLive("a late 401 for a token already replaced does not refresh again", () =>
+    Effect.gen(function* () {
+      // The refresh writes the keychain, as the real one does.
+      const keychain = yield* Ref.make(makeCredsKeychain("old"))
+      const refreshes = yield* Ref.make(0)
+      const creds = yield* credentialCache({
+        read: Ref.get(keychain),
+        refresh: () =>
+          Effect.gen(function* () {
+            yield* Ref.update(refreshes, (count) => count + 1)
+            yield* Ref.set(keychain, makeCredsKeychain("new"))
+            return makeCredsKeychain("new")
+          }),
+      })
+      // A and B both send the old token. B's 401 arrives after A refreshed.
+      const bSent = yield* Deferred.make<boolean>()
+      const aRenewed = yield* Deferred.make<boolean>()
+      const sent: Array<string> = []
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          const authorization = String(request.headers["authorization"])
+          const call = sent.push(authorization) - 1
+          if (call === 0) yield* Deferred.await(bSent)
+          if (call === 1) {
+            yield* Deferred.succeed(bSent, true)
+            yield* Deferred.await(aRenewed)
+          }
+          if (authorization === "Bearer new-access") {
+            yield* Deferred.succeed(aRenewed, true)
+            return HttpClientResponse.fromWeb(request, new Response("ok", { status: 200 }))
+          }
+          return HttpClientResponse.fromWeb(request, new Response("auth", { status: 401 }))
+        }),
+      )
+      const wrapped = buildKeychainTransformClient(creds, TEST_ENV)(client)
+      const post = runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
+      )
+      const a = yield* Effect.forkScoped(post)
+      // B starts once A holds the old token on the wire.
+      yield* Effect.yieldNow
+      const b = yield* Effect.forkScoped(post)
+      const responses = yield* Effect.all([Fiber.join(a), Fiber.join(b)]).pipe(
+        Effect.timeout("4 seconds"),
+      )
+      expect(responses.map((response) => response.status)).toEqual([200, 200])
+      expect(sent.slice(0, 2)).toEqual(["Bearer old-access", "Bearer old-access"])
+      expect(yield* Ref.get(refreshes)).toBe(1)
+    }),
+  )
   it.scopedLive(
     "two consecutive 401s — second surfaces (real auth failure, no infinite loop)",
     () =>
@@ -1136,7 +1188,7 @@ describe("Anthropic credential cache — invalidate", () => {
           const svc = yield* cache
           const before = yield* svc.getFresh
           callsRef.current = creds2
-          yield* svc.invalidate
+          yield* svc.invalidate(before)
           const after = yield* svc.getFresh
           expect(before.accessToken).toBe("k1-access")
           expect(after.accessToken).toBe("k2-access")

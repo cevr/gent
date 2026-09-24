@@ -551,12 +551,12 @@ describe("OpenAI credential cache — invalidate", () => {
         Effect.gen(function* () {
           const svc = yield* cache
           // Seed creds are already fresh — no refresh on first call.
-          yield* svc.getFresh
+          const seeded = yield* svc.getFresh
           expect(refreshCount).toBe(0)
           // After invalidate the cell is empty, so even with no
           // accessible authInfo seed (cell holds null), the service
           // falls back to authInfo.refresh and forces a refresh call.
-          yield* svc.invalidate
+          yield* svc.invalidate(seeded)
           const after = yield* svc.getFresh
           expect(after.access).toBe("fresh-access")
           expect(refreshCount).toBe(1)
@@ -708,7 +708,13 @@ describe("OpenAI credential cache — invalidate preserves durable refresh token
           }
           expect(callTokens[0]).toBe("seed-refresh")
           expect(Option.isNone(persistState.lastWritten)).toBe(true)
-          yield* svc.invalidate
+          // The rotated credential is the one the cell holds.
+          yield* svc.invalidate({
+            access: "rotated-access",
+            refresh: "rotated-refresh",
+            expires: FAR_FUTURE,
+            accountId: Option.none(),
+          })
           const second = yield* svc.getFresh
           expect(second.access).toBe("post-invalidate-access")
           expect(callTokens[1]).toBe("rotated-refresh")
@@ -731,7 +737,7 @@ describe("OpenAI credential cache — invalidate preserves durable refresh token
         Effect.gen(function* () {
           const svc = yield* cache
           // Invalidate before any successful refresh — cell is empty.
-          yield* svc.invalidate
+          yield* svc.invalidate(makeCreds("never-held", 0))
           const result = yield* Effect.exit(svc.getFresh)
           expect(result._tag).toBe("Failure")
           if (result._tag === "Failure") {

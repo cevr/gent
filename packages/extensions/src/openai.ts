@@ -58,7 +58,7 @@ import {
   effortAtOrAbove,
   EMPTY_CREDENTIAL_CELL,
   explainCredentialFailure,
-  freshCredentials,
+  authorizedClient,
   HttpResponseField,
   isTransientTokenStatus,
   makeCredentialCache,
@@ -66,7 +66,6 @@ import {
   postOAuthForm,
   apiKeyFrom,
   readOptionalEnv,
-  recoverUnauthorized,
   replaceHeldCredential,
   withHeaders,
 } from "./providers.js"
@@ -1199,32 +1198,24 @@ const buildOauthHeaders = (
  *     response to the caller so user-facing recovery (re-run
  *     authorization from the auth picker) can kick in.
  */
-export const buildCodexTransformClient =
-  (
-    creds: CredentialCache<OpenAICredentials>,
-  ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
-  (client) =>
-    client.pipe(
-      HttpClient.mapRequestEffect((req) =>
-        Effect.gen(function* () {
-          const fresh = yield* freshCredentials(creds, req)
-          let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
-          const url = new URL(req.url, "https://api.openai.com")
-          if (codexUrlMatches(url)) {
-            headers = Headers.set(
-              headers,
-              "openai-beta",
-              ensureBetaToken(Headers.get(headers, "openai-beta"), CODEX_BETA_TOKEN),
-            )
-            const withBody = rewriteCodexBody(withHeaders(req, headers))
-            if (req.url.startsWith("/")) return withBody
-            return HttpClientRequest.setUrl(withBody, new URL(CODEX_API_ENDPOINT))
-          }
-          return withHeaders(req, headers)
-        }),
-      ),
-      recoverUnauthorized(creds),
-    )
+export const buildCodexTransformClient = (
+  creds: CredentialCache<OpenAICredentials>,
+): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
+  authorizedClient(creds, (req, fresh) => {
+    let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
+    const url = new URL(req.url, "https://api.openai.com")
+    if (codexUrlMatches(url)) {
+      headers = Headers.set(
+        headers,
+        "openai-beta",
+        ensureBetaToken(Headers.get(headers, "openai-beta"), CODEX_BETA_TOKEN),
+      )
+      const withBody = rewriteCodexBody(withHeaders(req, headers))
+      if (req.url.startsWith("/")) return withBody
+      return HttpClientRequest.setUrl(withBody, new URL(CODEX_API_ENDPOINT))
+    }
+    return withHeaders(req, headers)
+  })
 
 // ── extension ───────────────────────────────────────────────────────────────
 
