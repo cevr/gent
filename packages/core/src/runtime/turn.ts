@@ -1905,49 +1905,42 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * instead of being restated, so a forgotten restatement can no longer
      * reset a turn's position.
      *
-     * `base` is the record a caller has already read; `Option.none()` reads
-     * the current record here.
+     * `onFailure` says what a storage failure does. `"log"`: the turn goes
+     * on, and a read failure writes over the empty record (the probe fallback
+     * in `resumeTurn` re-derives a lost position). `"die"`: a change a
+     * restart must find, such as the parked marks that decide whether a call
+     * runs again; its read or write fails the step as a defect.
+     *
+     * `base` is the record a caller has already read; without it the current
+     * record is read here.
      */
-    const updateTurnRecord = (
+    const writeTurnRecord = (
       messageId: RunningState["message"]["id"],
       change: (current: TurnRecord) => Partial<TurnRecord>,
-      base: Option.Option<TurnRecord> = Option.none(),
-    ) =>
-      Effect.gen(function* () {
-        const current = yield* Option.match(base, {
-          onNone: () => readTurnRecord(messageId),
-          onSome: Effect.succeed,
-        })
-        const record = turnRecordAtStep({ ...current, ...change(current) })
-        yield* turnRecordStorage
-          .put(turnRecordKey(messageId), record)
-          .pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("turn.record-write-failed").pipe(
-                Effect.annotateLogs({ error: String(cause) }),
-              ),
-            ),
-          )
+      options: { readonly onFailure: "log" | "die"; readonly base?: TurnRecord },
+    ) => {
+      const readBase = Effect.gen(function* () {
+        if (Predicate.isNotUndefined(options.base)) return options.base
+        if (options.onFailure === "die")
+          return yield* turnRecordStorage.get(turnRecordKey(messageId))
+        return yield* readTurnRecord(messageId)
       })
-
-    /**
-     * A change a restart must find, or the step does not go on: the parked
-     * marks decide whether a call runs again or is reported as interrupted.
-     * Its read and its write fail the step (as a defect) instead of logging.
-     */
-    const requireTurnRecordChange = (
-      messageId: RunningState["message"]["id"],
-      change: (current: TurnRecord) => Partial<TurnRecord>,
-    ) =>
-      turnRecordStorage.get(turnRecordKey(messageId)).pipe(
-        Effect.flatMap((current) =>
-          turnRecordStorage.put(
-            turnRecordKey(messageId),
-            turnRecordAtStep({ ...current, ...change(current) }),
+      const write = Effect.gen(function* () {
+        const current = yield* readBase
+        yield* turnRecordStorage.put(
+          turnRecordKey(messageId),
+          turnRecordAtStep({ ...current, ...change(current) }),
+        )
+      })
+      if (options.onFailure === "die") return write.pipe(Effect.orDie)
+      return write.pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("turn.record-write-failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
           ),
         ),
-        Effect.orDie,
       )
+    }
 
     /** The step opened: its assistant message committed, its calls are pending. */
     const openTurnStep = Effect.fn("AgentLoop.openTurnStep")(function* (params: {
@@ -1959,10 +1952,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         id: toolCall.id,
         name: toolCall.name,
       }))
-      yield* updateTurnRecord(params.messageId, () => ({
-        step: params.step - 1,
-        pendingToolCalls,
-      }))
+      yield* writeTurnRecord(
+        params.messageId,
+        () => ({ step: params.step - 1, pendingToolCalls }),
+        { onFailure: "log" },
+      )
     })
 
     /**
@@ -1981,7 +1975,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         if (!params.parked.has(toolCall.id)) return { id: toolCall.id, name: toolCall.name }
         return { id: toolCall.id, name: toolCall.name, parked: true }
       })
-      yield* requireTurnRecordChange(params.messageId, () => ({ pendingToolCalls }))
+      yield* writeTurnRecord(params.messageId, () => ({ pendingToolCalls }), { onFailure: "die" })
     })
 
     /**
@@ -1989,22 +1983,27 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * first: a restart during that run finds calls cut short, not parked.
      */
     const clearParkedCalls = (messageId: RunningState["message"]["id"]) =>
-      requireTurnRecordChange(messageId, (current) => ({
-        pendingToolCalls: current.pendingToolCalls.map((call) => ({
-          id: call.id,
-          name: call.name,
-        })),
-      }))
+      writeTurnRecord(
+        messageId,
+        (current) => ({
+          pendingToolCalls: current.pendingToolCalls.map((call) => ({
+            id: call.id,
+            name: call.name,
+          })),
+        }),
+        { onFailure: "die" },
+      )
 
     /** The step closed: every message it owns has committed. */
     const closeTurnStep = Effect.fn("AgentLoop.closeTurnStep")(function* (params: {
       readonly messageId: RunningState["message"]["id"]
       readonly step: number
     }) {
-      yield* updateTurnRecord(params.messageId, (current) => ({
-        step: Math.max(current.step, params.step),
-        pendingToolCalls: [],
-      }))
+      yield* writeTurnRecord(
+        params.messageId,
+        (current) => ({ step: Math.max(current.step, params.step), pendingToolCalls: [] }),
+        { onFailure: "log" },
+      )
     })
 
     /**
@@ -2706,10 +2705,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         id: toolCall.id,
         name: toolCall.name,
       }))
-      yield* updateTurnRecord(
+      yield* writeTurnRecord(
         messageId,
         () => ({ step: lastCompletedStep, pendingToolCalls: derivedPending }),
-        Option.some(record),
+        { onFailure: "log", base: record },
       )
       return {
         step: lastCompletedStep,
@@ -2978,11 +2977,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           metadata: { customType: "continuation", details: { step: params.step } },
         }),
       })
-      yield* updateTurnRecord(
-        params.messageId,
-        () => ({ continuations: used + 1 }),
-        Option.some(record),
-      )
+      yield* writeTurnRecord(params.messageId, () => ({ continuations: used + 1 }), {
+        onFailure: "log",
+        base: record,
+      })
       yield* Effect.logInfo("turn.continue-within-turn").pipe(
         Effect.annotateLogs({ step: params.step, continuation: used + 1 }),
       )
