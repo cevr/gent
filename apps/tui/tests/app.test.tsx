@@ -8,8 +8,10 @@ import {
   Duration,
   Effect,
   Exit,
+  Logger,
   Option,
   Queue,
+  References,
   Schema,
   Stream,
 } from "effect"
@@ -50,7 +52,7 @@ import {
   renderWithProviders,
   applySnapshotAgent,
 } from "./render-harness-boundary"
-import { createSignal, onMount } from "solid-js"
+import { createSignal, onMount, type Signal } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
 import { waitForFrame, waitUntilAdvancing } from "./helpers-boundary"
@@ -686,79 +688,113 @@ function TerminalDimensionsProbe() {
   return <text>{`${dimensions().width}x${dimensions().height}`}</text>
 }
 
+/**
+ * The app on a test clock with one client extension whose notice-row sources
+ * are `ids`, each answering its own signal (`None` until set). The session
+ * view's casts and forks run on the clock and log into `warnings`, as
+ * `<message> source=<id>`.
+ */
+const mountNoticeSources = (ids: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const clock = yield* TestClock.make()
+    const warnings: Array<string> = []
+    const capture = Logger.make(({ message, fiber }) => {
+      const text = [message].flat().map(String).join(" ")
+      const source = fiber.getRef(References.CurrentLogAnnotations)["source"]
+      warnings.push(`${text} source=${String(source)}`)
+    })
+    // Only the session view's casts read this clock: the bound sleeps on it.
+    // The test preload turns logs off; these casts log again, into `capture`.
+    const withClock = <R,>() =>
+      Context.makeUnsafe<R>(
+        new Map<string, unknown>([
+          [Clock.Clock.key, clock],
+          [Logger.CurrentLoggers.key, new Set([capture])],
+          [References.MinimumLogLevel.key, "All"],
+        ]),
+      )
+    const runtime: GentRuntime = {
+      ...createMockRuntime(),
+      cast: (effect) => {
+        Effect.runForkWith(withClock())(effect)
+      },
+      fork: (effect) => Effect.runForkWith(withClock())(effect),
+    }
+    const answers = new Map<string, Signal<Option.Option<ReadonlyArray<NoticeRow>>>>(
+      ids.map((id) => [id, createSignal(Option.none<ReadonlyArray<NoticeRow>>())]),
+    )
+    const answer = (id: string, rows: ReadonlyArray<NoticeRow>) => {
+      const entry = Option.fromNullishOr(answers.get(id))
+      if (Option.isSome(entry)) entry.value[1](Option.some(rows))
+    }
+    let settled = () => false
+    // A widget inside the session view reads the hold native history obeys.
+    function SettledProbe() {
+      settled = useSessionController().itemsSettled
+      return <box />
+    }
+    const extension = defineClientExtension("@test/silent-notices", {
+      setup: Effect.succeed(
+        clientContributions(
+          ...[...answers].map(([id, [rows]]) => noticeRowContribution({ id, rows: () => rows() })),
+          widgetContribution({
+            id: "settled-probe",
+            slot: "below-input",
+            component: SettledProbe,
+          }),
+        ),
+      ),
+    })
+    let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+    const setup = yield* Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <>
+            <App missingAuthProviders={[]} />
+            <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+          </>
+        ),
+        {
+          client: createMockClient({
+            auth: { listProviders: () => Effect.succeed([]) },
+            branch: { getTree: () => Effect.succeed([]) },
+          }),
+          runtime,
+          builtins: [...builtinClientModules, extension],
+          initialSession: {
+            id: SessionId.make("session-silent"),
+            activeBranchId: BranchId.make("branch-silent"),
+            name: "Silent",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        },
+      ),
+    )
+    const loaded = () => Option.exists(ext, (value) => value.loaded())
+    yield* waitForFrame(setup, (frame) => frame.includes("ready ·") && loaded(), "loaded")
+    const sources = (): ReadonlyArray<string> =>
+      Option.match(ext, {
+        onNone: () => [],
+        onSome: (value) => value.noticeRows().map((source) => source.id),
+      })
+    const failed = () =>
+      Option.exists(ext, (value) =>
+        value.failures().some((failure) => failure.id === "@test/silent-notices"),
+      )
+    yield* waitForFrame(setup, () => ids.every((id) => sources().includes(id)), "the sources")
+    return { setup, clock, warnings, answer, settled: () => settled(), sources, failed }
+  })
+
 describe("notice rows", () => {
   // Native history waits for every notice-row source; one that never answers
   // would hold it for good. The bound is on the hold: the source stays, and a
   // late answer still draws its rows.
   it.scopedLive("history stops waiting at the bound, and a late answer still draws its rows", () =>
     Effect.gen(function* () {
-      const clock = yield* TestClock.make()
-      // Only the session view's casts read this clock: the bound sleeps on it.
-      const withClock = <R,>() => Context.makeUnsafe<R>(new Map([[Clock.Clock.key, clock]]))
-      const runtime: GentRuntime = {
-        ...createMockRuntime(),
-        cast: (effect) => {
-          Effect.runForkWith(withClock())(effect)
-        },
-        fork: (effect) => Effect.runForkWith(withClock())(effect),
-      }
-      const [answer, setAnswer] = createSignal(Option.none<ReadonlyArray<NoticeRow>>())
-      let settled = () => false
-      // A widget inside the session view reads the hold native history obeys.
-      function SettledProbe() {
-        settled = useSessionController().itemsSettled
-        return <box />
-      }
-      const silent = defineClientExtension("@test/silent-notices", {
-        setup: Effect.succeed(
-          clientContributions(
-            noticeRowContribution({ id: "silent", rows: () => answer() }),
-            widgetContribution({
-              id: "settled-probe",
-              slot: "below-input",
-              component: SettledProbe,
-            }),
-          ),
-        ),
-      })
-      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
-      const setup = yield* Effect.promise(() =>
-        renderWithProviders(
-          () => (
-            <>
-              <App missingAuthProviders={[]} />
-              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
-            </>
-          ),
-          {
-            client: createMockClient({
-              auth: { listProviders: () => Effect.succeed([]) },
-              branch: { getTree: () => Effect.succeed([]) },
-            }),
-            runtime,
-            builtins: [...builtinClientModules, silent],
-            initialSession: {
-              id: SessionId.make("session-silent"),
-              activeBranchId: BranchId.make("branch-silent"),
-              name: "Silent",
-              createdAt: dateFromMillis(0),
-              updatedAt: dateFromMillis(0),
-            },
-          },
-        ),
-      )
-      const loaded = () => Option.exists(ext, (value) => value.loaded())
-      yield* waitForFrame(setup, (frame) => frame.includes("ready ·") && loaded(), "loaded")
-      const sources = (): ReadonlyArray<string> =>
-        Option.match(ext, {
-          onNone: () => [],
-          onSome: (value) => value.noticeRows().map((source) => source.id),
-        })
-      const failed = () =>
-        Option.exists(ext, (value) =>
-          value.failures().some((failure) => failure.id === "@test/silent-notices"),
-        )
-      yield* waitForFrame(setup, () => sources().includes("silent"), "the source")
+      const { setup, clock, answer, settled, sources, failed } = yield* mountNoticeSources([
+        "silent",
+      ])
       expect(settled()).toBe(false)
       // Inside the bound, history still waits for the source.
       yield* clock.adjust(Duration.subtract(NOTICE_ROWS_BOUND, Duration.millis(1)))
@@ -768,12 +804,38 @@ describe("notice rows", () => {
       // The source did not fail: it stays, and its late answer draws.
       expect(sources()).toContain("silent")
       expect(failed()).toBe(false)
-      setAnswer(
-        Option.some([
-          { key: "late", createdAt: 1, glyph: "◌", color: "warning", text: "LATE-NOTICE-ROW" },
-        ]),
-      )
+      answer("silent", [
+        { key: "late", createdAt: 1, glyph: "◌", color: "warning", text: "LATE-NOTICE-ROW" },
+      ])
       yield* waitForFrame(setup, (frame) => frame.includes("LATE-NOTICE-ROW"), "the late row")
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  // The bound warning names a source that held history to the end. A source
+  // that answered inside the bound is not stuck and draws no warning.
+  it.scopedLive("the bound warns only for a source still deriving at the bound", () =>
+    Effect.gen(function* () {
+      const { setup, clock, warnings, answer, settled } = yield* mountNoticeSources([
+        "prompt",
+        "stuck",
+      ])
+      yield* clock.adjust("1 second")
+      answer("prompt", [
+        { key: "on-time", createdAt: 1, glyph: "◌", color: "info", text: "ON-TIME-ROW" },
+      ])
+      yield* waitForFrame(setup, (frame) => frame.includes("ON-TIME-ROW"), "the on-time row")
+      // Both holds end at the same instant; the stuck source's warning lands
+      // after its release, so wait on the warning, then give every hold one
+      // more step before reading the whole log.
+      yield* waitUntilAdvancing(
+        clock.adjust("1 second"),
+        () => settled() && warnings.length > 0,
+        "the bound warning",
+      )
+      yield* clock.adjust("1 second")
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(warnings).toEqual(["tui.notice-rows.bound source=stuck"])
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
