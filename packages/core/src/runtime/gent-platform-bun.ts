@@ -1,5 +1,5 @@
 /**
- * `BunGentPlatform` — Bun-runtime implementation of `GentPlatform`. This is
+ * `BunGentPlatformLive` — Bun-runtime implementation of `GentPlatform`. This is
  * the ONLY file in the codebase allowed to reference the `Bun` global; the
  * platform duplication guards reject `Bun.randomUUIDv7()` everywhere else.
  * The broader no-bun lint keeps other `Bun.*` calls inside adapter-shaped

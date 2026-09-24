@@ -308,7 +308,7 @@ export interface SessionRuntimeService {
 }
 
 const wrapError = (message: string, cause: Cause.Cause<unknown>) => {
-  // Preserve inner typed SessionRuntimeError (e.g. from `requireSessionExists`)
+  // Preserve inner typed SessionRuntimeError (e.g. from `requireSessionBranch`)
   // so callers observing the cause chain see the specific "Session not found"
   // message instead of a generic "<op> failed" wrapper.
   const inner = cause.reasons.find(Cause.isFailReason)?.error

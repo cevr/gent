@@ -903,7 +903,7 @@ export const baseLocalLayer = (config: InProcessLayerConfig) =>
  *
  * Use this for new extension RPC tests instead of hand-composing
  * `createRpcClient(createE2ELayer({...}))` + a session-create call. Direct-runtime
- * tests via `makeActorRuntimeLayer` bypass the per-request scope boundary
+ * tests via `baseLocalLayer` bypass the per-request scope boundary
  * production uses; this harness asserts that boundary.
  *
  * The harness is intentionally thin: it folds the four lines every RPC test

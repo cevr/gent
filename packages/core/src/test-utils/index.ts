@@ -42,9 +42,11 @@ export {
   type SequenceStep,
   textStep,
   toolCallStep,
+  turnRequestText,
   waitFor,
 } from "./language-model.js"
 export { finishPart, textDeltaPart, toolCallPart } from "../runtime/provider.js"
+export { turnNoticesText } from "../runtime/model-context.js"
 export { type LoadedExtension } from "../domain/extension.js"
 export { ApprovalService } from "../runtime/extension-host.js"
 export { BunGentPlatformLive } from "../runtime/gent-platform-bun.js"

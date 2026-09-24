@@ -286,8 +286,8 @@ export interface RequestInput<
 /**
  * Lower a `RequestInput` to a typed `RequestCapability<Input, Output>`.
  * The returned capability also carries a typed `CapabilityRef<Input, Output>` under a local symbol,
- * read via the `ref(capability)` accessor — so callers no longer hand-roll a
- * parallel `*Ref` const next to every request.
+ * read via the `ref(capability)` accessor, so a caller needs no separate
+ * `*Ref` const next to each request.
  */
 export function request<Input, Output, R = never, E extends RequestFailure = CapabilityError>(
   input: RequestInput<Input, Output, R, E>,

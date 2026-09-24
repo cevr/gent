@@ -11,7 +11,6 @@ import {
   type ModelId,
   type ModelId as ModelIdType,
   type ReasoningEffort,
-  resolveAgentDriver,
   resolveAgentModel,
 } from "../domain/agent.js"
 import {
@@ -40,6 +39,7 @@ import {
 import {
   type ActorCommandId,
   type BranchId,
+  type ExtensionId,
   InteractionRequestId,
   MessageId,
   type ProcessGenerationId,
@@ -69,6 +69,7 @@ import {
   CurrentExtensionHostContext,
   ExtensionRegistry,
   type ExtensionRegistryService,
+  type ExtensionTurnNotice,
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
   RunOpener,
@@ -126,7 +127,7 @@ import {
   type TurnInterruption,
 } from "./tools.js"
 import { ConfigService, type UserConfig } from "./config.js"
-import { asAgentLoopError, type ResolvedTurn, type RunningState } from "../domain/agent-loop.js"
+import { asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
   driverRetryPolicy,
   ModelRegistry,
@@ -151,6 +152,7 @@ import {
   projectContextWindow,
   projectModelContext,
   toPrompt,
+  turnNoticesText,
 } from "./model-context.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { LoopInbox } from "./agent-loop.js"
@@ -648,13 +650,18 @@ interface TurnLedger {
     readonly toolCallCount: number
   }) => Effect.Effect<void>
   /**
-   * A compaction summary this turn wrote, and its price: none when its model
-   * has no price, which leaves the turn without a cost. Its tokens are not a
+   * A compaction summary this turn wrote or tried to write, and its price:
+   * none when its model has no price or the summary failed after its model
+   * was admitted, which leaves the turn without a cost. Its tokens are not a
    * step's.
    */
   readonly noteCompaction: (costUsd: Option.Option<number>) => Effect.Effect<void>
   /** What this turn spent, as `TurnCompleted` reports it. */
   readonly total: Effect.Effect<TurnMetrics>
+  /** A step's request carried these notices. */
+  readonly noteNotices: (notices: ReadonlyArray<ExtensionTurnNotice>) => Effect.Effect<void>
+  /** The keys of every notice a step of this turn carried, by the extension that showed it. */
+  readonly shownNotices: Effect.Effect<ReadonlyMap<ExtensionId, ReadonlySet<string>>>
 }
 
 /** A cache count the receipt records: zero is left out, as the steps leave it out. */
@@ -666,12 +673,18 @@ const addCost = (total: Option.Option<number>, cost: Option.Option<number>) =>
 
 export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* () {
   const metrics = yield* Ref.make(emptyTurnMetrics())
+  const shown = yield* Ref.make<ReadonlyMap<ExtensionId, ReadonlySet<string>>>(new Map())
   return {
     beginTurn: (messageId) =>
-      Ref.update(metrics, (m) => {
-        if (Option.contains(m.messageId, messageId)) return m
-        return { ...emptyTurnMetrics(), messageId: Option.some(messageId) }
-      }),
+      Ref.modify(metrics, (m): readonly [boolean, TurnMetrics] => {
+        if (Option.contains(m.messageId, messageId)) return [false, m]
+        return [true, { ...emptyTurnMetrics(), messageId: Option.some(messageId) }]
+      }).pipe(
+        Effect.flatMap((fresh) => {
+          if (!fresh) return Effect.void
+          return Ref.set(shown, new Map())
+        }),
+      ),
     noteUnseenSteps: Ref.update(metrics, (m) => {
       if (m.steps > 0) return m
       return { ...m, usageKnown: false, costUsd: Option.none() }
@@ -731,6 +744,16 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
     noteCompaction: (costUsd) =>
       Ref.update(metrics, (m) => ({ ...m, costUsd: addCost(m.costUsd, costUsd) })),
     total: Ref.get(metrics),
+    noteNotices: (notices) =>
+      Ref.update(shown, (current) => {
+        const next = new Map(current)
+        for (const { extensionId, notice } of notices) {
+          const earlier = Option.getOrElse(Option.fromUndefinedOr(next.get(extensionId)), () => [])
+          next.set(extensionId, new Set([...earlier, ...notice.keys]))
+        }
+        return next
+      }),
+    shownNotices: Ref.get(shown),
   }
 })
 
@@ -1072,13 +1095,24 @@ export const recordToolOutcome = (params: {
 
 // ── turn-resolve ────────────────────────────────────────────────────────────
 
-interface ResolvedTurnContext extends ResolvedTurn {
+/** What one step of a turn runs with: the agent, its prompt, model and tool bindings. */
+interface ResolvedTurnContext {
+  currentTurnAgent: AgentNameType
+  messages: ReadonlyArray<Message>
+  systemPrompt: string
+  modelId: ModelIdType
+  reasoning?: ReasoningEffort
+  temperature?: number
+  /** Derived once at resolution; the resolver, retry policy, and catalog lookup share it. */
+  modelDriver: EffectiveModelDriver
   agent: AgentDefinition
   tools: ReadonlyArray<ToolCapability>
   /** Exact owner and implementation selected for each advertised tool. */
   toolBindings: ReadonlyMap<string, ResolvedToolCapability>
   /** Admitted host tools remain available to extension-owned execution surfaces. */
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
+  /** Sent after the conversation, never in `systemPrompt`: see `toPrompt`. */
+  notices: ReadonlyArray<ExtensionTurnNotice>
 }
 
 const mergeSystemPromptAddendum = (
@@ -1144,8 +1178,9 @@ interface SessionRoute {
 /**
  * How a session's next turn routes, derived once. The agent is the one its
  * admission names (the default when it names none), reshaped by config
- * `agents[name]` and then by the admission's run overrides; a config driver
- * override routes it when the agent names no driver of its own. The
+ * `agents[name]` and then by the admission's run overrides. The model
+ * dispatches through the agent's own driver; when it names none, through
+ * config `driverOverrides[name]`; else through the model id's provider. The
  * session's own model and reasoning win over the agent's; an unknown agent
  * falls back to the default model. The turn, the snapshot footer and the
  * auth gate all read it here, so a child session is its agent everywhere and
@@ -1172,11 +1207,6 @@ export const resolveSessionRoute = (params: {
         ),
       ),
     ),
-    Option.map((agent) => {
-      const routed = resolveAgentDriver(agent, params.config.driverOverrides)
-      if (routed.source !== "config") return agent
-      return AgentDefinition.make({ ...agent, driver: routed.driver })
-    }),
   )
   const modelId = Option.getOrElse(Option.fromUndefinedOr(params.session.modelId), () =>
     Option.match(definition, {
@@ -1192,7 +1222,11 @@ export const resolveSessionRoute = (params: {
       Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.reasoningEffort)),
     ),
     modelDriver: effectiveModelDriver(
-      Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.driver)),
+      Option.flatMap(definition, (agent) =>
+        Option.orElse(Option.fromUndefinedOr(agent.driver), () =>
+          Option.fromUndefinedOr(params.config.driverOverrides?.[agent.name]),
+        ),
+      ),
       modelId,
     ),
   }
@@ -1322,8 +1356,8 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     modelId: route.modelId,
     reasoning: Option.getOrUndefined(route.reasoningLevel),
     temperature: dispatchAgent.temperature,
-    driver: dispatchAgent.driver,
     modelDriver: route.modelDriver,
+    notices: projEval.notices,
   }
 })
 
@@ -1470,7 +1504,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   }
   const budget = ModelContextBudget.make({
     contextLimitTokens: contextLimit,
-    reservedSystemTokens: estimateTextTokens(resolved.systemPrompt),
+    reservedSystemTokens:
+      estimateTextTokens(resolved.systemPrompt) +
+      Option.match(turnNoticesText(resolved.notices.map(({ notice }) => notice)), {
+        onNone: () => 0,
+        onSome: estimateTextTokens,
+      }),
     reservedToolTokens: estimateToolSchemaTokens(resolved.tools),
     reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
   })
@@ -1500,6 +1539,9 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }
       return projection.success
     })
+  // Set once a summary model is admitted: from then on its call may spend
+  // tokens whether or not a summary comes back.
+  const summaryAdmitted = yield* Ref.make(false)
   const { durableMessages, compacted, summary } = yield* projectContextWindow({
     sessionId: params.sessionId,
     branchId: params.branchId,
@@ -1516,12 +1558,19 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       resolveAdmittedModel({
         ...modelRequest,
         hints: { ...modelRequest.hints, maxTokens, reasoning: "none" },
-      }),
+      }).pipe(Effect.tap(() => Ref.set(summaryAdmitted, true))),
   })
 
-  // A summary is priced by the model its receipt names, as a step is by its own.
+  // A summary is priced by the model its receipt names, as a step is by its
+  // own. A summary that failed after its model was admitted has no receipt,
+  // so its spend is unknown: the turn's cost is then absent, never partial.
   const compaction = yield* Option.match(summary, {
-    onNone: () => Effect.succeedNone,
+    onNone: () =>
+      Ref.get(summaryAdmitted).pipe(
+        Effect.map((admitted) =>
+          Option.liftPredicate({ costUsd: Option.none<number>() }, () => admitted),
+        ),
+      ),
     onSome: (value) =>
       computeStreamEndedCost({
         modelId: value.modelId,
@@ -1556,7 +1605,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       costUsd: Option.getOrUndefined(compactionCostUsd),
     }),
   )
-  const prompt = toPrompt(projection.messages, { systemPrompt: resolved.systemPrompt })
+  const prompt = toPrompt(projection.messages, {
+    systemPrompt: resolved.systemPrompt,
+    notices: resolved.notices.map(({ notice }) => notice),
+  })
   const toolkit = convertTools([...resolved.tools])
   const rawStream = Stream.unwrap(
     resolveAdmittedModel(modelRequest).pipe(
@@ -2227,6 +2279,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
       if (Option.isSome(source.compaction))
         yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
+      yield* scope.turnLedger.noteNotices(params.resolved.notices)
 
       const eventStore = yield* EventStore
       const publishEventOrDie = (event: StreamStarted | StreamEnded) =>
@@ -2480,26 +2533,33 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       params: TurnEnd & TurnReceipt & { readonly agentName: AgentNameType },
     ) {
       const extensionRegistry = yield* ExtensionRegistry
-      yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter({
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
-        durationMs: params.durationMs,
-        messageId: params.messageId,
-        agentName: params.agentName,
-        interrupted: params.turnInterrupted,
-        streamFailed: params.streamFailed,
-        unanswered: params.unanswered,
-        usage: {
-          known: {
-            inputTokens: params.metrics.inputTokens,
-            outputTokens: params.metrics.outputTokens,
-            cacheReadTokens: params.metrics.cacheReadTokens,
-            cacheWriteTokens: params.metrics.cacheWriteTokens,
-            costUsd: params.metrics.costUsd,
+      // A turn that did not answer read none of its notices: they show again.
+      const answered = !(params.turnInterrupted || params.streamFailed || params.unanswered)
+      let readNotices: ReadonlyMap<ExtensionId, ReadonlySet<string>> = new Map()
+      if (answered) readNotices = yield* scope.turnLedger.shownNotices
+      yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter(
+        {
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          durationMs: params.durationMs,
+          messageId: params.messageId,
+          agentName: params.agentName,
+          interrupted: params.turnInterrupted,
+          streamFailed: params.streamFailed,
+          unanswered: params.unanswered,
+          usage: {
+            known: {
+              inputTokens: params.metrics.inputTokens,
+              outputTokens: params.metrics.outputTokens,
+              cacheReadTokens: params.metrics.cacheReadTokens,
+              cacheWriteTokens: params.metrics.cacheWriteTokens,
+              costUsd: params.metrics.costUsd,
+            },
+            complete: usageComplete(params.metrics),
           },
-          complete: usageComplete(params.metrics),
         },
-      })
+        readNotices,
+      )
     })
 
     const finalizeTurn = Effect.fn("AgentLoop.finalizeTurn")(function* (
