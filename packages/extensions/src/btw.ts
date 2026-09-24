@@ -272,15 +272,20 @@ const followFork = (parentBranchId: string, fork: { sessionId: SessionId; branch
     )
   })
 
-/** Admits the question on the fork's loop and marks the fork replying until its receipt arrives. */
+/**
+ * Admits the question on the fork's loop and marks the fork replying until its
+ * receipt arrives. A send the fork refuses leaves it not replying, so it stays askable.
+ */
 const sendToFork = (parentBranchId: string, fork: OpenFork, question: string) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const forks = yield* OpenForks
-    yield* forks.update(parentBranchId, (current) => {
-      if (current.sessionId !== fork.sessionId) return current
-      return { ...current, replying: true, error: Option.none() }
-    })
+    const markReplying = (replying: boolean) =>
+      forks.update(parentBranchId, (current) => {
+        if (current.sessionId !== fork.sessionId) return current
+        return { ...current, replying, error: Option.none() }
+      })
+    yield* markReplying(true)
     yield* ctx.Session.send({
       delivery: "turn",
       sessionId: fork.sessionId,
@@ -288,6 +293,7 @@ const sendToFork = (parentBranchId: string, fork: OpenFork, question: string) =>
       content: question,
       completion: "admission",
     }).pipe(
+      Effect.tapError(() => markReplying(false)),
       Effect.mapError(
         (error) => new ForkError({ message: `Cannot ask the fork: ${error.message}` }),
       ),
@@ -299,6 +305,8 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
     id: "btw.fork",
     description:
       "Fork this branch into a parallel child session seeded with its context; an empty question forks without asking",
+    // The fork is its own session; this branch's loop state is not touched.
+    answersDuringTurn: true,
     input: ForkInput,
     output: ForkOutput,
     execute: Effect.fn("BtwRpc.Fork")(function* (input: ForkInput) {
@@ -368,6 +376,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
     id: "btw.ask",
     description:
       "Ask the fork opened from this branch a follow-up; refused while the fork is still replying",
+    answersDuringTurn: true,
     input: AskInput,
     output: Schema.Struct({ asked: Schema.Boolean }),
     execute: Effect.fn("BtwRpc.Ask")(function* (input: AskInput) {
@@ -388,6 +397,7 @@ export const BtwRpc = defineRequests(BTW_EXTENSION_ID, {
     id: "btw.progress",
     description:
       "The fork opened from this branch: its turns after the fork point and the reply streaming now",
+    answersDuringTurn: true,
     input: Schema.Struct({}),
     output: ForkProgress,
     execute: Effect.fn("BtwRpc.Progress")(function* () {

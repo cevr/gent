@@ -50,15 +50,12 @@ const runGent = (args: ReadonlyArray<string>, options: { readonly keyless?: bool
       mode.push("--debug")
     }
     // eslint-disable-next-line effect/noGlobals -- subprocess execution is the integration boundary under test.
-    const proc = Bun.spawn(
-      ["bun", "--preload", "@opentui/solid/preload", "src/main.tsx", ...mode, ...args],
-      {
-        cwd: appDir,
-        env: makeChildEnv(homeDir, env),
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    )
+    const proc = Bun.spawn(["bun", "src/main.tsx", ...mode, ...args], {
+      cwd: appDir,
+      env: makeChildEnv(homeDir, env),
+      stdout: "pipe",
+      stderr: "pipe",
+    })
     const [exitCode, stdout, stderr] = yield* Effect.all(
       [
         waitForExit(proc, 15000),

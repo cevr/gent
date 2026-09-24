@@ -1029,7 +1029,6 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     /** Output the worker wrote during the cell, once its boundary arrived. */
     takeOutput,
     isRunning: handle.isRunning.pipe(Effect.mapError(ioError)),
-    exitCode: handle.exitCode.pipe(Effect.mapError(ioError)),
     send: Effect.fn("CellProcess.send")(function* (request: CellRequest) {
       if (yield* Deferred.isDone(failure)) return yield* Deferred.await(failure)
       // Output nobody claimed, such as late writes from a process a cell spawned, is dropped here.
@@ -1082,16 +1081,27 @@ const KernelStatus = Schema.Literals(["ready", "lost", "closed"])
  */
 const CELL_COMPUTE_DEADLINE_MS = 30_000
 
-/** One worker at a time. Only explicit reset can replace a failed worker. */
+/** Launches in a row that may fail before the kernel stops replacing its worker. */
+const DEFAULT_MAXIMUM_FAILED_LAUNCHES = 3
+
+/**
+ * One worker at a time. Only explicit reset can replace a failed worker.
+ *
+ * `maximumFailedLaunches` stops a crash loop: once that many launches in a row
+ * failed, reset refuses. A launch fails when the worker never reaches Ready, or
+ * when it dies (a process exit, a protocol fault) before it completes a cell.
+ * A worker the kernel stops (a timeout, a cancel) did not fail. Only a
+ * completed cell starts the count again.
+ */
 export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   readonly worker: CellWorker
   readonly cwd: string
   readonly readinessTimeoutMs?: number
   readonly evaluationTimeoutMs?: number
-  readonly maximumReplacements?: number
+  readonly maximumFailedLaunches?: number
 }) {
   const timeoutMs = input.evaluationTimeoutMs ?? CELL_COMPUTE_DEADLINE_MS
-  const maximumReplacements = input.maximumReplacements ?? 3
+  const maximumFailedLaunches = input.maximumFailedLaunches ?? DEFAULT_MAXIMUM_FAILED_LAUNCHES
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     return yield* new CellProcessError({
       phase: "launch",
@@ -1099,10 +1109,10 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
       diagnostics: "",
     })
   }
-  if (!Number.isSafeInteger(maximumReplacements) || maximumReplacements < 0) {
+  if (!Number.isSafeInteger(maximumFailedLaunches) || maximumFailedLaunches < 1) {
     return yield* new CellProcessError({
       phase: "launch",
-      message: "Cell replacement limit must be a non-negative integer",
+      message: "Cell failed-launch limit must be a positive integer",
       diagnostics: "",
     })
   }
@@ -1139,7 +1149,9 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   status = "ready"
   const permit = yield* Semaphore.make(1)
   const shutdown = yield* Deferred.make<never, CellKernelError>()
-  let replacements = 0
+  let failedLaunches = 0
+  // The current worker has not completed a cell yet, so its death is a failed launch.
+  let unproven = true
   let sequence = 0
   // Catalog delta: the worker keeps the last catalog, so only a changed hash travels. A
   // replacement worker starts empty and receives the full catalog on its first cell.
@@ -1174,6 +1186,13 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     if (status !== "closed") status = "lost"
     yield* child.stop.pipe(Effect.ensuring(child.dispose))
   })
+  /** A worker that dies on its own before completing a cell is a failed launch. */
+  const countUnprovenDeath = (error: CellKernelError) =>
+    Effect.sync(() => {
+      if (unproven && (error.reason === "process" || error.reason === "protocol")) {
+        failedLaunches++
+      }
+    })
   const deadline = {
     duration: timeoutMs,
     orElse: () => failure("timeout", "Cell deadline exceeded; working state was lost"),
@@ -1299,6 +1318,9 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
           .pipe(Effect.mapError(processError))
         if (Option.isSome(catalog)) workerCatalogHash = Option.some(catalog.value.hash)
         const frame = yield* Deferred.await(result).pipe(Effect.raceFirst(watchdog))
+        // The worker answered a cell: it is not part of a crash loop.
+        unproven = false
+        failedLaunches = 0
         // The worker marks the end of the cell on its one output pipe before the frame;
         // the take resolves once that mark arrived, so the output is complete and ordered.
         return {
@@ -1306,7 +1328,10 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
           output: yield* child.takeOutput(outputToken).pipe(Effect.mapError(processError)),
         }
       }),
-    ).pipe(Effect.onError(() => discard().pipe(Effect.orDie)))
+    ).pipe(
+      Effect.tapError(countUnprovenDeath),
+      Effect.onError(() => discard().pipe(Effect.orDie)),
+    )
     // Prime-style result text: process output first, then the cell's own display.
     const withOutput = (display: string) =>
       [response.output.trimEnd(), display].filter((text) => text.length > 0).join("\n")
@@ -1340,6 +1365,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     }).pipe(
       Effect.catchTag("CellProcessError", (error) => Effect.fail(processError(error))),
       Effect.timeoutOrElse(deadline),
+      Effect.tapError(countUnprovenDeath),
       Effect.onError(() => discard().pipe(Effect.orDie)),
     )
   })
@@ -1348,14 +1374,24 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     if (status === "closed") return yield* failure("closed", "Cell kernel is closed")
     // A lost worker has nothing to talk to: replace the process instead.
     if (status === "lost") {
-      if (replacements >= maximumReplacements) {
-        return yield* failure("replacement-limit", "Cell worker replacement limit reached")
+      if (failedLaunches >= maximumFailedLaunches) {
+        return yield* failure(
+          "replacement-limit",
+          `Cell worker failed ${failedLaunches} times in a row before completing a cell`,
+        )
       }
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          replacements++
           workerCatalogHash = Option.none()
-          child = yield* restore(openWorker()).pipe(Effect.mapError(processError))
+          child = yield* restore(openWorker()).pipe(
+            Effect.tapError(() =>
+              Effect.sync(() => {
+                failedLaunches++
+              }),
+            ),
+            Effect.mapError(processError),
+          )
+          unproven = true
           // close can run while the replacement is starting. Never restore a closed owner.
           if (isClosed()) return yield* failure("closed", "Cell kernel closed during replacement")
           status = "ready"
@@ -1988,11 +2024,23 @@ const makeCellToolHostWith = (
               output: "",
             })
           const key = { cell: params.cell, operationId: request.operationId }
-          const admission = yield* storage.admit({
-            ...key,
-            binding: identity.value,
-            input: request.input,
-          })
+          const admission = yield* storage
+            .admit({
+              ...key,
+              binding: identity.value,
+              input: request.input,
+            })
+            .pipe(
+              // Admission comes before the operation: nothing ran.
+              Effect.mapError(
+                (cause) =>
+                  new CellEvaluationError({
+                    phase: "execute",
+                    message: `Cell operation storage failed. The operation was not run: ${cause.message}`,
+                    output: "",
+                  }),
+              ),
+            )
           if (!admission.admitted) {
             if (admission.operation.state._tag === "Completed")
               return yield* cellToolResultValue(admission.operation.state.result)
@@ -2088,7 +2136,6 @@ interface CellExecutionService {
     StorageError | CellExecutionIncomplete,
     CellOperationHost
   >
-  readonly reset: Effect.Effect<void, CellKernelError>
   readonly cancel: Effect.Effect<void>
   /** The loop closes: end the running cell and record nothing, as a crash would. */
   readonly stop: Effect.Effect<void>
@@ -2157,7 +2204,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
             stateLost: true,
           })
         let kernel = Option.none<Kernel>()
-        let startupAttempts = 0
+        let failedStarts = 0
         // Set when the worker reported state loss; the next run replaces it and restores.
         let recoveryPending = false
         // Report for the first evaluation after a host-owned restore.
@@ -2187,25 +2234,29 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         })
         const getKernel = Effect.fn("CellExecution.getKernel")(function* () {
           if (Option.isSome(kernel)) return kernel.value
-          const remainingReplacements = (input.maximumReplacements ?? 3) - startupAttempts
-          if (remainingReplacements < 0) {
+          // The first launch counts against the same limit as the kernel's replacements.
+          if (failedStarts >= (input.maximumFailedLaunches ?? DEFAULT_MAXIMUM_FAILED_LAUNCHES)) {
             return yield* new CellProcessError({
               phase: "launch",
-              message: "Cell worker startup attempt limit reached",
+              message: `Cell worker failed to launch ${failedStarts} times in a row`,
               diagnostics: "",
             })
           }
-          startupAttempts++
           return yield* Effect.uninterruptibleMask((restore) =>
             restore(
-              openCellKernel({ ...input, maximumReplacements: remainingReplacements }).pipe(
-                Effect.provideContext(platform),
-                Scope.provide(scope),
-              ),
+              openCellKernel(input).pipe(Effect.provideContext(platform), Scope.provide(scope)),
             ).pipe(
+              Effect.tapError(() =>
+                Effect.sync(() => {
+                  failedStarts++
+                }),
+              ),
               Effect.tap((opened) =>
                 Effect.sync(() => {
                   kernel = Option.some(opened)
+                  // A new worker starts clean and restores just below: the
+                  // recovery a failed launch asked for is done.
+                  recoveryPending = false
                 }),
               ),
               Effect.tap((opened) => restoreNamespace(opened)),
@@ -2352,12 +2403,6 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           if (stopping) return yield* Effect.interrupt
           return result
         })
-        const reset = Effect.fn("CellExecution.reset")(function* () {
-          if (Option.isSome(kernel)) yield* kernel.value.reset
-          yield* namespaces.clear(namespaceAddress).pipe(Effect.orDie)
-          recoveryPending = false
-          restoreReport = Option.none()
-        })
         const cancel = Effect.fn("CellExecution.cancel")(function* () {
           cancellationEpoch++
           if (Option.isSome(active)) yield* Deferred.fail(active.value, cancelled())
@@ -2370,7 +2415,6 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         return CellExecution.of({
           run: (call) =>
             Effect.suspend(() => Semaphore.withPermit(permit, run(call, cancellationEpoch))),
-          reset: Semaphore.withPermit(permit, reset()),
           cancel: cancel().pipe(Effect.uninterruptible),
           stop: stop().pipe(Effect.uninterruptible),
         })
@@ -2557,7 +2601,7 @@ export const recoverCellExecution = Effect.fn("CellExecution.recover")(function*
  * A cell that was mid-flight when the process died left receipts: an outer
  * admission, and one row per inner call. Those settle the call without running
  * it again. A tool call that is not a cell, or a cell that was never admitted,
- * is re-issued instead.
+ * is left to the loop, which reports it as interrupted.
  */
 
 const cellToolCallRecovery = Layer.effect(
@@ -2587,7 +2631,7 @@ const cellToolCallRecovery = Layer.effect(
               (cause) => new ToolCallRecoveryError({ message: "Cannot read the receipt", cause }),
             ),
           )
-        // Never admitted: nothing ran, so re-issue rather than settle.
+        // Never admitted: no receipt to settle from; the loop reports it.
         if (Option.isNone(saved)) return ToolCallRecoveryOutcome.cases.NotRecovered.make({})
         const profile = yield* CurrentAgentLoopTurnProfile
         return yield* recover({ cell, profile }).pipe(
@@ -3078,9 +3122,36 @@ const renderField = (
   if (!isSchemaNode(schema)) return `${propertyKey(name)}?: unknown`
   const rendered = renderSchemaType(schema, depth, scope)
   if (required) return `${propertyKey(name)}: ${rendered}`
-  const present = rendered.split(" | ").filter((member) => member !== "null")
-  if (present.length === 0) return `${propertyKey(name)}?: ${rendered}`
-  return `${propertyKey(name)}?: ${present.join(" | ")}`
+  // Only the field's own top-level members: a `null` nested inside one stays.
+  const present = withoutNull(schema)
+  if (Option.isNone(present)) return `${propertyKey(name)}?: ${rendered}`
+  return `${propertyKey(name)}?: ${renderSchemaType(present.value, depth, scope)}`
+}
+
+const isNullSchema = (schema: JsonSchema.JsonSchema) =>
+  schema["type"] === "null" || ("const" in schema && Predicate.isNull(schema["const"]))
+
+/** The schema with its top-level `null` member removed; none when it has none or only that. */
+const withoutNull = (schema: JsonSchema.JsonSchema): Option.Option<JsonSchema.JsonSchema> => {
+  const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
+  if (alternatives.length > 0) {
+    // A nullable member is itself a union; its `null` is still top-level.
+    const members = alternatives
+      .filter((member) => !isNullSchema(member))
+      .map((member) => {
+        const inner = withoutNull(member)
+        return { schema: Option.getOrElse(inner, () => member), stripped: Option.isSome(inner) }
+      })
+    const kept = members.map((member) => member.schema)
+    const changed = kept.length < alternatives.length || members.some((member) => member.stripped)
+    if (!changed || kept.length === 0) return Option.none()
+    const { anyOf: _anyOf, oneOf: _oneOf, ...rest } = schema
+    return Option.some({ ...rest, anyOf: kept })
+  }
+  const types = strings([schema["type"]].flat())
+  const kept = types.filter((type) => type !== "null")
+  if (kept.length === types.length || kept.length === 0) return Option.none()
+  return Option.some({ ...schema, type: kept })
 }
 
 /** An object with no named keys and a value schema is a record. */

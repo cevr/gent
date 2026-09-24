@@ -794,7 +794,6 @@ describe("recorded cell execution", () => {
           ),
           CellExecution,
         )
-        yield* replay.reset
         expect(
           yield* replay.run(first).pipe(Effect.provideService(CellOperationHost, host)),
         ).toEqual(result)
@@ -845,30 +844,34 @@ describe("recorded cell execution", () => {
         yield* Deferred.await(started)
         yield* Fiber.interrupt(running)
         expect(yield* Deferred.isDone(stopped)).toBe(true)
-        yield* execution.reset
-        const unknown = yield* execution
+        // The loop closed under the cell; the next loop opens its own execution.
+        const reopened = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        const unknown = yield* reopened
           .run(first)
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
         expect(unknown._tag).toBe("CellExecutionIncomplete")
         expect(yield* fs.readFileString(output)).toBe("x")
-        const fresh = yield* execution
-          .run(next)
-          .pipe(Effect.provideService(CellOperationHost, host))
+        const fresh = yield* reopened.run(next).pipe(Effect.provideService(CellOperationHost, host))
         expect(fresh.result).toMatchObject({ display: "42" })
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
   )
 
   it.scopedLive(
-    "counts failed lazy startup against the same worker replacement limit",
+    "a failed lazy startup counts toward the failed-launch limit",
     () =>
       Effect.gen(function* () {
         const worker = yield* buildCellWorker
         const fs = yield* FileSystem.FileSystem
         const savedWorker = `${worker.scriptPath}.saved`
         yield* fs.rename(worker.scriptPath, savedWorker)
-        const [first, next, crash] = yield* setupCalls(["41", "42", "process.exit(0)"])
-        if (!first || !next || !crash) return yield* Effect.die("Missing test cell")
+        const [first, next] = yield* setupCalls(["41", "42"])
+        if (!first || !next) return yield* Effect.die("Missing test cell")
         const execution = Context.get(
           yield* Layer.build(
             CellExecution.Live({
@@ -876,7 +879,7 @@ describe("recorded cell execution", () => {
               cwd: packageDirectory,
               sessionId,
               branchId,
-              maximumReplacements: 1,
+              maximumFailedLaunches: 1,
             }),
           ),
           CellExecution,
@@ -887,15 +890,16 @@ describe("recorded cell execution", () => {
           .pipe(Effect.provideService(CellOperationHost, host))
         expect(failed.isFailure).toBe(true)
         expect(failed.result).toMatchObject({ _tag: "CellProcessError", phase: "launch" })
+        // The worker is back, but one failed launch already reached the limit of one.
         yield* fs.rename(savedWorker, worker.scriptPath)
-        expect(
-          (yield* execution.run(next).pipe(Effect.provideService(CellOperationHost, host))).result,
-        ).toMatchObject({ display: "42" })
-        expect(
-          (yield* execution.run(crash).pipe(Effect.provideService(CellOperationHost, host)))
-            .isFailure,
-        ).toBe(true)
-        expect((yield* execution.reset.pipe(Effect.flip)).reason).toBe("replacement-limit")
+        const refused = yield* execution
+          .run(next)
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(refused.result).toMatchObject({
+          _tag: "CellProcessError",
+          phase: "launch",
+          message: expect.stringContaining("failed to launch 1 times in a row"),
+        })
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
   )
@@ -1044,6 +1048,58 @@ describe("cell worker process", () => {
         yield* kernel.close
       }).pipe(Effect.timeout("10 seconds"), Effect.provide(platformLayer)),
     12000,
+  )
+
+  it.scopedLive(
+    "a late throw or an unawaited rejection reaches the cell output and the worker lives",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+        })
+        const host = CellOperationHost.of({
+          catalog: hostCatalog("broken"),
+          call: () =>
+            Effect.fail(
+              new CellEvaluationError({ phase: "execute", message: "service down", output: "" }),
+            ),
+        })
+        const run = (source: string) =>
+          kernel.evaluate(source).pipe(Effect.provideService(CellOperationHost, host))
+        const settle = "await new Promise((resolve) => setTimeout(resolve, 150))"
+        // A timer throws while its own cell runs: that cell's output carries it.
+        const own = yield* run(
+          `var kept = 5; setTimeout(() => { throw new Error('own timer') }, 20); ${settle}; 1`,
+        )
+        expect(own.display).toContain("own timer")
+        // A timer from cell A throws while cell B runs: B does not claim it,
+        // and the next cell names A as its origin.
+        yield* run("setTimeout(() => { throw new Error('late timer') }, 40); 1")
+        const whileLate = yield* run(`${settle}; kept`)
+        expect(whileLate.display).not.toContain("late timer")
+        expect(whileLate.display).toContain("5")
+        const afterTimer = yield* run("2")
+        expect(afterTimer.display).toMatch(/Uncaught \(from cell \d+\): .*late timer/)
+        // A rejection nobody awaits has no known origin: it is never the
+        // running cell's error, and the next cell reports it as unknown.
+        const dropped = yield* run(`Promise.reject(new Error('dropped promise')); ${settle}; 2`)
+        expect(dropped.display).not.toContain("dropped promise")
+        const afterDropped = yield* run("kept")
+        expect(afterDropped.display).toContain(
+          "Uncaught (origin unknown: an unawaited promise or microtask): ",
+        )
+        expect(afterDropped.display).toContain("dropped promise")
+        // A host call the cell never awaits fails while the cell still runs:
+        // an unhandled rejection, so it too waits for the next cell, unattributed.
+        const orphan = yield* run(`tools.broken({}); ${settle}; 3`)
+        expect(orphan.display).toBe("3")
+        const afterOrphan = yield* run("4")
+        expect(afterOrphan.display).toContain("Uncaught (origin unknown")
+        expect(afterOrphan.display).toContain("service down")
+        yield* kernel.close
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
   )
 
   it.scopedLive(
@@ -1196,7 +1252,7 @@ describe("cell worker process", () => {
           worker: yield* buildCellWorker,
           cwd: packageDirectory,
           evaluationTimeoutMs: 1000,
-          maximumReplacements: 1,
+          maximumFailedLaunches: 1,
         })
         let calls = 0
         let pid = 0
@@ -1235,7 +1291,8 @@ describe("cell worker process", () => {
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
         if (crash._tag !== "CellKernelError") return yield* crash
         expect(crash.reason).toBe("process")
-        expect((yield* kernel.reset.pipe(Effect.flip)).reason).toBe("replacement-limit")
+        // Both workers launched, so neither loss counts toward the failed-launch limit.
+        yield* kernel.reset
         yield* kernel.close
         expect((yield* kernel.reset.pipe(Effect.flip)).reason).toBe("closed")
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
@@ -1250,7 +1307,7 @@ describe("cell worker process", () => {
           worker: yield* buildCellWorker,
           cwd: packageDirectory,
           evaluationTimeoutMs: 400,
-          maximumReplacements: 1,
+          maximumFailedLaunches: 1,
         })
         // Host operations own their bounds: a slow one outlives the compute deadline.
         const host = CellOperationHost.of({
@@ -1282,7 +1339,7 @@ describe("cell worker process", () => {
           worker: yield* buildCellWorker,
           cwd: packageDirectory,
           evaluationTimeoutMs: 1000,
-          maximumReplacements: 1,
+          maximumFailedLaunches: 1,
         })
         const catalog = {
           hash: "read-v1",
@@ -1320,6 +1377,60 @@ describe("cell worker process", () => {
   )
 
   it.scopedLive(
+    "a lost worker is replaced as often as cells need once each worker completed a cell",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+        })
+        const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
+        const run = (source: string) =>
+          kernel.evaluate(source).pipe(Effect.provideService(CellOperationHost, host))
+        // More losses than the failed-launch limit: each worker completed a cell first.
+        for (let lost = 0; lost < 5; lost++) {
+          expect((yield* run("1 + 1")).display).toBe("2")
+          const crash = yield* run("process.exit(7)").pipe(Effect.flip)
+          expect(crash._tag).toBe("CellKernelError")
+          yield* kernel.reset
+        }
+        expect((yield* run("21 * 2")).display).toBe("42")
+        yield* kernel.close
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "workers that launch and die in their first cell trip the failed-launch limit",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+        })
+        const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
+        const crash = Effect.gen(function* () {
+          const error = yield* kernel
+            .evaluate("process.exit(7)")
+            .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+          if (error._tag !== "CellKernelError") return yield* Effect.die(error)
+          return error.reason
+        })
+        // Each worker reaches Ready, then dies before it completes a cell.
+        for (let launch = 0; launch < 2; launch++) {
+          expect(yield* crash).toBe("process")
+          yield* kernel.reset
+        }
+        expect(yield* crash).toBe("process")
+        const refused = yield* kernel.reset.pipe(Effect.flip)
+        expect(refused.reason).toBe("replacement-limit")
+        expect(refused.message).toContain("3 times in a row")
+        yield* kernel.close
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
     "counts failed replacement starts and does not reopen a closed kernel",
     () =>
       Effect.gen(function* () {
@@ -1328,9 +1439,14 @@ describe("cell worker process", () => {
         const kernel = yield* openCellKernel({
           worker: launch,
           cwd: packageDirectory,
-          maximumReplacements: 1,
+          maximumFailedLaunches: 1,
         })
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
+        // The first worker completes a cell, so its later death is not a failed launch.
+        const completed = yield* kernel
+          .evaluate("1")
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(completed.display).toBe("1")
         const crash = yield* kernel
           .evaluate("process.exit(7)")
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
@@ -3927,7 +4043,7 @@ const cancelRecoveredChild = Effect.fn("test.cancelRecoveredChild")(function* (
 })
 
 it.scopedLive(
-  "recovers saved cells through RPC without native replay and retains sibling results",
+  "recovers saved cells through RPC, and reports a call cut short as interrupted instead of running it again",
   () =>
     Effect.gen(function* () {
       for (const state of [
@@ -4224,11 +4340,10 @@ it.scopedLive(
           ).toHaveLength(1)
           expect(yield* controls.callCount).toBe(3)
         }
+        // A cell with no receipt was in flight too: it is not run again.
         if (state === "completed") expect(outer).toEqual(savedResult)
-        else if (state === "unadmitted")
-          expect(outer).toMatchObject({ isFailure: false, result: 1 })
-        else if (state === "revoked")
-          expect(outer).toMatchObject({ isFailure: true, result: { error: "Unknown tool: cell" } })
+        else if (state === "unadmitted" || state === "revoked")
+          expect(outer).toMatchObject({ isFailure: true, result: { reason: "Interrupted" } })
         else
           expect(outer).toMatchObject({
             isFailure: true,
@@ -4242,20 +4357,13 @@ it.scopedLive(
             },
           })
         }
+        // The native sibling was in flight when the process died: the model
+        // reads that it was interrupted, and it does not run again.
         expect(
           results?.find((part) => part.type === "tool-result" && part.id === "native-sibling"),
-        ).toMatchObject({ isFailure: false, result: 1 })
-        if (state === "unadmitted") {
-          expect(yield* Ref.get(cellCalls)).toBe(1)
-          expect(yield* Ref.get(selectedNames)).toEqual([
-            "approve",
-            "cell",
-            "delegate.cancel",
-            "delegate.start",
-            "sibling",
-          ])
-        } else expect(yield* Ref.get(cellCalls)).toBe(0)
-        expect(yield* Ref.get(nativeCalls)).toBe(1)
+        ).toMatchObject({ isFailure: true, result: { reason: "Interrupted" } })
+        expect(yield* Ref.get(cellCalls)).toBe(0)
+        expect(yield* Ref.get(nativeCalls)).toBe(0)
       }
     }).pipe(Effect.timeout("12 seconds")),
   15000,
@@ -5400,6 +5508,20 @@ const classResult = tool({
   execute: () => Effect.succeed(new ClassResult({ ok: true, items: [] })),
 })
 
+const nullableMiddle = tool({
+  id: "nullable-middle",
+  description: "Takes an optional field with a nested nullable union.",
+  params: Schema.Struct({
+    box: Schema.optional(
+      Schema.NullOr(
+        Schema.Struct({ a: Schema.Union([Schema.String, Schema.Null, Schema.Finite]) }),
+      ),
+    ),
+  }),
+  output: Schema.Boolean,
+  execute: () => Effect.succeed(true),
+})
+
 const treeResult = tool({
   id: "tree",
   description: "Returns a tree.",
@@ -5460,6 +5582,10 @@ const edgeSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   [
     classResult,
     '- tools["class-result"](input?: { nested?: { ok: boolean; items: string[] } }): Promise<{ ok: boolean; items: string[] }> // Returns a class.',
+  ],
+  [
+    nullableMiddle,
+    '- tools["nullable-middle"](input?: { box?: { a: string | null | number } }): Promise<boolean> // Takes an optional field with a nested nullable union.',
   ],
   [
     treeResult,

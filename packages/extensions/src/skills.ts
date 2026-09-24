@@ -151,7 +151,6 @@ export const SkillEntry = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
   filePath: Schema.String,
-  content: Schema.String,
   level: SkillLevel,
 })
 export type SkillEntry = typeof SkillEntry.Type
@@ -384,7 +383,7 @@ export function parseSkillFile(content: string, filename: string) {
     Option.getOrElse(() => `Skill: ${name}`),
   )
 
-  return { name, description, content: body }
+  return { name, description }
 }
 
 // Format skills for system prompt
@@ -521,6 +520,7 @@ export const SkillsRpc = defineRequests(SKILLS_EXTENSION_ID, {
   ListSkills: request({
     id: "skills-list",
     description: "List loaded skills",
+    answersDuringTurn: true,
     input: Schema.Struct({}),
     output: Schema.Array(SkillEntry),
     execute: Effect.fn("SkillsRpc.ListSkills")(function* () {

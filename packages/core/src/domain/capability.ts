@@ -155,8 +155,8 @@ interface RequestCapabilityApi {
   readonly effect: unknown
   readonly slash?: unknown
   readonly description?: string
-  /** Answers during a turn: runs without the loop's mutation permit. Must not change loop state. */
-  readonly readonly?: boolean
+  /** See `RequestInput.answersDuringTurn`. */
+  readonly answersDuringTurn?: boolean
   readonly ref: unknown
 }
 
@@ -246,11 +246,17 @@ export interface RequestInput<
   /** Human-readable description for registry/listing surfaces. */
   readonly description?: string
   /**
-   * A read-only request answers while a turn is running: it skips the loop's
-   * mutation permit, which the running turn otherwise holds until it ends. It
-   * must not change loop state. Default: the request waits for the turn.
+   * The request does not need this branch's side-mutation permit, so it
+   * answers while a turn runs. Without it the request waits: the running turn
+   * holds the permit until it ends, so a client read or a `/btw` fork would
+   * freeze for the whole turn.
+   *
+   * Set it when the request does not change this branch's loop state (its
+   * queue, follow-ups or messages). Reads qualify, and so do writes outside
+   * the branch's loop: another session, a process resource, an extension
+   * file under its own lock. Default: the request waits for the turn.
    */
-  readonly readonly?: boolean
+  readonly answersDuringTurn?: boolean
   /** Optional slash-command presentation for public transport clients. */
   readonly slash?: {
     /** Slash trigger without the leading `/`. Defaults to `id`. */
@@ -282,7 +288,7 @@ export function request(input: {
   readonly input: Schema.Codec<unknown, unknown, never, never>
   readonly output: Schema.Codec<unknown, unknown, never, never>
   readonly description?: string
-  readonly readonly?: boolean
+  readonly answersDuringTurn?: boolean
   readonly slash?: RequestInput<unknown, unknown>["slash"]
   readonly execute: ErasedCapabilityEffect<RequestFailure>
 }): RequestCapability {
@@ -332,7 +338,7 @@ export function request(input: {
     id: rpcId,
     slash: input.slash,
     description: input.description,
-    readonly: input.readonly,
+    answersDuringTurn: input.answersDuringTurn,
     input: input.input,
     output: input.output,
     effect,

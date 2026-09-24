@@ -234,26 +234,32 @@ describe("transformResponseContent", () => {
       { type: "text", text: "Here you go." },
       { type: "tool_use", id: "tc-1", name: "mcp_echo", input: { text: "hi" } },
     ]
-    const result = transformResponseContent(content)
+    const result = transformResponseContent(content, [])
     expect(result[0]!["name"]).toBeUndefined()
     expect(result[1]!["name"]).toBe("echo")
   })
 
   test("does not modify non-tool_use blocks", () => {
     const content = [{ type: "text", text: "hello" }]
-    const result = transformResponseContent(content)
+    const result = transformResponseContent(content, [])
     expect(result[0]).toEqual({ type: "text", text: "hello" })
   })
 
   test("passes through tool_use without mcp_ prefix", () => {
     const content = [{ type: "tool_use", id: "tc-1", name: "echo", input: {} }]
-    const result = transformResponseContent(content)
+    const result = transformResponseContent(content, [])
     expect(result[0]!["name"]).toBe("echo")
+  })
+
+  test("restores a tool id with an uppercase first letter from the request's tools", () => {
+    const content = [{ type: "tool_use", id: "tc-1", name: "mcp_Deploy", input: {} }]
+    const result = transformResponseContent(content, ["Deploy", "echo"])
+    expect(result[0]!["name"]).toBe("Deploy")
   })
 
   test("strips exactly one mcp_ prefix", () => {
     const content = [{ type: "tool_use", id: "tc-1", name: "mcp_mcp_foo", input: {} }]
-    const result = transformResponseContent(content)
+    const result = transformResponseContent(content, [])
     expect(result[0]!["name"]).toBe("mcp_foo")
   })
 })
@@ -267,7 +273,7 @@ describe("transformStreamEvent", () => {
       index: 1,
       content_block: { type: "tool_use", id: "tc-1", name: "mcp_echo", input: {} },
     } satisfies AnthropicClient.MessageStreamEvent
-    const result = transformStreamEvent(event)
+    const result = transformStreamEvent([])(event)
     expect(result.type).toBe("content_block_start")
     if (result.type === "content_block_start" && result.content_block.type === "tool_use") {
       expect(result.content_block.name).toBe("echo")
@@ -280,7 +286,7 @@ describe("transformStreamEvent", () => {
       index: 0,
       content_block: { type: "text", text: "" },
     } satisfies AnthropicClient.MessageStreamEvent
-    const result = transformStreamEvent(event)
+    const result = transformStreamEvent([])(event)
     expect(result.type).toBe("content_block_start")
     if (result.type === "content_block_start") expect(result.content_block.type).toBe("text")
   })
@@ -289,7 +295,7 @@ describe("transformStreamEvent", () => {
     const event = {
       type: "message_stop",
     } satisfies AnthropicClient.MessageStreamEvent
-    const result = transformStreamEvent(event)
+    const result = transformStreamEvent([])(event)
     expect(result).toBe(event)
   })
 
@@ -299,7 +305,7 @@ describe("transformStreamEvent", () => {
       index: 1,
       delta: { type: "input_json_delta", partial_json: '{"text":' },
     } satisfies AnthropicClient.MessageStreamEvent
-    const result = transformStreamEvent(event)
+    const result = transformStreamEvent([])(event)
     expect(result).toBe(event)
   })
 })
@@ -780,6 +786,91 @@ describe("keychainTransformClient — 401 recovery", () => {
       expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer fresh-access")
     }),
   )
+  it.scopedLive("401 with the keychain unchanged → refresh with its refresh token → retry", () =>
+    Effect.gen(function* () {
+      // The server revoked a token whose expiry is still ahead; the keychain
+      // still holds it, so only a refresh can replace it.
+      const held: Array<Option.Option<ClaudeCredentials>> = []
+      const creds = yield* credentialCache({
+        read: Effect.succeed(makeCredsKeychain("revoked")),
+        refresh: (credential) =>
+          Effect.sync(() => {
+            held.push(credential)
+            return makeCredsKeychain("renewed")
+          }),
+      })
+      const fakeState: FakeClientState = {
+        captured: [],
+        responder: respondFirstWith(
+          new Response("auth", { status: 401 }),
+          new Response("ok", { status: 200 }),
+        ),
+      }
+      const transform = buildKeychainTransformClient(creds, TEST_ENV)
+      const wrapped = transform(makeFakeClient(fakeState))
+      const response = yield* runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
+      )
+      expect(response.status).toBe(200)
+      expect(fakeState.captured[0]!.headers["authorization"]).toBe("Bearer revoked-access")
+      expect(fakeState.captured[1]!.headers["authorization"]).toBe("Bearer renewed-access")
+      expect(held).toEqual([Option.some(makeCredsKeychain("revoked"))])
+    }),
+  )
+  it.scopedLive("a late 401 for a token already replaced does not refresh again", () =>
+    Effect.gen(function* () {
+      // The refresh writes the keychain, as the real one does.
+      const keychain = yield* Ref.make(makeCredsKeychain("old"))
+      const refreshes = yield* Ref.make(0)
+      const creds = yield* credentialCache({
+        read: Ref.get(keychain),
+        refresh: () =>
+          Effect.gen(function* () {
+            yield* Ref.update(refreshes, (count) => count + 1)
+            yield* Ref.set(keychain, makeCredsKeychain("new"))
+            return makeCredsKeychain("new")
+          }),
+      })
+      // A and B both send the old token. B's 401 arrives after A refreshed.
+      const bSent = yield* Deferred.make<boolean>()
+      const aRenewed = yield* Deferred.make<boolean>()
+      const sent: Array<string> = []
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          const authorization = String(request.headers["authorization"])
+          const call = sent.push(authorization) - 1
+          if (call === 0) yield* Deferred.await(bSent)
+          if (call === 1) {
+            yield* Deferred.succeed(bSent, true)
+            yield* Deferred.await(aRenewed)
+          }
+          if (authorization === "Bearer new-access") {
+            yield* Deferred.succeed(aRenewed, true)
+            return HttpClientResponse.fromWeb(request, new Response("ok", { status: 200 }))
+          }
+          return HttpClientResponse.fromWeb(request, new Response("auth", { status: 401 }))
+        }),
+      )
+      const wrapped = buildKeychainTransformClient(creds, TEST_ENV)(client)
+      const post = runOk(
+        wrapped.post("https://api.anthropic.com/v1/messages", {
+          body: jsonBody({ model: "claude-opus-4-6" }),
+        }),
+      )
+      const a = yield* Effect.forkScoped(post)
+      // B starts once A holds the old token on the wire.
+      yield* Effect.yieldNow
+      const b = yield* Effect.forkScoped(post)
+      const responses = yield* Effect.all([Fiber.join(a), Fiber.join(b)]).pipe(
+        Effect.timeout("4 seconds"),
+      )
+      expect(responses.map((response) => response.status)).toEqual([200, 200])
+      expect(sent.slice(0, 2)).toEqual(["Bearer old-access", "Bearer old-access"])
+      expect(yield* Ref.get(refreshes)).toBe(1)
+    }),
+  )
   it.scopedLive(
     "two consecutive 401s — second surfaces (real auth failure, no infinite loop)",
     () =>
@@ -1097,7 +1188,7 @@ describe("Anthropic credential cache — invalidate", () => {
           const svc = yield* cache
           const before = yield* svc.getFresh
           callsRef.current = creds2
-          yield* svc.invalidate
+          yield* svc.invalidate(before)
           const after = yield* svc.getFresh
           expect(before.accessToken).toBe("k1-access")
           expect(after.accessToken).toBe("k2-access")
@@ -2063,6 +2154,63 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       expect(storeWrites).toBe(0)
       const keychain = yield* fs.readFileString(path.join(home, ".claude", ".credentials.json"))
       expect(keychain).toContain("refreshed-refresh")
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+  it.live("a sign-in written during the refresh survives, and the request uses it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      yield* fs.makeDirectory(path.join(home, ".claude"))
+      const credentialsFile = path.join(home, ".claude", ".credentials.json")
+      yield* fs.writeFileString(
+        credentialsFile,
+        encodeExternalJson({
+          claudeAiOauth: { accessToken: "old-access", refreshToken: "old-refresh", expiresAt: 0 },
+        }),
+      )
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      const driver = buildAnthropicModelDriverLive(
+        credentialCellRef,
+        Option.none(),
+        AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+        testCatalogSource(),
+      )
+      const newerSignIn = encodeExternalJson({
+        claudeAiOauth: {
+          accessToken: "signed-in-access",
+          refreshToken: "signed-in-refresh",
+          expiresAt: FUTURE_MS,
+        },
+      })
+      const fetchState = makeFakeFetchState()
+      const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+        if (!request.url.endsWith("/v1/oauth/token")) return anthropicHappyResponse()
+        // The user signs in again (`claude` writes the keychain) while the
+        // refresh of the old token is in flight: the token POST answers only
+        // after the new sign-in is on disk.
+        return fs.writeFileString(credentialsFile, newerSignIn).pipe(
+          Effect.orDie,
+          Effect.as({
+            status: 200,
+            body: encodeExternalJson({
+              access_token: "refreshed-access",
+              refresh_token: "refreshed-refresh",
+              expires_in: 3600,
+            }),
+          }),
+        )
+      })
+      const model = yield* driver
+        .resolveModel("claude-opus-4-6", makeOAuthInfo())
+        .pipe(Effect.provide(fetchLayer))
+      yield* runOne(model, fetchState)
+
+      expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer signed-in-access")
+      const keychain = yield* fs.readFileString(credentialsFile)
+      expect(keychain).toContain("signed-in-refresh")
+      expect(keychain).not.toContain("refreshed-refresh")
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
 })

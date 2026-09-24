@@ -74,10 +74,20 @@ const decodeMcpResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(McpRe
 
 /** Extract search result text from an MCP response object */
 function extractResult(data: McpResponse): Option.Option<string> {
-  if (Option.isSome(Option.fromNullishOr(data.error))) return Option.none()
-  const result = Option.fromNullishOr(data.result)
-  if (Option.isNone(result) || result.value.isError === true) return Option.none()
-  return Option.fromNullishOr(result.value.content[0]).pipe(Option.map((item) => item.text))
+  if (Option.isSome(mcpError(data))) return Option.none()
+  return Option.fromNullishOr(data.result?.content[0]).pipe(Option.map((item) => item.text))
+}
+
+/** A JSON-RPC error, or a tool result the server flagged `isError`, whose text is the reason. */
+function mcpError(data: McpResponse): Option.Option<{ readonly message: string }> {
+  if (Predicate.isNotUndefined(data.error)) return Option.some(data.error)
+  if (data.result?.isError !== true) return Option.none()
+  return Option.some({
+    message: Option.getOrElse(
+      Option.fromNullishOr(data.result.content[0]?.text),
+      () => "Unknown error",
+    ),
+  })
 }
 
 // WebSearch Tool
@@ -87,6 +97,7 @@ export const WebSearchTool = tool({
   description:
     "Search the web using Exa AI. Returns content from the most relevant websites. Use the current year when searching for recent information.",
   promptSnippet: "Search the web for information",
+  readonly: true,
   promptGuidelines: ["When you already have a specific URL, fetch it in the cell instead"],
   params: WebSearchParams,
   output: WebSearchResult,
@@ -166,7 +177,7 @@ export const WebSearchTool = tool({
               const data = yield* parseMcpJson(responseText)
               const text = extractResult(data)
               if (Option.isSome(text)) return text.value
-              return yield* mcpFailure(Option.fromNullishOr(data.error))
+              return yield* mcpFailure(mcpError(data))
             }
 
             // A frame that carries an error ends the search with it; a frame with neither is skipped.
@@ -174,7 +185,7 @@ export const WebSearchTool = tool({
               const data = yield* parseMcpJson(frame)
               const text = extractResult(data)
               if (Option.isSome(text)) return text.value
-              const error = Option.fromNullishOr(data.error)
+              const error = mcpError(data)
               if (Option.isSome(error)) return yield* mcpFailure(error)
             }
 

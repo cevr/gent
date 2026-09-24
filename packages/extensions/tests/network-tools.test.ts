@@ -83,10 +83,11 @@ const mcpHit = (text: string): McpWire => ({
   result: { content: [{ type: "text", text }] },
 })
 
+/** A frame with no content and no error: the search skips it. */
 const emptyFrame: McpWire = {
   jsonrpc: "2.0",
   id: 1,
-  result: { content: [], isError: true },
+  result: { content: [] },
 }
 
 const search = (layer: Layer.Layer<HttpClient.HttpClient>) =>
@@ -133,7 +134,7 @@ describe("WebSearchTool", () => {
     }),
   )
 
-  it.live("JSON result flagged isError reports an unknown Exa error", () =>
+  it.live("JSON result flagged isError surfaces its text as the Exa error", () =>
     Effect.gen(function* () {
       const failure = yield* failureOf(
         search(
@@ -141,12 +142,32 @@ describe("WebSearchTool", () => {
             jsonResponse({
               jsonrpc: "2.0",
               id: 1,
-              result: { content: [{ type: "text", text: "ignored" }], isError: true },
+              result: { content: [{ type: "text", text: "quota exceeded" }], isError: true },
             }),
           ),
         ),
       )
-      expect(Option.getOrThrow(failure).message).toBe("Exa MCP error: Unknown error")
+      expect(Option.getOrThrow(failure).message).toBe("Exa MCP error: quota exceeded")
+    }),
+  )
+
+  it.live("an SSE frame flagged isError surfaces its text, not a no-results reply", () =>
+    Effect.gen(function* () {
+      const failure = yield* failureOf(
+        search(
+          clientLayer(() =>
+            sseResponse([
+              emptyFrame,
+              {
+                jsonrpc: "2.0",
+                id: 1,
+                result: { content: [{ type: "text", text: "quota exceeded" }], isError: true },
+              },
+            ]),
+          ),
+        ),
+      )
+      expect(Option.getOrThrow(failure).message).toBe("Exa MCP error: quota exceeded")
     }),
   )
 

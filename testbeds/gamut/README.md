@@ -13,7 +13,7 @@ bun run gamut list                  # the presets and the models each one pins
 bun run gamut up sol-luna           # fresh scratch run in a new herdr pane
 bun run gamut up mixed --prompt ./my-prompt.md --no-build
 bun run gamut read 80               # the pane tail
-bun run gamut wait                  # block until a turn has run, no session in the run's data.db has an open turn, and the pane shows no busy row
+bun run gamut wait                  # block until a turn has run (after a /command: any stored event, or about 15 s of quiet), no session in the run's data.db has an open turn, and the pane shows no busy row
 bun run gamut send "also run typecheck"   # types into the TUI composer, then Enter
 bun run gamut interrupt             # one Ctrl-C
 bun run gamut status                # what the run actually did (below)
@@ -53,7 +53,7 @@ It reads the run's own `data.db` read-only and prints:
    `${home}/.gent/auth`, not the data dir, so the real credentials still work.
 2. **The wrong binary.** `~/.bun/bin/gent` points at whichever checkout last
    ran the gate. `up` builds and launches `apps/tui/bin/gent` by absolute path
-   from this checkout, and never sets `GENT_LINK`. It builds through the root
+   from this checkout, and never runs `bun run link`. It builds through the root
    build, so the `gent-cell` worker beside the binary is this checkout's too.
 3. **The stale TUI.** `pkill` returns before the process releases the PTY, so
    the next command types into the dying session. `restart` and `down` send two

@@ -45,14 +45,13 @@ import {
   effortAtOrAbove,
   EMPTY_CREDENTIAL_CELL,
   explainCredentialFailure,
-  freshCredentials,
+  authorizedClient,
   freshEnoughAt,
   isTransientTokenStatus,
   makeCredentialCache,
   postOAuthForm,
   apiKeyFrom,
   readOptionalEnv,
-  recoverUnauthorized,
   withHeaders,
 } from "./providers.js"
 import type { ChildProcessSpawner } from "effect/unstable/process"
@@ -539,9 +538,50 @@ const readCredentialsFile: Effect.Effect<
   return yield* decodeCredentials(raw)
 })
 
+/** Two stored credentials, or their absence, are the same sign-in at the same rotation. */
+const sameStoredCredential = Option.makeEquivalence(Schema.toEquivalence(ClaudeCredentials))
+
+/**
+ * What a write-back found. `Kept` means the store still held the credential
+ * the refresh started from, so the refreshed one is the one to use (whether
+ * or not the blob took the splice). `Superseded` means another writer
+ * changed the store during the refresh; its credential wins.
+ */
+const WriteBack = Schema.TaggedUnion({
+  Kept: {},
+  Superseded: { stored: Schema.Option(ClaudeCredentials) },
+})
+type WriteBack = typeof WriteBack.Type
+
+/**
+ * Splice `creds` into the stored blob `raw`, but only while it still holds
+ * `expected`, the credential the refresh started from. Another writer (a
+ * new sign-in, the `claude` CLI's own refresh) wins over this refresh.
+ */
+const compareAndWrite = <E, R>(
+  raw: string,
+  creds: ClaudeCredentials,
+  expected: Option.Option<ClaudeCredentials>,
+  write: (blob: string) => Effect.Effect<void, E, R>,
+): Effect.Effect<WriteBack, E, R> =>
+  Effect.gen(function* () {
+    const stored = yield* Effect.option(decodeCredentials(raw))
+    if (!sameStoredCredential(stored, expected)) {
+      return WriteBack.cases.Superseded.make({ stored })
+    }
+    const updated = updateCredentialBlob(raw, creds)
+    if (Option.isSome(updated)) yield* write(updated.value)
+    return WriteBack.cases.Kept.make({})
+  })
+
 const writeCredentialsFile = (
   creds: ClaudeCredentials,
-): Effect.Effect<void, ProviderAuthError, AnthropicPlatform | FileSystem.FileSystem | Path.Path> =>
+  expected: Option.Option<ClaudeCredentials>,
+): Effect.Effect<
+  WriteBack,
+  ProviderAuthError,
+  AnthropicPlatform | FileSystem.FileSystem | Path.Path
+> =>
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     const fs = yield* FileSystem.FileSystem
@@ -556,12 +596,14 @@ const writeCredentialsFile = (
     if (exists) {
       raw = yield* fs.readFileString(credentialsFile).pipe(Effect.mapError(mapFsError))
     }
-    const updated = updateCredentialBlob(raw, creds)
-    if (Option.isNone(updated)) return
-    yield* fs.writeFileString(credentialsFile, updated.value).pipe(Effect.mapError(mapFsError))
-    // chmod 0600 after write so the credentials file is not
-    // world-readable on first creation.
-    yield* fs.chmod(credentialsFile, 0o600).pipe(Effect.mapError(mapFsError))
+    return yield* compareAndWrite(raw, creds, expected, (blob) =>
+      fs.writeFileString(credentialsFile, blob).pipe(
+        // chmod 0600 after write so the credentials file is not
+        // world-readable on first creation.
+        Effect.andThen(fs.chmod(credentialsFile, 0o600)),
+        Effect.mapError(mapFsError),
+      ),
+    )
   })
 
 // ── oauth keychain ──────────────────────────────────────────────────────────
@@ -701,21 +743,27 @@ const readClaudeCodeCredentials: Effect.Effect<
  * the stale `accessToken` straight back from disk/keychain. The
  * `acct` field is preserved by reading the existing entry first.
  *
+ * The write is a compare-and-swap: it re-reads the stored blob and writes
+ * only while it still holds `expected`, the credential read before the
+ * refresh. A sign-in (or a CLI refresh) written meanwhile is newer than
+ * this refresh, so it survives and the result names it.
+ *
  * Errors are surfaced as `ProviderAuthError` for the caller to log:
  * write-back is best-effort; the in-memory creds are authoritative for
  * the in-flight request.
  */
 const writeBackCredentials = (
   creds: ClaudeCredentials,
+  expected: Option.Option<ClaudeCredentials>,
 ): Effect.Effect<
-  void,
+  WriteBack,
   ProviderAuthError,
   AnthropicPlatform | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     if (platform.platform !== "darwin") {
-      return yield* writeCredentialsFile(creds)
+      return yield* writeCredentialsFile(creds, expected)
     }
 
     // A read failure surfaces as a typed error, so the refresh call site
@@ -739,13 +787,15 @@ const writeBackCredentials = (
         ),
       ),
     )
-    const updated = updateCredentialBlob(raw, creds)
-    if (Option.isNone(updated)) return
-    const accountName = Option.getOrElse(
-      yield* getKeychainAccountName(CLAUDE_KEYCHAIN_SERVICE),
-      () => CLAUDE_KEYCHAIN_SERVICE,
+    return yield* compareAndWrite(raw, creds, expected, (blob) =>
+      Effect.gen(function* () {
+        const accountName = Option.getOrElse(
+          yield* getKeychainAccountName(CLAUDE_KEYCHAIN_SERVICE),
+          () => CLAUDE_KEYCHAIN_SERVICE,
+        )
+        yield* writeKeychainEntry(CLAUDE_KEYCHAIN_SERVICE, accountName, blob)
+      }),
     )
-    yield* writeKeychainEntry(CLAUDE_KEYCHAIN_SERVICE, accountName, updated.value)
   })
 
 // ── oauth refresh ───────────────────────────────────────────────────────────
@@ -898,13 +948,20 @@ const refreshClaudeCodeCredentials = (
         // Best-effort write-back so subsequent processes pick up the
         // new token. A failure here doesn't lose the refresh — the
         // caller has it in memory.
-        yield* writeBackCredentials(refreshed.value).pipe(
+        const expected = Exit.getSuccess(current)
+        const outcome = yield* writeBackCredentials(refreshed.value, expected).pipe(
           Effect.catchEager((e: ProviderAuthError) =>
             Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
               Effect.annotateLogs({ error: String(e) }),
+              Effect.as(WriteBack.cases.Kept.make({})),
             ),
           ),
         )
+        // A sign-in written during the refresh is newer: use it, and drop
+        // this refresh rather than overwrite it.
+        if (outcome._tag === "Superseded" && Option.isSome(outcome.stored)) {
+          return outcome.stored.value
+        }
         return refreshed.value
       }
       const error = Cause.findErrorOption(refreshed.cause)
@@ -1082,12 +1139,27 @@ const decodeMessageStreamEvent = Schema.decodeUnknownSync(MessageStreamEventSche
 const prefixName = (name: string): string =>
   `${MCP_PREFIX}${name.charAt(0).toUpperCase()}${name.slice(1)}`
 
-/** Reverse `prefixName`: drop `mcp_` and lowercase the first char. */
-const unprefixName = (name: string): string => {
+/**
+ * Reverse `prefixName`. The request's own tool ids decide: `prefixName` loses
+ * the case of an id's first letter. A name no request tool produced drops
+ * `mcp_` and lowercases its first letter.
+ */
+const unprefixName = (toolIds: ReadonlyArray<string>, name: string): string => {
+  const id = toolIds.find((candidate) => prefixName(candidate) === name)
+  if (Predicate.isNotUndefined(id)) return id
   let stripped = name
   if (name.startsWith(MCP_PREFIX)) stripped = name.slice(MCP_PREFIX.length)
   return `${stripped.charAt(0).toLowerCase()}${stripped.slice(1)}`
 }
+
+/** The tool ids a request advertised, before `transformTools` prefixed them. */
+const requestToolIds = (
+  payload: Parameters<AnthropicClient.Service["createMessage"]>[0]["payload"],
+): ReadonlyArray<string> =>
+  (payload.tools ?? []).flatMap((tool) => {
+    if ("name" in tool && Predicate.isString(tool.name)) return [tool.name]
+    return []
+  })
 
 /** Prefix all tool names with mcp_ in the outgoing payload */
 const transformTools = (tools: ReadonlyArray<JsonRecord>): ReadonlyArray<JsonRecord> =>
@@ -1473,33 +1545,34 @@ const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): J
 /** Strip mcp_ prefix from tool_use content blocks in a non-streaming response */
 export const transformResponseContent = (
   content: ReadonlyArray<JsonRecord>,
+  toolIds: ReadonlyArray<string>,
 ): ReadonlyArray<JsonRecord> =>
   content.map((block) => {
     if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
-      return { ...block, name: unprefixName(block["name"]) }
+      return { ...block, name: unprefixName(toolIds, block["name"]) }
     }
     return block
   })
 
 /** Strip mcp_ prefix from streaming content_block_start events.
  *  MessageStreamEvent uses `type` for the event kind, and `content_block` for the block data. */
-export const transformStreamEvent = (
-  event: AnthropicClient.MessageStreamEvent,
-): AnthropicClient.MessageStreamEvent => {
-  // content_block_start has type: "content_block_start" and content_block with the block data
-  const e = Schema.decodeSync(JsonRecordSchema)(event)
-  if (e["type"] !== "content_block_start") return event
-  const rawBlock = e["content_block"]
-  if (!isRecord(rawBlock)) return event
-  const block = rawBlock
-  if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
-    return decodeMessageStreamEvent({
-      ...event,
-      content_block: { ...block, name: unprefixName(block["name"]) },
-    })
+export const transformStreamEvent =
+  (toolIds: ReadonlyArray<string>) =>
+  (event: AnthropicClient.MessageStreamEvent): AnthropicClient.MessageStreamEvent => {
+    // content_block_start has type: "content_block_start" and content_block with the block data
+    const e = Schema.decodeSync(JsonRecordSchema)(event)
+    if (e["type"] !== "content_block_start") return event
+    const rawBlock = e["content_block"]
+    if (!isRecord(rawBlock)) return event
+    const block = rawBlock
+    if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
+      return decodeMessageStreamEvent({
+        ...event,
+        content_block: { ...block, name: unprefixName(toolIds, block["name"]) },
+      })
+    }
+    return event
   }
-  return event
-}
 
 // ── Layer ──
 
@@ -1512,11 +1585,14 @@ type CreateMessageStreamReply = Effect.Success<
 interface ClientPath<R> {
   /** The path's own payload rewrite, run after the request plan is applied. */
   readonly payload: (payload: JsonRecord) => Effect.Effect<JsonRecord, never, R>
+  /** Maps the reply; `toolIds` are the tool ids the call's request advertised. */
   readonly message: (
     call: Effect.Effect<CreateMessageReply, AiError.AiError>,
+    toolIds: ReadonlyArray<string>,
   ) => Effect.Effect<CreateMessageReply, AiError.AiError>
   readonly stream: (
     call: Effect.Effect<CreateMessageStreamReply, AiError.AiError>,
+    toolIds: ReadonlyArray<string>,
   ) => Effect.Effect<CreateMessageStreamReply, AiError.AiError>
 }
 
@@ -1561,8 +1637,10 @@ const anthropicClientLayer = <R>(
           const inner = yield* AnthropicClient.AnthropicClient
           return AnthropicClient.AnthropicClient.of({
             ...inner,
-            createMessage: (request) => path.message(inner.createMessage(request)),
-            createMessageStream: (request) => path.stream(inner.createMessageStream(request)),
+            createMessage: (request) =>
+              path.message(inner.createMessage(request), requestToolIds(request.payload)),
+            createMessageStream: (request) =>
+              path.stream(inner.createMessageStream(request), requestToolIds(request.payload)),
           })
         }),
       )
@@ -1591,13 +1669,16 @@ const claudeCodeClientPath = (
   const explain = explainCredentialFailure(creds)
   return {
     payload: transformPayload,
-    message: (call) =>
+    message: (call, toolIds) =>
       explain(call).pipe(
         Effect.map(([body, response]) => {
           const b = Schema.decodeSync(JsonRecordSchema)(body)
           const content = b["content"]
           if (isRecordArray(content)) {
-            const transformed = { ...b, content: transformResponseContent(content) }
+            const transformed = {
+              ...b,
+              content: transformResponseContent(content, toolIds),
+            }
             return [
               Schema.decodeUnknownSync(Generated.BetaMessage)(transformed),
               response,
@@ -1606,13 +1687,13 @@ const claudeCodeClientPath = (
           return [body, response] satisfies CreateMessageReply
         }),
       ),
-    stream: (call) =>
+    stream: (call, toolIds) =>
       explain(call).pipe(
         Effect.map(
           ([response, stream]) =>
             [
               response,
-              stream.pipe(Stream.map(transformStreamEvent)),
+              stream.pipe(Stream.map(transformStreamEvent(toolIds))),
             ] satisfies CreateMessageStreamReply,
         ),
       ),
@@ -1723,23 +1804,14 @@ const buildOauthHeaders = (
  * returned client to have an empty requirement channel. Each request
  * invokes `creds.getFresh`, which consults the live `Ref` cache.
  */
-export const buildKeychainTransformClient =
-  (
-    creds: CredentialCache<ClaudeCredentials>,
-    env: AnthropicKeychainEnv,
-  ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
-  (client) =>
-    client.pipe(
-      HttpClient.mapRequestEffect((req) =>
-        Effect.gen(function* () {
-          const fresh = yield* freshCredentials(creds, req)
-          const modelId = parseModelIdFromBody(requestBodyText(req))
-          const headers = buildOauthHeaders(req, fresh.accessToken, modelId, env)
-          return withHeaders(req, headers)
-        }),
-      ),
-      recoverUnauthorized(creds),
-    )
+export const buildKeychainTransformClient = (
+  creds: CredentialCache<ClaudeCredentials>,
+  env: AnthropicKeychainEnv,
+): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
+  authorizedClient(creds, (req, fresh) => {
+    const modelId = parseModelIdFromBody(requestBodyText(req))
+    return withHeaders(req, buildOauthHeaders(req, fresh.accessToken, modelId, env))
+  })
 
 // ── extension ───────────────────────────────────────────────────────────────
 

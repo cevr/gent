@@ -33,6 +33,7 @@ import {
 } from "../../src/domain/ids"
 import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import {
+  AgentLoopLiveActor,
   AgentLoopSessionGovernance,
   type AgentLoopState,
   buildInitialAgentLoopState,
@@ -201,6 +202,7 @@ import {
   buildIdleState,
   buildRunningState,
   entityIdOf,
+  type FollowUpQueueFull,
   type LoopState,
   type RunningState,
   toWaitingForInteractionState,
@@ -2804,6 +2806,28 @@ describe("admitted turn withdrawal", () => {
     }),
   )
 
+  it.live("an interrupt aimed at a withdrawn admission does not stop the next turn", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("first")
+      const second = queuedItem("second")
+      const harness = yield* makeHarness(admitted(first, [second]), { settles: true })
+      // The user stops `first` before the worker claims it, then withdraws it.
+      yield* harness.worker.interrupt(first.message.id)
+      expect(yield* harness.worker.withdrawAdmittedTurn(first.message.id)).toBe(true)
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      const ran = yield* waitForOption(
+        () =>
+          Ref.get(harness.interruptedTurns).pipe(
+            Effect.map(Option.liftPredicate((all) => all.length === 1)),
+          ),
+        "the promoted follow-up ran",
+      )
+      expect(yield* Ref.get(harness.ranTurns)).toEqual(["second"])
+      expect(ran).toEqual([false])
+      yield* Fiber.interrupt(loop)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.effect("a promoted follow-up can be withdrawn in turn", () =>
     Effect.gen(function* () {
       const first = queuedItem("first")
@@ -3074,6 +3098,268 @@ describe("turn lifecycle hooks", () => {
       yield* client.message.send({ sessionId, branchId, content: "answer me" }).pipe(Effect.exit)
       expect(yield* Deferred.await(stopped).pipe(Effect.timeout("5 seconds"))).toBe(true)
     }),
+  )
+})
+
+// ── loop open hooks ─────────────────────────────────────────────────────────
+
+/** Answers every model call with one fixed text, and counts the calls. */
+const countingReply = (text: string, calls: Ref.Ref<number>) =>
+  LanguageModelLayers.testStream(() =>
+    Ref.update(calls, (n) => n + 1).pipe(
+      Effect.as(
+        Stream.fromIterable([
+          textDeltaPart(text),
+          finishPart({ finishReason: "stop" }),
+        ] satisfies LanguageModelStreamPart[]),
+      ),
+    ),
+  )
+
+const hasAssistantText = (messages: ReadonlyArray<Message>, text: string) =>
+  messages.some(
+    (message) => message.role === "assistant" && messagePartsText(message.parts) === text,
+  )
+
+describe("loop open hooks", () => {
+  it.scopedLive(
+    "a loop rebuilt after a restart runs its loopOpen hooks once, and a turn does not run them again",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-loop-open-")
+        const dbPath = `${tempDir}/gent.db`
+        const opened = yield* Ref.make<ReadonlyArray<string>>([])
+        const extension = defineExtension({
+          id: "@gent/test-loop-open-record",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("loopOpen", () =>
+              Effect.gen(function* () {
+                const ctx = yield* ExtensionContext
+                yield* Ref.update(opened, (all) => [...all, `${ctx.sessionId}/${ctx.branchId}`])
+              }),
+            )
+          }),
+        })
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [...e2ePreset.extensionInputs, extension],
+            storagePath: dbPath,
+          })
+
+        // First process: one answered turn, then the process stops.
+        const firstCalls = yield* Ref.make(0)
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              layerFor(countingReply("first answer", firstCalls)),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message.send({ sessionId, branchId, content: "hello" })
+            // The receipt is written before the loop goes idle: a restart
+            // after this point has no turn to resume.
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (snapshot) =>
+                snapshot.runtime._tag === "Idle" &&
+                hasAssistantText(snapshot.messages, "first answer"),
+              5_000,
+              "the first turn settled",
+            )
+            return { sessionId, branchId }
+          }),
+        )
+        yield* Ref.set(opened, [])
+
+        // Second process: a snapshot rebuilds the loop, and no turn runs.
+        const secondCalls = yield* Ref.make(0)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              layerFor(countingReply("second answer", secondCalls)),
+            )
+            yield* client.session.getSnapshot(started)
+            const seen = yield* waitFor(
+              Ref.get(opened),
+              (all) => all.length > 0,
+              5_000,
+              "the loopOpen hook ran",
+            )
+            expect(seen).toEqual([`${started.sessionId}/${started.branchId}`])
+            expect(yield* Ref.get(secondCalls)).toBe(0)
+
+            // A turn on the open loop does not open it again.
+            yield* client.message.send({ ...started, content: "again" })
+            yield* waitFor(
+              client.message.list({ branchId: started.branchId }),
+              (messages) => hasAssistantText(messages, "second answer"),
+              5_000,
+              "the second turn answered",
+            )
+            expect(yield* Ref.get(opened)).toEqual([`${started.sessionId}/${started.branchId}`])
+          }),
+        )
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a loopOpen hook that queues on its own branch wakes it without stalling the rebuild",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-loop-open-queue-")
+        const dbPath = `${tempDir}/gent.db`
+        const armed = yield* Ref.make(false)
+        const extension = defineExtension({
+          id: "@gent/test-loop-open-queue",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("loopOpen", () =>
+              Effect.gen(function* () {
+                if (!(yield* Ref.get(armed))) return
+                const ctx = yield* ExtensionContext
+                yield* ctx.Session.send({
+                  delivery: "queue",
+                  content: "work was lost in the restart",
+                  sourceId: "test-loop-open-notice",
+                })
+              }),
+            )
+          }),
+        })
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [...e2ePreset.extensionInputs, extension],
+            storagePath: dbPath,
+          })
+
+        const firstCalls = yield* Ref.make(0)
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              layerFor(countingReply("first answer", firstCalls)),
+            )
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message.send({ sessionId, branchId, content: "hello" })
+            // The receipt is written before the loop goes idle: a restart
+            // after this point has no turn to resume.
+            yield* waitFor(
+              client.session.getSnapshot({ sessionId, branchId }),
+              (snapshot) =>
+                snapshot.runtime._tag === "Idle" &&
+                hasAssistantText(snapshot.messages, "first answer"),
+              5_000,
+              "the first turn settled",
+            )
+            return { sessionId, branchId }
+          }),
+        )
+        yield* Ref.set(armed, true)
+
+        const secondCalls = yield* Ref.make(0)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(
+              layerFor(countingReply("noticed the loss", secondCalls)),
+            )
+            yield* client.session.getSnapshot(started).pipe(Effect.timeout("3 seconds"))
+            const isNotice = (message: Message) =>
+              message.role === "user" &&
+              messagePartsText(message.parts) === "work was lost in the restart"
+            const messages = yield* waitFor(
+              client.message.list({ branchId: started.branchId }),
+              (all) => hasAssistantText(all, "noticed the loss") && all.some(isNotice),
+              5_000,
+              "the queued notice started a turn",
+            )
+            expect(messages.filter(isNotice).length).toBe(1)
+            expect(yield* Ref.get(secondCalls)).toBe(1)
+          }),
+        )
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive("a failing loopOpen hook leaves the loop open and later hooks still run", () =>
+    Effect.gen(function* () {
+      const later = yield* Deferred.make<void>()
+      const failing = defineExtension({
+        id: "@gent/test-loop-open-fails",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("loopOpen", () => Effect.die("loopOpen broke"))
+        }),
+      })
+      const recording = defineExtension({
+        id: "@gent/test-loop-open-after-failure",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.on("loopOpen", () => Deferred.succeed(later, void 0))
+        }),
+      })
+      const calls = yield* Ref.make(0)
+      const { client, sessionId, branchId } = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: countingReply("still answering", calls),
+        extensionInputs: [...e2ePreset.extensionInputs, failing, recording],
+      })
+      yield* client.message.send({ sessionId, branchId, content: "are you there?" })
+      yield* Deferred.await(later)
+      yield* waitFor(
+        client.message.list({ branchId }),
+        (all) => hasAssistantText(all, "still answering"),
+        5_000,
+        "the turn answered",
+      )
+      expect(yield* Ref.get(calls)).toBe(1)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+
+  it.scopedLive(
+    "a loopOpen hook that never returns delays no turn and no other hook",
+    () =>
+      Effect.gen(function* () {
+        const hanging = yield* Deferred.make<void>()
+        const later = yield* Deferred.make<void>()
+        const stuck = defineExtension({
+          // Sorts before the recording hook, so a sequential run would stop there.
+          id: "@gent/test-loop-open-a-hangs",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("loopOpen", () =>
+              Deferred.succeed(hanging, void 0).pipe(Effect.andThen(Effect.never)),
+            )
+          }),
+        })
+        const recording = defineExtension({
+          id: "@gent/test-loop-open-after-hang",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("loopOpen", () => Deferred.succeed(later, void 0))
+          }),
+        })
+        const calls = yield* Ref.make(0)
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer: countingReply("not held up", calls),
+          extensionInputs: [...e2ePreset.extensionInputs, stuck, recording],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "are you there?" })
+        yield* Deferred.await(hanging)
+        yield* Deferred.await(later)
+        yield* waitFor(
+          client.message.list({ branchId }),
+          (all) => hasAssistantText(all, "not held up"),
+          5_000,
+          "the turn answered while a loopOpen hook still ran",
+        )
+        expect(yield* Ref.get(calls)).toBe(1)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 })
 
@@ -4607,7 +4893,7 @@ const makeRuntimeLayer = (
   )
   const approvalLayer = ApprovalService.Live.pipe(Layer.provide(baseDeps))
   return Layer.provideMerge(
-    SessionRuntime.Live({ baseSections: [] }),
+    Layer.provideMerge(AgentLoopLiveActor({ baseSections: [] }), SessionRuntime.Client),
     Layer.mergeAll(baseDeps, approvalLayer, ProcessLocalToolReplay.Live),
   )
 }
@@ -4770,6 +5056,59 @@ describe("a submit whose caller is interrupted before its turn starts", () => {
         expect(messages.filter((message) => message.id === interrupted.id)).toHaveLength(1)
         expect(streamCalls).toBe(1)
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
+    }),
+  )
+})
+
+describe("a full follow-up queue", () => {
+  it.scopedLive("refuses the next submit and leaves the running turn streaming", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("queue-full-session")
+      const branchId = BranchId.make("queue-full-branch")
+      const firstStarted = yield* Deferred.make<void>()
+      const releaseFirst = yield* Deferred.make<void>()
+      const firstInterrupted = yield* Ref.make(false)
+      const calls = yield* Ref.make(0)
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Effect.gen(function* () {
+          const call = yield* Ref.getAndUpdate(calls, (n) => n + 1)
+          if (call === 0) {
+            yield* Deferred.succeed(firstStarted, void 0)
+            yield* Deferred.await(releaseFirst).pipe(
+              Effect.onInterrupt(() => Ref.set(firstInterrupted, true)),
+            )
+          }
+          return Stream.fromIterable([
+            textDeltaPart(`turn ${call}`),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies LanguageModelStreamPart[])
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const submit = (text: string) =>
+          submitAgentLoop(agentLoop, makeMessage(sessionId, branchId, text))
+        yield* submit("running")
+        yield* Deferred.await(firstStarted)
+        for (let i = 1; i <= 10; i++) yield* submit(`queued-${i}`)
+        const refused = yield* Effect.flip(submit("one-too-many"))
+        expect(refused._tag).toBe("FollowUpQueueFull")
+        // The refusal leaves the loop and its running turn alone.
+        expect(yield* Ref.get(firstInterrupted)).toBe(false)
+        expect((yield* agentLoop.getQueue({ sessionId, branchId })).followUp).toHaveLength(10)
+        yield* Deferred.succeed(releaseFirst, void 0)
+        yield* waitForOption(
+          () => Ref.get(calls).pipe(Effect.map(Option.liftPredicate((n) => n === 11))),
+          "every admitted turn ran",
+        )
+        yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
+        // The running turn streamed once: recovery never restarted it.
+        expect(yield* Ref.get(calls)).toBe(11)
+        expect(yield* Ref.get(firstInterrupted)).toBe(false)
+      }).pipe(
+        Effect.timeout("8 seconds"),
+        Effect.provide(actorTestRoot({ provider: providerLayer })),
+      )
     }),
   )
 })
@@ -4996,7 +5335,7 @@ describe("agent-loop actor commands", () => {
       )
       const readProbe = request({
         id: "read-probe",
-        readonly: true,
+        answersDuringTurn: true,
         input: Schema.String,
         output: Schema.String,
         execute: (value: string) => Effect.succeed(`read ${value}`),
@@ -5141,9 +5480,11 @@ describe("wake admission", () => {
    */
   const withInbox = <A>(
     body: (inbox: {
-      readonly admit: (item: QueuedTurnItem) => Effect.Effect<unknown, AgentLoopError>
+      readonly admit: (
+        item: QueuedTurnItem,
+      ) => Effect.Effect<unknown, AgentLoopError | FollowUpQueueFull>
       readonly queue: Effect.Effect<LoopQueueStateType>
-    }) => Effect.Effect<A, AgentLoopError>,
+    }) => Effect.Effect<A, AgentLoopError | FollowUpQueueFull>,
   ) =>
     Effect.gen(function* () {
       const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
@@ -5220,7 +5561,9 @@ describe("wake admission", () => {
   )
 
   const fillFollowUpQueue = (inbox: {
-    readonly admit: (item: QueuedTurnItem) => Effect.Effect<unknown, AgentLoopError>
+    readonly admit: (
+      item: QueuedTurnItem,
+    ) => Effect.Effect<unknown, AgentLoopError | FollowUpQueueFull>
   }) =>
     Effect.forEach(
       Array.from({ length: 10 }, (_, index) => index),
@@ -5272,11 +5615,11 @@ describe("wake admission", () => {
         yield* fillFollowUpQueue(inbox)
         const rejected = yield* inbox.admit({ message: queuedMessage("full-10", "item 10") }).pipe(
           Effect.match({
-            onFailure: (error) => Option.some(error.message),
+            onFailure: (error) => Option.some(error._tag),
             onSuccess: () => Option.none(),
           }),
         )
-        expect(rejected).toEqual(Option.some("Follow-up queue full (max 10)"))
+        expect(rejected).toEqual(Option.some("FollowUpQueueFull"))
         expect((yield* inbox.queue).followUp.map((item) => String(item.message.id))).toEqual(
           Array.from({ length: 10 }, (_, index) => `full-${index}`),
         )
@@ -9435,5 +9778,264 @@ describe("session depth guard", () => {
         expect(error.message).toContain("ancestry is missing or incomplete")
       }),
     ),
+  )
+})
+
+describe("a repeated durable send", () => {
+  it.scopedLive(
+    "opens the target's loop, so a turn the previous process left unfinished resumes",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-durable-repeat-")
+        const dbPath = `${tempDir}/gent.db`
+        const target = yield* Ref.make(Option.none<{ sessionId: SessionId; branchId: BranchId }>())
+        // The sender repeats the same durable turn each time its own loop
+        // opens, the way an extension re-sends work after a restart.
+        const extension = defineExtension({
+          id: "@gent/test-durable-repeat",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("loopOpen", () =>
+              Effect.gen(function* () {
+                const current = yield* Ref.get(target)
+                if (Option.isNone(current)) return
+                const ctx = yield* ExtensionContext
+                if (ctx.sessionId === current.value.sessionId) return
+                yield* ctx.Session.send({
+                  delivery: "turn",
+                  ...current.value,
+                  content: "TARGET-TASK: answer",
+                  commandId: ActorCommandId.make("durable-repeat-turn"),
+                  completion: "admission",
+                })
+              }),
+            )
+          }),
+        })
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [...e2ePreset.extensionInputs, extension],
+            storagePath: dbPath,
+          })
+        const isTargetCall = (prompt: Prompt.RawInput) =>
+          Prompt.make(prompt).content.some(
+            (message) =>
+              message.role === "user" &&
+              message.content.some(
+                (part) => part.type === "text" && part.text.includes("TARGET-TASK"),
+              ),
+          )
+
+        // First process: the target's turn starts and hangs, then the process stops.
+        const running = yield* Deferred.make<void>()
+        const sender = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const providerLayer = LanguageModelLayers.testStream((options) => {
+              if (!isTargetCall(options.prompt)) return Effect.never
+              return Deferred.succeed(running, void 0).pipe(Effect.andThen(Effect.never))
+            })
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            const created = yield* client.session.create({ cwd: "/tmp" })
+            yield* Ref.set(
+              target,
+              Option.some({ sessionId: created.sessionId, branchId: created.branchId }),
+            )
+            const opened = yield* client.session.create({ cwd: "/tmp" })
+            const senderTarget = { sessionId: opened.sessionId, branchId: opened.branchId }
+            yield* client.session.getSnapshot(senderTarget)
+            yield* Deferred.await(running)
+            return senderTarget
+          }),
+        )
+        const targetBranch = Option.getOrThrow(yield* Ref.get(target))
+
+        // Second process: only the sender opens. Its repeat is answered from
+        // the stored reply, and the target's turn still resumes.
+        const targetCalls = yield* Ref.make(0)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const providerLayer = LanguageModelLayers.testStream((options) => {
+              if (!isTargetCall(options.prompt)) return Effect.never
+              return Ref.update(targetCalls, (n) => n + 1).pipe(
+                Effect.as(
+                  Stream.fromIterable([
+                    textDeltaPart("resumed answer"),
+                    finishPart({ finishReason: "stop" }),
+                  ] satisfies LanguageModelStreamPart[]),
+                ),
+              )
+            })
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            yield* client.session.getSnapshot(sender)
+            yield* waitFor(
+              client.message.list({ branchId: targetBranch.branchId }),
+              (messages) => hasAssistantText(messages, "resumed answer"),
+              5_000,
+              "the target's unfinished turn resumed",
+            )
+            const messages = yield* client.message.list({ branchId: targetBranch.branchId })
+            expect(messages.filter((message) => message.role === "user")).toHaveLength(1)
+            expect(yield* Ref.get(targetCalls)).toBe(1)
+          }),
+        )
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+})
+
+describe("a tool call a restart cut short", () => {
+  it.scopedLive(
+    "is reported to the model as interrupted, and does not run again",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-cut-short-")
+        const dbPath = `${tempDir}/gent.db`
+        const runs = yield* Ref.make(0)
+        const running = yield* Deferred.make<void>()
+        // The first run never returns: the process stops while it runs.
+        const sideEffect = tool({
+          id: "side_effect",
+          description: "Does something that must not happen twice",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: () =>
+            Ref.updateAndGet(runs, (n) => n + 1).pipe(
+              Effect.flatMap((n) => {
+                if (n > 1) return Effect.succeed("ran again")
+                return Deferred.succeed(running, void 0).pipe(Effect.andThen(Effect.never))
+              }),
+            ),
+        })
+        // A build identity gives the call a durable binding, as a shipped tool has.
+        const extension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/cut-short") },
+          scope: "builtin",
+          sourcePath: "test",
+          artifactIdentity: LoadedArtifactIdentity.make("@test/cut-short@artifact-1"),
+          contributions: { tools: [sideEffect] },
+        }
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [extension],
+            storagePath: dbPath,
+          })
+
+        // First process: the model calls the tool, and the process stops while it runs.
+        const target = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+              toolCallStep("side_effect", {}),
+            ])
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message.send({ sessionId, branchId, content: "do it once" })
+            yield* Deferred.await(running)
+            return { sessionId, branchId }
+          }),
+        )
+
+        // Second process: the turn resumes; the model reads what happened.
+        const seen = yield* Ref.make(Option.none<Prompt.Prompt>())
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const providerLayer = LanguageModelLayers.testStream((options) =>
+              Ref.set(seen, Option.some(Prompt.make(options.prompt))).pipe(
+                Effect.as(
+                  Stream.fromIterable([
+                    textDeltaPart("told it was cut short"),
+                    finishPart({ finishReason: "stop" }),
+                  ] satisfies LanguageModelStreamPart[]),
+                ),
+              ),
+            )
+            const { client } = yield* createRpcClient(layerFor(providerLayer))
+            yield* waitFor(
+              client.session.getSnapshot(target),
+              (snapshot) =>
+                snapshot.runtime._tag === "Idle" &&
+                hasAssistantText(snapshot.messages, "told it was cut short"),
+              5_000,
+              "the resumed turn answered",
+            )
+          }),
+        )
+        expect(yield* Ref.get(runs)).toBe(1)
+        const prompt = Option.getOrThrow(yield* Ref.get(seen))
+        const results = prompt.content.flatMap((message) => {
+          if (message.role !== "tool") return []
+          return message.content.filter((part) => part.type === "tool-result")
+        })
+        expect(results).toHaveLength(1)
+        expect(results[0]?.isFailure).toBe(true)
+        expect(results[0]?.result).toMatchObject({ reason: "Interrupted" })
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a parked mark the database refuses fails the step, so the turn does not park unmarked",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-mark-refused-")
+        const dbPath = `${tempDir}/gent.db`
+        const asking = tool({
+          id: "asking_work",
+          description: "Asks before it works",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: Effect.fn("asking_work")(function* () {
+            const ctx = yield* ExtensionContext
+            const decision = yield* ctx.Interaction.approve({ text: "do the work?" })
+            if (!decision.approved) return "declined"
+            return "worked"
+          }),
+        })
+        const extension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/mark-refused") },
+          scope: "builtin",
+          sourcePath: "test",
+          artifactIdentity: LoadedArtifactIdentity.make("@test/mark-refused@artifact-1"),
+          contributions: { tools: [asking] },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("asking_work", {}),
+        ])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [extension],
+            durableApproval: true,
+            storagePath: dbPath,
+          }),
+        )
+        const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+        // The database refuses any turn row that carries a parked mark.
+        yield* Effect.sync(() => {
+          const db = new Database(dbPath)
+          db.exec("PRAGMA busy_timeout = 2000")
+          for (const event of ["INSERT", "UPDATE"]) {
+            db.exec(
+              `CREATE TRIGGER refuse_parked_${event.toLowerCase()} BEFORE ${event} ON turn_records WHEN NEW.pending_tool_calls_json LIKE '%"parked":true%' BEGIN SELECT RAISE(ABORT, 'parked mark refused'); END`,
+            )
+          }
+          db.close()
+        })
+        yield* client.message.send({ sessionId, branchId, content: "ask first" })
+        const settled = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) => message.role === "assistant"),
+          5_000,
+          "the turn ended instead of parking",
+        )
+        expect(settled.runtime._tag).toBe("Idle")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
   )
 })

@@ -30,7 +30,8 @@ import {
   aiError,
   Auth,
   AuthApi,
-  CurrentResolveModelAssertion,
+  ModelResolver,
+  type ResolveModelRequest,
   finishPart,
   type LanguageModelStreamPart,
   makeLanguageModelLayer,
@@ -82,22 +83,32 @@ export const makeFakeFetchState = (): FakeFetchState => ({ captured: [] })
  *
  * `responder` receives the captured request (same shape stored in
  * `state.captured`) so per-call response shaping is possible — e.g. 401
- * on first call, 200 on retry.
+ * on first call, 200 on retry. A responder that returns an Effect runs it
+ * before the response resolves, so a test can change the world while a
+ * request is in flight.
  */
 type FakeFetchFn = (
   input: globalThis.RequestInfo | globalThis.URL,
   init?: globalThis.RequestInit,
 ) => Promise<Response>
 
+interface FakeResponse {
+  status: number
+  headers?: Record<string, string>
+  body: string
+}
+
+type FakeResponder = (req: CapturedRequest) => FakeResponse | Effect.Effect<FakeResponse>
+
+const asEffect = (
+  answer: FakeResponse | Effect.Effect<FakeResponse>,
+): Effect.Effect<FakeResponse> => {
+  if (Effect.isEffect(answer)) return answer
+  return Effect.succeed(answer)
+}
+
 const makeFakeFetch =
-  (
-    state: FakeFetchState,
-    responder: (req: CapturedRequest) => {
-      status: number
-      headers?: Record<string, string>
-      body: string
-    },
-  ): FakeFetchFn =>
+  (state: FakeFetchState, responder: FakeResponder): FakeFetchFn =>
   (input: globalThis.RequestInfo | globalThis.URL, init?: globalThis.RequestInit) => {
     let url: string
     if (Predicate.isString(input)) url = input
@@ -133,14 +144,15 @@ const makeFakeFetch =
     }
     state.captured.push(captured)
 
-    const response = responder(captured)
     // oxlint-disable-next-line gent/no-runpromise-outside-boundary -- This adapter implements the Promise-based Fetch interface.
     return Effect.runPromise(
-      Effect.succeed(
-        new globalThis.Response(response.body, {
-          status: response.status,
-          headers: response.headers ?? { "content-type": "application/json" },
-        }),
+      Effect.map(
+        asEffect(responder(captured)),
+        (reply) =>
+          new globalThis.Response(reply.body, {
+            status: reply.status,
+            headers: reply.headers ?? { "content-type": "application/json" },
+          }),
       ),
     )
   }
@@ -151,11 +163,7 @@ const makeFakeFetch =
  */
 export const fakeFetchLayer = (
   state: FakeFetchState,
-  responder: (req: CapturedRequest) => {
-    status: number
-    headers?: Record<string, string>
-    body: string
-  },
+  responder: FakeResponder,
 ): Layer.Layer<never, never, never> =>
   Layer.succeed(
     FetchHttpClient.Fetch,
@@ -354,6 +362,17 @@ const signal = (reply: string, options?: { inputTokens?: number; outputTokens?: 
     return { layer, controls }
   })
 
+/**
+ * The resolve-request check a sequence's `assertRequest` steps install. Only
+ * `LanguageModelLayers.resolver` reads it; a model layer without one resolves
+ * unchecked.
+ */
+const SequenceRequestAssertion = Context.Reference<
+  Option.Option<(request: ResolveModelRequest) => Effect.Effect<void, ProviderError>>
+>("@gent/core/src/test-utils/language-model/SequenceRequestAssertion", {
+  defaultValue: () => Option.none(),
+})
+
 const sequence = (steps: ReadonlyArray<SequenceStep>) =>
   Effect.gen(function* () {
     const indexRef = yield* Ref.make(0)
@@ -405,27 +424,30 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
         }).pipe(Stream.unwrap),
       generateText: () => Effect.succeed("sequence language model"),
     })
-    const requestAssertionLayer = Layer.succeed(CurrentResolveModelAssertion, (request) =>
-      Effect.gen(function* () {
-        const idx = yield* Ref.getAndUpdate(requestIndexRef, (n) => n + 1)
-        const step = steps[idx] ?? steps[0]
-        if (Predicate.isUndefined(step?.assertRequest)) return
-        yield* Effect.try({
-          try: () => {
-            const model = String(request.modelId)
-            if (!Predicate.isUndefined(request.hints?.reasoning)) {
-              return step.assertRequest?.({ model, reasoning: request.hints.reasoning })
-            }
-            return step.assertRequest?.({ model })
-          },
-          catch: (e) =>
-            new ProviderError({
-              message: `Sequence language model: assertRequest failed at step ${idx}: ${e}`,
-              model: request.modelId,
-              cause: e,
-            }),
-        })
-      }),
+    const requestAssertionLayer = Layer.succeed(
+      SequenceRequestAssertion,
+      Option.some((request: ResolveModelRequest) =>
+        Effect.gen(function* () {
+          const idx = yield* Ref.getAndUpdate(requestIndexRef, (n) => n + 1)
+          const step = steps[idx] ?? steps[0]
+          if (Predicate.isUndefined(step?.assertRequest)) return
+          yield* Effect.try({
+            try: () => {
+              const model = String(request.modelId)
+              if (!Predicate.isUndefined(request.hints?.reasoning)) {
+                return step.assertRequest?.({ model, reasoning: request.hints.reasoning })
+              }
+              return step.assertRequest?.({ model })
+            },
+            catch: (e) =>
+              new ProviderError({
+                message: `Sequence language model: assertRequest failed at step ${idx}: ${e}`,
+                model: request.modelId,
+                cause: e,
+              }),
+          })
+        }),
+      ),
     )
     const layer = Layer.merge(languageModelLayer, requestAssertionLayer)
 
@@ -461,7 +483,28 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
     return { layer, controls }
   })
 
+/**
+ * A model resolver over a test model layer: it serves the one model for every
+ * request, after the sequence's `assertRequest` check when the layer has one.
+ */
+const resolver = (layer: Layer.Layer<LanguageModel.LanguageModel>): Layer.Layer<ModelResolver> =>
+  Layer.effect(
+    ModelResolver,
+    Effect.gen(function* () {
+      const model = yield* LanguageModel.LanguageModel
+      const assertRequest = yield* SequenceRequestAssertion
+      return ModelResolver.of({
+        resolve: (request) =>
+          Option.match(assertRequest, {
+            onNone: () => Effect.succeed(model),
+            onSome: (check) => check(request).pipe(Effect.as(model)),
+          }),
+      })
+    }),
+  ).pipe(Layer.provide(layer))
+
 export const LanguageModelLayers = {
+  resolver,
   testStream,
   debug: ScriptedLanguageModel.debug,
   get empty() {

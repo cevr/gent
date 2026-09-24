@@ -846,7 +846,9 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
       onNone: () => StateLocation.cases.Memory.make({}),
       onSome: (dbPath) => StateLocation.cases.Disk.make({ dbPath }),
     }),
-    languageModelLayerOverride: config.providerLayer,
+    modelResolverOverride: Option.getOrUndefined(
+      Option.map(Option.fromUndefinedOr(config.providerLayer), LanguageModelLayers.resolver),
+    ),
     extensions: extensionInputsForConfig(config),
     // A broken extension fails the test with its reason, not a later timeout.
     failOnExtensionFailure: config.allowFailedExtensions !== true,

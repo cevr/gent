@@ -33,6 +33,22 @@ export class AgentLoopError extends Schema.TaggedError<AgentLoopError>()("AgentL
 }) {}
 
 /**
+ * The branch refused a follow-up because its queue is at the cap. A refusal,
+ * not a fault: the loop and its running turn go on untouched.
+ */
+export class FollowUpQueueFull extends Schema.TaggedError<FollowUpQueueFull>()(
+  "FollowUpQueueFull",
+  { max: Schema.Int },
+) {
+  override get message(): string {
+    return `Follow-up queue full (max ${this.max})`
+  }
+}
+
+/** What an admission can fail with: a loop fault, or the queue's refusal. */
+const AdmissionError = Schema.Union([AgentLoopError, FollowUpQueueFull])
+
+/**
  * A storage or transport fault becomes the loop's one caller-facing error at
  * the call that raised it, keeping what actually went wrong as the cause.
  */
@@ -466,26 +482,26 @@ export const AgentLoop = Actor.fromEntity(
     Submit: {
       payload: TurnSubmissionFields,
       success: Schema.Void,
-      error: AgentLoopError,
+      error: AdmissionError,
       id: messageTarget,
     },
     SubmitAndWait: {
       payload: TurnSubmissionFields,
       success: Schema.Void,
-      error: AgentLoopError,
+      error: AdmissionError,
       id: messageTarget,
     },
     SubmitDurable: {
       payload: TurnSubmissionFields,
       success: Schema.Void,
-      error: AgentLoopError,
+      error: AdmissionError,
       persisted: true,
       id: messageTarget,
     },
     QueueFollowUp: {
       payload: QueueFollowUpFields,
       success: Schema.Void,
-      error: AgentLoopError,
+      error: AdmissionError,
       id: messageTarget,
     },
     Steer: {
@@ -616,6 +632,17 @@ export const submitUserMessage = Effect.fn("AgentLoop.client.submitUserMessage")
   }
   const ref = yield* loopRefFor(input.sessionId, input.branchId)
   if (input.completion === "admission") {
+    // A repeat of a durable submit is answered from its stored reply and
+    // never reaches the loop. The state read opens the loop first, so a
+    // repeat still resumes a turn the previous process left unfinished.
+    yield* ref.execute(
+      AgentLoop.GetState.make({
+        workspaceId: payload.workspaceId,
+        sessionId: input.sessionId,
+        branchId: input.branchId,
+        commandId,
+      }),
+    )
     yield* ref.execute(AgentLoop.SubmitDurable.make(payload))
   } else if (shouldHoldCompletion) {
     yield* ref.execute(AgentLoop.SubmitAndWait.make(payload))
@@ -684,7 +711,13 @@ export const queueFollowUpOn = Effect.fn("AgentLoop.client.queueFollowUp")(funct
         wake: input.wake,
       }),
     )
-    .pipe(asAgentLoopError(`Failed to queue follow-up ${message.id}`))
+    .pipe(
+      // A full queue stays the typed refusal; anything else is a loop fault.
+      Effect.mapError((cause) => {
+        if (Schema.is(FollowUpQueueFull)(cause)) return cause
+        return new AgentLoopError({ message: `Failed to queue follow-up ${message.id}`, cause })
+      }),
+    )
 })
 
 /** Remove a queued follow-up on a branch by source. False when absent or already running. */

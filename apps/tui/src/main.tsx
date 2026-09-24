@@ -35,7 +35,7 @@ import {
   resolveStartupAuthState,
 } from "./app"
 import { TerminalDimensionsProvider } from "./terminal"
-import { ComposerMemoryProvider, SessionShellProvider } from "./session"
+import { ComposerMemoryProvider } from "./session"
 import { detectColorScheme } from "./theme"
 import { EnvProvider, WorkspaceProvider } from "./workspace"
 import { ExtensionUIProvider } from "./extensions/host"
@@ -377,24 +377,22 @@ const runGent = ({
                 initialAgent={initialAgent}
               >
                 <ExtensionUIProvider scope={uiScope}>
-                  <SessionShellProvider
-                    initialPrompt={bootstrap.initialPrompt}
-                    initialSessionId={Option.map(
-                      Option.fromNullishOr(bootstrap.initialSession),
-                      (session) => session.sessionId,
-                    )}
-                  >
-                    <TerminalDimensionsProvider>
-                      <ComposerMemoryProvider>
-                        <App
-                          debugMode={debug}
-                          missingAuthProviders={missingAuth}
-                          initialBranches={bootstrap.initialBranches}
-                          initialThemeMode={initialThemeMode}
-                        />
-                      </ComposerMemoryProvider>
-                    </TerminalDimensionsProvider>
-                  </SessionShellProvider>
+                  <TerminalDimensionsProvider>
+                    <ComposerMemoryProvider
+                      initialPrompt={bootstrap.initialPrompt}
+                      initialSessionId={Option.map(
+                        Option.fromNullishOr(bootstrap.initialSession),
+                        (session) => session.sessionId,
+                      )}
+                    >
+                      <App
+                        debugMode={debug}
+                        missingAuthProviders={missingAuth}
+                        initialBranches={bootstrap.initialBranches}
+                        initialThemeMode={initialThemeMode}
+                      />
+                    </ComposerMemoryProvider>
+                  </TerminalDimensionsProvider>
                 </ExtensionUIProvider>
               </ClientProvider>
             </WorkspaceProvider>

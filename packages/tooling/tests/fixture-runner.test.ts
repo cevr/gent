@@ -28,7 +28,14 @@ import {
   type OxlintReport,
   type OxlintRun,
 } from "../src/fixture-runner"
-import gentRules, { isTest, isTestCode, isTestHarness, isTestSupport } from "../src/gent-rules"
+import gentRules, {
+  isTest,
+  isTestCode,
+  isTestHarness,
+  isShippedSource,
+  isTestSupport,
+  ruleSubject,
+} from "../src/gent-rules"
 
 const filterByFile = (report: OxlintReport, fixtureFile: string): ReadonlyArray<Diagnostic> =>
   report.diagnostics.filter((d) => d.filename === fixtureFile)
@@ -455,6 +462,39 @@ describe("what is a test", () => {
   test("testbeds and lint fixtures are support but not test code", () => {
     expect(kinds("testbeds/gamut/gamut.ts")).toEqual(supportOnly)
     expect(kinds("packages/tooling/fixtures/no-sleep.valid.ts")).toEqual(supportOnly)
+  })
+
+  test("a rule judges the path under the lint root, not the directories above it", () => {
+    const cwd = "/Users/x/tests/integration/gent"
+    const subject = (file: string) => ruleSubject({ filename: `${cwd}/${file}`, cwd })
+    expect(kinds(subject("packages/core/src/runtime/agent-loop.ts"))).toEqual(product)
+    expect(kinds(subject("packages/core/tests/runtime/agent-loop.test.ts"))).toEqual(aTest)
+    expect(ruleSubject({ filename: `${cwd}/packages/core/src/a.ts`, cwd: `${cwd}/` })).toBe(
+      "packages/core/src/a.ts",
+    )
+  })
+
+  test("a lint fixture is judged as the file it mirrors", () => {
+    const cwd = "/Users/x/gent"
+    expect(
+      ruleSubject({
+        filename: `${cwd}/packages/tooling/fixtures/packages/core/tests/a.test.ts`,
+        cwd,
+      }),
+    ).toBe("packages/core/tests/a.test.ts")
+  })
+
+  test("shipped source is product code under packages/ and apps/, outside tooling and build output", () => {
+    expect(isShippedSource("packages/core/src/runtime/agent-loop.ts")).toBe(true)
+    expect(isShippedSource("apps/tui/src/main.tsx")).toBe(true)
+    expect(isShippedSource("apps/tui/scripts/build.ts")).toBe(true)
+    expect(isShippedSource("packages/core/src/test-utils/harness.ts")).toBe(false)
+    expect(isShippedSource("packages/e2e/src/pty-fixture.ts")).toBe(false)
+    expect(isShippedSource("packages/core/tests/runtime/agent-loop.test.ts")).toBe(false)
+    expect(isShippedSource("packages/tooling/src/guards.ts")).toBe(false)
+    expect(isShippedSource("packages/extensions/dist/index.js")).toBe(false)
+    expect(isShippedSource("testbeds/gamut/gamut.ts")).toBe(false)
+    expect(isShippedSource("packages/core/package.json")).toBe(false)
   })
 
   test("a shipped boundary file is product code", () => {
