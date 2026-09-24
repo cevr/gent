@@ -43,11 +43,13 @@ import {
   latestAssistantText,
   type Message,
   makeRunSpec,
+  makeShownNotices,
   MessageId,
   RequestId,
   type RunSpec,
   RunSpecSchema,
   SessionId,
+  type ShownNotices,
   ToolCallId,
   tool,
   type TurnUsage,
@@ -967,41 +969,18 @@ const noticeTask = (prompt: string) => {
 const stopNoticeKey = (row: DelegateEntry) => `${row.requestId}@${row.stopNoticeAt}`
 
 /**
- * The stop notices each turn put in its prompt, per `sessionId:branchId`,
- * until that turn ends. Only these clear, and only when the turn answered: a
- * notice the turn never showed (its read failed, or the cap left it out) stays
- * for the next turn. A lost process loses the marks, and the notices show again.
+ * The stop notices each turn put in its prompt. Only these clear, and only
+ * when the turn answered: a notice the turn never showed (its read failed, or
+ * the cap left it out) stays for the next turn.
  */
-class ShownStopNotices extends Context.Service<
-  ShownStopNotices,
-  {
-    readonly record: (key: string, notices: ReadonlyArray<string>) => Effect.Effect<void>
-    /** The notices the turn showed; the marks drop either way. */
-    readonly take: (key: string) => Effect.Effect<ReadonlySet<string>>
-  }
->()("@gent/extensions/src/delegate/ShownStopNotices") {}
+class ShownStopNotices extends Context.Service<ShownStopNotices, ShownNotices>()(
+  "@gent/extensions/src/delegate/ShownStopNotices",
+) {}
 
 const ShownStopNoticesResource = defineResource({
   id: "@gent/delegate/shown-stop-notices",
   scope: "process",
-  layer: Layer.effect(
-    ShownStopNotices,
-    Effect.map(Ref.make<ReadonlyMap<string, ReadonlySet<string>>>(new Map()), (state) =>
-      ShownStopNotices.of({
-        record: (key, notices) =>
-          Ref.update(state, (current) => {
-            const shown = new Set([...(current.get(key) ?? []), ...notices])
-            return new Map([...current, [key, shown]])
-          }),
-        take: (key) =>
-          Ref.modify(state, (current) => {
-            const rest = new Map(current)
-            rest.delete(key)
-            return [current.get(key) ?? new Set<string>(), rest]
-          }),
-      }),
-    ),
-  ),
+  layer: Layer.effect(ShownStopNotices, makeShownNotices),
 })
 
 /**
@@ -1036,7 +1015,7 @@ const stopNoticeSections = Effect.fn("Delegate.stopNotices")(function* () {
     lines.push(`- and ${unnamed} more stopped children, named once you have read these.`)
   }
   yield* (yield* ShownStopNotices).record(
-    `${ctx.sessionId}:${ctx.branchId}`,
+    { sessionId: ctx.sessionId, branchId: ctx.branchId },
     named.flat().map(stopNoticeKey),
   )
   return [
@@ -1060,8 +1039,8 @@ const clearReadStopNotices = Effect.fn("Delegate.clearStopNotices")(function* (i
   readonly streamFailed: boolean
   readonly unanswered: boolean
 }) {
-  const shown = yield* (yield* ShownStopNotices).take(`${input.sessionId}:${input.branchId}`)
-  if (input.interrupted || input.streamFailed || input.unanswered || shown.size === 0) return
+  const shown = yield* (yield* ShownStopNotices).takeRead(input)
+  if (shown.size === 0) return
   const read = (row: DelegateEntry) =>
     Predicate.isNotUndefined(row.stopNoticeAt) && shown.has(stopNoticeKey(row))
   yield* registry.at(input.branchId).update((entries) => {
