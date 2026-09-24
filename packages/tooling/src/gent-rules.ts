@@ -1624,6 +1624,122 @@ const plugin: Plugin = {
         }
       },
     },
+
+    /**
+     * Every child-session writer in core admits the nesting depth.
+     *
+     * `DEFAULT_MAX_AGENT_RUN_DEPTH` is enforced in one place,
+     * `admitChildSessionDepth` (`packages/core/src/runtime/session.ts`). A
+     * `new Session({ ... parentSessionId ... })` row is a child-session
+     * writer, and a writer that skips the admission (the compaction handoff
+     * once did) nests sessions without bound.
+     *
+     * What is required: before the write, the writer's innermost enclosing
+     * function -- a declaration, a function expression, an arrow, or a method
+     * -- calls `admitChildSessionDepth`, or calls a same-file function whose
+     * own body does (`admitParent` in `server.ts` checks the parent, then
+     * admits). An admission in an outer function does not cover a writer in a
+     * nested one: the nested function can run where the outer one never
+     * admitted.
+     *
+     * Storage (rows rebuilt from the database) and the test harness (seeded
+     * chains) are outside the rule; so is everything outside core.
+     */
+    "child-session-writer-admits": {
+      create(context) {
+        const subject = ruleSubject(context)
+        if (!subject.startsWith("packages/core/src/")) return {}
+        if (/^packages\/core\/src\/(?:storage|test-utils)\//.test(subject)) return {}
+
+        const FUNCTION_TYPES = new Set([
+          "FunctionDeclaration",
+          "FunctionExpression",
+          "ArrowFunctionExpression",
+        ])
+        /** The innermost function around `node`, or the program. */
+        const innermostFunction = (node: AstNode): AstNode => {
+          let at = getNodeField(node, "parent")
+          let last = node
+          while (at !== undefined) {
+            if (FUNCTION_TYPES.has(at.type)) return at
+            last = at
+            at = getNodeField(at, "parent")
+          }
+          return last
+        }
+        /**
+         * The name a function is bound to: its own name, or the variable its
+         * wrapping calls initialise (`const admitParent = Effect.fn("x")(function* ...)`).
+         */
+        const boundName = (fn: AstNode): string | undefined => {
+          const id = getNodeField(fn, "id")
+          if (id?.type === "Identifier") return getStringField(id, "name")
+          let at = getNodeField(fn, "parent")
+          while (at?.type === "CallExpression") at = getNodeField(at, "parent")
+          if (at?.type !== "VariableDeclarator") return undefined
+          const variable = getNodeField(at, "id")
+          return variable?.type === "Identifier" ? getStringField(variable, "name") : undefined
+        }
+        const namesParent = (literal: AstNode | undefined): boolean =>
+          literal?.type === "ObjectExpression" &&
+          (getNodeArrayField(literal, "properties") ?? []).some((property) => {
+            const key = getNodeField(property, "key")
+            return (
+              property.type === "Property" &&
+              key?.type === "Identifier" &&
+              getStringField(key, "name") === "parentSessionId"
+            )
+          })
+
+        const calls: Array<{ readonly node: AstNode; readonly name: string }> = []
+        const writers: Array<AstNode> = []
+        return {
+          CallExpression(node) {
+            if (!isAstNode(node)) return
+            const callee = getNodeField(node, "callee")
+            if (callee?.type !== "Identifier") return
+            const name = getStringField(callee, "name")
+            if (name !== undefined) calls.push({ node, name })
+          },
+          NewExpression(node) {
+            if (!isAstNode(node)) return
+            const callee = getNodeField(node, "callee")
+            if (callee?.type !== "Identifier" || getStringField(callee, "name") !== "Session")
+              return
+            if (namesParent(callExpressionArgs(node)[0])) writers.push(node)
+          },
+          "Program:exit"() {
+            const admitting = new Set(["admitChildSessionDepth"])
+            let grew = true
+            while (grew) {
+              grew = false
+              for (const call of calls) {
+                if (!admitting.has(call.name)) continue
+                const name = boundName(innermostFunction(call.node))
+                if (name === undefined || admitting.has(name)) continue
+                admitting.add(name)
+                grew = true
+              }
+            }
+            for (const writer of writers) {
+              const scope = innermostFunction(writer)
+              const admitted = calls.some(
+                (call) =>
+                  admitting.has(call.name) &&
+                  call.node.range[0] < writer.range[0] &&
+                  innermostFunction(call.node) === scope,
+              )
+              if (admitted) continue
+              context.report({
+                message:
+                  "A child-session writer must admit the nesting depth: call `admitChildSessionDepth` (or a same-file function that does) in the writer's own function, before the write. An admission in an outer function does not cover a nested one.",
+                node: writer,
+              })
+            }
+          },
+        }
+      },
+    },
   },
 }
 

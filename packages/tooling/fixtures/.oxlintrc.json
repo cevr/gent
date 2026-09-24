@@ -20,6 +20,7 @@
     "gent/no-sleep": "error",
     "gent/no-die-in-test-helpers": "error",
     "gent/no-with-wrapper-call": "error",
-    "gent/no-inert-it": "error"
+    "gent/no-inert-it": "error",
+    "gent/child-session-writer-admits": "error"
   }
 }

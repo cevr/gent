@@ -21,7 +21,6 @@ import {
   findSuppressionInventoryFindings,
   findTuiSessionIdentityReads,
   findUnadaptedSeams,
-  findUnadmittedChildSessionWriters,
   findUnconsumedExports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
@@ -125,7 +124,6 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
   findCoreVendorModelPins,
   findAliasTestLayers,
   findE2eFixtureImportFindings,
-  findUnadmittedChildSessionWriters,
   findIdentityEncodes,
   findTuiSessionIdentityReads,
 ]

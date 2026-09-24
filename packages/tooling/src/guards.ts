@@ -260,88 +260,25 @@ export const findAliasTestLayers = (file: string, text: string): ReadonlyArray<F
   return findings
 }
 
-// ── every child-session writer admits the depth ─────────────────────────────
-
-/**
- * Guard: every child-session writer in core admits the nesting depth.
- *
- * `DEFAULT_MAX_AGENT_RUN_DEPTH` is enforced in one place,
- * `admitChildSessionDepth` (`packages/core/src/runtime/session.ts`).
- * A file that builds a `new Session({ ... parentSessionId: ... })` row is a
- * child-session writer and must call that admission, or a new writer (the
- * compaction handoff once did) nests sessions without bound.
- *
- * Storage readers rebuild rows from the database and test fixtures seed
- * chains on purpose; both are outside the rule.
- *
- * @module
- */
-
-const CORE_SRC = "packages/core/src/"
-const EXEMPT_PREFIXES = [`${CORE_SRC}storage/`, `${CORE_SRC}test-utils/`]
-const SHARED_CHECK = "admitChildSessionDepth"
-const SESSION_LITERAL = /new Session\(\{/g
-const SHARED_CHECK_CALL = new RegExp(`\\b${SHARED_CHECK}\\(`)
-const TOP_LEVEL_DECLARATION = /(?:^|\n)(?:export\s+)?(?:const|let|function|class)\s/g
-
-/** Offset of the last column-0 declaration head in `text`, or 0. */
-const lastDeclarationStart = (text: string): number => {
-  let start = 0
-  for (const match of text.matchAll(TOP_LEVEL_DECLARATION)) start = match.index
-  return start
-}
-
-/** Report `new Session({...parentSessionId...})` in a core file that never admits depth. */
-export const findUnadmittedChildSessionWriters = (
-  file: string,
-  text: string,
-): ReadonlyArray<Finding> => {
-  if (!file.startsWith(CORE_SRC)) return []
-  if (EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix))) return []
-
-  const findings: Finding[] = []
-  for (const match of text.matchAll(SESSION_LITERAL)) {
-    const start = match.index
-    const end = text.indexOf("})", start)
-    if (end === -1) continue
-    const literal = text.slice(start, end)
-    // A field (`parentSessionId: x`) or a shorthand (`parentSessionId,`).
-    if (!/\bparentSessionId\s*(?:[:,]|$)/.test(literal)) continue
-    // The admission must run before the write, in the same top-level
-    // declaration. A whole-file escape let one admission anywhere in a
-    // 700-line file cover every writer in it.
-    const before = text.slice(0, start)
-    if (SHARED_CHECK_CALL.test(before.slice(lastDeclarationStart(before)))) continue
-    findings.push({
-      file,
-      line: text.slice(0, start).split("\n").length,
-      message: `child-session writer never calls \`${SHARED_CHECK}\`; every \`parentSessionId\` writer admits the nesting cap through \`runtime/session.ts\``,
-    })
-  }
-  return findings
-}
-
 // ── core names no feature built on it ───────────────────────────────────────
 
 /**
  * Guard: core must not name the features built on top of it.
  *
  * Core is the loop. A feature such as the code cell is an extension of the
- * loop, so core carries it through agnostic seams -- `BranchToolFeature`,
- * `ToolCallRecoveryService`, `ModelContextCompactor` -- and never imports it.
+ * loop (`packages/extensions/src/cell.ts`), so core carries it through
+ * agnostic seams and never imports it. The import side is the
+ * `gent/declared-workspace-imports` lint rule: core declares no
+ * `@gent/extensions` dependency, and no relative path leaves a workspace. The
+ * module side is a `RETIRED_SURFACES` path row: no file or directory under
+ * `packages/core/src/` names the cell.
  *
- * No site is exempt. Core takes a `BranchToolFeature` as input, and every
- * composition root that names a concrete one -- `apps/server`, the SDK, the
- * test harnesses -- lives outside core.
- *
- * The same rule holds for a feature's data. A model catalog host belongs to
- * the driver that lists those models, so core must not name one.
+ * This guard holds the rule for a feature's data: a feature's tables and a
+ * catalog host belong to the extension that owns them, so core must not name
+ * one.
  *
  * @module
  */
-
-/** Feature directories under `packages/core/src` that core proper must not import. */
-const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
 
 /**
  * SQL table-name prefixes owned by a feature.
@@ -365,43 +302,17 @@ const FEATURE_HOSTS: ReadonlyArray<string> = ["models.dev"]
 
 const CORE_SRC_PREFIX = "packages/core/src/"
 
-const IMPORT_PATTERN = /^\s*(?:import|export)\b[^"']*from\s*["']([^"']+)["']/
-
 /** A feature-owned table named as a SQL identifier, not merely as a substring. */
 const TABLE_PATTERN = (prefix: string) => new RegExp(`\\b${prefix}[a-z_]+\\b`)
 
-/**
- * Find every import in `file` that reaches into a feature directory it is not
- * allowed to know about.
- *
- * Returns nothing for files outside core and for a feature's own sources.
- */
+/** Find every line in a core file that names a feature's table or catalog host. */
 export const findCoreFeatureIndependenceFindings = (
   file: string,
   text: string,
 ): ReadonlyArray<Finding> => {
   if (!file.startsWith(CORE_SRC_PREFIX)) return []
-  const ownSegments = file.slice(CORE_SRC_PREFIX.length).split("/")
-  if (FEATURE_DIRECTORIES.some((feature) => ownSegments.includes(feature))) return []
 
   const findings: Array<Finding> = []
-  for (const [index, line] of text.split("\n").entries()) {
-    const specifier = Option.flatMap(Option.fromNullishOr(IMPORT_PATTERN.exec(line)), (match) =>
-      Option.fromNullishOr(match[1]),
-    )
-    if (Option.isNone(specifier)) continue
-    const segments = specifier.value.split("/")
-    const named = Option.fromNullishOr(
-      FEATURE_DIRECTORIES.find((feature) => segments.includes(feature)),
-    )
-    if (Option.isNone(named)) continue
-    findings.push({
-      file,
-      line: index + 1,
-      message: `core must not import the "${named.value}" feature (${specifier.value}); carry it through an agnostic seam`,
-    })
-  }
-
   for (const [index, line] of text.split("\n").entries()) {
     const table = Option.fromNullishOr(
       FEATURE_TABLE_PREFIXES.find((prefix) => TABLE_PATTERN(prefix).test(line)),
@@ -1016,7 +927,12 @@ const globMatcher = (glob: string): RegExp => {
  */
 export const OxlintConfigSchema = Schema.Struct({
   overrides: Schema.optional(
-    Schema.Array(Schema.Struct({ files: Schema.optional(Schema.Array(Schema.String)) })),
+    Schema.Array(
+      Schema.Struct({
+        files: Schema.optional(Schema.Array(Schema.String)),
+        rules: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+      }),
+    ),
   ),
   /** Rule names only; the severity values are the caller's business. */
   rules: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
@@ -1048,6 +964,90 @@ export const findUnmatchedOverrideGlobs = (
         file: configFile,
         line: lineOfGlob(configText, glob),
         message: `oxlint override \`files: "${glob}"\` matches no tracked file; delete the override, or fix the glob`,
+      })
+    }
+  }
+  return findings
+}
+
+// ---------------------------------------------------------------------------
+// (a2) An override "off" that suppresses nothing
+// ---------------------------------------------------------------------------
+
+/** One diagnostic of a lint run: the file it names and its `plugin(rule)` code. */
+export interface LintDiagnostic {
+  readonly file: string
+  readonly code: string
+}
+
+/** The code oxlint reports for a configured rule: `effect/noAs` is `effect(noAs)`. */
+const diagnosticCode = (rule: string): string => {
+  const slash = rule.indexOf("/")
+  if (slash === -1) return `eslint(${rule})`
+  return `${rule.slice(0, slash)}(${rule.slice(slash + 1)})`
+}
+
+const isOff = Schema.is(Schema.Literals(["off", 0]))
+
+/** Each rule an override turns off, keyed by the override's index. */
+export const overrideOffs = (config: OxlintConfig): ReadonlyArray<ReadonlyArray<string>> =>
+  (config.overrides ?? []).map((override) =>
+    Object.entries(override.rules ?? {})
+      .filter(([, severity]) => isOff(severity))
+      .map(([rule]) => rule),
+  )
+
+/** The line of `rule`'s key inside the override whose first glob is `glob`. */
+const lineOfOverrideRule = (configText: string, glob: string, rule: string): number => {
+  const lines = configText.split("\n")
+  const start = lineOfGlob(configText, glob) - 1
+  const offset = lines.slice(start).findIndex((line) => line.includes(`"${rule}":`))
+  return start + Math.max(offset, 0) + 1
+}
+
+/**
+ * An override "off" is a suppression: it must hide at least one diagnostic.
+ * `diagnostics` come from a run of the same config with every override "off"
+ * removed. Such a diagnostic belongs to an override when the override's
+ * globs match its file and no other override turns the same rule off for
+ * that file: removing that override alone would bring it back. An "off" that
+ * owns no diagnostic suppresses nothing today, and it would hide the next
+ * real hit without review.
+ */
+export const findUnneededOverrideOffs = (
+  configFile: string,
+  configText: string,
+  config: OxlintConfig,
+  diagnostics: ReadonlyArray<LintDiagnostic>,
+): ReadonlyArray<Finding> => {
+  const overrides = (config.overrides ?? []).map((override, index) => ({
+    globs: override.files ?? [],
+    matchers: (override.files ?? []).map(globMatcher),
+    offs: new Set(overrideOffs(config)[index] ?? []),
+  }))
+  const matches = (matchers: ReadonlyArray<RegExp>, file: string): boolean =>
+    matchers.some((matcher) => matcher.test(file))
+  const findings: Array<Finding> = []
+  for (const [index, override] of overrides.entries()) {
+    for (const rule of override.offs) {
+      const code = diagnosticCode(rule)
+      const owned = diagnostics.some(
+        (diagnostic) =>
+          diagnostic.code === code &&
+          matches(override.matchers, diagnostic.file) &&
+          !overrides.some(
+            (other, otherIndex) =>
+              otherIndex !== index &&
+              other.offs.has(rule) &&
+              matches(other.matchers, diagnostic.file),
+          ),
+      )
+      if (owned) continue
+      const firstGlob = override.globs[0] ?? ""
+      findings.push({
+        file: configFile,
+        line: lineOfOverrideRule(configText, firstGlob, rule),
+        message: `oxlint override for "${firstGlob}" turns off \`${rule}\`, which reports nothing in its files; delete the "off"`,
       })
     }
   }
@@ -1300,8 +1300,10 @@ export const findPlatformDuplicationViolations = (
  * Guard: a deleted surface stays deleted.
  *
  * Each row names what was removed and what replaced it. A row matches a source
- * line, an import specifier's module basename, or the file path itself. The
- * guard source is exempt: the table names every retired surface on purpose.
+ * line or the file path itself. A retired module is a `line` row on its quoted
+ * specifier, so a one-line import, the closing line of a multi-line one, an
+ * `export ... from` and an `import()` all match. The guard source is exempt:
+ * the table names every retired surface on purpose.
  *
  * The steering files and the authoring docs are read too, for every `line`
  * row whatever its scope: an agent reads them before the code, and a deleted
@@ -1316,8 +1318,8 @@ export const findPlatformDuplicationViolations = (
  */
 
 interface RetiredSurface {
-  /** `line`: a source line; `import`: an imported module's basename; `path`: the file path. */
-  readonly on: "line" | "import" | "path"
+  /** `line`: a source line; `path`: the file path. */
+  readonly on: "line" | "path"
   readonly match: RegExp
   /**
    * `shipped`: shipped source and the test harness, not the tests. A test may
@@ -1333,7 +1335,12 @@ interface RetiredSurface {
 const identifiers = (...names: ReadonlyArray<string>): RegExp =>
   new RegExp(`(?<![A-Za-z0-9_$])(?:${names.join("|")})(?![A-Za-z0-9_$])`)
 
-const modules = (...names: ReadonlyArray<string>): RegExp => new RegExp(`^(?:${names.join("|")})$`)
+/**
+ * A module named as the last segment of a quoted relative specifier, with or
+ * without its extension: `"./resource-graph.js"` matches `resource-graph`.
+ */
+const specifierModules = (...names: ReadonlyArray<string>): RegExp =>
+  new RegExp(`(?<=["'][^"'\\n]*/)(?:${names.join("|")})(?=(?:\\.[cm]?[jt]sx?)?["'])`)
 
 const RECONCILER_MESSAGE =
   "the resource reconciler is removed; a profile builds its resources once per cwd in runtime/extension-host.ts, so put new resource behavior inside that scoped build"
@@ -1386,8 +1393,8 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     message: RECONCILER_MESSAGE,
   },
   {
-    on: "import",
-    match: modules(
+    on: "line",
+    match: specifierModules(
       "resource-graph",
       "resource-graph-host",
       "resource-leases",
@@ -1624,6 +1631,14 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     message:
       "server-root.ts is folded away; the SDK root and the test harness build the routes and RPC handlers from createDependencies",
   },
+  {
+    // A core file or directory whose name has `cell` as a whole word.
+    on: "path",
+    match: /^packages\/core\/src\/(?:[^/]+\/)*(?:[^/]*[-_])?cell(?:[-_.][^/]*)?(?:\/|$)/,
+    scope: "shipped",
+    message:
+      "The code cell lives in @gent/extensions (packages/extensions/src/cell.ts); core carries no cell module",
+  },
 ]
 
 /** Source under `packages/` and `apps/` but the tooling package, which names the rows. */
@@ -1637,25 +1652,7 @@ const inRetiredScope = (file: string, row: RetiredSurface): boolean => {
   return isShippedSource(file) || isTestCode(file)
 }
 
-const importedModule = (line: string): Option.Option<string> =>
-  Option.flatMap(
-    Option.flatMap(Option.fromNullishOr(IMPORT_PATTERN.exec(line)), (match) =>
-      Option.fromNullishOr(match[1]),
-    ),
-    (specifier) =>
-      Option.map(Option.fromNullishOr(specifier.split("/").at(-1)), (last) =>
-        last.replace(/\.[cm]?[jt]sx?$/, ""),
-      ),
-  )
-
-/** What a row reads on one line: the line itself, its import's module, or nothing. */
-const subjectOf = (row: RetiredSurface, line: string): Option.Option<string> => {
-  if (row.on === "line") return Option.some(line)
-  if (row.on === "import") return importedModule(line)
-  return Option.none()
-}
-
-/** Every line, import, or path in `file` that brings back a retired surface. */
+/** Every line or path in `file` that brings back a retired surface. */
 export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<Finding> => {
   const rows = RETIRED_SURFACES.filter((row) => inRetiredScope(file, row))
   if (rows.length === 0) return []
@@ -1664,10 +1661,10 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
     if (row.on === "path" && row.match.test(file))
       findings.push({ file, line: 1, message: row.message })
   }
+  const lineRows = rows.filter((row) => row.on === "line")
   for (const [index, line] of text.split("\n").entries()) {
-    for (const row of rows) {
-      const subject = subjectOf(row, line)
-      const hit = Option.flatMap(subject, (value) => Option.fromNullishOr(row.match.exec(value)))
+    for (const row of lineRows) {
+      const hit = Option.fromNullishOr(row.match.exec(line))
       if (Option.isNone(hit)) continue
       findings.push({ file, line: index + 1, message: `"${hit.value[0]}": ${row.message}` })
     }
@@ -1687,9 +1684,8 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * resolves it. An agent sent to `apps/tui/tests/render-harness.tsx` finds
  * nothing and either invents the file or picks a neighbour.
  *
- * Scope is the four files an agent is told to read: `CLAUDE.md` and
- * `AGENTS.md` at the root, `apps/tui/AGENTS.md`, and `ARCHITECTURE.md`. Today
- * `CLAUDE.md` is a symlink to `AGENTS.md`; the guard runner skips symlinks, so
+ * Scope is the steering prose (`STEERING_PROSE`): what an agent is told to
+ * read. Today `CLAUDE.md` is a symlink to `AGENTS.md`; the guard runner skips symlinks, so
  * the document is read once, and a `CLAUDE.md` that becomes a file of its own
  * is read as one.
  *
@@ -1720,12 +1716,13 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
 /**
  * Steering prose: what an agent is told to read before it changes the code.
  * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, a package's own
- * `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, and the
+ * `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, a testbed's
+ * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), and the
  * project skills under `.claude/skills/`. The path claims and the
  * retired-surface rows both read exactly this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|\.claude\/skills\/.+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|\.claude\/skills\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
@@ -2196,6 +2193,9 @@ export const findUnusedSuppressionApprovals = (
  *   e2e packages are read the same way, and so is `packages/core/src/test-utils/`,
  *   which is its own surface: a guard's finding type, a fixture's context type
  *   and a test layer's config sit beside the function that returns them.
+ *   Support modules -- test helpers, build scripts and a testbed's driver --
+ *   are read with the strict rule (`SUPPORT_MODULE`); a test file declares
+ *   nothing the scan measures.
  *
  * - An entry-point surface (`packages/core/src/extensions/api.ts`,
  *   `packages/core/src/protocol.ts`, `packages/core/src/host.ts`,
@@ -2365,8 +2365,33 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
   },
 ]
 
-const surfaceOf = (file: string): Option.Option<ScannedSurface> =>
-  Option.fromNullishOr(SCANNED_SURFACES.find((surface) => file.startsWith(surface.prefix)))
+/**
+ * Support modules: the test helpers under a workspace's `tests/` or
+ * `integration/`, its build scripts, and a testbed's driver. They sit outside
+ * every shipped tree, so no prefix row reaches them. Each is read strictly: a
+ * name only its own file uses drops the `export` keyword.
+ */
+const SUPPORT_MODULE =
+  /^(?:(?:packages|apps)\/[^/]+\/(?:tests|integration|scripts)\/|testbeds\/[^/]+\/(?:tests\/)?[^/]+\.[cm]?[jt]sx?$)/
+
+const SUPPORT_SURFACE: ScannedSurface = {
+  prefix: "",
+  outsideOf: [],
+  testsCount: true,
+  ownFileCounts: false,
+  specifier: Option.none(),
+}
+
+/** A test file declares nothing the scan measures: its exports are fixture text or test-local. */
+const TEST_FILE = /\.test\.[cm]?[jt]sx?$/
+
+const surfaceOf = (file: string): Option.Option<ScannedSurface> => {
+  if (TEST_FILE.test(file)) return Option.none()
+  return Option.orElse(
+    Option.fromNullishOr(SCANNED_SURFACES.find((surface) => file.startsWith(surface.prefix))),
+    () => Option.liftPredicate(SUPPORT_SURFACE, () => SUPPORT_MODULE.test(file)),
+  )
+}
 
 /** A declared name, and the surface whose rule decides whether it is consumed. */
 interface Declaration {
