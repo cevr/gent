@@ -1,4 +1,4 @@
-import { Context, Effect, Option, Predicate, Result, Schema } from "effect"
+import { Context, DateTime, Effect, Option, Predicate, Result, Schema } from "effect"
 import {
   ExtensionId,
   type ExtensionId as ExtensionIdType,
@@ -31,16 +31,23 @@ export const compileSystemPrompt = (sections: ReadonlyArray<PromptSection>): str
     .map((s) => s.content)
     .join("\n\n")
 
-/** The one section core writes: where the loop is running. Everything an agent *is* comes from extensions. */
+/**
+ * The one section core writes: where the loop is running. Everything an agent *is* comes from extensions.
+ *
+ * The date is the user's local date with its time zone: a UTC date is a day
+ * ahead for every evening west of Greenwich. It is the only value in the
+ * section that changes, once a day.
+ */
 export function environmentSection(options: {
   cwd: string
   platform: string
   isGitRepo: boolean
-  date: string
+  now: DateTime.Zoned
   shell?: string
   osVersion?: string
 }): PromptSection {
-  const { cwd, platform, isGitRepo, date, shell, osVersion } = options
+  const { cwd, platform, isGitRepo, now, shell, osVersion } = options
+  const date = `${DateTime.formatIsoDate(now)} (${DateTime.zoneToString(now.zone)})`
   let platformDisplay = platform
   if (!Predicate.isUndefined(osVersion)) platformDisplay = `${platform} (${osVersion})`
   let shellDisplay = "unknown"

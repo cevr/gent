@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Context, Effect, Schema } from "effect"
+import { Context, DateTime, Effect, Schema } from "effect"
 import * as AiTool from "effect/unstable/ai/Tool"
 import {
   defineRequests,
@@ -206,11 +206,15 @@ describe("tool declarations", () => {
 // ── prompt composition ──────────────────────────────────────────────────────
 
 describe("environment section", () => {
+  // 03:00 UTC on New Year's Day is still New Year's Eve in New York.
+  const newYorkEve = DateTime.makeZonedUnsafe(Date.UTC(2026, 0, 1, 3), {
+    timeZone: "America/New_York",
+  })
   const base = {
     cwd: "/home/user/project",
     platform: "linux",
     isGitRepo: true,
-    date: "2026-01-01",
+    now: newYorkEve,
   }
 
   test("names the working directory, platform, git state, and date", () => {
@@ -218,7 +222,11 @@ describe("environment section", () => {
     expect(result).toContain("Working directory: /home/user/project")
     expect(result).toContain("Platform: linux")
     expect(result).toContain("Git repository: yes")
-    expect(result).toMatch(/Date: \d{4}-\d{2}-\d{2}/)
+  })
+
+  // The model is told the user's date, not UTC's: from 20:00 EDT, UTC is already tomorrow.
+  test("the date is the local date, with its time zone", () => {
+    expect(environmentSection(base).content).toContain("Date: 2025-12-31 (America/New_York)")
   })
 
   test("shell and OS version appear when known", () => {
