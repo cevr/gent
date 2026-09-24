@@ -27,7 +27,6 @@ import {
   findUnmatchedOverrideGlobs,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
-  isRetiredSurfaceProse,
   isSteeringFile,
   OxlintConfigSchema,
   type DependencyScope,
@@ -339,10 +338,7 @@ const program = Effect.gen(function* () {
       // join the pass so their own scans get the text.
       .filter(
         (file) =>
-          /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) ||
-          isSteeringFile(file) ||
-          isRetiredSurfaceProse(file) ||
-          file === HOOK_FILE,
+          /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file) || file === HOOK_FILE,
       )
       .filter((file) => !file.includes("/dist/") && !symlinks.has(file)),
     readTrackedFile,

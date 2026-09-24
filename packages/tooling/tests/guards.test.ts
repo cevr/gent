@@ -1518,14 +1518,23 @@ describe("steering file paths", () => {
     ).toEqual([])
   })
 
-  test("checks each of the four steering files and nothing else", () => {
+  test("checks the steering prose the retired rows read, and nothing else", () => {
     const text = "- `packages/gone/src/missing.ts`"
-    for (const file of ["CLAUDE.md", "AGENTS.md", "apps/tui/AGENTS.md", "ARCHITECTURE.md"]) {
+    for (const file of [
+      "CLAUDE.md",
+      "AGENTS.md",
+      "ARCHITECTURE.md",
+      "apps/tui/AGENTS.md",
+      "packages/core/AGENTS.md",
+      "docs/extensions.md",
+    ]) {
       expect(isSteeringFile(file)).toBe(true)
       expect(messagesOfSteeringPath(text, file)).toHaveLength(1)
     }
-    expect(isSteeringFile("plans/some-plan.md")).toBe(false)
-    expect(messagesOfSteeringPath(text, "plans/some-plan.md")).toEqual([])
+    for (const file of ["plans/some-plan.md", "docs/research/2026-09-06-x.md", "README.md"]) {
+      expect(isSteeringFile(file)).toBe(false)
+      expect(messagesOfSteeringPath(text, file)).toEqual([])
+    }
   })
 })
 

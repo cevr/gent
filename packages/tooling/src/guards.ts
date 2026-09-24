@@ -1,7 +1,7 @@
 import { Option, Schema } from "effect"
 // A write or a caller in test support proves a reader works, not that
 // production supplies it; the lint rules read the same definitions.
-import { isTestCode, isTestHarness, isTestSupport } from "./gent-rules"
+import { isShippedSource, isTestCode, isTestHarness, isTestSupport } from "./gent-rules"
 
 /** What every guard reports: a place in a file, and what is wrong there. */
 export interface Finding {
@@ -170,17 +170,12 @@ export const findBannedEslintDisableBlocks = (
  * @module
  */
 
-/**
- * Shipped source, the same reading `core-retired-reconciler` uses.
- *
- * The rule this guard enforces is a project rule, not a core rule: a service
- * in the TUI earns a `Test` layer on the same terms as a service in core. A
- * `packages/`-only prefix left `apps/tui/src/services/` outside the question
- * entirely. The two guards that do pin `packages/core/src/` -- feature
- * independence, vendor model pins -- are scoped that way because what they
- * forbid is core reaching outward; nothing about an alias is core-specific.
- */
-const SHIPPED_SOURCE = /^(?:packages|apps)\/[^/]+\/(?:[^/]+\/)*src\//
+// The scope is `isShippedSource`. The rule this guard enforces is a project
+// rule, not a core rule: a service in the TUI earns a `Test` layer on the same
+// terms as a service in core. The two guards that do pin `packages/core/src/`
+// -- feature independence, vendor model pins -- are scoped that way because
+// what they forbid is core reaching outward; nothing about an alias is
+// core-specific.
 
 /**
  * Member names that claim to be an alternative implementation.
@@ -242,7 +237,7 @@ const normalized = (initializer: string): string =>
 
 /** Report alternative layer statics whose whole body returns `Live`. */
 export const findAliasTestLayers = (file: string, text: string): ReadonlyArray<Finding> => {
-  if (!SHIPPED_SOURCE.test(file)) return []
+  if (!isShippedSource(file)) return []
 
   const findings: Finding[] = []
   const lines = text.split("\n")
@@ -554,7 +549,7 @@ const ENCODER_BINDING =
 const COMPARED = /(?:===|!==|\.has\(|\.get\(|\.add\()/
 
 export const findIdentityEncodes = (file: string, text: string): ReadonlyArray<Finding> => {
-  if (!SHIPPED_SOURCE.test(file)) return []
+  if (!isShippedSource(file)) return []
   const lines = text.split("\n")
   const encoders: string[] = []
   for (const line of lines) {
@@ -628,7 +623,7 @@ const SEAM_DECLARATION_FILE = "packages/core/src/domain/extension.ts"
 
 /** Files that may fill a seam: shipped extensions and the apps, never test support. */
 const isAdapterSource = (file: string): boolean =>
-  (file.startsWith("packages/extensions/src/") || file.startsWith("apps/")) && !isTestSupport(file)
+  isShippedSource(file) && (file.startsWith("packages/extensions/src/") || file.startsWith("apps/"))
 
 /**
  * Reads the member names of a single interface or object-literal body.
@@ -1266,14 +1261,6 @@ export const findReadersWithoutWriters = (
 
 // ── no code duplicates an Effect platform service ───────────────────────────
 
-/** Shipped source under `packages/` and `apps/`: not test support, not build output. */
-const shippedSourceFile = (file: string): boolean =>
-  /^(?:packages|apps)\//.test(file) &&
-  /\.(?:[cm]?[jt]sx?)$/.test(file) &&
-  file !== GUARDS_FILE &&
-  !isTestSupport(file) &&
-  !file.includes("/dist/")
-
 const PLATFORM_LAYER = /\b(?:BunPlatformLive|BunGentPlatformLive)\b/
 
 const platformProviderRootFiles = new Set([
@@ -1281,10 +1268,6 @@ const platformProviderRootFiles = new Set([
   "packages/core/src/runtime/gent-platform-bun.ts",
   // The host entry is the door hosts take to the platform roots.
   "packages/core/src/host.ts",
-  // The test entry hands test roots the full Bun platform.
-  "packages/core/src/test-utils/index.ts",
-  // The in-process test server root provides the platform around `createDependencies`.
-  "packages/core/src/test-utils/harness.ts",
   "apps/tui/src/main.tsx",
   "packages/sdk/src/server.ts",
 ])
@@ -1298,7 +1281,7 @@ export const findPlatformDuplicationViolations = (
   file: string,
   text: string,
 ): ReadonlyArray<Finding> => {
-  if (!shippedSourceFile(file) || platformProviderRootFiles.has(file)) return []
+  if (!isShippedSource(file) || platformProviderRootFiles.has(file)) return []
   return text.split("\n").flatMap((line, index) => {
     if (!PLATFORM_LAYER.test(line)) return []
     return [
@@ -1646,22 +1629,12 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
 /** Source under `packages/` and `apps/` but the tooling package, which names the rows. */
 const RETIRED_SOURCE = /^(?:packages|apps)\/(?!tooling\/).+\.[cm]?[jt]sx?$/
 
-/**
- * The prose the retired rows read: the steering files, a package's own
- * `AGENTS.md` or `CLAUDE.md`, and `docs/` but its dated research.
- */
-const RETIRED_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md)$/
-
-/** A prose file the retired-surface rows read. */
-export const isRetiredSurfaceProse = (file: string): boolean => RETIRED_PROSE.test(file)
-
 const inRetiredScope = (file: string, row: RetiredSurface): boolean => {
-  if (isRetiredSurfaceProse(file)) return row.on === "line"
+  if (isSteeringFile(file)) return row.on === "line"
   if (!RETIRED_SOURCE.test(file) || file.includes("/dist/")) return false
   // The harness ships no product, but it is where a removed test layer grows back.
-  if (row.scope === "shipped") return shippedSourceFile(file) || isTestHarness(file)
-  return shippedSourceFile(file) || isTestCode(file)
+  if (row.scope === "shipped") return isShippedSource(file) || isTestHarness(file)
+  return isShippedSource(file) || isTestCode(file)
 }
 
 const importedModule = (line: string): Option.Option<string> =>
@@ -1744,10 +1717,16 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * @module
  */
 
-/** The files an agent is told to read before it changes the code. */
-const STEERING_FILES = new Set(["CLAUDE.md", "AGENTS.md", "apps/tui/AGENTS.md", "ARCHITECTURE.md"])
+/**
+ * Steering prose: what an agent is told to read before it changes the code.
+ * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, a package's own
+ * `AGENTS.md` or `CLAUDE.md`, and `docs/` but its dated research. The path
+ * claims and the retired-surface rows both read exactly this set.
+ */
+const STEERING_PROSE =
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md)$/
 
-export const isSteeringFile = (file: string): boolean => STEERING_FILES.has(file)
+export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
 /** The five roots under which a backticked path is a claim about the tree. */
 const SOURCE_ROOT = /^(?:packages|apps|plans|testbeds|examples)\//
