@@ -22,6 +22,7 @@ import { KeyboardScopeProvider, useScopedKeyboard, useTerminalDimensions } from 
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
 import { Composer, ComposerFrame } from "./composer"
+import { DockProvider } from "./ui"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
   BranchPicker,
@@ -747,8 +748,9 @@ export function Session(props: SessionProps) {
 
         {/* The footer never outgrows the split-footer region: past it, the
             last rows (a docked pane's newest lines, its ask line) fall below
-            the terminal. The trays give way first (`TrayFrame`), then a
-            docked pane's body (`PickerFrame`); the composer keeps its rows. */}
+            the terminal. While a docked pane is open the trays hide
+            (`TrayFrame`), and the pane gives way in whole rows (`PickerFrame`);
+            the composer keeps its rows. */}
         <box
           flexDirection="column"
           flexShrink={0}
@@ -950,9 +952,11 @@ export function App(props: AppProps) {
     >
       <ThemeProvider mode={props.initialThemeMode}>
         <KeyboardScopeProvider>
-          <CommandProvider>
-            <AppContent {...props} />
-          </CommandProvider>
+          <DockProvider>
+            <CommandProvider>
+              <AppContent {...props} />
+            </CommandProvider>
+          </DockProvider>
         </KeyboardScopeProvider>
       </ThemeProvider>
     </ErrorBoundary>

@@ -147,7 +147,7 @@ export function WakeTray(props: {
       <TrayFrame>
         <For each={lines()}>
           {(line) => (
-            <text wrapMode="none" flexShrink={0}>
+            <text wrapMode="none">
               <span style={{ fg: theme.info }}>{`${line.glyph} `}</span>
               <span style={{ fg: theme.textMuted }}>{line.text}</span>
             </text>

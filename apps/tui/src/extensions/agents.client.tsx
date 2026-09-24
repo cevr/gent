@@ -157,7 +157,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
       <TrayFrame>
         <For each={lines()}>
           {(line, index) => (
-            <text wrapMode="none" flexShrink={0}>
+            <text wrapMode="none">
               <span style={{ fg: theme.success }}>{`${glyph(line.pulse)} `}</span>
               <span style={{ fg: theme.textMuted }}>{line.text}</span>
               <Show when={index() === 0}>
