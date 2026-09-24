@@ -380,51 +380,7 @@ describe("child-session depth guard", () => {
 
 // ── core feature independence ───────────────────────────────────────────────
 
-const CELL_IMPORT = 'import { CellExecution } from "../cell/cell-execution.js"'
-
 describe("core feature independence guard", () => {
-  test("flags a core file that imports a feature directory", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/agent-loop.ts",
-      CELL_IMPORT,
-    )
-    expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([
-      "packages/core/src/runtime/agent-loop.ts:1",
-    ])
-    expect(findings[0]?.message).toContain("cell")
-  })
-
-  test("flags a type-only import, which still names the feature", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/session.ts",
-      'import type { DispatchingToolStorage } from "./cell/dispatching-tool-storage.js"',
-    )
-    expect(findings.length).toBe(1)
-  })
-
-  test("allows a feature to import itself", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/cell/cell-storage.ts",
-      'import { CellExecution } from "./cell-execution.js"',
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("ignores files outside core", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/extensions/src/some-extension.ts",
-      CELL_IMPORT,
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("ignores a mention that is not an import", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/tools.ts",
-      "// the cell feature dispatches inner tool calls",
-    )
-    expect(findings).toEqual([])
-  })
   test("flags core naming a table the cell owns", () => {
     const findings = findCoreFeatureIndependenceFindings(
       "packages/core/src/storage/schema.ts",
@@ -434,18 +390,10 @@ describe("core feature independence guard", () => {
     expect(findings[0]!.message).toContain("feature-migrations seam")
   })
 
-  test("lets the cell name its own tables", () => {
+  test("lets the cell extension name its own tables", () => {
     const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/cell/cell-storage.ts",
+      "packages/extensions/src/cell.ts",
       "    CREATE TABLE cell_executions (",
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("lets a cell file import a sibling through the feature directory name", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/cell/cell-storage.ts",
-      'import { CellExecution } from "../cell/cell-execution.js"',
     )
     expect(findings).toEqual([])
   })
@@ -1501,11 +1449,43 @@ describe("retired surface guard", () => {
     }
   })
 
-  test("a doc is not read for imports, and a doc's own path is no finding", () => {
+  test("a doc that shows a retired module's import is reported; a doc's own path is not", () => {
     expect(
-      findRetiredSurfaces("docs/extensions.md", 'import { x } from "./resource-graph.js"'),
-    ).toEqual([])
+      findRetiredSurfaces("docs/extensions.md", 'import { x } from "./resource-graph.js"').map(
+        (finding) => finding.line,
+      ),
+    ).toEqual([1])
     expect(findRetiredSurfaces("docs/server-root.md", "")).toEqual([])
+  })
+
+  test("a retired module is read on every import shape, a multi-line one included", () => {
+    const file = "packages/core/src/runtime/extension-host.ts"
+    const multiLine = [
+      "import {",
+      "  ResourceGraph,",
+      "  ResourceGraphLayer,",
+      '} from "./resource-graph"',
+    ]
+    expect(findRetiredSurfaces(file, multiLine.join("\n")).map((finding) => finding.line)).toEqual([
+      4,
+    ])
+    expect(
+      findRetiredSurfaces(
+        file,
+        'const m = yield* Effect.promise(() => import("../live-profile.js"))',
+      ),
+    ).toHaveLength(1)
+  })
+
+  test("a retired module name that is not a specifier's last segment is not a hit", () => {
+    const file = "packages/core/src/runtime/extension-host.ts"
+    for (const line of [
+      'import { x } from "./resource-graph-builder"',
+      'import { x } from "./resource-graph/index.js"',
+      "// the resource-graph module is gone",
+    ]) {
+      expect(findRetiredSurfaces(file, line)).toEqual([])
+    }
   })
 
   test("dated research, plans, the tooling tests and the guard source are not scanned", () => {

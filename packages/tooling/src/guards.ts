@@ -370,21 +370,17 @@ export const findUnadmittedChildSessionWriters = (
  * Guard: core must not name the features built on top of it.
  *
  * Core is the loop. A feature such as the code cell is an extension of the
- * loop, so core carries it through agnostic seams -- `BranchToolFeature`,
- * `ToolCallRecoveryService`, `ModelContextCompactor` -- and never imports it.
+ * loop (`packages/extensions/src/cell.ts`), so core carries it through
+ * agnostic seams and never imports it. The import side is the
+ * `gent/declared-workspace-imports` lint rule: core declares no
+ * `@gent/extensions` dependency, and no relative path leaves a workspace.
  *
- * No site is exempt. Core takes a `BranchToolFeature` as input, and every
- * composition root that names a concrete one -- `apps/server`, the SDK, the
- * test harnesses -- lives outside core.
- *
- * The same rule holds for a feature's data. A model catalog host belongs to
- * the driver that lists those models, so core must not name one.
+ * This guard holds the rule for a feature's data: a feature's tables and a
+ * catalog host belong to the extension that owns them, so core must not name
+ * one.
  *
  * @module
  */
-
-/** Feature directories under `packages/core/src` that core proper must not import. */
-const FEATURE_DIRECTORIES: ReadonlyArray<string> = ["cell"]
 
 /**
  * SQL table-name prefixes owned by a feature.
@@ -408,43 +404,17 @@ const FEATURE_HOSTS: ReadonlyArray<string> = ["models.dev"]
 
 const CORE_SRC_PREFIX = "packages/core/src/"
 
-const IMPORT_PATTERN = /^\s*(?:import|export)\b[^"']*from\s*["']([^"']+)["']/
-
 /** A feature-owned table named as a SQL identifier, not merely as a substring. */
 const TABLE_PATTERN = (prefix: string) => new RegExp(`\\b${prefix}[a-z_]+\\b`)
 
-/**
- * Find every import in `file` that reaches into a feature directory it is not
- * allowed to know about.
- *
- * Returns nothing for files outside core and for a feature's own sources.
- */
+/** Find every line in a core file that names a feature's table or catalog host. */
 export const findCoreFeatureIndependenceFindings = (
   file: string,
   text: string,
 ): ReadonlyArray<Finding> => {
   if (!file.startsWith(CORE_SRC_PREFIX)) return []
-  const ownSegments = file.slice(CORE_SRC_PREFIX.length).split("/")
-  if (FEATURE_DIRECTORIES.some((feature) => ownSegments.includes(feature))) return []
 
   const findings: Array<Finding> = []
-  for (const [index, line] of text.split("\n").entries()) {
-    const specifier = Option.flatMap(Option.fromNullishOr(IMPORT_PATTERN.exec(line)), (match) =>
-      Option.fromNullishOr(match[1]),
-    )
-    if (Option.isNone(specifier)) continue
-    const segments = specifier.value.split("/")
-    const named = Option.fromNullishOr(
-      FEATURE_DIRECTORIES.find((feature) => segments.includes(feature)),
-    )
-    if (Option.isNone(named)) continue
-    findings.push({
-      file,
-      line: index + 1,
-      message: `core must not import the "${named.value}" feature (${specifier.value}); carry it through an agnostic seam`,
-    })
-  }
-
   for (const [index, line] of text.split("\n").entries()) {
     const table = Option.fromNullishOr(
       FEATURE_TABLE_PREFIXES.find((prefix) => TABLE_PATTERN(prefix).test(line)),
@@ -1432,8 +1402,10 @@ export const findPlatformDuplicationViolations = (
  * Guard: a deleted surface stays deleted.
  *
  * Each row names what was removed and what replaced it. A row matches a source
- * line, an import specifier's module basename, or the file path itself. The
- * guard source is exempt: the table names every retired surface on purpose.
+ * line or the file path itself. A retired module is a `line` row on its quoted
+ * specifier, so a one-line import, the closing line of a multi-line one, an
+ * `export ... from` and an `import()` all match. The guard source is exempt:
+ * the table names every retired surface on purpose.
  *
  * The steering files and the authoring docs are read too, for every `line`
  * row whatever its scope: an agent reads them before the code, and a deleted
@@ -1448,8 +1420,8 @@ export const findPlatformDuplicationViolations = (
  */
 
 interface RetiredSurface {
-  /** `line`: a source line; `import`: an imported module's basename; `path`: the file path. */
-  readonly on: "line" | "import" | "path"
+  /** `line`: a source line; `path`: the file path. */
+  readonly on: "line" | "path"
   readonly match: RegExp
   /**
    * `shipped`: shipped source and the test harness, not the tests. A test may
@@ -1465,7 +1437,12 @@ interface RetiredSurface {
 const identifiers = (...names: ReadonlyArray<string>): RegExp =>
   new RegExp(`(?<![A-Za-z0-9_$])(?:${names.join("|")})(?![A-Za-z0-9_$])`)
 
-const modules = (...names: ReadonlyArray<string>): RegExp => new RegExp(`^(?:${names.join("|")})$`)
+/**
+ * A module named as the last segment of a quoted relative specifier, with or
+ * without its extension: `"./resource-graph.js"` matches `resource-graph`.
+ */
+const specifierModules = (...names: ReadonlyArray<string>): RegExp =>
+  new RegExp(`(?<=["'][^"'\\n]*/)(?:${names.join("|")})(?=(?:\\.[cm]?[jt]sx?)?["'])`)
 
 const RECONCILER_MESSAGE =
   "the resource reconciler is removed; a profile builds its resources once per cwd in runtime/extension-host.ts, so put new resource behavior inside that scoped build"
@@ -1518,8 +1495,8 @@ export const RETIRED_SURFACES: ReadonlyArray<RetiredSurface> = [
     message: RECONCILER_MESSAGE,
   },
   {
-    on: "import",
-    match: modules(
+    on: "line",
+    match: specifierModules(
       "resource-graph",
       "resource-graph-host",
       "resource-leases",
@@ -1769,25 +1746,7 @@ const inRetiredScope = (file: string, row: RetiredSurface): boolean => {
   return isShippedSource(file) || isTestCode(file)
 }
 
-const importedModule = (line: string): Option.Option<string> =>
-  Option.flatMap(
-    Option.flatMap(Option.fromNullishOr(IMPORT_PATTERN.exec(line)), (match) =>
-      Option.fromNullishOr(match[1]),
-    ),
-    (specifier) =>
-      Option.map(Option.fromNullishOr(specifier.split("/").at(-1)), (last) =>
-        last.replace(/\.[cm]?[jt]sx?$/, ""),
-      ),
-  )
-
-/** What a row reads on one line: the line itself, its import's module, or nothing. */
-const subjectOf = (row: RetiredSurface, line: string): Option.Option<string> => {
-  if (row.on === "line") return Option.some(line)
-  if (row.on === "import") return importedModule(line)
-  return Option.none()
-}
-
-/** Every line, import, or path in `file` that brings back a retired surface. */
+/** Every line or path in `file` that brings back a retired surface. */
 export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<Finding> => {
   const rows = RETIRED_SURFACES.filter((row) => inRetiredScope(file, row))
   if (rows.length === 0) return []
@@ -1796,10 +1755,10 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
     if (row.on === "path" && row.match.test(file))
       findings.push({ file, line: 1, message: row.message })
   }
+  const lineRows = rows.filter((row) => row.on === "line")
   for (const [index, line] of text.split("\n").entries()) {
-    for (const row of rows) {
-      const subject = subjectOf(row, line)
-      const hit = Option.flatMap(subject, (value) => Option.fromNullishOr(row.match.exec(value)))
+    for (const row of lineRows) {
+      const hit = Option.fromNullishOr(row.match.exec(line))
       if (Option.isNone(hit)) continue
       findings.push({ file, line: index + 1, message: `"${hit.value[0]}": ${row.message}` })
     }
