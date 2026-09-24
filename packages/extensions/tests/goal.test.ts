@@ -438,8 +438,14 @@ describe("goal stream failure", () => {
 
         // Creating the goal queues the first continuation, which starts the turn
         // that then fails. The failed turn must not queue a second one: that is
-        // the prompt that would wake the branch and spend the goal again.
-        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        // the prompt that would wake the branch and spend the goal again. The
+        // goal pauses before the turn ends, so the check waits for Idle first.
+        const snapshot = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) => current.runtime._tag === "Idle",
+          5_000,
+          "the failed turn ended",
+        )
         expect(snapshot.runtime._tag).toBe("Idle")
         const goalMessages = snapshot.messages.filter(
           (message) => message.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE,
@@ -670,7 +676,13 @@ describe("goal partial usage", () => {
         )
 
         // The paused goal queues no continuation: only the first one exists.
-        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        // The goal pauses before the turn ends, so the check waits for Idle first.
+        const snapshot = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) => current.runtime._tag === "Idle",
+          5_000,
+          "the turn ended",
+        )
         expect(snapshot.runtime._tag).toBe("Idle")
         const goalMessages = snapshot.messages.filter(
           (message) => message.metadata?.customType === GOAL_CONTEXT_MESSAGE_TYPE,
