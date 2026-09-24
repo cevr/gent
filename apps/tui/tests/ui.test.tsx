@@ -5,6 +5,7 @@ import { createSignal } from "solid-js"
 import {
   decoration,
   pickerHeight,
+  PickerFrame,
   pickerLines,
   selectable,
   SelectList,
@@ -623,6 +624,55 @@ describe("docked panes", () => {
       yield* waitForFrame(setup, (frame) => frame.includes("side-quest"), "branch pane")
       expect(renderedFrameRows(renderFrame(setup))).toBe(pickerHeight(2, 40))
     }),
+  )
+})
+
+/**
+ * A frame asking for `height()` rows inside a 10-row column. The frame's
+ * measured height stays 10 whenever it asks for 10 or more, so a change of
+ * the requested height alone must re-decide whether the key hint shows.
+ */
+const mountSqueezableFrame = (initial: number) =>
+  Effect.gen(function* () {
+    const [height, setHeight] = createSignal(initial)
+    const setup = yield* Effect.promise(() =>
+      renderWithProviders(
+        () => (
+          <box flexDirection="column" height={10} maxHeight={10}>
+            <PickerFrame height={height()} title="TITLE" footer="KEY-HINT">
+              <box flexDirection="column" flexGrow={1}>
+                <text>BODY-1</text>
+              </box>
+            </PickerFrame>
+          </box>
+        ),
+        { width: 40, height: 20 },
+      ),
+    )
+    return { setup, setHeight }
+  })
+
+describe("picker squeeze", () => {
+  it.live("a squeezed frame that then asks for exactly the rows it has shows its key hint", () =>
+    Effect.gen(function* () {
+      const { setup, setHeight } = yield* mountSqueezableFrame(14)
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("TITLE") && !frame.includes("KEY-HINT"),
+        "squeezed frame",
+      )
+      setHeight(10)
+      yield* waitForFrame(setup, (frame) => frame.includes("KEY-HINT"), "key hint back", 1_000)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
+  it.live("a frame that fits and then asks for more rows than it has drops its key hint", () =>
+    Effect.gen(function* () {
+      const { setup, setHeight } = yield* mountSqueezableFrame(10)
+      yield* waitForFrame(setup, (frame) => frame.includes("KEY-HINT"), "fitting frame")
+      setHeight(14)
+      yield* waitForFrame(setup, (frame) => !frame.includes("KEY-HINT"), "key hint gone", 1_000)
+    }).pipe(Effect.timeout("4 seconds")),
   )
 })
 

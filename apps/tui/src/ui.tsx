@@ -441,7 +441,9 @@ export function PickerFrame(props: {
   // out of rows, the trays are already hidden (`TrayFrame`) and the frame is
   // the one box that gives way, in whole rows. Squeezed, it drops its key
   // hint before its body's last row: the rows the reader opened it for win.
-  const [squeezed, setSqueezed] = createSignal(false)
+  // A change of either the measured or the requested height re-decides it.
+  const [measured, setMeasured] = createSignal(Option.none<number>())
+  const squeezed = () => Option.exists(measured(), (rows) => rows < props.height)
   return (
     <box
       flexDirection="column"
@@ -450,7 +452,7 @@ export function PickerFrame(props: {
       // A basis, not a height: OpenTUI turns shrinking off on a box whose height is set.
       flexBasis={props.height}
       onSizeChange={function () {
-        setSqueezed(this.height < props.height)
+        setMeasured(Option.some(this.height))
       }}
     >
       <box
