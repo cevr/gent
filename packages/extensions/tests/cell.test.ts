@@ -794,7 +794,6 @@ describe("recorded cell execution", () => {
           ),
           CellExecution,
         )
-        yield* replay.reset
         expect(
           yield* replay.run(first).pipe(Effect.provideService(CellOperationHost, host)),
         ).toEqual(result)
@@ -845,15 +844,19 @@ describe("recorded cell execution", () => {
         yield* Deferred.await(started)
         yield* Fiber.interrupt(running)
         expect(yield* Deferred.isDone(stopped)).toBe(true)
-        yield* execution.reset
-        const unknown = yield* execution
+        // The loop closed under the cell; the next loop opens its own execution.
+        const reopened = Context.get(
+          yield* Layer.build(
+            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
+          ),
+          CellExecution,
+        )
+        const unknown = yield* reopened
           .run(first)
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
         expect(unknown._tag).toBe("CellExecutionIncomplete")
         expect(yield* fs.readFileString(output)).toBe("x")
-        const fresh = yield* execution
-          .run(next)
-          .pipe(Effect.provideService(CellOperationHost, host))
+        const fresh = yield* reopened.run(next).pipe(Effect.provideService(CellOperationHost, host))
         expect(fresh.result).toMatchObject({ display: "42" })
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(testLayer)),
     10000,
@@ -5463,6 +5466,20 @@ const classResult = tool({
   execute: () => Effect.succeed(new ClassResult({ ok: true, items: [] })),
 })
 
+const nullableMiddle = tool({
+  id: "nullable-middle",
+  description: "Takes an optional field with a nested nullable union.",
+  params: Schema.Struct({
+    box: Schema.optional(
+      Schema.NullOr(
+        Schema.Struct({ a: Schema.Union([Schema.String, Schema.Null, Schema.Finite]) }),
+      ),
+    ),
+  }),
+  output: Schema.Boolean,
+  execute: () => Effect.succeed(true),
+})
+
 const treeResult = tool({
   id: "tree",
   description: "Returns a tree.",
@@ -5523,6 +5540,10 @@ const edgeSignatures: ReadonlyArray<readonly [ToolCapability, string]> = [
   [
     classResult,
     '- tools["class-result"](input?: { nested?: { ok: boolean; items: string[] } }): Promise<{ ok: boolean; items: string[] }> // Returns a class.',
+  ],
+  [
+    nullableMiddle,
+    '- tools["nullable-middle"](input?: { box?: { a: string | null | number } }): Promise<boolean> // Takes an optional field with a nested nullable union.',
   ],
   [
     treeResult,

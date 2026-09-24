@@ -1029,7 +1029,6 @@ export const openCellProcess = Effect.fn("CellProcess.open")(function* (input: {
     /** Output the worker wrote during the cell, once its boundary arrived. */
     takeOutput,
     isRunning: handle.isRunning.pipe(Effect.mapError(ioError)),
-    exitCode: handle.exitCode.pipe(Effect.mapError(ioError)),
     send: Effect.fn("CellProcess.send")(function* (request: CellRequest) {
       if (yield* Deferred.isDone(failure)) return yield* Deferred.await(failure)
       // Output nobody claimed, such as late writes from a process a cell spawned, is dropped here.
@@ -2008,11 +2007,23 @@ const makeCellToolHostWith = (
               output: "",
             })
           const key = { cell: params.cell, operationId: request.operationId }
-          const admission = yield* storage.admit({
-            ...key,
-            binding: identity.value,
-            input: request.input,
-          })
+          const admission = yield* storage
+            .admit({
+              ...key,
+              binding: identity.value,
+              input: request.input,
+            })
+            .pipe(
+              // Admission comes before the operation: nothing ran.
+              Effect.mapError(
+                (cause) =>
+                  new CellEvaluationError({
+                    phase: "execute",
+                    message: `Cell operation storage failed. The operation was not run: ${cause.message}`,
+                    output: "",
+                  }),
+              ),
+            )
           if (!admission.admitted) {
             if (admission.operation.state._tag === "Completed")
               return yield* cellToolResultValue(admission.operation.state.result)
@@ -2108,7 +2119,6 @@ interface CellExecutionService {
     StorageError | CellExecutionIncomplete,
     CellOperationHost
   >
-  readonly reset: Effect.Effect<void, CellKernelError>
   readonly cancel: Effect.Effect<void>
   /** The loop closes: end the running cell and record nothing, as a crash would. */
   readonly stop: Effect.Effect<void>
@@ -2227,6 +2237,9 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
               Effect.tap((opened) =>
                 Effect.sync(() => {
                   kernel = Option.some(opened)
+                  // A new worker starts clean and restores just below: the
+                  // recovery a failed launch asked for is done.
+                  recoveryPending = false
                 }),
               ),
               Effect.tap((opened) => restoreNamespace(opened)),
@@ -2373,12 +2386,6 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           if (stopping) return yield* Effect.interrupt
           return result
         })
-        const reset = Effect.fn("CellExecution.reset")(function* () {
-          if (Option.isSome(kernel)) yield* kernel.value.reset
-          yield* namespaces.clear(namespaceAddress).pipe(Effect.orDie)
-          recoveryPending = false
-          restoreReport = Option.none()
-        })
         const cancel = Effect.fn("CellExecution.cancel")(function* () {
           cancellationEpoch++
           if (Option.isSome(active)) yield* Deferred.fail(active.value, cancelled())
@@ -2391,7 +2398,6 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         return CellExecution.of({
           run: (call) =>
             Effect.suspend(() => Semaphore.withPermit(permit, run(call, cancellationEpoch))),
-          reset: Semaphore.withPermit(permit, reset()),
           cancel: cancel().pipe(Effect.uninterruptible),
           stop: stop().pipe(Effect.uninterruptible),
         })
@@ -3099,9 +3105,36 @@ const renderField = (
   if (!isSchemaNode(schema)) return `${propertyKey(name)}?: unknown`
   const rendered = renderSchemaType(schema, depth, scope)
   if (required) return `${propertyKey(name)}: ${rendered}`
-  const present = rendered.split(" | ").filter((member) => member !== "null")
-  if (present.length === 0) return `${propertyKey(name)}?: ${rendered}`
-  return `${propertyKey(name)}?: ${present.join(" | ")}`
+  // Only the field's own top-level members: a `null` nested inside one stays.
+  const present = withoutNull(schema)
+  if (Option.isNone(present)) return `${propertyKey(name)}?: ${rendered}`
+  return `${propertyKey(name)}?: ${renderSchemaType(present.value, depth, scope)}`
+}
+
+const isNullSchema = (schema: JsonSchema.JsonSchema) =>
+  schema["type"] === "null" || ("const" in schema && Predicate.isNull(schema["const"]))
+
+/** The schema with its top-level `null` member removed; none when it has none or only that. */
+const withoutNull = (schema: JsonSchema.JsonSchema): Option.Option<JsonSchema.JsonSchema> => {
+  const alternatives = [...schemaNodes(schema["anyOf"]), ...schemaNodes(schema["oneOf"])]
+  if (alternatives.length > 0) {
+    // A nullable member is itself a union; its `null` is still top-level.
+    const members = alternatives
+      .filter((member) => !isNullSchema(member))
+      .map((member) => {
+        const inner = withoutNull(member)
+        return { schema: Option.getOrElse(inner, () => member), stripped: Option.isSome(inner) }
+      })
+    const kept = members.map((member) => member.schema)
+    const changed = kept.length < alternatives.length || members.some((member) => member.stripped)
+    if (!changed || kept.length === 0) return Option.none()
+    const { anyOf: _anyOf, oneOf: _oneOf, ...rest } = schema
+    return Option.some({ ...rest, anyOf: kept })
+  }
+  const types = strings([schema["type"]].flat())
+  const kept = types.filter((type) => type !== "null")
+  if (kept.length === types.length || kept.length === 0) return Option.none()
+  return Option.some({ ...schema, type: kept })
 }
 
 /** An object with no named keys and a value schema is a record. */
