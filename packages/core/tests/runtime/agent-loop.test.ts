@@ -80,6 +80,7 @@ import {
   multiToolCallStep,
   textStep,
   toolCallStep,
+  turnRequestText,
   waitFor,
 } from "../../src/test-utils/language-model"
 import {
@@ -430,6 +431,135 @@ describe("system prompt date", () => {
         expect(second).not.toContain(`Date: ${today}`)
       }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
     10_000,
+  )
+})
+
+// ── turn notices ────────────────────────────────────────────────────────────
+
+/** The text of the last message before the request's trailing system messages. */
+const lastConversationText = (prompt: Prompt.Prompt): string => {
+  const last = prompt.content.findLast((message) => message.role !== "system")
+  if (last?.role !== "user") return ""
+  return last.content
+    .flatMap((part) => {
+      if (part.type !== "text") return []
+      return [part.text]
+    })
+    .join("")
+}
+
+describe("turn notices", () => {
+  it.scopedLive(
+    "a notice rides after the conversation until an answered turn reads it, and the system prompt never changes",
+    () =>
+      Effect.gen(function* () {
+        const requests = yield* Ref.make<ReadonlyArray<ReturnType<typeof turnRequestText>>>([])
+        const lastUserTexts = yield* Ref.make<ReadonlyArray<string>>([])
+        // The second turn's stream fails: that turn does not answer.
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            const prompt = Prompt.make(options.prompt)
+            const call = (yield* Ref.updateAndGet(requests, (all) => [
+              ...all,
+              turnRequestText(prompt),
+            ])).length
+            yield* Ref.update(lastUserTexts, (all) => [...all, lastConversationText(prompt)])
+            if (call === 2) {
+              return yield* AiError.make({
+                module: "Test",
+                method: "streamText",
+                reason: new AiError.AuthenticationError({
+                  kind: "Unknown",
+                  description: "the keychain is locked",
+                }),
+              })
+            }
+            return Stream.fromIterable([
+              textDeltaPart(`reply ${call}`),
+              finishPart({ finishReason: "stop" }),
+            ] satisfies LanguageModelStreamPart[])
+          }),
+        )
+        const unread = yield* Ref.make<ReadonlyArray<string>>([])
+        const reads = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([])
+        const notices = defineExtension({
+          id: "@test/turn-notices",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("turnProjection", () =>
+              Effect.map(Ref.get(unread), (keys) => {
+                if (keys.length === 0) return {}
+                return {
+                  notices: [
+                    { id: "test-notice", content: `# Test notice\n\n${keys.join("\n")}`, keys },
+                  ],
+                }
+              }),
+            )
+            yield* host.on("turnAfter", (input: TurnAfterInput) =>
+              Effect.gen(function* () {
+                yield* Ref.update(reads, (all) => [...all, [...input.readNotices]])
+                yield* Ref.update(unread, (keys) =>
+                  keys.filter((key) => !input.readNotices.has(key)),
+                )
+              }),
+            )
+          }),
+        })
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          extensionInputs: [...e2ePreset.extensionInputs, notices],
+          providerLayer,
+        })
+        const turn = (content: string, ended: number) =>
+          client.message
+            .send({ sessionId, branchId, content })
+            .pipe(
+              Effect.andThen(
+                waitFor(
+                  Ref.get(reads),
+                  (all) => all.length === ended,
+                  5_000,
+                  `turn ${ended} ended`,
+                ),
+              ),
+            )
+
+        yield* turn("no notice yet", 1)
+        yield* Ref.set(unread, ["fired-1"])
+        yield* turn("the stream breaks", 2)
+        yield* turn("now answer", 3)
+        yield* turn("nothing left", 4)
+
+        const sent = yield* Ref.get(requests)
+        expect(sent).toHaveLength(4)
+        // One system prompt, byte for byte, whether a notice came or went.
+        expect(new Set(sent.map((request) => request.systemPrompt)).size).toBe(1)
+        expect(sent[0]?.systemPrompt).not.toContain("# Test notice")
+        expect(sent.map((request) => request.notices)).toEqual([
+          "",
+          "# Test notice\n\nfired-1",
+          "# Test notice\n\nfired-1",
+          "",
+        ])
+        // The notice follows the turn's own message: it is the request's last message.
+        expect(yield* Ref.get(lastUserTexts)).toEqual([
+          "no notice yet",
+          "the stream breaks",
+          "now answer",
+          "nothing left",
+        ])
+        // The failed turn read nothing; the answered one read what it showed.
+        expect(yield* Ref.get(reads)).toEqual([[], [], ["fired-1"], []])
+        // No stored message carries the notice.
+        const snapshot = yield* client.session.getSnapshot({ sessionId, branchId })
+        expect(
+          snapshot.messages.some((message) =>
+            messagePartsText(message.parts).includes("# Test notice"),
+          ),
+        ).toBe(false)
+      }).pipe(Effect.timeout("12 seconds")),
+    15_000,
   )
 })
 

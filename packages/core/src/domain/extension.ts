@@ -8,7 +8,6 @@ import {
   Order,
   Path,
   Predicate,
-  Ref,
   Schema,
   type Stream,
   TxRef,
@@ -375,6 +374,13 @@ export interface TurnAfterInput {
   readonly unanswered: boolean
   /** What the turn's model calls spent, and whether that is all of it. */
   readonly usage: TurnUsage
+  /**
+   * The keys of this extension's notices (`TurnProjection.notices`) that
+   * reached the model in one of the turn's steps, when the turn answered.
+   * An interrupted, failed or unanswered turn read nothing: the set is
+   * empty, and every notice shows again next turn.
+   */
+  readonly readNotices: ReadonlySet<string>
 }
 
 /**
@@ -402,58 +408,6 @@ export interface TurnUsage {
   }
   readonly complete: boolean
 }
-
-// ── Shown notices ──
-
-/**
- * The notices each turn put in its prompt, per branch, until that turn ends.
- * A notice an extension keeps until a turn has read it is shown by the
- * extension's `turnProjection` hook, which records the keys it showed; its
- * `turnAfter` hook takes them back and clears only those. `takeRead` returns
- * the keys only for a turn that answered: an interrupted, failed, or
- * unanswered turn keeps every notice. The marks drop either way, and a notice
- * the turn never showed stays for the next turn. The marks live in memory: a
- * lost process loses them, and its notices show again.
- */
-export interface ShownNotices {
-  readonly record: (
-    branch: { readonly sessionId: SessionId; readonly branchId: BranchId },
-    keys: Iterable<string>,
-  ) => Effect.Effect<void>
-  readonly takeRead: (
-    turn: Pick<
-      TurnAfterInput,
-      "sessionId" | "branchId" | "interrupted" | "streamFailed" | "unanswered"
-    >,
-  ) => Effect.Effect<ReadonlySet<string>>
-}
-
-/** A fresh `ShownNotices`; an extension holds one in a process resource of its own. */
-type ShownNoticeMarks = ReadonlyMap<string, ReadonlySet<string>>
-
-export const makeShownNotices: Effect.Effect<ShownNotices> = Effect.map(
-  Ref.make<ShownNoticeMarks>(new Map()),
-  (state): ShownNotices => {
-    const keyOf = (branch: { readonly sessionId: SessionId; readonly branchId: BranchId }) =>
-      `${branch.sessionId}:${branch.branchId}`
-    return {
-      record: (branch, keys) =>
-        Ref.update(state, (current) => {
-          const key = keyOf(branch)
-          const shown = new Set([...(current.get(key) ?? []), ...keys])
-          return new Map([...current, [key, shown]])
-        }),
-      takeRead: (turn) =>
-        Ref.modify(state, (current): readonly [ReadonlySet<string>, ShownNoticeMarks] => {
-          const key = keyOf(turn)
-          const rest = new Map(current)
-          rest.delete(key)
-          if (turn.interrupted || turn.streamFailed || turn.unanswered) return [new Set(), rest]
-          return [current.get(key) ?? new Set<string>(), rest]
-        }),
-    }
-  },
-)
 
 // ── Lifecycle hooks ──
 //
@@ -530,10 +484,29 @@ export interface ToolPolicyFragment {
   readonly modelSet?: ReadonlyArray<string>
 }
 
+/**
+ * Something the model must see until a turn has read it: a fire nobody
+ * answered, a child an interrupt stopped. It changes from turn to turn, so
+ * it stays out of the system prompt, whose cached prefix it would break:
+ * the runtime places every notice after the conversation, in each step's
+ * request only, and stores none. A turn that answered with a notice in view
+ * hands its `keys` back in `TurnAfterInput.readNotices`; the extension
+ * clears exactly those.
+ */
+export interface TurnNotice {
+  /** Names the notice; a later extension's notice with the same id replaces it. */
+  readonly id: string
+  readonly content: string
+  /** What the notice shows, in the extension's own terms. */
+  readonly keys: ReadonlyArray<string>
+}
+
 /** Turn-time projection — needs agent/tool context, used during prompt assembly */
 export interface TurnProjection {
   readonly toolPolicy?: ToolPolicyFragment
+  /** Standing prompt content: the same from turn to turn while nothing changes. */
   readonly promptSections?: ReadonlyArray<PromptSection>
+  readonly notices?: ReadonlyArray<TurnNotice>
 }
 
 // Extension — the core primitive

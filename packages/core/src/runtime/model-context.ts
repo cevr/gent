@@ -24,6 +24,7 @@ import { ErrorOccurred, EventStore, type EventStoreError, UsageSchema } from "..
 import { type BranchId, MessageId, type SessionId, ToolCallId } from "../domain/ids.js"
 import { ModelId } from "../domain/agent.js"
 import type { ToolCapability } from "../domain/capability.js"
+import type { TurnNotice } from "../domain/extension.js"
 import type { LanguageModel } from "effect/unstable/ai"
 import type { ProviderAuthError } from "../domain/driver.js"
 import type { ProviderError, StorageError } from "../domain/errors.js"
@@ -34,6 +35,8 @@ import type { EventStorageError } from "../storage/storage.js"
 interface PromptTranscriptOptions {
   readonly systemPrompt?: string
   readonly includeHidden?: boolean
+  /** The turn's notices, placed after the conversation; see `turnNoticesText`. */
+  readonly notices?: ReadonlyArray<TurnNotice>
 }
 
 const isAiVisibleMessage = (message: Message): boolean => message.metadata?.hidden !== true
@@ -195,6 +198,24 @@ export const toPromptMessages = (
   return result
 }
 
+/**
+ * The turn's notices as one text, in projection order; none when there are
+ * none.
+ */
+export const turnNoticesText = (notices: ReadonlyArray<TurnNotice>): Option.Option<string> =>
+  Option.liftPredicate(notices.map((notice) => notice.content).join("\n\n"), (text) => text !== "")
+
+/**
+ * The request a step sends: the system prompt, the conversation, then the
+ * turn's notices as one system message after the last message.
+ *
+ * The notices change from turn to turn and the rest does not, so they go
+ * last: the system prompt and the conversation stay one cacheable prefix
+ * whether a notice comes or goes. A later system message is the host
+ * speaking, not the user: a driver sends it as a context update after the
+ * conversation (the Anthropic driver as a `<host-context-update>` block,
+ * which takes no cache marker; the OpenAI driver as a developer message).
+ */
 export const toPrompt = (
   messages: ReadonlyArray<Message>,
   options?: PromptTranscriptOptions,
@@ -204,6 +225,8 @@ export const toPrompt = (
   if (!Predicate.isUndefined(systemPrompt) && systemPrompt !== "") {
     promptMessages.unshift(Prompt.systemMessage({ content: systemPrompt }))
   }
+  const notices = turnNoticesText(options?.notices ?? [])
+  if (Option.isSome(notices)) promptMessages.push(Prompt.systemMessage({ content: notices.value }))
 
   return Prompt.fromMessages(promptMessages)
 }

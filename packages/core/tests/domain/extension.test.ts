@@ -1,8 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Deferred, Effect, Fiber, Layer, type Path, Ref } from "effect"
 import { BunServices } from "@effect/platform-bun"
-import { FileLockService, makeShownNotices } from "../../src/domain/extension"
-import { BranchId, SessionId } from "../../src/domain/ids"
+import { FileLockService } from "../../src/domain/extension"
 
 // ── file lock ───────────────────────────────────────────────────────────────
 
@@ -147,42 +146,5 @@ describe("FileLockService", () => {
         expect(yield* lock.currentSize).toBe(0)
       }),
     ),
-  )
-})
-
-// ── shown notices ───────────────────────────────────────────────────────────
-
-describe("shown notices", () => {
-  const branch = { sessionId: SessionId.make("shown-session"), branchId: BranchId.make("shown") }
-  const other = { ...branch, branchId: BranchId.make("other") }
-  const answered = { ...branch, interrupted: false, streamFailed: false, unanswered: false }
-
-  it.live("an answered turn takes back what its steps showed on its branch, once", () =>
-    Effect.gen(function* () {
-      const shown = yield* makeShownNotices
-      yield* shown.record(branch, ["a"])
-      yield* shown.record(branch, ["a", "b"])
-      yield* shown.record(other, ["c"])
-      expect([...(yield* shown.takeRead(answered))].toSorted()).toEqual(["a", "b"])
-      // The marks dropped: the next turn showed nothing yet.
-      expect((yield* shown.takeRead(answered)).size).toBe(0)
-      expect([...(yield* shown.takeRead({ ...answered, ...other }))]).toEqual(["c"])
-    }),
-  )
-
-  it.live("an interrupted, failed or unanswered turn reads nothing, and its marks drop", () =>
-    Effect.gen(function* () {
-      const shown = yield* makeShownNotices
-      const endings: ReadonlyArray<Partial<typeof answered>> = [
-        { interrupted: true },
-        { streamFailed: true },
-        { unanswered: true },
-      ]
-      for (const ending of endings) {
-        yield* shown.record(branch, ["a"])
-        expect((yield* shown.takeRead({ ...answered, ...ending })).size).toBe(0)
-        expect((yield* shown.takeRead(answered)).size).toBe(0)
-      }
-    }),
   )
 })

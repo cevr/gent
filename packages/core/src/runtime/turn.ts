@@ -39,6 +39,7 @@ import {
 import {
   type ActorCommandId,
   type BranchId,
+  type ExtensionId,
   InteractionRequestId,
   MessageId,
   type ProcessGenerationId,
@@ -68,6 +69,7 @@ import {
   CurrentExtensionHostContext,
   ExtensionRegistry,
   type ExtensionRegistryService,
+  type ExtensionTurnNotice,
   provideCurrentCapabilityContext,
   provideCurrentHostCtx,
   RunOpener,
@@ -150,6 +152,7 @@ import {
   projectContextWindow,
   projectModelContext,
   toPrompt,
+  turnNoticesText,
 } from "./model-context.js"
 import { GentPlatform } from "./gent-platform.js"
 import type { LoopInbox } from "./agent-loop.js"
@@ -655,6 +658,10 @@ interface TurnLedger {
   readonly noteCompaction: (costUsd: Option.Option<number>) => Effect.Effect<void>
   /** What this turn spent, as `TurnCompleted` reports it. */
   readonly total: Effect.Effect<TurnMetrics>
+  /** A step's request carried these notices. */
+  readonly noteNotices: (notices: ReadonlyArray<ExtensionTurnNotice>) => Effect.Effect<void>
+  /** The keys of every notice a step of this turn carried, by the extension that showed it. */
+  readonly shownNotices: Effect.Effect<ReadonlyMap<ExtensionId, ReadonlySet<string>>>
 }
 
 /** A cache count the receipt records: zero is left out, as the steps leave it out. */
@@ -666,12 +673,18 @@ const addCost = (total: Option.Option<number>, cost: Option.Option<number>) =>
 
 export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* () {
   const metrics = yield* Ref.make(emptyTurnMetrics())
+  const shown = yield* Ref.make<ReadonlyMap<ExtensionId, ReadonlySet<string>>>(new Map())
   return {
     beginTurn: (messageId) =>
-      Ref.update(metrics, (m) => {
-        if (Option.contains(m.messageId, messageId)) return m
-        return { ...emptyTurnMetrics(), messageId: Option.some(messageId) }
-      }),
+      Ref.modify(metrics, (m): readonly [boolean, TurnMetrics] => {
+        if (Option.contains(m.messageId, messageId)) return [false, m]
+        return [true, { ...emptyTurnMetrics(), messageId: Option.some(messageId) }]
+      }).pipe(
+        Effect.flatMap((fresh) => {
+          if (!fresh) return Effect.void
+          return Ref.set(shown, new Map())
+        }),
+      ),
     noteUnseenSteps: Ref.update(metrics, (m) => {
       if (m.steps > 0) return m
       return { ...m, usageKnown: false, costUsd: Option.none() }
@@ -731,6 +744,16 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
     noteCompaction: (costUsd) =>
       Ref.update(metrics, (m) => ({ ...m, costUsd: addCost(m.costUsd, costUsd) })),
     total: Ref.get(metrics),
+    noteNotices: (notices) =>
+      Ref.update(shown, (current) => {
+        const next = new Map(current)
+        for (const { extensionId, notice } of notices) {
+          const earlier = Option.getOrElse(Option.fromUndefinedOr(next.get(extensionId)), () => [])
+          next.set(extensionId, new Set([...earlier, ...notice.keys]))
+        }
+        return next
+      }),
+    shownNotices: Ref.get(shown),
   }
 })
 
@@ -1088,6 +1111,8 @@ interface ResolvedTurnContext {
   toolBindings: ReadonlyMap<string, ResolvedToolCapability>
   /** Admitted host tools remain available to extension-owned execution surfaces. */
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
+  /** Sent after the conversation, never in `systemPrompt`: see `toPrompt`. */
+  notices: ReadonlyArray<ExtensionTurnNotice>
 }
 
 const mergeSystemPromptAddendum = (
@@ -1332,6 +1357,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     reasoning: Option.getOrUndefined(route.reasoningLevel),
     temperature: dispatchAgent.temperature,
     modelDriver: route.modelDriver,
+    notices: projEval.notices,
   }
 })
 
@@ -1478,7 +1504,12 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   }
   const budget = ModelContextBudget.make({
     contextLimitTokens: contextLimit,
-    reservedSystemTokens: estimateTextTokens(resolved.systemPrompt),
+    reservedSystemTokens:
+      estimateTextTokens(resolved.systemPrompt) +
+      Option.match(turnNoticesText(resolved.notices.map(({ notice }) => notice)), {
+        onNone: () => 0,
+        onSome: estimateTextTokens,
+      }),
     reservedToolTokens: estimateToolSchemaTokens(resolved.tools),
     reservedOutputTokens: MODEL_OUTPUT_RESERVE_TOKENS,
   })
@@ -1574,7 +1605,10 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       costUsd: Option.getOrUndefined(compactionCostUsd),
     }),
   )
-  const prompt = toPrompt(projection.messages, { systemPrompt: resolved.systemPrompt })
+  const prompt = toPrompt(projection.messages, {
+    systemPrompt: resolved.systemPrompt,
+    notices: resolved.notices.map(({ notice }) => notice),
+  })
   const toolkit = convertTools([...resolved.tools])
   const rawStream = Stream.unwrap(
     resolveAdmittedModel(modelRequest).pipe(
@@ -2245,6 +2279,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       })
       if (Option.isSome(source.compaction))
         yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
+      yield* scope.turnLedger.noteNotices(params.resolved.notices)
 
       const eventStore = yield* EventStore
       const publishEventOrDie = (event: StreamStarted | StreamEnded) =>
@@ -2498,26 +2533,33 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       params: TurnEnd & TurnReceipt & { readonly agentName: AgentNameType },
     ) {
       const extensionRegistry = yield* ExtensionRegistry
-      yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter({
-        sessionId: scope.sessionId,
-        branchId: scope.branchId,
-        durationMs: params.durationMs,
-        messageId: params.messageId,
-        agentName: params.agentName,
-        interrupted: params.turnInterrupted,
-        streamFailed: params.streamFailed,
-        unanswered: params.unanswered,
-        usage: {
-          known: {
-            inputTokens: params.metrics.inputTokens,
-            outputTokens: params.metrics.outputTokens,
-            cacheReadTokens: params.metrics.cacheReadTokens,
-            cacheWriteTokens: params.metrics.cacheWriteTokens,
-            costUsd: params.metrics.costUsd,
+      // A turn that did not answer read none of its notices: they show again.
+      const answered = !(params.turnInterrupted || params.streamFailed || params.unanswered)
+      let readNotices: ReadonlyMap<ExtensionId, ReadonlySet<string>> = new Map()
+      if (answered) readNotices = yield* scope.turnLedger.shownNotices
+      yield* extensionRegistry.getResolved().extensionHooks.emitTurnAfter(
+        {
+          sessionId: scope.sessionId,
+          branchId: scope.branchId,
+          durationMs: params.durationMs,
+          messageId: params.messageId,
+          agentName: params.agentName,
+          interrupted: params.turnInterrupted,
+          streamFailed: params.streamFailed,
+          unanswered: params.unanswered,
+          usage: {
+            known: {
+              inputTokens: params.metrics.inputTokens,
+              outputTokens: params.metrics.outputTokens,
+              cacheReadTokens: params.metrics.cacheReadTokens,
+              cacheWriteTokens: params.metrics.cacheWriteTokens,
+              costUsd: params.metrics.costUsd,
+            },
+            complete: usageComplete(params.metrics),
           },
-          complete: usageComplete(params.metrics),
         },
-      })
+        readNotices,
+      )
     })
 
     const finalizeTurn = Effect.fn("AgentLoop.finalizeTurn")(function* (

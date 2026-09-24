@@ -24,6 +24,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import type { ProviderOptions } from "effect/unstable/ai/LanguageModel"
 import type * as AiError from "effect/unstable/ai/AiError"
+import type * as Prompt from "effect/unstable/ai/Prompt"
 import { ToolCallId } from "../domain/ids.js"
 import { ProviderError } from "../domain/errors.js"
 import {
@@ -268,6 +269,30 @@ export const waitFor = <A, R = never>(
     })
     return yield* loop
   })
+
+// ── request shape ───────────────────────────────────────────────────────────
+
+/**
+ * A step's request as the runtime builds it: the system prompt it opens
+ * with, and the turn notices it places after the conversation (empty when
+ * the step carries none).
+ */
+export const turnRequestText = (prompt: Prompt.Prompt) => {
+  const systemAt = (index: number) =>
+    Option.fromUndefinedOr(prompt.content[index]).pipe(
+      Option.flatMap((message) => {
+        if (message.role !== "system") return Option.none()
+        return Option.some(message.content)
+      }),
+    )
+  const systemPrompt = systemAt(0)
+  const lastIndex = prompt.content.length - 1
+  const notices = Option.filter(systemAt(lastIndex), () => lastIndex > 0)
+  return {
+    systemPrompt: Option.getOrElse(systemPrompt, () => ""),
+    notices: Option.getOrElse(notices, () => ""),
+  }
+}
 
 // ── language-model ──────────────────────────────────────────────────────────
 

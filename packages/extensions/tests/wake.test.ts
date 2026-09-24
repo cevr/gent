@@ -34,6 +34,7 @@ import {
   runToolWithCtx,
   testLeafContext,
   testToolContext,
+  turnRequestText,
   RuntimeEnvironment,
 } from "@gent/core/test-utils"
 import { builtinAgent } from "./helpers/builtin-agents"
@@ -55,7 +56,6 @@ import {
   WakeRpc,
   WakeExtension,
   WakeTool,
-  ShownWakeNotices,
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
 import type { LanguageModel } from "effect/unstable/ai"
@@ -65,7 +65,6 @@ import {
   RequestId,
   ExtensionContext,
   type ExtensionContextService,
-  makeShownNotices,
 } from "@gent/core/extensions/api"
 
 /**
@@ -308,12 +307,10 @@ describe("wake", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const systemPrompts: Array<string> = []
+          const requests: Array<{ readonly systemPrompt: string; readonly notices: string }> = []
           let calls = 0
           const providerLayer = LanguageModelLayers.testStream((options) => {
-            for (const message of options.prompt.content) {
-              if (message.role === "system") systemPrompts.push(message.content)
-            }
+            requests.push(turnRequestText(options.prompt))
             calls += 1
             if (calls === 1) {
               return Effect.succeed(
@@ -368,10 +365,11 @@ describe("wake", () => {
             8_000,
             "the next turn ran",
           )
-          // The notice reached the model as a prompt section and left the list.
+          // The notice reached the model after the conversation and left the list.
           expect(hasWake(idle.messages)).toBe(false)
-          expect(systemPrompts.at(-1)).toContain("# Notices")
-          expect(systemPrompts.at(-1)).toContain("stand up")
+          expect(requests.at(-1)?.notices).toContain("# Notices")
+          expect(requests.at(-1)?.notices).toContain("stand up")
+          expect(requests.at(-1)?.systemPrompt).toBe(requests[0]?.systemPrompt)
           expect((yield* list()).entries).toEqual([])
         }).pipe(Effect.timeout("12 seconds")),
       ),
@@ -809,8 +807,7 @@ const wakeTurnHooks = (home: string) =>
         pending: Effect.succeed([]),
       }),
     )
-    const shownNotices = Layer.effect(ShownWakeNotices, makeShownNotices)
-    const turnLayer = Layer.merge(failedAlarms, shownNotices)
+    const turnLayer = failedAlarms
     const ctx = testLeafContext({
       ...contextWith(home, yield* Ref.make<ReadonlyArray<string>>([])),
       cwd: home,
@@ -820,22 +817,20 @@ const wakeTurnHooks = (home: string) =>
     return {
       write: (entries: ReadonlyArray<WakeEntry>) => fs.writeFileString(file, encodeAlarms(entries)),
       stored: Effect.flatMap(fs.readFileString(file), decode),
-      /** One step's projection: the prompt text the wake sections add. */
+      /** One step's projection: the notice text, and the keys the runtime hands back once read. */
       project: projection.hook.handler({ agent: builtinAgent }).pipe(
-        Effect.map((projected) =>
-          (projected.promptSections ?? []).map((section) => section.content).join("\n"),
-        ),
+        Effect.map((projected) => {
+          const notices = projected.notices ?? []
+          return {
+            text: notices.map((notice) => notice.content).join("\n"),
+            keys: notices.flatMap((notice) => notice.keys),
+          }
+        }),
         Effect.provideService(ExtensionContext, ctx),
         Effect.provideContext(services),
       ),
-      /** The turn's end; an answered turn unless `ending` says otherwise. */
-      end: (
-        ending: Partial<{
-          readonly interrupted: boolean
-          readonly streamFailed: boolean
-          readonly unanswered: boolean
-        }>,
-      ) =>
+      /** An answered turn's end, which read `readNotices`. */
+      end: (readNotices: ReadonlyArray<string>) =>
         after.hook
           .handler({
             sessionId: SessionId.make("wake-session"),
@@ -846,7 +841,7 @@ const wakeTurnHooks = (home: string) =>
             interrupted: false,
             streamFailed: false,
             unanswered: false,
-            ...ending,
+            readNotices: new Set(readNotices),
             usage: {
               known: {
                 inputTokens: 0,
@@ -868,14 +863,12 @@ describe("notices", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const systemPrompts: Array<string> = []
+          const requests: Array<{ readonly systemPrompt: string; readonly notices: string }> = []
           const streaming = yield* Deferred.make<void>()
           const release = yield* Deferred.make<void>()
           let calls = 0
           const providerLayer = LanguageModelLayers.testStream((options) => {
-            for (const message of options.prompt.content) {
-              if (message.role === "system") systemPrompts.push(message.content)
-            }
+            requests.push(turnRequestText(options.prompt))
             calls += 1
             // Turn 1: set the notify alarm, then reply.
             if (calls === 1) {
@@ -951,7 +944,7 @@ describe("notices", () => {
             "the held turn ended",
           )
           // The interrupted turn read the notice but did not answer; it stays.
-          expect(systemPrompts.at(-1)).toContain("stand up")
+          expect(requests.at(-1)?.notices).toContain("stand up")
           expect((yield* notices()).length).toBe(1)
           yield* client.message.send({ sessionId, branchId, content: "what did I miss?" })
           yield* waitFor(
@@ -962,9 +955,11 @@ describe("notices", () => {
             8_000,
             "the answered turn ran",
           )
-          expect(systemPrompts.length).toBe(5)
-          expect(systemPrompts[3]).toContain("stand up")
-          expect(systemPrompts[4]).toContain("stand up")
+          expect(requests.length).toBe(5)
+          expect(requests[3]?.notices).toContain("stand up")
+          expect(requests[4]?.notices).toContain("stand up")
+          // The notice never entered the system prompt: every request sent the same one.
+          expect(new Set(requests.map((request) => request.systemPrompt)).size).toBe(1)
           yield* waitFor(notices(), (found) => found.length === 0, 5_000, "the notice is cleared")
         }).pipe(Effect.timeout("14 seconds")),
       ),
@@ -1017,7 +1012,8 @@ describe("notices", () => {
           },
           { _tag: "alarm", wakeId: "later", dueAt: Number.MAX_SAFE_INTEGER, note: "much later" },
         ])
-        expect(yield* turn.project).toContain("stand up")
+        const shown = yield* turn.project
+        expect(shown.text).toContain("stand up")
         // A fire the step did not read: its write landed after the projection,
         // though it fired before the turn started.
         yield* turn.write([
@@ -1031,7 +1027,7 @@ describe("notices", () => {
             note: "check CI",
           },
         ])
-        yield* turn.end({})
+        yield* turn.end(shown.keys)
         // The turn read the earlier notice and answered, so it is gone; the
         // alarm row stays, and so does the notice the turn never showed.
         expect((yield* turn.stored).map((entry) => entry.wakeId)).toEqual(["later", "unread"])
@@ -1040,7 +1036,7 @@ describe("notices", () => {
   )
 
   it.scopedLive(
-    "a turn that never answered keeps the notices it showed",
+    "a turn end that read no notice keeps them all",
     () =>
       Effect.gen(function* () {
         const home = yield* makeTempDirectoryScoped("wake-unanswered-")
@@ -1055,12 +1051,14 @@ describe("notices", () => {
             note: "stand up",
           },
         ])
-        expect(yield* turn.project).toContain("stand up")
-        yield* turn.end({ unanswered: true })
+        expect((yield* turn.project).text).toContain("stand up")
+        // The runtime hands back nothing for a turn that did not answer.
+        yield* turn.end([])
         expect((yield* turn.stored).map((entry) => entry.wakeId)).toEqual(["earlier"])
         // The next turn shows it again, answers, and clears it.
-        expect(yield* turn.project).toContain("stand up")
-        yield* turn.end({})
+        const shown = yield* turn.project
+        expect(shown.text).toContain("stand up")
+        yield* turn.end(shown.keys)
         expect(yield* turn.stored).toEqual([])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
     10_000,
@@ -1072,12 +1070,10 @@ describe("notices", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const home = yield* makeTempDirectoryScoped("wake-blocked-once-")
-          const systemPrompts: Array<string> = []
+          const requests: Array<{ readonly systemPrompt: string; readonly notices: string }> = []
           let calls = 0
           const providerLayer = LanguageModelLayers.testStream((options) => {
-            for (const message of options.prompt.content) {
-              if (message.role === "system") systemPrompts.push(message.content)
-            }
+            requests.push(turnRequestText(options.prompt))
             calls += 1
             return Effect.succeed(replyStream(`reply ${calls}`))
           })
@@ -1126,13 +1122,13 @@ describe("notices", () => {
             "the re-arm blocked the monitor",
           )
           yield* answer("I'm back", "reply 1")
-          expect(systemPrompts[0]).toContain("never approved")
+          expect(requests[0]?.notices).toContain("never approved")
           const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
             yield* fs.readFileString(file),
           )
           expect(stored).toEqual([])
           yield* answer("anything else?", "reply 2")
-          expect(systemPrompts[1]).not.toContain("never approved")
+          expect(requests[1]?.notices).not.toContain("never approved")
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
       ),
     15_000,

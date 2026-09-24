@@ -42,6 +42,7 @@ export {
   type SequenceStep,
   textStep,
   toolCallStep,
+  turnRequestText,
   waitFor,
 } from "./language-model.js"
 export { finishPart, textDeltaPart, toolCallPart } from "../runtime/provider.js"

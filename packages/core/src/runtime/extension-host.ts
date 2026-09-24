@@ -37,6 +37,8 @@ import {
   type ExtensionSetupServices,
   type ExtensionStateFacet,
   type ExtensionStatusInfo,
+  type TurnNotice,
+  type TurnProjection,
   type TurnProjectionInput,
   type FailedExtension,
   type FailedExtensionPhase,
@@ -289,15 +291,24 @@ interface CompiledExtensionHooks {
   readonly resolveTurnProjection: (
     input: TurnProjectionInput,
   ) => Effect.Effect<ExtensionTurnProjection, never, CurrentExtensionHostContext>
+  /** Each extension's hooks read back only the notices its own projection showed. */
   readonly emitTurnAfter: (
-    input: TurnAfterInput,
+    input: Omit<TurnAfterInput, "readNotices">,
+    readNotices: ReadonlyMap<ExtensionId, ReadonlySet<string>>,
   ) => Effect.Effect<void, never, CurrentExtensionHostContext>
   readonly emitLoopOpen: Effect.Effect<void, never, CurrentExtensionHostContext>
+}
+
+/** A notice with the extension whose projection returned it. */
+export interface ExtensionTurnNotice {
+  readonly extensionId: ExtensionId
+  readonly notice: TurnNotice
 }
 
 interface ExtensionTurnProjection {
   readonly promptSections: ReadonlyArray<PromptSection>
   readonly policyFragments: ReadonlyArray<ToolPolicyFragment>
+  readonly notices: ReadonlyArray<ExtensionTurnNotice>
 }
 
 interface RegisteredSystemPromptRewrite {
@@ -307,14 +318,7 @@ interface RegisteredSystemPromptRewrite {
 
 interface HookTurnProjectionSlot {
   readonly extensionId: ExtensionId
-  readonly handler: (input: TurnProjectionInput) => Effect.Effect<
-    {
-      readonly promptSections?: ReadonlyArray<PromptSection>
-      readonly toolPolicy?: ToolPolicyFragment
-    },
-    unknown,
-    unknown
-  >
+  readonly handler: (input: TurnProjectionInput) => Effect.Effect<TurnProjection, unknown, unknown>
 }
 
 interface RegisteredHook<Input> {
@@ -341,10 +345,12 @@ const collectTurnProjection = (
   projection: Option.Option<ExtensionTurnProjection>,
   sectionsById: Map<string, PromptSection>,
   policyFragments: ToolPolicyFragment[],
+  noticesById: Map<string, ExtensionTurnNotice>,
 ) => {
   if (Option.isNone(projection)) return
   for (const section of projection.value.promptSections) sectionsById.set(section.id, section)
   for (const fragment of projection.value.policyFragments) policyFragments.push(fragment)
+  for (const notice of projection.value.notices) noticesById.set(notice.notice.id, notice)
 }
 
 const runTurnProjectionHook = (slot: HookTurnProjectionSlot, input: TurnProjectionInput) =>
@@ -363,7 +369,11 @@ const runTurnProjectionHook = (slot: HookTurnProjectionSlot, input: TurnProjecti
             if (!Predicate.isUndefined(projection.toolPolicy)) {
               policyFragments = [projection.toolPolicy]
             }
-            return Option.some({ promptSections, policyFragments })
+            const notices = Option.getOrElse(
+              Option.fromUndefinedOr(projection.notices),
+              () => [],
+            ).map((notice): ExtensionTurnNotice => ({ extensionId: slot.extensionId, notice }))
+            return Option.some({ promptSections, policyFragments, notices })
           }),
         )
         .pipe(provideExtensionLeaf({ extensionId: slot.extensionId })),
@@ -485,21 +495,33 @@ export const compileExtensionHooks = (
       Effect.gen(function* () {
         const sectionsById = new Map<string, PromptSection>()
         const policyFragments: ToolPolicyFragment[] = []
+        const noticesById = new Map<string, ExtensionTurnNotice>()
 
         for (const slot of turnProjectionSlots) {
           collectTurnProjection(
             yield* runTurnProjectionHook(slot, input),
             sectionsById,
             policyFragments,
+            noticesById,
           )
         }
 
-        return { promptSections: [...sectionsById.values()], policyFragments }
+        return {
+          promptSections: [...sectionsById.values()],
+          policyFragments,
+          notices: [...noticesById.values()],
+        }
       }),
 
-    emitTurnAfter: (input) =>
+    emitTurnAfter: (input, readNotices) =>
       Effect.gen(function* () {
-        for (const slot of turnAfterSlots) yield* runHook(input, slot)
+        for (const slot of turnAfterSlots) {
+          const read = Option.getOrElse(
+            Option.fromUndefinedOr(readNotices.get(slot.extensionId)),
+            () => new Set<string>(),
+          )
+          yield* runHook({ ...input, readNotices: read }, slot)
+        }
       }),
 
     // Each hook runs on its own: one that never returns holds up no other.
