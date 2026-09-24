@@ -1720,6 +1720,34 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("after a parent option its table does not name, the subcommand may follow its value", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `npm --loglevel silent exec -- ${r}`,
+      `npm --loglevel silent x -- ${r}`,
+      `uv --cache-dir ${x} run ${r}`,
+      `uv --cache-dir ${x} --offline run ${r}`,
+      `pnpm --gent-probe-unknown ${x} exec ${r}`,
+      // The subcommand's own risk, and the script it runs.
+      `gh --gent-probe-unknown ${x} repo delete o/r --yes`,
+      `pnpm --gent-probe-unknown ${x} exec -c '${r}'`,
+      // Input the guard cannot read names the command npm runs.
+      `cat ${x} | xargs npm --loglevel silent exec --`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "git --no-pager status",
+      "git --no-pager log --oneline -5",
+      "git --no-pager diff main",
+      "npm --loglevel silent exec -- tsc",
+      `uv --cache-dir ${x} run pytest`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("nested runners are read once per command they reach", () => {
     // Each reading of each runner reaches the same words; before they were
     // read once each, 20 nested runners overflowed the stack.
@@ -1902,7 +1930,7 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  test("SQL known only at run time asks; a dynamic connection name does not", () => {
+  test("SQL known only at run time asks; a quoted dynamic connection name does not", () => {
     const x = "/nonexistent/gent-probe-x"
     for (const command of [
       `Q='DELETE FROM gent_probe_x'; psql -c "$Q"`,
@@ -1916,14 +1944,29 @@ describe("classifyBashCommand", () => {
       `sqlite3 ${x}.db "$SQL"`,
       `sqlite3 -cmd "$SQL" ${x}.db`,
       `duckdb -c "$SQL"`,
+      // An unquoted expansion splits into more words: a connection name
+      // may bring SQL options with it.
+      `ARGS='app -c DROP/**/TABLE/**/t'; psql -d $ARGS`,
+      "psql -d $ARGS",
+      "psql $ARGS",
+      "psql --host=$H --dbname=$DB -c 'select 1'",
+      "psql -d ${DB} -c 'select 1'",
+      `psql -d $(cat ${x}) -c 'select 1'`,
+      "psql -d `cat /nonexistent/gent-probe-x` -c 'select 1'",
+      "mysql -D $ARGS",
+      "mysql $ARGS",
+      "sqlite3 $ARGS",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
       `psql -h "$PGHOST" -U "$PGUSER" -d "$PGDATABASE" -c 'select 1'`,
+      `psql -d "$DB" -c 'select 1'`,
       `psql "$DATABASE_URL" -c 'select 1'`,
-      "psql --host=$H --dbname=$DB -c 'select 1'",
+      `psql --host="$H" --dbname="$DB" -c 'select 1'`,
+      `psql -d "$(cat ${x})" -c 'select 1'`,
       `mysql -h "$H" -u "$U" -p"$P" "$DB" -e 'SHOW TABLES'`,
+      `mysql -D "$DB" -e 'select 1'`,
       `sqlite3 "$DB" 'select 1'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")

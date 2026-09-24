@@ -371,6 +371,11 @@ interface ShellWord {
   readonly endSafe: boolean
   /** The word holds a parameter expansion or a command substitution: its text is known only at run time. */
   readonly dynamic: boolean
+  /**
+   * The word holds an unquoted expansion or substitution: the shell splits
+   * its value into more words (`$ARGS` may be `app -c 'DROP TABLE t'`).
+   */
+  readonly splits: boolean
   /** The word holds an unquoted glob or brace pattern: the shell expands it to other words. */
   readonly pattern: boolean
 }
@@ -440,6 +445,7 @@ interface CommandReader {
   wordEnd: number
   wordEndSafe: boolean
   dynamic: boolean
+  splits: boolean
   /** The unquoted characters of the word: where a glob or brace pattern can be. */
   plain: string
   inWord: boolean
@@ -498,6 +504,7 @@ const sourceWord = (
     end: sourceOffset(source, end - 1) + 1,
     endSafe: sourceSafe(source, end - 1),
     dynamic: expands && DYNAMIC_TEXT.test(text),
+    splits: false,
     pattern: false,
   }
 }
@@ -543,6 +550,7 @@ const clearWord = (reader: CommandReader) => {
   reader.wordSafe = []
   reader.wordEndSafe = false
   reader.dynamic = false
+  reader.splits = false
   reader.plain = ""
   reader.inWord = false
   reader.quoted = false
@@ -598,6 +606,7 @@ const endWord = (reader: CommandReader) => {
       end: reader.wordEnd,
       endSafe: reader.wordEndSafe,
       dynamic: reader.dynamic,
+      splits: reader.splits,
       pattern: PATTERN_TEXT.test(reader.plain),
     }
     if (reader.role === "argument") readCompoundWord(reader, word)
@@ -759,6 +768,7 @@ function readParameterExpansion(reader: CommandReader, index: number, quoted: bo
   const end = Math.min(at, text.length)
   addRange(reader, index, end, quoted)
   reader.dynamic = true
+  if (!quoted) reader.splits = true
   return end
 }
 
@@ -930,6 +940,7 @@ const readSubstitutionWord = (reader: CommandReader, index: number): Option.Opti
   const end = readSubstitution(reader.source, index, reader.segment.pipedFrom)
   addRange(reader, index, end, false)
   reader.dynamic = true
+  reader.splits = true
   return Option.some(end)
 }
 
@@ -1060,7 +1071,10 @@ const readPlain = (reader: CommandReader, index: number): number => {
     endWord(reader)
     return index + 1
   }
-  if (startsExpansion(reader.source.text, index)) reader.dynamic = true
+  if (startsExpansion(reader.source.text, index)) {
+    reader.dynamic = true
+    reader.splits = true
+  }
   reader.plain += reader.source.text.charAt(index)
   addChar(reader, index, false)
   return index + 1
@@ -1093,6 +1107,7 @@ function readCommands(
     wordEnd: 0,
     wordEndSafe: false,
     dynamic: false,
+    splits: false,
     plain: "",
     inWord: false,
     quoted: false,
@@ -1147,12 +1162,16 @@ const parseCommand = (command: string): Array<ShellSegment> =>
       end: command.length,
       endSafe: true,
       dynamic: false,
+      splits: false,
       pattern: false,
     },
     Option.none(),
   )
 
-/** A word made of other text: no source offsets to rewrite, no safe insertion point. */
+/**
+ * A word made of other text: no source offsets to rewrite, no safe
+ * insertion point. Its quoting is lost, so dynamic text may split.
+ */
 const derivedWord = (text: string, dynamic: boolean): ShellWord => ({
   text,
   map: Array.from({ length: text.length }, () => 0),
@@ -1160,6 +1179,7 @@ const derivedWord = (text: string, dynamic: boolean): ShellWord => ({
   end: 0,
   endSafe: false,
   dynamic,
+  splits: dynamic,
   pattern: false,
 })
 
@@ -1195,6 +1215,7 @@ const joinWords = (words: ReadonlyArray<ShellWord>): Option.Option<ShellWord> =>
     end: last.value.end,
     endSafe: last.value.endSafe,
     dynamic: words.some((word) => word.dynamic),
+    splits: words.some((word) => word.splits),
     pattern: words.some((word) => word.pattern),
   })
 }
@@ -1522,22 +1543,119 @@ interface ResolvedCommand {
   readonly words: ReadonlyArray<ShellWord>
 }
 
-/** The longest command path `COMMAND_SPECS` names in `words`, whose first word is the command word. */
-const resolveCommand = (words: ReadonlyArray<ShellWord>): ResolvedCommand => {
+/**
+ * Whether the words after `option` may be read wrong: its table does not
+ * name it as written (a letter, or a long name in full), and no `=value`
+ * shows that it takes no word after it. It may take none, one or more of
+ * them (`uv run --directory sub pytest`); an abbreviated name may be another
+ * option (parallel's `--tag` is not `--tagstring`).
+ */
+const isUnsure = (valued: ValueOptions, option: ParsedOption) => {
+  if (!option.long) return !`${valued.short ?? ""}${valued.attached ?? ""}`.includes(option.name)
+  if ((valued.long ?? []).includes(option.name)) return false
+  return !Option.exists(option.value, (value) => value.word === option.at)
+}
+
+/**
+ * Where the subcommand word after a parent's options may be, as indexes into
+ * `args` (the words after the parent's last word), read from `from`. The
+ * parent's table names only its options that take a value: an option it does
+ * not name may take no value or one (`uv --cache-dir x run`), so both
+ * readings go on. Each index is read once, so a run of such options stays
+ * linear.
+ */
+const subcommandPositions = (
+  args: ReadonlyArray<string>,
+  from: number,
+  valued: ValueOptions,
+): ReadonlySet<number> => {
+  const found = new Set<number>()
+  const read = new Set<number>()
+  const pending = [from]
+  while (pending.length > 0) {
+    const index = pending.pop() ?? args.length
+    if (read.has(index)) continue
+    read.add(index)
+    const arg = args[index] ?? ""
+    if (arg === "--") {
+      found.add(index + 1)
+    } else if (!isOptionWord(arg, valued)) {
+      found.add(index)
+    } else {
+      const into: OptionsRead = { shorts: new Set(), longs: [], options: [] }
+      const next = readOption(args, index, valued, into)
+      pending.push(next)
+      const takesValue = Option.exists(
+        Arr.last(into.options),
+        (option) => Option.isNone(option.value) && isUnsure(valued, option),
+      )
+      if (takesValue) pending.push(next + 1)
+    }
+  }
+  return found
+}
+
+/** The path under `resolved` whose subcommand word is `words[next]`, when `COMMAND_SPECS` names it. */
+const childCommand = (resolved: ResolvedCommand, next: number): Option.Option<ResolvedCommand> => {
+  const key = `${resolved.path} ${resolved.words[next]?.text ?? ""}`
+  if (!COMMAND_SPECS.has(key) && !SPEC_PARENTS.has(key)) return Option.none()
+  return Option.some({
+    path: key,
+    spec: COMMAND_SPECS.get(key) ?? NO_SPEC,
+    words: resolved.words.slice(next),
+  })
+}
+
+/**
+ * The readings of the command path under `resolved`. The first takes every
+ * option the parent's table does not name to have no value, and stops at
+ * the parent when the next word names no path. Each other position of the
+ * subcommand word that names a path is a reading too
+ * (`npm --loglevel silent exec -- cmd`). An unnamed option alone adds none:
+ * `git --no-pager status` has one reading.
+ */
+const readingsUnder = (resolved: ResolvedCommand): Arr.NonEmptyReadonlyArray<ResolvedCommand> => {
+  if (!SPEC_PARENTS.has(resolved.path)) return [resolved]
+  const rest = resolved.words
+  let from = 0
+  if (resolved.spec.toolchain === true && rest[1]?.text.startsWith("+") === true) from = 1
+  const args = rest.slice(1).map((word) => word.text)
+  const { valued } = resolved.spec
+  // `args[index]` is `rest[index + 1]`.
+  const first = from + parseArguments(args.slice(from), valued, "leading").end
+  const others = [...subcommandPositions(args, from, valued)]
+    .filter((index) => index !== first)
+    .sort((a, b) => a - b)
+    .flatMap((index) =>
+      Option.match(childCommand(resolved, index + 1), {
+        onNone: () => [],
+        onSome: readingsUnder,
+      }),
+    )
+  const head = Option.match(childCommand(resolved, first + 1), {
+    onNone: (): Arr.NonEmptyReadonlyArray<ResolvedCommand> => [resolved],
+    onSome: readingsUnder,
+  })
+  return Arr.appendAll(head, others)
+}
+
+/**
+ * Every reading of the command path in `words`, whose first word is the
+ * command word: the longest path `COMMAND_SPECS` names. Where an option a
+ * parent does not name hides the subcommand word, there are more readings,
+ * and the strongest risk of them wins. The first is the usual one.
+ */
+const resolveReadings = (
+  words: ReadonlyArray<ShellWord>,
+): Arr.NonEmptyReadonlyArray<ResolvedCommand> => {
   let path = commandName(words[0]?.text ?? "")
   if (path.startsWith("mkfs.")) path = "mkfs"
-  let resolved: ResolvedCommand = { path, spec: COMMAND_SPECS.get(path) ?? NO_SPEC, words }
-  while (SPEC_PARENTS.has(resolved.path)) {
-    const rest = resolved.words
-    let next = 1
-    if (resolved.spec.toolchain === true && rest[next]?.text.startsWith("+") === true) next++
-    next += parseWords(rest.slice(next - 1), resolved.spec.valued, "leading").end
-    const key = `${resolved.path} ${rest[next]?.text ?? ""}`
-    if (!COMMAND_SPECS.has(key) && !SPEC_PARENTS.has(key)) break
-    resolved = { path: key, spec: COMMAND_SPECS.get(key) ?? NO_SPEC, words: rest.slice(next) }
-  }
-  return resolved
+  return readingsUnder({ path, spec: COMMAND_SPECS.get(path) ?? NO_SPEC, words })
 }
+
+/** The usual reading of the command path in `words`: every unnamed parent option takes no value. */
+const resolveCommand = (words: ReadonlyArray<ShellWord>): ResolvedCommand =>
+  Arr.headNonEmpty(resolveReadings(words))
 
 /** The index in `words` (from a path's last word) of the first word a `Command`, `Joined` or `Stdin` run runs. */
 const commandStart = (
@@ -1556,19 +1674,6 @@ const commandStart = (
   // No command is named `--`: after the positionals it ends the options (`ssh host -- cmd`).
   if (words[end]?.text === "--") end++
   return end
-}
-
-/**
- * Whether the words after `option` may be read wrong: its table does not
- * name it as written (a letter, or a long name in full), and no `=value`
- * shows that it takes no word after it. It may take none, one or more of
- * them (`uv run --directory sub pytest`); an abbreviated name may be another
- * option (parallel's `--tag` is not `--tagstring`).
- */
-const isUnsure = (valued: ValueOptions, option: ParsedOption) => {
-  if (!option.long) return !`${valued.short ?? ""}${valued.attached ?? ""}`.includes(option.name)
-  if ((valued.long ?? []).includes(option.name)) return false
-  return !Option.exists(option.value, (value) => value.word === option.at)
 }
 
 /**
@@ -1765,19 +1870,20 @@ const collectInvocations = (
   const found: Invocation = { segment, words: command, assignments, placeholder }
   if (isCollected(into, found)) return
   into.push(found)
-  const resolved = resolveCommand(command)
-  for (const run of resolved.spec.runs) {
-    let fed = placeholder
-    let input = segment
-    if (run._tag === "FindExec") fed = Option.some(/\{\}/)
-    if (run._tag === "Stdin") {
-      // The command reads what the wrapper reads: its pipe, its file or its sources.
-      const use = inputUse(resolved)
-      fed = Option.orElse(use.marker, () => placeholder)
-      input = wrapperSegment(segment, use, wrapperWords(resolved).sources)
-    }
-    for (const wrapped of runCommands(resolved, run)) {
-      collectInvocations(input, wrapped, into, fed)
+  for (const resolved of resolveReadings(command)) {
+    for (const run of resolved.spec.runs) {
+      let fed = placeholder
+      let input = segment
+      if (run._tag === "FindExec") fed = Option.some(/\{\}/)
+      if (run._tag === "Stdin") {
+        // The command reads what the wrapper reads: its pipe, its file or its sources.
+        const use = inputUse(resolved)
+        fed = Option.orElse(use.marker, () => placeholder)
+        input = wrapperSegment(segment, use, wrapperWords(resolved).sources)
+      }
+      for (const wrapped of runCommands(resolved, run)) {
+        collectInvocations(input, wrapped, into, fed)
+      }
     }
   }
 }
@@ -2741,19 +2847,22 @@ const inputNamesCommand = (
   const lengths = read.get(head.value) ?? new Set<number>()
   if (lengths.has(words.length)) return false
   read.set(head.value, lengths.add(words.length))
-  const resolved = resolveCommand(words)
-  if (resolved.spec.runs.some((run) => inputFillsScript(resolved, run, isMarked, appends))) {
-    return true
-  }
-  const wrapped = resolved.spec.runs.flatMap((run) => {
-    if (run._tag !== "Command" && run._tag !== "Stdin") return []
-    return runCommands(resolved, run)
-  })
+  const readings = resolveReadings(words)
+  const fills = readings.some((resolved) =>
+    resolved.spec.runs.some((run) => inputFillsScript(resolved, run, isMarked, appends)),
+  )
+  if (fills) return true
+  const wrapped = readings.flatMap((resolved) =>
+    resolved.spec.runs.flatMap((run) => {
+      if (run._tag !== "Command" && run._tag !== "Stdin") return []
+      return runCommands(resolved, run)
+    }),
+  )
   if (wrapped.length > 0) {
     return wrapped.some((inner) => inputNamesCommand(inner, isMarked, appends, read))
   }
   if (commandName(head.value.text) !== "git") return false
-  if (resolved.spec.risks.length > 0) return true
+  if (readings.some((resolved) => resolved.spec.risks.length > 0)) return true
   const subcommand = Option.fromUndefinedOr(words[commandStart(words, GIT_GLOBAL_OPTIONS, {})])
   return Option.match(subcommand, {
     onNone: () => true,
@@ -2907,8 +3016,9 @@ const commandRuns = (invocation: Invocation): SegmentRuns => {
   if (FOREIGN_SHELLS.has(name)) return foreignShellRuns(invocation)
   if (name === "source" || name === ".")
     return scriptFileRuns(invocation.segment, Option.fromUndefinedOr(words[1]))
-  const resolved = resolveCommand(words)
-  const runs = resolved.spec.runs.map((run) => specRuns(invocation, resolved, run))
+  const runs = resolveReadings(words).flatMap((resolved) =>
+    resolved.spec.runs.map((run) => specRuns(invocation, resolved, run)),
+  )
   if (name === "git") runs.push(gitRuns(invocation))
   return mergeRuns(runs)
 }
@@ -3231,7 +3341,8 @@ const sqlWords = (
  * A SQL client asks when the guard cannot see what it runs: SQL from a
  * file (`-f`, `--file`, `-init`, a `<` redirect), input the guard cannot
  * read, SQL known only at run time (any word but a connection name holds a
- * `$VAR` or `$(…)`), a client command outside its read-only list, or output
+ * `$VAR` or `$(…)`, or any word holds one unquoted: it splits, and a name
+ * may bring options with it), a client command outside its read-only list, or output
  * sent to a file or a program. Else it asks when its text holds a word of
  * `SQL_DESTRUCTIVE`: any argument, option values as written, or its
  * readable input.
@@ -3250,7 +3361,10 @@ const sqlRisk =
       return destructive("SQL the guard cannot read: a file or unreadable input")
     }
     const words = sqlWords(texts, parsed, client)
-    if (words.all.some((index) => resolved.words[index + 1]?.dynamic === true)) {
+    if (
+      resolved.words.slice(1).some((word) => word.splits) ||
+      words.all.some((index) => resolved.words[index + 1]?.dynamic === true)
+    ) {
       return destructive("SQL known only at run time")
     }
     const outputs = parsed.options.filter((option) =>
@@ -3631,17 +3745,17 @@ const SPEC_PARENTS: ReadonlySet<string> = new Set(
   }),
 )
 
-const invocationRisks = (invocation: Invocation): Array<BashRisk> => {
-  const resolved = resolveCommand(invocation.words)
-  const texts = resolved.words.slice(1).map((word) => word.text)
-  const args: CommandArgs = {
-    texts,
-    parsed: parseArguments(texts, resolved.spec.valued),
-    resolved,
-    invocation,
-  }
-  return resolved.spec.risks.flatMap((risk) => Option.toArray(risk(args)))
-}
+const invocationRisks = (invocation: Invocation): Array<BashRisk> =>
+  resolveReadings(invocation.words).flatMap((resolved) => {
+    const texts = resolved.words.slice(1).map((word) => word.text)
+    const args: CommandArgs = {
+      texts,
+      parsed: parseArguments(texts, resolved.spec.valued),
+      resolved,
+      invocation,
+    }
+    return resolved.spec.risks.flatMap((risk) => Option.toArray(risk(args)))
+  })
 
 const RISK_RANK = {
   safe: 0,
