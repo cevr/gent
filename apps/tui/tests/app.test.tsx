@@ -1001,6 +1001,52 @@ describe("App auth gate", () => {
       expect(view.steers).toEqual(["Cancel"])
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // The quit window is for a press that follows the cancel; a draft made in
+  // between is nearer, so the next ctrl+c clears it and never quits over it.
+  // A paste reaches the composer without a key event, so no key disarms it.
+  it.live("a ctrl+c after a cancel and a new draft clears the draft, and does not quit", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
+      yield* Effect.promise(() => view.setup.mockInput.pasteBracketedText("keep me"))
+      yield* waitForFrame(view.setup, (frame) => frame.includes("keep me"), "draft pasted")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, (frame) => !frame.includes("keep me"), "draft cleared")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A transcript toggle between two ctrl+c presses is another gesture: the
+  // second press collapses the transcript and never quits.
+  it.live("a transcript toggle between two ctrl+c presses disarms the quit", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
+      view.setup.mockInput.pressKey("o", { ctrl: true, shift: true })
+      // gent/no-sleep: allow the toggle must be parsed and handled before the next press
+      yield* Effect.sleep("50 millis")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      // gent/no-sleep: allow the press must be parsed and handled before the negative assertion
+      yield* Effect.sleep("100 millis")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // ctrl+o changes only how tool groups draw, so nothing nearer is left for
+  // the next press to undo: the key itself has to disarm the quit.
+  it.live("a disclosure key between two ctrl+c presses makes the second cancel, not quit", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "first cancel")
+      view.setup.mockInput.pressKey("o", { ctrl: true })
+      // gent/no-sleep: allow the key must be parsed and handled before the next press
+      yield* Effect.sleep("50 millis")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 2, "second cancel")
+      expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   // The quit arm is per key: a ctrl+c that cancelled a turn, then an escape
   // on the idle session, is two gestures and does not quit.
   it.live("escape after a ctrl+c that cancelled a turn does not quit", () =>
