@@ -479,7 +479,10 @@ const messageSegments = (
       continue
     }
     if (part.type === "reasoning") {
-      segments.push(MessageSegment.cases.Reasoning.make({ content: part.text }))
+      // An OpenAI reasoning item without a summary is stored for replay only.
+      if (part.text !== "") {
+        segments.push(MessageSegment.cases.Reasoning.make({ content: part.text }))
+      }
       continue
     }
     if (part.type === "file" && part.mediaType.startsWith("image/")) {
@@ -1736,32 +1739,83 @@ export const emptyLoopQueueState = (): LoopQueueState => ({
 
 // ── response-part-normalization ─────────────────────────────────────────────
 
-const appendNormalizedTextPart = (parts: Array<Response.AnyPart>, text: string): void => {
-  if (text === "") return
+const isJsonRecord = Schema.is(Schema.Record(Schema.String, Schema.Json))
+
+/** One provider's entry: two objects merge by field, later winning; anything else is replaced. */
+const mergeProviderEntry = (
+  previous: Option.Option<Response.ProviderMetadata[string]>,
+  next: Response.ProviderMetadata[string],
+): Response.ProviderMetadata[string] => {
+  if (Option.isNone(previous) || !isJsonRecord(previous.value) || !isJsonRecord(next)) return next
+  return Object.fromEntries([...Object.entries(previous.value), ...Object.entries(next)])
+}
+
+/**
+ * Provider metadata folded per provider key, later fields winning: the rule
+ * `Prompt.fromResponseParts` applies to a streamed part.
+ */
+const mergeProviderMetadata = (
+  left: Response.ProviderMetadata,
+  right: Response.ProviderMetadata,
+): Response.ProviderMetadata => {
+  const merged = { ...left }
+  for (const [provider, value] of Object.entries(right)) {
+    merged[provider] = mergeProviderEntry(Option.fromUndefinedOr(merged[provider]), value)
+  }
+  return merged
+}
+
+const hasProviderMetadata = (metadata: Response.ProviderMetadata): boolean =>
+  Object.keys(metadata).length > 0
+
+/**
+ * Text and reasoning a provider streams, as whole parts. A part that carries
+ * provider metadata stays whole and keeps it: the metadata (an OpenAI item id
+ * and encrypted reasoning, an Anthropic thinking signature) belongs to exactly
+ * that text, and a later step sends it back. Such a part is kept even with no
+ * text, as an OpenAI reasoning item without a summary is. Chunks without
+ * metadata join the previous part of their kind.
+ */
+const appendNormalizedTextPart = (
+  parts: Array<Response.AnyPart>,
+  text: string,
+  metadata: Response.ProviderMetadata = {},
+): void => {
+  const keep = hasProviderMetadata(metadata)
+  if (text === "" && !keep) return
   const last = parts.at(-1)
-  if (last?.type === "text") {
+  if (!keep && last?.type === "text" && !hasProviderMetadata(last.metadata)) {
     parts[parts.length - 1] = Response.makePart("text", { text: `${last.text}${text}` })
     return
   }
-  parts.push(Response.makePart("text", { text }))
+  parts.push(Response.makePart("text", { text, metadata }))
 }
 
-const appendNormalizedReasoningPart = (parts: Array<Response.AnyPart>, text: string): void => {
-  if (text === "") return
+const appendNormalizedReasoningPart = (
+  parts: Array<Response.AnyPart>,
+  text: string,
+  metadata: Response.ProviderMetadata = {},
+): void => {
+  const keep = hasProviderMetadata(metadata)
+  if (text === "" && !keep) return
   const last = parts.at(-1)
-  if (last?.type === "reasoning") {
-    parts[parts.length - 1] = Response.makePart("reasoning", {
-      text: `${last.text}${text}`,
-    })
+  if (!keep && last?.type === "reasoning" && !hasProviderMetadata(last.metadata)) {
+    parts[parts.length - 1] = Response.makePart("reasoning", { text: `${last.text}${text}` })
     return
   }
-  parts.push(Response.makePart("reasoning", { text }))
+  parts.push(Response.makePart("reasoning", { text, metadata }))
+}
+
+/** A streamed part between its start and its end. */
+interface ActiveDelta {
+  readonly text: string
+  readonly metadata: Response.ProviderMetadata
 }
 
 interface NormalizedResponseState {
   readonly normalized: Array<Response.AnyPart>
-  readonly activeTextDeltas: Map<string, string>
-  readonly activeReasoningDeltas: Map<string, string>
+  readonly activeTextDeltas: Map<string, ActiveDelta>
+  readonly activeReasoningDeltas: Map<string, ActiveDelta>
   readonly toolCallIds: Set<string>
   readonly toolResultIds: Set<string>
 }
@@ -1776,31 +1830,60 @@ type ReasoningResponsePart = Extract<
   { readonly type: "reasoning" | "reasoning-start" | "reasoning-delta" | "reasoning-end" }
 >
 
+/** Fold one streamed chunk into its active part; `false` when no part with that id started. */
+const foldActiveDelta = (
+  active: Map<string, ActiveDelta>,
+  id: string,
+  delta: string,
+  metadata: Response.ProviderMetadata,
+): boolean => {
+  const current = active.get(id)
+  if (Predicate.isUndefined(current)) return false
+  active.set(id, {
+    text: `${current.text}${delta}`,
+    metadata: mergeProviderMetadata(current.metadata, metadata),
+  })
+  return true
+}
+
+/** The finished part for `id`, with the end chunk's metadata folded in; `None` when it never started. */
+const takeActiveDelta = (
+  active: Map<string, ActiveDelta>,
+  id: string,
+  metadata: Response.ProviderMetadata,
+): Option.Option<ActiveDelta> => {
+  const current = active.get(id)
+  if (Predicate.isUndefined(current)) return Option.none()
+  active.delete(id)
+  return Option.some({
+    text: current.text,
+    metadata: mergeProviderMetadata(current.metadata, metadata),
+  })
+}
+
 const normalizeTextResponsePart = (
   state: NormalizedResponseState,
   part: TextResponsePart,
 ): void => {
   switch (part.type) {
     case "text":
-      appendNormalizedTextPart(state.normalized, part.text)
+      appendNormalizedTextPart(state.normalized, part.text, part.metadata)
       return
     case "text-start":
-      state.activeTextDeltas.set(part.id, "")
+      state.activeTextDeltas.set(part.id, { text: "", metadata: part.metadata })
       return
     case "text-delta":
-      if (state.activeTextDeltas.has(part.id)) {
-        state.activeTextDeltas.set(
-          part.id,
-          `${state.activeTextDeltas.get(part.id) ?? ""}${part.delta}`,
-        )
-      } else {
-        appendNormalizedTextPart(state.normalized, part.delta)
+      if (!foldActiveDelta(state.activeTextDeltas, part.id, part.delta, part.metadata)) {
+        appendNormalizedTextPart(state.normalized, part.delta, part.metadata)
       }
       return
-    case "text-end":
-      appendNormalizedTextPart(state.normalized, state.activeTextDeltas.get(part.id) ?? "")
-      state.activeTextDeltas.delete(part.id)
+    case "text-end": {
+      const done = takeActiveDelta(state.activeTextDeltas, part.id, part.metadata)
+      if (Option.isSome(done)) {
+        appendNormalizedTextPart(state.normalized, done.value.text, done.value.metadata)
+      }
       return
+    }
   }
 }
 
@@ -1810,28 +1893,23 @@ const normalizeReasoningResponsePart = (
 ): void => {
   switch (part.type) {
     case "reasoning":
-      appendNormalizedReasoningPart(state.normalized, part.text)
+      appendNormalizedReasoningPart(state.normalized, part.text, part.metadata)
       return
     case "reasoning-start":
-      state.activeReasoningDeltas.set(part.id, "")
+      state.activeReasoningDeltas.set(part.id, { text: "", metadata: part.metadata })
       return
     case "reasoning-delta":
-      if (state.activeReasoningDeltas.has(part.id)) {
-        state.activeReasoningDeltas.set(
-          part.id,
-          `${state.activeReasoningDeltas.get(part.id) ?? ""}${part.delta}`,
-        )
-      } else {
-        appendNormalizedReasoningPart(state.normalized, part.delta)
+      if (!foldActiveDelta(state.activeReasoningDeltas, part.id, part.delta, part.metadata)) {
+        appendNormalizedReasoningPart(state.normalized, part.delta, part.metadata)
       }
       return
-    case "reasoning-end":
-      appendNormalizedReasoningPart(
-        state.normalized,
-        state.activeReasoningDeltas.get(part.id) ?? "",
-      )
-      state.activeReasoningDeltas.delete(part.id)
+    case "reasoning-end": {
+      const done = takeActiveDelta(state.activeReasoningDeltas, part.id, part.metadata)
+      if (Option.isSome(done)) {
+        appendNormalizedReasoningPart(state.normalized, done.value.text, done.value.metadata)
+      }
       return
+    }
   }
 }
 
@@ -1868,8 +1946,8 @@ export const normalizeResponseParts = (
 ): ReadonlyArray<Response.AnyPart> => {
   const state: NormalizedResponseState = {
     normalized: [],
-    activeTextDeltas: new Map<string, string>(),
-    activeReasoningDeltas: new Map<string, string>(),
+    activeTextDeltas: new Map<string, ActiveDelta>(),
+    activeReasoningDeltas: new Map<string, ActiveDelta>(),
     toolCallIds: new Set<string>(),
     toolResultIds: new Set<string>(),
   }
@@ -1898,11 +1976,11 @@ export const normalizeResponseParts = (
     normalizePassthroughResponsePart(state, part)
   }
 
-  for (const text of state.activeTextDeltas.values()) {
-    appendNormalizedTextPart(state.normalized, text)
+  for (const active of state.activeTextDeltas.values()) {
+    appendNormalizedTextPart(state.normalized, active.text, active.metadata)
   }
-  for (const text of state.activeReasoningDeltas.values()) {
-    appendNormalizedReasoningPart(state.normalized, text)
+  for (const active of state.activeReasoningDeltas.values()) {
+    appendNormalizedReasoningPart(state.normalized, active.text, active.metadata)
   }
 
   return state.normalized
@@ -1952,10 +2030,13 @@ const responsePartToAssistantMessagePart = (
   part: Response.AnyPart,
 ): Option.Option<AssistantMessagePart> => {
   switch (part.type) {
+    // Provider metadata becomes the part's options, which the SDK reads when
+    // it sends the part back: an OpenAI item id and encrypted reasoning, an
+    // Anthropic thinking signature. Stored rows written before this carry `{}`.
     case "text":
-      return Option.some(Prompt.textPart({ text: part.text }))
+      return Option.some(Prompt.textPart({ text: part.text, options: part.metadata }))
     case "reasoning":
-      return Option.some(Prompt.reasoningPart({ text: part.text }))
+      return Option.some(Prompt.reasoningPart({ text: part.text, options: part.metadata }))
     case "file":
       // Only images replay into the transcript; the provider gets a data URL back.
       if (!part.mediaType.startsWith("image/")) return Option.none()
@@ -1972,6 +2053,7 @@ const responsePartToAssistantMessagePart = (
           name: part.name,
           params: part.params,
           providerExecuted: part.providerExecuted,
+          options: part.metadata,
         }),
       )
     case "tool-approval-request":

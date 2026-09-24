@@ -21,6 +21,7 @@ import {
   signalActiveStreamInterrupt,
 } from "../../src/runtime/turn"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
+import { ModelId } from "../../src/domain/agent"
 import { ProviderError } from "../../src/domain/errors"
 import { finishPart, textDeltaPart, toolCallPart } from "../../src/runtime/provider"
 import {
@@ -161,7 +162,7 @@ describe("agent turn response collectors", () => {
         turnStream: Stream.fail(new ProviderError({ message: "boom", model: "test/model" })),
         sessionId,
         branchId,
-        modelId: "test/model",
+        modelId: ModelId.make("test/model"),
         activeStream,
         formatStreamError: (error) => error.message,
       }).pipe(Effect.flip, Effect.provide(layer))
@@ -178,6 +179,7 @@ describe("agent turn response collectors", () => {
       const collected = yield* collectFailedModelTurnResponse({
         ...streamAddress,
         streamError: new ProviderError({ message: "interrupted boom", model: "test/model" }),
+        modelId: ModelId.make("test/model"),
         sessionId,
         branchId,
         activeStream,
@@ -203,7 +205,7 @@ describe("agent turn response collectors", () => {
         ),
         sessionId,
         branchId,
-        modelId: "test/model",
+        modelId: ModelId.make("test/model"),
         activeStream,
         formatStreamError: (error) => error.message,
       }).pipe(Effect.provide(layer))

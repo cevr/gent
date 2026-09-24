@@ -20,7 +20,7 @@ import {
   readChildCompletionHeadline,
   StartChild,
 } from "../src/delegate.js"
-import { RequestId } from "@gent/core/extensions/api"
+import { type ModelPricing, RequestId } from "@gent/core/extensions/api"
 import {
   ApprovalService,
   createE2ELayer,
@@ -67,7 +67,11 @@ const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown)
 
 const harnessWithHome = (
   providerLayer: Parameters<typeof createRpcHarness>[0]["providerLayer"],
-  options: { readonly config?: UserConfig; readonly dialogs?: boolean } = {},
+  options: {
+    readonly config?: UserConfig
+    readonly dialogs?: boolean
+    readonly modelPricing?: ModelPricing
+  } = {},
 ) =>
   Effect.gen(function* () {
     const home = yield* makeTempDirectoryScoped("delegate-")
@@ -77,6 +81,7 @@ const harnessWithHome = (
       extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
       ...Record.filter(
         {
+          modelPricing: options.modelPricing,
           configServiceLayer: Option.map(
             Option.fromUndefinedOr(options.config),
             ConfigService.Test,
@@ -405,6 +410,128 @@ describe("a child's completion", () => {
           expect(messageTexts([completion!])[0]).toContain(
             `Child agent "${DELEGATE_AGENT_NAME}" completed.`,
           )
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "the completion carries the child's whole bill: tokens, cache reads and writes, and cost",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              if (!promptToolCallIds(options.prompt).includes("child-read")) {
+                return Effect.succeed(
+                  Stream.fromIterable([
+                    toolCallPart(
+                      "read",
+                      { path: "/tmp/no-such-file-for-a-child" },
+                      { toolCallId: ToolCallId.make("child-read") },
+                    ),
+                    finishPart({
+                      finishReason: "tool-calls",
+                      usage: {
+                        inputTokens: 1_000,
+                        outputTokens: 100,
+                        cacheReadTokens: 600,
+                        cacheWriteTokens: 300,
+                      },
+                    }),
+                  ]),
+                )
+              }
+              return Effect.succeed(
+                Stream.fromIterable([
+                  textDeltaPart("pong"),
+                  finishPart({
+                    finishReason: "stop",
+                    usage: { inputTokens: 1_200, outputTokens: 50, cacheReadTokens: 900 },
+                  }),
+                ]),
+              )
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer, {
+            // Dollars per million tokens.
+            modelPricing: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+          })
+          yield* sendPrompt(harness, "delegate this task")
+          const snapshot = yield* afterCompletion(harness)
+          const [completion] = completionMessages(snapshot.messages)
+          const { usage } = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({
+              usage: Schema.Struct({
+                input: Schema.Finite,
+                output: Schema.Finite,
+                cacheRead: Schema.Finite,
+                cacheWrite: Schema.Finite,
+                costUsd: Schema.Finite,
+              }),
+            }),
+          )(completion?.metadata?.details)
+          expect(Struct.omit(usage, ["costUsd"])).toEqual({
+            input: 2_200,
+            output: 150,
+            cacheRead: 1_500,
+            cacheWrite: 300,
+          })
+          // Step 1: 100 uncached, 600 read, 300 written, 100 out. Step 2: 300
+          // uncached, 900 read, 50 out.
+          const stepOne = 100 * 3 + 600 * 0.3 + 300 * 3.75 + 100 * 15
+          const stepTwo = 300 * 3 + 900 * 0.3 + 50 * 15
+          expect(usage.costUsd).toBeCloseTo((stepOne + stepTwo) / 1_000_000, 12)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  // The hook and the recovery read one rule: a turn with no model step has no
+  // bill. A completion written by the hook must match the one recovery writes
+  // from the child's `TurnCompleted` receipt, or a crash changes the record.
+  it.live(
+    "a child that ends before its first model step reports no usage, as its receipt does",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* harnessWithHome(startThenEnd("pong"), {
+            config: new UserConfig({
+              agents: {
+                // The window cannot hold the child's context: the turn ends before a step.
+                [DELEGATE_AGENT_NAME]: { contextLength: 10 },
+              },
+            }),
+          })
+          yield* sendPrompt(harness, "delegate this task")
+          const snapshot = yield* afterCompletion(harness)
+          const child = yield* childOf(harness)
+          const childEnds = yield* harness.client.session.events(child).pipe(
+            Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+            Stream.flatMap((envelope): Stream.Stream<string> => {
+              const event = envelope.event
+              if (event._tag === "StreamEnded") return Stream.make("step")
+              if (event._tag !== "TurnCompleted") return Stream.empty
+              if (Predicate.isUndefined(event.usage)) return Stream.make("receipt")
+              return Stream.make("receipt with usage")
+            }),
+            Stream.runCollect,
+            Effect.map((items) => Array.from(items)),
+          )
+          // No step ran, and the receipt recovery reads carries no usage.
+          expect(childEnds).toEqual(["receipt"])
+          const [completion] = completionMessages(snapshot.messages)
+          const details = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ usage: Schema.optional(Schema.Unknown) }),
+          )(completion?.metadata?.details)
+          expect(Option.fromUndefinedOr(details.usage)).toEqual(Option.none())
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,

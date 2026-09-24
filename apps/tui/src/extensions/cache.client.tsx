@@ -26,8 +26,10 @@ import {
  * derives the same rows) into the misses and why each happened: the cache
  * expired during a long tool call, while the turn waited for an approval,
  * while the reader was idle, before a child's completion or a wake, or after a
- * model switch. A miss inside the cache lifetime with the same model is a
- * changed prefix: the regression alarm for a moved cache marker.
+ * model switch. A miss inside the cache lifetime with the same model, on a
+ * provider that reports cache writes, is a changed prefix: the regression
+ * alarm for a moved cache marker. On a provider that caches implicitly and
+ * reports reads only, such a miss is no evidence and is not counted.
  *
  * Nothing is stored and the model never sees it. A notice row shows a miss
  * large enough to matter; the status row shows the branch's total.
@@ -58,7 +60,7 @@ const MISS_GLYPH = "◌"
 export const CacheMissCause = Schema.TaggedUnion({
   /** The step ran on another model; its cache holds nothing of this prefix. */
   ModelSwitch: {},
-  /** Same model inside the cache lifetime: the prefix itself changed. */
+  /** Same model inside the cache lifetime, on a provider that writes its cache: the prefix itself changed. */
   PrefixChanged: {},
   /** The previous response itself took most of the lifetime, measured from its start. */
   Response: { ms: Schema.Finite },
@@ -147,6 +149,15 @@ export const makeCacheScan = (): CacheScan => {
   let waits: Array<Span> = []
   /** `metadata.customType` of each message that carries one: what opened a turn. */
   const inputTypes = new Map<string, string>()
+  /**
+   * The models whose steps reported cache writes. Such a provider caches
+   * explicitly (Anthropic's `cache_control`): it holds a written prefix for
+   * the lifetime, so a zero read inside it means the prefix changed. A
+   * provider that reports reads only caches implicitly (OpenAI): a request
+   * reads the cache only when it reaches a server that holds the prefix, so a
+   * zero read inside the lifetime is no evidence of anything.
+   */
+  const writers = new Set<string>()
 
   const reset = () => {
     previous = Option.none()
@@ -154,17 +165,31 @@ export const makeCacheScan = (): CacheScan => {
     waits = []
   }
 
+  /** The cause of a miss; none when the miss is no evidence that a prefix was lost. */
   const classify = (
     prior: CachedRequest,
     model: string,
     at: number,
     input: Option.Option<string>,
-  ): CacheMissCause => {
-    if (model !== prior.model) return CacheMissCause.cases.ModelSwitch.make({})
+  ): Option.Option<CacheMissCause> => {
+    if (model !== prior.model) return Option.some(CacheMissCause.cases.ModelSwitch.make({}))
     // The lifetime runs from the start of the request that refreshed the
     // cache; the cause names what took that interval.
     const gapMs = Math.max(0, at - prior.startedAt)
-    if (gapMs <= CACHE_TTL_MS) return CacheMissCause.cases.PrefixChanged.make({})
+    if (gapMs <= CACHE_TTL_MS) {
+      return Option.liftPredicate(CacheMissCause.cases.PrefixChanged.make({}), () =>
+        writers.has(model),
+      )
+    }
+    return Option.some(expiredCause(prior, gapMs, input))
+  }
+
+  /** Why a prefix outlived its lifetime: what took the gap since it was refreshed. */
+  const expiredCause = (
+    prior: CachedRequest,
+    gapMs: number,
+    input: Option.Option<string>,
+  ): CacheMissCause => {
     const response = { name: "response", ms: Math.max(0, prior.endedAt - prior.startedAt) }
     if (Option.isSome(covers(Option.some(response), gapMs))) {
       return CacheMissCause.cases.Response.make({ ms: response.ms })
@@ -206,11 +231,12 @@ export const makeCacheScan = (): CacheScan => {
     const model = event.model ?? ""
     const pricedModel = event.pricedModel ?? model
     const reported = cacheReadTokens + cacheWriteTokens > 0
+    if (cacheWriteTokens > 0) writers.add(model)
     const miss = Option.flatMap(previous, (prior): Option.Option<CacheMiss> => {
       if (!reported && !prior.reportedCache) return Option.none()
       const missedTokens = Math.min(prior.promptTokens, promptTokens) - cacheReadTokens
       if (missedTokens <= NOISE_FLOOR_TOKENS) return Option.none()
-      return Option.some({
+      return Option.map(classify(prior, model, begun.at, begun.input), (cause) => ({
         eventId: envelope.id,
         startedAt: begun.at,
         model,
@@ -220,8 +246,8 @@ export const makeCacheScan = (): CacheScan => {
         cacheReadTokens,
         cacheWriteTokens,
         billed: (event.costUsd ?? 0) > 0,
-        cause: classify(prior, model, begun.at, begun.input),
-      })
+        cause,
+      }))
     })
     previous = Option.some({
       promptTokens,

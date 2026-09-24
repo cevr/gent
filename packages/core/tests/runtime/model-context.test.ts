@@ -26,6 +26,7 @@ import {
   latestUserMessageId,
   maximumModelToolResultChars,
   messagesInCurrentWindow,
+  modelChangeNotice,
   MODEL_OUTPUT_RESERVE_TOKENS,
   ModelCompactionError,
   ModelContextBudget,
@@ -126,6 +127,13 @@ const success = (value: ReturnType<typeof projectModelContext>): ModelContextPro
 
 const failure = (value: ReturnType<typeof projectModelContext>): ModelContextErrorValue =>
   Result.getOrThrow(Result.flip(value))
+
+/** The text of each reasoning part, in order. */
+const messagePartsReasoningTexts = (parts: ReadonlyArray<MessagePart>): ReadonlyArray<string> =>
+  parts.flatMap((part) => {
+    if (part.type !== "reasoning") return []
+    return [part.text]
+  })
 
 const ids = (projection: ModelContextProjectionValue): ReadonlyArray<string> =>
   projection.messages.map((item) => item.id)
@@ -1485,6 +1493,90 @@ describe("AI transcript projection", () => {
         result: { ok: true },
       }),
     )
+  })
+
+  test("reasoning keeps the provider state a later step sends back", () => {
+    const thinking = (signature: string): Response.ReasoningDeltaPartMetadata => ({
+      anthropic: { info: { type: "thinking", signature } },
+    })
+    const projection = projectResponsePartsToMessageParts([
+      // Anthropic: the signature arrives on a delta. Two blocks keep two signatures.
+      Response.makePart("reasoning-start", { id: "0" }),
+      Response.makePart("reasoning-delta", { id: "0", delta: "plan" }),
+      Response.makePart("reasoning-delta", { id: "0", delta: "", metadata: thinking("sig-a") }),
+      Response.makePart("reasoning-end", { id: "0" }),
+      Response.makePart("reasoning-start", { id: "1" }),
+      Response.makePart("reasoning-delta", { id: "1", delta: "check" }),
+      Response.makePart("reasoning-delta", { id: "1", delta: "", metadata: thinking("sig-b") }),
+      Response.makePart("reasoning-end", { id: "1" }),
+      // OpenAI: an item with no summary text; its encrypted content arrives at the end.
+      Response.makePart("reasoning-start", {
+        id: "rs_1:0",
+        metadata: { openai: { itemId: "rs_1" } },
+      }),
+      Response.makePart("reasoning-end", {
+        id: "rs_1:0",
+        metadata: { openai: { itemId: "rs_1", encryptedContent: "enc-1" } },
+      }),
+      Response.makePart("tool-call", {
+        id: "call_1",
+        name: "cell",
+        params: {},
+        providerExecuted: false,
+        metadata: { openai: { itemId: "fc_1" } },
+      }),
+    ])
+    expect(projection.assistant.map((part) => [part.type, part.options])).toEqual([
+      ["reasoning", thinking("sig-a")],
+      ["reasoning", thinking("sig-b")],
+      ["reasoning", { openai: { itemId: "rs_1", encryptedContent: "enc-1" } }],
+      ["tool-call", { openai: { itemId: "fc_1" } }],
+    ])
+    expect(messagePartsReasoningTexts(projection.assistant)).toEqual(["plan", "check", ""])
+  })
+
+  test("reasoning without provider state still joins into one part", () => {
+    const projection = projectResponsePartsToMessageParts([
+      Response.makePart("reasoning-delta", { id: "a", delta: "thin" }),
+      Response.makePart("reasoning-delta", { id: "b", delta: "king" }),
+      Response.makePart("reasoning-start", { id: "c" }),
+      Response.makePart("reasoning-end", { id: "c" }),
+    ])
+    expect(projection.assistant).toEqual([Prompt.reasoningPart({ text: "thinking" })])
+  })
+
+  test("reasoning state from before a model change is not sent to the new model", () => {
+    const reasoning = (label: string) =>
+      Prompt.reasoningPart({
+        text: label,
+        options: { anthropic: { info: { type: "thinking", signature: `sig-${label}` } } },
+      })
+    const assistant = (id: string, label: string) =>
+      message(id, "assistant", [reasoning(label), text(`${label} answer`)])
+    const prompt = toPrompt([
+      assistant("a-old", "old"),
+      modelChangeNotice({
+        sessionId,
+        branchId,
+        turnMessageId: MessageId.make("turn"),
+        step: 2,
+        previousModelId: ModelId.make("anthropic/claude-opus-5"),
+        nextModelId: ModelId.make("anthropic/claude-sonnet-5"),
+        createdAt,
+      }),
+      assistant("a-new", "new"),
+    ])
+    const replayed: Array<Prompt.ReasoningPart> = []
+    for (const promptMessage of prompt.content) {
+      if (promptMessage.role !== "assistant") continue
+      for (const part of promptMessage.content) {
+        if (part.type === "reasoning") replayed.push(part)
+      }
+    }
+    expect(replayed.map((part) => [part.text, part.options])).toEqual([
+      ["old", {}],
+      ["new", { anthropic: { info: { type: "thinking", signature: "sig-new" } } }],
+    ])
   })
 
   test("keeps Response parts canonical while deriving storage projections", () => {

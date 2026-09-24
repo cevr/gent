@@ -1138,6 +1138,21 @@ const rewriteCodexBody = (
 // ── Header construction ──
 
 /**
+ * The ChatGPT backend routes prompt-cache affinity by the Responses
+ * `session-id` header; `prompt_cache_key` alone does not keep a session on
+ * a warm cache. Codex sends its cache key there for a root session
+ * (codex-rs `core/src/client.rs`, `responses_session_id`), so the header
+ * carries the request's `prompt_cache_key`: the session id, stable for every
+ * request of the session. A request without a key gets no header.
+ */
+const codexSessionId = (req: HttpClientRequest.HttpClientRequest): Option.Option<string> =>
+  tryReadJsonBody(req.body).pipe(
+    Option.flatMap((body) => Option.fromUndefinedOr(body["prompt_cache_key"])),
+    Option.filter(Predicate.isString),
+    Option.filter((key) => key.length > 0),
+  )
+
+/**
  * Build the OAuth header set for a Codex request: Bearer over the
  * access token, ChatGPT-Account-Id when known, plus polite-default
  * `originator` and `User-Agent` if the upstream didn't set them.
@@ -1210,6 +1225,8 @@ export const buildCodexTransformClient = (
         "openai-beta",
         ensureBetaToken(Headers.get(headers, "openai-beta"), CODEX_BETA_TOKEN),
       )
+      const sessionId = codexSessionId(req)
+      if (Option.isSome(sessionId)) headers = Headers.set(headers, "session-id", sessionId.value)
       const withBody = rewriteCodexBody(withHeaders(req, headers))
       if (req.url.startsWith("/")) return withBody
       return HttpClientRequest.setUrl(withBody, new URL(CODEX_API_ENDPOINT))
@@ -1427,6 +1444,125 @@ const summaryRefusalClient =
       ),
     )
 
+// ── Undecryptable reasoning ──
+
+/**
+ * A stored reasoning item goes back with its `encrypted_content` (see
+ * `model-context.ts`, reasoning replay). That content is bound to the model and
+ * to the organization that produced it: openai/codex#17541 (a model switch
+ * fails with "encrypted content could not be decrypted") and LiteLLM's
+ * "Encrypted Content Failures" incident report ("Encrypted content
+ * organization_id did not match the target organization"). The loop's
+ * model-change rule covers the model. The organization changes when the user
+ * signs in to another account or moves between the ChatGPT sign-in and an API
+ * key, and the loop cannot see that. Then the API answers HTTP 400 with
+ * `code: "invalid_encrypted_content"`. The request is sent once more without
+ * the reasoning items it carried, and their ids are recorded so later steps
+ * leave them out from the start. The model reads the rest of the history as
+ * before; only that reasoning is lost. The record lives as long as the driver.
+ */
+const EncryptedContentRejection = Schema.fromJsonString(
+  Schema.Struct({
+    error: Schema.Struct({ code: Schema.Literal("invalid_encrypted_content") }),
+  }),
+)
+const decodeEncryptedContentRejection = Schema.decodeUnknownOption(EncryptedContentRejection)
+
+/** The driver-owned ids of the reasoning items the API could not decrypt. */
+type RejectedReasoning = Ref.Ref<HashSet.HashSet<string>>
+
+/** Drives the one retry after a rejection; carries the response for when no retry is left. */
+class ReasoningRejectedError extends Schema.TaggedError<ReasoningRejectedError>(
+  "@gent/extensions/src/openai/ReasoningRejectedError",
+)("ReasoningRejectedError", {
+  response: HttpResponseField,
+}) {}
+
+/** A replayed reasoning input item that carries encrypted content. */
+const EncryptedReasoningItem = Schema.Struct({
+  type: Schema.Literal("reasoning"),
+  id: Schema.String,
+  encrypted_content: Schema.String,
+})
+const isEncryptedReasoningItem = Schema.is(EncryptedReasoningItem)
+
+/** The request body's `input` array; empty when there is none. */
+const requestInput = (req: HttpClientRequest.HttpClientRequest): ReadonlyArray<unknown> => {
+  const input = Option.map(tryReadJsonBody(req.body), (body) => body["input"])
+  if (Option.isNone(input) || !Array.isArray(input.value)) return []
+  return input.value
+}
+
+/** The ids of the request's input reasoning items that carry encrypted content. */
+const encryptedReasoningIds = (req: HttpClientRequest.HttpClientRequest): ReadonlyArray<string> =>
+  requestInput(req)
+    .filter(isEncryptedReasoningItem)
+    .map((item) => item.id)
+
+/** The request without the reasoning items in `rejected`; any other body as it is. */
+const withoutRejectedReasoning = (
+  req: HttpClientRequest.HttpClientRequest,
+  rejected: HashSet.HashSet<string>,
+): HttpClientRequest.HttpClientRequest => {
+  if (HashSet.size(rejected) === 0) return req
+  const parsed = tryReadJsonBody(req.body)
+  if (Option.isNone(parsed)) return req
+  const input = requestInput(req)
+  const kept = input.filter(
+    (item) => !(isEncryptedReasoningItem(item) && HashSet.has(rejected, item.id)),
+  )
+  if (kept.length === input.length) return req
+  const encoded = new TextEncoder().encode(encodeCodexBody({ ...parsed.value, input: kept }))
+  return HttpClientRequest.bodyUint8Array(req, encoded, "application/json")
+}
+
+/**
+ * Fails a rejection of the request's encrypted reasoning after recording its
+ * items. A request with no encrypted reasoning has nothing to leave out, so its
+ * 400 passes. The response keeps its body: a read body reads again.
+ */
+const rejectionCheck = (
+  rejected: RejectedReasoning,
+  response: HttpClientResponse.HttpClientResponse,
+): Effect.Effect<void, ReasoningRejectedError> => {
+  if (response.status !== 400) return Effect.void
+  const ids = encryptedReasoningIds(response.request)
+  if (ids.length === 0) return Effect.void
+  return response.text.pipe(
+    Effect.orElseSucceed(() => ""),
+    Effect.map(decodeEncryptedContentRejection),
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: () =>
+          Ref.update(rejected, (current) =>
+            ids.reduce((set, id) => HashSet.add(set, id), current),
+          ).pipe(Effect.andThen(Effect.fail(new ReasoningRejectedError({ response })))),
+      }),
+    ),
+  )
+}
+
+/**
+ * The client both auth paths run over, next to the transport: leaves rejected
+ * reasoning out, and on a rejection records it and retries once.
+ */
+const undecryptableReasoningClient =
+  (rejected: RejectedReasoning) =>
+  (client: HttpClient.HttpClient): HttpClient.HttpClient =>
+    client.pipe(
+      HttpClient.mapRequestEffect((req) =>
+        Effect.map(Ref.get(rejected), (ids) => withoutRejectedReasoning(req, ids)),
+      ),
+      HttpClient.transformResponse((effect) =>
+        effect.pipe(
+          Effect.tap((response) => rejectionCheck(rejected, response)),
+          Effect.retry({ while: (e) => e._tag === "ReasoningRejectedError", times: 1 }),
+          Effect.catchTag("ReasoningRejectedError", (e) => Effect.succeed(e.response)),
+        ),
+      ),
+    )
+
 // ── Layer construction helpers ──
 
 /**
@@ -1439,10 +1575,16 @@ const makeApiKeyOpenAIResolution = (
   config: OpenAiResponsesConfig,
   apiKey: string,
   refusedKeys: RefusedKeys,
+  rejectedReasoning: RejectedReasoning,
 ) => {
   const httpClientLayer = Layer.effect(
     HttpClient.HttpClient,
-    Effect.map(HttpClient.HttpClient, summaryRefusalClient(refusedKeys, apiKey)),
+    Effect.map(HttpClient.HttpClient, (client) =>
+      summaryRefusalClient(
+        refusedKeys,
+        apiKey,
+      )(undecryptableReasoningClient(rejectedReasoning)(client)),
+    ),
   ).pipe(Layer.provide(FetchHttpClient.layer))
   const clientLayer = OpenAiResponsesClient.layer({ apiKey: Redacted.make(apiKey) }).pipe(
     Layer.provide(httpClientLayer),
@@ -1473,12 +1615,15 @@ const makeOauthOpenAILayer = (
   modelName: string,
   config: OpenAiResponsesConfig,
   creds: CredentialCache<OpenAICredentials>,
+  rejectedReasoning: RejectedReasoning,
 ) => {
   const codexHttpClientLayer = Layer.effect(
     HttpClient.HttpClient,
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
-      return buildCodexTransformClient(creds)(client)
+      return buildCodexTransformClient(creds)(
+        undecryptableReasoningClient(rejectedReasoning)(client),
+      )
     }),
   ).pipe(Layer.provide(FetchHttpClient.layer))
   const clientLayer = OpenAiResponsesClient.layer({
@@ -1521,6 +1666,8 @@ export const buildOpenAIModelDriver = (
 ): ModelDriverContribution => {
   // The keys whose organization OpenAI refused a reasoning summary.
   const refusedKeys: RefusedKeys = Ref.makeUnsafe(HashSet.empty())
+  // The reasoning items the API could not decrypt for this driver's account.
+  const rejectedReasoning: RejectedReasoning = Ref.makeUnsafe(HashSet.empty())
   return {
     id: "openai",
     name: "OpenAI",
@@ -1550,7 +1697,11 @@ export const buildOpenAIModelDriver = (
             auth.value.update,
           )
           yield* checkCredentials(creds)
-          return AiModel.make("openai", modelName, makeOauthOpenAILayer(modelName, config, creds))
+          return AiModel.make(
+            "openai",
+            modelName,
+            makeOauthOpenAILayer(modelName, config, creds, rejectedReasoning),
+          )
         }
 
         // Stored API key takes precedence over env var
@@ -1558,7 +1709,13 @@ export const buildOpenAIModelDriver = (
 
         if (Option.isSome(apiKey)) {
           const config = buildOpenAiResponsesConfig(modelName, Option.fromNullishOr(hints))
-          return makeApiKeyOpenAIResolution(modelName, config, apiKey.value, refusedKeys)
+          return makeApiKeyOpenAIResolution(
+            modelName,
+            config,
+            apiKey.value,
+            refusedKeys,
+            rejectedReasoning,
+          )
         }
 
         // Fail closed — no stored OAuth, no stored API key, no env var.

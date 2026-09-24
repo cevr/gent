@@ -45,6 +45,7 @@ import {
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
   Model,
+  type ModelPricing,
   parseModelId,
 } from "../domain/agent.js"
 import { Auth, ModelRegistry } from "../runtime/provider.js"
@@ -732,6 +733,8 @@ export interface E2ELayerConfig {
   readonly extraLayers?: ReadonlyArray<Layer.Layer<never>>
   /** `"test"` installs the stub tool runner; default runs the live one. */
   readonly toolRunner?: "test" | "live"
+  /** The price of every model the test registry makes up. Default: free. */
+  readonly modelPricing?: ModelPricing
   /** Auth override. Use for public RPC auth failure-path tests. */
   readonly authLayer?: Layer.Layer<Auth>
   /**
@@ -851,7 +854,7 @@ export const createE2ELayer = (config: E2ELayerConfig) => {
     failOnExtensionFailure: config.allowFailedExtensions !== true,
     branchTools: config.branchTools ?? noBranchTools,
     overrides: {
-      modelRegistryLayer: ModelRegistry.Test(),
+      modelRegistryLayer: ModelRegistry.Test([], Option.fromUndefinedOr(config.modelPricing)),
       authLayer: config.authLayer ?? Auth.Test(),
       approvalLayer: Option.getOrUndefined(approvalOverrideForConfig(config)),
       configServiceLayer: config.configServiceLayer ?? ConfigService.Test(),

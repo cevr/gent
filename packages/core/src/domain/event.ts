@@ -151,6 +151,12 @@ export const AgentEvent = Schema.TaggedUnion({
      * reported no usage or an unusable count, and on historical receipts.
      */
     usage: Schema.optional(UsageSchema),
+    /**
+     * USD over the same steps, plus any compaction summary the turn wrote,
+     * frozen at emit time. Present only beside `usage`, and only when a model
+     * the turn used has a price.
+     */
+    costUsd: Schema.optional(Schema.Finite),
   },
   /** What the model saw this turn after projection and compaction. */
   ModelContextProjected: {
@@ -164,6 +170,12 @@ export const AgentEvent = Schema.TaggedUnion({
     handoffMessageId: Schema.optional(MessageId),
     /** This projection wrote a handoff. */
     compacted: Schema.Boolean,
+    /**
+     * USD of the compaction summary this projection asked for, frozen at emit
+     * time as `StreamEnded.costUsd` is. Absent when there was no summary, it
+     * reported no usage, or its model has no price.
+     */
+    costUsd: Schema.optional(Schema.Finite),
   },
   ToolCallStarted: {
     sessionId: SessionId,

@@ -66,13 +66,34 @@ const toUserMessage = (message: Message): Option.Option<Prompt.UserMessage> => {
   return Option.some(Prompt.userMessage({ content }))
 }
 
-const toAssistantMessage = (message: Message): Option.Option<Prompt.AssistantMessage> => {
+/**
+ * Whether an assistant message's reasoning goes back with its provider state
+ * (a thinking signature, encrypted reasoning). That state is valid only for
+ * the model that produced it, so a message above the latest model-change
+ * notice sends its reasoning as text alone, which the providers drop.
+ *
+ * The state has other bindings the loop cannot see, and each provider adapter
+ * keeps them from failing a request: Anthropic binds a signature to the
+ * system prompt, the tools and the earlier messages, and the adapter asks the
+ * API to drop a block that fails (`block_binding` in `anthropic.ts`); OpenAI
+ * binds encrypted reasoning to the organization, and the adapter retries once
+ * without the items the API could not decrypt (`openai.ts`).
+ */
+type ReasoningReplay = "with-provider-state" | "text-only"
+
+const toAssistantMessage = (
+  message: Message,
+  reasoning: ReasoningReplay,
+): Option.Option<Prompt.AssistantMessage> => {
   const content: Prompt.AssistantMessagePart[] = []
 
   for (const part of message.parts) {
     switch (part.type) {
-      case "text":
       case "reasoning":
+        if (reasoning === "with-provider-state") content.push(part)
+        else content.push(Prompt.reasoningPart({ text: part.text }))
+        break
+      case "text":
       case "file":
       case "tool-call":
       case "tool-approval-request":
@@ -134,17 +155,26 @@ const toToolMessage = (message: Message): Option.Option<Prompt.ToolMessage> => {
   return Option.some(Prompt.toolMessage({ content }))
 }
 
-const toPromptMessage = (message: Message): Option.Option<Prompt.Message> => {
+const toPromptMessage = (
+  message: Message,
+  reasoning: ReasoningReplay,
+): Option.Option<Prompt.Message> => {
   switch (message.role) {
     case "system":
       return toSystemMessage(message)
     case "user":
       return toUserMessage(message)
     case "assistant":
-      return toAssistantMessage(message)
+      return toAssistantMessage(message, reasoning)
     case "tool":
       return toToolMessage(message)
   }
+}
+
+/** Only a message after the latest model-change notice was produced by the current model. */
+const reasoningReplayAt = (index: number, lastModelChange: number): ReasoningReplay => {
+  if (index > lastModelChange) return "with-provider-state"
+  return "text-only"
 }
 
 export const toPromptMessages = (
@@ -152,10 +182,13 @@ export const toPromptMessages = (
   options?: Pick<PromptTranscriptOptions, "includeHidden">,
 ): ReadonlyArray<Prompt.Message> => {
   const result: Prompt.Message[] = []
+  const lastModelChange = messages.findLastIndex(
+    (message) => message.metadata?.customType === MODEL_CHANGE_MESSAGE_TYPE,
+  )
 
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
     if (options?.includeHidden !== true && !isAiVisibleMessage(message)) continue
-    const promptMessage = toPromptMessage(message)
+    const promptMessage = toPromptMessage(message, reasoningReplayAt(index, lastModelChange))
     if (Option.isSome(promptMessage)) result.push(promptMessage.value)
   }
 
@@ -1158,6 +1191,8 @@ const summarizedRange = (history: ReadonlyArray<Message>, summary: CompactionSum
 type WindowProjection = {
   readonly durableMessages: ReadonlyArray<Message>
   readonly compacted: boolean
+  /** The summary this projection paid for, whether or not a marker kept it. */
+  readonly summary: Option.Option<CompactionSummary>
 }
 
 /**
@@ -1250,7 +1285,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   // summary call, and report a compaction that changed nothing.
   const summarizable = history.some((message) => Option.isNone(windowDetails(message)))
   if (!(requested || overflowing) || !summarizable || Option.isNone(compactor)) {
-    return { durableMessages, compacted: false } satisfies WindowProjection
+    return { durableMessages, compacted: false, summary: Option.none() } satisfies WindowProjection
   }
   const summary = yield* compactor.value
     .compact({
@@ -1290,7 +1325,7 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
     ),
   )
   if (Option.isNone(handoff))
-    return { durableMessages, compacted: false } satisfies WindowProjection
+    return { durableMessages, compacted: false, summary } satisfies WindowProjection
   const marker = yield* params.persist(
     windowMarkerMessage({
       sessionId: params.sessionId,
@@ -1304,5 +1339,6 @@ export const projectContextWindow = Effect.fn("TurnHelpers.projectContextWindow"
   return {
     durableMessages: [...durableMessages, marker],
     compacted: true,
+    summary,
   } satisfies WindowProjection
 })

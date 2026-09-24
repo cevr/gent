@@ -1420,13 +1420,17 @@ export const transformPayload = (
  * `system` → `messages`, and a request takes at most 4 markers.
  *
  * Markers, in priority order, while the limit allows:
- *   1. the end of the stable prefix: the last system block, or on the
- *      Claude Code path the first user message (the system prompt moves
- *      there, and the billing and identity blocks take no marker);
+ *   1. the end of the system prompt: the last system block, or on the
+ *      Claude Code path the system prompt's block in the first user
+ *      message (it moves there, before the user's own text, and the
+ *      billing and identity blocks take no marker). A new session and
+ *      every sibling child read the prompt back from this entry;
  *   2. the last cacheable block of the last message, so each step reads
- *      the previous step's conversation back from the cache;
- *   3. the last tool, so the tool list stays cached when the system
- *      prompt changes.
+ *      the previous step's conversation back from the cache.
+ *
+ * The tool list takes no marker of its own: it renders first, so the
+ * system prompt's marker caches it, and alone it is below the minimum
+ * cacheable length (one `cell` tool, about 100 tokens).
  *
  * Markers already on the payload count toward the limit. A marker does
  * not change the cached bytes, so the tail marker moves forward each
@@ -1482,7 +1486,15 @@ const markBlockAt = (
 const markLastCacheable = (blocks: ReadonlyArray<JsonRecord>) =>
   markBlockAt(blocks, blocks.findLastIndex(isCacheableBlock))
 
-/** The payload with `cache_control` on the stable prefix, the conversation tail and the tool list. */
+/**
+ * The block that ends the system prompt in a Claude Code request: the first
+ * text after any leading tool results in the first user message, where
+ * `relocateThirdPartyIntoFirstUser` puts it.
+ */
+const systemPromptBlockIndex = (content: ReadonlyArray<JsonRecord>): number =>
+  content.findIndex((block) => block["type"] !== "tool_result" && isCacheableBlock(block))
+
+/** The payload with `cache_control` at the end of the system prompt and on the conversation tail. */
 const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): JsonRecord => {
   const result = { ...payload }
   let budget = CACHE_BREAKPOINT_LIMIT - countCacheMarkers(payload)
@@ -1497,13 +1509,16 @@ const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): J
     set(marked.value)
     budget -= 1
   }
-  const markMessage = (index: number) => {
+  const markMessage = (
+    index: number,
+    mark: (content: ReadonlyArray<JsonRecord>) => Option.Option<ReadonlyArray<JsonRecord>>,
+  ) => {
     const message = Option.fromUndefinedOr(messages[index])
     if (Option.isNone(message)) return
     // The SDK always sends block arrays; a string content takes no marker.
     const content = message.value["content"]
     if (!isRecordArray(content)) return
-    spend(markLastCacheable(content), (marked) => {
+    spend(mark(content), (marked) => {
       messages[index] = { ...message.value, content: marked }
     })
   }
@@ -1515,15 +1530,12 @@ const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): J
       })
     }
   } else {
-    markMessage(messages.findIndex((message) => message["role"] === "user"))
+    markMessage(
+      messages.findIndex((message) => message["role"] === "user"),
+      (content) => markBlockAt(content, systemPromptBlockIndex(content)),
+    )
   }
-  markMessage(messages.length - 1)
-  if (isRecordArray(payload["tools"])) {
-    const tools = payload["tools"]
-    spend(markBlockAt(tools, tools.length - 1), (marked) => {
-      result["tools"] = marked
-    })
-  }
+  markMessage(messages.length - 1, markLastCacheable)
   if (isRecordArray(payload["messages"])) result["messages"] = messages
   return result
 }
@@ -1615,7 +1627,11 @@ const anthropicClientLayer = <R>(
             onSome: (payload) =>
               path.payload(applyRequestPlan(payload, plan)).pipe(
                 Effect.provideContext(pathContext),
-                Effect.map((body) => HttpClientRequest.bodyJsonUnsafe(request, body)),
+                Effect.map((body) => {
+                  const rewritten = HttpClientRequest.bodyJsonUnsafe(request, body)
+                  if (!bindsThinking(body)) return rewritten
+                  return withBeta(rewritten, THINKING_BINDING_BETA)
+                }),
               ),
           }),
       )
@@ -2023,11 +2039,52 @@ const anthropicRequest = (
  * thinking blocks with empty text, and that "`display` works in both modes".
  * `"summarized"` is already the default on the 4.6 models, so it changes
  * nothing there. `display` "is invalid with `thinking.type: "disabled"`".
+ *
+ * Adaptive thinking also sets `block_binding: { prefix_mismatch_behavior:
+ * "drop_block" }`. platform.claude.com/docs/en/build-with-claude/preserved-thinking
+ * (read 2026-09-23): on Claude Fable 5.1 and Claude Opus 5.5 a replayed thinking
+ * block "stays valid only while the top-level `system` prompt, the `tools`, and
+ * the messages before it are unchanged", and the default for a block that fails
+ * is a 400. The loop changes that prefix on its own: the Date line on a resumed
+ * session, a compacted window, a tool list that changes. With `drop_block` the
+ * API drops the failing blocks and answers, so a replay never turns a working
+ * request into a 400. "Models that don't run the prefix check accept the object
+ * and report only model-check drops, so one request body works across models."
+ * The field needs the `thinking-binding-controls-2026-08-01` beta.
  */
 const THINKING_CONFIG = {
-  adaptive: { type: "adaptive", display: "summarized" },
+  adaptive: {
+    type: "adaptive",
+    display: "summarized",
+    block_binding: { prefix_mismatch_behavior: "drop_block" },
+  },
   disabled: { type: "disabled" },
 } satisfies Record<"adaptive" | "disabled", JsonRecord>
+
+/** The beta that `thinking.block_binding` requires; sending the field without it is a 400. */
+const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+
+/** Whether the payload's thinking object carries `block_binding`. */
+const bindsThinking = (payload: JsonRecord): boolean => {
+  const thinking = payload["thinking"]
+  return isRecord(thinking) && "block_binding" in thinking
+}
+
+/** The request with `beta` added to its `anthropic-beta` list, other betas kept. */
+const withBeta = (
+  request: HttpClientRequest.HttpClientRequest,
+  beta: string,
+): HttpClientRequest.HttpClientRequest => {
+  const current = Option.getOrElse(
+    Option.fromUndefinedOr(request.headers["anthropic-beta"]),
+    () => "",
+  )
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+  if (current.includes(beta)) return request
+  return HttpClientRequest.setHeader(request, "anthropic-beta", [...current, beta].join(","))
+}
 
 /** The payload with the plan's effort and thinking; any `output_config` the SDK set is kept. */
 const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): JsonRecord => {
