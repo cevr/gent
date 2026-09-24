@@ -3206,10 +3206,14 @@ const SQL_READ_STARTS = new Set([
 /**
  * Words that write over rows or to a file in a statement that starts as a
  * read: `WITH x AS (UPDATE …)`, `EXPLAIN ANALYZE UPDATE`, `ON CONFLICT DO
- * UPDATE`, `INSERT OR REPLACE`, `INTO OUTFILE`, `lo_export(…)`.
+ * UPDATE`, `INSERT OR REPLACE`, `INTO OUTFILE`. Functions too: every
+ * large-object function (`lo_put`, `lo_import`, `lo_truncate`, `lowrite`;
+ * `lo_get` only reads, an accepted over-ask), adminpack's server-file
+ * functions (`pg_file_write`, `pg_file_unlink`), `pg_terminate_backend`,
+ * `pg_promote`, and `dblink`, which runs SQL the guard does not read.
  */
 const SQL_OVERWRITES =
-  /\b(update|merge|upsert|overwrite|outfile|dumpfile|lo_export|lo_unlink|or\s+replace)\b/i
+  /\b(update|merge|upsert|overwrite|outfile|dumpfile|lo_\w+|lowrite|pg_file_\w+|pg_terminate_backend|pg_promote|dblink\w*|or\s+replace)\b/i
 
 /**
  * The first statement of `text` that does not start as a read, by the word
