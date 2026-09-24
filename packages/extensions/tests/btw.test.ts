@@ -14,13 +14,7 @@ import {
 import { AgentName, BranchId, ModelId, RequestId, SessionId } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { AgentEvent } from "@gent/core/protocol"
-import {
-  BTW_EXTENSION_ID,
-  BTW_QUESTION_TYPE,
-  ForkProgress,
-  foldForkEvent,
-  forkQuestionBody,
-} from "../src/btw.js"
+import { BTW_EXTENSION_ID, ForkProgress, foldForkEvent, forkQuestionBody } from "../src/btw.js"
 
 /**
  * `/btw` forks the branch into a parallel child session that carries the
@@ -40,7 +34,7 @@ const lastText = (options: ProviderOptions): string =>
   Option.getOrElse(Option.fromUndefinedOr(promptTexts(options).at(-1)), () => "")
 
 /** A prompt text read as a question the pane sent; any other text comes back whole. */
-const asked = (text: string): string => forkQuestionBody({ text, customType: BTW_QUESTION_TYPE })
+const asked = (text: string): string => forkQuestionBody(text)
 
 type Harness = Effect.Success<ReturnType<typeof createRpcHarness>>
 

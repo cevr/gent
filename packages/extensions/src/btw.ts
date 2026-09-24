@@ -57,17 +57,12 @@ export const forkQuestionText = (parentSessionId: SessionId, question: string): 
   ].join("\n")
 
 /**
- * The question without its header. The message's type says whether it has
- * one, never its text: a message a person typed that starts with the same
- * words is returned whole.
+ * The question without its header, for the text of a message of type
+ * `BTW_QUESTION_TYPE`. The caller reads the type; the text alone never says
+ * whether a header is there, so a person's message never comes here.
  */
-export const forkQuestionBody = (message: {
-  readonly text: string
-  readonly customType?: string
-}): string => {
-  const text = message.text
-  if (message.customType !== BTW_QUESTION_TYPE) return text
-  return Option.liftPredicate(text, (value) => value.startsWith(FORK_QUESTION_PREFIX)).pipe(
+export const forkQuestionBody = (text: string): string =>
+  Option.liftPredicate(text, (value) => value.startsWith(FORK_QUESTION_PREFIX)).pipe(
     Option.flatMap((value) =>
       Option.liftPredicate(value.indexOf("\n\n"), (split) => split !== -1).pipe(
         Option.map((split) => value.slice(split + 2)),
@@ -75,7 +70,6 @@ export const forkQuestionBody = (message: {
     ),
     Option.getOrElse(() => text),
   )
-}
 
 /** One exchange on the fork; `answer` is the streamed text while the fork is replying. */
 const ForkTurn = Schema.Struct({
@@ -235,10 +229,9 @@ const forkTurns = (messages: ReadonlyArray<Message>, partial: string): ReadonlyA
   const turns: Array<ForkTurn> = []
   for (const message of messages) {
     if (isAskedTurn(message)) {
-      const question = forkQuestionBody({
-        text: textOf(message),
-        ...Record.filter({ customType: message.metadata?.customType }, Predicate.isNotUndefined),
-      })
+      // The header is stripped by the message's type, never by its text.
+      let question = textOf(message)
+      if (message.metadata?.customType === BTW_QUESTION_TYPE) question = forkQuestionBody(question)
       turns.push({ question, answer: "" })
       continue
     }
