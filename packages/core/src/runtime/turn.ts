@@ -11,7 +11,6 @@ import {
   type ModelId,
   type ModelId as ModelIdType,
   type ReasoningEffort,
-  resolveAgentDriver,
   resolveAgentModel,
 } from "../domain/agent.js"
 import {
@@ -126,7 +125,7 @@ import {
   type TurnInterruption,
 } from "./tools.js"
 import { ConfigService, type UserConfig } from "./config.js"
-import { asAgentLoopError, type ResolvedTurn, type RunningState } from "../domain/agent-loop.js"
+import { asAgentLoopError, type RunningState } from "../domain/agent-loop.js"
 import {
   driverRetryPolicy,
   ModelRegistry,
@@ -1072,7 +1071,16 @@ export const recordToolOutcome = (params: {
 
 // ── turn-resolve ────────────────────────────────────────────────────────────
 
-interface ResolvedTurnContext extends ResolvedTurn {
+/** What one step of a turn runs with: the agent, its prompt, model and tool bindings. */
+interface ResolvedTurnContext {
+  currentTurnAgent: AgentNameType
+  messages: ReadonlyArray<Message>
+  systemPrompt: string
+  modelId: ModelIdType
+  reasoning?: ReasoningEffort
+  temperature?: number
+  /** Derived once at resolution; the resolver, retry policy, and catalog lookup share it. */
+  modelDriver: EffectiveModelDriver
   agent: AgentDefinition
   tools: ReadonlyArray<ToolCapability>
   /** Exact owner and implementation selected for each advertised tool. */
@@ -1144,8 +1152,9 @@ interface SessionRoute {
 /**
  * How a session's next turn routes, derived once. The agent is the one its
  * admission names (the default when it names none), reshaped by config
- * `agents[name]` and then by the admission's run overrides; a config driver
- * override routes it when the agent names no driver of its own. The
+ * `agents[name]` and then by the admission's run overrides. The model
+ * dispatches through the agent's own driver; when it names none, through
+ * config `driverOverrides[name]`; else through the model id's provider. The
  * session's own model and reasoning win over the agent's; an unknown agent
  * falls back to the default model. The turn, the snapshot footer and the
  * auth gate all read it here, so a child session is its agent everywhere and
@@ -1172,11 +1181,6 @@ export const resolveSessionRoute = (params: {
         ),
       ),
     ),
-    Option.map((agent) => {
-      const routed = resolveAgentDriver(agent, params.config.driverOverrides)
-      if (routed.source !== "config") return agent
-      return AgentDefinition.make({ ...agent, driver: routed.driver })
-    }),
   )
   const modelId = Option.getOrElse(Option.fromUndefinedOr(params.session.modelId), () =>
     Option.match(definition, {
@@ -1192,7 +1196,11 @@ export const resolveSessionRoute = (params: {
       Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.reasoningEffort)),
     ),
     modelDriver: effectiveModelDriver(
-      Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.driver)),
+      Option.flatMap(definition, (agent) =>
+        Option.orElse(Option.fromUndefinedOr(agent.driver), () =>
+          Option.fromUndefinedOr(params.config.driverOverrides?.[agent.name]),
+        ),
+      ),
       modelId,
     ),
   }
@@ -1322,7 +1330,6 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     modelId: route.modelId,
     reasoning: Option.getOrUndefined(route.reasoningLevel),
     temperature: dispatchAgent.temperature,
-    driver: dispatchAgent.driver,
     modelDriver: route.modelDriver,
   }
 })
