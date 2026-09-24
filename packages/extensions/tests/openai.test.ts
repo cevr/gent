@@ -2459,7 +2459,6 @@ describe("buildOpenAIModelDriver — a new sign-in replaces the held account", (
         flow: {
           authorization: { url: "https://auth.openai.com", method: "auto", instructions: "" },
           callback: () => Effect.succeed(signedIn),
-          cancel: Effect.void,
         },
         close: Effect.void,
         timeoutFiber,

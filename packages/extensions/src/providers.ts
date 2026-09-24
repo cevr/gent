@@ -3,6 +3,7 @@ import {
   Clock,
   Config,
   type Context,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -859,31 +860,35 @@ type CatalogEffect = Effect.Effect<
  * during their own `listModels`, and the memo is what makes that one read and
  * at most one fetch rather than one per driver.
  *
- * A memo that resolved to a catalog holds for the life of the process. A memo
- * that resolved to nothing does not: `loadCatalog` degrades rather than fails,
- * so an offline start would otherwise pin an empty catalog until the process
- * ends. An empty result drops its own entry, and the next `listModels` loads
- * again.
+ * A memo that resolved to a catalog holds for `CATALOG_MEMO_TTL`, then the next
+ * `listModels` loads again. `loadCatalog` degrades rather than fails, so an
+ * offline start serves the stale disk cache (or nothing); the reload re-reads
+ * the disk and fetches only when the cache is still stale, so a long-lived
+ * process picks up the fresh catalog once the host is reachable. A memo that
+ * resolved to nothing drops its own entry at once, and the next `listModels`
+ * loads again.
  */
+const CATALOG_MEMO_TTL = Duration.minutes(5)
+
 const catalogsByHome = new Map<string, CatalogEffect>()
 
 /**
- * The models.dev catalog for `home`, loaded at most once per process while the
- * load produces models.
+ * The models.dev catalog for `home`, loaded at most once per `CATALOG_MEMO_TTL`
+ * while the load produces models.
  *
  * The memo is built the first time a home is asked for and stored before the
  * effect is handed back, so every driver that lists models for the same home
- * shares one read and at most one fetch. `Effect.cached` is a constructor: it
+ * shares one read and at most one fetch. `Effect.cachedWithTTL` is a constructor: it
  * allocates the latch and performs no IO, so building the memo here decides
  * nothing about when the catalog loads.
  */
 export const modelsDevCatalog = (home: string): CatalogEffect => {
   const existing = Option.fromUndefinedOr(catalogsByHome.get(home))
   if (Option.isSome(existing)) return existing.value
-  // `Effect.cached` only allocates the memo's latch — no IO, no failure — so
-  // running it here is allocation, not work. The catalog loads when a driver
-  // runs the effect this returns.
-  const memo = Effect.runSync(Effect.cached(loadCatalog(home))).pipe(
+  // `Effect.cachedWithTTL` only allocates the memo's latch — no IO, no failure —
+  // so running it here is allocation, not work. The catalog loads when a driver
+  // runs the effect this returns, and the TTL reads that driver's clock.
+  const memo = Effect.runSync(Effect.cachedWithTTL(loadCatalog(home), CATALOG_MEMO_TTL)).pipe(
     // An empty result means no cache and no reachable host. Forget it, so a
     // later call retries instead of serving nothing for the whole process.
     Effect.tap((models) =>

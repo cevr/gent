@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
   ConfigProvider,
+  Clock,
   Deferred,
   Effect,
   Fiber,
@@ -27,6 +28,7 @@ import {
   oneGenerate,
 } from "@gent/core/test-utils"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { TestClock } from "effect/testing"
 import { BunFileSystem } from "@effect/platform-bun"
 import {
   type CredentialCacheCell,
@@ -467,6 +469,45 @@ describe("models.dev catalog", () => {
 
       expect(yield* Ref.get(calls)).toBe(1)
       expect(models.map((model) => model.id)).toEqual([ModelId.make("openai/gpt-4.1")])
+    }).pipe(Effect.provide(platformLayer)),
+  )
+
+  it.scopedLive("a stale catalog served after a failed fetch is fetched again later", () =>
+    Effect.gen(function* () {
+      const home = yield* freshHome("offline-retry")
+      const cachePath = yield* writeCache(
+        home,
+        yield* stampedCache([
+          Model.make({
+            id: ModelId.make("openai/gpt-4.1"),
+            name: "GPT-4.1",
+            provider: ProviderId.make("openai"),
+            contextLength: 256_000,
+          }),
+        ]),
+      )
+      yield* ageCacheTwoDays(cachePath)
+      const offline = yield* Ref.make(0)
+      const online = yield* Ref.make(0)
+      const now = yield* Clock.currentTimeMillis
+      yield* Effect.gen(function* () {
+        // The virtual clock starts where the cache file's age was measured from.
+        yield* TestClock.setTime(now)
+        const first = yield* modelsDevCatalog(home).pipe(Effect.provide(failingHttpLayer(offline)))
+        expect(first.map((model) => model.id)).toEqual([ModelId.make("openai/gpt-4.1")])
+        // Within the memo's life the process asks nobody.
+        yield* modelsDevCatalog(home).pipe(
+          Effect.provide(countingHttpLayer(online, encodeAnyJson(remotePayload))),
+        )
+        expect(yield* Ref.get(online)).toBe(0)
+        // Later the network is back, and the stale catalog is fetched again.
+        yield* TestClock.adjust("1 hour")
+        const later = yield* modelsDevCatalog(home).pipe(
+          Effect.provide(countingHttpLayer(online, encodeAnyJson(remotePayload))),
+        )
+        expect(yield* Ref.get(online)).toBe(1)
+        expect(later.map((model) => model.id)).toContain(ModelId.make("openai/gpt-5.4"))
+      }).pipe(Effect.provide(TestClock.layer()))
     }).pipe(Effect.provide(platformLayer)),
   )
 

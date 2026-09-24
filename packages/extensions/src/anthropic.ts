@@ -1082,12 +1082,27 @@ const decodeMessageStreamEvent = Schema.decodeUnknownSync(MessageStreamEventSche
 const prefixName = (name: string): string =>
   `${MCP_PREFIX}${name.charAt(0).toUpperCase()}${name.slice(1)}`
 
-/** Reverse `prefixName`: drop `mcp_` and lowercase the first char. */
-const unprefixName = (name: string): string => {
+/**
+ * Reverse `prefixName`. The request's own tool ids decide: `prefixName` loses
+ * the case of an id's first letter. A name no request tool produced drops
+ * `mcp_` and lowercases its first letter.
+ */
+const unprefixName = (toolIds: ReadonlyArray<string>, name: string): string => {
+  const id = toolIds.find((candidate) => prefixName(candidate) === name)
+  if (Predicate.isNotUndefined(id)) return id
   let stripped = name
   if (name.startsWith(MCP_PREFIX)) stripped = name.slice(MCP_PREFIX.length)
   return `${stripped.charAt(0).toLowerCase()}${stripped.slice(1)}`
 }
+
+/** The tool ids a request advertised, before `transformTools` prefixed them. */
+const requestToolIds = (
+  payload: Parameters<AnthropicClient.Service["createMessage"]>[0]["payload"],
+): ReadonlyArray<string> =>
+  (payload.tools ?? []).flatMap((tool) => {
+    if ("name" in tool && Predicate.isString(tool.name)) return [tool.name]
+    return []
+  })
 
 /** Prefix all tool names with mcp_ in the outgoing payload */
 const transformTools = (tools: ReadonlyArray<JsonRecord>): ReadonlyArray<JsonRecord> =>
@@ -1461,33 +1476,34 @@ const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): J
 /** Strip mcp_ prefix from tool_use content blocks in a non-streaming response */
 export const transformResponseContent = (
   content: ReadonlyArray<JsonRecord>,
+  toolIds: ReadonlyArray<string>,
 ): ReadonlyArray<JsonRecord> =>
   content.map((block) => {
     if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
-      return { ...block, name: unprefixName(block["name"]) }
+      return { ...block, name: unprefixName(toolIds, block["name"]) }
     }
     return block
   })
 
 /** Strip mcp_ prefix from streaming content_block_start events.
  *  MessageStreamEvent uses `type` for the event kind, and `content_block` for the block data. */
-export const transformStreamEvent = (
-  event: AnthropicClient.MessageStreamEvent,
-): AnthropicClient.MessageStreamEvent => {
-  // content_block_start has type: "content_block_start" and content_block with the block data
-  const e = Schema.decodeSync(JsonRecordSchema)(event)
-  if (e["type"] !== "content_block_start") return event
-  const rawBlock = e["content_block"]
-  if (!isRecord(rawBlock)) return event
-  const block = rawBlock
-  if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
-    return decodeMessageStreamEvent({
-      ...event,
-      content_block: { ...block, name: unprefixName(block["name"]) },
-    })
+export const transformStreamEvent =
+  (toolIds: ReadonlyArray<string>) =>
+  (event: AnthropicClient.MessageStreamEvent): AnthropicClient.MessageStreamEvent => {
+    // content_block_start has type: "content_block_start" and content_block with the block data
+    const e = Schema.decodeSync(JsonRecordSchema)(event)
+    if (e["type"] !== "content_block_start") return event
+    const rawBlock = e["content_block"]
+    if (!isRecord(rawBlock)) return event
+    const block = rawBlock
+    if (block["type"] === "tool_use" && Predicate.isString(block["name"])) {
+      return decodeMessageStreamEvent({
+        ...event,
+        content_block: { ...block, name: unprefixName(toolIds, block["name"]) },
+      })
+    }
+    return event
   }
-  return event
-}
 
 // ── Layer ──
 
@@ -1500,11 +1516,14 @@ type CreateMessageStreamReply = Effect.Success<
 interface ClientPath<R> {
   /** The path's own payload rewrite, run after the request plan is applied. */
   readonly payload: (payload: JsonRecord) => Effect.Effect<JsonRecord, never, R>
+  /** Maps the reply; `toolIds` are the tool ids the call's request advertised. */
   readonly message: (
     call: Effect.Effect<CreateMessageReply, AiError.AiError>,
+    toolIds: ReadonlyArray<string>,
   ) => Effect.Effect<CreateMessageReply, AiError.AiError>
   readonly stream: (
     call: Effect.Effect<CreateMessageStreamReply, AiError.AiError>,
+    toolIds: ReadonlyArray<string>,
   ) => Effect.Effect<CreateMessageStreamReply, AiError.AiError>
 }
 
@@ -1549,8 +1568,10 @@ const anthropicClientLayer = <R>(
           const inner = yield* AnthropicClient.AnthropicClient
           return AnthropicClient.AnthropicClient.of({
             ...inner,
-            createMessage: (request) => path.message(inner.createMessage(request)),
-            createMessageStream: (request) => path.stream(inner.createMessageStream(request)),
+            createMessage: (request) =>
+              path.message(inner.createMessage(request), requestToolIds(request.payload)),
+            createMessageStream: (request) =>
+              path.stream(inner.createMessageStream(request), requestToolIds(request.payload)),
           })
         }),
       )
@@ -1579,13 +1600,16 @@ const claudeCodeClientPath = (
   const explain = explainCredentialFailure(creds)
   return {
     payload: transformPayload,
-    message: (call) =>
+    message: (call, toolIds) =>
       explain(call).pipe(
         Effect.map(([body, response]) => {
           const b = Schema.decodeSync(JsonRecordSchema)(body)
           const content = b["content"]
           if (isRecordArray(content)) {
-            const transformed = { ...b, content: transformResponseContent(content) }
+            const transformed = {
+              ...b,
+              content: transformResponseContent(content, toolIds),
+            }
             return [
               Schema.decodeUnknownSync(Generated.BetaMessage)(transformed),
               response,
@@ -1594,13 +1618,13 @@ const claudeCodeClientPath = (
           return [body, response] satisfies CreateMessageReply
         }),
       ),
-    stream: (call) =>
+    stream: (call, toolIds) =>
       explain(call).pipe(
         Effect.map(
           ([response, stream]) =>
             [
               response,
-              stream.pipe(Stream.map(transformStreamEvent)),
+              stream.pipe(Stream.map(transformStreamEvent(toolIds))),
             ] satisfies CreateMessageStreamReply,
         ),
       ),

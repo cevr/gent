@@ -234,26 +234,32 @@ describe("transformResponseContent", () => {
       { type: "text", text: "Here you go." },
       { type: "tool_use", id: "tc-1", name: "mcp_echo", input: { text: "hi" } },
     ]
-    const result = transformResponseContent(content)
+    const result = transformResponseContent(content, [])
     expect(result[0]!["name"]).toBeUndefined()
     expect(result[1]!["name"]).toBe("echo")
   })
 
   test("does not modify non-tool_use blocks", () => {
     const content = [{ type: "text", text: "hello" }]
-    const result = transformResponseContent(content)
+    const result = transformResponseContent(content, [])
     expect(result[0]).toEqual({ type: "text", text: "hello" })
   })
 
   test("passes through tool_use without mcp_ prefix", () => {
     const content = [{ type: "tool_use", id: "tc-1", name: "echo", input: {} }]
-    const result = transformResponseContent(content)
+    const result = transformResponseContent(content, [])
     expect(result[0]!["name"]).toBe("echo")
+  })
+
+  test("restores a tool id with an uppercase first letter from the request's tools", () => {
+    const content = [{ type: "tool_use", id: "tc-1", name: "mcp_Deploy", input: {} }]
+    const result = transformResponseContent(content, ["Deploy", "echo"])
+    expect(result[0]!["name"]).toBe("Deploy")
   })
 
   test("strips exactly one mcp_ prefix", () => {
     const content = [{ type: "tool_use", id: "tc-1", name: "mcp_mcp_foo", input: {} }]
-    const result = transformResponseContent(content)
+    const result = transformResponseContent(content, [])
     expect(result[0]!["name"]).toBe("mcp_foo")
   })
 })
@@ -267,7 +273,7 @@ describe("transformStreamEvent", () => {
       index: 1,
       content_block: { type: "tool_use", id: "tc-1", name: "mcp_echo", input: {} },
     } satisfies AnthropicClient.MessageStreamEvent
-    const result = transformStreamEvent(event)
+    const result = transformStreamEvent([])(event)
     expect(result.type).toBe("content_block_start")
     if (result.type === "content_block_start" && result.content_block.type === "tool_use") {
       expect(result.content_block.name).toBe("echo")
@@ -280,7 +286,7 @@ describe("transformStreamEvent", () => {
       index: 0,
       content_block: { type: "text", text: "" },
     } satisfies AnthropicClient.MessageStreamEvent
-    const result = transformStreamEvent(event)
+    const result = transformStreamEvent([])(event)
     expect(result.type).toBe("content_block_start")
     if (result.type === "content_block_start") expect(result.content_block.type).toBe("text")
   })
@@ -289,7 +295,7 @@ describe("transformStreamEvent", () => {
     const event = {
       type: "message_stop",
     } satisfies AnthropicClient.MessageStreamEvent
-    const result = transformStreamEvent(event)
+    const result = transformStreamEvent([])(event)
     expect(result).toBe(event)
   })
 
@@ -299,7 +305,7 @@ describe("transformStreamEvent", () => {
       index: 1,
       delta: { type: "input_json_delta", partial_json: '{"text":' },
     } satisfies AnthropicClient.MessageStreamEvent
-    const result = transformStreamEvent(event)
+    const result = transformStreamEvent([])(event)
     expect(result).toBe(event)
   })
 })
