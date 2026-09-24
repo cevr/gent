@@ -3,6 +3,7 @@ import {
   Cause,
   Clock,
   Context,
+  DateTime,
   Deferred,
   Duration,
   Effect,
@@ -370,6 +371,65 @@ describe("session termination markers", () => {
       expect(workspaceATerminated).toBe(true)
       expect(workspaceBTerminated).toBe(false)
     }).pipe(Effect.provide(AgentLoopSessionGovernance.Live)),
+  )
+})
+
+// ── system prompt date ──────────────────────────────────────────────────────
+
+describe("system prompt date", () => {
+  it.scopedLive(
+    "a turn after local midnight tells the model the new date",
+    () =>
+      Effect.gen(function* () {
+        const systemTexts = yield* Ref.make<ReadonlyArray<string>>([])
+        const secondCall = yield* Deferred.make<void>()
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Ref.updateAndGet(systemTexts, (all) => [
+            ...all,
+            Prompt.make(options.prompt)
+              .content.filter((message) => message.role === "system")
+              .map((message) => message.content)
+              .join("\n"),
+          ]).pipe(
+            Effect.tap((all) =>
+              Effect.when(Deferred.succeed(secondCall, void 0), Effect.succeed(all.length >= 2)),
+            ),
+            Effect.as(
+              Stream.fromIterable([
+                textDeltaPart("noted"),
+                finishPart({ finishReason: "stop" }),
+              ] satisfies LanguageModelStreamPart[]),
+            ),
+          ),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        const localDate = Effect.map(DateTime.now, (now) =>
+          DateTime.formatIsoDate(DateTime.setZone(now, DateTime.zoneMakeLocal())),
+        )
+        const today = yield* localDate
+        const firstCompleted = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "first" })
+        yield* Fiber.join(firstCompleted)
+        // The process keeps running past local midnight.
+        yield* TestClock.adjust("1 day")
+        const tomorrow = yield* localDate
+        yield* client.message.send({ sessionId, branchId, content: "second" })
+        yield* Deferred.await(secondCall)
+        const [first, second] = yield* Ref.get(systemTexts)
+        expect(today).not.toBe(tomorrow)
+        expect(first).toContain(`Date: ${today}`)
+        expect(second).toContain(`Date: ${tomorrow}`)
+        expect(second).not.toContain(`Date: ${today}`)
+      }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
+    10_000,
   )
 })
 
@@ -3199,6 +3259,67 @@ describe("loop open hooks", () => {
               "the second turn answered",
             )
             expect(yield* Ref.get(opened)).toEqual([`${started.sessionId}/${started.branchId}`])
+          }),
+        )
+      }).pipe(Effect.timeout("15 seconds")),
+    20_000,
+  )
+
+  it.scopedLive(
+    "a loop rebuilt with a turn to resume runs its loopOpen hooks while that turn streams",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-loop-open-resume-")
+        const dbPath = `${tempDir}/gent.db`
+        const armed = yield* Ref.make(false)
+        const opened = yield* Deferred.make<void>()
+        const extension = defineExtension({
+          id: "@gent/test-loop-open-resume",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("loopOpen", () =>
+              Effect.gen(function* () {
+                if (yield* Ref.get(armed)) yield* Deferred.succeed(opened, void 0)
+              }),
+            )
+          }),
+        })
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensionInputs: [...e2ePreset.extensionInputs, extension],
+            storagePath: dbPath,
+          })
+
+        // First process: the turn starts streaming, and the process stops.
+        const first = yield* LanguageModelLayers.signal("never sent.")
+        const started = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layerFor(first.layer))
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            yield* client.message.send({ sessionId, branchId, content: "hello" })
+            yield* first.controls.waitForStreamStart
+            return { sessionId, branchId }
+          }),
+        )
+        yield* Ref.set(armed, true)
+
+        // Second process: a snapshot rebuilds the loop, which resumes the
+        // turn. The resumed stream is held; the hook runs beside it.
+        const second = yield* LanguageModelLayers.signal("resumed reply.")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layerFor(second.layer))
+            yield* client.session.getSnapshot(started)
+            yield* second.controls.waitForStreamStart
+            const ranDuringTurn = yield* Deferred.await(opened).pipe(
+              Effect.timeout("3 seconds"),
+              Effect.as(true),
+              Effect.catchTag("TimeoutError", () => Effect.succeed(false)),
+            )
+            yield* second.controls.emitAll
+            expect(ranDuringTurn).toBe(true)
           }),
         )
       }).pipe(Effect.timeout("15 seconds")),
@@ -9971,7 +10092,13 @@ describe("a tool call a restart cut short", () => {
         })
         expect(results).toHaveLength(1)
         expect(results[0]?.isFailure).toBe(true)
-        expect(results[0]?.result).toMatchObject({ reason: "Interrupted" })
+        // A sibling that finished in memory, or a call that never started,
+        // reads the same way, so the text claims only what is known.
+        expect(results[0]?.result).toMatchObject({
+          reason: "Interrupted",
+          error:
+            "No result was recorded before the server stopped: the tool may have run in part, in full, or not at all. It did not run again; check its effects before you retry it.",
+        })
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
   )

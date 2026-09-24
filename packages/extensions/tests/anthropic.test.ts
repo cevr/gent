@@ -2213,6 +2213,131 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       expect(keychain).not.toContain("refreshed-refresh")
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   )
+  it.live("a sign-in to the held account during the stored account's refresh survives", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.makeTempDirectoryScoped()
+      yield* fs.makeDirectory(path.join(home, ".claude"))
+      const credentialsFile = path.join(home, ".claude", ".credentials.json")
+      // The cache holds account B; the store read finds account A, whose
+      // refresh token is sent first.
+      const accountB = { accessToken: "b-access", refreshToken: "b-refresh", expiresAt: 0 }
+      yield* fs.writeFileString(
+        credentialsFile,
+        encodeExternalJson({
+          claudeAiOauth: { accessToken: "a-access", refreshToken: "a-refresh", expiresAt: 0 },
+        }),
+      )
+      const credentialCellRef =
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+      yield* SynchronizedRef.set(credentialCellRef, {
+        _tag: "Durable",
+        creds: accountB,
+        at: 0,
+        invalidated: false,
+      })
+      const driver = buildAnthropicModelDriverLive(
+        credentialCellRef,
+        Option.none(),
+        AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+        testCatalogSource(),
+      )
+      const fetchState = makeFakeFetchState()
+      const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+        if (!request.url.endsWith("/v1/oauth/token")) return anthropicHappyResponse()
+        if (!(request.body ?? "").includes("refresh_token=a-refresh")) {
+          return { status: 400, body: '{"error":"invalid_grant"}' }
+        }
+        // The user signs in to B while A's refresh is in flight: the store
+        // now equals the held credential, and A's refresh answers after.
+        return fs
+          .writeFileString(credentialsFile, encodeExternalJson({ claudeAiOauth: accountB }))
+          .pipe(
+            Effect.orDie,
+            Effect.as({
+              status: 200,
+              body: encodeExternalJson({
+                access_token: "a-new-access",
+                refresh_token: "a-new-refresh",
+                expires_in: 3600,
+              }),
+            }),
+          )
+      })
+      // B is stored expired, so resolving it fails; the store is the subject.
+      const resolved = yield* Effect.exit(
+        driver.resolveModel("claude-opus-4-6", makeOAuthInfo()).pipe(Effect.provide(fetchLayer)),
+      )
+      expect(Exit.isFailure(resolved)).toBe(true)
+
+      const stored = yield* fs.readFileString(credentialsFile)
+      expect(stored).toContain("b-refresh")
+      expect(stored).not.toContain("a-new-refresh")
+      expect(
+        fetchState.captured.some(
+          (request) => request.headers["authorization"] === "Bearer a-new-access",
+        ),
+      ).toBe(false)
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
+  it.live(
+    "a store that could not be read before the refresh and holds the held credential after it takes the refresh",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const home = yield* fs.makeTempDirectoryScoped()
+        yield* fs.makeDirectory(path.join(home, ".claude"))
+        const credentialsFile = path.join(home, ".claude", ".credentials.json")
+        // The first read fails (a locked Keychain off darwin is an unreadable
+        // file), so the refresh runs on the held token.
+        yield* fs.writeFileString(credentialsFile, "{not json")
+        const heldCreds = { accessToken: "held-access", refreshToken: "held-refresh", expiresAt: 0 }
+        const credentialCellRef =
+          yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
+        yield* SynchronizedRef.set(credentialCellRef, {
+          _tag: "Durable",
+          creds: heldCreds,
+          at: 0,
+          invalidated: false,
+        })
+        const driver = buildAnthropicModelDriverLive(
+          credentialCellRef,
+          Option.none(),
+          AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+          testCatalogSource(),
+        )
+        const fetchState = makeFakeFetchState()
+        const fetchLayer = fakeFetchLayer(fetchState, (request) => {
+          if (!request.url.endsWith("/v1/oauth/token")) return anthropicHappyResponse()
+          // The store reads again by the write-back, and holds the credential
+          // this refresh started from: its refresh token was just consumed.
+          return fs
+            .writeFileString(credentialsFile, encodeExternalJson({ claudeAiOauth: heldCreds }))
+            .pipe(
+              Effect.orDie,
+              Effect.as({
+                status: 200,
+                body: encodeExternalJson({
+                  access_token: "refreshed-access",
+                  refresh_token: "refreshed-refresh",
+                  expires_in: 3600,
+                }),
+              }),
+            )
+        })
+        const model = yield* driver
+          .resolveModel("claude-opus-4-6", makeOAuthInfo())
+          .pipe(Effect.provide(fetchLayer))
+        yield* runOne(model, fetchState)
+
+        expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer refreshed-access")
+        const stored = yield* fs.readFileString(credentialsFile)
+        expect(stored).toContain("refreshed-refresh")
+        expect(stored).not.toContain("held-refresh")
+      }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+  )
 })
 describe("buildAnthropicModelDriver — credential order", () => {
   it.live("a stored Claude Code sign-in beats ANTHROPIC_API_KEY", () =>

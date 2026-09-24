@@ -542,7 +542,7 @@ const readCredentialsFile: Effect.Effect<
 const sameStoredCredential = Option.makeEquivalence(Schema.toEquivalence(ClaudeCredentials))
 
 /**
- * What a write-back found. `Kept` means the store still held the credential
+ * What a write-back found. `Kept` means the store still held a credential
  * the refresh started from, so the refreshed one is the one to use (whether
  * or not the blob took the splice). `Superseded` means another writer
  * changed the store during the refresh; its credential wins.
@@ -554,19 +554,45 @@ const WriteBack = Schema.TaggedUnion({
 type WriteBack = typeof WriteBack.Type
 
 /**
+ * What a refresh started from: the credential whose refresh token was sent
+ * (`sent`), and what the pre-refresh store read found (`read`, none when that
+ * read failed). The read is always tried first, so when it differs from
+ * `sent` its token was refused.
+ */
+interface RefreshBase {
+  readonly read: Option.Option<ClaudeCredentials>
+  readonly sent: ClaudeCredentials
+}
+
+/**
+ * Whether the store may take the refresh. It may when it holds the credential
+ * whose token was sent, or still holds what the pre-refresh read found (no
+ * writer came in between), or, when that read failed, is still empty (a first
+ * write). Anything else is a newer writer: the held credential is not a base,
+ * since a sign-in to the held account during the refresh equals it.
+ */
+const refreshStartedFrom = (stored: Option.Option<ClaudeCredentials>, base: RefreshBase): boolean =>
+  Option.match(stored, {
+    onNone: () => Option.isNone(base.read),
+    onSome: (credential) =>
+      sameStoredCredential(stored, base.read) ||
+      Schema.toEquivalence(ClaudeCredentials)(credential, base.sent),
+  })
+
+/**
  * Splice `creds` into the stored blob `raw`, but only while it still holds
- * `expected`, the credential the refresh started from. Another writer (a
+ * the base the refresh started from (`refreshStartedFrom`). Another writer (a
  * new sign-in, the `claude` CLI's own refresh) wins over this refresh.
  */
 const compareAndWrite = <E, R>(
   raw: string,
   creds: ClaudeCredentials,
-  expected: Option.Option<ClaudeCredentials>,
+  base: RefreshBase,
   write: (blob: string) => Effect.Effect<void, E, R>,
 ): Effect.Effect<WriteBack, E, R> =>
   Effect.gen(function* () {
     const stored = yield* Effect.option(decodeCredentials(raw))
-    if (!sameStoredCredential(stored, expected)) {
+    if (!refreshStartedFrom(stored, base)) {
       return WriteBack.cases.Superseded.make({ stored })
     }
     const updated = updateCredentialBlob(raw, creds)
@@ -576,7 +602,7 @@ const compareAndWrite = <E, R>(
 
 const writeCredentialsFile = (
   creds: ClaudeCredentials,
-  expected: Option.Option<ClaudeCredentials>,
+  base: RefreshBase,
 ): Effect.Effect<
   WriteBack,
   ProviderAuthError,
@@ -596,7 +622,7 @@ const writeCredentialsFile = (
     if (exists) {
       raw = yield* fs.readFileString(credentialsFile).pipe(Effect.mapError(mapFsError))
     }
-    return yield* compareAndWrite(raw, creds, expected, (blob) =>
+    return yield* compareAndWrite(raw, creds, base, (blob) =>
       fs.writeFileString(credentialsFile, blob).pipe(
         // chmod 0600 after write so the credentials file is not
         // world-readable on first creation.
@@ -744,9 +770,10 @@ const readClaudeCodeCredentials: Effect.Effect<
  * `acct` field is preserved by reading the existing entry first.
  *
  * The write is a compare-and-swap: it re-reads the stored blob and writes
- * only while it still holds `expected`, the credential read before the
- * refresh. A sign-in (or a CLI refresh) written meanwhile is newer than
- * this refresh, so it survives and the result names it.
+ * only while it still holds the credential whose refresh token was sent, or
+ * what the pre-refresh read found. A sign-in (or a CLI refresh) written
+ * meanwhile is newer than this refresh, so it survives and the result names
+ * it, even when it equals the held credential.
  *
  * Errors are surfaced as `ProviderAuthError` for the caller to log:
  * write-back is best-effort; the in-memory creds are authoritative for
@@ -754,7 +781,7 @@ const readClaudeCodeCredentials: Effect.Effect<
  */
 const writeBackCredentials = (
   creds: ClaudeCredentials,
-  expected: Option.Option<ClaudeCredentials>,
+  base: RefreshBase,
 ): Effect.Effect<
   WriteBack,
   ProviderAuthError,
@@ -763,7 +790,7 @@ const writeBackCredentials = (
   Effect.gen(function* () {
     const platform = yield* AnthropicPlatform
     if (platform.platform !== "darwin") {
-      return yield* writeCredentialsFile(creds, expected)
+      return yield* writeCredentialsFile(creds, base)
     }
 
     // A read failure surfaces as a typed error, so the refresh call site
@@ -787,7 +814,7 @@ const writeBackCredentials = (
         ),
       ),
     )
-    return yield* compareAndWrite(raw, creds, expected, (blob) =>
+    return yield* compareAndWrite(raw, creds, base, (blob) =>
       Effect.gen(function* () {
         const accountName = Option.getOrElse(
           yield* getKeychainAccountName(CLAUDE_KEYCHAIN_SERVICE),
@@ -935,21 +962,24 @@ const refreshClaudeCodeCredentials = (
         }),
       )
     }
-    let keychainToken = ""
-    if (Exit.isSuccess(current)) keychainToken = current.value.refreshToken
-    const heldToken = Option.match(held, { onNone: () => "", onSome: (c) => c.refreshToken })
-    const tokens = [keychainToken, heldToken].filter(
-      (token, index, all) => token !== "" && all.indexOf(token) === index,
-    )
-    if (tokens.length === 0) failures.push("no stored refresh token")
-    for (const token of tokens) {
-      const refreshed = yield* Effect.exit(refreshViaOAuth(token))
+    const read = Exit.getSuccess(current)
+    // The stored credential first, then the held one; each refresh token once.
+    const candidates = [read, held]
+      .flatMap((candidate) => Option.toArray(candidate))
+      .filter(
+        (candidate, index, all) =>
+          candidate.refreshToken !== "" &&
+          all.findIndex((other) => other.refreshToken === candidate.refreshToken) === index,
+      )
+    if (candidates.length === 0) failures.push("no stored refresh token")
+    for (const sent of candidates) {
+      const refreshed = yield* Effect.exit(refreshViaOAuth(sent.refreshToken))
       if (Exit.isSuccess(refreshed)) {
         // Best-effort write-back so subsequent processes pick up the
         // new token. A failure here doesn't lose the refresh — the
         // caller has it in memory.
-        const expected = Exit.getSuccess(current)
-        const outcome = yield* writeBackCredentials(refreshed.value, expected).pipe(
+        const base: RefreshBase = { read, sent }
+        const outcome = yield* writeBackCredentials(refreshed.value, base).pipe(
           Effect.catchEager((e: ProviderAuthError) =>
             Effect.logWarning("anthropic.oauth.writeback.failed").pipe(
               Effect.annotateLogs({ error: String(e) }),

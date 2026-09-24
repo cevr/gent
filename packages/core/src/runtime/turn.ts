@@ -7,6 +7,7 @@ import {
   DEFAULT_AGENT_NAME,
   DEFAULT_MODEL_ID,
   effectiveModelDriver,
+  type EffectiveModelDriver,
   type ModelId,
   type ModelId as ModelIdType,
   type ReasoningEffort,
@@ -15,6 +16,7 @@ import {
 } from "../domain/agent.js"
 import {
   compileSystemPrompt,
+  dateSection,
   getToolId,
   getToolMetadata,
   type PromptSection,
@@ -123,7 +125,7 @@ import {
   ToolInteractionPending,
   type TurnInterruption,
 } from "./tools.js"
-import { ConfigService } from "./config.js"
+import { ConfigService, type UserConfig } from "./config.js"
 import { asAgentLoopError, type ResolvedTurn, type RunningState } from "../domain/agent-loop.js"
 import {
   driverRetryPolicy,
@@ -343,8 +345,10 @@ type TurnMetrics = {
   cacheReadTokens: number
   cacheWriteTokens: number
   /**
-   * USD of the priced steps, and of the compaction summaries this turn wrote.
-   * None until one is priced; a model with no price adds nothing.
+   * USD of the steps and of the compaction summaries this turn wrote. None
+   * once one of them could not be priced (its model has no price, or it
+   * reported no usable counts): a sum of the rest would read as the turn's
+   * whole cost, the same rule `usageKnown` keeps for the tokens.
    */
   costUsd: Option.Option<number>
   toolCallCount: number
@@ -362,7 +366,7 @@ const emptyTurnMetrics = (): TurnMetrics => ({
   outputTokens: 0,
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
-  costUsd: Option.none(),
+  costUsd: Option.some(0),
   toolCallCount: 0,
   steps: 0,
   usageKnown: true,
@@ -381,7 +385,12 @@ const usageComplete = (metrics: TurnMetrics): boolean => metrics.steps > 0 && me
  */
 const turnMetricsFor = (metrics: TurnMetrics, messageId: MessageId): TurnMetrics => {
   if (Option.contains(metrics.messageId, messageId)) return metrics
-  return { ...emptyTurnMetrics(), messageId: Option.some(messageId), usageKnown: false }
+  return {
+    ...emptyTurnMetrics(),
+    messageId: Option.some(messageId),
+    usageKnown: false,
+    costUsd: Option.none(),
+  }
 }
 
 /** How a turn ended, as its receipt and its `turnAfter` hooks record it. */
@@ -638,7 +647,11 @@ interface TurnLedger {
     readonly costUsd: Option.Option<number>
     readonly toolCallCount: number
   }) => Effect.Effect<void>
-  /** A compaction summary this turn wrote cost this much. Its tokens are not a step's. */
+  /**
+   * A compaction summary this turn wrote, and its price: none when its model
+   * has no price, which leaves the turn without a cost. Its tokens are not a
+   * step's.
+   */
   readonly noteCompaction: (costUsd: Option.Option<number>) => Effect.Effect<void>
   /** What this turn spent, as `TurnCompleted` reports it. */
   readonly total: Effect.Effect<TurnMetrics>
@@ -647,12 +660,9 @@ interface TurnLedger {
 /** A cache count the receipt records: zero is left out, as the steps leave it out. */
 const positiveCount = (count: number) => Option.liftPredicate(count, (value) => value > 0)
 
-/** Two optional prices summed: none only when both are. */
+/** Two prices summed: none when either is unknown. */
 const addCost = (total: Option.Option<number>, cost: Option.Option<number>) =>
-  Option.match(cost, {
-    onNone: () => total,
-    onSome: (value) => Option.some(Option.getOrElse(total, () => 0) + value),
-  })
+  Option.zipWith(total, cost, (sum, value) => sum + value)
 
 export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* () {
   const metrics = yield* Ref.make(emptyTurnMetrics())
@@ -664,7 +674,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
       }),
     noteUnseenSteps: Ref.update(metrics, (m) => {
       if (m.steps > 0) return m
-      return { ...m, usageKnown: false }
+      return { ...m, usageKnown: false, costUsd: Option.none() }
     }),
     noteModel: (params) =>
       Ref.update(metrics, (m) => ({ ...m, agent: params.agent, model: params.model })),
@@ -678,7 +688,7 @@ export const makeTurnLedger: Effect.Effect<TurnLedger> = Effect.gen(function* ()
           outputTokens: m.outputTokens,
           cacheReadTokens: m.cacheReadTokens,
           cacheWriteTokens: m.cacheWriteTokens,
-          costUsd: m.costUsd,
+          costUsd: Option.none<number>(),
           toolCallCount: m.toolCallCount + params.toolCallCount,
           steps: m.steps + 1,
           usageKnown: false,
@@ -1114,17 +1124,39 @@ const applyAgentOverrides = (
   })
 }
 
+interface SessionSettingsSource {
+  readonly modelId?: ModelId
+  readonly reasoningLevel?: ReasoningEffort
+}
+
+/** How a session's next turn routes; see `resolveSessionRoute`. */
+interface SessionRoute {
+  /** The agent the session names; the default one when it names none. */
+  readonly name: AgentNameType
+  /** That agent as the turn dispatches it; none when no loaded agent has the name. */
+  readonly definition: Option.Option<AgentDefinition>
+  readonly modelId: ModelId
+  readonly reasoningLevel: Option.Option<ReasoningEffort>
+  /** The driver the model dispatches through, and the catalog id it reaches. */
+  readonly modelDriver: EffectiveModelDriver
+}
+
 /**
- * The agent a session's turns run as: the agent its admission names (the
- * default one when it names none), reshaped by config `agents[name]` and then
- * by the admission's run overrides. The turn, the snapshot and the auth check
- * all read it here, so a child session is its agent everywhere.
+ * How a session's next turn routes, derived once. The agent is the one its
+ * admission names (the default when it names none), reshaped by config
+ * `agents[name]` and then by the admission's run overrides; a config driver
+ * override routes it when the agent names no driver of its own. The
+ * session's own model and reasoning win over the agent's; an unknown agent
+ * falls back to the default model. The turn, the snapshot footer and the
+ * auth gate all read it here, so a child session is its agent everywhere and
+ * the three cannot disagree on a model or driver.
  */
-export const sessionAgentDefinition = (params: {
+export const resolveSessionRoute = (params: {
   readonly agents: ReadonlyArray<AgentDefinition>
   readonly admission: Option.Option<SessionAdmission>
-  readonly configAgents: Option.Option<Readonly<Record<string, AgentRunOverrides>>>
-}) => {
+  readonly config: Pick<UserConfig, "agents" | "driverOverrides">
+  readonly session: SessionSettingsSource
+}): SessionRoute => {
   const name = Option.getOrElse(
     Option.flatMap(params.admission, (admission) => Option.fromUndefinedOr(admission.agent)),
     () => DEFAULT_AGENT_NAME,
@@ -1134,17 +1166,36 @@ export const sessionAgentDefinition = (params: {
   ).pipe(
     Option.map((agent) =>
       applyAgentOverrides(
-        applyAgentOverrides(
-          agent,
-          Option.flatMap(params.configAgents, (agents) => Option.fromUndefinedOr(agents[name])),
-        ),
+        applyAgentOverrides(agent, Option.fromUndefinedOr(params.config.agents?.[name])),
         Option.flatMap(params.admission, (admission) =>
           Option.fromUndefinedOr(admission.runSpec?.overrides),
         ),
       ),
     ),
+    Option.map((agent) => {
+      const routed = resolveAgentDriver(agent, params.config.driverOverrides)
+      if (routed.source !== "config") return agent
+      return AgentDefinition.make({ ...agent, driver: routed.driver })
+    }),
   )
-  return { name, definition }
+  const modelId = Option.getOrElse(Option.fromUndefinedOr(params.session.modelId), () =>
+    Option.match(definition, {
+      onNone: () => DEFAULT_MODEL_ID,
+      onSome: resolveAgentModel,
+    }),
+  )
+  return {
+    name,
+    definition,
+    modelId,
+    reasoningLevel: Option.orElse(Option.fromUndefinedOr(params.session.reasoningLevel), () =>
+      Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.reasoningEffort)),
+    ),
+    modelDriver: effectiveModelDriver(
+      Option.flatMap(definition, (agent) => Option.fromUndefinedOr(agent.driver)),
+      modelId,
+    ),
+  }
 }
 
 /** The agent a session's turns run as, by name; the default when the session names none. */
@@ -1156,36 +1207,6 @@ export const sessionAgentName = Effect.fn("TurnHelpers.sessionAgentName")(functi
     Option.fromUndefinedOr(session?.admission?.agent),
     () => DEFAULT_AGENT_NAME,
   )
-})
-
-interface SessionSettingsSource {
-  readonly modelId?: ModelId
-  readonly reasoningLevel?: ReasoningEffort
-}
-
-interface ResolvedSessionSettings {
-  readonly modelId: ModelId
-  readonly reasoningLevel: Option.Option<ReasoningEffort>
-}
-
-/**
- * What the next turn on a session would use. The session's own settings win
- * over the effective agent (definition plus config and run overrides); a
- * session whose agent is unknown falls back to the default model.
- */
-export const resolveSessionSettings = (
-  effectiveAgent: Option.Option<AgentDefinition>,
-  session: SessionSettingsSource,
-): ResolvedSessionSettings => ({
-  modelId: Option.getOrElse(Option.fromUndefinedOr(session.modelId), () =>
-    Option.match(effectiveAgent, {
-      onNone: () => DEFAULT_MODEL_ID,
-      onSome: resolveAgentModel,
-    }),
-  ),
-  reasoningLevel: Option.orElse(Option.fromUndefinedOr(session.reasoningLevel), () =>
-    Option.flatMap(effectiveAgent, (agent) => Option.fromUndefinedOr(agent.reasoningEffort)),
-  ),
 })
 
 const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function* (params: {
@@ -1214,12 +1235,13 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   // Overrides come from the session's cwd, so a multi-cwd server reads each
   // project's own config. `get(undefined)` reads the launch-cwd config.
   const sessionConfig = yield* configService.get(hostCtx.cwd)
-  // Config `agents[name]` reshapes the definition; the session's run overrides win.
-  const { name: currentAgent, definition } = sessionAgentDefinition({
+  const route = resolveSessionRoute({
     agents: [...resolvedExtensions.agents.values()],
     admission,
-    configAgents: Option.fromUndefinedOr(sessionConfig.agents),
+    config: sessionConfig,
+    session: Option.getOrElse(session, (): SessionSettingsSource => ({})),
   })
+  const { name: currentAgent, definition } = route
   if (Option.isNone(definition)) {
     yield* eventStore
       .publish(
@@ -1233,19 +1255,8 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     // oxlint-disable-next-line effect/noNullish -- Unknown agents are an expected resolution miss after the error event is published.
     return undefined
   }
-  const effectiveAgent = definition.value
+  const dispatchAgent = definition.value
   const interactive = params.interactive
-
-  // Resolve runtime driver routing — `agent.driver` (hardcoded) wins,
-  // then `UserConfig.driverOverrides[agent.name]`, else default.
-  const driverOverrides = sessionConfig.driverOverrides
-  const driverResolution = resolveAgentDriver(effectiveAgent, driverOverrides)
-  // If config-routed and the agent had no hardcoded driver, the
-  // override replaces it — `effectiveAgent` is otherwise unchanged.
-  let dispatchAgent = effectiveAgent
-  if (driverResolution.source === "config") {
-    dispatchAgent = AgentDefinition.make({ ...effectiveAgent, driver: driverResolution.driver })
-  }
 
   // Derive extension projections from explicit prompt/message slots.
   const allToolEntries = staticToolEntries(extensionRegistry)
@@ -1268,7 +1279,7 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     tools: hostTools,
     modelTools: tools,
     promptSections: extensionSections,
-  } = compileToolPolicy(allTools, effectiveAgent, { interactive }, extensionProjections)
+  } = compileToolPolicy(allTools, dispatchAgent, { interactive }, extensionProjections)
   const entriesByToolId = new Map<string, ResolvedToolCapability>()
   for (const entry of allToolEntries) {
     const bound = yield* attachToolBindingIdentity(entry, resolvedExtensions.extensions)
@@ -1283,10 +1294,12 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   const toolBindings = new Map([...hostToolBindings].filter(([name]) => selectedNames.has(name)))
 
   // Build the tool-aware prompt, then run it through the systemPrompt hooks,
-  // which receive the compiled `basePrompt`.
+  // which receive the compiled `basePrompt`. The date is read per turn: the
+  // base sections live as long as the profile, which can outlive midnight.
+  const today = DateTime.setZone(yield* DateTime.now, DateTime.zoneMakeLocal())
   const sections = buildTurnPromptSections(
-    params.baseSections,
-    effectiveAgent,
+    [...params.baseSections, dateSection(today)],
+    dispatchAgent,
     tools,
     extensionSections,
   )
@@ -1298,12 +1311,6 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     tools,
     hostTools,
   })
-  // The session's own settings win over the agent definition and config.
-  const settings = resolveSessionSettings(
-    Option.some(dispatchAgent),
-    Option.getOrElse(session, (): SessionSettingsSource => ({})),
-  )
-
   return {
     currentTurnAgent: currentAgent,
     messages,
@@ -1312,14 +1319,11 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
     toolBindings,
     hostToolBindings,
     systemPrompt,
-    modelId: settings.modelId,
-    reasoning: Option.getOrUndefined(settings.reasoningLevel),
+    modelId: route.modelId,
+    reasoning: Option.getOrUndefined(route.reasoningLevel),
     temperature: dispatchAgent.temperature,
     driver: dispatchAgent.driver,
-    modelDriver: effectiveModelDriver(
-      Option.fromUndefinedOr(dispatchAgent.driver),
-      settings.modelId,
-    ),
+    modelDriver: route.modelDriver,
   }
 })
 
@@ -1351,8 +1355,8 @@ const toolCallsFromResponseParts = (
   })
 
 type ModelTurnSource = {
-  /** What the compaction summary written for this step cost, when one was written and priced. */
-  readonly compactionCostUsd: Option.Option<number>
+  /** The compaction summary written for this step, and its price when its model has one. */
+  readonly compaction: Option.Option<{ readonly costUsd: Option.Option<number> }>
   readonly stream: Stream.Stream<Response.AnyPart, ProviderError>
   readonly formatStreamError: (streamError: ProviderError) => string
   readonly collect: <R>(
@@ -1515,11 +1519,16 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
       }),
   })
 
-  // The summary ran on the turn's model, so the step's price applies to it.
-  const compactionCostUsd = yield* computeStreamEndedCost({
-    modelId: contextModelId,
-    usage: Option.flatMap(summary, (value) => Option.fromUndefinedOr(value.usage)),
+  // A summary is priced by the model its receipt names, as a step is by its own.
+  const compaction = yield* Option.match(summary, {
+    onNone: () => Effect.succeedNone,
+    onSome: (value) =>
+      computeStreamEndedCost({
+        modelId: value.modelId,
+        usage: Option.fromUndefinedOr(value.usage),
+      }).pipe(Effect.map((costUsd) => Option.some({ costUsd }))),
   })
+  const compactionCostUsd = Option.flatMap(compaction, (value) => value.costUsd)
 
   const finalWindow = messagesInCurrentWindow(durableMessages)
   const projection = yield* project(finalWindow)
@@ -1573,7 +1582,7 @@ const resolveTurnSource = Effect.fn("TurnHelpers.resolveTurnSource")(function* (
   )
 
   return {
-    compactionCostUsd,
+    compaction,
     stream: rawStream.pipe(
       Stream.mapError(
         // oxlint-disable-next-line effect/noUnknownParameters -- Model streams expose provider-specific error values.
@@ -1905,49 +1914,42 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * instead of being restated, so a forgotten restatement can no longer
      * reset a turn's position.
      *
-     * `base` is the record a caller has already read; `Option.none()` reads
-     * the current record here.
+     * `onFailure` says what a storage failure does. `"log"`: the turn goes
+     * on, and a read failure writes over the empty record (the probe fallback
+     * in `resumeTurn` re-derives a lost position). `"die"`: a change a
+     * restart must find, such as the parked marks that decide whether a call
+     * runs again; its read or write fails the step as a defect.
+     *
+     * `base` is the record a caller has already read; without it the current
+     * record is read here.
      */
-    const updateTurnRecord = (
+    const writeTurnRecord = (
       messageId: RunningState["message"]["id"],
       change: (current: TurnRecord) => Partial<TurnRecord>,
-      base: Option.Option<TurnRecord> = Option.none(),
-    ) =>
-      Effect.gen(function* () {
-        const current = yield* Option.match(base, {
-          onNone: () => readTurnRecord(messageId),
-          onSome: Effect.succeed,
-        })
-        const record = turnRecordAtStep({ ...current, ...change(current) })
-        yield* turnRecordStorage
-          .put(turnRecordKey(messageId), record)
-          .pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("turn.record-write-failed").pipe(
-                Effect.annotateLogs({ error: String(cause) }),
-              ),
-            ),
-          )
+      options: { readonly onFailure: "log" | "die"; readonly base?: TurnRecord },
+    ) => {
+      const readBase = Effect.gen(function* () {
+        if (Predicate.isNotUndefined(options.base)) return options.base
+        if (options.onFailure === "die")
+          return yield* turnRecordStorage.get(turnRecordKey(messageId))
+        return yield* readTurnRecord(messageId)
       })
-
-    /**
-     * A change a restart must find, or the step does not go on: the parked
-     * marks decide whether a call runs again or is reported as interrupted.
-     * Its read and its write fail the step (as a defect) instead of logging.
-     */
-    const requireTurnRecordChange = (
-      messageId: RunningState["message"]["id"],
-      change: (current: TurnRecord) => Partial<TurnRecord>,
-    ) =>
-      turnRecordStorage.get(turnRecordKey(messageId)).pipe(
-        Effect.flatMap((current) =>
-          turnRecordStorage.put(
-            turnRecordKey(messageId),
-            turnRecordAtStep({ ...current, ...change(current) }),
+      const write = Effect.gen(function* () {
+        const current = yield* readBase
+        yield* turnRecordStorage.put(
+          turnRecordKey(messageId),
+          turnRecordAtStep({ ...current, ...change(current) }),
+        )
+      })
+      if (options.onFailure === "die") return write.pipe(Effect.orDie)
+      return write.pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("turn.record-write-failed").pipe(
+            Effect.annotateLogs({ error: String(cause) }),
           ),
         ),
-        Effect.orDie,
       )
+    }
 
     /** The step opened: its assistant message committed, its calls are pending. */
     const openTurnStep = Effect.fn("AgentLoop.openTurnStep")(function* (params: {
@@ -1959,10 +1961,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         id: toolCall.id,
         name: toolCall.name,
       }))
-      yield* updateTurnRecord(params.messageId, () => ({
-        step: params.step - 1,
-        pendingToolCalls,
-      }))
+      yield* writeTurnRecord(
+        params.messageId,
+        () => ({ step: params.step - 1, pendingToolCalls }),
+        { onFailure: "log" },
+      )
     })
 
     /**
@@ -1981,7 +1984,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         if (!params.parked.has(toolCall.id)) return { id: toolCall.id, name: toolCall.name }
         return { id: toolCall.id, name: toolCall.name, parked: true }
       })
-      yield* requireTurnRecordChange(params.messageId, () => ({ pendingToolCalls }))
+      yield* writeTurnRecord(params.messageId, () => ({ pendingToolCalls }), { onFailure: "die" })
     })
 
     /**
@@ -1989,22 +1992,27 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * first: a restart during that run finds calls cut short, not parked.
      */
     const clearParkedCalls = (messageId: RunningState["message"]["id"]) =>
-      requireTurnRecordChange(messageId, (current) => ({
-        pendingToolCalls: current.pendingToolCalls.map((call) => ({
-          id: call.id,
-          name: call.name,
-        })),
-      }))
+      writeTurnRecord(
+        messageId,
+        (current) => ({
+          pendingToolCalls: current.pendingToolCalls.map((call) => ({
+            id: call.id,
+            name: call.name,
+          })),
+        }),
+        { onFailure: "die" },
+      )
 
     /** The step closed: every message it owns has committed. */
     const closeTurnStep = Effect.fn("AgentLoop.closeTurnStep")(function* (params: {
       readonly messageId: RunningState["message"]["id"]
       readonly step: number
     }) {
-      yield* updateTurnRecord(params.messageId, (current) => ({
-        step: Math.max(current.step, params.step),
-        pendingToolCalls: [],
-      }))
+      yield* writeTurnRecord(
+        params.messageId,
+        (current) => ({ step: Math.max(current.step, params.step), pendingToolCalls: [] }),
+        { onFailure: "log" },
+      )
     })
 
     /**
@@ -2217,7 +2225,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         branchId: scope.branchId,
         activeStream: params.activeStream,
       })
-      yield* scope.turnLedger.noteCompaction(source.compactionCostUsd)
+      if (Option.isSome(source.compaction))
+        yield* scope.turnLedger.noteCompaction(source.compaction.value.costUsd)
 
       const eventStore = yield* EventStore
       const publishEventOrDie = (event: StreamStarted | StreamEnded) =>
@@ -2706,10 +2715,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         id: toolCall.id,
         name: toolCall.name,
       }))
-      yield* updateTurnRecord(
+      yield* writeTurnRecord(
         messageId,
         () => ({ step: lastCompletedStep, pendingToolCalls: derivedPending }),
-        Option.some(record),
+        { onFailure: "log", base: record },
       )
       return {
         step: lastCompletedStep,
@@ -2833,9 +2842,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         (toolCall) => !known.value.knownResults.has(toolCall.id),
       )
       // Only a call that parked on an interaction runs again: its last run
-      // stopped at the ask. Any other unsettled call was cut short while it
-      // ran (the process stopped), and running it again could repeat what it
-      // already did. The model reads that it was interrupted instead.
+      // stopped at the ask. Any other unsettled call has no recorded result:
+      // it was cut short while it ran, it finished beside a parked sibling
+      // (step results are kept only in process memory until the whole step
+      // settles), or it never started (the step's concurrency cap). Running
+      // it again could repeat what it already did, so the model reads that
+      // no result was recorded instead.
       const cutShort = unsettledCalls.filter((toolCall) => !position.parkedCallIds.has(toolCall.id))
       for (const toolCall of cutShort) {
         recoveredResults.push(
@@ -2846,7 +2858,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             providerExecuted: false,
             result: {
               error:
-                "The tool did not finish: the server stopped while it ran. It did not run again; check its effects before you retry it.",
+                "No result was recorded before the server stopped: the tool may have run in part, in full, or not at all. It did not run again; check its effects before you retry it.",
               reason: "Interrupted",
             },
           }),
@@ -2975,11 +2987,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           metadata: { customType: "continuation", details: { step: params.step } },
         }),
       })
-      yield* updateTurnRecord(
-        params.messageId,
-        () => ({ continuations: used + 1 }),
-        Option.some(record),
-      )
+      yield* writeTurnRecord(params.messageId, () => ({ continuations: used + 1 }), {
+        onFailure: "log",
+        base: record,
+      })
       yield* Effect.logInfo("turn.continue-within-turn").pipe(
         Effect.annotateLogs({ step: params.step, continuation: used + 1 }),
       )

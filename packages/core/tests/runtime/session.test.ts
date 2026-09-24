@@ -45,6 +45,8 @@ import {
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
   baseLocalLayerWithProvider,
+  createE2ELayer,
+  createRpcClient,
   createRpcHarness,
   RecordingEventStore,
   runtimeHostContext,
@@ -89,6 +91,8 @@ import {
   SqliteStorage,
 } from "../../src/storage/storage"
 import { SessionRuntime } from "../../src/runtime/session"
+import { ModelContextCompactor } from "../../src/runtime/model-context"
+import { makeTurnLedger } from "../../src/runtime/turn"
 import type { ExtensionContributions } from "../../src/domain/extension.js"
 import { e2ePreset } from "../helpers/test-preset"
 
@@ -1026,6 +1030,169 @@ describe("session metrics", () => {
         expect(ev.costUsd).toBeUndefined()
       }
       expect(result.metrics.costUsd).toBe(0)
+    }),
+  )
+
+  /**
+   * Two turns on a small window, so the second turn's projection overflows
+   * and the stub compactor writes a summary whose receipt names
+   * `summaryModelId`. Returns the stored events of the branch.
+   */
+  const runCompactingTurns = (summaryModelId: ModelId, summaryModels: readonly Model[]) =>
+    Effect.gen(function* () {
+      const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+        textStep("first reply"),
+        textStep("second reply"),
+      ])
+      const compactor = defineExtension({
+        id: "@test/stub-compactor",
+        setup: Effect.gen(function* () {
+          const host = yield* ExtensionHost
+          yield* host.register(
+            "resource",
+            defineResource({
+              id: "@test/stub-compactor/compactor",
+              scope: "process",
+              layer: Layer.succeed(
+                ModelContextCompactor,
+                ModelContextCompactor.of({
+                  compact: () =>
+                    Effect.succeed({
+                      notice: "stub summary",
+                      modelId: summaryModelId,
+                      usage: { inputTokens: 1_000_000, outputTokens: 0 },
+                    }),
+                }),
+              ),
+            }),
+          )
+        }),
+      })
+      const smallWindow = new Model({
+        id: ModelId.make("test/priced"),
+        name: "Priced, small window",
+        provider: ProviderId.make("test"),
+        contextLength: 12_000,
+        pricing: { input: 3, output: 15 },
+      })
+      const layer = createE2ELayer({
+        providerLayer,
+        agents: [AgentDefinition.make({ name: DEFAULT_AGENT_NAME, model: smallWindow.id })],
+        extensionInputs: [compactor],
+        extraLayers: [ModelRegistry.Test([smallWindow, ...summaryModels])],
+      })
+      return yield* Effect.gen(function* () {
+        const { client } = yield* createRpcClient(layer)
+        const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+        for (const content of [`first ${"a".repeat(16_000)}`, `second ${"b".repeat(16_000)}`]) {
+          yield* client.message.send({ sessionId, branchId, content })
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (snapshot) =>
+              snapshot.runtime._tag === "Idle" &&
+              snapshot.messages.some(
+                (message) =>
+                  message.role === "user" &&
+                  message.parts.some((part) => part.type === "text" && part.text === content),
+              ) &&
+              snapshot.messages.at(-1)?.role === "assistant",
+            5_000,
+            "the turn settled",
+          )
+        }
+        const events = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.takeUntil(({ event }) => event._tag === "StreamSynchronized"),
+          Stream.map(({ event }) => event),
+          Stream.runCollect,
+          Effect.map((all) => Array.from(all)),
+        )
+        return events
+      }).pipe(Effect.scoped)
+    }).pipe(Effect.timeout("8 seconds"))
+
+  it.live("a compaction summary is priced by the model its receipt names", () =>
+    Effect.gen(function* () {
+      const summaryModel = new Model({
+        id: ModelId.make("test/summary"),
+        name: "Summary",
+        provider: ProviderId.make("test"),
+        contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
+        pricing: { input: 1, output: 1 },
+      })
+      const events = yield* runCompactingTurns(summaryModel.id, [summaryModel])
+      const projected = events.find(
+        (event) => event._tag === "ModelContextProjected" && event.compacted,
+      )
+      // One million input tokens at $1/M, not at the turn model's $3/M.
+      expect(projected?._tag === "ModelContextProjected" && projected.costUsd).toBeCloseTo(1, 12)
+    }),
+  )
+
+  it.live("a turn whose summary has no price stores its usage but no cost", () =>
+    Effect.gen(function* () {
+      const unpricedSummary = new Model({
+        id: ModelId.make("test/summary-unpriced"),
+        name: "Unpriced summary",
+        provider: ProviderId.make("test"),
+        contextLength: TEST_MODEL_CONTEXT_LIMIT_TOKENS,
+      })
+      const events = yield* runCompactingTurns(unpricedSummary.id, [unpricedSummary])
+      expect(
+        events.some((event) => event._tag === "ModelContextProjected" && event.compacted),
+      ).toBe(true)
+      const receipts = events.filter((event) => event._tag === "TurnCompleted")
+      expect(receipts).toHaveLength(2)
+      const [first, second] = receipts
+      // The first turn priced every step; the second cannot price its summary,
+      // so a sum of its step alone would read as the turn's whole cost.
+      expect(first?._tag === "TurnCompleted" && first.costUsd).toBeGreaterThan(0)
+      expect(second?._tag === "TurnCompleted" && second.usage).toBeDefined()
+      expect(second?._tag === "TurnCompleted" && second.costUsd).toBeUndefined()
+    }),
+  )
+})
+
+describe("turn ledger", () => {
+  it.effect("a turn that mixes a priced and an unpriced step has no cost", () =>
+    Effect.gen(function* () {
+      const ledger = yield* makeTurnLedger
+      const messageId = MessageId.make("ledger-turn")
+      yield* ledger.beginTurn(messageId)
+      const usage = Option.some({ inputTokens: 100, outputTokens: 10 })
+      yield* ledger.noteStep({
+        agent: AgentName.make("cowork"),
+        model: ModelId.make("test/priced"),
+        usage,
+        costUsd: Option.some(0.5),
+        toolCallCount: 1,
+      })
+      yield* ledger.noteStep({
+        agent: AgentName.make("cowork"),
+        model: ModelId.make("custom/unpriced"),
+        usage,
+        costUsd: Option.none(),
+        toolCallCount: 0,
+      })
+      const total = yield* ledger.total
+      expect(total.usageKnown).toBe(true)
+      expect(total.costUsd).toEqual(Option.none())
+    }),
+  )
+
+  it.effect("a turn whose steps are all priced sums them", () =>
+    Effect.gen(function* () {
+      const ledger = yield* makeTurnLedger
+      yield* ledger.beginTurn(MessageId.make("ledger-priced"))
+      for (const cost of [0.5, 0.25]) {
+        yield* ledger.noteStep({
+          agent: AgentName.make("cowork"),
+          model: ModelId.make("test/priced"),
+          usage: Option.some({ inputTokens: 100, outputTokens: 10 }),
+          costUsd: Option.some(cost),
+          toolCallCount: 0,
+        })
+      }
+      expect((yield* ledger.total).costUsd).toEqual(Option.some(0.75))
     }),
   )
 })

@@ -389,8 +389,9 @@ export interface TurnAfterInput {
  *
  * `cacheReadTokens` and `cacheWriteTokens` are the parts of `inputTokens` the
  * provider read from and wrote to its prompt cache. `costUsd` prices the
- * steps and any compaction summary the turn wrote; it is none when no model
- * the turn used has a price.
+ * steps and any compaction summary the turn wrote; it is none when one of
+ * them could not be priced (its model has no price, or its counts are
+ * unknown), so it is never a partial sum.
  */
 export interface TurnUsage {
   readonly known: {
