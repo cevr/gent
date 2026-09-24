@@ -981,7 +981,16 @@ describe("notices", () => {
             interrupted: false,
             streamFailed: false,
             unanswered: false,
-            usage: { known: { inputTokens: 0, outputTokens: 0 }, complete: true },
+            usage: {
+              known: {
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+                costUsd: Option.none(),
+              },
+              complete: true,
+            },
           })
           .pipe(Effect.provideService(ExtensionContext, ctx), Effect.provide(failedAlarms))
         const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(

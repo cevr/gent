@@ -153,10 +153,12 @@ const completionState = (details: CompletionDetails, content: string): Completio
   })
 }
 
-/** `delegate completed · abcd1234 · ↑1.2k ↓300`. */
+/** `delegate completed · abcd1234 · ↑1.2k ↓300 $0.0123`. */
 const completionHeader = (state: CompletionState, details: CompletionDetails): string => {
   const usage = Option.fromUndefinedOr(details.usage).pipe(
-    Option.map(formatUsageStats),
+    Option.map((value) =>
+      formatUsageStats({ input: value.input, output: value.output, cost: value.costUsd }),
+    ),
     Option.filter((text) => text.length > 0),
     Option.map((text) => ` · ${text}`),
     Option.getOrElse(() => ""),

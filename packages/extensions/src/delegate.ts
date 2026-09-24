@@ -102,7 +102,17 @@ const ChildOutcome = Schema.Struct({
 })
 type ChildOutcome = typeof ChildOutcome.Type
 
-const ChildUsage = Schema.Struct({ input: Schema.Finite, output: Schema.Finite })
+/**
+ * The child turn's bill. The cache counts and the cost came later: older rows
+ * carry only the tokens. A zero cache count and an unpriced model are left out.
+ */
+const ChildUsage = Schema.Struct({
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cacheRead: Schema.optionalKey(Schema.Finite),
+  cacheWrite: Schema.optionalKey(Schema.Finite),
+  costUsd: Schema.optionalKey(Schema.Finite),
+})
 
 /** One child known to a parent branch. `completed` is a turn receipt, not task success. */
 export const DelegateEntry = Schema.Struct({
@@ -225,10 +235,34 @@ const outcomeOf = (receipt: {
     (flag) => flag === true,
   )
 
-const usageOf = (
-  usage: Option.Option<{ readonly inputTokens: number; readonly outputTokens: number }>,
-): Option.Option<typeof ChildUsage.Type> =>
-  Option.map(usage, (value) => ({ input: value.inputTokens, output: value.outputTokens }))
+/**
+ * The row's bill from a complete turn total. The `turnAfter` hook and the
+ * `TurnCompleted` receipt race to write it, so both go through here and a zero
+ * or an absent value is dropped the same way.
+ */
+const usageOf = (usage: Option.Option<TurnUsage["known"]>): Option.Option<typeof ChildUsage.Type> =>
+  Option.map(usage, (value) => ({
+    input: value.inputTokens,
+    output: value.outputTokens,
+    ...Record.filter(
+      { cacheRead: value.cacheReadTokens, cacheWrite: value.cacheWriteTokens },
+      (count) => count > 0,
+    ),
+    ...Option.match(value.costUsd, {
+      onNone: () => ({}),
+      onSome: (costUsd) => ({ costUsd }),
+    }),
+  }))
+
+/** A `TurnCompleted` receipt's total, in the shape the `turnAfter` hook gets. */
+const receiptTotal = (receipt: TurnCompleted): Option.Option<TurnUsage["known"]> =>
+  Option.map(Option.fromUndefinedOr(receipt.usage), (usage) => ({
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: Option.getOrElse(Option.fromUndefinedOr(usage.cacheReadTokens), () => 0),
+    cacheWriteTokens: Option.getOrElse(Option.fromUndefinedOr(usage.cacheWriteTokens), () => 0),
+    costUsd: Option.fromUndefinedOr(receipt.costUsd),
+  }))
 
 /** The outcome in words a model reads. */
 const failureNames = (outcome: ChildOutcome): ReadonlyArray<string> => {
@@ -628,7 +662,7 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
           parent,
           sent,
           outcomeOf(receipt),
-          usageOf(Option.fromUndefinedOr(receipt.usage)),
+          usageOf(receiptTotal(receipt)),
           error,
         )
         next = replaceEntry(next, delivered)

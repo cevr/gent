@@ -402,6 +402,41 @@ describe("scanCacheMisses counts only a lost prefix", () => {
     }),
   )
 
+  // OpenAI caches implicitly and reports reads only: a request reads the
+  // cache when it reaches a server that holds the prefix. Probe, Codex
+  // gpt-5.6-luna, 2026-09-23: with the session-id header 17 of 36 later
+  // steps read, and a step that read was followed by one that read nothing
+  // on the same prefix. A zero read inside the lifetime is then no evidence
+  // that the prefix changed.
+  it.live("a reads-only provider's zero read inside the lifetime is not a changed prefix", () =>
+    Effect.sync(() => {
+      const history = makeHistory()
+      history.input(0, "t1")
+      history.step({
+        start: SECOND,
+        end: 10 * SECOND,
+        turn: "t1",
+        usage: { inputTokens: 30_000 },
+        model: GPT,
+      })
+      history.step({
+        start: 20 * SECOND,
+        end: 30 * SECOND,
+        turn: "t1",
+        usage: { inputTokens: 31_000, cacheReadTokens: 29_500 },
+        model: GPT,
+      })
+      history.step({
+        start: 40 * SECOND,
+        end: 50 * SECOND,
+        turn: "t1",
+        usage: { inputTokens: 32_000 },
+        model: GPT,
+      })
+      expect(scanCacheMisses(history.envelopes)).toEqual([])
+    }),
+  )
+
   it.live("a miss of 1,024 tokens or fewer is noise", () =>
     Effect.sync(() => {
       const atFloor = cachedFirstStep()

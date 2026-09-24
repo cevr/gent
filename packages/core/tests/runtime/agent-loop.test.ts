@@ -154,6 +154,7 @@ import {
   EventStore,
   EventStoreError,
   MessageReceived,
+  type StreamEnded,
   ToolCallStarted,
   ToolCallSucceeded,
   TurnCompleted,
@@ -1006,6 +1007,78 @@ describe("empty final step", () => {
         }).pipe(Effect.provide(makeRecordingLayer(providerLayer))),
       )
     }),
+  )
+})
+
+// ── reasoning replay ────────────────────────────────────────────────────────
+
+/**
+ * A provider signs its reasoning (an Anthropic thinking signature, OpenAI
+ * encrypted reasoning) so a later step can send it back. The loop stores the
+ * step's parts and rebuilds the next prompt from storage, so the signature
+ * must survive both.
+ */
+describe("reasoning replay", () => {
+  const sessionId = SessionId.make("reasoning-replay-session")
+  const branchId = BranchId.make("reasoning-replay-branch")
+  const signature: Response.ReasoningDeltaPartMetadata = {
+    anthropic: { info: { type: "thinking", signature: "sig-1" } },
+  }
+
+  const echoTool = tool({
+    id: "echo",
+    description: "Echoes input",
+    params: Schema.Struct({ text: Schema.String }),
+    output: Schema.Struct({ text: Schema.String }),
+    execute: (params) => Effect.succeed({ text: params.text }),
+  })
+
+  it.live("the next step sends back the signed reasoning of the step before it", () =>
+    Effect.gen(function* () {
+      const replayed: Array<Prompt.ReasoningPart> = []
+      const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+        {
+          parts: [
+            Response.makePart("reasoning-start", { id: "0" }),
+            Response.makePart("reasoning-delta", { id: "0", delta: "plan the call" }),
+            Response.makePart("reasoning-delta", { id: "0", delta: "", metadata: signature }),
+            Response.makePart("reasoning-end", { id: "0" }),
+            toolCallPart("echo", { text: "hi" }),
+            finishPart({ finishReason: "tool-calls", usage: { inputTokens: 1, outputTokens: 1 } }),
+          ],
+        },
+        {
+          ...textStep("done"),
+          assertOptions: (options) => {
+            for (const message of Prompt.make(options.prompt).content) {
+              if (message.role !== "assistant") continue
+              for (const part of message.content) {
+                if (part.type === "reasoning") replayed.push(part)
+              }
+            }
+          },
+        },
+      ])
+      const eventsRef = yield* Ref.make<AgentEvent[]>([])
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        yield* runAgentLoop(
+          agentLoop,
+          Message.cases.regular.make({
+            id: MessageId.make("reasoning-replay-msg"),
+            sessionId,
+            branchId,
+            role: "user",
+            parts: [Prompt.textPart({ text: "call echo" })],
+            createdAt: dateFromMillis(1_767_225_600_000),
+          }),
+        )
+        yield* controls.assertDone
+        expect(replayed.map((part) => [part.text, part.options])).toEqual([
+          ["plan the call", signature],
+        ])
+      }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
+    }).pipe(Effect.timeout("4 seconds")),
   )
 })
 
@@ -2838,6 +2911,80 @@ const brokenAfterPartialOutput = (calls: Ref.Ref<number>) =>
       )
     }),
   )
+
+describe("a step that does not settle", () => {
+  // Each `StreamEnded` names the model the step ran on, so a usage row is
+  // never modelless: the step spent tokens on that model whether or not it
+  // settled.
+  it.scopedLive("an interrupted step and a broken step name their model", () =>
+    Effect.gen(function* () {
+      const { layer: signalLayer, controls } = yield* LanguageModelLayers.signal("one. two.")
+      const interruptedRun = yield* createRpcHarness({ ...e2ePreset, providerLayer: signalLayer })
+      const calls = yield* Ref.make(0)
+      const brokenRun = yield* createRpcHarness({
+        ...e2ePreset,
+        providerLayer: brokenAfterPartialOutput(calls),
+      })
+      const endedSteps = (run: typeof brokenRun) =>
+        run.client.session.events({ sessionId: run.sessionId, branchId: run.branchId }).pipe(
+          Stream.takeUntil(({ event }) => event._tag === "TurnCompleted"),
+          Stream.runCollect,
+          Effect.map((envelopes) => {
+            const ended: Array<{
+              readonly outcome: StreamEnded["outcome"]
+              readonly model: Option.Option<ModelId>
+            }> = []
+            for (const { event } of envelopes) {
+              if (event._tag === "StreamEnded") {
+                ended.push({ outcome: event.outcome, model: Option.fromUndefinedOr(event.model) })
+              }
+            }
+            return ended
+          }),
+          Effect.forkScoped,
+        )
+
+      const interruptedSteps = yield* endedSteps(interruptedRun)
+      yield* interruptedRun.client.message.send({
+        sessionId: interruptedRun.sessionId,
+        branchId: interruptedRun.branchId,
+        content: "answer me",
+      })
+      yield* controls.waitForStreamStart.pipe(Effect.timeout("5 seconds"))
+      yield* interruptedRun.client.steer.command({
+        command: {
+          _tag: "Cancel",
+          sessionId: interruptedRun.sessionId,
+          branchId: interruptedRun.branchId,
+          requestId: "req-interrupted-step-model",
+        } satisfies SteerCommand,
+      })
+
+      const brokenSteps = yield* endedSteps(brokenRun)
+      yield* brokenRun.client.message.send({
+        sessionId: brokenRun.sessionId,
+        branchId: brokenRun.branchId,
+        content: "answer me",
+      })
+
+      const interrupted = yield* Fiber.join(interruptedSteps)
+      const broken = yield* Fiber.join(brokenSteps)
+      expect([...interrupted, ...broken].map((step) => step.outcome)).toEqual([
+        "Interrupted",
+        "Failed",
+        "Failed",
+        "Failed",
+      ])
+      // Both harnesses run the same agent, so every end names the same model.
+      const models = [...interrupted, ...broken].map((step) => step.model)
+      expect(models.every((model) => Option.isSome(model))).toBe(true)
+      expect(new Set(models.map((model) => Option.getOrElse(model, () => "")))).toHaveProperty(
+        "size",
+        1,
+      )
+    }).pipe(Effect.timeout("20 seconds")),
+  )
+})
 
 describe("turn lifecycle hooks", () => {
   it.scopedLive("a turn that answers reports neither interrupt nor failure", () =>

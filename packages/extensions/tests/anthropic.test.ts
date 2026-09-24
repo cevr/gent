@@ -2450,6 +2450,7 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
 })
 const CacheBlock = Schema.Struct({
   type: Schema.optional(Schema.String),
+  text: Schema.optional(Schema.String),
   cache_control: Schema.optional(Schema.NullOr(Schema.Struct({ type: Schema.String }))),
 })
 type CacheBlock = typeof CacheBlock.Type
@@ -2553,25 +2554,30 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
       )
     })
 
-  it.live("an API-key request marks the system prompt, the conversation tail and the tools", () =>
+  // The tool list alone is below Anthropic's minimum cacheable length, so
+  // the system prompt's marker caches it: tools render before the system.
+  it.live("an API-key request marks the system prompt and the conversation tail", () =>
     Effect.gen(function* () {
       const request = yield* sentFor(makeApiAuthInfo("sk-test"))
       expect(lastMarked(request.system ?? [])).toBe(true)
       expect(lastMarked(request.messages.at(-1)?.content ?? [])).toBe(true)
-      expect(lastMarked(request.tools ?? [])).toBe(true)
-      expect(markerCount(request)).toBe(3)
+      expect((request.tools ?? []).some(isMarked)).toBe(false)
+      expect(markerCount(request)).toBe(2)
     }),
   )
 
-  // The billing and identity blocks take no marker; the system prompt moves into the first user message.
-  it.live("a Claude Code request marks the first user message, the tail and the tools", () =>
+  // The billing and identity blocks take no marker; the system prompt moves
+  // into the first user message and ends the prefix there, before the user's
+  // own text, so a new session or a sibling child reads it from the cache.
+  it.live("a Claude Code request marks the relocated system prompt and the tail", () =>
     Effect.gen(function* () {
       const request = yield* sentFor(makeOAuthInfo())
       expect((request.system ?? []).some(isMarked)).toBe(false)
-      expect(lastMarked(request.messages[0]?.content ?? [])).toBe(true)
+      const first = request.messages[0]?.content ?? []
+      expect(first.filter(isMarked).map((block) => block.text)).toEqual(["Stable instructions."])
       expect(lastMarked(request.messages.at(-1)?.content ?? [])).toBe(true)
-      expect(lastMarked(request.tools ?? [])).toBe(true)
-      expect(markerCount(request)).toBe(3)
+      expect((request.tools ?? []).some(isMarked)).toBe(false)
+      expect(markerCount(request)).toBe(2)
     }),
   )
 
@@ -2580,6 +2586,176 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
     Effect.gen(function* () {
       for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
         expect(markerCount(yield* sentFor(authInfo, callerMarker))).toBe(4)
+      }
+    }),
+  )
+})
+const ThinkingRequest = Schema.fromJsonString(
+  Schema.Struct({
+    messages: Schema.Array(
+      Schema.Struct({
+        role: Schema.String,
+        content: Schema.Array(
+          Schema.Struct({
+            type: Schema.String,
+            signature: Schema.optional(Schema.String),
+            cache_control: Schema.optional(Schema.NullOr(Schema.Struct({ type: Schema.String }))),
+          }),
+        ),
+      }),
+    ),
+  }),
+)
+describe("buildAnthropicModelDriver — thinking replay", () => {
+  // The part the loop stores for a signed thinking block (`projectResponsePartsToMessageParts`).
+  const signedThinking = Prompt.makePart("reasoning", {
+    text: "Read the file first.",
+    options: { anthropic: { info: { type: "thinking", signature: "sig-step-1" } } },
+  })
+  const conversation = Prompt.make([
+    { role: "system", content: "Stable instructions." },
+    { role: "user", content: "Read a.txt." },
+    {
+      role: "assistant",
+      content: [
+        signedThinking,
+        Prompt.makePart("tool-call", {
+          id: "call_read",
+          name: "read",
+          params: { path: "a.txt" },
+          providerExecuted: false,
+        }),
+      ],
+    },
+    {
+      role: "tool",
+      content: [
+        Prompt.makePart("tool-result", {
+          id: "call_read",
+          name: "read",
+          result: "alpha",
+          isFailure: false,
+          providerExecuted: false,
+        }),
+      ],
+    },
+  ])
+
+  it.live("a later step sends the thinking block back with its signature on both paths", () =>
+    Effect.gen(function* () {
+      for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
+        const credentialCellRef = yield* SynchronizedRef.make<
+          CredentialCacheCell<ClaudeCredentials>
+        >({
+          _tag: "Durable",
+          creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+          at: yield* Clock.currentTimeMillis,
+          invalidated: false,
+        })
+        const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+        const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo, {
+          reasoning: "high",
+        })
+        const state = makeFakeFetchState()
+        yield* LanguageModel.generateText({
+          prompt: conversation,
+          toolkit: Toolkit.make(ReadTool),
+          disableToolCallResolution: true,
+        }).pipe(
+          Effect.provide(
+            Layer.provideMerge(
+              model,
+              fakeFetchLayer(state, () => anthropicHappyResponse()),
+            ),
+          ),
+          Effect.scoped,
+          Effect.orDie,
+        )
+        const request = yield* Schema.decodeEffect(ThinkingRequest)(
+          Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)?.body)),
+        )
+        const assistant = request.messages.find((message) => message.role === "assistant")
+        expect(assistant?.content.map((block) => block.type)).toEqual(["thinking", "tool_use"])
+        const thinking = assistant?.content[0]
+        expect(thinking?.signature).toBe("sig-step-1")
+        // A thinking block takes no cache marker; Anthropic answers 400 on one.
+        expect(Option.fromNullishOr(thinking?.cache_control).pipe(Option.isSome)).toBe(false)
+      }
+    }),
+  )
+
+  // platform.claude.com/docs/en/build-with-claude/preserved-thinking (read
+  // 2026-09-23): on Fable 5.1 and Opus 5.5 a signed block is bound to the
+  // system prompt, the tools, and every message before it, and the default
+  // for a changed prefix is a 400. A resumed session has a new Date line; a
+  // compacted window drops earlier messages. `drop_block` has the API drop
+  // those blocks and answer; models without the check accept the field.
+  it.live("a thinking request lets Anthropic drop a block bound to another prefix", () =>
+    Effect.gen(function* () {
+      const BoundRequest = Schema.fromJsonString(
+        Schema.Struct({
+          thinking: Schema.optional(
+            Schema.Struct({
+              type: Schema.String,
+              block_binding: Schema.optional(
+                Schema.Struct({ prefix_mismatch_behavior: Schema.String }),
+              ),
+            }),
+          ),
+        }),
+      )
+      const sent = (modelName: string, authInfo: ProviderAuthInfo, hints: ProviderHints) =>
+        Effect.gen(function* () {
+          const credentialCellRef = yield* SynchronizedRef.make<
+            CredentialCacheCell<ClaudeCredentials>
+          >({
+            _tag: "Durable",
+            creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+            at: yield* Clock.currentTimeMillis,
+            invalidated: false,
+          })
+          const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+          const model = yield* driver.resolveModel(modelName, authInfo, hints)
+          const state = makeFakeFetchState()
+          yield* LanguageModel.generateText({
+            prompt: conversation,
+            toolkit: Toolkit.make(ReadTool),
+            disableToolCallResolution: true,
+          }).pipe(
+            Effect.provide(
+              Layer.provideMerge(
+                model,
+                fakeFetchLayer(state, () => anthropicHappyResponse()),
+              ),
+            ),
+            Effect.scoped,
+            Effect.orDie,
+          )
+          const request = Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)))
+          const body = yield* Schema.decodeEffect(BoundRequest)(
+            Option.getOrThrow(Option.fromUndefinedOr(request.body)),
+          )
+          const betas = Option.getOrElse(
+            Option.fromUndefinedOr(request.headers["anthropic-beta"]),
+            () => "",
+          ).split(",")
+          return {
+            binding: Option.fromUndefinedOr(body.thinking?.block_binding?.prefix_mismatch_behavior),
+            beta: betas.includes("thinking-binding-controls-2026-08-01"),
+          }
+        })
+      for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
+        for (const modelName of ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5"]) {
+          expect(yield* sent(modelName, authInfo, { reasoning: "high" })).toEqual({
+            binding: Option.some("drop_block"),
+            beta: true,
+          })
+        }
+        // Thinking turned off sends no thinking object to bind, and no beta.
+        expect(yield* sent("claude-sonnet-5", authInfo, { reasoning: "none" })).toEqual({
+          binding: Option.none(),
+          beta: false,
+        })
       }
     }),
   )
