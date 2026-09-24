@@ -1147,6 +1147,21 @@ const rewriteCodexBody = (
 // ── Header construction ──
 
 /**
+ * The ChatGPT backend routes prompt-cache affinity by the Responses
+ * `session-id` header; `prompt_cache_key` alone does not keep a session on
+ * a warm cache. Codex sends its cache key there for a root session
+ * (codex-rs `core/src/client.rs`, `responses_session_id`), so the header
+ * carries the request's `prompt_cache_key`: the session id, stable for every
+ * request of the session. A request without a key gets no header.
+ */
+const codexSessionId = (req: HttpClientRequest.HttpClientRequest): Option.Option<string> =>
+  tryReadJsonBody(req.body).pipe(
+    Option.flatMap((body) => Option.fromUndefinedOr(body["prompt_cache_key"])),
+    Option.filter(Predicate.isString),
+    Option.filter((key) => key.length > 0),
+  )
+
+/**
  * Build the OAuth header set for a Codex request: Bearer over the
  * access token, ChatGPT-Account-Id when known, plus polite-default
  * `originator` and `User-Agent` if the upstream didn't set them.
@@ -1224,6 +1239,9 @@ export const buildCodexTransformClient =
               "openai-beta",
               ensureBetaToken(Headers.get(headers, "openai-beta"), CODEX_BETA_TOKEN),
             )
+            const sessionId = codexSessionId(req)
+            if (Option.isSome(sessionId))
+              headers = Headers.set(headers, "session-id", sessionId.value)
             const withBody = rewriteCodexBody(withHeaders(req, headers))
             if (req.url.startsWith("/")) return withBody
             return HttpClientRequest.setUrl(withBody, new URL(CODEX_API_ENDPOINT))

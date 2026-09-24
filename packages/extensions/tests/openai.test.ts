@@ -40,7 +40,7 @@ import {
   HttpClientResponse,
 } from "effect/unstable/http"
 import { EncodeError, HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
-import { AiError, LanguageModel } from "effect/unstable/ai"
+import { AiError, LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
 import { encodeExternalJson } from "./helpers/external-wire.js"
 import { testCatalogSource } from "./helpers/catalog-source.js"
 import { e2ePreset } from "./helpers/test-preset.js"
@@ -1992,6 +1992,137 @@ describe("OpenAI cache routing", () => {
         ),
       )
       expect(keys).toEqual(["same-session", "same-session", "other-session"])
+    }),
+  )
+
+  // ChatGPT routes cache affinity by the Responses `session-id` header, not
+  // by `prompt_cache_key` (codex-rs `core/src/client.rs`, `responses_session_id`).
+  it.live("OAuth requests name their session in the session-id header", () =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+        makeDurableCell({
+          access: "cache-test-token",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        }),
+      )
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+      )
+      const fetchState = makeFakeFetchState()
+      for (const cacheKey of ["same-session", "same-session", "other-session"]) {
+        const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo(), { cacheKey })
+        yield* runOne(model, fetchState)
+      }
+      const model = yield* driver.resolveModel("gpt-5.4", makeOAuthInfo())
+      yield* runOne(model, fetchState)
+      expect(
+        fetchState.captured.map((request) => Option.fromUndefinedOr(request.headers["session-id"])),
+      ).toEqual([
+        Option.some("same-session"),
+        Option.some("same-session"),
+        Option.some("other-session"),
+        Option.none(),
+      ])
+    }),
+  )
+})
+
+const ReadTool = Tool.make("read", {
+  description: "Read a file.",
+  parameters: Schema.Struct({ path: Schema.String }),
+  success: Schema.String,
+})
+
+const ReplayedInput = Schema.fromJsonString(
+  Schema.Struct({
+    input: Schema.Array(
+      Schema.Struct({
+        type: Schema.optional(Schema.String),
+        id: Schema.optional(Schema.String),
+        encrypted_content: Schema.optional(Schema.String),
+      }),
+    ),
+  }),
+)
+
+describe("OpenAI reasoning replay", () => {
+  // The parts the loop stores for a step that reasoned, then called a tool.
+  const conversation = Prompt.make([
+    { role: "user", content: "Read a.txt." },
+    {
+      role: "assistant",
+      content: [
+        Prompt.makePart("reasoning", {
+          text: "",
+          options: { openai: { itemId: "rs_1", encryptedContent: "enc-1" } },
+        }),
+        Prompt.makePart("tool-call", {
+          id: "call_read",
+          name: "read",
+          params: { path: "a.txt" },
+          providerExecuted: false,
+          options: { openai: { itemId: "fc_1" } },
+        }),
+      ],
+    },
+    {
+      role: "tool",
+      content: [
+        Prompt.makePart("tool-result", {
+          id: "call_read",
+          name: "read",
+          result: "alpha",
+          isFailure: false,
+          providerExecuted: false,
+        }),
+      ],
+    },
+  ])
+
+  it.live("a later step sends the encrypted reasoning item back on both paths", () =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+        makeDurableCell({
+          access: "replay-token",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        }),
+      )
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+      )
+      for (const authInfo of [makeApiAuthInfo("sk-replay"), makeOAuthInfo()]) {
+        const model = yield* driver.resolveModel("gpt-5.4", authInfo, { reasoning: "high" })
+        const state = makeFakeFetchState()
+        yield* LanguageModel.generateText({
+          prompt: conversation,
+          toolkit: Toolkit.make(ReadTool),
+          disableToolCallResolution: true,
+        }).pipe(
+          Effect.provide(
+            Layer.provideMerge(model, fakeFetchLayer(state, openaiResponsesHappyResponse)),
+          ),
+          Effect.scoped,
+          Effect.orDie,
+        )
+        const sent = yield* Schema.decodeEffect(ReplayedInput)(
+          Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)?.body)),
+        )
+        const reasoning = sent.input.filter((item) => item.type === "reasoning")
+        expect(reasoning).toEqual([{ type: "reasoning", id: "rs_1", encrypted_content: "enc-1" }])
+        // The reasoning item goes right before the call it led to.
+        const types = sent.input.map((item) => item.type)
+        expect(types.indexOf("function_call")).toBe(types.indexOf("reasoning") + 1)
+      }
     }),
   )
 })
