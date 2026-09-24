@@ -14,12 +14,13 @@ Decide by the principles in `~/Developer/personal/dotfiles/principles/` and writ
 
 ## Steps
 
-1. **Open the ledger.** Copy the section layout of the newest `plans/architecture-loop-*.md`. Record the HEAD hash and the baseline table (source lines and files per package):
-   `git ls-files 'packages/*/src/**' 'apps/*/src/**' | xargs wc -l | awk '$2 != "total" { split($2, p, "/"); n[p[2]] += $1; f[p[2]]++ } END { for (k in n) print n[k], f[k], k }' | sort -rn`.
+1. **Open the ledger.** Copy the section layout of the newest `plans/architecture-loop-*.md`. Record the HEAD hash and the baseline table (TypeScript source lines and files per package):
+   `git ls-files ':(glob)packages/*/src/**/*.ts' ':(glob)packages/*/src/**/*.tsx' ':(glob)apps/*/src/**/*.ts' ':(glob)apps/*/src/**/*.tsx' | xargs wc -l | awk '$2 != "total" { split($2, p, "/"); n[p[2]] += $1; f[p[2]]++ } END { for (k in n) print n[k], f[k], k }' | sort -rn`.
+   The `:(glob)` magic keeps `*` inside one path segment; a plain pathspec `*` crosses `/` and counts the lint fixtures under `packages/tooling/fixtures/` as source.
    Read [`rejected.md`](rejected.md). Done when the ledger file exists with a baseline.
 
 2. **Coverage audit.** List every source directory with its file count:
-   `git ls-files 'packages/*/src/**' 'apps/*/src/**' | xargs -n1 dirname | sort | uniq -c`.
+   `git ls-files ':(glob)packages/*/src/**/*.ts' ':(glob)packages/*/src/**/*.tsx' ':(glob)apps/*/src/**/*.ts' ':(glob)apps/*/src/**/*.tsx' | xargs -n1 dirname | sort | uniq -c`.
    Mark each directory that no earlier ledger or report names. Those directories go first. Done when every directory has a mark: swept-before or unswept.
 
 3. **Prior art, first pass only.** Read [`prior-art.md`](prior-art.md). Survey only what it does not already answer. Done when each new idea is a ledger row: adopt, or rejected with a reason.
