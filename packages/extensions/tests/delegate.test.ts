@@ -494,6 +494,49 @@ describe("a child's completion", () => {
     12_000,
   )
 
+  // The hook and the recovery read one rule: a turn with no model step has no
+  // bill. A completion written by the hook must match the one recovery writes
+  // from the child's `TurnCompleted` receipt, or a crash changes the record.
+  it.live(
+    "a child that ends before its first model step reports no usage, as its receipt does",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* harnessWithHome(startThenEnd("pong"), {
+            config: new UserConfig({
+              agents: {
+                // The window cannot hold the child's context: the turn ends before a step.
+                [DELEGATE_AGENT_NAME]: { contextLength: 10 },
+              },
+            }),
+          })
+          yield* sendPrompt(harness, "delegate this task")
+          const snapshot = yield* afterCompletion(harness)
+          const child = yield* childOf(harness)
+          const childEnds = yield* harness.client.session.events(child).pipe(
+            Stream.takeUntil((envelope) => envelope.event._tag === "StreamSynchronized"),
+            Stream.flatMap((envelope): Stream.Stream<string> => {
+              const event = envelope.event
+              if (event._tag === "StreamEnded") return Stream.make("step")
+              if (event._tag !== "TurnCompleted") return Stream.empty
+              if (Predicate.isUndefined(event.usage)) return Stream.make("receipt")
+              return Stream.make("receipt with usage")
+            }),
+            Stream.runCollect,
+            Effect.map((items) => Array.from(items)),
+          )
+          // No step ran, and the receipt recovery reads carries no usage.
+          expect(childEnds).toEqual(["receipt"])
+          const [completion] = completionMessages(snapshot.messages)
+          const details = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ usage: Schema.optional(Schema.Unknown) }),
+          )(completion?.metadata?.details)
+          expect(Option.fromUndefinedOr(details.usage)).toEqual(Option.none())
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
   it.live("a child cannot delegate further, and gets no tool that waits on the user", () =>
     Effect.scoped(
       Effect.gen(function* () {

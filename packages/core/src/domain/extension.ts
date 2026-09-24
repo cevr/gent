@@ -383,9 +383,9 @@ export interface TurnAfterInput {
  * Provider-reported tokens of one turn.
  *
  * `known` sums the steps that reported usable counts. `complete` is false when
- * a step reported none, was cut short, or ran before a restart: `known` is then
- * a lower bound, not the turn's total. `TurnCompleted.usage` carries a total
- * only when it is complete.
+ * no model step ran, or a step reported none, was cut short, or ran before a
+ * restart: `known` is then not the turn's total. `TurnCompleted.usage` carries
+ * a total exactly when `complete` is true.
  *
  * `cacheReadTokens` and `cacheWriteTokens` are the parts of `inputTokens` the
  * provider read from and wrote to its prompt cache. `costUsd` prices the

@@ -369,6 +369,13 @@ const emptyTurnMetrics = (): TurnMetrics => ({
 })
 
 /**
+ * Whether the totals are the turn's whole spend: at least one model step ran,
+ * and every step reported usable counts. The `TurnCompleted` receipt and the
+ * `turnAfter` hooks both read this, so a record built from either agrees.
+ */
+const usageComplete = (metrics: TurnMetrics): boolean => metrics.steps > 0 && metrics.usageKnown
+
+/**
  * The ledger's totals when they are this turn's. A turn that failed before it
  * began left another turn's counts there: it spent nothing it can report.
  */
@@ -2422,9 +2429,9 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       const turnEndTime = yield* DateTime.now
       const durationMs = Math.max(0, DateTime.toEpochMillis(turnEndTime) - params.startedAtMs)
       const metrics = turnMetricsFor(yield* scope.turnLedger.total, params.messageId)
-      // Token totals are a receipt only when every step reported usable
-      // counts; a partial sum would read as the turn's true total.
-      const total = flagWhenTrue(metrics.steps > 0 && metrics.usageKnown)
+      // Token totals are a receipt only when they are complete; a partial sum
+      // would read as the turn's true total.
+      const total = flagWhenTrue(usageComplete(metrics))
       const usage = Option.map(total, () => ({
         inputTokens: metrics.inputTokens,
         outputTokens: metrics.outputTokens,
@@ -2481,7 +2488,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             cacheWriteTokens: params.metrics.cacheWriteTokens,
             costUsd: params.metrics.costUsd,
           },
-          complete: params.metrics.usageKnown,
+          complete: usageComplete(params.metrics),
         },
       })
     })
