@@ -42,6 +42,9 @@ It reads the run's own `data.db` read-only and prints:
   `content_chunks`, so a prompt sent twice, or a resume that replayed one, is
   counted rather than guessed;
 - **tool calls per session**, from `ToolCallStarted`;
+- **extension pulses per extension**, the stored `ExtensionStateChanged`
+  events grouped by `extensionId`, so a widget that refetched too often, or
+  never, has a count;
 - **`bun test` in the work dir**, pass and fail counts — the red app is the
   only real measure of whether the run did the work.
 

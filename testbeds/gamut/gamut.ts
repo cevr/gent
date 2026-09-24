@@ -458,6 +458,24 @@ const sessionTree = (
   return out
 }
 
+/**
+ * Stored `ExtensionStateChanged` events per extension id, most first: how
+ * often each extension told its client widgets to refetch during the run.
+ */
+export const extensionPulses = (
+  db: Database,
+): ReadonlyArray<{ readonly extension: string; readonly count: number }> =>
+  decodeRows(
+    Schema.Struct({ extension: Schema.String, count: Schema.Finite }),
+    db
+      .query(
+        `SELECT json_extract(event_json, '$.extensionId') AS extension, COUNT(*) AS count
+         FROM events WHERE event_tag = 'ExtensionStateChanged'
+         GROUP BY extension ORDER BY count DESC, extension`,
+      )
+      .all(),
+  )
+
 const status = async () => {
   const state = await readState()
   const dbPath = join(state.data, "data.db")
@@ -515,6 +533,10 @@ const status = async () => {
   for (const message of userMessages) {
     console.log(`  [${message.session_id.slice(-8)}] ${JSON.stringify(message.text)}`)
   }
+
+  const pulses = extensionPulses(db)
+  console.log(`\nextension pulses (stored ExtensionStateChanged, ${pulses.length} extensions):`)
+  for (const { extension, count } of pulses) console.log(`  ${extension}  ${count}`)
   db.close()
 
   console.log("\nbun test in the work dir:")
