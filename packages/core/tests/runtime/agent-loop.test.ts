@@ -9747,4 +9747,67 @@ describe("a tool call a restart cut short", () => {
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
   )
+
+  it.scopedLive(
+    "a parked mark the database refuses fails the step, so the turn does not park unmarked",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-mark-refused-")
+        const dbPath = `${tempDir}/gent.db`
+        const asking = tool({
+          id: "asking_work",
+          description: "Asks before it works",
+          params: Schema.Struct({}),
+          output: Schema.String,
+          execute: Effect.fn("asking_work")(function* () {
+            const ctx = yield* ExtensionContext
+            const decision = yield* ctx.Interaction.approve({ text: "do the work?" })
+            if (!decision.approved) return "declined"
+            return "worked"
+          }),
+        })
+        const extension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/mark-refused") },
+          scope: "builtin",
+          sourcePath: "test",
+          artifactIdentity: LoadedArtifactIdentity.make("@test/mark-refused@artifact-1"),
+          contributions: { tools: [asking] },
+        }
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+          toolCallStep("asking_work", {}),
+        ])
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [extension],
+            durableApproval: true,
+            storagePath: dbPath,
+          }),
+        )
+        const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+        // The database refuses any turn row that carries a parked mark.
+        yield* Effect.sync(() => {
+          const db = new Database(dbPath)
+          db.exec("PRAGMA busy_timeout = 2000")
+          for (const event of ["INSERT", "UPDATE"]) {
+            db.exec(
+              `CREATE TRIGGER refuse_parked_${event.toLowerCase()} BEFORE ${event} ON turn_records WHEN NEW.pending_tool_calls_json LIKE '%"parked":true%' BEGIN SELECT RAISE(ABORT, 'parked mark refused'); END`,
+            )
+          }
+          db.close()
+        })
+        yield* client.message.send({ sessionId, branchId, content: "ask first" })
+        const settled = yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (snapshot) =>
+            snapshot.runtime._tag === "Idle" &&
+            snapshot.messages.some((message) => message.role === "assistant"),
+          5_000,
+          "the turn ended instead of parking",
+        )
+        expect(settled.runtime._tag).toBe("Idle")
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
 })

@@ -58,6 +58,7 @@ import {
   Result,
   Schema,
   type Scope,
+  Semaphore,
   Stream,
 } from "effect"
 import type { ExtensionHostContext, TurnProjection } from "../domain/extension.js"
@@ -1852,6 +1853,25 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           )
       })
 
+    /**
+     * A change a restart must find, or the step does not go on: the parked
+     * marks decide whether a call runs again or is reported as interrupted.
+     * Its read and its write fail the step (as a defect) instead of logging.
+     */
+    const requireTurnRecordChange = (
+      messageId: RunningState["message"]["id"],
+      change: (current: TurnRecord) => Partial<TurnRecord>,
+    ) =>
+      turnRecordStorage.get(turnRecordKey(messageId)).pipe(
+        Effect.flatMap((current) =>
+          turnRecordStorage.put(
+            turnRecordKey(messageId),
+            turnRecordAtStep({ ...current, ...change(current) }),
+          ),
+        ),
+        Effect.orDie,
+      )
+
     /** The step opened: its assistant message committed, its calls are pending. */
     const openTurnStep = Effect.fn("AgentLoop.openTurnStep")(function* (params: {
       readonly messageId: RunningState["message"]["id"]
@@ -1869,9 +1889,11 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
     })
 
     /**
-     * The step parked on an interaction. `parked` names the calls whose run
-     * ended at the ask; they run again when the turn resumes. The whole
-     * pending list is restated, so a mark never depends on an earlier write.
+     * Calls of the step parked on an interaction. `parked` names the calls
+     * whose run ended at the ask; they run again when the turn resumes. The
+     * whole pending list is restated, so a mark never depends on an earlier
+     * write. Each call is marked when it parks, while its siblings may still
+     * run: an answer given before a restart is taken by the resumed call.
      */
     const markParkedCalls = Effect.fn("AgentLoop.markParkedCalls")(function* (params: {
       readonly messageId: RunningState["message"]["id"]
@@ -1882,7 +1904,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         if (!params.parked.has(toolCall.id)) return { id: toolCall.id, name: toolCall.name }
         return { id: toolCall.id, name: toolCall.name, parked: true }
       })
-      yield* updateTurnRecord(params.messageId, () => ({ pendingToolCalls }))
+      yield* requireTurnRecordChange(params.messageId, () => ({ pendingToolCalls }))
     })
 
     /**
@@ -1890,7 +1912,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
      * first: a restart during that run finds calls cut short, not parked.
      */
     const clearParkedCalls = (messageId: RunningState["message"]["id"]) =>
-      updateTurnRecord(messageId, (current) => ({
+      requireTurnRecordChange(messageId, (current) => ({
         pendingToolCalls: current.pendingToolCalls.map((call) => ({
           id: call.id,
           name: call.name,
@@ -2007,6 +2029,22 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         const pendingToolCalls = params.toolCalls.filter(
           (toolCall) => !knownResults.has(toolCall.id),
         )
+        // Every call that parks is marked when it parks, one write at a time,
+        // each restating every mark so far. Only a parked call runs again
+        // when the turn resumes; a call cut short without a mark does not.
+        const parked = yield* Ref.make<ReadonlySet<string>>(new Set())
+        const markLock = yield* Semaphore.make(1)
+        const onParked = (toolCallId: ToolCallId) =>
+          Ref.updateAndGet(parked, (current) => new Set([...current, toolCallId])).pipe(
+            Effect.flatMap((marked) =>
+              markParkedCalls({
+                messageId: params.messageId,
+                toolCalls: params.toolCalls,
+                parked: marked,
+              }),
+            ),
+            markLock.withPermits(1),
+          )
         const executedResults = yield* executeToolCalls({
           interruption: scope.turnInterruption.awaitInterrupt,
           hostToolBindings: params.hostToolBindings,
@@ -2016,21 +2054,10 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
           branchId: scope.branchId,
           currentTurnAgent: params.currentTurnAgent,
           toolBindings: params.toolBindings,
+          onParked,
         }).pipe(
           Effect.tapError((error) =>
             Effect.gen(function* () {
-              const completed = new Set(error.completedResults.map((result) => result.id))
-              // Every call runs to an exit, so a call with no result parked.
-              // Only a parked call runs again when the turn resumes.
-              yield* markParkedCalls({
-                messageId: params.messageId,
-                toolCalls: params.toolCalls,
-                parked: new Set(
-                  pendingToolCalls
-                    .filter((toolCall) => !completed.has(toolCall.id))
-                    .map((toolCall) => toolCall.id),
-                ),
-              })
               if (error.completedResults.length === 0) return
               const partial = new Map(localResults)
               for (const result of error.completedResults) partial.set(result.id, result)

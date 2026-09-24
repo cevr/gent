@@ -392,8 +392,10 @@ Shape:
   model work. Clients replaying `ToolCallStarted` never keep a stale running
   projection. Ambiguous side effects are not replayed. When a turn resumes, a
   pending call runs again only if its last run parked on an interaction: the
-  turn record marks it `parked` (an optional field on its pending entry) and
-  clears the mark before the call runs again. Any other pending call was cut
+  turn record marks it `parked` (an optional field on its pending entry) as
+  soon as the call parks, while its siblings may still run, so an answer given
+  before a restart is taken; the mark clears before the call runs again. A mark
+  or a clear that cannot be written fails the step. Any other pending call was cut
   short while it ran; the model reads a failed result with reason
   `Interrupted` and the call does not run again (a cell with a receipt still
   settles from it first). The binding replay rules then decide whether a

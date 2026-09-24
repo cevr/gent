@@ -1048,6 +1048,11 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
   hostToolBindings: ReadonlyMap<string, ResolvedToolCapability>
   /** Completes when the turn is interrupted; a call still running then stops. */
   interruption: Effect.Effect<void>
+  /**
+   * Records a call that parked on an interaction as soon as it parks, before
+   * its siblings finish. The call's exit waits for it.
+   */
+  onParked: (toolCallId: ToolCallId) => Effect.Effect<void>
 }) {
   const toolRunner = yield* ToolRunner
   const hostCtx = yield* CurrentExtensionHostContext
@@ -1086,6 +1091,7 @@ export const executeToolCalls = Effect.fn("TurnHelpers.executeToolCalls")(functi
           return yield* toolRunner
             .runBound(toolCallInput, Option.fromUndefinedOr(params.toolBindings.get(toolCall.name)))
             .pipe(
+              Effect.tapError(() => params.onParked(toolCallInput.toolCallId)),
               Effect.mapError(
                 (e) =>
                   new ToolInteractionPending({

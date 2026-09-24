@@ -4875,3 +4875,132 @@ describe("a resumed call that had taken its answer", () => {
     20_000,
   )
 })
+
+describe("a call answered while a sibling call still ran", () => {
+  it.scopedLive(
+    "takes its answer after a restart; only the sibling is reported as interrupted",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = yield* makeTempDirectoryScoped("gent-sibling-restart-")
+        const dbPath = `${tempDir}/gent.db`
+        const approvedRuns = MutableRef.make(0)
+        const siblingRunning = yield* Deferred.make<void>()
+        // One call asks; its sibling in the same step never finishes, so the
+        // step never ends before the process stops.
+        const extension: LoadedExtension = {
+          manifest: { id: ExtensionId.make("@test/sibling-work") },
+          scope: "builtin",
+          sourcePath: "test",
+          artifactIdentity: LoadedArtifactIdentity.make("@test/sibling-work@artifact-1"),
+          contributions: {
+            tools: [
+              tool({
+                id: "asking_work",
+                description: "Ask, then do work",
+                params: Schema.Struct({}),
+                output: Schema.String,
+                execute: Effect.fn("asking_work")(function* () {
+                  const ctx = yield* ExtensionContext
+                  const decision = yield* ctx.Interaction.approve({ text: "do the work?" })
+                  if (!decision.approved) return "declined"
+                  MutableRef.update(approvedRuns, (n) => n + 1)
+                  return "worked"
+                }),
+              }),
+              tool({
+                id: "long_sibling",
+                description: "Work that outlives the process",
+                params: Schema.Struct({}),
+                output: Schema.String,
+                execute: Effect.fn("long_sibling")(function* () {
+                  yield* Deferred.succeed(siblingRunning, void 0)
+                  return yield* Effect.never
+                }),
+              }),
+            ],
+          },
+        }
+        const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [extension],
+            durableApproval: true,
+            storagePath: dbPath,
+          })
+
+        // First process: the call asks and is answered while its sibling
+        // runs, and the process stops before the step ends.
+        const firstProvider = yield* LanguageModelLayers.sequence([
+          multiToolCallStep(
+            { toolName: "asking_work", input: {} },
+            { toolName: "long_sibling", input: {} },
+          ),
+        ])
+        const target = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layerFor(firstProvider.layer))
+            const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+            const presented = yield* client.session.events({ sessionId, branchId }).pipe(
+              Stream.filterMap((envelope) => {
+                if (envelope.event._tag === "InteractionPresented")
+                  return Result.succeed(envelope.event)
+                return Result.failVoid
+              }),
+              Stream.take(1),
+              Stream.runCollect,
+              Effect.forkScoped,
+            )
+            yield* client.message.send({ sessionId, branchId, content: "do both" })
+            const dialog = Array.from(yield* Fiber.join(presented))[0]
+            if (Predicate.isUndefined(dialog)) return yield* Effect.die("no dialog")
+            yield* Deferred.await(siblingRunning)
+            yield* client.interaction.respondInteraction({
+              sessionId,
+              branchId,
+              requestId: dialog.requestId,
+              approved: true,
+            })
+            return { sessionId, branchId }
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+        expect(MutableRef.get(approvedRuns)).toBe(0)
+
+        // Second process: the answered call takes its answer; the sibling was cut short.
+        const secondProvider = yield* LanguageModelLayers.sequence([textStep("both settled")])
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { client } = yield* createRpcClient(layerFor(secondProvider.layer))
+            const snapshot = yield* waitFor(
+              client.session.getSnapshot(target),
+              (current) =>
+                current.runtime._tag === "Idle" &&
+                current.messages.some(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.parts.some(
+                      (part) => part.type === "text" && part.text === "both settled",
+                    ),
+                ),
+              5_000,
+              "the resumed turn answered",
+            )
+            const results = snapshot.messages.flatMap((message) =>
+              message.parts.filter((part) => part.type === "tool-result"),
+            )
+            expect(results).toHaveLength(2)
+            expect(results.find((part) => part.name === "asking_work")).toMatchObject({
+              isFailure: false,
+              result: "worked",
+            })
+            expect(results.find((part) => part.name === "long_sibling")).toMatchObject({
+              isFailure: true,
+              result: { reason: "Interrupted" },
+            })
+          }).pipe(Effect.timeout("8 seconds")),
+        )
+        expect(MutableRef.get(approvedRuns)).toBe(1)
+      }),
+    20_000,
+  )
+})

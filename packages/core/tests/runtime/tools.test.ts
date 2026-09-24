@@ -215,6 +215,7 @@ describe("tool execution", () => {
         const hostEntry = yield* Effect.fromOption(currentEntry)
         const hiddenOuterTurn = yield* executeToolCalls({
           interruption: Effect.never,
+          onParked: () => Effect.void,
           assistantMessageId: MessageId.make("outer-message"),
           sessionId,
           branchId,
