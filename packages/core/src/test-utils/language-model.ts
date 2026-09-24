@@ -30,7 +30,8 @@ import {
   aiError,
   Auth,
   AuthApi,
-  CurrentResolveModelAssertion,
+  ModelResolver,
+  type ResolveModelRequest,
   finishPart,
   type LanguageModelStreamPart,
   makeLanguageModelLayer,
@@ -354,6 +355,17 @@ const signal = (reply: string, options?: { inputTokens?: number; outputTokens?: 
     return { layer, controls }
   })
 
+/**
+ * The resolve-request check a sequence's `assertRequest` steps install. Only
+ * `LanguageModelLayers.resolver` reads it; a model layer without one resolves
+ * unchecked.
+ */
+const SequenceRequestAssertion = Context.Reference<
+  Option.Option<(request: ResolveModelRequest) => Effect.Effect<void, ProviderError>>
+>("@gent/core/src/test-utils/language-model/SequenceRequestAssertion", {
+  defaultValue: () => Option.none(),
+})
+
 const sequence = (steps: ReadonlyArray<SequenceStep>) =>
   Effect.gen(function* () {
     const indexRef = yield* Ref.make(0)
@@ -405,27 +417,30 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
         }).pipe(Stream.unwrap),
       generateText: () => Effect.succeed("sequence language model"),
     })
-    const requestAssertionLayer = Layer.succeed(CurrentResolveModelAssertion, (request) =>
-      Effect.gen(function* () {
-        const idx = yield* Ref.getAndUpdate(requestIndexRef, (n) => n + 1)
-        const step = steps[idx] ?? steps[0]
-        if (Predicate.isUndefined(step?.assertRequest)) return
-        yield* Effect.try({
-          try: () => {
-            const model = String(request.modelId)
-            if (!Predicate.isUndefined(request.hints?.reasoning)) {
-              return step.assertRequest?.({ model, reasoning: request.hints.reasoning })
-            }
-            return step.assertRequest?.({ model })
-          },
-          catch: (e) =>
-            new ProviderError({
-              message: `Sequence language model: assertRequest failed at step ${idx}: ${e}`,
-              model: request.modelId,
-              cause: e,
-            }),
-        })
-      }),
+    const requestAssertionLayer = Layer.succeed(
+      SequenceRequestAssertion,
+      Option.some((request: ResolveModelRequest) =>
+        Effect.gen(function* () {
+          const idx = yield* Ref.getAndUpdate(requestIndexRef, (n) => n + 1)
+          const step = steps[idx] ?? steps[0]
+          if (Predicate.isUndefined(step?.assertRequest)) return
+          yield* Effect.try({
+            try: () => {
+              const model = String(request.modelId)
+              if (!Predicate.isUndefined(request.hints?.reasoning)) {
+                return step.assertRequest?.({ model, reasoning: request.hints.reasoning })
+              }
+              return step.assertRequest?.({ model })
+            },
+            catch: (e) =>
+              new ProviderError({
+                message: `Sequence language model: assertRequest failed at step ${idx}: ${e}`,
+                model: request.modelId,
+                cause: e,
+              }),
+          })
+        }),
+      ),
     )
     const layer = Layer.merge(languageModelLayer, requestAssertionLayer)
 
@@ -461,7 +476,28 @@ const sequence = (steps: ReadonlyArray<SequenceStep>) =>
     return { layer, controls }
   })
 
+/**
+ * A model resolver over a test model layer: it serves the one model for every
+ * request, after the sequence's `assertRequest` check when the layer has one.
+ */
+const resolver = (layer: Layer.Layer<LanguageModel.LanguageModel>): Layer.Layer<ModelResolver> =>
+  Layer.effect(
+    ModelResolver,
+    Effect.gen(function* () {
+      const model = yield* LanguageModel.LanguageModel
+      const assertRequest = yield* SequenceRequestAssertion
+      return ModelResolver.of({
+        resolve: (request) =>
+          Option.match(assertRequest, {
+            onNone: () => Effect.succeed(model),
+            onSome: (check) => check(request).pipe(Effect.as(model)),
+          }),
+      })
+    }),
+  ).pipe(Layer.provide(layer))
+
 export const LanguageModelLayers = {
+  resolver,
   testStream,
   debug: ScriptedLanguageModel.debug,
   get empty() {

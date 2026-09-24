@@ -70,6 +70,7 @@ import {
   buildIdleState,
   buildRunningState,
   followUpMessageIdForSource,
+  FollowUpQueueFull,
   type HandlerRequest,
   type LoopState,
   type MessageType,
@@ -592,7 +593,7 @@ export type LoopInbox = {
   readonly admit: (
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
-  ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
+  ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError | FollowUpQueueFull>
   /**
    * Take the next item only while nothing else holds or has reserved the loop.
    * `Some` also reserves the start for that item, as `admit` does.
@@ -739,61 +740,51 @@ export const makeLoopInbox = (
     ) {
       const startedAtMs = yield* Clock.currentTimeMillis
       if (yield* scope.turnSettled(item.message.id)) return Option.none<RunningState>()
-      return yield* commitQueueTransactionHeld<Option.Option<RunningState> | AgentLoopError>(
-        "reserved or queued follow-up",
-        (current) => {
-          if (turnAdmitted(current, item.message.id)) {
-            return { value: Option.none(), next: current, persist: false }
-          }
-          // Build the next queue first: a retry of a queued id replaces in
-          // place, so only an admission that grows the queue past the cap fails.
-          const nextQueue = appendFollowUpQueueState(current.queue, item)
-          if (
-            nextQueue.followUp.length > current.queue.followUp.length &&
-            nextQueue.followUp.length > FOLLOW_UP_QUEUE_MAX
-          ) {
-            return {
-              value: new AgentLoopError({
-                message: `Follow-up queue full (max ${FOLLOW_UP_QUEUE_MAX})`,
-              }),
-              next: current,
-              persist: false,
-            }
-          }
-
-          if (options.queueOnly) {
-            return {
-              value: Option.none(),
-              next: { ...current, queue: nextQueue },
-              persist: true,
-            }
-          }
-
-          const projectedState = projectRuntimeState(current)
-          if (projectedState._tag !== "Idle" || !canStartTurnNow(current)) {
-            return {
-              value: Option.none(),
-              next: { ...current, queue: nextQueue },
-              persist: true,
-            }
-          }
-
-          const reservedRunningState = buildRunningState(item, { startedAtMs })
+      const decided = yield* commitQueueTransactionHeld<
+        Option.Option<RunningState> | FollowUpQueueFull
+      >("reserved or queued follow-up", (current) => {
+        if (turnAdmitted(current, item.message.id)) {
+          return { value: Option.none(), next: current, persist: false }
+        }
+        // Build the next queue first: a retry of a queued id replaces in
+        // place, so only an admission that grows the queue past the cap fails.
+        const nextQueue = appendFollowUpQueueState(current.queue, item)
+        if (
+          nextQueue.followUp.length > current.queue.followUp.length &&
+          nextQueue.followUp.length > FOLLOW_UP_QUEUE_MAX
+        ) {
           return {
-            value: Option.some(reservedRunningState),
-            next: { ...current, startingState: reservedRunningState },
+            value: new FollowUpQueueFull({ max: FOLLOW_UP_QUEUE_MAX }),
+            next: current,
             persist: false,
           }
-        },
-      ).pipe(
-        Effect.filterOrFail(
-          (value): value is Option.Option<RunningState> => !Schema.is(AgentLoopError)(value),
-          (value) => {
-            if (Schema.is(AgentLoopError)(value)) return value
-            return new AgentLoopError({ message: "Queue transaction returned an invalid value" })
-          },
-        ),
-      )
+        }
+
+        if (options.queueOnly) {
+          return {
+            value: Option.none(),
+            next: { ...current, queue: nextQueue },
+            persist: true,
+          }
+        }
+
+        if (!canStartTurnNow(current)) {
+          return {
+            value: Option.none(),
+            next: { ...current, queue: nextQueue },
+            persist: true,
+          }
+        }
+
+        const reservedRunningState = buildRunningState(item, { startedAtMs })
+        return {
+          value: Option.some(reservedRunningState),
+          next: { ...current, startingState: reservedRunningState },
+          persist: false,
+        }
+      })
+      if (Schema.is(FollowUpQueueFull)(decided)) return yield* decided
+      return decided
     }, scope.queuePersistenceSemaphore.withPermits(1))
 
     const writeInitialQueue = Effect.suspend(
@@ -1132,11 +1123,13 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
     }).pipe(scope.sideMutationSemaphore.withPermits(1))
 
   /**
-   * Drops a turn that was admitted as the next run but has not started.
-   * Callers usually hold the side-mutation permit already (extension requests
-   * and hooks), so this takes none; the admission gate and the in-flight
-   * marker together prove the turn is only queued. The next queued item (if
-   * any) takes its place.
+   * Drops a turn that was admitted as the next run but has not started. It
+   * takes no side-mutation permit: a re-entrant caller (an extension request
+   * or hook) already holds it, and the `RemoveFollowUp` handler holds none.
+   * The admission gate serializes it against the worker's claim, and the
+   * in-flight marker proves the turn is only queued. The next queued item (if
+   * any) takes its place under the interrupt permit, as every other hand-over
+   * does, so an interrupt latched for the withdrawn turn never stops it.
    */
   const withdrawAdmittedTurn = Effect.fn("AgentLoop.withdrawAdmittedTurn")((messageId: MessageId) =>
     Effect.gen(function* () {
@@ -1155,7 +1148,11 @@ export const makeAgentLoopWorker = <E, R>(scope: AgentLoopWorkerContext<E, R>) =
         yield* Ref.update(scope.admissionGateRef, (gate) => ({ ...gate, withdrawn: Option.none() }))
         return false
       }
-      yield* advanceOrIdle(yield* scope.inbox.take)
+      yield* Effect.gen(function* () {
+        const nextItem = yield* scope.inbox.take
+        yield* scope.turnInterruption.beginTurn
+        yield* advanceOrIdle(nextItem)
+      }).pipe(scope.interruptSemaphore.withPermits(1))
       return true
     }),
   )
@@ -1390,7 +1387,7 @@ type AgentLoopBehavior = {
   admitAndStart: (
     item: QueuedTurnItem,
     options: { readonly queueOnly: boolean },
-  ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError>
+  ) => Effect.Effect<Option.Option<RunningState>, AgentLoopError | FollowUpQueueFull>
   interrupt: (messageId?: MessageId) => Effect.Effect<void, AgentLoopError>
   respondInteraction: (requestId: InteractionRequestId) => Effect.Effect<void, AgentLoopError>
   withSideMutation: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
@@ -1426,7 +1423,7 @@ type EnqueueFollowUp = (input: {
   metadata?: MessageMetadata
   wake?: boolean
   clientRequest?: ClientRequestGrant
-}) => Effect.Effect<void, AgentLoopError | StorageError>
+}) => Effect.Effect<void, AgentLoopError | FollowUpQueueFull | StorageError>
 
 /** Removes a queued follow-up by its source; false when absent or already running. */
 type DequeueFollowUp = (input: {
@@ -1552,7 +1549,9 @@ const makeAgentLoopBehavior = (
     const hostProvider = yield* makeExtensionHostContextProvider({
       host,
       sessionControl: {
-        queueFollowUp: (input): Effect.Effect<void, AgentLoopError | StorageError> => {
+        queueFollowUp: (
+          input,
+        ): Effect.Effect<void, AgentLoopError | FollowUpQueueFull | StorageError> => {
           // The loop's own queue is re-entrant; another branch's is its actor's.
           if (isOwnBranch(input)) return followUp.enqueue(input)
           return queueFollowUpOn(input).pipe(provideLoopClient)
@@ -2179,14 +2178,19 @@ const buildAgentLoopActorHandlers = (config: {
     const closeBehavior = (loop: AgentLoopBehavior) =>
       closeBehaviorWithHeldStartupPermit(loop).pipe(startupSemaphore.withPermits(1))
 
-    /** A failed behavior call closes the loop before the error reaches the caller. */
+    /**
+     * A loop or persistence failure closes the loop before the error reaches
+     * the caller. A refusal (`FollowUpQueueFull`) is an answer, not a broken
+     * loop: the loop and its running turn go on.
+     */
     const orCleanup =
       (handle: AgentLoopBehavior) =>
       <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
         effect.pipe(
-          Effect.catchEager((error) =>
-            closeBehavior(handle).pipe(Effect.andThen(Effect.fail(error))),
-          ),
+          Effect.catchEager((error) => {
+            if (Schema.is(FollowUpQueueFull)(error)) return Effect.fail(error)
+            return closeBehavior(handle).pipe(Effect.andThen(Effect.fail(error)))
+          }),
         )
 
     // Typed reentrant-only handle lookup. The only legitimate caller is the

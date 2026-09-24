@@ -116,7 +116,7 @@ import {
   type ProviderResolution,
 } from "../../src/domain/driver"
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
-import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
+import { ModelRegistry } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
@@ -157,7 +157,7 @@ import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/
 import { SingleRunner } from "effect/unstable/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
-import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 
 // ── ambient host context ─────────────────────────────────────────────────────
@@ -3161,6 +3161,39 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
     }).pipe(Effect.provide(fsLayer)),
   )
 
+  it.scopedLive("launched from home, the user extensions load once and only as user", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../../.."),
+        prefix: ".tmp-home-launch-",
+      })
+      const home = yield* fs.realPath(directory)
+      const userDir = path.join(home, ".gent/extensions")
+      yield* fs.makeDirectory(userDir, { recursive: true })
+      yield* fs.writeFileString(
+        path.join(userDir, "entry.ts"),
+        `import { Effect } from "effect";
+export default { manifest: { id: "home-user" }, setup: Effect.void };`,
+      )
+      const loadedAs = (result: Effect.Success<ReturnType<typeof discoverExtensions>>) =>
+        result.loaded.map((entry) => `${entry.scope}:${entry.extension.manifest.id}`)
+      // Untrusted (the default): no "not trusted" failure for the user's own files.
+      const untrusted = yield* discoverExtensions({ userDir, projectDir: userDir })
+      expect(loadedAs(untrusted)).toEqual(["user:home-user"])
+      expect(untrusted.failed).toEqual([])
+      // Trusted: still one copy, as user.
+      yield* fs.writeFileString(
+        path.join(userDir, "../config.json"),
+        encodeJson({ trustedProjects: [home] }),
+      )
+      const trusted = yield* discoverExtensions({ userDir, projectDir: userDir })
+      expect(loadedAs(trusted)).toEqual(["user:home-user"])
+      expect(trusted.failed).toEqual([])
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
   it.live("preserves the explicit loaded artifact identity", () =>
     Effect.gen(function* () {
       const artifactIdentity = LoadedArtifactIdentity.make("@gent/test-loader@artifact-1")
@@ -4597,7 +4630,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     storageLayer,
     clusterRunnerLayer,
     providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
+    LanguageModelLayers.resolver(providerLayer),
     eventStoreLayer,
     recorderLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
@@ -4611,7 +4644,10 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live({ baseSections: [] }), baseDeps)
+  const sessionRuntimeLayer = Layer.provide(
+    Layer.provideMerge(AgentLoopLiveActor({ baseSections: [] }), SessionRuntime.Client),
+    baseDeps,
+  )
   const sessionMutationsLayer = Layer.provide(
     SessionMutationsLive,
     Layer.mergeAll(baseDeps, sessionRuntimeLayer),

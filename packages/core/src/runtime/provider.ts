@@ -436,19 +436,15 @@ const envCredentialSet = (name: Option.Option<string>): Effect.Effect<boolean> =
 
 /**
  * Every registered model driver with its stored auth. A driver is `required`
- * when one of `modelIds` routes to it; the caller resolves those models for
- * the session it asks about (its registry, config, and model override).
+ * when it is one of `requiredDriverIds`: the drivers the caller's turns route
+ * through, resolved as the turn resolves them (`effectiveModelDriver`).
  */
 export const listAuthProviders = Effect.fn("listAuthProviders")(function* (
-  modelIds: ReadonlyArray<ModelId>,
+  requiredDriverIds: ReadonlyArray<string>,
 ) {
   const auth = yield* Auth
   const registry = yield* ExtensionRegistry
-  const required = new Set<string>()
-  for (const modelId of modelIds) {
-    const provider = parseModelProvider(modelId)
-    if (Option.isSome(provider)) required.add(provider.value)
-  }
+  const required = new Set(requiredDriverIds)
   const providers: AuthProviderInfo[] = []
   for (const driver of registry.getResolved().modelDrivers.values()) {
     const provider = ProviderId.make(driver.id)
@@ -682,14 +678,6 @@ export interface ResolveModelRequest {
   readonly driverId?: string
 }
 
-export const CurrentResolveModelAssertion = Context.Reference<
-  // oxlint-disable-next-line effect/noNullish -- The optional assertion is test-only instrumentation at this service boundary.
-  ((request: ResolveModelRequest) => Effect.Effect<void, ProviderError>) | undefined
->("@gent/core/src/runtime/provider/CurrentResolveModelAssertion", {
-  // oxlint-disable-next-line effect/noNullish -- The optional assertion is test-only instrumentation.
-  defaultValue: () => undefined,
-})
-
 interface ModelResolverService {
   readonly resolve: (
     request: ResolveModelRequest,
@@ -776,14 +764,7 @@ export class ModelResolver extends Context.Service<ModelResolver, ModelResolverS
       ModelResolver,
       Effect.gen(function* () {
         const model = yield* LanguageModel.LanguageModel
-        const assertRequest = yield* CurrentResolveModelAssertion
-        return ModelResolver.of({
-          resolve: (request) =>
-            Effect.gen(function* () {
-              if (!Predicate.isUndefined(assertRequest)) yield* assertRequest(request)
-              return model
-            }),
-        })
+        return ModelResolver.of({ resolve: () => Effect.succeed(model) })
       }),
     ).pipe(Layer.provide(layer))
 

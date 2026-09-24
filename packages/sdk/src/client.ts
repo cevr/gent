@@ -116,7 +116,7 @@ interface GentClientOptions {
 const connectWs = (
   url: string,
   headers = workspaceHeadersForCwd(process.cwd()),
-): Effect.Effect<GentClientBundle<Scope.Scope>, GentConnectionError, Scope.Scope> =>
+): Effect.Effect<GentClientBundle<Scope.Scope>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope
     let generation = 0

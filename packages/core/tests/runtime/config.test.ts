@@ -25,6 +25,7 @@ import {
 import {
   ConfigService,
   isProjectExtensionDirectoryTrusted,
+  readDisabledExtensions,
   RuntimeEnvironment,
   UserConfig,
 } from "../../src/runtime/config"
@@ -359,6 +360,33 @@ describe("user configuration", () => {
           expect(yield* fs.readFileString(userConfigPath)).toEqual(broken)
         }).pipe(Effect.provide(live))
       }).pipe(Effect.provide(BunServices.layer)),
+    )
+
+    it.scopedLive(
+      "launched from home, the user config is read once, not again as the project's",
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const home = yield* fs.makeTempDirectoryScoped()
+          const userConfigPath = path.join(home, ConfigService.CONFIG_RELATIVE)
+          yield* fs.makeDirectory(path.dirname(userConfigPath), { recursive: true })
+          yield* fs.writeFileString(userConfigPath, '{"disabledExtensions":["@x/off"]}')
+          const live = ConfigService.Live.pipe(
+            Layer.provide(RuntimeEnvironment.Live({ cwd: home, home })),
+            Layer.provide(BunServices.layer),
+          )
+          yield* Effect.gen(function* () {
+            const cfg = yield* ConfigService
+            expect((yield* cfg.getFresh(home)).config.disabledExtensions).toEqual(["@x/off"])
+            // A broken user file is one failure: the project scope is not a second copy of it.
+            yield* fs.writeFileString(userConfigPath, "{broken")
+            const fresh = yield* cfg.getFresh(home)
+            expect(fresh.failures.map((failure) => failure.path)).toEqual([userConfigPath])
+          }).pipe(Effect.provide(live))
+          yield* fs.writeFileString(userConfigPath, '{"disabledExtensions":["@x/off"]}')
+          expect([...(yield* readDisabledExtensions({ home, cwd: home }))]).toEqual(["@x/off"])
+        }).pipe(Effect.provide(BunServices.layer)),
     )
 
     /** A live service over `home`, with `fsLayer` in place of the real file system. */

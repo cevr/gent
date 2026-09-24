@@ -25,7 +25,6 @@ import {
   type GentRpcClient,
   GentRpcs,
   makeNamespacedClient,
-  SessionRpcs,
   SlashCommandInfo,
 } from "../../src/server/rpc"
 import {
@@ -115,10 +114,9 @@ import { type LogEvent, WideEventLogger } from "effect-wide-event"
 // ── rpc contract schemas ────────────────────────────────────────────────────
 
 const decodeSuccess = (key: string, value: Readonly<Record<string, string>>): unknown => {
-  const group = SessionRpcs
-  const rpc = group.requests.get(key)
+  const rpc = GentRpcs.requests.get(key)
   if (Predicate.isUndefined(rpc)) return Effect.runSync(Effect.die(new Error(`Missing RPC ${key}`)))
-  return Schema.decodeUnknownSync(rpc.successSchema)(value)
+  return Schema.decodeSync(rpc.successSchema)(value)
 }
 
 describe("RPC contract schemas", () => {
@@ -583,6 +581,31 @@ describe("auth.listProviders", () => {
         expect(
           required(yield* client.auth.listProviders({ agentName: AgentName.make("helper") })),
         ).toEqual(["anthropic", "otherprov"])
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  it.live("a driver override decides the required driver, not the model prefix", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const configContext = yield* Layer.build(ConfigService.Test())
+        const { client } = yield* createRpcClient(
+          createE2ELayer({
+            ...e2ePreset,
+            providerLayer,
+            extensions: [authDriversExtension],
+            configServiceLayer: Layer.succeedContext(configContext),
+          }),
+        )
+        const session = yield* client.session.create({ cwd: process.cwd() })
+        // The model stays `anthropic/…`; the turn routes through `otherprov`.
+        yield* client.driver.set({ agentName: DEFAULT_AGENT_NAME, driver: { id: "otherprov" } })
+        yield* client.auth.setKey({ provider: "otherprov", key: "sk-other" })
+        const providers = yield* client.auth.listProviders({ sessionId: session.sessionId })
+        expect(
+          providers.filter((entry) => entry.required).map((entry) => String(entry.provider)),
+        ).toEqual(["otherprov"])
+        expect(providers.filter((entry) => entry.required && !entry.hasKey)).toEqual([])
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
@@ -3452,6 +3475,40 @@ describe("extension command RPCs", () => {
         }).pipe(Effect.timeout("4 seconds")),
       )
     }),
+  )
+  it.live("the settings wide event records the stored settings, not the change", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const wideEvents = MutableRef.make<Array<LogEvent>>([])
+        const minimumLogLevel = Layer.effectContext(
+          Effect.succeed(Context.make(MinimumLogLevel, "Info")),
+        )
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensionInputs: [],
+          cwd: "/tmp/gent-settings-wide-event",
+          extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
+        })
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(ModelId.make("anthropic/kept-model")),
+        })
+        // This change leaves the model out; the stored model is what the event names.
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some("high") })
+        const settingsEvents = MutableRef.get(wideEvents).filter(
+          (event) =>
+            event.annotations["service"] === "rpc" &&
+            event.annotations["method"] === "session.updateSettings",
+        )
+        expect(settingsEvents).toHaveLength(2)
+        const last = settingsEvents[1]?.annotations
+        expect(last?.["sessionId"]).toBe(sessionId)
+        expect(last?.["modelId"]).toBe("anthropic/kept-model")
+        expect(last?.["reasoningLevel"]).toBe("high")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
   )
   it.live("a turn emits one agent-loop wide event with its session envelope", () =>
     Effect.scoped(

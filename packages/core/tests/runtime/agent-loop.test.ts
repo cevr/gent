@@ -33,6 +33,7 @@ import {
 } from "../../src/domain/ids"
 import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import {
+  AgentLoopLiveActor,
   AgentLoopSessionGovernance,
   type AgentLoopState,
   buildInitialAgentLoopState,
@@ -200,6 +201,7 @@ import {
   buildIdleState,
   buildRunningState,
   entityIdOf,
+  type FollowUpQueueFull,
   type LoopState,
   type RunningState,
   toWaitingForInteractionState,
@@ -2731,6 +2733,28 @@ describe("admitted turn withdrawal", () => {
     }),
   )
 
+  it.live("an interrupt aimed at a withdrawn admission does not stop the next turn", () =>
+    Effect.gen(function* () {
+      const first = queuedItem("first")
+      const second = queuedItem("second")
+      const harness = yield* makeHarness(admitted(first, [second]), { settles: true })
+      // The user stops `first` before the worker claims it, then withdraws it.
+      yield* harness.worker.interrupt(first.message.id)
+      expect(yield* harness.worker.withdrawAdmittedTurn(first.message.id)).toBe(true)
+      const loop = yield* Effect.forkChild(harness.worker.turnWorkerLoop)
+      const ran = yield* waitForOption(
+        () =>
+          Ref.get(harness.interruptedTurns).pipe(
+            Effect.map(Option.liftPredicate((all) => all.length === 1)),
+          ),
+        "the promoted follow-up ran",
+      )
+      expect(yield* Ref.get(harness.ranTurns)).toEqual(["second"])
+      expect(ran).toEqual([false])
+      yield* Fiber.interrupt(loop)
+    }).pipe(Effect.timeout("4 seconds")),
+  )
+
   it.effect("a promoted follow-up can be withdrawn in turn", () =>
     Effect.gen(function* () {
       const first = queuedItem("first")
@@ -4722,7 +4746,7 @@ const makeRuntimeLayer = (
   )
   const approvalLayer = ApprovalService.Live.pipe(Layer.provide(baseDeps))
   return Layer.provideMerge(
-    SessionRuntime.Live({ baseSections: [] }),
+    Layer.provideMerge(AgentLoopLiveActor({ baseSections: [] }), SessionRuntime.Client),
     Layer.mergeAll(baseDeps, approvalLayer, ProcessLocalToolReplay.Live),
   )
 }
@@ -4885,6 +4909,59 @@ describe("a submit whose caller is interrupted before its turn starts", () => {
         expect(messages.filter((message) => message.id === interrupted.id)).toHaveLength(1)
         expect(streamCalls).toBe(1)
       }).pipe(Effect.timeout("4 seconds"), Effect.provide(layer))
+    }),
+  )
+})
+
+describe("a full follow-up queue", () => {
+  it.scopedLive("refuses the next submit and leaves the running turn streaming", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("queue-full-session")
+      const branchId = BranchId.make("queue-full-branch")
+      const firstStarted = yield* Deferred.make<void>()
+      const releaseFirst = yield* Deferred.make<void>()
+      const firstInterrupted = yield* Ref.make(false)
+      const calls = yield* Ref.make(0)
+      const providerLayer = LanguageModelLayers.testStream(() =>
+        Effect.gen(function* () {
+          const call = yield* Ref.getAndUpdate(calls, (n) => n + 1)
+          if (call === 0) {
+            yield* Deferred.succeed(firstStarted, void 0)
+            yield* Deferred.await(releaseFirst).pipe(
+              Effect.onInterrupt(() => Ref.set(firstInterrupted, true)),
+            )
+          }
+          return Stream.fromIterable([
+            textDeltaPart(`turn ${call}`),
+            finishPart({ finishReason: "stop" }),
+          ] satisfies LanguageModelStreamPart[])
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const agentLoop = yield* makeAgentLoopService
+        const submit = (text: string) =>
+          submitAgentLoop(agentLoop, makeMessage(sessionId, branchId, text))
+        yield* submit("running")
+        yield* Deferred.await(firstStarted)
+        for (let i = 1; i <= 10; i++) yield* submit(`queued-${i}`)
+        const refused = yield* Effect.flip(submit("one-too-many"))
+        expect(refused._tag).toBe("FollowUpQueueFull")
+        // The refusal leaves the loop and its running turn alone.
+        expect(yield* Ref.get(firstInterrupted)).toBe(false)
+        expect((yield* agentLoop.getQueue({ sessionId, branchId })).followUp).toHaveLength(10)
+        yield* Deferred.succeed(releaseFirst, void 0)
+        yield* waitForOption(
+          () => Ref.get(calls).pipe(Effect.map(Option.liftPredicate((n) => n === 11))),
+          "every admitted turn ran",
+        )
+        yield* waitForPhase(agentLoop, { sessionId, branchId }, "Idle")
+        // The running turn streamed once: recovery never restarted it.
+        expect(yield* Ref.get(calls)).toBe(11)
+        expect(yield* Ref.get(firstInterrupted)).toBe(false)
+      }).pipe(
+        Effect.timeout("8 seconds"),
+        Effect.provide(actorTestRoot({ provider: providerLayer })),
+      )
     }),
   )
 })
@@ -5256,9 +5333,11 @@ describe("wake admission", () => {
    */
   const withInbox = <A>(
     body: (inbox: {
-      readonly admit: (item: QueuedTurnItem) => Effect.Effect<unknown, AgentLoopError>
+      readonly admit: (
+        item: QueuedTurnItem,
+      ) => Effect.Effect<unknown, AgentLoopError | FollowUpQueueFull>
       readonly queue: Effect.Effect<LoopQueueStateType>
-    }) => Effect.Effect<A, AgentLoopError>,
+    }) => Effect.Effect<A, AgentLoopError | FollowUpQueueFull>,
   ) =>
     Effect.gen(function* () {
       const loopRef = yield* TxSubscriptionRef.make<AgentLoopState>(
@@ -5335,7 +5414,9 @@ describe("wake admission", () => {
   )
 
   const fillFollowUpQueue = (inbox: {
-    readonly admit: (item: QueuedTurnItem) => Effect.Effect<unknown, AgentLoopError>
+    readonly admit: (
+      item: QueuedTurnItem,
+    ) => Effect.Effect<unknown, AgentLoopError | FollowUpQueueFull>
   }) =>
     Effect.forEach(
       Array.from({ length: 10 }, (_, index) => index),
@@ -5387,11 +5468,11 @@ describe("wake admission", () => {
         yield* fillFollowUpQueue(inbox)
         const rejected = yield* inbox.admit({ message: queuedMessage("full-10", "item 10") }).pipe(
           Effect.match({
-            onFailure: (error) => Option.some(error.message),
+            onFailure: (error) => Option.some(error._tag),
             onSuccess: () => Option.none(),
           }),
         )
-        expect(rejected).toEqual(Option.some("Follow-up queue full (max 10)"))
+        expect(rejected).toEqual(Option.some("FollowUpQueueFull"))
         expect((yield* inbox.queue).followUp.map((item) => String(item.message.id))).toEqual(
           Array.from({ length: 10 }, (_, index) => `full-${index}`),
         )

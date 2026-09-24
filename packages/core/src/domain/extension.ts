@@ -1230,7 +1230,7 @@ export interface SessionMutationsService {
     input: SwitchBranchInput,
   ) => Effect.Effect<void, SessionMutationError>
   readonly deleteSession: (sessionId: SessionId) => Effect.Effect<void, SessionMutationError>
-  /** Replace the session's settings; the reply is what was stored. */
+  /** Merge a settings change into the stored settings; the reply is what was stored. */
   readonly updateSettings: (
     input: UpdateSessionSettingsInput,
   ) => Effect.Effect<SessionSettings, SessionMutationError>

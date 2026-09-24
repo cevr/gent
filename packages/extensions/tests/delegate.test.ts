@@ -20,7 +20,7 @@ import {
   readChildCompletionHeadline,
   StartChild,
 } from "../src/delegate.js"
-import { DEFAULT_AGENT_NAME, RequestId } from "@gent/core/extensions/api"
+import { RequestId } from "@gent/core/extensions/api"
 import {
   ApprovalService,
   createE2ELayer,
@@ -40,7 +40,14 @@ import {
   RuntimeEnvironment,
   UserConfig,
 } from "@gent/core/test-utils"
-import { BranchId, ModelId, SessionId, SteerCommand, ToolCallId } from "@gent/core/protocol"
+import {
+  BranchId,
+  DEFAULT_AGENT_NAME,
+  ModelId,
+  SessionId,
+  SteerCommand,
+  ToolCallId,
+} from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
 import type * as Prompt from "effect/unstable/ai/Prompt"
