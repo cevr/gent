@@ -350,7 +350,8 @@ describe("classifyBashCommand", () => {
       "cat README.md; cp ~/.aws/credentials /tmp/x",
       "ls && cp ~/.aws/credentials /tmp/x",
       "ls || mv .env /tmp/x",
-      "ls | xargs -I{} cp {} ~/.ssh/id_rsa",
+      // Without `--`, input before it may be a flag, and asks as destructive.
+      "ls | xargs -I{} cp -- {} ~/.ssh/id_rsa",
       "cat README.md\ncp ~/.aws/credentials /tmp/x",
       "cat $(cp ~/.aws/credentials /tmp/x)",
       "cat `cp ~/.aws/credentials /tmp/x`",
@@ -549,6 +550,25 @@ describe("classifyBashCommand", () => {
       "psql -c 'DROP TABLE users'",
       "sqlite3 app.db <<EOF\ntruncate table jobs;\nEOF",
       "echo 'drop table users' | mysql app",
+      "truncate -s 0 /nonexistent/gent-probe-x",
+      "shred -u /nonexistent/gent-probe-x",
+      "rsync -a --delete /nonexistent/gent-probe-a/ /nonexistent/gent-probe-x/",
+      "rsync -a --delete-after /nonexistent/gent-probe-a/ /nonexistent/gent-probe-x/",
+      "rsync -e 'rm -rf /nonexistent/gent-probe-x' a b:c",
+      "rimraf /nonexistent/gent-probe-x",
+      "npx rimraf /nonexistent/gent-probe-x",
+      "bunx rimraf /nonexistent/gent-probe-x",
+      "dropdb gent_probe_x",
+      "crontab -r",
+      "crontab /nonexistent/gent-probe-x",
+      "docker volume rm gent_probe_x",
+      "docker volume prune -f",
+      "docker system prune -af",
+      "git checkout-index -f -a",
+      "git read-tree -u --reset HEAD",
+      "git read-tree --reset HEAD",
+      "git update-ref -d refs/heads/gent-probe-x",
+      "git reflog expire --expire=now --all",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -564,6 +584,13 @@ describe("classifyBashCommand", () => {
       "kill 123",
       "grep -rn 'DROP TABLE' migrations",
       "git commit -m 'drop table users'",
+      "rsync -a /nonexistent/gent-probe-a/ /nonexistent/gent-probe-x/",
+      "crontab -l",
+      "docker volume ls",
+      "git checkout-index -a",
+      "git read-tree HEAD",
+      "git reflog",
+      "git reflog show main",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -707,6 +734,25 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand("git config alias.st status").level).toBe("safe")
   })
 
+  // bash -c expands aliases once `expand_aliases` is set, and `hash -p`
+  // binds a command name to another program: `ls` may run rm.
+  test("a shell alias value is a script, and hash -p asks", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      `shopt -s expand_aliases\nalias w='rm -rf ${x}'\nw`,
+      "alias w='git reset --hard'",
+      `alias -g W='rm -rf ${x}'`,
+      `builtin alias w='rm -rf ${x}'`,
+      'alias w="$CMD"',
+      `hash -p /bin/rm ls; ls -rf ${x}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of ["alias ll='ls -la'", "alias", "alias -p", "hash", "hash -r"]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("a shell script the guard cannot read takes its input as the script, or asks", () => {
     for (const command of [
       "echo 'git reset --hard' | xargs -I{} sh -c '{}'",
@@ -828,6 +874,57 @@ describe("classifyBashCommand", () => {
     }
     expect(classifyBashCommand("bash script.sh").level).toBe("safe")
     expect(classifyBashCommand("diff <(ls a) <(ls b)").level).toBe("safe")
+  })
+
+  // A risk reads the flags as written. A word known only at run time may be
+  // one: an unquoted expansion splits into more words, `"$@"` passes on a
+  // function's or `set --`'s arguments, and a quoted `"$F"` stays one word
+  // that the command still reads as `-rf`. Only after `--`, or as the value
+  // of an option the table names, is such a word no flag.
+  test("a risky command with options known only at run time asks", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      `F='-rf ${x}'; rm $F`,
+      `rm $FLAGS ${x}`,
+      `rm \${FLAGS} ${x}`,
+      `rm $(printf -- -rf) ${x}`,
+      "git reset $MODE",
+      `set -- -rf ${x}; rm "$@"`,
+      `set -- -rf ${x}; rm $*`,
+      `wipe() { rm "$@"; }; wipe -rf ${x}`,
+      'r() { git reset "$@"; }; r --hard',
+      `a=(-rf ${x}); rm "\${a[@]}"`,
+      `F=-rf; rm "$F" ${x}`,
+      'M=--hard; git reset "$M"',
+      `rm "$(printf -- -rf)" ${x}`,
+      // An unquoted option value still splits.
+      `cp -t $D ${x}`,
+      // Accepted over-asks: any dynamic operand may be a flag too.
+      "kill $PID",
+      "cp $a $b",
+      'rm "$f"',
+      'kill "$PID"',
+      'git checkout "$b"',
+      `psql "$DATABASE_URL" -c 'select 1'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "rm -- $TMP",
+      'rm -- "$f"',
+      "ls $DIR",
+      'ls "$DIR"',
+      "echo $HOME",
+      // The value of an option the table names.
+      `psql -d "$DB" -c 'select 1'`,
+      'git -C "$dir" status',
+      `cp -t "$D" ${x}`,
+      `cp --target-directory="$D" ${x}`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    // A named option value is still a path the secret-file check reads.
+    expect(classifyBashCommand(`cp -t ${x}/.ssh ${x}`).level).toBe("sensitive")
   })
 
   test("quoted text and heredoc notes that describe git work are data", () => {
@@ -1297,7 +1394,7 @@ describe("classifyBashCommand", () => {
     }
     expect(classifyBashCommand("echo .env | xargs rm").level).toBe("sensitive")
     for (const command of [
-      "find . -name '*.tmp' | xargs rm",
+      "find . -name '*.tmp' | xargs rm --",
       "echo a b | xargs rm",
       "echo 123 | xargs kill",
       "echo a | xargs wc -l",
@@ -1370,11 +1467,22 @@ describe("classifyBashCommand", () => {
       `${u} xargs git checkout`,
       "parallel :::: /nonexistent/gent-probe-x",
       "parallel git :::: /nonexistent/gent-probe-x",
+      // Input that lands before `--` may be a flag of a command with risks.
+      `${u} xargs rm`,
+      "xargs rm < /nonexistent/gent-probe-x",
+      "xargs -a /nonexistent/gent-probe-x rm",
+      `${u} xargs -I{} rm {}`,
+      `${u} xargs env rm`,
+      `${u} xargs kill`,
+      `${u} parallel rm`,
+      // Accepted over-ask: a file name may start with `-`.
+      "find . -name '*.tmp' | xargs rm",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
-      `${u} xargs rm`,
+      `${u} xargs rm --`,
+      `${u} xargs -I{} rm -- {}`,
       `${u} xargs env grep x`,
       `${u} xargs git add`,
       `${u} xargs -I{} git -C {} status`,
@@ -1734,9 +1842,13 @@ describe("classifyBashCommand", () => {
       `pnpm --gent-probe-unknown ${x} exec -c '${r}'`,
       // Input the guard cannot read names the command npm runs.
       `cat ${x} | xargs npm --loglevel silent exec --`,
+      // Accepted over-ask: runners and parents share one rule, so any later
+      // word after an unnamed option may be the subcommand.
+      "git --no-pager log --format=%H main stash",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
+    expect(classifyBashCommand("docker --debug run alpine push").level).toBe("external")
     for (const command of [
       "git --no-pager status",
       "git --no-pager log --oneline -5",
@@ -1885,6 +1997,66 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  // Each statement must start as a read: an UPDATE with no WHERE, a REPLACE,
+  // a COPY TO a file or an ALTER loses data with no trigger word. The text
+  // is split at `;` and new lines only, so a `;` in a string asks too.
+  test("a SQL statement that does not start as a read asks", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      "psql -c 'UPDATE gent_probe_x SET a = NULL'",
+      `sqlite3 ${x}.db 'UPDATE gent_probe_x SET a = 0'`,
+      "mysql -e 'REPLACE INTO gent_probe_x VALUES (1)'",
+      `psql -c "COPY gent_probe_x TO '${x}'"`,
+      `duckdb -c "COPY (SELECT 1) TO '${x}.csv'"`,
+      "psql -c 'ALTER TABLE gent_probe_x RENAME TO y'",
+      `sqlite3 ${x}.db "VACUUM INTO '${x}'"`,
+      "psql -c 'select 1; update gent_probe_x set a = 1'",
+      "echo 'UPDATE gent_probe_x SET a = 1' | psql",
+      "psql <<'EOF'\nUPDATE gent_probe_x SET a = 1;\nEOF",
+      // A read start that writes all the same.
+      "psql -c 'WITH x AS (UPDATE gent_probe_x SET a = 1 RETURNING *) SELECT 1'",
+      "psql -c 'EXPLAIN ANALYZE UPDATE gent_probe_x SET a = 1'",
+      "psql -c 'INSERT INTO gent_probe_x VALUES (1) ON CONFLICT (a) DO UPDATE SET a = 2'",
+      `sqlite3 ${x}.db 'INSERT OR REPLACE INTO gent_probe_x VALUES (1)'`,
+      `mysql -e "SELECT 1 INTO OUTFILE '${x}'"`,
+      `psql -c "SELECT lo_export(1, '${x}')"`,
+      // Large objects, server files, other sessions and other databases.
+      "psql -c \"SELECT lo_put(24528, 0, decode('00', 'hex'))\"",
+      "psql -c \"SELECT lo_from_bytea(24528, decode('00', 'hex'))\"",
+      "psql -c 'SELECT lo_truncate(0, 0)'",
+      `psql -c "SELECT lo_import('${x}', 24528)"`,
+      "psql -c \"SELECT lowrite(0, decode('00', 'hex'))\"",
+      `psql -c "SELECT pg_file_write('${x}', 'a', false)"`,
+      `psql -c "SELECT pg_file_unlink('${x}')"`,
+      "psql -c 'SELECT pg_terminate_backend(1)'",
+      "psql -c \"SELECT dblink_exec('dbname=gent_probe_x', 'VACUUM')\"",
+      // Accepted over-asks: a new table, a `;` inside a string, a leading comment.
+      "psql -c 'CREATE TABLE gent_probe_x (a int)'",
+      `psql -c "SELECT 'a;b'"`,
+      "psql -c '-- note\nSELECT 1'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "psql -c 'SELECT a FROM gent_probe_x; SELECT 2;'",
+      "psql -c '(SELECT 1) UNION (SELECT 2)'",
+      "psql -c 'WITH x AS (SELECT 1) SELECT * FROM x'",
+      "psql -c 'EXPLAIN SELECT 1'",
+      "psql -c 'select replace(a, 1, 2) from gent_probe_x'",
+      "psql -c \"select set_config('search_path', 'a', false)\"",
+      "psql -c '\\d gent_probe_x'",
+      "mysql -e 'DESCRIBE gent_probe_x'",
+      "mysql -e 'use app; show tables'",
+      `sqlite3 ${x}.db 'PRAGMA table_info(gent_probe_x)'`,
+      "psql -c 'BEGIN; INSERT INTO gent_probe_x VALUES (1); COMMIT'",
+      "psql -v n=1 -c 'select :n'",
+      `sqlite3 ${x}.db`,
+      `sqlite3 -vfs unix ${x}.db 'select 1'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("SQL from a file or unreadable input, and SQL that builds and runs SQL, asks", () => {
     const f = "/nonexistent/gent-probe-x/q.sql"
     const db = "/nonexistent/gent-probe-x/db"
@@ -1930,7 +2102,7 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  test("SQL known only at run time asks; a quoted dynamic connection name does not", () => {
+  test("SQL known only at run time asks; a quoted dynamic option value does not", () => {
     const x = "/nonexistent/gent-probe-x"
     for (const command of [
       `Q='DELETE FROM gent_probe_x'; psql -c "$Q"`,
@@ -1956,18 +2128,22 @@ describe("classifyBashCommand", () => {
       "mysql -D $ARGS",
       "mysql $ARGS",
       "sqlite3 $ARGS",
+      // A quoted dynamic operand stays one word, but it may be an option
+      // (`-f file`, `-cDROP …`): only a named option's value is a name.
+      `psql "$DATABASE_URL" -c 'select 1'`,
+      `mysql -h "$H" -u "$U" -p"$P" "$DB" -e 'SHOW TABLES'`,
+      `sqlite3 "$DB" 'select 1'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
       `psql -h "$PGHOST" -U "$PGUSER" -d "$PGDATABASE" -c 'select 1'`,
       `psql -d "$DB" -c 'select 1'`,
-      `psql "$DATABASE_URL" -c 'select 1'`,
+      `psql --dbname="$DATABASE_URL" -c 'select 1'`,
       `psql --host="$H" --dbname="$DB" -c 'select 1'`,
       `psql -d "$(cat ${x})" -c 'select 1'`,
-      `mysql -h "$H" -u "$U" -p"$P" "$DB" -e 'SHOW TABLES'`,
+      `mysql -h "$H" -u "$U" -p"$P" -D "$DB" -e 'SHOW TABLES'`,
       `mysql -D "$DB" -e 'select 1'`,
-      `sqlite3 "$DB" 'select 1'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
@@ -2022,7 +2198,7 @@ describe("classifyBashCommand", () => {
       "psql -c '\\x' -c 'select 1'",
       "psql -c '\\timing on' -c 'select 1'",
       "psql -F '\\t' -c 'select 1'",
-      `psql -F , app "$PGUSER" -c 'select 1'`,
+      `psql -F , app -U "$PGUSER" -c 'select 1'`,
       "psql -v n=1 -c 'select :n'",
       "mysql -e 'use app; select 1'",
       "mysql -e 'select 1\\G'",

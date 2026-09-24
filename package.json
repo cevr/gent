@@ -26,7 +26,6 @@
   },
   "devDependencies": {
     "@effect/platform-bun": "catalog:",
-    "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@effect/tsgo": "0.41.0",
     "@oxlint/plugins": "^1.82.0",
@@ -54,7 +53,6 @@
   "catalog": {
     "effect": "4.0.0-rc.112",
     "@effect/platform-bun": "4.0.0-rc.112",
-    "@effect/sql-pg": "4.0.0-rc.112",
     "@effect/sql-sqlite-bun": "4.0.0-rc.112",
     "effect-encore": "^0.31.0",
     "effect-wide-event": "0.3.0",

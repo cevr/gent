@@ -163,6 +163,7 @@ const installedOf = Effect.fn("Tooling.installedOf")(function* (
     ...packageJson.dependencies,
     ...packageJson.devDependencies,
     ...packageJson.optionalDependencies,
+    ...packageJson.peerDependencies,
   })
   const installed = new Map<string, InstalledDependency>()
   for (const name of names) {
@@ -184,7 +185,8 @@ const scriptsOf = (packageJson: PackageJson): ReadonlyArray<string> =>
 /**
  * One scope per manifest. A workspace's dependencies serve its own directory
  * and scripts. The root's serve the whole tree: every package script, the
- * hook and the CI steps can run them, and it installs every workspace's peers.
+ * hook and the CI steps can run them, and it installs the peers the
+ * workspaces use.
  */
 const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
   root: ManifestRead,
@@ -197,7 +199,6 @@ const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
   const useTexts = new Map<string, string>(
     reads.flatMap(Option.toArray).map(({ file, text }) => [file, text]),
   )
-  const workspaces = [...manifests]
   const rootScope: DependencyScope = {
     manifest: ROOT_MANIFEST,
     manifestText: root.text,
@@ -207,12 +208,9 @@ const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
       ...[root, ...manifests.values()].flatMap((read) => scriptsOf(read.value)),
       ...[...useTexts].filter(([file]) => /\.ya?ml$/.test(file)).map(([, text]) => text),
     ],
-    providedPeers: new Set(
-      workspaces.flatMap(([, read]) => Object.keys(read.value.peerDependencies ?? {})),
-    ),
     installed: yield* installedOf([""], root.value),
   }
-  const workspaceScopes = yield* Effect.forEach(workspaces, ([manifest, read]) => {
+  const workspaceScopes = yield* Effect.forEach([...manifests], ([manifest, read]) => {
     const directory = manifest.slice(0, -"package.json".length)
     return Effect.map(installedOf([directory, ""], read.value), (installed): DependencyScope => ({
       manifest,
@@ -220,11 +218,10 @@ const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
       packageJson: read.value,
       files: new Map([...useTexts].filter(([file]) => file.startsWith(directory))),
       commands: scriptsOf(read.value),
-      providedPeers: new Set(),
       installed,
     }))
   })
-  return [rootScope, ...workspaceScopes]
+  return { root: rootScope, workspaces: workspaceScopes }
 })
 
 /** The findings that read every manifest and every workspace tsconfig. */

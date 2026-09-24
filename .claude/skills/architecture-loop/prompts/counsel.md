@@ -1,7 +1,7 @@
 # Counsel prompt
 
-One round per pass. Write the prompt to `<scratchpad>/counsel-pass<N>.md`, run in the background:
-`okra counsel -f <prompt> -o <scratchpad>/counsel-out<N> > <log> 2>&1; echo "COUNSEL EXIT $?" >> <log>`.
+One round per batch, on the batch's rift, then one fixup round by the apply agent. Write the prompt to `~/.cache/gent-pass<N>/counsel-p<N>-<batch>.md`, run in the background:
+`okra counsel -f <prompt> -o ~/.cache/gent-pass<N>/counsel-out-p<N>-<batch> > <log> 2>&1; echo "COUNSEL EXIT $?" >> <log>`.
 When codex is rate-limited, launch an independent Opus agent with the same prompt.
 
 ```
