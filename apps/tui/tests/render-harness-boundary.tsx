@@ -19,7 +19,7 @@ import {
 import { type GentRuntime } from "@gent/sdk"
 import { ExtensionUIProvider } from "../src/extensions/host"
 import type { AnyExtensionClientModule } from "../src/extensions/client-facets"
-import { ComposerMemoryProvider, SessionShellProvider } from "../src/session"
+import { ComposerMemoryProvider } from "../src/session"
 import {
   AgentName,
   BranchId,
@@ -265,47 +265,44 @@ export const renderWithProviders = (
         render(
           () => (
             <TerminalDimensionsProvider>
-              <ComposerMemoryProvider>
+              <ComposerMemoryProvider
+                initialPrompt={Option.getOrElse(Option.fromNullishOr(options?.initialPrompt), () =>
+                  Option.none<string>(),
+                )}
+                initialSessionId={Option.map(
+                  toInitialSession(Option.fromNullishOr(options?.initialSession)),
+                  (session) => session.sessionId,
+                )}
+              >
                 <KeyboardScopeProvider>
                   <ThemeProvider mode="dark">
                     <EnvProvider
                       env={{ visual: Option.none(), editor: Option.none(), shutdown: () => {} }}
                     >
                       <CommandProvider>
-                        <SessionShellProvider
-                          initialPrompt={Option.getOrElse(
-                            Option.fromNullishOr(options?.initialPrompt),
-                            () => Option.none<string>(),
-                          )}
-                          initialSessionId={Option.map(
-                            toInitialSession(Option.fromNullishOr(options?.initialSession)),
-                            (session) => session.sessionId,
-                          )}
+                        <WorkspaceProvider
+                          cwd={options?.cwd ?? defaultWorkspaceCwd}
+                          home="/tmp"
+                          services={services}
                         >
-                          <WorkspaceProvider
-                            cwd={options?.cwd ?? defaultWorkspaceCwd}
-                            home="/tmp"
+                          <ClientProvider
+                            client={client}
+                            runtime={runtime}
                             services={services}
+                            log={noopLog}
+                            initialSession={Option.getOrUndefined(
+                              toInitialSession(Option.fromNullishOr(options?.initialSession)),
+                            )}
+                            initialAgent={options?.initialAgent}
                           >
-                            <ClientProvider
-                              client={client}
-                              runtime={runtime}
-                              services={services}
-                              log={noopLog}
-                              initialSession={Option.getOrUndefined(
-                                toInitialSession(Option.fromNullishOr(options?.initialSession)),
-                              )}
-                              initialAgent={options?.initialAgent}
+                            <ExtensionUIProvider
+                              builtins={options?.builtins}
+                              scope={options?.uiScope}
                             >
-                              <ExtensionUIProvider
-                                builtins={options?.builtins}
-                                scope={options?.uiScope}
-                              >
-                                {node()}
-                              </ExtensionUIProvider>
-                            </ClientProvider>
-                          </WorkspaceProvider>
-                        </SessionShellProvider>
+                              {node()}
+                            </ExtensionUIProvider>
+                          </ClientProvider>
+                        </WorkspaceProvider>
                       </CommandProvider>
                     </EnvProvider>
                   </ThemeProvider>
