@@ -110,76 +110,6 @@ import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useScopedKeyboard } from "./terminal"
 import { useExtensionUI } from "./extensions/host"
 
-// ── session shell ───────────────────────────────────────────────────────────
-
-/**
- * Session shell — what the TUI carries into the session it booted with.
- *
- * Which session and branch show belongs to `ClientProvider`, where
- * `switchSession` writes it and `session()` reads it. The shell carries the
- * startup prompt.
- *
- * The prompt belongs to the session the startup flags named, on whichever
- * branch of it the reader ends up: picking a branch in the boot picker
- * re-mounts the session view, and the prompt has to survive that. A session
- * the reader opens afterwards is a different session and starts empty, so the
- * shell keys the prompt on the boot session's id rather than handing it to
- * whoever asks first.
- *
- * @module
- */
-
-/**
- * The startup prompt as a submission. It is sent once; a send that fails is
- * refused as a composer submission is: it comes back to the draft of the
- * branch it was sent from, with its reason.
- */
-interface StartupPrompt {
-  readonly content: string
-  /** `lost` is the request id when the reply was lost, not answered. */
-  readonly refuse: (target: SessionIdentity, reason: string, lost: Option.Option<string>) => void
-}
-
-interface SessionShellValue {
-  /**
-   * The `-p` prompt, if this is the session the startup flags named and no
-   * one took it yet. A session view that mounts again gets nothing: the
-   * prompt goes out once, and a failed send gives it to the draft.
-   */
-  readonly takePrompt: (sessionId: SessionId) => Option.Option<string>
-}
-
-const SessionShellContext = createContext<SessionShellValue>()
-
-interface SessionShellProviderProps {
-  readonly initialPrompt: Option.Option<string>
-  /** The session the startup flags resolved to, if there was one. */
-  readonly initialSessionId: Option.Option<SessionId>
-}
-
-export function SessionShellProvider(props: ParentProps<SessionShellProviderProps>) {
-  let taken = false
-  const value: SessionShellValue = {
-    takePrompt: (sessionId) => {
-      const owns = Option.exists(props.initialSessionId, (boot) => boot === sessionId)
-      if (!owns || taken) return Option.none()
-      return Option.map(props.initialPrompt, (content) => {
-        taken = true
-        return content
-      })
-    },
-  }
-
-  return <SessionShellContext.Provider value={value}>{props.children}</SessionShellContext.Provider>
-}
-
-function useSessionShell(): SessionShellValue {
-  return useRequiredContext(
-    SessionShellContext,
-    "useSessionShell must be used within SessionShellProvider",
-  )
-}
-
 // ── session labels ──────────────────────────────────────────────────────────
 
 /** One colored label on the composer's status row, its color resolved. */
@@ -513,9 +443,27 @@ function transition(state: ComposerState, event: ComposerEvent): TransitionResul
 
 // ── composer memory ─────────────────────────────────────────────────────────
 //
-// What the composer keeps across its own remounts: the draft per branch and
-// the prompt history it navigates. Both live for one mounted shell, owned by
-// this provider rather than by a module global.
+// What the composer keeps across its own remounts: the draft per branch, the
+// prompt history it navigates and the `-p` startup prompt. All live for one
+// mounted shell, owned by this provider rather than by a module global.
+//
+// The startup prompt belongs to the session the startup flags named, on
+// whichever branch of it the reader ends up: picking a branch in the boot
+// picker re-mounts the session view, and the prompt has to survive that. A
+// session the reader opens afterwards is a different session and starts
+// empty, so the prompt is keyed on the boot session's id rather than handed to
+// whoever asks first.
+
+/**
+ * The startup prompt as a submission. It is sent once; a send that fails is
+ * refused as a composer submission is: it comes back to the draft of the
+ * branch it was sent from, with its reason.
+ */
+interface StartupPrompt {
+  readonly content: string
+  /** `lost` is the request id when the reply was lost, not answered. */
+  readonly refuse: (target: SessionIdentity, reason: string, lost: Option.Option<string>) => void
+}
 
 type ComposerDraft = Pick<ComposerInteractionState, "draft" | "mode">
 
@@ -567,6 +515,18 @@ interface ComposerMemory {
   readonly drafts: ComposerDrafts
   readonly refusals: ComposerRefusals
   readonly history: PromptHistoryStore
+  /**
+   * The `-p` prompt, if this is the session the startup flags named and no
+   * one took it yet. A session view that mounts again gets nothing: the
+   * prompt goes out once, and a failed send gives it to the draft.
+   */
+  readonly takePrompt: (sessionId: SessionId) => Option.Option<string>
+}
+
+interface ComposerMemoryProviderProps {
+  readonly initialPrompt: Option.Option<string>
+  /** The session the startup flags resolved to, if there was one. */
+  readonly initialSessionId: Option.Option<SessionId>
 }
 
 /** A refused text and how it was written into the draft. */
@@ -589,6 +549,11 @@ const REFUSED_SEPARATOR = "\n\n"
  * order; once the reader has edited them, it goes ahead of the whole draft.
  * A draft of shell commands only stays in shell mode; a mixed one is a
  * message, each command written with its `!`.
+ *
+ * `write` is how the draft holds a message: a composer on screen writes a
+ * large one as a paste placeholder. A command is always written as text, so
+ * the reader sees what Enter runs. A text a kept draft held as itself is
+ * written again when its block joins a composer on screen.
  */
 interface RefusedMerge {
   readonly draft: ComposerDraft
@@ -603,7 +568,15 @@ export const mergeRefused = (
   refused: RefusedSubmission,
   write: (text: string) => string = writeAsIs,
 ): RefusedMerge => {
-  const added: WrittenRefusal = { ...refused, written: write(refused.text) }
+  const writeEntry = (entry: RefusedSubmission): string => {
+    if (entry.shell) return entry.text
+    return write(entry.text)
+  }
+  const rewrite = (entry: WrittenRefusal): WrittenRefusal => {
+    if (entry.written !== entry.text) return entry
+    return { ...entry, written: writeEntry(entry) }
+  }
+  const added: WrittenRefusal = { ...refused, written: writeEntry(refused) }
   // The block stands whole: the draft is it, or it and then a separator.
   const kept =
     block.shown.length > 0 &&
@@ -612,7 +585,7 @@ export const mergeRefused = (
   let entries: ReadonlyArray<WrittenRefusal> = [added]
   let typed = current.draft
   if (kept) {
-    entries = [...block.entries, added].toSorted((a, b) => a.order - b.order)
+    entries = [...block.entries.map(rewrite), added].toSorted((a, b) => a.order - b.order)
     typed = current.draft.slice(block.shown.length + REFUSED_SEPARATOR.length)
   }
   const hasTyped = typed.trim().length > 0
@@ -631,7 +604,7 @@ export const mergeRefused = (
 
 const ComposerMemoryContext = createContext<ComposerMemory>()
 
-export function ComposerMemoryProvider(props: ParentProps) {
+export function ComposerMemoryProvider(props: ParentProps<ComposerMemoryProviderProps>) {
   const byBranch = new Map<BranchId, ComposerDraft>()
   const drafts: ComposerDrafts = {
     get: (branchId) => Option.fromNullishOr(byBranch.get(branchId)),
@@ -688,7 +661,21 @@ export function ComposerMemoryProvider(props: ParentProps) {
       )
     },
   }
-  const value: ComposerMemory = { drafts, refusals, history: makePromptHistoryStore() }
+  let taken = false
+  const takePrompt = (sessionId: SessionId): Option.Option<string> => {
+    const owns = Option.exists(props.initialSessionId, (boot) => boot === sessionId)
+    if (!owns || taken) return Option.none()
+    return Option.map(props.initialPrompt, (content) => {
+      taken = true
+      return content
+    })
+  }
+  const value: ComposerMemory = {
+    drafts,
+    refusals,
+    history: makePromptHistoryStore(),
+    takePrompt,
+  }
   return (
     <ComposerMemoryContext.Provider value={value}>{props.children}</ComposerMemoryContext.Provider>
   )
@@ -2581,8 +2568,8 @@ export function createSessionController(props: {
   const client = useClient()
   const command = useCommand()
   const ext = useExtensionUI()
-  const shell = useSessionShell()
   const refusals = useComposerRefusals()
+  const { takePrompt } = useComposerMemory()
   const { cast } = useRuntime()
   const renderer = useRenderer()
   const env = useEnv()
@@ -2749,7 +2736,6 @@ export function createSessionController(props: {
 
   const onBranchPickerSelect = (branchId: BranchId) => {
     dispatchSessionUi(SessionUiEvent.cases.CloseOverlay.make({}))
-    if (branchId === props.branchId) return
     client.switchSession(props.sessionId, branchId, currentSessionName())
   }
 
@@ -2778,14 +2764,12 @@ export function createSessionController(props: {
     const session = Option.fromNullishOr(client.session())
     const sessionId = Option.getOrUndefined(Option.map(session, (value) => value.sessionId))
     if (client.isLoading() || client.isReconnecting()) return { sessionId, state: "unknown" }
-    if (
-      isBlockingAuthGate(authGateState()) ||
-      composerState()._tag === "interaction" ||
-      client.isError()
-    ) {
+    if (isBlockingAuthGate(authGateState()) || composerState()._tag === "interaction") {
       return { sessionId, state: "blocked" }
     }
+    // A turn that runs is working, whatever error shows beside it.
     if (client.isStreaming()) return { sessionId, state: "working" }
+    if (client.isError()) return { sessionId, state: "blocked" }
     return { sessionId, state: "idle" }
   })
 
@@ -2851,7 +2835,7 @@ export function createSessionController(props: {
     // The startup prompt is a submission: it takes its place in send order,
     // and a refused one comes back to the draft of its branch with its reason.
     () =>
-      Option.map(shell.takePrompt(props.sessionId), (content): StartupPrompt => {
+      Option.map(takePrompt(props.sessionId), (content): StartupPrompt => {
         const order = refusals.nextOrder()
         return {
           content,
