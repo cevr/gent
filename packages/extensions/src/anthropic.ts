@@ -1348,13 +1348,17 @@ export const transformPayload = (
  * `system` → `messages`, and a request takes at most 4 markers.
  *
  * Markers, in priority order, while the limit allows:
- *   1. the end of the stable prefix: the last system block, or on the
- *      Claude Code path the first user message (the system prompt moves
- *      there, and the billing and identity blocks take no marker);
+ *   1. the end of the system prompt: the last system block, or on the
+ *      Claude Code path the system prompt's block in the first user
+ *      message (it moves there, before the user's own text, and the
+ *      billing and identity blocks take no marker). A new session and
+ *      every sibling child read the prompt back from this entry;
  *   2. the last cacheable block of the last message, so each step reads
- *      the previous step's conversation back from the cache;
- *   3. the last tool, so the tool list stays cached when the system
- *      prompt changes.
+ *      the previous step's conversation back from the cache.
+ *
+ * The tool list takes no marker of its own: it renders first, so the
+ * system prompt's marker caches it, and alone it is below the minimum
+ * cacheable length (one `cell` tool, about 100 tokens).
  *
  * Markers already on the payload count toward the limit. A marker does
  * not change the cached bytes, so the tail marker moves forward each
@@ -1410,7 +1414,15 @@ const markBlockAt = (
 const markLastCacheable = (blocks: ReadonlyArray<JsonRecord>) =>
   markBlockAt(blocks, blocks.findLastIndex(isCacheableBlock))
 
-/** The payload with `cache_control` on the stable prefix, the conversation tail and the tool list. */
+/**
+ * The block that ends the system prompt in a Claude Code request: the first
+ * text after any leading tool results in the first user message, where
+ * `relocateThirdPartyIntoFirstUser` puts it.
+ */
+const systemPromptBlockIndex = (content: ReadonlyArray<JsonRecord>): number =>
+  content.findIndex((block) => block["type"] !== "tool_result" && isCacheableBlock(block))
+
+/** The payload with `cache_control` at the end of the system prompt and on the conversation tail. */
 const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): JsonRecord => {
   const result = { ...payload }
   let budget = CACHE_BREAKPOINT_LIMIT - countCacheMarkers(payload)
@@ -1425,13 +1437,16 @@ const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): J
     set(marked.value)
     budget -= 1
   }
-  const markMessage = (index: number) => {
+  const markMessage = (
+    index: number,
+    mark: (content: ReadonlyArray<JsonRecord>) => Option.Option<ReadonlyArray<JsonRecord>>,
+  ) => {
     const message = Option.fromUndefinedOr(messages[index])
     if (Option.isNone(message)) return
     // The SDK always sends block arrays; a string content takes no marker.
     const content = message.value["content"]
     if (!isRecordArray(content)) return
-    spend(markLastCacheable(content), (marked) => {
+    spend(mark(content), (marked) => {
       messages[index] = { ...message.value, content: marked }
     })
   }
@@ -1443,15 +1458,12 @@ const markCacheBreakpoints = (payload: JsonRecord, prefixEnd: CachePrefixEnd): J
       })
     }
   } else {
-    markMessage(messages.findIndex((message) => message["role"] === "user"))
+    markMessage(
+      messages.findIndex((message) => message["role"] === "user"),
+      (content) => markBlockAt(content, systemPromptBlockIndex(content)),
+    )
   }
-  markMessage(messages.length - 1)
-  if (isRecordArray(payload["tools"])) {
-    const tools = payload["tools"]
-    spend(markBlockAt(tools, tools.length - 1), (marked) => {
-      result["tools"] = marked
-    })
-  }
+  markMessage(messages.length - 1, markLastCacheable)
   if (isRecordArray(payload["messages"])) result["messages"] = messages
   return result
 }
