@@ -9,12 +9,12 @@
     "./extensions": "./src/extensions.ts"
   },
   "scripts": {
-    "dev": "bun --preload @opentui/solid/preload src/main.tsx",
+    "dev": "bun src/main.tsx",
     "build": "env -u FORCE_COLOR NO_COLOR=1 bun scripts/build.ts",
     "link": "mkdir -p \"$HOME/.bun/bin\" && ln -sfn \"$PWD/bin/gent\" \"$HOME/.bun/bin/gent\" && echo \"Linked $HOME/.bun/bin/gent -> $PWD/bin/gent\"",
     "typecheck": "tsc --noEmit",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-preload.ts --preload @opentui/solid/preload --parallel --path-ignore-patterns=\"**/headless-cli-exit.test.ts\" tests",
-    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload @opentui/solid/preload integration tests/headless-cli-exit.test.ts"
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-preload.ts --parallel --path-ignore-patterns=\"**/headless-cli-exit.test.ts\" tests",
+    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-preload.ts integration tests/headless-cli-exit.test.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",

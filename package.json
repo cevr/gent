@@ -17,7 +17,7 @@
     "build": "turbo run build",
     "link": "turbo run link --filter=@gent/tui",
     "test": "turbo run test --ui=stream --concurrency=1",
-    "test:e2e": "turbo run test:e2e",
+    "test:e2e": "turbo run test:e2e --ui=stream --concurrency=1",
     "gate": "env -u FORCE_COLOR NO_COLOR=1 concurrently -n type,style,build \"bun run typecheck\" \"bun run lint && bun run fmt:check\" \"bun run build\" && bun run test",
     "clean": "rm -rf .turbo */.turbo */*/.turbo",
     "smoke": "d=$(mktemp -d) && trap 'rm -rf \"$d\"' EXIT && GENT_DATA_DIR=\"$d\" bun run --cwd apps/tui dev --debug -H 'Say hi in 3 words'",

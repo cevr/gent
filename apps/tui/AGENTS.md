@@ -3,7 +3,7 @@
 ## Gotchas
 
 - **jsxImportSource** - Must be `@opentui/solid`, not `solid-js`. Set in tsconfig.json.
-- **Preload required** - Dev only: `bun --preload @opentui/solid/preload`. Binary doesn't need it.
+- **Preload required** - Source runs only: `apps/tui/bunfig.toml` declares `@opentui/solid/preload` for `bun` (top level) and `bun test` (`[test]`); run from `apps/tui`. Binary doesn't need it.
 - **No shorthand props** - Use `marginTop`/`marginBottom` not `marginY`.
 - **Border placement** - `border` prop goes on `<box>`, not `<input>`.
 - **autoloadBunfig: false** - Required in `Bun.build` compile options, else binary tries to load bunfig at runtime.
