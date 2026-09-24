@@ -1778,9 +1778,8 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
  * resolves it. An agent sent to `apps/tui/tests/render-harness.tsx` finds
  * nothing and either invents the file or picks a neighbour.
  *
- * Scope is the four files an agent is told to read: `CLAUDE.md` and
- * `AGENTS.md` at the root, `apps/tui/AGENTS.md`, and `ARCHITECTURE.md`. Today
- * `CLAUDE.md` is a symlink to `AGENTS.md`; the guard runner skips symlinks, so
+ * Scope is the steering prose (`STEERING_PROSE`): what an agent is told to
+ * read. Today `CLAUDE.md` is a symlink to `AGENTS.md`; the guard runner skips symlinks, so
  * the document is read once, and a `CLAUDE.md` that becomes a file of its own
  * is read as one.
  *
@@ -1811,12 +1810,13 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
 /**
  * Steering prose: what an agent is told to read before it changes the code.
  * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, a package's own
- * `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, and the
+ * `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, a testbed's
+ * `README.md` (the root `CLAUDE.md` sends agents to the gamut one), and the
  * project skills under `.claude/skills/`. The path claims and the
  * retired-surface rows both read exactly this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|\.claude\/skills\/.+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|testbeds\/[^/]+\/README\.md|\.claude\/skills\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 

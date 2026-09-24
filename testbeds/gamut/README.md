@@ -25,7 +25,8 @@ bun run gamut down                  # quit, close the pane, remove the scratch d
 not. It then copies `fixture/` to `$TMPDIR/gent-gamut-<timestamp>/work`, makes it a git
 repo, installs it, writes the preset into `work/.gent/config.json` and the
 roster block in `work/AGENTS.md`, runs the root build of **this** checkout
-(turbo: the `gent-cell` worker, then `apps/tui/bin/gent` beside it), and
+(turbo: the `gent-cell` worker, then the `gent` binary beside it in
+`apps/tui/`, under `bin/`), and
 launches it in a fresh pane. The run is recorded in
 `$TMPDIR/gent-gamut-<checkout name>.json`, one file per checkout, so two rifts can run at once.
 
@@ -52,13 +53,17 @@ It reads the run's own `data.db` read-only and prints:
    scratch dir. Auth is unaffected: the auth store resolves from
    `${home}/.gent/auth`, not the data dir, so the real credentials still work.
 2. **The wrong binary.** `~/.bun/bin/gent` points at whichever checkout last
-   ran the gate. `up` builds and launches `apps/tui/bin/gent` by absolute path
-   from this checkout, and never runs `bun run link`. It builds through the root
-   build, so the `gent-cell` worker beside the binary is this checkout's too.
+   ran `bun run link`; only that command moves it, and the gate and the build
+   leave it alone. `up` builds this checkout and launches its own binary (the
+   one under `apps/tui/`) by absolute path, and never runs `bun run link`. It
+   builds through the root build, so the `gent-cell` worker beside the binary
+   is this checkout's too.
 3. **The stale TUI.** `pkill` returns before the process releases the PTY, so
-   the next command types into the dying session. `restart` and `down` send two
-   raw `\x03` bytes (`send-keys` does not deliver Ctrl chords) and then poll
-   `pgrep` until the binary is gone.
+   the next command types into the dying session. `restart` and `down` press
+   Ctrl-C up to four times, one raw `\x03` byte per press (`send-keys` does not
+   deliver Ctrl chords), until the binary is gone: each press peels one layer
+   (an expanded transcript, a draft in the composer, a running turn) and the
+   last one exits. Then they poll `pgrep` until the process releases the PTY.
 
 ## The fixture
 

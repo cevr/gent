@@ -1611,12 +1611,18 @@ describe("steering file paths", () => {
       "apps/tui/AGENTS.md",
       "packages/core/AGENTS.md",
       "docs/extensions.md",
+      "testbeds/gamut/README.md",
       ".claude/skills/architecture-loop/prior-art.md",
     ]) {
       expect(isSteeringFile(file)).toBe(true)
       expect(messagesOfSteeringPath(text, file)).toHaveLength(1)
     }
-    for (const file of ["plans/some-plan.md", "docs/research/2026-09-06-x.md", "README.md"]) {
+    for (const file of [
+      "plans/some-plan.md",
+      "docs/research/2026-09-06-x.md",
+      "README.md",
+      "testbeds/gamut/fixture/README.md",
+    ]) {
       expect(isSteeringFile(file)).toBe(false)
       expect(messagesOfSteeringPath(text, file)).toEqual([])
     }
