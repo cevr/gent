@@ -20,6 +20,8 @@ import {
   messageRendererContribution,
   type MessageRowProps,
   NoActiveSessionError,
+  type NoticeRow,
+  noticeRowContribution,
   rendererContribution,
   statusLabelContribution,
   type WidgetComponent,
@@ -307,6 +309,37 @@ describe("resolveTuiExtensions", () => {
     ])
 
     expect(resolved.statusLabels.map((label) => label.priority)).toEqual([10, 20, 30])
+  })
+
+  // A user extension reaches the notice bucket as a shipped one does, and
+  // replaces a shipped notice by claiming its id.
+  test("notice rows key by id; a higher scope replaces, a same-scope claim is dropped", () => {
+    const session = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
+    const rowsSaying = (text: string) => (): ReadonlyArray<NoticeRow> => [
+      { key: "1", createdAt: 0, glyph: "◌", color: "warning", text },
+    ]
+    const notice = (text: string) =>
+      noticeRowContribution({ id: "cache.misses", rows: rowsSaying(text) })
+    const resolved = resolveTuiExtensions([
+      make("a-cache", "builtin", notice("builtin")),
+      make("b-cache", "builtin", notice("rival")),
+      make("user-cache", "user", notice("user")),
+      make("user-other", "user", noticeRowContribution({ id: "other", rows: rowsSaying("other") })),
+    ])
+
+    expect(resolved.noticeRows.map((source) => [source.id, source.rows(session)[0]?.text])).toEqual(
+      [
+        ["cache.misses", "user"],
+        ["other", "other"],
+      ],
+    )
+    expect(resolved.failures).toEqual([
+      {
+        id: "b-cache",
+        reason:
+          'notice row "cache.misses" is already claimed by "/test/a-cache" in scope "builtin"',
+      },
+    ])
   })
 
   test("autocomplete contributions stay scope ordered and additive", () => {
@@ -1308,6 +1341,7 @@ const testRuntime = makeClientRuntime({
     currentSession: () => Option.none(),
     onExtensionStateChanged: () => () => {},
     onSessionEvent: () => () => {},
+    models: () => [],
   },
   workspace: { cwd: "/tmp/test-cwd", home: "/tmp/test-home" },
   shell: { cast: castTestShellEffect, pane: makePaneSlot() },
@@ -1653,6 +1687,7 @@ export default defineClientExtension("@test/dup", {
           }),
         onExtensionStateChanged: () => () => {},
         onSessionEvent: () => () => {},
+        models: () => [],
       },
     })
     return Effect.gen(function* () {

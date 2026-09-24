@@ -17,6 +17,7 @@ import {
   type EventEnvelope,
   type ImagePartProjection,
   type Message,
+  type Model,
   type Session,
   type SessionSnapshot,
   SessionId,
@@ -30,6 +31,7 @@ import type { ToolRenderer } from "../tool-renderers"
 import type { Command } from "../commands"
 import type { JSX } from "@opentui/solid"
 import type { RGBA } from "@opentui/core"
+import type { NamedThemeColor } from "../theme"
 
 // ── effect boundary ─────────────────────────────────────────────────────────
 
@@ -155,6 +157,12 @@ export interface ClientTransport {
   /** Subscribe to every event for the active session/branch. */
   readonly onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
   /**
+   * The active session's model catalog, prices included: the list the shell
+   * loads for its model picker, read straight through. Reactive; empty until
+   * the first load lands.
+   */
+  readonly models: () => ReadonlyArray<Model>
+  /**
    * Read live detail for one loop, by explicit key rather than the active
    * session: the caller is asking about a row, which is usually not the
    * session the shell is on.
@@ -195,7 +203,7 @@ export interface ClientTransport {
  */
 export type ClientShellTransport = Pick<
   ClientTransport,
-  "currentSession" | "onExtensionStateChanged" | "onSessionEvent"
+  "currentSession" | "onExtensionStateChanged" | "onSessionEvent" | "models"
 > & {
   readonly client: GentNamespacedClient
   readonly runtime: GentRuntime
@@ -211,6 +219,7 @@ const transportFacet = (payload: ClientShellTransport): ClientTransport => ({
   ) => requestExtensionAt(payload, ref, input, activeSession),
   onExtensionStateChanged: payload.onExtensionStateChanged,
   onSessionEvent: payload.onSessionEvent,
+  models: payload.models,
   agentDetail: (key) => agentDetailAt(payload, key),
   deleteSession: (sessionId) =>
     shellRead(payload, "session.delete", (client) => client.session.delete({ sessionId })).pipe(
@@ -644,8 +653,9 @@ export const sessionQuery = <A>(opts: {
 // Adding a new facet means adding an explicit field and resolver path, not
 // another stringly runtime tag table. Per-bucket conflict rules are preserved
 // by the resolver:
-//   - renderers, message renderers, widgets, interaction renderers: keyed by
-//     tool name, message custom type, widget id and metadataType; the highest
+//   - renderers, message renderers, widgets, notice rows, interaction renderers:
+//     keyed by tool name, message custom type, widget id, notice id and
+//     metadataType; the highest
 //     scope wins, and inside one scope the first claim keeps the key. Widgets
 //     sort by priority.
 //   - commands: the same rule by id, slash and keybind, applied by the host's
@@ -725,14 +735,7 @@ interface InteractionRendererContribution {
 }
 
 /** A theme color by name, or a resolved one. */
-export type StatusLabelColor =
-  | RGBA
-  | "warning"
-  | "info"
-  | "success"
-  | "primary"
-  | "text"
-  | "textMuted"
+export type StatusLabelColor = RGBA | NamedThemeColor
 
 export interface StatusLabelItem {
   readonly text: string
@@ -747,6 +750,29 @@ interface StatusLabelContribution {
   /** Lower = earlier; default 100. */
   readonly priority?: number
   readonly produce: () => ReadonlyArray<StatusLabelItem>
+}
+
+/**
+ * One transcript row an extension derives, such as a cache-miss notice. It is
+ * not a message: nothing stores it and the model never reads it, so the
+ * extension derives it again whenever the branch's events replay.
+ */
+export interface NoticeRow {
+  /** Unique within its contribution; the transcript keys the row on it. */
+  readonly key: string
+  /** Epoch milliseconds; the row sorts among the transcript's rows by it. */
+  readonly createdAt: number
+  /** One glyph, drawn in `color` in the row's glyph column. */
+  readonly glyph: string
+  readonly color: StatusLabelColor
+  /** Drawn muted after the glyph. */
+  readonly text: string
+}
+
+interface NoticeRowContribution {
+  readonly id: string
+  /** The rows of one branch. Reactive: the transcript reads it again when it changes. */
+  readonly rows: (session: ActiveExtensionSession) => ReadonlyArray<NoticeRow>
 }
 
 export interface AutocompleteContribution {
@@ -782,6 +808,7 @@ export interface ClientContributions {
   readonly commands?: ReadonlyArray<Command>
   readonly interactionRenderers?: ReadonlyArray<InteractionRendererContribution>
   readonly statusLabels?: ReadonlyArray<StatusLabelContribution>
+  readonly noticeRows?: ReadonlyArray<NoticeRowContribution>
   readonly autocomplete?: ReadonlyArray<AutocompleteContribution>
 }
 
@@ -796,6 +823,7 @@ const CONTRIBUTION_BUCKETS = {
   commands: true,
   interactionRenderers: true,
   statusLabels: true,
+  noticeRows: true,
   autocomplete: true,
 } satisfies Record<keyof ClientContributions, true>
 
@@ -833,6 +861,7 @@ export const clientContributions = (
     out.commands = append(out.commands, part.commands)
     out.interactionRenderers = append(out.interactionRenderers, part.interactionRenderers)
     out.statusLabels = append(out.statusLabels, part.statusLabels)
+    out.noticeRows = append(out.noticeRows, part.noticeRows)
     out.autocomplete = append(out.autocomplete, part.autocomplete)
   }
 
@@ -874,6 +903,11 @@ export const interactionRendererContribution = (
 
 export const statusLabelContribution = (opts: StatusLabelContribution): ClientContributions => ({
   statusLabels: [opts],
+})
+
+/** Transcript rows derived per branch; the highest scope's claim on an `id` wins. */
+export const noticeRowContribution = (opts: NoticeRowContribution): ClientContributions => ({
+  noticeRows: [opts],
 })
 
 export const autocompleteContribution = (opts: AutocompleteContribution): ClientContributions => ({

@@ -109,6 +109,8 @@ import type { ToolCall } from "./tool-renderers"
 import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useScopedKeyboard } from "./terminal"
 import { useExtensionUI } from "./extensions/host"
+import type { ActiveExtensionSession, NoticeRow } from "./extensions/client-facets"
+import type { ResolvedNoticeRows } from "./extensions/loader-boundary"
 
 // ── session labels ──────────────────────────────────────────────────────────
 
@@ -1615,6 +1617,45 @@ const isMessage = Predicate.or(
   Predicate.isTagged("interjection-message"),
 )
 
+/** Transcript order: by time; a message before an event row at the same time; event rows by seq. */
+const compareSessionItems = (a: SessionItem, b: SessionItem): number => {
+  if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
+  if (!isMessage(a) && !isMessage(b)) return a.seq - b.seq
+  if (a._tag === b._tag) return 0
+  if (isMessage(a)) return -1
+  return 1
+}
+
+/**
+ * The client extensions' notice rows for one branch, merged into the feed's
+ * rows. Each row keeps its transcript item while the extension answers the
+ * same row object, so the transcript does not remount rows that did not change.
+ */
+const noticeRowItems = (
+  sources: ReadonlyArray<ResolvedNoticeRows>,
+  session: ActiveExtensionSession,
+  previous: ReadonlyMap<NoticeRow, SessionItem>,
+): Map<NoticeRow, SessionItem> => {
+  const next = new Map<NoticeRow, SessionItem>()
+  for (const source of sources) {
+    for (const row of source.rows(session)) {
+      next.set(
+        row,
+        previous.get(row) ?? {
+          _tag: "notice",
+          key: `${source.id}:${row.key}`,
+          glyph: row.glyph,
+          color: row.color,
+          text: row.text,
+          createdAt: row.createdAt,
+          seq: 0,
+        },
+      )
+    }
+  }
+  return next
+}
+
 // ── Build messages from raw ──
 
 /**
@@ -2021,6 +2062,13 @@ export function useSessionFeed(
   /** Read at send time, so the owner decides whether the prompt is still unsent. */
   takeInitialPrompt?: () => Option.Option<StartupPrompt>,
   canSendPrompt?: () => boolean,
+  /**
+   * The feed opens only once this answers true. The session view passes the
+   * client extensions' load: the branch replays from its first event when the
+   * feed opens, and an extension that derives rows from events (the cache
+   * notices) must be subscribed by then to see the whole history.
+   */
+  subscribersReady: () => boolean = () => true,
 ): SessionFeed {
   const [store, setStore] = createStore<{ messages: Message[]; events: SessionEvent[] }>({
     messages: [],
@@ -2089,11 +2137,15 @@ export function useSessionFeed(
         // A notice leaves the turn running: a muted row, no retry settled.
         if (event.notice === true) {
           if (live) client.log.warn("sessionFeed.notice", { error: event.error, seq: eventSeq })
+          const seq = eventSeq++
           appendSessionEvent(setStore, {
             _tag: "notice",
+            key: `error:${stampedAt}:${seq}`,
+            glyph: "●",
+            color: "textMuted",
             text: event.error,
             createdAt: stampedAt,
-            seq: eventSeq++,
+            seq,
           })
           return
         }
@@ -2192,16 +2244,9 @@ export function useSessionFeed(
     processedEnvelopeIds = new Set()
   }
 
-  const items = createMemo((): SessionItem[] => {
-    const combined: SessionItem[] = [...store.messages, ...store.events]
-    return combined.sort((a, b) => {
-      if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
-      if (!isMessage(a) && !isMessage(b)) return a.seq - b.seq
-      if (a._tag === b._tag) return 0
-      if (isMessage(a)) return -1
-      return 1
-    })
-  })
+  const items = createMemo((): SessionItem[] =>
+    [...store.messages, ...store.events].sort(compareSessionItems),
+  )
 
   // Keyed subscription — re-runs only when sessionId:branchId identity changes
   const feedKey = createMemo(() => `${sessionId()}:${branchId()}`)
@@ -2266,8 +2311,8 @@ export function useSessionFeed(
   )
 
   createEffect(
-    on([activeSessionKey, feedKey], ([active, key]) => {
-      if (Option.isNone(active) || active.value !== key) return
+    on([activeSessionKey, feedKey, subscribersReady], ([active, key, ready]) => {
+      if (Option.isNone(active) || active.value !== key || !ready) return
 
       // Reset all projection state on identity change
       if (Option.isNone(currentKey) || currentKey.value !== key) {
@@ -2853,9 +2898,23 @@ export function createSessionController(props: {
     // Gate prompt send on auth resolution and on the branch picker — the feed
     // waits for the stream plus this signal.
     () => !authGatePending() && !branchPickerOpen(),
+    ext.loaded,
   )
 
-  const items = createMemo<SessionItem[]>(() => feed.items())
+  const noticeItems = createMemo<Map<NoticeRow, SessionItem>>(
+    (previous) =>
+      noticeRowItems(
+        ext.noticeRows(),
+        { sessionId: props.sessionId, branchId: props.branchId },
+        previous,
+      ),
+    new Map(),
+  )
+  const items = createMemo<SessionItem[]>(() => {
+    const notices = noticeItems()
+    if (notices.size === 0) return feed.items()
+    return [...feed.items(), ...notices.values()].sort(compareSessionItems)
+  })
   const promptSearch = createPromptSearchController({
     state: () => {
       const overlay = uiState().overlay

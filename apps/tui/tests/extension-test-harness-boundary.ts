@@ -1,6 +1,6 @@
 import { Deferred, Effect, Option, type Scope } from "effect"
 import { createSignal } from "solid-js"
-import type { BranchId, EventEnvelope, SessionId } from "@gent/core/protocol"
+import type { BranchId, EventEnvelope, Model, SessionId } from "@gent/core/protocol"
 import type {
   ClientContextDeps,
   AnyExtensionClientModule,
@@ -29,6 +29,8 @@ export interface ClientExtensionHarnessOptions {
   readonly requestEffect?: (request: ActiveClientSession) => Effect.Effect<unknown, Error>
   readonly requestReply?: unknown
   readonly sessionEventSubscribers?: Set<(envelope: EventEnvelope) => void>
+  /** The model catalog the shell holds; empty by default. */
+  readonly models?: () => ReadonlyArray<Model>
   /**
    * Workspace the extension sees. Defaults to a shared `/tmp` pair, which is
    * fine for a setup that only reads `cwd`; a test whose extension writes
@@ -86,6 +88,7 @@ export const makeClientTestTransport = (
         opts.sessionEventSubscribers?.delete(cb)
       }
     },
+    models: opts.models ?? (() => []),
   }
 }
 
