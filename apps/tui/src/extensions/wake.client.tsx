@@ -17,6 +17,7 @@ import {
   defineClientExtension,
   messageRendererContribution,
   sessionQuery,
+  TrayFrame,
   truncate,
   useSpinnerClock,
   useTerminalDimensions,
@@ -143,7 +144,7 @@ export function WakeTray(props: {
     })
   return (
     <Show when={lines().length > 0}>
-      <box flexDirection="column" flexShrink={0} paddingLeft={1} paddingRight={1}>
+      <TrayFrame>
         <For each={lines()}>
           {(line) => (
             <text wrapMode="none">
@@ -152,7 +153,7 @@ export function WakeTray(props: {
             </text>
           )}
         </For>
-      </box>
+      </TrayFrame>
     </Show>
   )
 }

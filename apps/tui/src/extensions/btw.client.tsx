@@ -176,6 +176,12 @@ const pastedText = (text: string): string =>
   [...text.replace(/\r?\n/g, " ")].filter((char) => char >= " " && char !== "\u007f").join("")
 
 /**
+ * One blank row between turns, none above the first. The gap sits above a turn,
+ * not under it, so a squeezed body that holds its last row shows text.
+ */
+const gapAbove = (position: number): number => Math.min(position, 1)
+
+/**
  * The fork pane, docked under the composer like the thread and agents panes.
  *
  * The composer keeps the terminal's focus, so the pane takes its keys through
@@ -246,12 +252,12 @@ export function ForkPane(props: {
         title={title()}
         footer="a parallel session from here · enter ask · ^o open · esc close"
       >
-        <ChromePanel.Body>
+        <ChromePanel.Body stickToBottom>
           <Show when={fork()}>
             {(view) => (
               <For each={view().turns}>
-                {(turn) => (
-                  <box flexDirection="column" marginBottom={1}>
+                {(turn, index) => (
+                  <box flexDirection="column" marginTop={gapAbove(index())}>
                     <text>
                       <span style={{ fg: theme.primary, bold: true }}>{turn.question}</span>
                     </text>
@@ -268,7 +274,7 @@ export function ForkPane(props: {
           </Show>
           <Show when={Option.getOrUndefined(props.controller.pending())}>
             {(question) => (
-              <box flexDirection="column" marginBottom={1}>
+              <box flexDirection="column" marginTop={gapAbove(fork()?.turns.length ?? 0)}>
                 <text>
                   <span style={{ fg: theme.primary, bold: true }}>{question()}</span>
                 </text>

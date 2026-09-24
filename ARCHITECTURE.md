@@ -363,7 +363,16 @@ Shape:
 - The same hook, read on the parent side, cascades an interrupt: when a turn
   ends interrupted, every child it started and had not heard from is settled
   as interrupted and then stopped, so a parent Escape stops the whole subtree
-  and no completion message wakes the parent the user just interrupted.
+  and no completion message wakes the parent the user just interrupted. The
+  settled row keeps a stop notice (`stopNoticeAt`, additive optional): the
+  delegate's `turnProjection` reads such rows into a `# Stopped children`
+  prompt section (one line per child, newest first, at most eight, then a
+  count), as `@gent/wake` does for a `notify` fire, and marks in process
+  memory which notices it showed. `turnAfter` on an answered turn (not
+  interrupted, not failed, not unanswered) removes exactly those; a notice the
+  turn did not show, because its read failed or the cap left it out, stays.
+  The stop starts no turn; the parent's next turn,
+  whoever starts it, knows the children are not running.
   Prime-agent does not cascade a turn abort; opencode does, and the gamut
   testbed's six children editing files after an Escape decided it.
 - `delegate.cancel` interrupts the child's turn through the facade; a finished

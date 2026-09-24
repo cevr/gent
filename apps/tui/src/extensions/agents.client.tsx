@@ -22,6 +22,7 @@ import {
   type SelectListRow,
   sessionQuery,
   textWidth,
+  TrayFrame,
   truncate,
   usePickerGeometry,
   useScopedKeyboard,
@@ -153,7 +154,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
   }
   return (
     <Show when={!props.controller.open() && running().length > 0}>
-      <box flexDirection="column" flexShrink={0} paddingLeft={1} paddingRight={1}>
+      <TrayFrame>
         <For each={lines()}>
           {(line, index) => (
             <text wrapMode="none">
@@ -167,7 +168,7 @@ export function SubagentTray(props: { controller: AgentsController }) {
             </text>
           )}
         </For>
-      </box>
+      </TrayFrame>
     </Show>
   )
 }

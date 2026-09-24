@@ -96,6 +96,18 @@ view. It draws `PickerFrame` like every other docked pane. The boot flow opens i
 has more than one branch; escape quits, because no branch was chosen yet. The
 command palette's "Branches" level switches branches after that.
 
+The footer (composer, trays, docked panes) never outgrows the split-footer
+region (`maxHeight` in `app.tsx`). While a docked pane is open the trays
+hide (`TrayFrame` reads the `DockProvider` count each `PickerFrame` adds to),
+so the pane the reader opened gets the rows. The pane is then the one box
+that gives way, in whole rows (`PickerFrame` sets a `flexBasis`, not a
+`height`: OpenTUI turns shrinking off on a box whose height is set);
+squeezed, it drops its key hint before its body's last row. Yoga does not
+keep a nested minimum here, and OpenTUI draws a 0-row node as one row, so
+the order is set by hiding whole boxes, not by shrink weights. A pane whose newest row matters
+passes `stickToBottom` to `ChromePanel.Body` and puts its gaps above a row,
+not under it.
+
 ## Compound Components
 
 StatusBar uses compound pattern - compose what you need:

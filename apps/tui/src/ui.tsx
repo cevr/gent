@@ -218,6 +218,8 @@ function ChromePanelRoot(props: ChromePanelRootProps) {
 
 interface ChromePanelBodyProps {
   ref?: (el: ScrollBoxRenderable) => void
+  /** Hold the view on the last row as rows arrive, so a squeezed body shows the newest. */
+  stickToBottom?: boolean
   paddingLeft?: number
   paddingRight?: number
   children: JSX.Element
@@ -228,6 +230,8 @@ function ChromePanelBody(props: ChromePanelBodyProps) {
     <scrollbox
       ref={props.ref}
       flexGrow={1}
+      stickyScroll={props.stickToBottom === true}
+      stickyStart="bottom"
       verticalScrollbarOptions={{ visible: false }}
       horizontalScrollbarOptions={{ visible: false }}
       paddingLeft={props.paddingLeft ?? 1}
@@ -395,6 +399,34 @@ export const usePickerGeometry = (): PickerGeometry => {
   }
 }
 
+// ── docked panes ────────────────────────────────────────────────────────────
+
+/**
+ * Which docked panes are open. The footer that holds them provides it; a
+ * `PickerFrame` counts itself while it is mounted, and a `TrayFrame` hides
+ * while any is open. Without a provider nothing is counted and trays show.
+ */
+interface DockState {
+  readonly paneOpen: () => boolean
+  /** Counts one open pane; the returned release uncounts it. */
+  readonly open: () => () => void
+}
+
+const DockContext = createContext<Option.Option<DockState>>(Option.none())
+
+/** The footer's dock: the panes the reader opened win its rows over the trays. */
+export function DockProvider(props: { children: JSX.Element }) {
+  const [panes, setPanes] = createSignal(0)
+  const dock: DockState = {
+    paneOpen: () => panes() > 0,
+    open: () => {
+      setPanes((count) => count + 1)
+      return () => setPanes((count) => count - 1)
+    },
+  }
+  return <DockContext.Provider value={Option.some(dock)}>{props.children}</DockContext.Provider>
+}
+
 export function PickerFrame(props: {
   height: number
   /** The muted heading row. A picker that carries counts puts them in here. */
@@ -403,8 +435,24 @@ export function PickerFrame(props: {
   footer: JSX.Element
 }) {
   const { theme } = useTheme()
+  const dock = useContext(DockContext)
+  if (Option.isSome(dock)) onCleanup(dock.value.open())
+  // The height is what the frame asks for. When the footer it docks in runs
+  // out of rows, the trays are already hidden (`TrayFrame`) and the frame is
+  // the one box that gives way, in whole rows. Squeezed, it drops its key
+  // hint before its body's last row: the rows the reader opened it for win.
+  const [squeezed, setSqueezed] = createSignal(false)
   return (
-    <box flexDirection="column" flexShrink={0} width="100%" height={props.height}>
+    <box
+      flexDirection="column"
+      flexShrink={1}
+      width="100%"
+      // A basis, not a height: OpenTUI turns shrinking off on a box whose height is set.
+      flexBasis={props.height}
+      onSizeChange={function () {
+        setSqueezed(this.height < props.height)
+      }}
+    >
       <box
         flexDirection="column"
         flexGrow={1}
@@ -418,10 +466,31 @@ export function PickerFrame(props: {
         </box>
         {props.children}
       </box>
-      <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-        {props.footer}
-      </text>
+      <Show when={!squeezed()}>
+        <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+          {props.footer}
+        </text>
+      </Show>
     </box>
+  )
+}
+
+// ── tray frame ──────────────────────────────────────────────────────────────
+
+/**
+ * TrayFrame — ambient rows under the status line: children that work on their
+ * own, wakes still pending. A tray is chrome about background work: it hides
+ * while a docked pane is open, so the pane the reader opened gets the rows.
+ */
+export function TrayFrame(props: { children: JSX.Element }) {
+  const dock = useContext(DockContext)
+  const paneOpen = () => Option.exists(dock, (current) => current.paneOpen())
+  return (
+    <Show when={!paneOpen()}>
+      <box flexDirection="column" flexShrink={0} paddingLeft={1} paddingRight={1}>
+        {props.children}
+      </box>
+    </Show>
   )
 }
 
