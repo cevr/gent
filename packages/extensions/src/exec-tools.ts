@@ -1660,33 +1660,74 @@ const childCommand = (resolved: ResolvedCommand, next: number): Option.Option<Re
   })
 }
 
+/** The index in `resolved.words` after a toolchain word (`cargo +nightly`), where the options start. */
+const optionsStart = (resolved: ResolvedCommand): number => {
+  if (resolved.spec.toolchain === true && resolved.words[1]?.text.startsWith("+") === true) return 2
+  return 1
+}
+
+/** The index in `resolved.words` of its usual subcommand word: the word after its leading options. */
+const subcommandAt = (resolved: ResolvedCommand): number => {
+  const start = optionsStart(resolved)
+  const texts = resolved.words.slice(start).map((word) => word.text)
+  return start + parseArguments(texts, resolved.spec.valued, "leading").end
+}
+
+/**
+ * `docker volume "$A" x`, `git {reset,status} --hard`: a subcommand word the
+ * shell makes at run time may be any path under the parent. Under a parent
+ * with a risky path (`RISKY_PARENTS`) it is a reading that asks.
+ */
+const runTimeChild = (resolved: ResolvedCommand, next: number): Option.Option<ResolvedCommand> =>
+  Option.map(
+    Option.filter(
+      Option.fromUndefinedOr(resolved.words[next]),
+      (word) =>
+        RISKY_PARENTS.has(resolved.path) &&
+        (word.dynamic || (word.pattern && BRACE_TEXT.test(word.text))),
+    ),
+    (word): ResolvedCommand => ({
+      path: `${resolved.path} ${word.text}`,
+      spec: spec({}, [], () =>
+        Option.some({
+          level: "destructive",
+          reason: `${resolved.path} with a subcommand known only at run time: ${word.text}`,
+        }),
+      ),
+      words: resolved.words.slice(next),
+    }),
+  )
+
+/** The readings when `words[next]` of `resolved` is its subcommand word; none when it names no path. */
+const readingsAt = (resolved: ResolvedCommand, next: number): ReadonlyArray<ResolvedCommand> =>
+  Option.match(childCommand(resolved, next), {
+    onNone: () => Option.toArray(runTimeChild(resolved, next)),
+    onSome: readingsUnder,
+  })
+
 /**
  * The readings of the command path under `resolved`. The first takes every
  * option the parent's table does not name to have no value, and stops at
  * the parent when the next word names no path. Each later word that may be
  * the subcommand (`laterCommandWords`) and names a path is a reading too
  * (`npm --loglevel silent exec -- cmd`). An unnamed option alone adds none:
- * `git --no-pager status` has one reading.
+ * `git --no-pager status` has one reading. A subcommand word known only at
+ * run time adds a reading that asks (`runTimeChild`).
  */
 const readingsUnder = (resolved: ResolvedCommand): Arr.NonEmptyReadonlyArray<ResolvedCommand> => {
   if (!SPEC_PARENTS.has(resolved.path)) return [resolved]
-  const rest = resolved.words
-  let from = 0
-  if (resolved.spec.toolchain === true && rest[1]?.text.startsWith("+") === true) from = 1
-  const args = rest.slice(1).map((word) => word.text)
-  const { valued } = resolved.spec
-  // `args[index]` is `rest[index + 1]`.
-  const first = from + parseArguments(args.slice(from), valued, "leading").end
-  const others = laterCommandWords(args, valued, from)
+  const from = optionsStart(resolved) - 1
+  const args = resolved.words.slice(1).map((word) => word.text)
+  // `args[index]` is `resolved.words[index + 1]`.
+  const first = subcommandAt(resolved) - 1
+  const others = laterCommandWords(args, resolved.spec.valued, from)
     .filter((index) => index !== first)
-    .flatMap((index) =>
-      Option.match(childCommand(resolved, index + 1), {
-        onNone: () => [],
-        onSome: readingsUnder,
-      }),
-    )
+    .flatMap((index) => readingsAt(resolved, index + 1))
   const head = Option.match(childCommand(resolved, first + 1), {
-    onNone: (): Arr.NonEmptyReadonlyArray<ResolvedCommand> => [resolved],
+    onNone: (): Arr.NonEmptyReadonlyArray<ResolvedCommand> => [
+      resolved,
+      ...Option.toArray(runTimeChild(resolved, first + 1)),
+    ],
     onSome: readingsUnder,
   })
   return Arr.appendAll(head, others)
@@ -2879,9 +2920,10 @@ const inputBeforeSeparator = (
  * Whether input that cannot be read names what `command` runs under `xargs`
  * or `parallel`: follow its runners (`env A=b`, `sudo`, `timeout 5`) to the
  * innermost command, whose word is missing or is the placeholder, or whose
- * script the input fills, or which is git with a risky subcommand, or with
- * its subcommand missing or the placeholder, or which has risks and takes
- * the input before `--`, where it may be a flag (`xargs rm` given `-rf x`).
+ * script the input fills, or which is git with a risky subcommand, or a
+ * parent with a risky path under it whose subcommand is missing or the
+ * placeholder (`xargs docker volume`), or which has risks and takes the
+ * input before `--`, where it may be a flag (`xargs rm` given `-rf x`).
  * `appends`: the input is appended to the command.
  */
 const inputNamesCommand = (
@@ -2914,16 +2956,18 @@ const inputNamesCommand = (
   if (wrapped.length > 0) {
     return wrapped.some((inner) => inputNamesCommand(inner, isMarked, appends, read))
   }
+  const namesSubcommand = readings.some(
+    (resolved) =>
+      RISKY_PARENTS.has(resolved.path) &&
+      Option.match(Option.fromUndefinedOr(resolved.words[subcommandAt(resolved)]), {
+        onNone: () => true,
+        onSome: (word) => isMarked(word.text),
+      }),
+  )
+  if (namesSubcommand) return true
   const risky = readings.some((resolved) => resolved.spec.risks.length > 0)
-  if (commandName(head.value.text) !== "git") {
-    return risky && inputBeforeSeparator(words, isMarked, appends)
-  }
-  if (risky) return true
-  const subcommand = Option.fromUndefinedOr(words[commandStart(words, GIT_GLOBAL_OPTIONS, {})])
-  return Option.match(subcommand, {
-    onNone: () => true,
-    onSome: (word) => isMarked(word.text),
-  })
+  if (commandName(head.value.text) === "git") return risky
+  return risky && inputBeforeSeparator(words, isMarked, appends)
 }
 
 /** Environment variables whose value a command runs as a shell command. */
@@ -3035,9 +3079,6 @@ const gitRuns = ({ words }: Invocation): SegmentRuns => {
   const at = 1 + global.end
   const subcommand = Option.fromUndefinedOr(words[at])
   if (Option.isNone(subcommand)) return mergeRuns(runs)
-  if (subcommand.value.dynamic) {
-    runs.push(unreadableRun(`a git subcommand known only at run time: ${subcommand.value.text}`))
-  }
   if (subcommand.value.text !== "config") return mergeRuns(runs)
   const args = words.slice(at + 1)
   for (const [index, key] of args.entries()) {
@@ -3924,6 +3965,15 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
 /** The paths with a longer path under them: the resolver reads a subcommand word after them. */
 const SPEC_PARENTS: ReadonlySet<string> = new Set(
   [...COMMAND_SPECS.keys()].flatMap((path) => {
+    const parts = path.split(" ")
+    return parts.slice(1).map((_, index) => parts.slice(0, index + 1).join(" "))
+  }),
+)
+
+/** The parents with a path under them that has risks (`docker volume` over `docker volume rm`). */
+const RISKY_PARENTS: ReadonlySet<string> = new Set(
+  [...COMMAND_SPECS].flatMap(([path, { risks }]) => {
+    if (risks.length === 0) return []
     const parts = path.split(" ")
     return parts.slice(1).map((_, index) => parts.slice(0, index + 1).join(" "))
   }),
