@@ -3103,23 +3103,23 @@ const gitRuns = ({ words }: Invocation): SegmentRuns => {
   return mergeRuns(runs)
 }
 
+/** The `name=value` words of an `alias` command: each name, and its value. */
+const aliasDefinitions = ({ words }: Invocation): ReadonlyArray<readonly [string, ShellWord]> =>
+  words.slice(1).flatMap((word): ReadonlyArray<readonly [string, ShellWord]> => {
+    const equals = word.text.indexOf("=")
+    if (equals <= 0 || word.text.startsWith("-")) return []
+    return [[word.text.slice(0, equals), wordFrom(word, equals + 1)]]
+  })
+
 /**
  * `alias w='rm -rf x'`: the value of each `name=value` runs where the name
  * is a command word, once the shell expands aliases (`shopt -s
- * expand_aliases`). As with a git alias, it is read where it is defined.
- * The shell appends the words typed after the name to the value, so the
- * value is read as `value "$@"`: those words are run-time words, and
- * `alias w=rm` then `w -rf x` asks. A derived word has no insertion point,
- * so no git trailer is written into an alias value.
+ * expand_aliases`). As with a git alias, the value as written is read where
+ * it is defined, so a value with its own risk asks there. Where the name
+ * is used, `aliasUseView` reads the value with the words after the name.
  */
-const shellAliasRuns = ({ words }: Invocation): SegmentRuns =>
-  scriptRuns(
-    words.slice(1).flatMap((word) => {
-      const equals = word.text.indexOf("=")
-      if (equals <= 0 || word.text.startsWith("-")) return []
-      return [derivedWord(`${word.text.slice(equals + 1)} "$@"`, word.dynamic)]
-    }),
-  )
+const shellAliasRuns = (invocation: Invocation): SegmentRuns =>
+  scriptRuns(aliasDefinitions(invocation).map(([, value]) => value))
 
 /**
  * The scripts one command's words run: the argument after a shell's `-c`,
@@ -3221,6 +3221,39 @@ const viewCommand = (
     }
   }
   return { invocations, writes, unreadable }
+}
+
+/**
+ * `alias w=rm` then `w -rf x`: where a name an `alias` command of `view`
+ * defines is a command word, the shell runs the value with the words after
+ * the name appended. The value is read there as `value "$@"`, so those
+ * words are run-time words and a risky command asks. A name matches in any
+ * order in the command line. A derived word has no insertion point, so no
+ * git trailer is written into an alias use.
+ */
+const aliasUseView = (view: CommandView): CommandView => {
+  const values = new Map<string, Array<ShellWord>>()
+  for (const invocation of view.invocations) {
+    if (invocationName(invocation) !== "alias") continue
+    for (const [name, value] of aliasDefinitions(invocation)) {
+      values.set(name, [...(values.get(name) ?? []), value])
+    }
+  }
+  const scripts = new Map<string, ShellWord>()
+  for (const invocation of view.invocations) {
+    for (const value of values.get(invocation.words[0]?.text ?? "") ?? []) {
+      const script = derivedWord(`${value.text} "$@"`, value.dynamic)
+      scripts.set(script.text, script)
+    }
+  }
+  const views = [...scripts.values()].map((script) =>
+    viewCommand(parseShell(script, Option.none()), MAX_NESTED_COMMAND_DEPTH - 1),
+  )
+  return {
+    invocations: views.flatMap((used) => used.invocations),
+    writes: views.flatMap((used) => used.writes),
+    unreadable: views.flatMap((used) => used.unreadable),
+  }
 }
 
 // ── command classification ──
@@ -4076,15 +4109,19 @@ const RISK_RANK = {
 /**
  * The strongest risk of every command in `command` and in every script it
  * runs (`bash -c '...'`, `eval "..."`, `$(...)`, a heredoc fed to a shell, a
- * git alias), and of every file it redirects into. A script the guard cannot
- * read asks, as a destructive command does.
+ * git alias, a shell alias where it is used), and of every file it
+ * redirects into. A script the guard cannot read asks, as a destructive
+ * command does.
  */
 export function classifyBashCommand(command: string): BashRisk {
-  const view = viewCommand(parseCommand(command), MAX_NESTED_COMMAND_DEPTH)
+  const direct = viewCommand(parseCommand(command), MAX_NESTED_COMMAND_DEPTH)
+  const aliased = aliasUseView(direct)
   const risks: Array<BashRisk> = [
-    ...view.invocations.flatMap(invocationRisks),
-    ...view.writes.flatMap((word) => Option.toArray(sensitiveFile(word.text))),
-    ...view.unreadable.map((reason): BashRisk => ({
+    ...[...direct.invocations, ...aliased.invocations].flatMap(invocationRisks),
+    ...[...direct.writes, ...aliased.writes].flatMap((word) =>
+      Option.toArray(sensitiveFile(word.text)),
+    ),
+    ...[...direct.unreadable, ...aliased.unreadable].map((reason): BashRisk => ({
       level: "destructive",
       reason: `runs a script the guard cannot read: ${reason}`,
     })),

@@ -754,6 +754,8 @@ describe("classifyBashCommand", () => {
       "shopt -s expand_aliases\nalias w='git reset'\nw --hard",
       "shopt -s expand_aliases\nalias g=git\ng reset --hard",
       "shopt -s expand_aliases\nalias p=psql\np -c 'UPDATE t SET a=1'",
+      `bash -c 'shopt -s expand_aliases\nalias w=rm\nw -rf ${x}'`,
+      `shopt -s expand_aliases\nalias w=rm v=ls\nls; w -rf ${x}`,
       // An indexed assignment to the alias or command table asks.
       `shopt -s expand_aliases\nBASH_ALIASES[w]='rm -rf ${x}'\nw`,
       `BASH_CMDS[ls]=/bin/rm; ls -rf ${x}`,
@@ -765,6 +767,9 @@ describe("classifyBashCommand", () => {
       "alias ll='ls -la'",
       "alias gs='git status'",
       `shopt -s expand_aliases\nalias ll='ls -la'\nll ${x}`,
+      // A value with no risk of its own asks only where the name is used.
+      "alias r=rm",
+      "shopt -s expand_aliases\nalias r=rm g=git\nls",
       "alias",
       "alias -p",
       "hash",
