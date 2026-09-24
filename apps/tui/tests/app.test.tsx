@@ -50,21 +50,24 @@ import {
   renderWithProviders,
   applySnapshotAgent,
 } from "./render-harness-boundary"
-import { onMount } from "solid-js"
+import { createSignal, onMount } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
 import { waitForFrame, waitUntilAdvancing } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
-import { NOTICE_ROWS_BOUND, useExtensionUI } from "../src/extensions/host"
+import { useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
   ClientContext,
   clientContributions,
   defineClientExtension,
+  type NoticeRow,
   noticeRowContribution,
+  widgetContribution,
 } from "../src/extensions/client-facets"
+import { NOTICE_ROWS_BOUND, useSessionController } from "../src/session"
 
 // ── app bootstrap ───────────────────────────────────────────────────────────
 
@@ -685,8 +688,9 @@ function TerminalDimensionsProbe() {
 
 describe("notice rows", () => {
   // Native history waits for every notice-row source; one that never answers
-  // would hold it for good.
-  it.scopedLive("a source that never answers fails after the bound and leaves the rows", () =>
+  // would hold it for good. The bound is on the hold: the source stays, and a
+  // late answer still draws its rows.
+  it.scopedLive("history stops waiting at the bound, and a late answer still draws its rows", () =>
     Effect.gen(function* () {
       const clock = yield* TestClock.make()
       // Only the session view's casts read this clock: the bound sleeps on it.
@@ -698,8 +702,24 @@ describe("notice rows", () => {
         },
         fork: (effect) => Effect.runForkWith(withClock())(effect),
       }
+      const [answer, setAnswer] = createSignal(Option.none<ReadonlyArray<NoticeRow>>())
+      let settled = () => false
+      // A widget inside the session view reads the hold native history obeys.
+      function SettledProbe() {
+        settled = useSessionController().itemsSettled
+        return <box />
+      }
       const silent = defineClientExtension("@test/silent-notices", {
-        setup: Effect.succeed(noticeRowContribution({ id: "silent", rows: () => Option.none() })),
+        setup: Effect.succeed(
+          clientContributions(
+            noticeRowContribution({ id: "silent", rows: () => answer() }),
+            widgetContribution({
+              id: "settled-probe",
+              slot: "below-input",
+              component: SettledProbe,
+            }),
+          ),
+        ),
       })
       let ext = Option.none<ReturnType<typeof useExtensionUI>>()
       const setup = yield* Effect.promise(() =>
@@ -729,7 +749,7 @@ describe("notice rows", () => {
       )
       const loaded = () => Option.exists(ext, (value) => value.loaded())
       yield* waitForFrame(setup, (frame) => frame.includes("ready ·") && loaded(), "loaded")
-      const sources = () =>
+      const sources = (): ReadonlyArray<string> =>
         Option.match(ext, {
           onNone: () => [],
           onSome: (value) => value.noticeRows().map((source) => source.id),
@@ -738,18 +758,22 @@ describe("notice rows", () => {
         Option.exists(ext, (value) =>
           value.failures().some((failure) => failure.id === "@test/silent-notices"),
         )
-      expect(sources()).toContain("silent")
-      // Inside the bound the source is still waited for.
+      yield* waitForFrame(setup, () => sources().includes("silent"), "the source")
+      expect(settled()).toBe(false)
+      // Inside the bound, history still waits for the source.
       yield* clock.adjust(Duration.subtract(NOTICE_ROWS_BOUND, Duration.millis(1)))
       yield* Effect.promise(() => setup.renderOnce())
+      expect(settled()).toBe(false)
+      yield* waitUntilAdvancing(clock.adjust("1 second"), settled, "history stopped waiting")
+      // The source did not fail: it stays, and its late answer draws.
+      expect(sources()).toContain("silent")
       expect(failed()).toBe(false)
-      yield* waitUntilAdvancing(clock.adjust("1 second"), failed, "the source failed")
-      expect(sources()).not.toContain("silent")
-      yield* waitForFrame(
-        setup,
-        (frame) => frame.includes('@test/silent-notices: notice rows "silent"'),
-        "the failure line",
+      setAnswer(
+        Option.some([
+          { key: "late", createdAt: 1, glyph: "◌", color: "warning", text: "LATE-NOTICE-ROW" },
+        ]),
       )
+      yield* waitForFrame(setup, (frame) => frame.includes("LATE-NOTICE-ROW"), "the late row")
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
