@@ -3745,8 +3745,16 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
       ),
       [Run.cases.Stdin.make({})],
     ),
+    // The primaries that take a value. find reads no abbreviation, but the
+    // parser does: no name here starts with `a`, so the `-a` operator takes
+    // no value (`find x -a "$X"` still asks).
     find: spec(
-      {},
+      {
+        long: names(
+          "name iname path ipath wholename iwholename regex iregex lname ilname type xtype newer cnewer mtime mmin ctime cmin size maxdepth mindepth user group uid gid perm links inum samefile fstype",
+        ),
+        singleDash: true,
+      },
       [Run.cases.FindExec.make({ actions: ["-exec", "-execdir", "-ok", "-okdir"] })],
       ({ texts }) => destructiveWhen(texts.includes("-delete"), "find -delete"),
     ),

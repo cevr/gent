@@ -972,6 +972,34 @@ describe("classifyBashCommand", () => {
     expect(classifyBashCommand(`cp -t ${x}/.ssh ${x}`).level).toBe("sensitive")
   })
 
+  // find's primaries that take a value are its options that take one: a
+  // dynamic pattern after `-name` is no primary. A dynamic start path, an
+  // unquoted value that splits, or a dynamic word after `-a` may still be
+  // `-delete`.
+  test("a dynamic value of a find primary is data; a dynamic start path asks", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      'find . -name "$pat"',
+      `find ${x} -iname "$pat" -type f`,
+      `find ${x} -mtime "$d" -user "$u" -perm "$m"`,
+      `find ${x} -maxdepth "$n" -path "$p" -print`,
+      // find passes each name after its start path: `{}` is no flag.
+      `find ${x} -name "$pat" -exec rm {} +`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    for (const command of [
+      'find "$dir" -type f',
+      `find ${x} -name "$pat" -delete`,
+      `find ${x} -name "$pat" -exec rm -rf {} +`,
+      `find ${x} -name $pat`,
+      `find ${x} -a "$X"`,
+      `find ${x} $EXPR`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+  })
+
   test("quoted text and heredoc notes that describe git work are data", () => {
     for (const command of [
       "git commit -m 'undo git reset --hard'",
