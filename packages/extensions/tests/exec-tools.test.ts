@@ -2392,6 +2392,51 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  test("cluster, infrastructure and compose deletions ask; their reads do not", () => {
+    for (const command of [
+      "kubectl delete pod gent-probe-x",
+      "kubectl -n gent-probe-x delete deployment web",
+      "kubectl --context=gent-probe-x drain node-1",
+      "kubectl replace --force -f /nonexistent/gent-probe-x.yaml",
+      'kubectl "$VERB" pod gent-probe-x',
+      "terraform destroy",
+      "terraform -chdir=/nonexistent/gent-probe-x destroy",
+      "terraform apply -auto-approve",
+      "terraform apply --auto-approve -var x=1",
+      "terraform apply /nonexistent/gent-probe-x.tfplan",
+      "terraform state rm aws_instance.web",
+      "tofu destroy",
+      "tofu apply -auto-approve",
+      'terraform "$CMD"',
+      "docker compose down -v",
+      "docker compose -f /nonexistent/gent-probe-x.yml down --volumes",
+      "docker compose rm -f",
+      "docker-compose down -v",
+      'docker compose "$CMD"',
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "kubectl get pods",
+      "kubectl -n gent-probe-x get pods",
+      "kubectl describe pod gent-probe-x",
+      "kubectl replace -f /nonexistent/gent-probe-x.yaml",
+      "terraform plan",
+      "terraform -chdir=/nonexistent/gent-probe-x plan",
+      "terraform apply",
+      "terraform apply -var x=1",
+      "terraform state list",
+      "tofu plan",
+      "docker compose up -d",
+      "docker compose -f /nonexistent/gent-probe-x.yml up",
+      "docker compose down",
+      "docker compose rm",
+      "docker-compose up",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("package runners, fd -x, SQL drops, gh deletes and git config from the environment are read", () => {
     for (const command of [
       "npm x -- rm -rf x",

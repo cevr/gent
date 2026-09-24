@@ -3707,6 +3707,24 @@ const COMMIT_OPTIONS = options(
 const FILTER_BRANCH_SCRIPTS =
   "setup env-filter tree-filter index-filter parent-filter msg-filter commit-filter tag-name-filter"
 
+/** `docker compose` options before the subcommand whose value is the next word. */
+const COMPOSE_OPTIONS = options(
+  "fp",
+  "file project-name profile env-file project-directory ansi progress parallel",
+)
+
+/** kubectl global options whose value is the next word. */
+const KUBECTL_OPTIONS = options(
+  "ns",
+  "namespace context kubeconfig cluster user server token as as-group request-timeout",
+)
+
+/** `terraform apply` options whose value may be the next word (`-var x=1`). */
+const TERRAFORM_APPLY_OPTIONS: ValueOptions = {
+  long: names("var var-file target replace state state-out backup lock-timeout parallelism"),
+  singleDash: true,
+}
+
 /** find primaries that write their output over the file they name. */
 const FIND_OUTPUTS = ["fprint", "fprint0", "fprintf", "fls"]
 
@@ -3893,6 +3911,58 @@ const COMMAND_SPECS: ReadonlyMap<string, CommandSpec> = new Map(
     ...each(
       ["docker volume rm", "docker volume remove", "docker volume prune", "docker system prune"],
       risky(({ resolved }) => destructive(`${resolved.path} (deletes volumes or containers)`)),
+    ),
+    // Compose: `down -v` deletes the named volumes, `rm -f` removes stopped
+    // containers without asking.
+    ...each(["docker compose", "docker-compose"], spec(COMPOSE_OPTIONS)),
+    ...each(
+      ["docker compose down", "docker-compose down"],
+      risky(({ parsed, resolved }) =>
+        destructiveWhen(
+          hasShort(parsed, "v") || hasLong(parsed, "volumes"),
+          `${resolved.path} -v (deletes volumes)`,
+        ),
+      ),
+    ),
+    ...each(
+      ["docker compose rm", "docker-compose rm"],
+      risky(({ parsed, resolved }) =>
+        destructiveWhen(
+          hasShort(parsed, "f") || hasLong(parsed, "force"),
+          `${resolved.path} -f (removes containers)`,
+        ),
+      ),
+    ),
+    kubectl: spec(KUBECTL_OPTIONS),
+    ...each(
+      ["kubectl delete", "kubectl drain"],
+      spec(options("fl", "filename selector"), [], ({ resolved }) =>
+        destructive(`${resolved.path} (deletes or evicts cluster resources)`),
+      ),
+    ),
+    "kubectl replace": spec(options("f", "filename"), [], ({ parsed }) =>
+      destructiveWhen(hasLong(parsed, "force"), "kubectl replace --force (deletes and recreates)"),
+    ),
+    // Terraform and OpenTofu: `destroy`, `apply` that does not stop to ask
+    // (`-auto-approve`, or a saved plan file), and `state rm`.
+    ...each(["terraform", "tofu"], spec({ long: ["chdir"], singleDash: true })),
+    ...each(
+      ["terraform destroy", "tofu destroy"],
+      risky(({ resolved }) => destructive(`${resolved.path} (destroys infrastructure)`)),
+    ),
+    ...each(
+      ["terraform apply", "tofu apply"],
+      spec(TERRAFORM_APPLY_OPTIONS, [], ({ parsed, resolved }) =>
+        destructiveWhen(
+          hasLong(parsed, "auto-approve") || parsed.operands.length > 0,
+          `${resolved.path} without a confirmation`,
+        ),
+      ),
+    ),
+    ...each(["terraform state", "tofu state"], spec({ singleDash: true })),
+    ...each(
+      ["terraform state rm", "tofu state rm"],
+      risky(({ resolved }) => destructive(`${resolved.path} (forgets managed resources)`)),
     ),
     uv: spec(options("", "directory project")),
     "uv run": runner(options("", "with python package env-file extra group")),
