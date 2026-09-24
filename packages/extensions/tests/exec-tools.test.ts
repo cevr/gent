@@ -1291,6 +1291,29 @@ describe("classifyBashCommand", () => {
     }
   })
 
+  // bash expands PS4 before each command `set -x` traces, and a command
+  // substitution in it runs, even when the value was quoted as data.
+  test("a command substitution in PS4 is read; the rest of the prompt is data", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      `PS4='$(rm -rf ${x})'; set -x; true`,
+      `export PS4='$(rm -rf ${x})'; set -x; true`,
+      `declare PS4='\`rm -rf ${x}\`'; set -x; true`,
+      `PS4='+ \\$(rm -rf ${x}) '; set -x; true`,
+      `PS4='+ "$(rm -rf ${x})" '; set -x; true`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "PS4='+ '; set -x; true",
+      `PS4='+ rm -rf ${x} '; set -x; true`,
+      "PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'; set -x; true",
+      `PS4="$P"; set -x; true`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
   test("shell text git runs from config, the environment or a subcommand is classified", () => {
     for (const command of [
       "git -c core.pager='rm -rf x' log",

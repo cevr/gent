@@ -2981,8 +2981,19 @@ const SHELL_VARIABLES = new Set([
 const DECLARATION_COMMANDS = new Set(["export", "declare", "typeset", "local", "readonly"])
 
 /**
+ * `PS4='$(cmd)'; set -x`: bash decodes the prompt's backslash escapes
+ * (`\$` is `$`), then expands it as a double-quoted word before each
+ * command it traces, so a command substitution in it runs. The script read
+ * is `: "<value>"` with every backslash and double quote dropped: only the
+ * substitutions in it run, and `(` or `;` in the prompt text stays data.
+ */
+const promptScript = (value: ShellWord): ShellWord =>
+  derivedWord(`: "${value.text.replaceAll(/[\\"]/g, "")}"`, value.dynamic)
+
+/**
  * `GIT_SSH_COMMAND=… git fetch`, `export EDITOR=…`: a value a later command
- * runs as a script. Git also reads config from `GIT_CONFIG_KEY_<n>` and
+ * runs as a script. A `PS4` value runs its command substitutions
+ * (`promptScript`). Git also reads config from `GIT_CONFIG_KEY_<n>` and
  * `GIT_CONFIG_VALUE_<n>` pairs, and from the `'key=value'` or
  * `'key'='value'` entries of `GIT_CONFIG_PARAMETERS`.
  */
@@ -3003,6 +3014,7 @@ const assignmentRuns = ({ words, assignments }: Invocation): SegmentRuns => {
   const runs: Array<SegmentRuns> = []
   for (const [name, value] of assigned) {
     if (SHELL_VARIABLES.has(name)) runs.push(scriptRuns([value]))
+    if (name === "PS4") runs.push(scriptRuns([promptScript(value)]))
     const configured = Option.fromNullishOr(/^GIT_CONFIG_KEY_(\d+)$/.exec(name)).pipe(
       Option.flatMap((match) => Option.fromUndefinedOr(values.get(`GIT_CONFIG_VALUE_${match[1]}`))),
       Option.flatMap((word) => configScript(value.text, word)),
