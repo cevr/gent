@@ -1114,7 +1114,135 @@ describe("a parent interrupt", () => {
       ),
     12_000,
   )
+
+  it.live("keeps the notice through a turn that never answers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const systems: Array<{ readonly system: string; readonly last: string }> = []
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          const last = promptTexts(options.prompt).at(-1) ?? ""
+          systems.push({ system: systemText(options.prompt), last })
+          // Every request of the first turn gets an empty reply: it spends its
+          // continuations and ends unanswered.
+          if (last === "NEXT") return Effect.succeed(reply("ack"))
+          return Effect.succeed(reply(""))
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        const { branchId } = harness
+        yield* harness.writeRegistry(branchId, [stoppedRow(1, 1_000)])
+        yield* sendPrompt(harness, "SILENT")
+        const first = yield* turnEnd(harness, 1)
+        expect(first).toMatchObject({ unanswered: true })
+        expect(systems[0]?.system).toContain(noticeLine(1))
+
+        yield* sendPrompt(harness, "NEXT")
+        yield* turnEnd(harness, 2)
+        const next = systems.find((request) => request.last === "NEXT")
+        expect(next?.system).toContain(noticeLine(1))
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
+
+  it.live("keeps a notice the turn could not read", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const restores: Array<Effect.Effect<void>> = []
+        const systems: Array<{ readonly system: string; readonly last: string }> = []
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Effect.gen(function* () {
+            // The projection already ran: the registry reads again from here on.
+            yield* Effect.all(restores.splice(0), { discard: true })
+            const last = promptTexts(options.prompt).at(-1) ?? ""
+            systems.push({ system: systemText(options.prompt), last })
+            return reply("ack")
+          }),
+        )
+        const harness = yield* harnessWithHome(providerLayer)
+        const { branchId } = harness
+        const fs = yield* FileSystem.FileSystem
+        const file = `${harness.home}/.gent/delegates/${branchId}.json`
+        yield* harness.writeRegistry(branchId, [stoppedRow(1, 1_000)])
+        const valid = yield* fs.readFileString(file)
+        yield* fs.writeFileString(file, "{ unreadable")
+        restores.push(fs.writeFileString(file, valid).pipe(Effect.orDie))
+        yield* sendPrompt(harness, "UNREAD")
+        yield* turnEnd(harness, 1)
+        expect(systems[0]?.system).not.toContain("# Stopped children")
+
+        yield* sendPrompt(harness, "NEXT")
+        yield* turnEnd(harness, 2)
+        const next = systems.find((request) => request.last === "NEXT")
+        expect(next?.system).toContain(noticeLine(1))
+      }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("8 seconds")),
+    ),
+  )
+
+  it.live("names a bounded number of stopped children, one line each, and clears only those", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const systems: Array<string> = []
+        const providerLayer = LanguageModelLayers.testStream((options) => {
+          systems.push(systemText(options.prompt))
+          return Effect.succeed(reply("ack"))
+        })
+        const harness = yield* harnessWithHome(providerLayer)
+        const { branchId } = harness
+        // Twelve children; child 12 was stopped twice, so it has two rows.
+        const rows = [
+          ...Array.from({ length: 12 }, (_, index) => stoppedRow(index + 1, 1_000 + index)),
+          { ...stoppedRow(12, 2_000), requestId: RequestId.make("stopped-12-again") },
+        ]
+        yield* harness.writeRegistry(branchId, rows)
+        yield* sendPrompt(harness, "FIRST")
+        yield* turnEnd(harness, 1)
+        const first = systems[0] ?? ""
+        const named = first.split("\n").filter((line) => line.startsWith('- "'))
+        // The newest eight, child 12 once, and a count of the rest.
+        expect(named).toHaveLength(8)
+        expect(named.filter((line) => line.includes("stopped task 12"))).toHaveLength(1)
+        expect(first).toContain(noticeLine(12))
+        expect(first).toContain(noticeLine(5))
+        expect(first).not.toContain(noticeLine(4))
+        expect(first).toContain("and 4 more stopped children")
+
+        yield* sendPrompt(harness, "SECOND")
+        yield* turnEnd(harness, 2)
+        const second = systems.at(-1) ?? ""
+        expect(second).toContain(noticeLine(4))
+        // The answered turn cleared the notices it named, both of child 12's rows too.
+        expect(second).not.toContain("stopped task 12")
+        expect(second).not.toContain(noticeLine(5))
+        expect(second).not.toContain("more stopped children")
+      }).pipe(Effect.timeout("8 seconds")),
+    ),
+  )
 })
+
+/** A child the parent's interrupt stopped, planted with an unread stop notice. */
+const stoppedRow = (n: number, stopNoticeAt: number): DelegateEntry => ({
+  requestId: RequestId.make(`stopped-${n}`),
+  sessionId: SessionId.make(`stopped-session-${n}`),
+  branchId: BranchId.make(`stopped-branch-${n}`),
+  agentName: DELEGATE_AGENT_NAME,
+  prompt: `stopped task ${n}\nsecond line`,
+  private: false,
+  submitted: true,
+  completed: { interrupted: true },
+  delivered: true,
+  stopNoticeAt,
+})
+
+const noticeLine = (n: number) => `- "stopped task ${n}" · session stopped-session-${n}`
+
+/** The receipt of the parent's `count`th turn. */
+const turnEnd = (harness: Harness, count: number) =>
+  harness.client.session.events({ sessionId: harness.sessionId, branchId: harness.branchId }).pipe(
+    Stream.map((envelope) => envelope.event),
+    Stream.filter((event) => event._tag === "TurnCompleted"),
+    Stream.take(count),
+    Stream.runLast,
+    Effect.map(Option.getOrUndefined),
+  )
 
 // ── background starts ───────────────────────────────────────────────────────
 

@@ -951,26 +951,90 @@ const onParentTurnAfter = Effect.fn("Delegate.parentTurnAfter")(function* (input
 /** A stop notice names the task by its first line, cut here; the registry keeps the whole prompt. */
 const maximumNoticeTaskChars = 80
 
+/** The children one notice names; the rest are counted, and named once these are read. */
+const maximumNoticeChildren = 8
+
 const noticeTask = (prompt: string) => {
   const chars = [...(prompt.trim().split("\n")[0] ?? "")]
   if (chars.length <= maximumNoticeTaskChars) return chars.join("")
   return `${chars.slice(0, maximumNoticeTaskChars - 1).join("")}…`
 }
 
+/** One unread stop notice: a row, at the stop that wrote it. A later stop of the same row is a new notice. */
+const stopNoticeKey = (row: DelegateEntry) => `${row.requestId}@${row.stopNoticeAt}`
+
+/**
+ * The stop notices each turn put in its prompt, per `sessionId:branchId`,
+ * until that turn ends. Only these clear, and only when the turn answered: a
+ * notice the turn never showed (its read failed, or the cap left it out) stays
+ * for the next turn. A lost process loses the marks, and the notices show again.
+ */
+class ShownStopNotices extends Context.Service<
+  ShownStopNotices,
+  {
+    readonly record: (key: string, notices: ReadonlyArray<string>) => Effect.Effect<void>
+    /** The notices the turn showed; the marks drop either way. */
+    readonly take: (key: string) => Effect.Effect<ReadonlySet<string>>
+  }
+>()("@gent/extensions/src/delegate/ShownStopNotices") {}
+
+const ShownStopNoticesResource = defineResource({
+  id: "@gent/delegate/shown-stop-notices",
+  scope: "process",
+  layer: Layer.effect(
+    ShownStopNotices,
+    Effect.map(Ref.make<ReadonlyMap<string, ReadonlySet<string>>>(new Map()), (state) =>
+      ShownStopNotices.of({
+        record: (key, notices) =>
+          Ref.update(state, (current) => {
+            const shown = new Set([...(current.get(key) ?? []), ...notices])
+            return new Map([...current, [key, shown]])
+          }),
+        take: (key) =>
+          Ref.modify(state, (current) => {
+            const rest = new Map(current)
+            rest.delete(key)
+            return [current.get(key) ?? new Set<string>(), rest]
+          }),
+      }),
+    ),
+  ),
+})
+
 /**
  * The children the parent's interrupt stopped, as one prompt section, the way
  * `@gent/wake` shows a notify fire: the stop wakes nobody, and without this the
- * parent's next turn believes they still run. Every step reads it; only an
- * answered turn clears it.
+ * parent's next turn believes they still run. A child is one line however
+ * often it was stopped, the newest first, at most `maximumNoticeChildren`;
+ * the rest are a count. Every step reads it and marks what it showed; an
+ * answered turn clears exactly that.
  */
 const stopNoticeSections = Effect.fn("Delegate.stopNotices")(function* () {
+  const ctx = yield* ExtensionContext
   const stopped = (yield* registry.read()).filter((row) =>
     Predicate.isNotUndefined(row.stopNoticeAt),
   )
   if (stopped.length === 0) return []
-  const lines = stopped.map(
-    (row) =>
-      `- "${noticeTask(row.prompt)}" · session ${row.sessionId} · requestId ${row.requestId}`,
+  const byChild = new Map<SessionId, ReadonlyArray<DelegateEntry>>()
+  for (const row of stopped)
+    byChild.set(row.sessionId, [...(byChild.get(row.sessionId) ?? []), row])
+  const newest = (rows: ReadonlyArray<DelegateEntry>) =>
+    Math.max(...rows.map((row) => row.stopNoticeAt ?? 0))
+  const children = [...byChild.values()].sort((left, right) => newest(right) - newest(left))
+  const named = children.slice(0, maximumNoticeChildren)
+  const unnamed = children.length - named.length
+  const lines = named.map((rows) => {
+    const [latest] = [...rows].sort(
+      (left, right) => (right.stopNoticeAt ?? 0) - (left.stopNoticeAt ?? 0),
+    )
+    return `- "${noticeTask(latest?.prompt ?? "")}" · session ${latest?.sessionId} · requestId ${latest?.requestId}`
+  })
+  if (unnamed > 0) {
+    lines.push(`- and ${unnamed} more stopped children, named once you have read these.`)
+  }
+  yield* (yield* ShownStopNotices).record(
+    `${ctx.sessionId}:${ctx.branchId}`,
+    named.flat().map(stopNoticeKey),
   )
   return [
     {
@@ -982,21 +1046,21 @@ const stopNoticeSections = Effect.fn("Delegate.stopNotices")(function* () {
 })
 
 /**
- * Drops the stop notices an answered turn read: those written before it
- * started. A turn that failed or was interrupted keeps them. Nothing to drop
- * leaves the file unwritten.
+ * Drops the stop notices an answered turn showed. A turn that was
+ * interrupted, failed, or never answered keeps them, and so does every notice
+ * the turn did not show. Nothing to drop leaves the file unwritten.
  */
 const clearReadStopNotices = Effect.fn("Delegate.clearStopNotices")(function* (input: {
+  readonly sessionId: SessionId
   readonly branchId: BranchId
-  readonly durationMs: number
   readonly interrupted: boolean
   readonly streamFailed: boolean
+  readonly unanswered: boolean
 }) {
-  if (input.interrupted || input.streamFailed) return
-  const now = yield* Clock.currentTimeMillis
-  const turnStartedAt = now - input.durationMs
+  const shown = yield* (yield* ShownStopNotices).take(`${input.sessionId}:${input.branchId}`)
+  if (input.interrupted || input.streamFailed || input.unanswered || shown.size === 0) return
   const read = (row: DelegateEntry) =>
-    Predicate.isNotUndefined(row.stopNoticeAt) && row.stopNoticeAt <= turnStartedAt
+    Predicate.isNotUndefined(row.stopNoticeAt) && shown.has(stopNoticeKey(row))
   yield* registry.at(input.branchId).update((entries) => {
     // The same array back skips the write.
     if (!entries.some(read)) return entries
@@ -1199,7 +1263,7 @@ export const DelegateExtension = defineExtension({
     const host = yield* ExtensionHost
     yield* host.register("agent", delegateAgent)
     yield* host.register("tool", StartChild, CancelChild, ListChildren)
-    yield* host.register("resource", ReconciledBranchesResource)
+    yield* host.register("resource", ReconciledBranchesResource, ShownStopNoticesResource)
     // Every turn end is read three times: as a child's receipt for its
     // parent, as a parent's interrupt for its children, and as a parent's
     // answer that read its stop notices.
