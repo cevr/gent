@@ -387,12 +387,6 @@ export function parseSkillFile(content: string, filename: string) {
 
 // Format skills for system prompt
 
-/**
- * The turn prompt lists skills compactly: each skills directory once, and
- * each skill by name and lead sentence. The file path follows from the
- * directory; the model reads the full text on demand. The listing is sent on
- * every request, so it gives names and paths up front and content on read.
- */
 const quoted = Schema.encodeSync(Schema.fromJsonString(Schema.String))
 
 const COMPACT_DESCRIPTION_CHARS = 110
@@ -449,6 +443,12 @@ const formatList = (list: ReadonlyArray<SkillEntry>): string => {
 
 const READ_RULE = `Each skill's file is <directory>/<name>/SKILL.md unless another file is named in parentheses. Read it with the read tool or from a cell when its name or description matches the task.`
 
+/**
+ * The turn prompt lists skills compactly: each skills directory once, and
+ * each skill by name and lead sentence. The file path follows from the
+ * directory; the model reads the full text on demand. The listing is sent on
+ * every request, so it gives names and paths up front and content on read.
+ */
 export const formatSkillsForPrompt = (skills: ReadonlyArray<SkillEntry>): string => {
   if (skills.length === 0) return ""
 
