@@ -2117,6 +2117,67 @@ describe("the server app surface", () => {
   })
 })
 
+describe("support module surface (test helpers, build scripts, testbed drivers)", () => {
+  const HELPER = "packages/core/tests/server/session-mutations.ts"
+
+  test("a helper export nothing names is reported", () => {
+    const findings = findingsFor([
+      { file: HELPER, text: `export const datePlusMillis = (millis: number) => millis\n` },
+    ])
+    expect(findings.map((finding) => finding.message)).toEqual([
+      expect.stringContaining("`datePlusMillis` is exported but no file outside"),
+    ])
+  })
+
+  test("a helper export only its own file reads drops the export keyword", () => {
+    const findings = findingsFor([
+      {
+        file: "apps/tui/tests/scrollback-hold-boundary.ts",
+        text: `export interface SettleHold {}\nexport const makeSettleHold = (): SettleHold => ({})\n`,
+      },
+      {
+        file: "apps/tui/tests/scrollback.test.ts",
+        text: `import { makeSettleHold } from "./scrollback-hold-boundary"\nvoid makeSettleHold\n`,
+      },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([1])
+  })
+
+  test("a test file keeps a helper export alive", () => {
+    expect(
+      findingsFor([
+        { file: HELPER, text: `export const FIXED_NOW = 1\n` },
+        {
+          file: "packages/core/tests/server/session.test.ts",
+          text: `import { FIXED_NOW } from "./session-mutations"\nvoid FIXED_NOW\n`,
+        },
+      ]),
+    ).toEqual([])
+  })
+
+  test("the testbed driver, an integration helper and a build script are scanned", () => {
+    const files = [
+      "testbeds/gamut/gamut.ts",
+      "apps/tui/integration/helpers.ts",
+      "apps/tui/scripts/build.ts",
+    ]
+    expect(files.map((file) => declaredNames(file, `export const orphan = 1\n`))).toEqual(
+      files.map(() => ["orphan"]),
+    )
+  })
+
+  test("a test file, the testbed fixture app and the lint fixtures declare nothing", () => {
+    const files = [
+      "apps/tui/tests/extensions/builtins.test.ts",
+      "testbeds/gamut/fixture/src/ledger.ts",
+      "packages/tooling/fixtures/apps/tui/tests/helper.ts",
+    ]
+    expect(files.map((file) => declaredNames(file, `export const orphan = 1\n`))).toEqual(
+      files.map(() => []),
+    )
+  })
+})
+
 describe("strict module surfaces (core, sdk)", () => {
   test("a planted sdk export no other file names is reported with its line", () => {
     const planted = `export const buildLogPaths = 1

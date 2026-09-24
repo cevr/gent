@@ -40,7 +40,7 @@ const BINARY = join(CHECKOUT, "apps/tui/bin/gent")
 // ── Presets ─────────────────────────────────────────────────────────────
 
 /** One model choice: which model, at which reasoning effort. */
-export interface Slot {
+interface Slot {
   readonly modelId: string
   readonly reasoningEffort: string
 }
@@ -52,7 +52,7 @@ export interface Slot {
  * roster block in `AGENTS.md`, which tells it what `overrides` to pass on a
  * `delegate.start` call that wants the second opinion.
  */
-export interface Preset {
+interface Preset {
   readonly orchestrator: Slot
   readonly worker: Slot
   readonly reviewer: Slot
@@ -648,7 +648,7 @@ const isIdle = (paneText: string, record: RunRecord): boolean => {
 }
 
 /** Where a wait stands: idle reads in a row with and without proof the send was handled. */
-export interface WaitProgress {
+interface WaitProgress {
   readonly settledReads: number
   readonly quietReads: number
 }
@@ -800,7 +800,7 @@ const main = async (argv: ReadonlyArray<string>): Promise<void> => {
  * whose default print is a source frame and a stack; the reader needs the
  * exit code and what the command said.
  */
-export const failureLine = (error: unknown): string => {
+const failureLine = (error: unknown): string => {
   if (error instanceof $.ShellError) {
     const said = failureText(error.stdout.toString(), error.stderr.toString())
     return `gamut: a command failed (exit ${error.exitCode}): ${said}`

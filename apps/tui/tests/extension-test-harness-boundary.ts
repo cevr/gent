@@ -14,11 +14,11 @@ import type {
 import { makeClientRuntime } from "../src/extensions/host"
 import { createMockClient, createMockRuntime } from "./render-harness-boundary"
 
-export type ActiveClientSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
+type ActiveClientSession = { readonly sessionId: SessionId; readonly branchId: BranchId }
 // eslint-disable-next-line effect/noNullish -- Test harness ref mirrors the SDK's absent active-session state.
-export type ActiveClientSessionRef = { value: ActiveClientSession | undefined }
+type ActiveClientSessionRef = { value: ActiveClientSession | undefined }
 
-export interface ClientExtensionHarnessOptions {
+interface ClientExtensionHarnessOptions {
   readonly transport?: ClientShellTransport
   /** Shell callbacks a test wants to observe; the rest stay no-ops. */
   readonly shell?: Partial<ClientShell>
@@ -38,10 +38,6 @@ export interface ClientExtensionHarnessOptions {
    */
   readonly workspace?: ClientContextDeps["workspace"]
 }
-
-export const makeActiveSessionRef = (value?: ActiveClientSession): ActiveClientSessionRef => ({
-  value,
-})
 
 /** One pane slot, as the session overlay keeps it: opening a pane replaces the open one. */
 export const makePaneSlot = (): PaneOwner => {
@@ -147,7 +143,7 @@ export const provideClientServices = <A>(
  * then runs `call`, so a test can act while a caller awaits it. It runs with
  * the caller's own services instead of starting a runtime beside them.
  */
-export interface PromiseHold {
+interface PromiseHold {
   /** Completes once a held call is waiting. */
   readonly started: Effect.Effect<void>
   /** Lets the held call run. */

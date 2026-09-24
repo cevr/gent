@@ -2286,6 +2286,9 @@ export const findUnusedSuppressionApprovals = (
  *   e2e packages are read the same way, and so is `packages/core/src/test-utils/`,
  *   which is its own surface: a guard's finding type, a fixture's context type
  *   and a test layer's config sit beside the function that returns them.
+ *   Support modules -- test helpers, build scripts and a testbed's driver --
+ *   are read with the strict rule (`SUPPORT_MODULE`); a test file declares
+ *   nothing the scan measures.
  *
  * - An entry-point surface (`packages/core/src/extensions/api.ts`,
  *   `packages/core/src/protocol.ts`, `packages/core/src/host.ts`,
@@ -2455,8 +2458,33 @@ const SCANNED_SURFACES: ReadonlyArray<ScannedSurface> = [
   },
 ]
 
-const surfaceOf = (file: string): Option.Option<ScannedSurface> =>
-  Option.fromNullishOr(SCANNED_SURFACES.find((surface) => file.startsWith(surface.prefix)))
+/**
+ * Support modules: the test helpers under a workspace's `tests/` or
+ * `integration/`, its build scripts, and a testbed's driver. They sit outside
+ * every shipped tree, so no prefix row reaches them. Each is read strictly: a
+ * name only its own file uses drops the `export` keyword.
+ */
+const SUPPORT_MODULE =
+  /^(?:(?:packages|apps)\/[^/]+\/(?:tests|integration|scripts)\/|testbeds\/[^/]+\/(?:tests\/)?[^/]+\.[cm]?[jt]sx?$)/
+
+const SUPPORT_SURFACE: ScannedSurface = {
+  prefix: "",
+  outsideOf: [],
+  testsCount: true,
+  ownFileCounts: false,
+  specifier: Option.none(),
+}
+
+/** A test file declares nothing the scan measures: its exports are fixture text or test-local. */
+const TEST_FILE = /\.test\.[cm]?[jt]sx?$/
+
+const surfaceOf = (file: string): Option.Option<ScannedSurface> => {
+  if (TEST_FILE.test(file)) return Option.none()
+  return Option.orElse(
+    Option.fromNullishOr(SCANNED_SURFACES.find((surface) => file.startsWith(surface.prefix))),
+    () => Option.liftPredicate(SUPPORT_SURFACE, () => SUPPORT_MODULE.test(file)),
+  )
+}
 
 /** A declared name, and the surface whose rule decides whether it is consumed. */
 interface Declaration {

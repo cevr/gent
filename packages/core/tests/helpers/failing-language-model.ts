@@ -3,13 +3,13 @@ import type { LanguageModel } from "effect/unstable/ai"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 import * as AiError from "effect/unstable/ai/AiError"
 
-export interface TestLanguageModelOptions {
+interface TestLanguageModelOptions {
   readonly disableToolCallResolution?: boolean
   readonly toolkit?: unknown
   readonly prompt?: Prompt.RawInput
 }
 
-export interface TestLanguageModelOverrides<Options extends TestLanguageModelOptions> {
+interface TestLanguageModelOverrides<Options extends TestLanguageModelOptions> {
   readonly generateText?: (options: Options) => Effect.Effect<unknown, unknown>
   readonly generateObject?: (options: Options) => Effect.Effect<unknown, unknown>
   readonly streamText?: (options: Options) => Stream.Stream<unknown, unknown>
