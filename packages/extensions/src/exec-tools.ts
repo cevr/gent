@@ -2979,26 +2979,35 @@ const inputNamesCommand = (
 const SHELL_VARIABLES = new Set([
   ...["GIT_SSH_COMMAND", "GIT_SSH", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_PAGER"],
   ...["GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "GIT_PROXY_COMMAND", "SSH_ASKPASS"],
-  ...["EDITOR", "VISUAL", "PAGER"],
+  ...["EDITOR", "VISUAL", "PAGER", "PROMPT_COMMAND"],
 ])
+
+/**
+ * Variables a shell expands when it uses them, running their command
+ * substitutions: the prompts (PS4 under `set -x`, PS0 and PS1 in an
+ * interactive shell) and the startup file names (`BASH_ENV`, `ENV`). They
+ * are read wherever they are set, whether or not a shell uses them later.
+ * The startup file itself is not read, as a `source`d file is not.
+ */
+const EXPANDED_VARIABLES = new Set(["PS0", "PS1", "PS4", "BASH_ENV", "ENV"])
 
 /** Builtins whose `NAME=value` arguments set variables. */
 const DECLARATION_COMMANDS = new Set(["export", "declare", "typeset", "local", "readonly"])
 
 /**
- * `PS4='$(cmd)'; set -x`: bash decodes the prompt's backslash escapes
- * (`\$` is `$`), then expands it as a double-quoted word before each
- * command it traces, so a command substitution in it runs. The script read
- * is `: "<value>"` with every backslash and double quote dropped: only the
- * substitutions in it run, and `(` or `;` in the prompt text stays data.
+ * `PS4='$(cmd)'; set -x`: bash decodes a prompt's backslash escapes (`\$`
+ * is `$`), then expands it as a double-quoted word, so a command
+ * substitution in it runs. The script read for an `EXPANDED_VARIABLES`
+ * value is `: "<value>"` with every backslash and double quote dropped:
+ * only the substitutions in it run, and `(` or `;` in the text stays data.
  */
 const promptScript = (value: ShellWord): ShellWord =>
   derivedWord(`: "${value.text.replaceAll(/[\\"]/g, "")}"`, value.dynamic)
 
 /**
  * `GIT_SSH_COMMAND=… git fetch`, `export EDITOR=…`: a value a later command
- * runs as a script. A `PS4` value runs its command substitutions
- * (`promptScript`). Git also reads config from `GIT_CONFIG_KEY_<n>` and
+ * runs as a script. An `EXPANDED_VARIABLES` value (`PS4`, `BASH_ENV`) runs
+ * its command substitutions (`promptScript`). Git also reads config from `GIT_CONFIG_KEY_<n>` and
  * `GIT_CONFIG_VALUE_<n>` pairs, and from the `'key=value'` or
  * `'key'='value'` entries of `GIT_CONFIG_PARAMETERS`.
  */
@@ -3019,7 +3028,7 @@ const assignmentRuns = ({ words, assignments }: Invocation): SegmentRuns => {
   const runs: Array<SegmentRuns> = []
   for (const [name, value] of assigned) {
     if (SHELL_VARIABLES.has(name)) runs.push(scriptRuns([value]))
-    if (name === "PS4") runs.push(scriptRuns([promptScript(value)]))
+    if (EXPANDED_VARIABLES.has(name)) runs.push(scriptRuns([promptScript(value)]))
     const configured = Option.fromNullishOr(/^GIT_CONFIG_KEY_(\d+)$/.exec(name)).pipe(
       Option.flatMap((match) => Option.fromUndefinedOr(values.get(`GIT_CONFIG_VALUE_${match[1]}`))),
       Option.flatMap((word) => configScript(value.text, word)),

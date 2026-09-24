@@ -1310,9 +1310,11 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  // bash expands PS4 before each command `set -x` traces, and a command
-  // substitution in it runs, even when the value was quoted as data.
-  test("a command substitution in PS4 is read; the rest of the prompt is data", () => {
+  // bash expands PS4 before each command `set -x` traces, PS0 and PS1 in an
+  // interactive shell, and BASH_ENV or ENV names a startup file: a command
+  // substitution in any of them runs, even when the value was quoted as
+  // data. PROMPT_COMMAND runs as a command.
+  test("a command substitution in a prompt or startup variable is read; the rest is data", () => {
     const x = "/nonexistent/gent-probe-x"
     for (const command of [
       `PS4='$(rm -rf ${x})'; set -x; true`,
@@ -1320,6 +1322,13 @@ describe("classifyBashCommand", () => {
       `declare PS4='\`rm -rf ${x}\`'; set -x; true`,
       `PS4='+ \\$(rm -rf ${x}) '; set -x; true`,
       `PS4='+ "$(rm -rf ${x})" '; set -x; true`,
+      `PS0='$(rm -rf ${x})' bash -i`,
+      `export PS1='$(rm -rf ${x}) $ '; bash -i`,
+      `PS1='\\$(rm -rf ${x})' bash -i`,
+      `BASH_ENV='$(rm -rf ${x})' bash -c true`,
+      `ENV='\`rm -rf ${x}\`' sh -i`,
+      `export PROMPT_COMMAND='rm -rf ${x}'; bash -i`,
+      `PROMPT_COMMAND='git reset --hard' bash -i`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -1328,6 +1337,11 @@ describe("classifyBashCommand", () => {
       `PS4='+ rm -rf ${x} '; set -x; true`,
       "PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'; set -x; true",
       `PS4="$P"; set -x; true`,
+      "PS1='\\u@\\h:\\w\\$ ' bash -i",
+      `PS0='rm -rf ${x}' bash -i`,
+      "ENV=production bun run start",
+      "BASH_ENV=~/.bashrc bash -c true",
+      "PROMPT_COMMAND='history -a' bash -i",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
