@@ -856,13 +856,17 @@ Inner operation bindings and durable approvals use the stores described below.
 
 The namespace section of `cell.ts` keeps the top-level bindings of the last good
 cell per branch (`cell_namespaces`) and restores them into a replacement worker;
-the first result after a restore names what came back and what was omitted. A
-handoff session (a parent, not spawned: `isSpawnedSession`) continues the
-thread, so the first kernel start of a branch with no saved namespace copies
-the one its parent saved on `parentBranchId` into its own row, and the report
-carries `previousSession`. The copy is one hop and happens once: neither side
-sees the other's later writes. The cell reads the parent ids through
-`ExtensionContext.Session.getSession`. A delegate child or `/btw` fork starts
+the first result after a restore names what came back and what was omitted.
+The first kernel start of a branch with no saved namespace fixes its starting
+namespace in its own row. For the opening branch (the oldest) of a handoff
+session (a parent, not spawned: `isSpawnedSession`), that is a copy of the one
+its parent saved on `parentBranchId`, and the report carries
+`previousSession`; for every other branch it is empty. The copy is one hop and
+happens once: neither side sees the other's later writes, and a parent that
+saves only later is not inherited. The cell reads the session and its
+branches through `ExtensionContext.Session` (`getSession`, `listBranches`). A
+worker is kept only after its restore succeeds; a failed restore closes it,
+and the next cell starts a clean one. A delegate child or `/btw` fork starts
 empty. A reset saves an empty namespace, so a later restart inherits nothing.
 
 `runtime/tools.ts` carries the transcript-owned call address

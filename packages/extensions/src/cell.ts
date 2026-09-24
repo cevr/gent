@@ -2216,11 +2216,11 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
         let restoreReport = Option.none<CellRestoreReport>()
         const namespaceAddress = { sessionId: input.sessionId, branchId: input.branchId }
         /**
-         * A handoff session continues its predecessor's thread, so a branch of
-         * it with no namespace of its own starts from the one the predecessor
-         * saved on the branch it was handed off from. The snapshot is copied
-         * into this branch's row, not shared: later writes on either side stay
-         * on their own branch. One hop: the predecessor's own inheritance was
+         * A handoff session continues its predecessor's thread, so the branch
+         * it opened with starts from the namespace the predecessor saved on
+         * the branch it was handed off from. That is the session's first
+         * branch; a branch created or forked later in the session starts
+         * empty. One hop: the predecessor's own inheritance was
          * copied into its row the same way. A spawned session (a delegate
          * child, a `/btw` fork) does not join the thread and starts empty.
          */
@@ -2239,18 +2239,39 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
             ),
           )
           if (Option.isNone(predecessor)) return Option.none<SavedNamespace>()
+          // The caller's session branches, oldest first. A fork always comes
+          // after the branch it forks, so the oldest is the opening branch.
+          const branches = yield* ctx.Session.listBranches.pipe(
+            Effect.mapError(namespaceStorageFailure),
+          )
+          if (branches[0]?.id !== input.branchId) return Option.none<SavedNamespace>()
           const saved = yield* namespaces.get(predecessor.value)
-          if (Option.isNone(saved)) return Option.none<SavedNamespace>()
-          yield* namespaces.set(namespaceAddress, saved.value)
-          return Option.some<SavedNamespace>({
-            snapshot: saved.value,
+          return Option.map(saved, (snapshot): SavedNamespace => ({
+            snapshot,
             previousSession: Option.some(predecessor.value.sessionId),
-          })
+          }))
+        })
+        /**
+         * A branch's first start fixes its starting namespace in its own row:
+         * the inherited one, else an empty one. Copied, not shared: later
+         * writes on either side stay on their own branch, and a predecessor
+         * that saves only later is not inherited.
+         */
+        const startNamespace = Effect.fn("CellExecution.startNamespace")(function* () {
+          const inherited = yield* inheritNamespace()
+          yield* namespaces.set(
+            namespaceAddress,
+            Option.match(inherited, {
+              onNone: () => emptyNamespace,
+              onSome: (value) => value.snapshot,
+            }),
+          )
+          return inherited
         })
         /**
          * Put the last good namespace back into a fresh worker: this branch's
-         * own, else the one a handoff inherits. Missing values are named; an
-         * inherited namespace also names the session it came from.
+         * own, else the one its first start fixes. Missing values are named;
+         * an inherited namespace also names the session it came from.
          */
         const restoreNamespace = Effect.fn("CellExecution.restoreNamespace")(function* (
           current: Kernel,
@@ -2258,7 +2279,7 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           const saved = yield* namespaces.get(namespaceAddress).pipe(
             Effect.flatMap(
               Option.match({
-                onNone: inheritNamespace,
+                onNone: startNamespace,
                 onSome: (snapshot) =>
                   Effect.succeedSome<SavedNamespace>({ snapshot, previousSession: Option.none() }),
               }),
@@ -2307,15 +2328,20 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
                   failedStarts++
                 }),
               ),
+              // The worker is recorded only once its namespace is back. A
+              // failed restore closes it, so the next cell opens a clean one
+              // and restores again instead of running on an empty worker.
+              Effect.tap((opened) =>
+                restoreNamespace(opened).pipe(Effect.onError(() => opened.close)),
+              ),
               Effect.tap((opened) =>
                 Effect.sync(() => {
                   kernel = Option.some(opened)
-                  // A new worker starts clean and restores just below: the
+                  // A new worker starts clean and was restored above: the
                   // recovery a failed launch asked for is done.
                   recoveryPending = false
                 }),
               ),
-              Effect.tap((opened) => restoreNamespace(opened)),
             ),
           )
         })
@@ -2337,8 +2363,9 @@ export class CellExecution extends Context.Service<CellExecution, CellExecutionS
           }
           if (!recoveryPending) return
           yield* current.reset
-          recoveryPending = false
           yield* restoreNamespace(current)
+          // Cleared only after the restore: a failed one is tried again next cell.
+          recoveryPending = false
         })
         const evaluated = (value: CellEvaluation): CellEvaluation => {
           if (Option.isNone(restoreReport)) return value

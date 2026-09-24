@@ -80,6 +80,8 @@ import {
   InteractionPendingError,
   defineExtension,
   ExtensionContext,
+  type ExtensionContextService,
+  ExtensionServiceError,
   ExtensionHost,
   tool,
   type ToolCapability,
@@ -202,29 +204,35 @@ export const buildCellExecutable = Effect.gen(function* () {
 // ── recorded cell execution ─────────────────────────────────────────────────
 
 const platform = Layer.merge(BunServices.layer, BunGentPlatformLive)
-/** The caller's extension context, reading sessions from the test's own storage. */
-const storedSessionContext = Layer.effect(
-  ExtensionContext,
-  Effect.gen(function* () {
-    const sessions = yield* SessionStorage
-    const ctx = testToolContext()
-    return testLeafContext(
-      testToolContext({
-        Session: {
-          ...ctx.Session,
-          getSession: (id) => sessions.getSession(id ?? ctx.sessionId).pipe(Effect.orDie),
-        },
-      }),
-    )
-  }),
-)
-const testLayer = Layer.provideMerge(
-  storedSessionContext,
-  SqliteStorage.MemoryWithSql(CellBranchTools.storage, CellBranchTools.migrations),
-).pipe(Layer.provideMerge(platform))
 const sessionId = SessionId.make("cell-execution-session")
 const branchId = BranchId.make("cell-execution-branch")
 const now = dateFromMillis(1_767_225_600_000)
+/**
+ * The test session's extension context, reading sessions and branches from
+ * the test's own storage. `getSession` can be replaced to fail a lookup.
+ */
+const storedSessionContext = Effect.fn("test.storedSessionContext")(function* (
+  getSession?: ExtensionContextService["Session"]["getSession"],
+) {
+  const sessions = yield* SessionStorage
+  const branches = yield* BranchStorage
+  const ctx = testToolContext({ sessionId, branchId })
+  return testLeafContext(
+    testToolContext({
+      sessionId,
+      branchId,
+      Session: {
+        ...ctx.Session,
+        getSession: getSession ?? ((id) => sessions.getSession(id ?? sessionId).pipe(Effect.orDie)),
+        listBranches: branches.listBranches(sessionId).pipe(Effect.orDie),
+      },
+    }),
+  )
+})
+const testLayer = Layer.provideMerge(
+  Layer.effect(ExtensionContext, storedSessionContext()),
+  SqliteStorage.MemoryWithSql(CellBranchTools.storage, CellBranchTools.migrations),
+).pipe(Layer.provideMerge(platform))
 
 /** A worker the test never launches: the cell settles before it needs one. */
 const unusedWorker = CellWorker.cases.Script.make({
@@ -251,7 +259,6 @@ const setupCalls = Effect.fn("test.setupCells")(function* (
 ) {
   const sessions = yield* SessionStorage
   const branches = yield* BranchStorage
-  const messages = yield* MessageStorage
   const session = new Session({ id: sessionId, createdAt: now, updatedAt: now })
   if (handoff) {
     yield* sessions.createSession(
@@ -273,31 +280,73 @@ const setupCalls = Effect.fn("test.setupCells")(function* (
   }
   yield* branches.createBranch(new Branch({ id: branchId, sessionId, createdAt: now }))
   return yield* Effect.forEach(sources, (code, index) =>
-    Effect.gen(function* () {
-      const call = {
-        assistantMessageId: MessageId.make(`cell-message-${index}`),
-        toolCallId: ToolCallId.make(`cell-call-${index}`),
-      }
-      yield* messages.createMessage(
-        Message.cases.regular.make({
-          id: call.assistantMessageId,
-          sessionId,
-          branchId,
-          role: "assistant",
-          parts: [
-            Prompt.toolCallPart({
-              id: call.toolCallId,
-              name: "cell",
-              params: { code, reset: resetAt.includes(index) },
-              providerExecuted: false,
-            }),
-          ],
-          createdAt: now,
-        }),
-      )
-      return call
+    recordCellCall({ branch: branchId, key: `${index}`, code, reset: resetAt.includes(index) }),
+  )
+})
+
+/** Save a namespace holding `notes` for the predecessor's branch. */
+const saveForPredecessor = (notes: ReadonlyArray<string>) =>
+  Effect.flatMap(Effect.service(CellStorage), (storage) =>
+    storage.namespaces.set(predecessor, {
+      bindings: [{ name: "notes", value: notes }],
+      omitted: [],
     }),
   )
+
+/** A cell owner for one branch of the test session; a new owner stands in for a restart. */
+const openCellOwner = (
+  worker: Parameters<typeof CellExecution.Live>[0]["worker"],
+  branch: BranchId = branchId,
+) =>
+  Effect.map(
+    Layer.build(CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId: branch })),
+    (context) => Context.get(context, CellExecution),
+  )
+
+/** Run a recorded cell with a host that selects no tools. */
+const runCell = (
+  owner: typeof CellExecution.Service,
+  call: Parameters<typeof CellExecution.Service.run>[0],
+) =>
+  owner
+    .run(call)
+    .pipe(
+      Effect.provideService(
+        CellOperationHost,
+        CellOperationHost.of({ catalog: hostCatalog(), call: () => Effect.never }),
+      ),
+    )
+
+/** One recorded `cell` call on a branch of the test session. */
+const recordCellCall = Effect.fn("test.recordCellCall")(function* (cell: {
+  readonly branch: BranchId
+  readonly key: string
+  readonly code: string
+  readonly reset?: boolean
+}) {
+  const messages = yield* MessageStorage
+  const call = {
+    assistantMessageId: MessageId.make(`cell-message-${cell.key}`),
+    toolCallId: ToolCallId.make(`cell-call-${cell.key}`),
+  }
+  yield* messages.createMessage(
+    Message.cases.regular.make({
+      id: call.assistantMessageId,
+      sessionId,
+      branchId: cell.branch,
+      role: "assistant",
+      parts: [
+        Prompt.toolCallPart({
+          id: call.toolCallId,
+          name: "cell",
+          params: { code: cell.code, reset: cell.reset === true },
+          providerExecuted: false,
+        }),
+      ],
+      createdAt: now,
+    }),
+  )
+  return call
 })
 
 describe("recorded cell execution", () => {
@@ -784,26 +833,14 @@ describe("recorded cell execution", () => {
           true,
         )
         if (!unsaved || !copied || !wipe || !gone) return yield* Effect.die("Missing test cells")
-        const namespaces = (yield* CellStorage).namespaces
-        const saveForPredecessor = (notes: ReadonlyArray<string>) =>
-          namespaces.set(predecessor, { bindings: [{ name: "notes", value: notes }], omitted: [] })
         yield* saveForPredecessor(["alpha"])
-        const host = CellOperationHost.of({ catalog: hostCatalog(), call: () => Effect.never })
-        const open = Effect.gen(function* () {
-          const context = yield* Layer.build(
-            CellExecution.Live({ worker, cwd: packageDirectory, sessionId, branchId }),
-          )
-          return Context.get(context, CellExecution)
-        })
-        const run = (owner: typeof cells, call: Parameters<typeof cells.run>[0]) =>
-          owner.run(call).pipe(Effect.provideService(CellOperationHost, host))
-        const cells = yield* open
+        const open = openCellOwner(worker)
         // The first start inherits; the failed cell saves nothing of its own.
-        expect(yield* run(cells, unsaved)).toMatchObject({ isFailure: true })
+        expect(yield* runCell(yield* open, unsaved)).toMatchObject({ isFailure: true })
         // The predecessor moves on. A restart restores the copy taken at the
         // first start, not the predecessor's newer namespace.
         yield* saveForPredecessor(["changed"])
-        const restarted = yield* run(yield* open, copied)
+        const restarted = yield* runCell(yield* open, copied)
         expect(restarted.result).toMatchObject({
           display: "alpha",
           restored: { restored: ["notes"], omitted: [] },
@@ -812,10 +849,117 @@ describe("recorded cell execution", () => {
         // A reset whose cell fails still leaves an empty namespace: a restart
         // neither restores the old values nor inherits the predecessor's.
         const reopened = yield* open
-        expect(yield* run(reopened, wipe)).toMatchObject({ isFailure: true })
-        const fresh = yield* run(yield* open, gone)
+        expect(yield* runCell(reopened, wipe)).toMatchObject({ isFailure: true })
+        const fresh = yield* runCell(yield* open, gone)
         expect(fresh.result).toMatchObject({ display: "undefined" })
         expect(fresh.result).not.toHaveProperty("restored")
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
+    15000,
+  )
+
+  it.scopedLive(
+    "a handoff whose predecessor saved nothing keeps its empty start after a restart",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [failed, later] = yield* setupCalls(
+          ["throw new Error('before any save')", "typeof notes"],
+          [],
+          true,
+        )
+        if (!failed || !later) return yield* Effect.die("Missing test cells")
+        expect(yield* runCell(yield* openCellOwner(worker), failed)).toMatchObject({
+          isFailure: true,
+        })
+        // The predecessor saves only after the handoff's first start.
+        yield* saveForPredecessor(["late"])
+        const restarted = yield* runCell(yield* openCellOwner(worker), later)
+        expect(restarted.result).toMatchObject({ display: "undefined" })
+        expect(restarted.result).not.toHaveProperty("restored")
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
+    15000,
+  )
+
+  it.scopedLive(
+    "only the handoff session's first branch inherits; a new or forked branch starts empty",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        yield* setupCalls([], [], true)
+        yield* saveForPredecessor(["alpha"])
+        const branches = yield* BranchStorage
+        const created = BranchId.make("cell-execution-created")
+        const forked = BranchId.make("cell-execution-forked")
+        yield* branches.createBranch(
+          new Branch({ id: created, sessionId, createdAt: dateFromMillis(now.getTime() + 1_000) }),
+        )
+        yield* branches.createBranch(
+          new Branch({
+            id: forked,
+            sessionId,
+            parentBranchId: branchId,
+            createdAt: dateFromMillis(now.getTime() + 2_000),
+          }),
+        )
+        for (const branch of [created, forked]) {
+          const call = yield* recordCellCall({ branch, key: branch, code: "typeof notes" })
+          const result = yield* runCell(yield* openCellOwner(worker, branch), call)
+          expect(result.result).toMatchObject({ display: "undefined" })
+          expect(result.result).not.toHaveProperty("restored")
+        }
+        const first = yield* recordCellCall({
+          branch: branchId,
+          key: "first",
+          code: "notes.join(',')",
+        })
+        expect((yield* runCell(yield* openCellOwner(worker), first)).result).toMatchObject({
+          display: "alpha",
+          restored: { previousSession: predecessor.sessionId },
+        })
+      }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
+    15000,
+  )
+
+  it.scopedLive(
+    "a failed session lookup at first start leaves no worker behind, and the next cell restores",
+    () =>
+      Effect.gen(function* () {
+        const worker = yield* buildCellWorker
+        const [failed, retried] = yield* setupCalls(
+          ["notes.join(',')", "notes.join(',')"],
+          [],
+          true,
+        )
+        if (!failed || !retried) return yield* Effect.die("Missing test cells")
+        yield* saveForPredecessor(["alpha"])
+        const sessions = yield* SessionStorage
+        const lookups = yield* Ref.make(0)
+        // The first lookup fails; every later one reads storage.
+        const flaky = yield* storedSessionContext((id) =>
+          Effect.gen(function* () {
+            if ((yield* Ref.getAndUpdate(lookups, (count) => count + 1)) === 0) {
+              return yield* new ExtensionServiceError({
+                service: "Session",
+                operation: "getSession",
+                message: "lookup unavailable",
+              })
+            }
+            return yield* sessions.getSession(id ?? sessionId).pipe(Effect.orDie)
+          }),
+        )
+        const owner = yield* openCellOwner(worker)
+        const lost = yield* runCell(owner, failed).pipe(
+          Effect.provideService(ExtensionContext, flaky),
+          Effect.flip,
+        )
+        expect(lost).toMatchObject({ _tag: "StorageError" })
+        const next = yield* runCell(owner, retried).pipe(
+          Effect.provideService(ExtensionContext, flaky),
+        )
+        expect(next.result).toMatchObject({
+          display: "alpha",
+          restored: { restored: ["notes"], previousSession: predecessor.sessionId },
+        })
       }).pipe(Effect.timeout("12 seconds"), Effect.provide(testLayer)),
     15000,
   )
