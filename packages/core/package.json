@@ -19,7 +19,6 @@
   },
   "peerDependencies": {
     "@effect/platform-bun": "catalog:",
-    "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "effect": "catalog:",
     "effect-bun-test": "catalog:"

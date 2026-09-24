@@ -1,25 +1,38 @@
 # Apply prompt
 
-Fill the slots. The **work rules** block goes in verbatim; it is the single copy.
+One agent per batch, in the batch's own rift. Fill the slots. The **work rules** block goes in verbatim; it is the single copy, except the **SAFETY** lines, which [`sweep.md`](sweep.md) carries too, so edit both together.
 
 ```
-Work in the rift `<rift path>` (branch `<name>`). Read `CLAUDE.md` there first. The warm source `/Users/cvr/Developer/personal/gent` stays untouched. Apply the findings in `<report path>`; verify each receipt yourself, line numbers move.
+Pass-<N> apply batch `p<N>-<batch>`. Rift <rift path> (branch p<N>-<batch>, base main <hash>). Read CLAUDE.md and ARCHITECTURE.md there first. The warm source <warm source> stays untouched. Apply <item ids> from <report paths>; re-verify each receipt in the source first, line numbers move. Reject a finding that does not hold, and say why.
 
-<Commit plan: one numbered item per commit, with the commit subject. Order: compiler-adjudicated cleanup, then comment truth, then each behavior change alone with its regression test first.>
+<Decisions the orchestrator already made, with their principle.>
+<Files other batches own: report a fix there as a decision; leave the file unedited.>
+
+Commit plan: <one numbered item per commit, with the commit subject. Order: compiler-adjudicated cleanup, then comment truth, then each behavior change alone with its regression test first.>
 
 Work rules:
-- Live binary: only through `bun run gamut`, which isolates the database. Never `bun run link`. No push.
-- Deletes use `trash`. Stage exact files by path.
-- Probes: snapshot the file with `/bin/cp` into `<scratchpad>`, break the code, run the test, restore with `/bin/cp`. Git restores (`stash`, `checkout`, `reset`) lose real edits and are out.
-- A regression test is red before the fix: run it against the unfixed code and quote the failure. A test that passes both ways proves nothing; find the path it misses.
-- Sync tests use `test(...)`; effect tests use `it.live`. After adding tests, check the pass count rose.
-- Caller-count greps cover `packages/`, `apps/` and `examples/`. Before a deletion, disable the code and run the suite (the deletion test).
-- Inside `packages/core/src/` imports are relative. Services are yielded, never passed as parameters. Tagged unions use Effect Schema. `Option` where `effect/noNullish` or `effect/noTernary` fire.
+- Bugs are red first: the test fails on the unfixed code, quoted. Prove each fix with a probe: `/bin/cp <file> <scratchpad>/<name>.snap`, break the fix, see the test go red, `/bin/cp` back, `cmp`. Git restores (`stash`, `checkout`) lose real edits and are out.
+- Reductions use the deletion test: delete the code, and let typecheck and tests name the real consumers. Caller-count greps cover `packages/`, `apps/` and `examples/`.
+- Stored formats (SQLite rows, event tags, state files) stay as they are; an additive optional field is acceptable, named in the reply.
+- Dependency edits (package.json dependencies, the catalog, bun.lock) may be denied by the permission check. When one is denied, stop that item and report it.
+- Sync tests use `test(...)`; effect tests use `it.live`, with `Effect.timeout` inside the Effect; state changes wait on a `Deferred` or `waitFor`, never `Effect.sleep`. After adding tests, check the pass count rose.
+- Inside `packages/core/src/` imports are relative; extensions import only the public entries. Services are yielded, never passed as parameters. Tagged unions use Effect Schema. `Option` where `effect/noNullish` or `effect/noTernary` fire.
 - One file per concern: new code goes into the concern's existing file under a section banner. A split into `x-part.ts` fragments is a finding, not a fix.
 - Comments describe today's behavior.
-- Commit through the hook with output to a log: `git commit -qm "..." > <scratchpad>/commit.log 2>&1; echo EXIT $?`, then grep the log for ` error `, `(fail)`. A test that fails once under load and passes on one retry is a flake: retry once and name it in the reply.
-- Finish in one run: no timers or monitors left behind.
-- A file that does not fit the description: stop and report.
+- Decide by the principles in ~/Developer/personal/dotfiles/principles/ and write "decided by <principle>"; the batch runs without check-ins. Owner rules: children wake, never block; the cell runs in full Bun; docked panes; a shipped extension is never more privileged than a user extension; personal library, no shims.
+- Gate: `bun run typecheck`, `bun run lint`, focused `bun test`, then commit through the hook, which runs the full gate, with output to a log: `git commit -qm "..." > <scratchpad>/commit.log 2>&1; echo EXIT $?`, then grep the log for ` error `, `(fail)`. A test that fails once under load and passes on one retry is a flake: retry once, name it, and keep its assertions.
+- Commits: Conventional Commits, one logical unit each, staged by exact path. Deletes use `trash`. No push, no rift creation or removal, no edits under `plans/`.
+- Live binary: only through `bun run gamut` or `--debug` runs with `GENT_DATA_DIR` under <scratchpad>; never `bun run link`, never a paid model.
+- Before the report: merge main into the rift, resolve conflicts there, run `bun run gate` into a log and read `GATE EXIT`.
+- Finish in one run: no timers or monitors left behind. A file that does not fit the description: stop and report.
 
-Final reply under 300 words: hashes, what was skipped and why, flake names, the last gate result.
+SAFETY (mandatory; on 2026-09-23 a heredoc of guard probe text ran `rm -rf ~`):
+- Create every file with the Write tool, never through a shell heredoc (`cat > f <<EOF`, quoted or not).
+- A destructive command string (rm, git reset, git clean, git push -f, dd, mkfs, chmod -R, find -delete, kill and similar) lives only as a string literal in a .ts file created with the Write tool, run with `bun <file>`. It stays out of every shell command line, heredoc, `echo`, `python3 -c`, `bun -e`, stdin heredoc and commit message; commit with `-m "..."` or `git commit -F <file written with Write>`.
+- Probe strings target only harmless paths such as `/nonexistent/gent-probe-x`; never `~`, `$HOME`, `/`, `.` or a real repo path.
+- The classifier is a pure function: call it with the probe strings. Probe text never reaches a shell.
+- To unstage, use `git restore --staged <file>`.
+- A live gent run uses `--debug` only, with `GENT_DATA_DIR` under <scratchpad>. The owner's database is read only as a `/bin/cp` copy of `~/.gent/data.db`, with `sqlite3 -readonly`.
+
+Report (final message, ASD-STE100 style): commits (hash + subject), `git diff --stat <base>..HEAD | tail -1`, per-item result with file:line receipts, a probe table, flake names, the last `GATE EXIT`, decisions for the orchestrator, and the abilities the batch changed with the TUI steps that show them in a gamut run.
 ```
