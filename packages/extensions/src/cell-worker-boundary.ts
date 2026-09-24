@@ -460,12 +460,21 @@ export const makeBunCellEvaluator = Effect.gen(function* () {
   // running cell goes to that cell's output. One from an earlier cell, or
   // with no known origin, waits for the next cell with its label: it is never
   // the running cell's error. The wait is bounded, like the output.
+  // Before the first cell no cell code exists in this worker, so an error
+  // with no known origin is the worker's own: it fails, and the worker ends.
+  // After a cell ran, its timers and promises outlive it and a reset, so such
+  // an error may be cell code and waits for the next cell.
   let cellNumber = 0
   let running = Option.none<number>()
   let strays: Array<string> = []
   const reportUncaught = (error: UncaughtError) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       const text = errorText(error.cause)
+      if (Option.isNone(error.origin) && cellNumber === 0) {
+        return yield* new CellProtocolError({
+          message: `Worker fault before any cell ran: ${text}`,
+        })
+      }
       if (Option.isSome(error.origin) && Option.contains(running, error.origin.value)) {
         return append(`Uncaught: ${text}`)
       }
@@ -632,7 +641,11 @@ export const runCellWorker = Effect.scoped(
     // Leaving the realm clean matters when several workers share one test process.
     yield* Effect.addFinalizer(() => kernel.reset)
     const environment = yield* CellWorkerEnvironment
-    yield* Stream.runForEach(environment.uncaught, kernel.reportUncaught).pipe(Effect.forkScoped)
+    // A worker's own fault ends the worker; the kernel starts a new one.
+    yield* Stream.runForEach(environment.uncaught, kernel.reportUncaught).pipe(
+      Effect.catchCause((cause) => Deferred.failCause(fatal, cause)),
+      Effect.forkScoped,
+    )
 
     const receive = Effect.fn("CellWorker.receive")(function* (request: CellRequest) {
       if (isHostReply(request)) {
@@ -802,7 +815,8 @@ if (import.meta.main) {
     Effect.scoped(
       Effect.gen(function* () {
         // Cell code runs in this process, so an error it raises outside its
-        // awaited code would end the worker. It goes to the cell output instead.
+        // awaited code would end the worker. It goes to the cell output instead;
+        // one with no known origin before any cell ran still ends the worker.
         const uncaught = yield* Queue.unbounded<UncaughtError>()
         // The origin is read here, inside the handler, where the throwing
         // callback's context is still current.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "effect-bun-test"
-import { Deferred, Effect, Fiber, Queue, Ref, type Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Fiber, Option, Queue, Ref, type Schema, Stream } from "effect"
 import {
   CellHost,
   CellWorkerEnvironment,
@@ -23,30 +23,78 @@ const catalogOf = (...names: ReadonlyArray<string>) => ({
   tools: names.map((name) => ({ name, description: name, guidelines: [], parameters: {} })),
 })
 
-const makeHarness = Effect.gen(function* () {
-  const requests = yield* Queue.make<CellRequest>({ capacity: 64 })
-  const responses = yield* Queue.make<CellResponse>({ capacity: 64 })
-  const fiber = yield* runCellWorker.pipe(
-    Effect.provideService(CellWorkerTransport, {
-      requests: Stream.fromQueue(requests),
-      send: (response) => Queue.offer(responses, response).pipe(Effect.asVoid),
-      endCellOutput: () => Effect.void,
-    }),
-    Effect.provideService(CellWorkerEnvironment, {
-      workingDirectory: process.cwd(),
-      uncaught: Stream.empty,
-    }),
-    Effect.forkScoped,
-  )
-  expect((yield* Queue.take(responses))._tag).toBe("Ready")
-  return {
-    send: (request: CellRequest) => Queue.offer(requests, request),
-    next: Queue.take(responses),
-    fiber,
-  }
-})
+/** A worker fed from queues; `uncaught` stands in for the process's uncaught handlers. */
+const makeHarnessWith = (uncaught: (typeof CellWorkerEnvironment.Service)["uncaught"]) =>
+  Effect.gen(function* () {
+    const requests = yield* Queue.make<CellRequest>({ capacity: 64 })
+    const responses = yield* Queue.make<CellResponse>({ capacity: 64 })
+    const fiber = yield* runCellWorker.pipe(
+      Effect.provideService(CellWorkerTransport, {
+        requests: Stream.fromQueue(requests),
+        send: (response) => Queue.offer(responses, response).pipe(Effect.asVoid),
+        endCellOutput: () => Effect.void,
+      }),
+      Effect.provideService(CellWorkerEnvironment, {
+        workingDirectory: process.cwd(),
+        uncaught,
+      }),
+      Effect.forkScoped,
+    )
+    expect((yield* Queue.take(responses))._tag).toBe("Ready")
+    return {
+      send: (request: CellRequest) => Queue.offer(requests, request),
+      next: Queue.take(responses),
+      fiber,
+    }
+  })
+
+const makeHarness = makeHarnessWith(Stream.empty)
 
 describe("cell worker", () => {
+  it.scopedLive("a fault of unknown origin before any cell ran ends the worker", () =>
+    Effect.gen(function* () {
+      const uncaught =
+        yield* Queue.unbounded<Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>>()
+      const worker = yield* makeHarnessWith(Stream.fromQueue(uncaught))
+      // No cell code exists in this worker yet: the fault is the worker's own.
+      yield* Queue.offer(uncaught, { cause: "worker bug", origin: Option.none() })
+      const ended = yield* Effect.exit(Fiber.join(worker.fiber))
+      expect(ended._tag).toBe("Failure")
+      if (ended._tag === "Failure")
+        expect(String(Cause.squash(ended.cause))).toContain("worker bug")
+    }).pipe(Effect.timeout("3 seconds")),
+  )
+
+  it.scopedLive("after a cell ran, a fault of unknown origin waits for the next cell", () =>
+    Effect.gen(function* () {
+      const uncaught =
+        yield* Queue.unbounded<Stream.Success<(typeof CellWorkerEnvironment.Service)["uncaught"]>>()
+      const worker = yield* makeHarnessWith(Stream.fromQueue(uncaught))
+      let cells = 0
+      const evaluate = (source: string) =>
+        Effect.gen(function* () {
+          cells += 1
+          const cellId = `cell-${cells}`
+          yield* worker.send(
+            CellRequest.cases.Evaluate.make({ cellId, outputToken: `${cellId}-token`, source }),
+          )
+          const result = yield* worker.next
+          if (result._tag !== "Evaluated")
+            return yield* new CellProtocolError({ message: `Expected result, got ${result._tag}` })
+          return result.result.display
+        })
+      expect(yield* evaluate("1")).toBe("1")
+      // A timer or promise of that cell may raise it: it is not the worker's own.
+      yield* Queue.offer(uncaught, { cause: "late rejection", origin: Option.none() })
+      // The report runs on its own fiber; each cell gives it a turn.
+      const display = yield* evaluate("2").pipe(
+        Effect.repeat({ until: (text) => text.includes("late rejection"), times: 20 }),
+      )
+      expect(display).toContain("Uncaught (origin unknown")
+      expect(display).toContain("late rejection")
+    }).pipe(Effect.timeout("3 seconds")),
+  )
+
   it.scopedLive("handles host replies during evaluation and retains values until reset", () =>
     Effect.gen(function* () {
       const worker = yield* makeHarness
