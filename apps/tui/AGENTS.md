@@ -209,6 +209,7 @@ builtin that owns a view keeps its own `src/extensions/*.client.tsx` file:
 | `@gent/herdr`                             | `builtins.tsx`           | Herdr activity reporter                    |
 | `@gent/agents-view`                       | `agents.client.tsx`      | Agents pane (the session browser), tray    |
 | `@gent/btw`                               | `btw.client.tsx`         | `/btw` fork pane                           |
+| `@gent/cache`                             | `cache.client.tsx`       | Cache-miss notice rows, cache waste total  |
 | `@gent/delegate`                          | `delegate.client.tsx`    | `delegate.start` row, child-completion row |
 | `@gent/thread-view`                       | `thread-view.client.tsx` | `/thread` pane                             |
 | `@gent/wake`                              | `wake.client.tsx`        | Wake alarm tray, fired wake row            |
@@ -240,6 +241,8 @@ Extension pipeline: `host.tsx` (static builtin imports) → `loader-boundary.ts`
 - A setup that returns a key outside the contribution buckets fails to load with `unknown contribution "<key>"`
 - **Message rows**: `messageRendererContribution(customType, component)` draws the user-role messages whose `metadata.customType` matches exactly. The component composes `UserRow` or `CollapsedRow` from `src/ui.tsx`. `message-list.tsx` names only the runtime's own kinds (`context-window`, `model-change`), and full detail draws every message as the plain row
 - Status labels (`statusLabelContribution`) draw on the composer's one status row, after the host's labels and before the right-anchored context gauge and cost, ordered by `priority`. The row has no placement: a label that needs its own place is a widget
+- **Notice rows**: `noticeRowContribution({ id, rows })` adds transcript rows that are not messages: nothing stores them and the model never reads them. `rows(session)` answers one branch's `NoticeRow`s (`key`, `createdAt`, one `glyph` drawn in `color`, muted `text`); the session view merges them into the feed's rows by `createdAt` and draws each as the notice row. A higher scope's claim on an `id` replaces a lower one. An extension derives its rows from `transport.onSessionEvent`: the session feed opens only after every client extension has loaded, so the branch's replay from its first event reaches every subscriber, and a later replay repeats envelope ids the subscriber must skip. `@gent/cache` is the example
+- `transport.models()` reads the model catalog the shell loaded for its model picker (prices included); it is reactive and empty until the first load lands
 - `autocompleteItems` contributions: extensions register prefix triggers + item sources for composer popups
 - `workspace.cwd` / `workspace.home` for workspace-relative operations
 - **`activity` has one encoding for absence**: `snapshot` is a plain reader, and a surface with nothing to report is given the default that returns `state: "unknown"` (a test takes it by omitting `activity`). Readers call `activity.snapshot()` and never re-test whether a provider exists — the composition root already decided. Do not reintroduce an `Option` around the reader alongside the default.

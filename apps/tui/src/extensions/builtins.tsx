@@ -60,6 +60,7 @@ import {
 } from "@gent/extensions/client"
 import builtinAgentsView from "./agents.client"
 import builtinBtw from "./btw.client"
+import builtinCache from "./cache.client"
 import builtinDelegate from "./delegate.client"
 import builtinWake from "./wake.client"
 import builtinThreadView from "./thread-view.client"
@@ -882,6 +883,7 @@ export const builtinSkills = defineClientExtension("@gent/skills-ui", {
 export const builtinClientModules: ReadonlyArray<AnyExtensionClientModule> = [
   builtinAgentsView,
   builtinBtw,
+  builtinCache,
   builtinDelegate,
   builtinDriver,
   builtinFiles,

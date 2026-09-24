@@ -1703,8 +1703,8 @@ export default defineClientExtension("@test/dup", {
           projectDir: emptyProject,
           runtime: activeSessionRuntime,
         })
-        // The goal label is the one builtin status label.
-        expect(resolved.statusLabels.map((label) => label.priority)).toEqual([40])
+        // The builtin status labels: the goal (40) and the cache waste total (60).
+        expect(resolved.statusLabels.map((label) => label.priority)).toEqual([40, 60])
       }).pipe(
         Effect.ensuring(
           Effect.gen(function* () {
