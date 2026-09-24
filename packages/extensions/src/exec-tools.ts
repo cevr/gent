@@ -2697,8 +2697,9 @@ const parallelGroups = (
  * command it builds is classified whole, so a runner (`xargs env`) or a
  * subcommand in the input (`xargs git`) is read as it would run. Input the
  * guard cannot divide or group asks. When the input cannot be read, the
- * wrapper asks only if the input names what runs (see `inputNamesCommand`);
- * anything else stays quiet (`find … | xargs rm`). A shell under the wrapper
+ * wrapper asks only if the input names what runs or may be its flags (see
+ * `inputNamesCommand`); anything else stays quiet (`find … | xargs rm --`,
+ * `find … | xargs wc -l`). A shell under the wrapper
  * reads its input through `shellRuns`. Each reading of the wrapper's
  * options (`wrapperStarts`) is read.
  */
@@ -2798,13 +2799,25 @@ const inputFillsScript = (
   return run._tag === "FindExec" && appends
 }
 
+/** Whether the input lands before the `--` of `words`: appended with no `--`, or in a placeholder before it. */
+const inputBeforeSeparator = (
+  words: ReadonlyArray<ShellWord>,
+  isMarked: (text: string) => boolean,
+  appends: boolean,
+): boolean => {
+  const end = words.findIndex((word, index) => index > 0 && word.text === "--")
+  if (end === -1) return appends || words.some((word) => isMarked(word.text))
+  return words.slice(0, end).some((word) => isMarked(word.text))
+}
+
 /**
  * Whether input that cannot be read names what `command` runs under `xargs`
  * or `parallel`: follow its runners (`env A=b`, `sudo`, `timeout 5`) to the
  * innermost command, whose word is missing or is the placeholder, or whose
  * script the input fills, or which is git with a risky subcommand, or with
- * its subcommand missing or the placeholder. `appends`: the input is
- * appended to the command.
+ * its subcommand missing or the placeholder, or which has risks and takes
+ * the input before `--`, where it may be a flag (`xargs rm` given `-rf x`).
+ * `appends`: the input is appended to the command.
  */
 const inputNamesCommand = (
   command: ReadonlyArray<ShellWord>,
@@ -2836,8 +2849,11 @@ const inputNamesCommand = (
   if (wrapped.length > 0) {
     return wrapped.some((inner) => inputNamesCommand(inner, isMarked, appends, read))
   }
-  if (commandName(head.value.text) !== "git") return false
-  if (readings.some((resolved) => resolved.spec.risks.length > 0)) return true
+  const risky = readings.some((resolved) => resolved.spec.risks.length > 0)
+  if (commandName(head.value.text) !== "git") {
+    return risky && inputBeforeSeparator(words, isMarked, appends)
+  }
+  if (risky) return true
   const subcommand = Option.fromUndefinedOr(words[commandStart(words, GIT_GLOBAL_OPTIONS, {})])
   return Option.match(subcommand, {
     onNone: () => true,

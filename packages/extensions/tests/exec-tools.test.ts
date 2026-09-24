@@ -350,7 +350,8 @@ describe("classifyBashCommand", () => {
       "cat README.md; cp ~/.aws/credentials /tmp/x",
       "ls && cp ~/.aws/credentials /tmp/x",
       "ls || mv .env /tmp/x",
-      "ls | xargs -I{} cp {} ~/.ssh/id_rsa",
+      // Without `--`, input before it may be a flag, and asks as destructive.
+      "ls | xargs -I{} cp -- {} ~/.ssh/id_rsa",
       "cat README.md\ncp ~/.aws/credentials /tmp/x",
       "cat $(cp ~/.aws/credentials /tmp/x)",
       "cat `cp ~/.aws/credentials /tmp/x`",
@@ -1393,7 +1394,7 @@ describe("classifyBashCommand", () => {
     }
     expect(classifyBashCommand("echo .env | xargs rm").level).toBe("sensitive")
     for (const command of [
-      "find . -name '*.tmp' | xargs rm",
+      "find . -name '*.tmp' | xargs rm --",
       "echo a b | xargs rm",
       "echo 123 | xargs kill",
       "echo a | xargs wc -l",
@@ -1466,11 +1467,22 @@ describe("classifyBashCommand", () => {
       `${u} xargs git checkout`,
       "parallel :::: /nonexistent/gent-probe-x",
       "parallel git :::: /nonexistent/gent-probe-x",
+      // Input that lands before `--` may be a flag of a command with risks.
+      `${u} xargs rm`,
+      "xargs rm < /nonexistent/gent-probe-x",
+      "xargs -a /nonexistent/gent-probe-x rm",
+      `${u} xargs -I{} rm {}`,
+      `${u} xargs env rm`,
+      `${u} xargs kill`,
+      `${u} parallel rm`,
+      // Accepted over-ask: a file name may start with `-`.
+      "find . -name '*.tmp' | xargs rm",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
     for (const command of [
-      `${u} xargs rm`,
+      `${u} xargs rm --`,
+      `${u} xargs -I{} rm -- {}`,
       `${u} xargs env grep x`,
       `${u} xargs git add`,
       `${u} xargs -I{} git -C {} status`,
