@@ -815,15 +815,19 @@ describe("continuation", () => {
         })
         // Release the gated step so the interrupted turn can finalize
         yield* controls.emitAll(1)
-        // Wait for the follow-up to complete
-        yield* waitForPhase(
-          agentLoop,
-          { sessionId: contSessionId, branchId: contBranchId },
-          "Idle",
-          200,
+        // Wait for the follow-up to complete: the second TurnCompleted, which
+        // is what the assertions read. The loop is idle for a moment between
+        // the two turns, so the phase alone does not say the follow-up ran.
+        const turnCompleted = yield* waitForOption(
+          () =>
+            Ref.get(eventsRef).pipe(
+              Effect.map((events) => {
+                const completed = events.filter(Schema.is(TurnCompleted))
+                return Option.some(completed).pipe(Option.filter((all) => all.length >= 2))
+              }),
+            ),
+          "two completed turns",
         )
-        const events = yield* Ref.get(eventsRef)
-        const turnCompleted = events.filter(Schema.is(TurnCompleted))
         // Both turns should have completed
         expect(turnCompleted.length).toBe(2)
         const interruptedTurns = turnCompleted.filter((e) => e.interrupted === true)
@@ -832,7 +836,7 @@ describe("continuation", () => {
         // Follow-up used the third provider step
         expect(yield* controls.callCount).toBe(3)
       }).pipe(Effect.provide(makeLayerWithEvents(providerLayer, eventsRef, [echoTool])))
-    }),
+    }).pipe(Effect.timeout("10 seconds")),
   )
 })
 
@@ -3648,8 +3652,8 @@ describe("model-change notice", () => {
         // `/model` lands while the tool call has no result yet.
         yield* client.session.updateSettings({
           sessionId,
-          modelId: nextModel,
-          reasoningLevel: Option.getOrUndefined(Option.none()),
+          modelId: Option.some(nextModel),
+          reasoningLevel: Option.none(),
         })
         yield* Deferred.succeed(gate.release, void 0)
         const messages = yield* waitFor(
@@ -3708,8 +3712,8 @@ describe("model-change notice", () => {
         // The settings event lands before this step's `StreamEnded`.
         yield* client.session.updateSettings({
           sessionId,
-          modelId: nextModel,
-          reasoningLevel: Option.getOrUndefined(Option.none()),
+          modelId: Option.some(nextModel),
+          reasoningLevel: Option.none(),
         })
         yield* controls.emitAll(0)
         yield* waitFor(
@@ -3764,8 +3768,8 @@ describe("model-change notice", () => {
             yield* Deferred.await(entered)
             yield* client.session.updateSettings({
               sessionId,
-              modelId: secondModel,
-              reasoningLevel: Option.getOrUndefined(Option.none()),
+              modelId: Option.some(secondModel),
+              reasoningLevel: Option.none(),
             })
             yield* Deferred.succeed(release, void 0)
             yield* firstProvider.controls.waitForCall(1)
@@ -3796,8 +3800,8 @@ describe("model-change notice", () => {
             )
             yield* client.session.updateSettings({
               sessionId: started.sessionId,
-              modelId: finalModel,
-              reasoningLevel: Option.getOrUndefined(Option.none()),
+              modelId: Option.some(finalModel),
+              reasoningLevel: Option.none(),
             })
             yield* client.session.getSnapshot({
               sessionId: started.sessionId,
@@ -3870,8 +3874,8 @@ describe("model-change notice", () => {
         yield* answered("reply 1")
         yield* client.session.updateSettings({
           sessionId,
-          modelId: ModelId.make("custom/next-model"),
-          reasoningLevel: Option.getOrUndefined(Option.none()),
+          modelId: Option.some(ModelId.make("custom/next-model")),
+          reasoningLevel: Option.none(),
         })
         yield* client.message.send({ sessionId, branchId, content: "second" })
         const messages = yield* answered("reply 3")
@@ -3914,8 +3918,8 @@ describe("model-change notice", () => {
         )
         yield* client.session.updateSettings({
           sessionId,
-          modelId: ModelId.make("custom/next-model"),
-          reasoningLevel: Option.getOrUndefined(Option.none()),
+          modelId: Option.some(ModelId.make("custom/next-model")),
+          reasoningLevel: Option.none(),
         })
         const newPrompt = "SECOND-USER-PROMPT"
         yield* client.message.send({ sessionId, branchId, content: newPrompt })

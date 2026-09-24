@@ -257,6 +257,7 @@ export const waitFor = <A, R = never>(
         }
         return yield* new WaitForError({ message: errorMessage })
       }
+      // gent/no-sleep: allow the poll interval of waitFor, the helper the rule points tests to
       yield* Effect.sleep("5 millis")
       return yield* loop
     })

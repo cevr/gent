@@ -153,6 +153,46 @@ describe("fork pane", () => {
     }),
   )
 
+  // The question rides a read queued behind one still out, and the reader
+  // switches before it runs: the read is the new session's. The first
+  // session's failure is said out loud and is not the new session's error.
+  it.scopedLive(
+    "a question that fails in the session the reader left is not the new pane's error",
+    () =>
+      Effect.gen(function* () {
+        const first = { sessionId: SessionId.make("s1"), branchId: BranchId.make("s1-branch") }
+        const second = { sessionId: SessionId.make("s2"), branchId: BranchId.make("s2-branch") }
+        const [current, setCurrent] = createSignal(first)
+        const hold = yield* Deferred.make<void>()
+        const readSecond = yield* Deferred.make<void>()
+        const notices: Array<string> = []
+        const controller = yield* provideClientServices(
+          makeForkPane({
+            fork: () => Effect.fail({ message: "model unavailable" }),
+            ask: () => Effect.void,
+            progress: (session) =>
+              Effect.suspend(() => {
+                if (session.sessionId === second.sessionId) {
+                  return Deferred.succeed(readSecond, void 0)
+                }
+                return Deferred.await(hold)
+              }).pipe(Effect.as(Option.none())),
+          }),
+          {
+            currentSession: () => Option.some(current()),
+            shell: { notify: (message) => notices.push(message) },
+          },
+        )
+        controller.ask("why?")
+        setCurrent(second)
+        yield* Deferred.succeed(hold, void 0)
+        yield* Deferred.await(readSecond).pipe(Effect.timeout("2 seconds"))
+        yield* Effect.yieldNow
+        expect(notices.some((notice) => notice.includes("why?"))).toBe(true)
+        expect(Option.isNone(controller.error())).toBe(true)
+      }),
+  )
+
   // Two asks before the first goes out: the second is refused with a notice
   // instead of replacing the first, and nothing is dropped silently.
   it.scopedLive("an ask while another waits or the fork replies is refused out loud", () =>

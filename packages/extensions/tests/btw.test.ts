@@ -275,8 +275,8 @@ describe("btw forks", () => {
           })
           yield* harness.client.session.updateSettings({
             sessionId: session.sessionId,
-            modelId: sessionModel,
-            reasoningLevel: "low",
+            modelId: Option.some(sessionModel),
+            reasoningLevel: Option.some("low"),
           })
           const pane = btw(harness, session)
           const handle = yield* pane.fork("What is the codeword?")

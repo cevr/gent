@@ -48,7 +48,6 @@ import {
   RuntimeEnvironment,
   BunGentPlatformLive,
   SqliteStorage,
-  EventStore,
   CurrentWorkspaceId,
   WorkspaceId,
   createRpcClient,
@@ -96,6 +95,7 @@ import {
   ToolRunner,
   ModelContextLedger,
   StorageError,
+  EventStore,
   getToolMetadata,
 } from "@gent/core/extensions/branch-tools"
 import {

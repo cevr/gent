@@ -62,7 +62,6 @@ import {
   Model,
   ModelId,
   ProviderId,
-  type ReasoningEffort,
 } from "../../src/domain/agent"
 import { createE2ELayer, createRpcClient, createRpcHarness } from "../../src/test-utils/harness"
 import { e2ePreset } from "../helpers/test-preset"
@@ -560,8 +559,8 @@ describe("auth.listProviders", () => {
         ).toEqual(["anthropic"])
         yield* client.session.updateSettings({
           sessionId: session.sessionId,
-          modelId: ModelId.make("otherprov/model"),
-          reasoningLevel: Option.getOrUndefined(Option.none<ReasoningEffort>()),
+          modelId: Option.some(ModelId.make("otherprov/model")),
+          reasoningLevel: Option.none(),
         })
         expect(
           required(yield* client.auth.listProviders({ sessionId: session.sessionId })),

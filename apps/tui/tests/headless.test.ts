@@ -24,6 +24,8 @@ import {
 import { InteractionRequestId } from "@gent/core/extensions/branch-tools"
 import { makeCliTeardown, renderHeadlessToolCall, runHeadless } from "../src/headless"
 import { createMockClient } from "./render-harness-boundary"
+import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
+import { SocketCloseError } from "effect/unstable/socket/Socket"
 class HeadlessRunnerTestError extends Schema.TaggedError<HeadlessRunnerTestError>()(
   "HeadlessRunnerTestError",
   { message: Schema.String },
@@ -465,7 +467,9 @@ describe("runHeadless", () => {
               // Fail the first two attempts with a lost connection so the
               // retry policy fires; succeed on the third.
               if (sendAttempts < 3) {
-                return Effect.fail(new GentConnectionError({ message: "transient socket close" }))
+                return Effect.fail(
+                  new RpcClientError({ reason: new SocketCloseError({ code: 1006 }) }),
+                )
               }
               return Deferred.done(sent, Exit.void).pipe(Effect.asVoid)
             },

@@ -194,7 +194,8 @@ export const ClientError = (message: string): ClientError => ({
   message,
 })
 
-export type UiError = GentClientRpcError | ClientError
+/** What the TUI shows: a call's error, a connection setup failure, or its own. */
+export type UiError = GentClientRpcError | GentConnectionError | ClientError
 
 /**
  * The `RpcClientError` reasons that mean the bytes did not make the round
@@ -221,10 +222,21 @@ const isTransportReason = (reason: RpcClientError["reason"]): boolean => {
  * A failure of the connection, not an answer from the server: the request
  * may have landed and only its reply was lost.
  */
-export const isConnectionLoss = (error: UiError): boolean => {
-  if (Predicate.isTagged(error, "@gent/core/GentConnectionError")) return true
+export const isConnectionLoss = (error: GentClientRpcError): boolean => {
   if (error._tag !== "RpcClientError") return false
   return isTransportReason(error.reason)
+}
+
+/**
+ * The request id of a send whose reply was lost: the server may have run it,
+ * so the same text sent again must reuse the id. None for an answered failure.
+ */
+export const lostRequest = (
+  error: GentClientRpcError,
+  requestId: string,
+): Option.Option<string> => {
+  if (isConnectionLoss(error)) return Option.some(requestId)
+  return Option.none()
 }
 
 /**

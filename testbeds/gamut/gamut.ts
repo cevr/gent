@@ -30,6 +30,7 @@ import { mkdirSync, cpSync, renameSync, existsSync, rmSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { tmpdir } from "node:os"
+import { Schema } from "effect"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CHECKOUT = resolve(HERE, "../..")
@@ -135,24 +136,22 @@ export interface GamutState {
 
 export const encodeState = (state: GamutState): string => `${JSON.stringify(state, null, 2)}\n`
 
+/** The state file as written. `sendMark` is absent in a file an older `up` wrote. */
+const StateFile = Schema.fromJsonString(
+  Schema.Struct({
+    root: Schema.String,
+    work: Schema.String,
+    data: Schema.String,
+    pane: Schema.String,
+    binary: Schema.String,
+    preset: Schema.String,
+    sendMark: Schema.optional(Schema.Finite),
+  }),
+)
+
 export const decodeState = (text: string): GamutState => {
-  const parsed: unknown = JSON.parse(text)
-  if (typeof parsed !== "object" || parsed === null) throw new Error("state file is not an object")
-  const record = parsed as Record<string, unknown>
-  const field = (name: keyof GamutState): string => {
-    const value = record[name]
-    if (typeof value !== "string") throw new Error(`state file field ${name} is not a string`)
-    return value
-  }
-  return {
-    root: field("root"),
-    work: field("work"),
-    data: field("data"),
-    pane: field("pane"),
-    binary: field("binary"),
-    preset: field("preset"),
-    sendMark: typeof record["sendMark"] === "number" ? record["sendMark"] : 0,
-  }
+  const state = Schema.decodeSync(StateFile)(text)
+  return { ...state, sendMark: state.sendMark ?? 0 }
 }
 
 // ── State file ──────────────────────────────────────────────────────────
@@ -196,12 +195,14 @@ const resolvePrompt = async (value: string): Promise<string> => {
 // ── herdr pane ──────────────────────────────────────────────────────────
 
 /** The `pane_id` out of a `herdr pane split` reply. */
+const SplitReply = Schema.fromJsonString(
+  Schema.Struct({ result: Schema.Struct({ pane: Schema.Struct({ pane_id: Schema.String }) }) }),
+)
+
 export const paneIdFromSplit = (stdout: string): string => {
-  const parsed: unknown = JSON.parse(stdout)
-  const result = (parsed as { result?: { pane?: { pane_id?: unknown } } }).result
-  const paneId = result?.pane?.pane_id
-  if (typeof paneId !== "string") throw new Error(`herdr pane split gave no pane id: ${stdout}`)
-  return paneId
+  const reply = Schema.decodeOption(SplitReply)(stdout)
+  if (reply._tag === "None") throw new Error(`herdr pane split gave no pane id: ${stdout}`)
+  return reply.value.result.pane.pane_id
 }
 
 /**
@@ -219,15 +220,15 @@ export const shellQuote = (argument: string): string => `'${argument.replaceAll(
  * with `{"error":{"message":...}}`; other commands say why on
  * stderr, so its last non-empty line wins, then stdout's.
  */
+/** A herdr JSON error reply. */
+const ErrorReply = Schema.fromJsonString(
+  Schema.Struct({ error: Schema.Struct({ message: Schema.String }) }),
+)
+
 export const failureText = (stdout: string, stderr: string): string => {
   for (const text of [stdout, stderr]) {
-    try {
-      const parsed: unknown = JSON.parse(text.trim())
-      const message = (parsed as { error?: { message?: unknown } }).error?.message
-      if (typeof message === "string") return message
-    } catch {
-      // Not a herdr JSON reply.
-    }
+    const reply = Schema.decodeOption(ErrorReply)(text.trim())
+    if (reply._tag === "Some") return reply.value.error.message
   }
   const lastLine = (text: string) =>
     text
@@ -254,10 +255,20 @@ const requireHerdrPane = async (): Promise<void> => {
 /** Ctrl-C as the raw byte. `send-keys` does not deliver Ctrl chords. */
 const CTRL_C = "\x03"
 
+/**
+ * The `pgrep -f` pattern for a process running `binary` itself: the command
+ * line starts with the path and the path ends there. An unanchored path also
+ * matches its `gent-cell` sibling (`bin/gent` is a prefix of `bin/gent-cell`).
+ */
+export const binaryProcessPattern = (binary: string): string => {
+  const literal = binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return `^${literal}( |$)`
+}
+
 /** Poll until no process is running the binary, so a relaunch gets a shell. */
 const waitForBinaryGone = async (binary: string): Promise<void> => {
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    const alive = await $`pgrep -f ${binary}`.quiet().nothrow()
+    const alive = await $`pgrep -f ${binaryProcessPattern(binary)}`.quiet().nothrow()
     if (alive.exitCode !== 0) return
     await Bun.sleep(500)
   }
@@ -341,11 +352,13 @@ const prepareAndLaunch = async (
     .quiet()
 
   if (build) {
-    // Build from THIS checkout. `gent` is a compiled binary: source edits show
-    // nothing until a rebuild, and `~/.bun/bin/gent` may point elsewhere.
-    // GENT_LINK stays unset so the build does not claim the global name.
+    // Build from THIS checkout. `gent` and its `gent-cell` worker are compiled
+    // binaries: source edits show nothing until a rebuild, and `~/.bun/bin/gent`
+    // may point elsewhere. The root build is turbo's, so an unchanged checkout
+    // is a cache hit. GENT_LINK stays unset so the build does not claim the
+    // global name.
     console.log("building gent from this checkout…")
-    await $`bun run build`.cwd(join(CHECKOUT, "apps/tui")).quiet()
+    await $`bun run build`.cwd(CHECKOUT).quiet()
   }
   if (!existsSync(BINARY)) throw new Error(`no binary at ${BINARY}; run without --no-build`)
 
@@ -378,11 +391,23 @@ const prepareAndLaunch = async (
 
 // ── status ──────────────────────────────────────────────────────────────
 
-interface SessionRow {
-  readonly id: string
-  readonly name: string | null
-  readonly parent_session_id: string | null
-}
+const SessionRow = Schema.Struct({
+  id: Schema.String,
+  name: Schema.NullOr(Schema.String),
+  parent_session_id: Schema.NullOr(Schema.String),
+})
+type SessionRow = typeof SessionRow.Type
+
+/** SQLite rows are untyped: each read decodes the shape its query selects. */
+const decodeRows = <S extends Schema.Decoder<unknown>>(
+  schema: S,
+  rows: unknown,
+): ReadonlyArray<S["Type"]> => Schema.decodeUnknownSync(Schema.Array(schema))(rows)
+
+const decodeRow = <S extends Schema.Decoder<unknown>>(
+  schema: S,
+  row: unknown,
+): S["Type"] | undefined => (row === null ? undefined : Schema.decodeSync(schema)(row))
 
 /** Indent a session by its depth in the parent chain. */
 const sessionTree = (
@@ -418,9 +443,10 @@ const status = async () => {
   }
   const db = new Database(dbPath, { readonly: true })
 
-  const sessions = db
-    .query(`SELECT id, name, parent_session_id FROM sessions ORDER BY created_at`)
-    .all() as Array<SessionRow>
+  const sessions = decodeRows(
+    SessionRow,
+    db.query(`SELECT id, name, parent_session_id FROM sessions ORDER BY created_at`).all(),
+  )
 
   // `StreamEnded.model` is where the model that produced a step is recorded.
   const modelOf = db.query(
@@ -435,8 +461,11 @@ const status = async () => {
 
   console.log("sessions:")
   for (const { row, depth } of sessionTree(sessions)) {
-    const model = modelOf.get(row.id) as { model: string | null } | null
-    const tools = toolCallsOf.get(row.id) as { n: number } | null
+    const model = decodeRow(
+      Schema.Struct({ model: Schema.NullOr(Schema.String) }),
+      modelOf.get(row.id),
+    )
+    const tools = decodeRow(Schema.Struct({ n: Schema.Finite }), toolCallsOf.get(row.id))
     const indent = "  ".repeat(depth + 1)
     console.log(
       `${indent}${row.id}  ${row.name ?? "(unnamed)"}  model=${model?.model ?? "-"}  toolCalls=${tools?.n ?? 0}`,
@@ -444,7 +473,7 @@ const status = async () => {
   }
 
   // A user message's text lives in the chunk parts, one row per part.
-  const userMessages = db
+  const userMessageRows = db
     .query(
       `SELECT m.session_id AS session_id, json_extract(cc.part_json, '$.text') AS text
        FROM messages m
@@ -453,7 +482,11 @@ const status = async () => {
        WHERE m.role = 'user' AND json_extract(cc.part_json, '$.type') = 'text'
        ORDER BY m.created_at, mc.ordinal`,
     )
-    .all() as Array<{ session_id: string; text: string | null }>
+    .all()
+  const userMessages = decodeRows(
+    Schema.Struct({ session_id: Schema.String, text: Schema.NullOr(Schema.String) }),
+    userMessageRows,
+  )
   console.log(`\nuser messages (${userMessages.length}):`)
   for (const message of userMessages) {
     console.log(`  [${message.session_id.slice(-8)}] ${JSON.stringify(message.text)}`)
@@ -500,39 +533,49 @@ const read = async (lines: number) => {
 
 /**
  * What the run's own events say: whether any turn has started, and which
- * sessions have a turn that has not ended. A turn ends with `TurnCompleted`,
- * or with `ErrorOccurred` when it fails. The pane shows the agents tray only
- * while it is on screen, so a child still working can be invisible there;
- * the events are the record.
+ * sessions have a turn that has not ended. A turn starts with a user-role
+ * `MessageReceived` (a prompt, a wake, a child's completion) or a
+ * `StreamStarted`. It ends with `TurnCompleted`, or with `ErrorOccurred` when
+ * it fails. The pane shows the agents tray only while it is on screen, so a
+ * child still working can be invisible there; the events are the record.
  */
 export interface RunRecord {
   readonly started: boolean
   readonly open: ReadonlyArray<string>
 }
 
+/**
+ * The events that start a turn. An assistant or tool `MessageReceived` is
+ * stored inside a turn, or outside one when a command presents a note
+ * (`/goal status` stores a hidden assistant message), so it starts nothing.
+ */
+const TURN_START = `(event_tag = 'StreamStarted'
+  OR (event_tag = 'MessageReceived' AND json_extract(event_json, '$.message.role') = 'user'))`
+
 export const openTurnSessions = (db: Database): ReadonlyArray<string> =>
-  (
+  decodeRows(
+    Schema.Struct({ session_id: Schema.String }),
     db
       .query(
         `SELECT session_id FROM events GROUP BY session_id
-         HAVING MAX(CASE WHEN event_tag IN ('MessageReceived', 'StreamStarted') THEN id END)
+         HAVING MAX(CASE WHEN ${TURN_START} THEN id END)
            > COALESCE(MAX(CASE WHEN event_tag IN ('TurnCompleted', 'ErrorOccurred') THEN id END), 0)`,
       )
-      .all() as Array<{ session_id: string }>
+      .all(),
   ).map((row) => row.session_id)
 
 /** A turn has started after `sendMark` (an event id), and which turns are open. */
 export const runRecord = (db: Database, sendMark: number): RunRecord => ({
   started:
-    db
-      .query(`SELECT 1 FROM events WHERE event_tag = 'MessageReceived' AND id > ? LIMIT 1`)
-      .get(sendMark) !== null,
+    db.query(`SELECT 1 FROM events WHERE ${TURN_START} AND id > ? LIMIT 1`).get(sendMark) !== null,
   open: openTurnSessions(db),
 })
 
 /** The newest event id, zero before any event. */
 export const latestEventId = (db: Database): number =>
-  (db.query(`SELECT COALESCE(MAX(id), 0) AS id FROM events`).get() as { id: number }).id
+  Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Finite }))(
+    db.query(`SELECT COALESCE(MAX(id), 0) AS id FROM events`).get(),
+  ).id
 
 const readRunDb = <A>(dataDir: string, absent: A, read: (db: Database) => A): A => {
   const dbPath = join(dataDir, "data.db")
@@ -588,7 +631,9 @@ const wait = async (timeoutSeconds: number) => {
     if (settledReads >= 2) return
     await Bun.sleep(3000)
   }
-  const turns = record.started ? `open turns: ${record.open.join(", ") || "none"}` : "no turn started"
+  const turns = record.started
+    ? `open turns: ${record.open.join(", ") || "none"}`
+    : "no turn started"
   console.error(`not settled after ${timeoutSeconds}s; ${turns}`)
   process.exitCode = 1
 }
@@ -631,15 +676,27 @@ const USAGE = `usage: bun run gamut <command>
   down                                              quit, close the pane, remove the scratch dir
   list                                              presets`
 
+/** `up`'s arguments. `--prompt` takes the next argument, which may not be a flag. */
+export const parseUpArgs = (
+  rest: ReadonlyArray<string>,
+): { readonly preset: string; readonly prompt: string | undefined; readonly build: boolean } => {
+  const promptIndex = rest.indexOf("--prompt")
+  const prompt = promptIndex >= 0 ? rest[promptIndex + 1] : undefined
+  if (promptIndex >= 0 && (prompt === undefined || prompt.startsWith("--"))) {
+    throw new Error("--prompt needs a value: a file path or the prompt text")
+  }
+  const positional = rest.filter(
+    (arg, index) => !arg.startsWith("--") && (promptIndex < 0 || index !== promptIndex + 1),
+  )
+  return { preset: positional[0] ?? "", prompt, build: !rest.includes("--no-build") }
+}
+
 const main = async (argv: ReadonlyArray<string>): Promise<void> => {
   const [command, ...rest] = argv
   switch (command) {
     case "up": {
-      const positional = rest.filter((arg) => !arg.startsWith("--"))
-      const promptIndex = rest.indexOf("--prompt")
-      const prompt = promptIndex >= 0 ? rest[promptIndex + 1] : undefined
-      const presetName = positional.find((arg) => arg !== prompt) ?? ""
-      return up(presetName, prompt, !rest.includes("--no-build"))
+      const args = parseUpArgs(rest)
+      return up(args.preset, args.prompt, args.build)
     }
     case "send":
       return send(rest.join(" "))

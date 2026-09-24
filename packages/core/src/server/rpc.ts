@@ -105,7 +105,7 @@ export const CreateSessionInput = Schema.Struct({
   initialPrompt: Schema.optional(Schema.String),
   /** What every turn of the new session runs as. Fixed at creation. */
   admission: Schema.optional(SessionAdmission),
-  /** The session's own model and reasoning, as `session.updateSettings` would set them. */
+  /** The session's own model and reasoning, as `session.updateSettings` stores them. */
   modelId: Schema.optional(ModelId),
   reasoningLevel: Schema.optional(ReasoningEffort),
   requestId: Schema.optional(RequestId),
@@ -205,16 +205,23 @@ export const RespondInteractionInput = Schema.Struct({
 })
 export type RespondInteractionInput = typeof RespondInteractionInput.Type
 
-/** The session's mutable settings, sent whole: an undefined field clears it. */
+/** The session's mutable settings as stored: an undefined field is unset. */
 export const SessionSettings = Schema.Struct({
   modelId: Schema.UndefinedOr(ModelId),
   reasoningLevel: Schema.UndefinedOr(ReasoningEffort),
 })
 export type SessionSettings = typeof SessionSettings.Type
 
+/**
+ * A change to the session's settings. The server owns the stored value and
+ * merges the change into it: a field left out stays as stored, `Some` sets it,
+ * and `None` clears it. A client never sends back a field it did not change,
+ * so a stale copy of the other field cannot overwrite it.
+ */
 export const UpdateSessionSettingsInput = Schema.Struct({
   sessionId: SessionId,
-  ...SessionSettings.fields,
+  modelId: Schema.optionalKey(Schema.OptionFromNullOr(ModelId)),
+  reasoningLevel: Schema.optionalKey(Schema.OptionFromNullOr(ReasoningEffort)),
 })
 export type UpdateSessionSettingsInput = typeof UpdateSessionSettingsInput.Type
 
@@ -582,15 +589,17 @@ export class GentRpcs extends RpcGroup.make()
 // RPC Client Types
 // ============================================================================
 
+// A call fails with its RPC's error or the transport's. `GentConnectionError`
+// belongs to connection setup (the SDK's server and client constructors); no
+// call produces one.
 export type GentRpcClient = RpcClient.RpcClient<
   RpcGroupNs.Rpcs<typeof GentRpcs>,
-  RpcClientError.RpcClientError | GentConnectionError
+  RpcClientError.RpcClientError
 >
 
 export type GentClientRpcError =
   | Rpc.Error<RpcGroupNs.Rpcs<typeof GentRpcs>>
   | RpcClientError.RpcClientError
-  | GentConnectionError
 
 // ============================================================================
 // Namespaced client — typed nested view over the flat RPC transport

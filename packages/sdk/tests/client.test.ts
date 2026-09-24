@@ -7,10 +7,14 @@ import {
   collectTestContributions,
   makeTempDirectoryScoped,
   waitFor,
-  WORKSPACE_ID_HEADER,
   projectMessagesWithToolInteractions,
 } from "@gent/core/test-utils"
-import { GentPlatform, workspaceHeadersForCwd, workspaceIdForCwd } from "@gent/core/host"
+import {
+  GentPlatform,
+  WORKSPACE_ID_HEADER,
+  workspaceHeadersForCwd,
+  workspaceIdForCwd,
+} from "@gent/core/host"
 import * as Prompt from "effect/unstable/ai/Prompt"
 import { Gent } from "../src/client"
 import type { Message as DomainMessage } from "@gent/core/protocol"

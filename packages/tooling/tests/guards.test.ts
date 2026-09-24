@@ -29,6 +29,7 @@ import {
   type PackageJson,
   workspaceManifests,
   RETIRED_SURFACES,
+  workspaceTsconfigs,
 } from "../src/guards"
 import { scanTrackedTexts } from "../src/check-guardrails"
 import { Option } from "effect"
@@ -1304,6 +1305,18 @@ const RETIRED_CASES: ReadonlyArray<readonly [string, string, string]> = [
   ["packages/core/tests/x.test.ts", "Layer.provide(BunCronRuntimeLive)", "BunCronRuntimeLive"],
   ["packages/core/src/server/rpc.ts", "export class SessionInfo {}", "SessionInfo"],
   ["packages/core/src/domain/x.ts", "type B = BranchInfo", "BranchInfo"],
+  ["packages/core/tests/x.test.ts", "yield* ExtensionStatePublisher", "ExtensionStatePublisher"],
+  ["packages/core/src/runtime/x.ts", "const events = yield* EventPublisher", "EventPublisher"],
+  ["packages/core/tests/x.test.ts", "Layer.provide(ConnectionTracker.Live)", "ConnectionTracker"],
+  ["packages/sdk/src/x.ts", 'Rpc.make("runtime.status", {})', '"runtime.status"'],
+  ["apps/tui/src/x.ts", "yield* transport.driverList", "driverList"],
+  ["packages/core/tests/x.test.ts", "yield* scope.inbox.claimStart(item)", "inbox.claimStart"],
+  ["packages/core/src/runtime/x.ts", "scope.inbox.releaseStart(item)", "inbox.releaseStart"],
+  ["packages/sdk/src/x.ts", 'import { x } from "./server/server-root.js"', "server-root"],
+  ["packages/core/tests/x.test.ts", "yield* buildServerRoot(deps)", "buildServerRoot"],
+  ["AGENTS.md", "the `ExtensionStatePublisher` publishes state", "ExtensionStatePublisher"],
+  ["docs/extensions.md", "yield* ProcessRunner", "ProcessRunner"],
+  ["packages/core/AGENTS.md", "Runtime code yields `EventPublisher`", "EventPublisher"],
 ]
 
 const RETIRED_PATHS: ReadonlyArray<string> = [
@@ -1315,6 +1328,7 @@ const RETIRED_PATHS: ReadonlyArray<string> = [
   "packages/core/src/runtime/scope-brands.ts",
   "packages/sdk/src/server-registry.ts",
   "packages/sdk/src/worker-http.ts",
+  "packages/core/src/server/server-root.ts",
 ]
 
 describe("retired surface guard", () => {
@@ -1363,10 +1377,33 @@ describe("retired surface guard", () => {
     ).toEqual([])
   })
 
-  test("docs, plans, the tooling tests and the guard source are not scanned", () => {
+  test("a steering file or a doc is read for every name row", () => {
     const text = ["ProcessRunner", "ResourceGraphHost", "ExtensionRuntime"].join("\n")
-    expect(findRetiredSurfaces("ARCHITECTURE.md", text)).toEqual([])
+    for (const file of [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "ARCHITECTURE.md",
+      "apps/tui/AGENTS.md",
+      "packages/core/AGENTS.md",
+      "docs/extensions.md",
+      "docs/guides/authoring.md",
+    ]) {
+      expect(findRetiredSurfaces(file, text).map((finding) => finding.line)).toEqual([1, 2, 3])
+    }
+  })
+
+  test("a doc is not read for imports, and a doc's own path is no finding", () => {
+    expect(
+      findRetiredSurfaces("docs/extensions.md", 'import { x } from "./resource-graph.js"'),
+    ).toEqual([])
+    expect(findRetiredSurfaces("docs/server-root.md", "")).toEqual([])
+  })
+
+  test("dated research, plans, the tooling tests and the guard source are not scanned", () => {
+    const text = ["ProcessRunner", "ResourceGraphHost", "ExtensionRuntime"].join("\n")
+    expect(findRetiredSurfaces("docs/research/2026-09-08-pi-v2-extensions.md", text)).toEqual([])
     expect(findRetiredSurfaces("plans/arch-core.md", text)).toEqual([])
+    expect(findRetiredSurfaces("README.md", text)).toEqual([])
     expect(findRetiredSurfaces("packages/tooling/src/guards.ts", text)).toEqual([])
     expect(findRetiredSurfaces("packages/tooling/tests/guards.test.ts", text)).toEqual([])
   })
@@ -1388,6 +1425,17 @@ describe("retired surface guard", () => {
     expect(findRetiredSurfaces("packages/core/src/runtime/child-agents.ts", "")).toEqual([])
     expect(findRetiredSurfaces("packages/core/src/runtime/provider.ts", "")).toEqual([])
     expect(findRetiredSurfaces("packages/sdk/src/server.ts", "")).toEqual([])
+    expect(
+      findRetiredSurfaces(
+        "packages/extensions/src/exec-tools.ts",
+        [
+          "const claim = yield* storage.claimStart({ id })",
+          "listModels: driverListModels(catalog, id)",
+          "const releaseStart = yield* Deferred.make<void>()",
+          "const status = yield* runtime.status",
+        ].join("\n"),
+      ),
+    ).toEqual([])
   })
 })
 
@@ -2506,17 +2554,42 @@ const VALID_MANIFESTS: ReadonlyArray<readonly [string, PackageJson]> = [
   ["examples/package.json", { private: true }],
 ]
 
+const PACKAGE_NAMES = new Map([
+  ["packages/core/package.json", "@gent/core"],
+  ["packages/extensions/package.json", "@gent/extensions"],
+  ["packages/sdk/package.json", "@gent/sdk"],
+  ["apps/tui/package.json", "@gent/tui"],
+  ["apps/server/package.json", "@gent/server-http"],
+  ["packages/e2e/package.json", "@gent/e2e"],
+  ["packages/tooling/package.json", "@gent/tooling"],
+  ["examples/package.json", "@gent/examples"],
+])
+
 /** The workspace with `changes` laid over the valid manifests, less the `removed` ones. */
 const packageSurface = (
   changes: ReadonlyArray<readonly [string, PackageJson]>,
   options: {
     readonly paths?: Readonly<Record<string, ReadonlyArray<string>>>
+    /** The tsconfig that sets `paths`; the root one by default. */
+    readonly pathsIn?: string
     readonly removed?: ReadonlyArray<string>
   } = {},
 ) => {
-  const manifests = new Map<string, PackageJson>([...VALID_MANIFESTS, ...changes])
+  // A change keeps the package's name unless it sets one.
+  const withName = ([file, manifest]: readonly [string, PackageJson]): [string, PackageJson] => [
+    file,
+    { name: PACKAGE_NAMES.get(file), ...manifest },
+  ]
+  const manifests = new Map<string, PackageJson>([
+    ...VALID_MANIFESTS.map(withName),
+    ...changes.map(withName),
+  ])
   for (const file of options.removed ?? []) manifests.delete(file)
-  return findPackageSurfaceFindings(manifests, { compilerOptions: { paths: options.paths ?? {} } })
+  const tsconfigs = new Map([
+    ["tsconfig.json", {}],
+    [options.pathsIn ?? "tsconfig.json", { compilerOptions: { paths: options.paths ?? {} } }],
+  ])
+  return findPackageSurfaceFindings(manifests, tsconfigs)
 }
 
 /** The file and the key a package surface finding names, as `<file> <key>`. */
@@ -2721,6 +2794,43 @@ describe("package entry points", () => {
     expect(messages(packageSurface([], { removed: ["examples/package.json"] }))).toEqual([
       "package-surface row examples/package.json names no workspace package; drop the row",
     ])
+  })
+
+  test("a package whose name is not its row's alias is reported", () => {
+    expect(
+      messages(
+        packageSurface([
+          [
+            "packages/sdk/package.json",
+            { name: "@gent/client", exports: { ".": "./src/index.ts" } },
+          ],
+        ]),
+      ),
+    ).toEqual([
+      "name: the package is @gent/client, its package-surface row names @gent/sdk; make them agree",
+    ])
+  })
+
+  test("a package tsconfig's path alias is reported in that tsconfig", () => {
+    expect(
+      packageSurface([], {
+        pathsIn: "packages/sdk/tsconfig.json",
+        paths: { "@gent/core/protocol": ["../core/src/protocol.ts"] },
+      }).map(pathOf),
+    ).toEqual(['packages/sdk/tsconfig.json compilerOptions.paths["@gent/core/protocol"]'])
+  })
+
+  test("every tsconfig but a fixture's is read for path aliases", () => {
+    expect(
+      workspaceTsconfigs([
+        "tsconfig.json",
+        "packages/sdk/tsconfig.json",
+        "packages/e2e/tsconfig.json",
+        "packages/sdk/tsconfig.build.json",
+        "testbeds/gamut/fixture/tsconfig.json",
+        "packages/tooling/fixtures/apps/tsconfig.json",
+      ]),
+    ).toEqual(["tsconfig.json", "packages/sdk/tsconfig.json", "packages/e2e/tsconfig.json"])
   })
 
   test("any tsconfig path alias is reported: packages resolve through exports", () => {

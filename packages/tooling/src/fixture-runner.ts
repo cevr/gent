@@ -20,25 +20,45 @@ export interface OxlintRun {
   readonly stderr: string
 }
 
+/** One oxlint run over a fixture set did not produce a report. */
+export class OxlintRunError extends Schema.TaggedError<OxlintRunError>()("OxlintRunError", {
+  message: Schema.String,
+}) {}
+
 const FIXTURES_DIR = Bun.fileURLToPath(new URL("../fixtures", import.meta.url))
 const FIXTURES_CONFIG = Bun.fileURLToPath(new URL("../fixtures/.oxlintrc.json", import.meta.url))
 
+/** The bound on one oxlint run over a fixture set; about a second on an idle machine. */
+const OXLINT_RUN_BOUND_MS = 20_000
+
 const decodeOxlintReport = Schema.decodeUnknownEffect(Schema.fromJsonString(OxlintReportSchema))
 
+/**
+ * Lint a fixture set in one oxlint process. The run is synchronous, so a test
+ * file can lint its fixtures while it registers its tests, and its own bound
+ * is the only bound: an overrun is one `OxlintRunError` that names the bound,
+ * not a test timeout that kills the process mid-report.
+ */
 export const runOxlint = Effect.fn("Tooling.runOxlint")(function* (
   fixtureFiles: ReadonlyArray<string>,
 ) {
-  const proc = Bun.spawn(
+  const proc = Bun.spawnSync(
     ["bunx", "oxlint", "-c", FIXTURES_CONFIG, "--format=json", ...fixtureFiles],
-    { cwd: FIXTURES_DIR, stdout: "pipe", stderr: "pipe" },
+    { cwd: FIXTURES_DIR, stdout: "pipe", stderr: "pipe", timeout: OXLINT_RUN_BOUND_MS },
   )
-  const [stdout, stderr, exitCode] = yield* Effect.all(
-    [
-      Effect.promise(() => new Response(proc.stdout).text()),
-      Effect.promise(() => new Response(proc.stderr).text()),
-      Effect.promise(() => proc.exited),
-    ],
-    { concurrency: "unbounded" },
+  const stderr = proc.stderr.toString()
+  if (proc.exitedDueToTimeout === true) {
+    return yield* new OxlintRunError({
+      message: `oxlint did not lint ${fixtureFiles.length} fixture files within ${OXLINT_RUN_BOUND_MS} ms`,
+    })
+  }
+  const report = yield* decodeOxlintReport(proc.stdout.toString()).pipe(
+    Effect.mapError(
+      (error) =>
+        new OxlintRunError({
+          message: `oxlint exited ${proc.exitCode} without a JSON report: ${error.message}\nstderr:\n${stderr}`,
+        }),
+    ),
   )
-  return { report: yield* decodeOxlintReport(stdout), exitCode, stderr }
+  return { report, exitCode: proc.exitCode, stderr }
 })

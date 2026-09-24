@@ -12,7 +12,7 @@
     "dev": "bun --preload @opentui/solid/preload src/main.tsx",
     "build": "env -u FORCE_COLOR NO_COLOR=1 bun scripts/build.ts",
     "typecheck": "tsc --noEmit",
-    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-log-preload.ts --preload @opentui/solid/preload --parallel=3 --path-ignore-patterns=\"**/headless-cli-exit.test.ts\" tests",
+    "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload ../../packages/tooling/src/test-preload.ts --preload @opentui/solid/preload --parallel --path-ignore-patterns=\"**/headless-cli-exit.test.ts\" tests",
     "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --reporter=dots --preload @opentui/solid/preload integration tests/headless-cli-exit.test.ts"
   },
   "dependencies": {
