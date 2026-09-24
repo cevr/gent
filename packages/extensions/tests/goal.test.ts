@@ -312,6 +312,27 @@ describe("goal store", () => {
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive("a file removed while it is being read reads as no goal", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("goal-store-vanished-")
+      const fs = yield* FileSystem.FileSystem
+      // An empty write removes the file after a check would have seen it: every
+      // probe says the file is there, and the read finds nothing.
+      const vanishing: FileSystem.FileSystem = { ...fs, exists: () => Effect.succeed(true) }
+      const ctx = testToolContext({
+        sessionId: SessionId.make("goal-session"),
+        branchId: BranchId.make("goal-branch"),
+        toolCallId: ToolCallId.make("tc-goal"),
+        home,
+        State: { changed: () => Effect.void },
+      })
+      const read = yield* runToolWithCtx(GoalTool, { action: "get" }, ctx).pipe(
+        Effect.provideService(FileSystem.FileSystem, vanishing),
+      )
+      expect(read.goal).toBeUndefined()
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.scopedLive("a run with its own data directory keeps branch state there, not in home", () =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("goal-store-home-")

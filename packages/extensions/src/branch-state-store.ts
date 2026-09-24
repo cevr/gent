@@ -49,12 +49,23 @@ export const makeBranchStateStore = <A, E>(input: BranchStateStoreInput<A, E>) =
       return { directory, file: path.join(directory, `${branchId}.json`) }
     })
 
+    /**
+     * One read, no existence check first: a plain read takes no lock, so an
+     * empty write can remove the file at any moment, and a missing file is
+     * the empty value.
+     */
     const read = Effect.fn(`${input.name}.read`)(function* () {
       const fs = yield* FileSystem.FileSystem
       const { file } = yield* location
-      if (!(yield* fs.exists(file))) return input.empty
-      const text = yield* fs.readFileString(file)
-      return yield* decode(text).pipe(Effect.mapError((cause) => input.invalid(file, cause)))
+      const text = yield* fs.readFileString(file).pipe(
+        Effect.asSome,
+        Effect.catchIf(
+          (error) => error.reason._tag === "NotFound",
+          () => Effect.succeed(Option.none<string>()),
+        ),
+      )
+      if (Option.isNone(text)) return input.empty
+      return yield* decode(text.value).pipe(Effect.mapError((cause) => input.invalid(file, cause)))
     })
 
     /**
