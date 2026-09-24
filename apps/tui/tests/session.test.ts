@@ -100,6 +100,44 @@ describe("refused submissions", () => {
     })
     expect(mixed.draft).toEqual(editing("!ls\n\nhello"))
   })
+
+  // The composer on screen writes a text as large as a paste as a placeholder.
+  const placeholder = (text: string) => {
+    if (text.length < 150) return text
+    return `[Pasted ~1 lines #${text.length}]`
+  }
+  const longCommand = `echo ${"x".repeat(200)}`
+  const longMessage = "y".repeat(200)
+
+  test("a long refused command comes back as the command Enter would run", () => {
+    const merged = mergeRefused(
+      editing(""),
+      empty,
+      { order: 0, text: longCommand, shell: true, requestId: Option.none() },
+      placeholder,
+    )
+    expect(merged.draft).toEqual({ draft: longCommand, mode: "shell" })
+  })
+
+  test("a kept block that joins a composer on screen is written the way that composer writes", () => {
+    // Refused while no composer was on screen: the kept draft holds the text itself.
+    const kept = mergeRefused(editing(""), empty, {
+      order: 0,
+      text: longMessage,
+      shell: false,
+      requestId: Option.none(),
+    })
+    expect(kept.draft).toEqual(editing(longMessage))
+    const live = mergeRefused(
+      kept.draft,
+      kept.block,
+      { order: 1, text: longMessage, shell: false, requestId: Option.none() },
+      placeholder,
+    )
+    expect(live.draft).toEqual(
+      editing(`${placeholder(longMessage)}\n\n${placeholder(longMessage)}`),
+    )
+  })
 })
 
 describe("transitionComposerInteraction", () => {
