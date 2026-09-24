@@ -1,6 +1,7 @@
 // oxlint-disable-next-line typescript/triple-slash-reference -- Downstream source consumers need this ambient Bun text-asset declaration without a runtime import.
 /// <reference path="./skills/markdown.d.ts" />
 import {
+  Config,
   Context,
   Crypto,
   Effect,
@@ -388,19 +389,112 @@ export function parseSkillFile(content: string, filename: string) {
 
 // Format skills for system prompt
 
-export const formatSkillsForPrompt = (skills: ReadonlyArray<SkillEntry>): string => {
+/**
+ * How the turn prompt lists skills. `full` gives each skill its description
+ * and absolute file path. `compact` names each skills directory once and
+ * gives each skill its name and first sentence; the file path follows from
+ * the directory. The listing is sent on every request, so `compact` trades
+ * detail for input tokens. Set with `GENT_SKILLS_LISTING`; `full` is the
+ * default. ARCHITECTURE.md names the measurement that decides the default.
+ */
+const SkillsListing = Schema.Literals(["full", "compact"])
+type SkillsListing = typeof SkillsListing.Type
+
+const skillsListingFlag = Config.schema(SkillsListing, "GENT_SKILLS_LISTING").pipe(
+  Config.withDefault<SkillsListing>("full"),
+)
+
+/** The listing the flag asks for. A value the flag does not know keeps the full listing. */
+const readSkillsListing = skillsListingFlag.pipe(
+  Effect.catch((error) =>
+    Effect.logWarning("skills: GENT_SKILLS_LISTING is not full or compact; listing in full").pipe(
+      Effect.annotateLogs({ error: String(error) }),
+      Effect.as<SkillsListing>("full"),
+    ),
+  ),
+)
+
+const quoted = Schema.encodeSync(Schema.fromJsonString(Schema.String))
+
+const COMPACT_DESCRIPTION_CHARS = 110
+/** A lead shorter than this ("Stop.") says too little; the next sentence joins it. */
+const COMPACT_DESCRIPTION_MIN_CHARS = 40
+
+/**
+ * A description's lead: its first sentence, and the ones after it while the
+ * lead is under 40 characters. Cut at a code point to about 110 characters.
+ */
+const firstSentence = (description: string): string => {
+  let lead = ""
+  for (const sentence of description.split(/(?<=[.!?])\s+/)) {
+    if (lead.length >= COMPACT_DESCRIPTION_MIN_CHARS) break
+    lead = `${lead} ${sentence}`.trim()
+  }
+  const points = Array.from(lead)
+  if (points.length <= COMPACT_DESCRIPTION_CHARS) return lead
+  return `${points
+    .slice(0, COMPACT_DESCRIPTION_CHARS - 1)
+    .join("")
+    .trimEnd()}…`
+}
+
+/**
+ * Where a skill file sits: its skills directory, and the file relative to it.
+ * A skill is `<directory>/<name>/SKILL.md` or `<directory>/<file>.md`.
+ */
+const skillLocation = (skill: SkillEntry) => {
+  const parts = skill.filePath.split("/")
+  let depth = 1
+  if (parts.at(-1) === "SKILL.md" && parts.length > 2) depth = 2
+  return {
+    directory: parts.slice(0, -depth).join("/"),
+    file: parts.slice(-depth).join("/"),
+  }
+}
+
+const formatCompactList = (list: ReadonlyArray<SkillEntry>): string => {
+  const byDirectory = new Map<string, Array<string>>()
+  for (const skill of list) {
+    const { directory, file } = skillLocation(skill)
+    let named = ""
+    if (file !== `${skill.name}/SKILL.md`) named = ` (${file})`
+    const lines = byDirectory.get(directory) ?? []
+    lines.push(`- ${skill.name}${named}: ${firstSentence(skill.description)}`)
+    byDirectory.set(directory, lines)
+  }
+  return Array.from(
+    byDirectory,
+    ([directory, lines]) => `Directory ${quoted(directory)}:\n${lines.join("\n")}`,
+  ).join("\n")
+}
+
+const formatFullList = (list: ReadonlyArray<SkillEntry>): string =>
+  list
+    .map(
+      (s) =>
+        `- **${s.name}** ($${s.name}:${s.level}): ${s.description}\n  File: ${quoted(s.filePath)}`,
+    )
+    .join("\n")
+
+const READ_FULL = `Read a listed file with the read tool or from a cell when its name or description matches the task.`
+
+const READ_COMPACT = `Each skill's file is <directory>/<name>/SKILL.md unless another file is named in parentheses. Read it with the read tool or from a cell when its name or description matches the task.`
+
+export const formatSkillsForPrompt = (
+  skills: ReadonlyArray<SkillEntry>,
+  listing: SkillsListing = "full",
+): string => {
   if (skills.length === 0) return ""
 
   const globalSkills = skills.filter((s) => s.level === "global")
   const localSkills = skills.filter((s) => s.level === "local")
 
-  const formatList = (list: ReadonlyArray<SkillEntry>): string =>
-    list
-      .map(
-        (s) =>
-          `- **${s.name}** ($${s.name}:${s.level}): ${s.description}\n  File: ${Schema.encodeSync(Schema.fromJsonString(Schema.String))(s.filePath)}`,
-      )
-      .join("\n")
+  let formatList = formatFullList
+  let readRule = READ_FULL
+  if (listing === "compact") {
+    formatList = formatCompactList
+    readRule = READ_COMPACT
+  }
 
   const sections: string[] = []
 
@@ -414,7 +508,7 @@ export const formatSkillsForPrompt = (skills: ReadonlyArray<SkillEntry>): string
   return `<available_skills>
 ${sections.join("\n\n")}
 
-Read a listed file with the read tool or from a cell when its name or description matches the task. Paths are on the session server. Resolve relative references from that file’s directory.
+${readRule} Paths are on the session server. Resolve relative references from that file’s directory.
 When you see \`$skill-name\`, read the local skill first, or the global skill if no local skill exists. Use \`$skill:local\` or \`$skill:global\` to select that level explicitly. Report missing skills or files; do not silently substitute a different scope.
 </available_skills>`
 }
@@ -463,12 +557,15 @@ export const SkillsExtension = defineExtension({
         layer: Skills.Live({ cwd: host.cwd, home: host.home }),
       }),
     )
+    const listing = yield* readSkillsListing
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
         const service = yield* Skills
         const skills = yield* service.list
         return {
-          promptSections: [{ id: "skills", priority: 80, content: formatSkillsForPrompt(skills) }],
+          promptSections: [
+            { id: "skills", priority: 80, content: formatSkillsForPrompt(skills, listing) },
+          ],
         }
       }),
     )

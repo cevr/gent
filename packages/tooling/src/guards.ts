@@ -1102,6 +1102,7 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
   ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
   ["GENT_LINK", "a developer sets this by hand to link the built binary onto PATH"],
+  ["GENT_SKILLS_LISTING", "the owner sets compact by hand to trial the short skills listing"],
 ])
 
 /**

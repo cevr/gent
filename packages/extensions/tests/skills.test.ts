@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "effect-bun-test"
-import { Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { ConfigProvider, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
 import {
   bundledSkillFiles,
   formatSkillsForPrompt,
@@ -61,6 +61,83 @@ describe("formatSkillsForPrompt", () => {
     expect(result).toContain('File: "/test/local/bun.md"')
     expect(result).toContain("$bun:local")
     expect(result).toContain("$skill:local")
+  })
+})
+
+describe("formatSkillsForPrompt, compact listing", () => {
+  const inDirectory = (
+    name: string,
+    level: "local" | "global",
+    root: string,
+    description: string,
+  ): SkillEntry => ({
+    name,
+    description,
+    filePath: `${root}/${name}/SKILL.md`,
+    content: "",
+    level,
+  })
+  const skills = [
+    inDirectory(
+      "bun",
+      "local",
+      "/repo/.claude/skills",
+      "Bun runtime guidance for scripts and servers. Use it for any script.",
+    ),
+    inDirectory(
+      "react",
+      "global",
+      "/home/u/.claude/skills",
+      `React patterns ${"and more ".repeat(20)}without a sentence end`,
+    ),
+    inDirectory(
+      "wait",
+      "global",
+      "/home/u/.claude/skills",
+      "Stop. Re-read the task before acting.",
+    ),
+    makeSkill("flat", "global", "A skill kept as one file, with no directory of its own."),
+  ]
+
+  test("names each directory once and each skill by name and first sentence", () => {
+    const result = formatSkillsForPrompt(skills, "compact")
+    expect(result).toContain(
+      '## Local\nDirectory "/repo/.claude/skills":\n- bun: Bun runtime guidance for scripts and servers.\n',
+    )
+    expect(result).toContain(
+      '## Global\nDirectory "/home/u/.claude/skills":\n- react: React patterns and more',
+    )
+    expect(result).not.toContain("Use it for any script.")
+    // One directory line per directory, not one path per skill.
+    expect(result.match(/\/home\/u\/\.claude\/skills/g)).toHaveLength(1)
+    expect(result).not.toContain('SKILL.md"')
+  })
+
+  test("a first sentence too short to say anything brings the next one", () => {
+    expect(formatSkillsForPrompt(skills, "compact")).toContain(
+      "- wait: Stop. Re-read the task before acting.",
+    )
+  })
+
+  test("a long first sentence is cut to about 110 characters", () => {
+    const result = formatSkillsForPrompt(skills, "compact")
+    const line = result.split("\n").find((text) => text.startsWith("- react: ")) ?? ""
+    expect(line.length).toBeLessThanOrEqual("- react: ".length + 110)
+    expect(line.endsWith("…")).toBe(true)
+  })
+
+  test("a skill kept as one file names that file; the rest follow the directory rule", () => {
+    const result = formatSkillsForPrompt(skills, "compact")
+    expect(result).toContain(
+      'Directory "/test/global":\n- flat (flat.md): A skill kept as one file, with no directory of its own.',
+    )
+    expect(result).toContain("<directory>/<name>/SKILL.md")
+    expect(result).toContain("$skill:local")
+  })
+
+  test("the full listing stays the default", () => {
+    expect(formatSkillsForPrompt(skills)).toBe(formatSkillsForPrompt(skills, "full"))
+    expect(formatSkillsForPrompt(skills)).toContain('File: "/home/u/.claude/skills/react/SKILL.md"')
   })
 })
 
@@ -232,6 +309,36 @@ describe("SkillsExtension via RPC", () => {
       }
       expect(section.value.content).toContain("effect-v4")
       expect(section.value.content).toContain("react")
+    }),
+  )
+
+  it.live("GENT_SKILLS_LISTING=compact makes the turn projection list skills compactly", () =>
+    Effect.gen(function* () {
+      const skillsSection = (env: Record<string, string>) =>
+        Effect.gen(function* () {
+          const contributions = yield* collectTestContributions(SkillsExtension.setup)
+          const turnProjection = Option.fromUndefinedOr(
+            contributions.hooks?.find((slot) => slot.kind === "turnProjection"),
+          )
+          if (Option.isNone(turnProjection)) {
+            return yield* Effect.die(new Error("expected skills turn projection"))
+          }
+          const result = yield* turnProjection.value.hook
+            .handler({ agent: builtinAgent })
+            .pipe(Effect.provide(Skills.Test(testSkills)), Effect.orDie)
+          return Option.fromUndefinedOr(
+            result.promptSections?.find((section) => section.id === "skills")?.content,
+          ).pipe(Option.getOrElse(() => ""))
+        }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))))
+
+      expect(yield* skillsSection({ GENT_SKILLS_LISTING: "compact" })).toBe(
+        formatSkillsForPrompt(testSkills, "compact"),
+      )
+      expect(yield* skillsSection({})).toBe(formatSkillsForPrompt(testSkills, "full"))
+      // A value the flag does not know keeps the full listing.
+      expect(yield* skillsSection({ GENT_SKILLS_LISTING: "tiny" })).toBe(
+        formatSkillsForPrompt(testSkills, "full"),
+      )
     }),
   )
 
