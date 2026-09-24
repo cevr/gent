@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Deferred, Effect, Exit, Option, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Option, Queue, Schema, Stream } from "effect"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import { SocketCloseError } from "effect/unstable/socket/Socket"
 import {
@@ -971,6 +971,137 @@ describe("App auth gate", () => {
       yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
       expect(view.steers).toEqual(["Cancel"])
       expect(view.shutdowns()).toBe(0)
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // Children that keep waking the parent start a new turn after each cancel;
+  // the second ctrl+c in the quit window still leaves.
+  it.live("a second ctrl+c after one that cancelled a turn quits while a turn runs", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
+      expect(view.shutdowns()).toBe(0)
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
+      expect(view.steers).toEqual(["Cancel"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // A docked pane leaves ctrl+c to the session: the btw ask line reads keys,
+  // and a turn runs behind it.
+  it.live("a second ctrl+c quits while the btw pane is open and a turn runs", () =>
+    Effect.gen(function* () {
+      const view = yield* mountRunningTurnWithError
+      yield* Effect.promise(() => view.setup.mockInput.typeText("/btw"))
+      view.setup.mockInput.pressEnter()
+      yield* waitForFrame(view.setup, (frame) => frame.includes("btw · fork"), "btw pane")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.steers.length === 1, "cancel")
+      view.setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(view.setup, () => view.shutdowns() > 0, "quit")
+      expect(view.steers).toEqual(["Cancel"])
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  // The quit arm is per key: a ctrl+c that cancelled a turn, then an escape
+  // on the idle session, is two gestures and does not quit.
+  it.live("escape after a ctrl+c that cancelled a turn does not quit", () =>
+    Effect.gen(function* () {
+      let shutdowns = 0
+      const sessionId = SessionId.make("session-cancel")
+      const branchId = BranchId.make("branch-cancel")
+      const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
+      const idle = { _tag: idleTag, queue: emptyQueueSnapshot() }
+      const runtime = yield* Queue.unbounded<typeof running | typeof idle>()
+      yield* Queue.offer(runtime, running)
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+        session: {
+          getSnapshot: () =>
+            Effect.succeed({
+              sessionId,
+              branchId,
+              messages: [],
+              lastEventId: nullValue,
+              reasoningLevel: absent,
+              agent: AgentName.make("main"),
+              runtime: running,
+              metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+            }),
+          watchRuntime: () => Stream.fromQueue(runtime),
+        },
+        steer: { command: () => Queue.offer(runtime, idle).pipe(Effect.asVoid) },
+      })
+      let ctx = Option.none<ClientContextValue>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ClientProbe onReady={(value) => (ctx = Option.some(value))} />
+            </>
+          ),
+          {
+            client,
+            runtime: createMockRuntime(),
+            initialSession: {
+              id: sessionId,
+              activeBranchId: branchId,
+              name: "Cancel",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      const destroy = setup.renderer.destroy.bind(setup.renderer)
+      setup.renderer.destroy = () => {
+        shutdowns += 1
+      }
+      const streaming = () => ctx.pipe(Option.exists((value) => value.isStreaming()))
+      yield* waitForFrame(setup, streaming, "running turn")
+      setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(setup, () => !streaming(), "turn cancelled")
+      setup.mockInput.pressEscape()
+      // gent/no-sleep: allow the escape must be parsed and handled before the negative assertion
+      yield* Effect.sleep("100 millis")
+      expect(shutdowns).toBe(0)
+      setup.renderer.destroy = destroy
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+  it.live("ctrl+c quits an idle session while the btw pane is open", () =>
+    Effect.gen(function* () {
+      let shutdowns = 0
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+          client,
+          runtime: createMockRuntime(),
+          builtins: builtinClientModules,
+          initialSession: {
+            id: SessionId.make("session-a"),
+            activeBranchId: BranchId.make("branch-a"),
+            name: "Session A",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·"), "session view")
+      yield* Effect.promise(() => setup.mockInput.typeText("/btw"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(setup, (frame) => frame.includes("btw · fork"), "btw pane")
+      const destroy = setup.renderer.destroy.bind(setup.renderer)
+      setup.renderer.destroy = () => {
+        shutdowns += 1
+      }
+      setup.mockInput.pressKey("c", { ctrl: true })
+      yield* waitForFrame(setup, () => shutdowns > 0, "quit")
+      setup.renderer.destroy = destroy
+      setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
   it.live("an interjection steers a running turn while an error shows", () =>

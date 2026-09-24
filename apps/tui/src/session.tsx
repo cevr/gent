@@ -2590,22 +2590,30 @@ export function createSessionController(props: {
     shutdownLog("exit.shutdown-signal")
     env.shutdown()
   }
-  // Escape twice within a second quits. The first press arms the quit (and
-  // clears a draft); a keybind, an interrupt, or any other use of escape
-  // disarms it.
+  // The same key twice within a second quits. Escape arms the quit (and clears
+  // a draft); ctrl+c arms it when it cancels a turn, so a second ctrl+c quits
+  // even when a new turn started in between (children that keep waking the
+  // session). The arm is per key: a ctrl+c then an escape is two gestures. A
+  // keybind or any other use of either key disarms it.
   const QUIT_WINDOW_MS = 1_000
-  let quitArmedAt = Option.none<number>()
+  type QuitKey = "escape" | "interrupt"
+  let quitArmed = Option.none<{ readonly key: QuitKey; readonly at: number }>()
   const disarmQuit = () => {
-    quitArmedAt = Option.none()
+    quitArmed = Option.none()
   }
+  const armQuit = (key: QuitKey, at: number) => {
+    quitArmed = Option.some({ key, at })
+  }
+  const quitArmedFor = (key: QuitKey, now: number) =>
+    Option.exists(quitArmed, (armed) => armed.key === key && now - armed.at < QUIT_WINDOW_MS)
   const pressQuit = (first: () => void) => {
     const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
-    if (Option.exists(quitArmedAt, (at) => now - at < QUIT_WINDOW_MS)) {
+    if (quitArmedFor("escape", now)) {
       disarmQuit()
       exit()
       return
     }
-    quitArmedAt = Option.some(now)
+    armQuit("escape", now)
     first()
   }
   const history = usePromptHistory()
@@ -3076,9 +3084,17 @@ export function createSessionController(props: {
     return true
   }
 
+  /**
+   * ctrl+c undoes the nearest thing, then quits. A press that cancels a turn
+   * arms the quit, and a second press in the window quits whatever started
+   * since: a session that children keep waking has a new turn running at
+   * every press, and cancelling each one would never let the reader leave.
+   */
   const handleInterrupt = () => {
+    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
+    const second = quitArmedFor("interrupt", now)
     disarmQuit()
-    if (overlayHoldsComposer(uiState().overlay)) {
+    if (second || overlayHoldsComposer(uiState().overlay)) {
       exit()
       return
     }
@@ -3092,6 +3108,7 @@ export function createSessionController(props: {
     }
     if (client.isStreaming()) {
       cancelTurn()
+      armQuit("interrupt", now)
       return
     }
     exit()
