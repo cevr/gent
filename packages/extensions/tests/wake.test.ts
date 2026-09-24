@@ -452,7 +452,7 @@ describe("wake", () => {
             "the stored alarm fired and was answered",
           )
           expect(woken.messages.filter((m) => m.role === "assistant").length).toBe(2)
-          expect(yield* fs.readFileString(`${home}/.gent/wakes/${branchId}.json`)).toBe("[]")
+          expect(yield* fs.exists(`${home}/.gent/wakes/${branchId}.json`)).toBe(false)
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
       ),
     15_000,
@@ -489,7 +489,7 @@ describe("wake", () => {
           )
           expect(textOf(wakeOf(woken.messages))).toContain("check the build")
           expect(yield* controls.callCount).toBe(1)
-          expect(yield* fs.readFileString(file)).toBe("[]")
+          expect(yield* fs.exists(file)).toBe(false)
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
       ),
     25_000,
@@ -576,10 +576,10 @@ describe("wake", () => {
               const client = yield* restart(again.layer)
               yield* client.session.getSnapshot({ sessionId, branchId })
               yield* waitFor(
-                fs.readFileString(file),
-                (text) => text === "[]",
+                fs.exists(file),
+                (exists) => !exists,
                 8_000,
-                "the re-armed alarm fired again and forgot its row",
+                "the re-armed alarm fired again and forgot its row, and the file with it",
               )
               // A replayed wake would run its settled message again.
               return yield* waitFor(
@@ -819,7 +819,7 @@ const wakeTurnHooks = (home: string) =>
     const decode = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))
     return {
       write: (entries: ReadonlyArray<WakeEntry>) => fs.writeFileString(file, encodeAlarms(entries)),
-      stored: Effect.flatMap(fs.readFileString(file), decode),
+      stored: Effect.flatMap(readStoredFile(file), decode),
       /** One step's projection: the prompt text the wake sections add. */
       project: projection.hook.handler({ agent: builtinAgent }).pipe(
         Effect.map((projected) =>
@@ -1120,17 +1120,15 @@ describe("notices", () => {
           // hooks run beside turns, so the test waits for the notice.
           yield* client.session.getSnapshot({ sessionId, branchId })
           yield* waitFor(
-            fs.readFileString(file),
+            readStoredFile(file),
             (text) => text.includes("never approved"),
             5_000,
             "the re-arm blocked the monitor",
           )
           yield* answer("I'm back", "reply 1")
           expect(systemPrompts[0]).toContain("never approved")
-          const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
-            yield* fs.readFileString(file),
-          )
-          expect(stored).toEqual([])
+          // The answered turn cleared the last entry, and the file with it.
+          expect(yield* fs.exists(file)).toBe(false)
           yield* answer("anything else?", "reply 2")
           expect(systemPrompts[1]).not.toContain("never approved")
         }).pipe(Effect.provide(BunServices.layer), Effect.timeout("12 seconds")),
@@ -1238,10 +1236,22 @@ const eventually = <A>(read: Effect.Effect<A>, done: (value: A) => boolean, labe
     expect(`still waiting: ${label}`).toBe(label)
   })
 
-const readFile = (home: string) =>
+/** A branch's wake file as text; a missing file is the empty list, as the store reads it. */
+const readStoredFile = (file: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    return yield* fs.readFileString(`${home}/.gent/wakes/${branchId}.json`)
+    if (!(yield* fs.exists(file))) return "[]"
+    return yield* fs.readFileString(file)
+  })
+
+const readFile = (home: string) =>
+  readStoredFile(`${home}/.gent/wakes/${branchId}.json`).pipe(Effect.provide(BunServices.layer))
+
+/** A branch with no pending entry keeps no file: the empty list is a missing file. */
+const wakeFileExists = (home: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    return yield* fs.exists(`${home}/.gent/wakes/${branchId}.json`)
   }).pipe(Effect.provide(BunServices.layer))
 
 describe("monitor guardrail", () => {
@@ -1487,32 +1497,34 @@ describe("monitor recovery and deadline", () => {
 })
 
 describe("wake store", () => {
-  it.scopedLive("an alarm is written to the branch file and removed once it fires", () =>
-    Effect.gen(function* () {
-      const home = yield* makeTempDirectoryScoped("wake-store-")
-      const queued = yield* Ref.make<ReadonlyArray<string>>([])
-      const fired = yield* Deferred.make<boolean>()
-      const ctx = contextWith(home, queued, Option.some(fired))
-      const handle = yield* runToolWithCtx(
-        WakeTool,
-        { afterSeconds: 0.2, note: "check the deploy" },
-        ctx,
-      )
-      const stored = yield* readFile(home)
-      expect(stored).toContain(handle.wakeId)
-      expect(stored).toContain("check the deploy")
-      expect(yield* Ref.get(queued)).toEqual([])
-      const alarms = yield* WakeAlarms
-      yield* TestClock.adjust("200 millis")
-      yield* Deferred.await(fired)
-      yield* settled(alarms.pending)
-      expect((yield* Ref.get(queued)).length).toBe(1)
-      expect(yield* readFile(home)).toBe("[]")
-    }).pipe(
-      // The timer lives in the resource scope; that scope must outlive the tool call.
-      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
-      Effect.timeout("8 seconds"),
-    ),
+  it.scopedLive(
+    "an alarm is written to the branch file, and the file goes once its last alarm fires",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* makeTempDirectoryScoped("wake-store-")
+        const queued = yield* Ref.make<ReadonlyArray<string>>([])
+        const fired = yield* Deferred.make<boolean>()
+        const ctx = contextWith(home, queued, Option.some(fired))
+        const handle = yield* runToolWithCtx(
+          WakeTool,
+          { afterSeconds: 0.2, note: "check the deploy" },
+          ctx,
+        )
+        const stored = yield* readFile(home)
+        expect(stored).toContain(handle.wakeId)
+        expect(stored).toContain("check the deploy")
+        expect(yield* Ref.get(queued)).toEqual([])
+        const alarms = yield* WakeAlarms
+        yield* TestClock.adjust("200 millis")
+        yield* Deferred.await(fired)
+        yield* settled(alarms.pending)
+        expect((yield* Ref.get(queued)).length).toBe(1)
+        expect(yield* wakeFileExists(home)).toBe(false)
+      }).pipe(
+        // The timer lives in the resource scope; that scope must outlive the tool call.
+        Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+        Effect.timeout("8 seconds"),
+      ),
   )
 
   it.scopedLive(
@@ -1544,7 +1556,7 @@ describe("wake store", () => {
         const cancelled = yield* runToolWithCtx(CancelTool, { wakeId: handle.wakeId }, ctx)
         expect(cancelled.cancelled).toEqual([handle.wakeId])
         yield* settled(alarms.pending)
-        expect(yield* readFile(home)).toBe("[]")
+        expect(yield* wakeFileExists(home)).toBe(false)
         yield* TestClock.adjust("4 seconds")
         expect(yield* firedCount).toBe(2)
       }).pipe(
@@ -1887,7 +1899,7 @@ describe("wake store", () => {
       ),
   )
 
-  it.scopedLive("cancelling stops the timer, empties the file, and nothing fires", () =>
+  it.scopedLive("cancelling stops the timer, removes the file, and nothing fires", () =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectoryScoped("wake-cancel-")
       const queued = yield* Ref.make<ReadonlyArray<string>>([])
@@ -1903,7 +1915,7 @@ describe("wake store", () => {
       const rest = yield* runToolWithCtx(CancelTool, {}, ctx)
       expect(rest.cancelled).toEqual([second.wakeId])
       expect(yield* alarms.pending).toEqual([])
-      expect(yield* readFile(home)).toBe("[]")
+      expect(yield* wakeFileExists(home)).toBe(false)
       // Both alarms were due at 0.3s. Past that point nothing may have queued.
       yield* TestClock.adjust("500 millis")
       expect(yield* Ref.get(queued)).toEqual([])
@@ -1947,7 +1959,7 @@ describe("wake store", () => {
       )
       const result = yield* runToolWithCtx(CancelTool, { wakeId: "repeating" }, ctx)
       expect(result.cancelled).toEqual(["repeating"])
-      expect(yield* readFile(home)).toBe("[]")
+      expect(yield* wakeFileExists(home)).toBe(false)
     }).pipe(
       Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
       Effect.timeout("8 seconds"),

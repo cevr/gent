@@ -64,6 +64,13 @@ import type * as Prompt from "effect/unstable/ai/Prompt"
 const registryCodec = Schema.fromJsonString(Schema.Array(DelegateEntry))
 const decodeRegistry = Schema.decodeUnknownSync(registryCodec)
 const encodeRegistry = Schema.encodeSync(registryCodec)
+/** A missing registry file is the empty registry, as the store reads it. */
+const storedRegistry = (file: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    if (!(yield* fs.exists(file))) return decodeRegistry("[]")
+    return decodeRegistry(yield* fs.readFileString(file))
+  })
 const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))
 
 const harnessWithHome = (
@@ -97,7 +104,9 @@ const harnessWithHome = (
     })
     const fs = yield* FileSystem.FileSystem
     const registryOf = (branchId: BranchId) =>
-      fs.readFileString(`${home}/.gent/delegates/${branchId}.json`).pipe(Effect.map(decodeRegistry))
+      storedRegistry(`${home}/.gent/delegates/${branchId}.json`).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+      )
     const writeRegistry = (branchId: BranchId, entries: ReadonlyArray<DelegateEntry>) =>
       fs
         .makeDirectory(`${home}/.gent/delegates`, { recursive: true })
@@ -2803,7 +2812,9 @@ const restartableHome = Effect.gen(function* () {
       extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
     })
   const registryOf = (branchId: BranchId) =>
-    fs.readFileString(`${home}/.gent/delegates/${branchId}.json`).pipe(Effect.map(decodeRegistry))
+    storedRegistry(`${home}/.gent/delegates/${branchId}.json`).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+    )
   const writeRegistry = (branchId: BranchId, entries: ReadonlyArray<DelegateEntry>) =>
     fs.writeFileString(`${home}/.gent/delegates/${branchId}.json`, encodeRegistry(entries))
   return { layerFor, registryOf, writeRegistry }

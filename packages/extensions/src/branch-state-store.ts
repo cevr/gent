@@ -4,7 +4,8 @@
  * database it sits beside.
  *
  * Every store that keeps branch state on disk has the same three needs: a
- * missing file reads as the empty value, a write replaces the file atomically
+ * missing file reads as the empty value (and writing the empty value removes
+ * the file), a write replaces the file atomically
  * so a reader never sees a half-written document, and a read-modify-write
  * cycle is serialized under the file lock across concurrent hooks. The
  * consumer binds only what differs: the directory, the codec, the empty value,
@@ -37,6 +38,7 @@ interface BranchStateStoreInput<A, E> {
 export const makeBranchStateStore = <A, E>(input: BranchStateStoreInput<A, E>) => {
   const decode = Schema.decodeUnknownEffect(input.codec)
   const encode = Schema.encodeSync(input.codec)
+  const emptyText = encode(input.empty)
 
   const bind = (branch: Option.Option<BranchId>) => {
     const location = Effect.gen(function* () {
@@ -55,11 +57,18 @@ export const makeBranchStateStore = <A, E>(input: BranchStateStoreInput<A, E>) =
       return yield* decode(text).pipe(Effect.mapError((cause) => input.invalid(file, cause)))
     })
 
+    /**
+     * A value that encodes as the empty value removes the file: a missing file
+     * reads back as that same value, so a branch with nothing pending keeps
+     * nothing on disk.
+     */
     const write = Effect.fn(`${input.name}.write`)(function* (value: A) {
       const fs = yield* FileSystem.FileSystem
       const { directory, file } = yield* location
+      const text = encode(value)
+      if (text === emptyText) return yield* fs.remove(file, { force: true })
       yield* fs.makeDirectory(directory, { recursive: true })
-      yield* writeFileAtomic(file, encode(value))
+      yield* writeFileAtomic(file, text)
     })
 
     /**

@@ -152,7 +152,7 @@ class GoalStoreError extends Schema.TaggedError<GoalStoreError>()("GoalStoreErro
   message: Schema.String,
 }) {}
 
-/** The file holds a snapshot so a cleared goal is an empty snapshot, not a deleted file. */
+/** The file holds a snapshot; a cleared goal is the empty snapshot, which the store keeps as no file. */
 const store = makeBranchStateStore({
   name: "GoalStore",
   directory: "goals",
