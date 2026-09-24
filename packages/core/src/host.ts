@@ -6,9 +6,13 @@
  */
 export { GentPlatform, type RuntimeModuleSource, writeFileAtomic } from "./runtime/gent-platform.js"
 export { bindBunModules, BunPlatformLive } from "./runtime/gent-platform-bun.js"
-export { isProjectExtensionDirectoryTrusted, readDisabledExtensions } from "./runtime/config.js"
+export {
+  hasProjectExtensionScope,
+  isProjectExtensionDirectoryTrusted,
+  readDisabledExtensions,
+} from "./runtime/config.js"
 export { extensionEntryModules } from "./runtime/extension-host.js"
-export { ScriptedLanguageModel } from "./runtime/provider.js"
+export { ModelResolver, ScriptedLanguageModel } from "./runtime/provider.js"
 export { BranchStorage, MessageStorage, SessionStorage } from "./storage/storage.js"
 export {
   provideWorkspaceIdHeader,

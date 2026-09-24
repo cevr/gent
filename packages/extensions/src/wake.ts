@@ -124,8 +124,9 @@ export type WakeDetails = typeof WakeDetails.Type
  * user-role `wake` message on the same branch and wakes the loop, so the
  * next turn starts with the note the model left itself. Timers live in a
  * branch-scoped resource; the entries themselves live in one file per branch
- * under `~/.gent/wakes`, so the next turn after a restart re-arms what is
- * still pending and fires at once what came due while the process was down.
+ * under `~/.gent/wakes`, so the branch's loop, when it opens after a restart,
+ * re-arms what is still pending and fires at once what came due while the
+ * process was down.
  * A repeating alarm advances its stored due time on every fire; ticks missed
  * while the process was down collapse into one fire. In `notify` mode a fire
  * starts no turn: it leaves a `notice` entry in the same file, the tray shows
@@ -331,16 +332,13 @@ const noticeSections = Effect.fn("WakeTool.notices")(function* () {
 
 /**
  * Drops the notices an answered turn read: those that fired before it
- * started, and every `blocked` one, which the turn's own projection made and
- * showed at once. A later fire shows again next turn. Nothing dropped leaves
- * the file unwritten.
+ * started. A later one shows again next turn: a fire during the turn, or a
+ * `blocked` notice from a `loopOpen` re-arm that ran beside the turn (the
+ * hooks do not hold turns back). Nothing dropped leaves the file unwritten.
  */
 const clearReadNotices = Effect.fn("WakeTool.clearNotices")(function* (turnStartedAt: number) {
   return yield* store.modify((current: ReadonlyArray<WakeEntry>) => {
-    const kept = current.filter(
-      (entry) =>
-        entry._tag !== "notice" || (entry.outcome !== "blocked" && entry.firedAt > turnStartedAt),
-    )
+    const kept = current.filter((entry) => entry._tag !== "notice" || entry.firedAt > turnStartedAt)
     const cleared = current.length - kept.length
     if (cleared === 0) return Effect.succeed({ next: current, result: 0 })
     return Effect.succeed({ next: kept, result: cleared })
@@ -608,7 +606,7 @@ const cancelWakes = Effect.fn("WakeTool.cancel")(function* (keep: (entry: WakeEn
       result: [...new Set(current.filter((entry) => !keep(entry)).map((entry) => entry.wakeId))],
     }),
   )
-  // A stored entry may have no timer yet (before the first turn re-arms it); an
+  // A stored entry may have no timer yet (before the loop's open re-arms it); an
   // interrupted timer leaves the file alone, which is why it is cleaned here first.
   yield* Effect.forEach(removed, (wakeId) => alarms.cancel(wakeId), { discard: true })
   return removed
@@ -1002,19 +1000,22 @@ export const WakeExtension = defineExtension({
     const host = yield* ExtensionHost
     yield* host.register("tool", WakeTool, MonitorTool, CancelTool, ListTool)
     yield* host.register("request", WakeRpc.Pending)
-    // The branch resource starts without a session facade, so the first turn
-    // after a restart is where stored entries get their timers back. A failed
-    // re-arm still shows the notices: the answered turn clears what fired
-    // before it, so a turn that hid them would clear them unread.
+    // The branch resource starts without a session facade, so the loop's open
+    // is where stored entries get their timers back: after a restart or a
+    // branch close, as soon as anything reaches the branch. A past-due alarm
+    // fires at once; a notify one leaves its notice and starts no turn.
+    yield* host.on("loopOpen", () =>
+      rearmPendingAlarms().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("wake.rearm.failed").pipe(
+            Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+          ),
+        ),
+      ),
+    )
+    // Every step reads the notices that have not been answered yet.
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
-        yield* rearmPendingAlarms().pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("wake.rearm.failed").pipe(
-              Effect.annotateLogs({ cause: Cause.pretty(cause) }),
-            ),
-          ),
-        )
         return { promptSections: yield* noticeSections() }
       }).pipe(
         Effect.catchCause((cause) =>

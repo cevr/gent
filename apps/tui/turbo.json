@@ -1,6 +1,9 @@
 {
   "extends": ["//"],
   "tasks": {
+    "typecheck": {
+      "inputs": ["$TURBO_EXTENDS$", "scripts/**"]
+    },
     "build": {
       "inputs": ["$TURBO_EXTENDS$", "scripts/**/*.ts"],
       "outputs": ["bin/gent", "bin/gent-cell"]

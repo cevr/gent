@@ -15,7 +15,6 @@
   },
   "dependencies": {
     "effect-encore": "catalog:",
-    "effect-machine": "catalog:",
     "effect-wide-event": "catalog:"
   },
   "peerDependencies": {

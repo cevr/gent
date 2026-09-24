@@ -27,10 +27,18 @@ import {
   findUnmatchedOverrideGlobs,
   findUnusedSuppressionApprovals,
   HOOK_FILE,
-  isRetiredSurfaceProse,
   isSteeringFile,
   OxlintConfigSchema,
+  type DependencyScope,
+  findUnusedCatalogEntries,
+  findUnusedDependencies,
+  type InstalledDependency,
+  installedDependency,
+  InstalledPackageSchema,
   type PackageJson,
+  PackageJsonSchema,
+  type TsConfigJson,
+  TsConfigSchema,
   workspaceManifests,
   workspaceTsconfigs,
 } from "./guards"
@@ -63,8 +71,23 @@ const readTrackedFile = Effect.fn("Tooling.readTrackedFile")(function* (file: st
   return Option.some({ file, text: yield* Effect.promise(() => source.text()) })
 })
 
-const readJsonFile = Effect.fn("Tooling.readJsonFile")(function* (path: string) {
-  return yield* Effect.promise(() => Bun.file(path).json())
+/**
+ * Every config the guards read goes through one reader. Tsconfigs and the
+ * lint config are JSON with comments and trailing commas; a manifest is plain
+ * JSON, a subset. The schema names only the fields a check reads.
+ */
+const readJsonc = Effect.fn("Tooling.readJsonc")(function* <
+  S extends Schema.Top & { readonly DecodingServices: never },
+>(path: string, schema: S) {
+  const text = yield* Effect.promise(() => Bun.file(path).text())
+  const parsed = yield* Effect.try({
+    try: (): unknown => Bun.JSONC.parse(text),
+    catch: (error) => `${path}: ${String(error)}`,
+  })
+  const value = yield* Schema.decodeUnknownEffect(schema)(parsed).pipe(
+    Effect.mapError((error) => `${path}: ${error.message}`),
+  )
+  return { text, value }
 })
 
 const OXLINT_CONFIG = ".oxlintrc.json"
@@ -75,11 +98,7 @@ const lintConfigFindings = Effect.fn("Tooling.lintConfigFindings")(function* (
   trackedFiles: ReadonlyArray<string>,
   sourceTexts: ReadonlyMap<string, string>,
 ) {
-  const configText = yield* Effect.promise(() => Bun.file(OXLINT_CONFIG).text())
-  // The config is JSONC: it carries a `//` note above most rules.
-  const config = yield* Schema.decodeEffect(Schema.fromJsonString(OxlintConfigSchema))(
-    configText.replace(/^\s*\/\/.*$/gm, ""),
-  )
+  const { text: configText, value: config } = yield* readJsonc(OXLINT_CONFIG, OxlintConfigSchema)
   const rootRules = new Set(Object.keys(config.rules ?? {}))
   const pluginText = Option.getOrElse(Option.fromNullishOr(sourceTexts.get(LINT_PLUGIN)), () => "")
   return [
@@ -113,58 +132,141 @@ const SOURCE_FILE_FINDERS: ReadonlyArray<FileFinder> = [
 
 const isSourceFile = (file: string): boolean => /\.[cm]?[jt]sx?$/.test(file)
 
-/** The one root manifest field the package-surface check reads. */
-const RootManifestSchema = Schema.Struct({
-  workspaces: Schema.optional(Schema.Array(Schema.String)),
+const ROOT_MANIFEST = "package.json"
+
+/** A manifest as read: its text, for finding lines, and the decoded fields. */
+interface ManifestRead {
+  readonly text: string
+  readonly value: PackageJson
+}
+
+/** The installed manifest of `name` under the first base that has it, or none. */
+const readInstalled = Effect.fn("Tooling.readInstalled")(function* (
+  bases: ReadonlyArray<string>,
+  name: string,
+) {
+  for (const base of bases) {
+    const path = `${base}node_modules/${name}/package.json`
+    if (!(yield* Effect.promise(() => Bun.file(path).exists()))) continue
+    const read = yield* Effect.result(readJsonc(path, InstalledPackageSchema))
+    if (Result.isSuccess(read)) return Option.some(installedDependency(name, read.success.value))
+  }
+  return Option.none<InstalledDependency>()
 })
 
-/** The one tsconfig field the paths check reads. */
-const TsConfigSchema = Schema.Struct({
-  compilerOptions: Schema.optional(
-    Schema.Struct({
-      paths: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.String))),
-    }),
-  ),
+/** Each declared dependency of `packageJson` as the scope resolves it: its own install first. */
+const installedOf = Effect.fn("Tooling.installedOf")(function* (
+  bases: ReadonlyArray<string>,
+  packageJson: PackageJson,
+) {
+  const names = Object.keys({
+    ...packageJson.dependencies,
+    ...packageJson.devDependencies,
+    ...packageJson.optionalDependencies,
+  })
+  const installed = new Map<string, InstalledDependency>()
+  for (const name of names) {
+    for (const found of Option.toArray(yield* readInstalled(bases, name)))
+      installed.set(name, found)
+  }
+  return installed
 })
 
-/** A tsconfig is JSON with comments and trailing commas, which TypeScript accepts. */
-const readTsconfig = Effect.fn("Tooling.readTsconfig")(function* (path: string) {
-  const text = yield* Effect.promise(() => Bun.file(path).text())
-  return yield* Effect.try({
-    try: () => Bun.JSONC.parse(text),
-    catch: (error) => String(error),
-  }).pipe(
-    Effect.flatMap((parsed) =>
-      Schema.decodeUnknownEffect(TsConfigSchema)(parsed).pipe(
-        Effect.mapError((error) => error.message),
-      ),
-    ),
-    Effect.result,
+/** Files that can load, name or run a dependency: source, config, hooks and CI steps. */
+const isDependencyUseFile = (file: string): boolean =>
+  /\.(?:[cm]?[jt]sx?|jsonc?|toml|ya?ml)$/.test(file) &&
+  !file.includes("/dist/") &&
+  !file.includes("node_modules/")
+
+const scriptsOf = (packageJson: PackageJson): ReadonlyArray<string> =>
+  Object.values(packageJson.scripts ?? {})
+
+/**
+ * One scope per manifest. A workspace's dependencies serve its own directory
+ * and scripts. The root's serve the whole tree: every package script, the
+ * hook and the CI steps can run them, and it installs every workspace's peers.
+ */
+const dependencyScopes = Effect.fn("Tooling.dependencyScopes")(function* (
+  root: ManifestRead,
+  manifests: ReadonlyMap<string, ManifestRead>,
+  trackedFiles: ReadonlyArray<string>,
+) {
+  const reads = yield* Effect.forEach(trackedFiles.filter(isDependencyUseFile), readTrackedFile, {
+    concurrency: 32,
+  })
+  const useTexts = new Map<string, string>(
+    reads.flatMap(Option.toArray).map(({ file, text }) => [file, text]),
   )
+  const workspaces = [...manifests]
+  const rootScope: DependencyScope = {
+    manifest: ROOT_MANIFEST,
+    manifestText: root.text,
+    packageJson: root.value,
+    files: useTexts,
+    commands: [
+      ...[root, ...manifests.values()].flatMap((read) => scriptsOf(read.value)),
+      ...[...useTexts].filter(([file]) => /\.ya?ml$/.test(file)).map(([, text]) => text),
+    ],
+    providedPeers: new Set(
+      workspaces.flatMap(([, read]) => Object.keys(read.value.peerDependencies ?? {})),
+    ),
+    installed: yield* installedOf([""], root.value),
+  }
+  const workspaceScopes = yield* Effect.forEach(workspaces, ([manifest, read]) => {
+    const directory = manifest.slice(0, -"package.json".length)
+    return Effect.map(installedOf([directory, ""], read.value), (installed): DependencyScope => ({
+      manifest,
+      manifestText: read.text,
+      packageJson: read.value,
+      files: new Map([...useTexts].filter(([file]) => file.startsWith(directory))),
+      commands: scriptsOf(read.value),
+      providedPeers: new Set(),
+      installed,
+    }))
+  })
+  return [rootScope, ...workspaceScopes]
 })
 
-/** The findings that read every workspace manifest and every workspace tsconfig. */
+/** The findings that read every manifest and every workspace tsconfig. */
 const packageSurfaceFindings = Effect.fn("Tooling.packageSurfaceFindings")(function* (
   trackedFiles: ReadonlyArray<string>,
 ) {
-  const rootManifest = yield* readJsonFile("package.json")
-  const { workspaces } = yield* Schema.decodeUnknownEffect(RootManifestSchema)(rootManifest)
-  const manifests = workspaceManifests(workspaces ?? [], trackedFiles)
-  const packageJsons = yield* Effect.forEach(manifests, readJsonFile, { concurrency: 8 })
-  const packageJsonByPath = new Map<string, PackageJson>(
-    manifests.map((path, index) => [path, packageJsons[index]]),
+  const root = yield* readJsonc(ROOT_MANIFEST, PackageJsonSchema)
+  const manifestPaths = workspaceManifests(root.value.workspaces ?? [], trackedFiles)
+  const manifestReads = yield* Effect.forEach(
+    manifestPaths,
+    (path) => readJsonc(path, PackageJsonSchema),
+    { concurrency: 8 },
+  )
+  const manifests = new Map<string, ManifestRead>(
+    manifestReads.map((read, index) => [manifestPaths[index] ?? "", read]),
   )
   const tsconfigPaths = workspaceTsconfigs(trackedFiles)
-  const tsconfigs = yield* Effect.forEach(tsconfigPaths, readTsconfig, { concurrency: 8 })
+  const tsconfigs = yield* Effect.forEach(
+    tsconfigPaths,
+    (path) => Effect.result(readJsonc(path, TsConfigSchema)),
+    { concurrency: 8 },
+  )
   const unreadable: Array<Finding> = []
-  const tsconfigByPath = new Map<string, typeof TsConfigSchema.Type>()
+  const tsconfigByPath = new Map<string, TsConfigJson>()
   for (const [index, read] of tsconfigs.entries()) {
     const path = tsconfigPaths.at(index) ?? "tsconfig.json"
-    if (Result.isSuccess(read)) tsconfigByPath.set(path, read.success)
+    if (Result.isSuccess(read)) tsconfigByPath.set(path, read.success.value)
     else
       unreadable.push({ file: path, line: 1, message: `not a readable tsconfig: ${read.failure}` })
   }
-  return [...unreadable, ...findPackageSurfaceFindings(packageJsonByPath, tsconfigByPath)]
+  const packageJsonByPath = new Map<string, PackageJson>(
+    [...manifests].map(([path, read]) => [path, read.value]),
+  )
+  return [
+    ...unreadable,
+    ...findPackageSurfaceFindings(packageJsonByPath, tsconfigByPath),
+    ...findUnusedDependencies(yield* dependencyScopes(root, manifests, trackedFiles)),
+    ...findUnusedCatalogEntries(
+      { manifest: ROOT_MANIFEST, text: root.text, packageJson: root.value },
+      [...manifests.values()].map((read) => read.value),
+    ),
+  ]
 })
 
 /** One tracked file the scan reads: its path and its text. */
@@ -236,10 +338,7 @@ const program = Effect.gen(function* () {
       // join the pass so their own scans get the text.
       .filter(
         (file) =>
-          /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) ||
-          isSteeringFile(file) ||
-          isRetiredSurfaceProse(file) ||
-          file === HOOK_FILE,
+          /\.(?:[cm]?[jt]sx?|jsonc?)$/.test(file) || isSteeringFile(file) || file === HOOK_FILE,
       )
       .filter((file) => !file.includes("/dist/") && !symlinks.has(file)),
     readTrackedFile,

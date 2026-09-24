@@ -172,6 +172,16 @@ export const isTestSupport = (file: string): boolean =>
   isTestCode(file) || LINT_FIXTURE.test(file) || /(?:^|\/)testbeds\//.test(file)
 
 /**
+ * Shipped source: a module under `packages/` or `apps/` that is not test
+ * support and not build output. The tooling package lints the product; it is
+ * not part of it. Every guard that asks "is this product code" reads this.
+ */
+export const isShippedSource = (file: string): boolean =>
+  /^(?:packages|apps)\/(?!tooling\/)[^/]+\/.+\.[cm]?[jt]sx?$/.test(file) &&
+  !file.includes("/dist/") &&
+  !isTestSupport(file)
+
+/**
  * A lint fixture mirrors the repo layout, so a rule judges it as the file at
  * the same path under the repo root; any other file is its own subject.
  */
@@ -179,6 +189,20 @@ const fixtureSubject = (filename: string): string => {
   const match = LINT_FIXTURE.exec(filename)
   return match === null ? filename : filename.slice(match.index + match[0].length)
 }
+
+/**
+ * The path a rule's test-scope checks judge: relative to the lint root, so a
+ * checkout under a directory named `tests` or `integration` does not turn
+ * every file into a test, and for a lint fixture the file it mirrors.
+ */
+export const ruleSubject = (context: Pick<Context, "filename" | "cwd">): string => {
+  const filename = context.filename.replaceAll("\\", "/")
+  const root = `${context.cwd.replaceAll("\\", "/").replace(/\/$/, "")}/`
+  return fixtureSubject(filename.startsWith(root) ? filename.slice(root.length) : filename)
+}
+
+/** A file in a `tests/` tree, judged repo-relative. */
+const inTestsTree = (context: Context): boolean => /(?:^|\/)tests\//.test(ruleSubject(context))
 
 /** A `-boundary` file holds a module's Promise edges; in a test tree it is a test's. */
 const isBoundaryFilename = (filename: string): boolean => /-boundary\.tsx?$/.test(filename)
@@ -755,7 +779,7 @@ const plugin: Plugin = {
       create(context) {
         const filename = context.filename
         const extensionFile = isExtensionFilename(filename)
-        const productFile = !isTestSupport(fixtureSubject(filename))
+        const productFile = !isTestSupport(ruleSubject(context))
         const outsideCore = !/\/packages\/core\//.test(filename)
         if (!extensionFile && !productFile && !outsideCore) return {}
         const tuiExtension = filename.includes("apps/tui/src/extensions/")
@@ -923,7 +947,7 @@ const plugin: Plugin = {
       create(context) {
         // Callback calls and helper definitions are product-code rules; a test
         // may keep a local `withX` fixture helper.
-        const inTests = /\/tests\//.test(context.filename)
+        const inTests = inTestsTree(context)
         const reportDefinition = (
           name: string | undefined,
           fn: AstNode | undefined,
@@ -992,7 +1016,7 @@ const plugin: Plugin = {
         // Allow inside any *-boundary.ts file (the convention for SDK edges)
         if (/-boundary\.ts$/.test(filename)) return {}
         // Allow tests
-        if (/\/tests\//.test(filename)) return {}
+        if (inTestsTree(context)) return {}
         if (/\.test\.tsx?$/.test(filename)) return {}
 
         // `RUN_PROMISE_METHODS` are the Promise edges, as `Effect` statics and
@@ -1192,7 +1216,7 @@ const plugin: Plugin = {
     "no-promise-control-flow-in-tests": {
       create(context) {
         const filename = context.filename
-        if (!isTest(fixtureSubject(filename))) return {}
+        if (!isTest(ruleSubject(context))) return {}
         if (isBoundaryFilename(filename)) return {}
 
         // Filled as the import declarations are visited, before any call.
@@ -1268,7 +1292,7 @@ const plugin: Plugin = {
       create(context) {
         const filename = context.filename
         const platformImpl = /\/runtime\/gent-platform-bun\.ts$/.test(filename)
-        const inTests = /\/tests\//.test(filename)
+        const inTests = inTestsTree(context)
         const protectedFile =
           protectedHostFactFilename(filename) && !platformBoundaryFilename(filename)
         const reportHostModule = (node: AstNode) => {
@@ -1437,7 +1461,7 @@ const plugin: Plugin = {
           return found
         }
 
-        if (!isTestCode(fixtureSubject(context.filename))) return {}
+        if (!isTestCode(ruleSubject(context))) return {}
 
         return {
           CallExpression(node) {
@@ -1500,7 +1524,7 @@ const plugin: Plugin = {
         // A lint fixture is judged as the file at its mirrored path, and it
         // keeps the allow-comment carveout, so the fixture tests count the
         // diagnostics on the invalid fixture and none on the valid one.
-        if (!isTestCode(fixtureSubject(context.filename))) return {}
+        if (!isTestCode(ruleSubject(context))) return {}
 
         return {
           CallExpression(node) {

@@ -6,6 +6,7 @@ import * as AiError from "effect/unstable/ai/AiError"
 import {
   AgentLoop as AgentLoopActor,
   AgentLoopError,
+  type FollowUpQueueFull,
   entityIdOf,
   type SessionRuntimeState,
 } from "../../src/domain/agent-loop"
@@ -13,7 +14,7 @@ import { AgentDefinition, AgentName, type Model, ModelId } from "../../src/domai
 import { AgentLoopSessionGovernance, AgentLoopTestActor } from "../../src/runtime/agent-loop"
 import {
   ModelRegistry,
-  ModelResolver,
+  type ModelResolver,
   finishPart,
   type LanguageModelStreamPart,
 } from "../../src/runtime/provider"
@@ -113,7 +114,11 @@ export interface AgentLoopService {
     readonly sessionId: SessionId
     readonly branchId: BranchId
     readonly prompt: string
-  }) => Effect.Effect<void, AgentLoopError | StorageError, BranchStorage | SessionStorage>
+  }) => Effect.Effect<
+    void,
+    AgentLoopError | FollowUpQueueFull | StorageError,
+    BranchStorage | SessionStorage
+  >
   readonly getQueue: (input: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -266,7 +271,7 @@ type ActorTestModel =
 
 const actorTestModelLayer = (model: ActorTestModel) => {
   if ("resolver" in model) return model.resolver
-  return Layer.merge(model.provider, ModelResolver.fromLanguageModel(model.provider))
+  return Layer.merge(model.provider, LanguageModelLayers.resolver(model.provider))
 }
 
 /**

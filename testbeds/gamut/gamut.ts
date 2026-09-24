@@ -132,11 +132,21 @@ export interface GamutState {
    * finished cannot pass for the one just sent.
    */
   readonly sendMark: number
+  /**
+   * Whether the last thing typed starts a turn. A prompt does; a slash
+   * command (`/model …`, `/goal status`) runs in the client and may start
+   * none, so `wait` takes any event stored after the send as proof it was
+   * handled, or a quiet period when it stores nothing (`waitStep`).
+   */
+  readonly awaitsTurn: boolean
 }
 
 export const encodeState = (state: GamutState): string => `${JSON.stringify(state, null, 2)}\n`
 
-/** The state file as written. `sendMark` is absent in a file an older `up` wrote. */
+/**
+ * The state file as written. `sendMark` and `awaitsTurn` are absent in a file
+ * an older `up` wrote.
+ */
 const StateFile = Schema.fromJsonString(
   Schema.Struct({
     root: Schema.String,
@@ -146,12 +156,13 @@ const StateFile = Schema.fromJsonString(
     binary: Schema.String,
     preset: Schema.String,
     sendMark: Schema.optional(Schema.Finite),
+    awaitsTurn: Schema.optional(Schema.Boolean),
   }),
 )
 
 export const decodeState = (text: string): GamutState => {
   const state = Schema.decodeSync(StateFile)(text)
-  return { ...state, sendMark: state.sendMark ?? 0 }
+  return { ...state, sendMark: state.sendMark ?? 0, awaitsTurn: state.awaitsTurn ?? true }
 }
 
 // ── State file ──────────────────────────────────────────────────────────
@@ -355,8 +366,8 @@ const prepareAndLaunch = async (
     // Build from THIS checkout. `gent` and its `gent-cell` worker are compiled
     // binaries: source edits show nothing until a rebuild, and `~/.bun/bin/gent`
     // may point elsewhere. The root build is turbo's, so an unchanged checkout
-    // is a cache hit. GENT_LINK stays unset so the build does not claim the
-    // global name.
+    // is a cache hit. The build never claims the global name; only
+    // `bun run link` does.
     console.log("building gent from this checkout…")
     await $`bun run build`.cwd(CHECKOUT).quiet()
   }
@@ -381,6 +392,7 @@ const prepareAndLaunch = async (
     binary: BINARY,
     preset: presetName,
     sendMark: 0,
+    awaitsTurn: true,
   }
   await Bun.write(STATE_FILE, encodeState(state))
 
@@ -511,10 +523,20 @@ export const testSummary = (output: string): string => {
 
 // ── the rest ────────────────────────────────────────────────────────────
 
+/** A prompt starts a turn; a slash command runs in the client and may start none. */
+export const sendAwaitsTurn = (text: string): boolean => !text.trimStart().startsWith("/")
+
 const send = async (text: string) => {
   const state = await readState()
   // Mark before typing: the message is stored after this id.
-  await Bun.write(STATE_FILE, encodeState({ ...state, sendMark: latestEventIn(state.data) }))
+  await Bun.write(
+    STATE_FILE,
+    encodeState({
+      ...state,
+      sendMark: latestEventIn(state.data),
+      awaitsTurn: sendAwaitsTurn(text),
+    }),
+  )
   // The pane is running the TUI, not a shell: the text goes into the composer
   // verbatim and Enter submits it. No shell quoting — that would be typed too.
   await $`herdr pane send-text ${state.pane} ${text}`.quiet()
@@ -542,6 +564,11 @@ const read = async (lines: number) => {
 export interface RunRecord {
   readonly started: boolean
   readonly open: ReadonlyArray<string>
+  /**
+   * Whether any event was stored after the send mark: the trace a handled
+   * slash command leaves (its own record, a note, a queued prompt).
+   */
+  readonly stored: boolean
 }
 
 /**
@@ -564,11 +591,12 @@ export const openTurnSessions = (db: Database): ReadonlyArray<string> =>
       .all(),
   ).map((row) => row.session_id)
 
-/** A turn has started after `sendMark` (an event id), and which turns are open. */
+/** A turn has started after `sendMark` (an event id), which turns are open, and whether anything was stored since. */
 export const runRecord = (db: Database, sendMark: number): RunRecord => ({
   started:
     db.query(`SELECT 1 FROM events WHERE ${TURN_START} AND id > ? LIMIT 1`).get(sendMark) !== null,
   open: openTurnSessions(db),
+  stored: db.query(`SELECT 1 FROM events WHERE id > ? LIMIT 1`).get(sendMark) !== null,
 })
 
 /** The newest event id, zero before any event. */
@@ -589,24 +617,62 @@ const readRunDb = <A>(dataDir: string, absent: A, read: (db: Database) => A): A 
 }
 
 const runRecordIn = (dataDir: string, sendMark: number): RunRecord =>
-  readRunDb(dataDir, { started: false, open: [] }, (db) => runRecord(db, sendMark))
+  readRunDb(dataDir, { started: false, open: [], stored: false }, (db) => runRecord(db, sendMark))
 
 const latestEventIn = (dataDir: string): number => readRunDb(dataDir, 0, latestEventId)
 
 /**
- * Whether the run is finished: a turn has started, every turn has ended, and
- * the pane shows no busy row. The footer is only a hint: its first slot
- * shows `idle`, `ready`, a held error or an extension notice
- * (`apps/tui/src/app.tsx`, `phaseLabels`), and the error and notice texts
- * are free text, so the footer cannot say idle on its own. The prompt text is
- * echoed in the transcript, so matching on a word the reply should contain
- * proves nothing either.
+ * Whether the pane and the record are idle: every turn has ended and the pane
+ * shows no busy row. The footer is only a hint: its first slot shows `idle`,
+ * `ready`, a held error or an extension notice (`apps/tui/src/app.tsx`,
+ * `phaseLabels`), and the error and notice texts are free text, so the footer
+ * cannot say idle on its own. The prompt text is echoed in the transcript, so
+ * matching on a word the reply should contain proves nothing either.
  */
-export const isSettled = (paneText: string, record: RunRecord): boolean => {
+const isIdle = (paneText: string, record: RunRecord): boolean => {
   const lines = paneText.split("\n").map((line) => line.trim())
   const busy = lines.some((line) => / working · /.test(line) || /^Generating\b/.test(line))
-  return record.started && record.open.length === 0 && !busy
+  return record.open.length === 0 && !busy
 }
+
+/** Where a wait stands: idle reads in a row with and without proof the send was handled. */
+export interface WaitProgress {
+  readonly settledReads: number
+  readonly quietReads: number
+}
+
+export const WAIT_START: WaitProgress = { settledReads: 0, quietReads: 0 }
+
+/**
+ * Idle reads in a row (3 s apart) after which a slash command that stored
+ * nothing is taken as handled. A command that queues a turn (`/plan`,
+ * `/review`) stores its prompt well inside this window.
+ */
+export const QUIET_READS = 5
+
+/**
+ * Fold one pane read into the wait. An idle read counts only with proof the
+ * send was handled: a turn started after it for a prompt, any stored event
+ * after it for a slash command (its record, a note, a queued prompt). Two such
+ * reads in a row settle: a background child's result starts a new turn by
+ * itself. A slash command that leaves no trace settles after `QUIET_READS`
+ * idle reads. A busy read starts the count again.
+ */
+export const waitStep = (
+  progress: WaitProgress,
+  paneText: string,
+  record: RunRecord,
+  awaitsTurn: boolean,
+): WaitProgress => {
+  if (!isIdle(paneText, record)) return WAIT_START
+  const handled = awaitsTurn ? record.started : record.stored
+  if (handled) return { settledReads: progress.settledReads + 1, quietReads: 0 }
+  if (awaitsTurn) return WAIT_START
+  return { settledReads: 0, quietReads: progress.quietReads + 1 }
+}
+
+export const isSettled = (progress: WaitProgress): boolean =>
+  progress.settledReads >= 2 || progress.quietReads >= QUIET_READS
 
 /** A positive whole count (seconds, lines) from the command line; anything else is refused. */
 export const parseCount = (name: string, value: string): number => {
@@ -620,15 +686,13 @@ export const parseCount = (name: string, value: string): number => {
 const wait = async (timeoutSeconds: number) => {
   const state = await readState()
   const deadline = Date.now() + timeoutSeconds * 1000
-  let settledReads = 0
-  let record: RunRecord = { started: false, open: [] }
+  let progress = WAIT_START
+  let record: RunRecord = { started: false, open: [], stored: false }
   while (Date.now() < deadline) {
     const text = await $`herdr pane read ${state.pane} --lines 12`.text()
     record = runRecordIn(state.data, state.sendMark)
-    settledReads = isSettled(text, record) ? settledReads + 1 : 0
-    // Two reads in a row: a background child's result starts a new turn by
-    // itself, and a message just sent may not be stored yet.
-    if (settledReads >= 2) return
+    progress = waitStep(progress, text, record, state.awaitsTurn)
+    if (isSettled(progress)) return
     await Bun.sleep(3000)
   }
   const turns = record.started

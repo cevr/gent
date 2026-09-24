@@ -28,6 +28,8 @@ import {
   toolCallStep,
   waitFor,
   collectTestContributions,
+  createE2ELayer,
+  createRpcClient,
   createRpcHarness,
   runToolWithCtx,
   testLeafContext,
@@ -55,6 +57,7 @@ import {
   WakeTool,
 } from "../src/wake.js"
 import { TestClock } from "effect/testing"
+import type { LanguageModel } from "effect/unstable/ai"
 import { toolResultSummary } from "@gent/core/extensions/branch-tools"
 import { BranchId, MessageId, SessionId, ToolCallId, SteerCommand } from "@gent/core/protocol"
 import {
@@ -101,6 +104,41 @@ const hasWake = (messages: ReadonlyArray<MessageLike>): boolean => Option.isSome
 
 const answered = (messages: ReadonlyArray<MessageLike>, text: string): boolean =>
   messages.some((message) => message.role === "assistant" && textOf(Option.some(message)) === text)
+
+/**
+ * A first process over a file database answers one turn and stops. `restart`
+ * starts a second process over the same database and home, as a server
+ * restart would; its loops are cold until something reaches them.
+ */
+const restartedSession = (home: string) =>
+  Effect.gen(function* () {
+    const directory = yield* makeTempDirectoryScoped("wake-db-")
+    const layerFor = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+      createE2ELayer({
+        ...e2ePreset,
+        providerLayer,
+        storagePath: `${directory}/gent.db`,
+        extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
+      })
+    const { layer: firstProvider } = yield* LanguageModelLayers.sequence([textStep("hello")])
+    const ids = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const { client } = yield* createRpcClient(layerFor(firstProvider))
+        const { sessionId, branchId } = yield* client.session.create({ cwd: "/tmp" })
+        yield* client.message.send({ sessionId, branchId, content: "hi" })
+        yield* waitFor(
+          client.session.getSnapshot({ sessionId, branchId }),
+          (current) => current.runtime._tag === "Idle" && answered(current.messages, "hello"),
+          8_000,
+          "the first process answered",
+        )
+        return { sessionId, branchId }
+      }),
+    )
+    const restart = (providerLayer: Layer.Layer<LanguageModel.LanguageModel>) =>
+      Effect.map(createRpcClient(layerFor(providerLayer)), ({ client }) => client)
+    return { ...ids, restart }
+  })
 
 describe("wake", () => {
   test("a wake's result reads as its mode, due time, repeat and note, not JSON", () => {
@@ -414,22 +452,92 @@ describe("wake", () => {
   )
 
   it.live(
+    "a stored alarm fires on a resumed branch once it is opened, with no message sent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* makeTempDirectoryScoped("wake-open-")
+          const { sessionId, branchId, restart } = yield* restartedSession(home)
+          const fs = yield* FileSystem.FileSystem
+          const file = `${home}/.gent/wakes/${branchId}.json`
+          yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
+          // Still ahead when the branch opens: the timer itself must come back.
+          const dueAt = (yield* Clock.currentTimeMillis) + 1_500
+          yield* fs.writeFileString(
+            file,
+            encodeAlarms([{ _tag: "alarm", wakeId: "ahead", dueAt, note: "check the build" }]),
+          )
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            textStep("checked the build as the alarm asked"),
+          ])
+          const client = yield* restart(providerLayer)
+          yield* client.session.getSnapshot({ sessionId, branchId })
+          const woken = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              answered(current.messages, "checked the build as the alarm asked"),
+            8_000,
+            "the re-armed alarm woke the branch",
+          )
+          expect(textOf(wakeOf(woken.messages))).toContain("check the build")
+          expect(yield* controls.callCount).toBe(1)
+          expect(yield* fs.readFileString(file)).toBe("[]")
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      ),
+    25_000,
+  )
+
+  it.live(
+    "a notify alarm that came due while the process was down shows its notice on open and starts no turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const home = yield* makeTempDirectoryScoped("wake-open-notify-")
+          const { sessionId, branchId, restart } = yield* restartedSession(home)
+          const fs = yield* FileSystem.FileSystem
+          yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
+          yield* fs.writeFileString(
+            `${home}/.gent/wakes/${branchId}.json`,
+            encodeAlarms([
+              { _tag: "alarm", wakeId: "missed", dueAt: 1_000, mode: "notify", note: "stand up" },
+            ]),
+          )
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([])
+          const client = yield* restart(providerLayer)
+          const opened = yield* client.session.getSnapshot({ sessionId, branchId })
+          const pending = client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: WAKE_EXTENSION_ID,
+              capabilityId: WakeRpc.Pending.id,
+              input: {},
+            })
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(WakePending)))
+          const shown = yield* waitFor(
+            pending,
+            (current) => current.entries.some((entry) => entry._tag === "notice"),
+            5_000,
+            "the notice is listed",
+          )
+          expect(shown.entries.map((entry) => entry._tag)).toEqual(["notice"])
+          const after = yield* client.session.getSnapshot({ sessionId, branchId })
+          expect(after.runtime._tag).toBe("Idle")
+          expect(after.messages.length).toBe(opened.messages.length)
+          expect(yield* controls.callCount).toBe(0)
+        }).pipe(Effect.provide(BunServices.layer), Effect.timeout("20 seconds")),
+      ),
+    25_000,
+  )
+
+  it.live(
     "an alarm that fired but was not forgotten before a restart does not wake twice",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const home = yield* makeTempDirectoryScoped("wake-refire-")
-          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
-            textStep("hello again"),
-            textStep("checked the build as the alarm asked"),
-            textStep("still here"),
-            textStep("checked the build twice"),
-          ])
-          const { client, sessionId, branchId } = yield* createRpcHarness({
-            ...e2ePreset,
-            providerLayer,
-            extraLayers: [RuntimeEnvironment.Live({ cwd: "/tmp", home })],
-          })
+          const { sessionId, branchId, restart } = yield* restartedSession(home)
           const fs = yield* FileSystem.FileSystem
           const file = `${home}/.gent/wakes/${branchId}.json`
           const leftOver = encodeAlarms([
@@ -437,41 +545,47 @@ describe("wake", () => {
           ])
           yield* fs.makeDirectory(`${home}/.gent/wakes`, { recursive: true })
           yield* fs.writeFileString(file, leftOver)
-          yield* client.message.send({ sessionId, branchId, content: "I'm back" })
-          yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.runtime._tag === "Idle" &&
-              answered(current.messages, "checked the build as the alarm asked"),
-            8_000,
-            "the stored alarm fired and was answered",
+          const woke = yield* LanguageModelLayers.sequence([
+            textStep("checked the build as the alarm asked"),
+          ])
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const client = yield* restart(woke.layer)
+              yield* waitFor(
+                client.session.getSnapshot({ sessionId, branchId }),
+                (current) =>
+                  current.runtime._tag === "Idle" &&
+                  answered(current.messages, "checked the build as the alarm asked"),
+                8_000,
+                "the stored alarm fired and was answered",
+              )
+            }),
           )
           // A shutdown between the wake and the forget leaves the fired row on disk.
           yield* fs.writeFileString(file, leftOver)
-          yield* client.message.send({ sessionId, branchId, content: "still there?" })
-          yield* waitFor(
-            fs.readFileString(file),
-            (text) => text === "[]",
-            8_000,
-            "the re-armed alarm fired again and forgot its row",
+          const again = yield* LanguageModelLayers.sequence([])
+          const settled = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const client = yield* restart(again.layer)
+              yield* client.session.getSnapshot({ sessionId, branchId })
+              yield* waitFor(
+                fs.readFileString(file),
+                (text) => text === "[]",
+                8_000,
+                "the re-armed alarm fired again and forgot its row",
+              )
+              // A replayed wake would run its settled message again.
+              return yield* waitFor(
+                client.session.getSnapshot({ sessionId, branchId }),
+                (current) =>
+                  current.runtime._tag === "Idle" && current.runtime.queue.followUp.length === 0,
+                8_000,
+                "the queue drained",
+              )
+            }),
           )
-          const settled = yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.runtime._tag === "Idle" && answered(current.messages, "still here"),
-            8_000,
-            "the second turn settled",
-          )
-          // A replayed wake would run its settled message again, after this turn.
-          yield* waitFor(
-            client.session.getSnapshot({ sessionId, branchId }),
-            (current) =>
-              current.runtime._tag === "Idle" && current.runtime.queue.followUp.length === 0,
-            8_000,
-            "the queue drained",
-          )
-          // One model call per turn: the first ask, the wake, the second ask.
-          expect(yield* controls.callCount).toBe(3)
+          expect(yield* woke.controls.callCount).toBe(1)
+          expect(yield* again.controls.callCount).toBe(0)
           const wakes = settled.messages.filter(
             (message) =>
               message.role === "user" && message.metadata?.customType === WAKE_MESSAGE_TYPE,
@@ -791,7 +905,7 @@ describe("notices", () => {
   )
 
   it.scopedLive(
-    "a failed re-arm still shows the notices, so the answered turn clears only what it read",
+    "a failed branch resource still shows the notices, so the answered turn clears only what it read",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
@@ -808,6 +922,15 @@ describe("notices", () => {
               firedAt: 1_000,
               content: "Alarm earlier fired. stand up",
               note: "stand up",
+            },
+            // A re-arm beside the turn's first step blocked this one after the turn started.
+            {
+              _tag: "notice",
+              wakeId: "late-blocked",
+              outcome: "blocked",
+              firedAt: Number.MAX_SAFE_INTEGER,
+              content: "Monitor late-blocked was not re-armed. check",
+              note: "check",
             },
             { _tag: "alarm", wakeId: "later", dueAt: Number.MAX_SAFE_INTEGER, note: "much later" },
           ]),
@@ -864,8 +987,9 @@ describe("notices", () => {
         const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(
           yield* fs.readFileString(file),
         )
-        // The turn read the notice and answered, so it is gone; the alarm row stays.
-        expect(stored.map((entry) => entry.wakeId)).toEqual(["later"])
+        // The turn read the earlier notice and answered, so it is gone; the
+        // alarm row stays, and so does the notice made after the turn started.
+        expect(stored.map((entry) => entry.wakeId)).toEqual(["late-blocked", "later"])
       }).pipe(Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
     10_000,
   )
@@ -920,6 +1044,15 @@ describe("notices", () => {
                   ),
                 ),
               )
+          // Opening the loop re-arms, and the re-arm blocks the monitor. The
+          // hooks run beside turns, so the test waits for the notice.
+          yield* client.session.getSnapshot({ sessionId, branchId })
+          yield* waitFor(
+            fs.readFileString(file),
+            (text) => text.includes("never approved"),
+            5_000,
+            "the re-arm blocked the monitor",
+          )
           yield* answer("I'm back", "reply 1")
           expect(systemPrompts[0]).toContain("never approved")
           const stored = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(WakeEntry)))(

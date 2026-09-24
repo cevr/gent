@@ -13,6 +13,11 @@
       "inputs": ["src/**", "tsconfig.json", "package.json"],
       "outputs": ["dist/**"]
     },
+    "link": {
+      "dependsOn": ["build"],
+      "outputs": [],
+      "cache": false
+    },
     "test": {
       "outputs": [],
       "cache": false

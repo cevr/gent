@@ -8,7 +8,7 @@ Work in the rift `<rift path>` (branch `<name>`). Read `CLAUDE.md` there first. 
 <Commit plan: one numbered item per commit, with the commit subject. Order: compiler-adjudicated cleanup, then comment truth, then each behavior change alone with its regression test first.>
 
 Work rules:
-- Live binary: only through `bun run gamut`, which isolates the database. `GENT_LINK` stays unset. No push.
+- Live binary: only through `bun run gamut`, which isolates the database. Never `bun run link`. No push.
 - Deletes use `trash`. Stage exact files by path.
 - Probes: snapshot the file with `/bin/cp` into `<scratchpad>`, break the code, run the test, restore with `/bin/cp`. Git restores (`stash`, `checkout`, `reset`) lose real edits and are out.
 - A regression test is red before the fix: run it against the unfixed code and quote the failure. A test that passes both ways proves nothing; find the path it misses.

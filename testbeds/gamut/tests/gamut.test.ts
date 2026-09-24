@@ -4,6 +4,11 @@ import {
   decodeState,
   failureText,
   isSettled,
+  QUIET_READS,
+  type RunRecord,
+  WAIT_START,
+  waitStep,
+  sendAwaitsTurn,
   latestEventId,
   openTurnSessions,
   encodeState,
@@ -99,15 +104,18 @@ describe("gamut state file", () => {
     binary: "/checkout/apps/tui/bin/gent",
     preset: "sol-luna",
     sendMark: 7,
+    awaitsTurn: false,
   }
 
   test("round trips every field", () => {
     expect(decodeState(encodeState(state))).toEqual(state)
   })
 
-  test("a state file from before any send reads its send mark as zero", () => {
-    const { sendMark: _mark, ...older } = state
-    expect(decodeState(JSON.stringify(older)).sendMark).toBe(0)
+  test("a state file from before any send reads its send mark as zero, awaiting a turn", () => {
+    const { sendMark: _mark, awaitsTurn: _awaits, ...older } = state
+    const decoded = decodeState(JSON.stringify(older))
+    expect(decoded.sendMark).toBe(0)
+    expect(decoded.awaitsTurn).toBe(true)
   })
 
   test("a missing field is refused rather than read as undefined", () => {
@@ -144,43 +152,91 @@ describe("gamut pane id", () => {
 })
 
 describe("a settled run", () => {
-  const finished = { started: true, open: [] }
-  test("an idle status line with every turn ended is settled", () => {
-    expect(
-      isSettled("  Done.\n\nidle · work (main) · GPT-5.6 Sol · medium   ctx 1%\n", finished),
-    ).toBe(true)
+  const finished = { started: true, open: [], stored: true }
+  const idlePane = "idle · work (main)\n"
+
+  /** Fold a script of pane reads; the index of the read that settles the wait, or -1. */
+  const settlesAt = (
+    reads: ReadonlyArray<readonly [string, RunRecord]>,
+    awaitsTurn: boolean,
+  ): number => {
+    let progress = WAIT_START
+    return reads.findIndex(([paneText, record]) => {
+      progress = waitStep(progress, paneText, record, awaitsTurn)
+      return isSettled(progress)
+    })
+  }
+  const repeated = (paneText: string, record: RunRecord, count: number) =>
+    Array.from({ length: count }, () => [paneText, record] as const)
+
+  test("an idle status line with every turn ended settles on the second read", () => {
+    const pane = "  Done.\n\nidle · work (main) · GPT-5.6 Sol · medium   ctx 1%\n"
+    expect(settlesAt(repeated(pane, finished, 3), true)).toBe(1)
   })
   // The footer's first slot holds a held error or an extension notice in
   // place of the phase word (apps/tui/src/app.tsx, phaseLabels).
   test("a held error in the footer still settles once every turn has ended", () => {
-    expect(
-      isSettled("  Done.\n\nprovider rejected the key · work (main) · GPT-5.6 Sol\n", finished),
-    ).toBe(true)
+    const pane = "  Done.\n\nprovider rejected the key · work (main) · GPT-5.6 Sol\n"
+    expect(settlesAt(repeated(pane, finished, 2), true)).toBe(1)
   })
   test("an extension notice in the footer still settles once every turn has ended", () => {
-    expect(isSettled("wake alarm set for 10:00 · work (main) · GPT-5.6 Sol\n", finished)).toBe(true)
+    const pane = "wake alarm set for 10:00 · work (main) · GPT-5.6 Sol\n"
+    expect(settlesAt(repeated(pane, finished, 2), true)).toBe(1)
   })
   test("an idle root with a working background child is not settled", () => {
-    expect(
-      isSettled(
-        "idle · work (main) · GPT-5.6 Sol\n ◆ main working · Task 2. Read-only audit  ^t agents\n",
-        finished,
-      ),
-    ).toBe(false)
+    const pane =
+      "idle · work (main) · GPT-5.6 Sol\n ◆ main working · Task 2. Read-only audit  ^t agents\n"
+    expect(settlesAt(repeated(pane, finished, 10), true)).toBe(-1)
   })
   test("a generating turn is not settled, whatever words the transcript echoes", () => {
-    expect(
-      isSettled(
-        "┃ Reply with the word idle · ready\n  Generating (3s)\nwork (main) · GPT-5.6 Sol\n",
-        finished,
-      ),
-    ).toBe(false)
+    const pane =
+      "┃ Reply with the word idle · ready\n  Generating (3s)\nwork (main) · GPT-5.6 Sol\n"
+    expect(settlesAt(repeated(pane, finished, 10), true)).toBe(-1)
   })
   test("an open turn in the record is not settled, whatever the pane shows", () => {
-    expect(isSettled("idle · work (main)\n", { started: true, open: ["child"] })).toBe(false)
+    const open = { started: true, open: ["child"], stored: true }
+    expect(settlesAt(repeated(idlePane, open, 10), true)).toBe(-1)
   })
-  test("a run with no turn started yet is not settled", () => {
-    expect(isSettled("ready · work (main)\n", { started: false, open: [] })).toBe(false)
+  test("a prompt whose turn never started is not settled, however long the pane is idle", () => {
+    const quiet = { started: false, open: [], stored: false }
+    expect(settlesAt(repeated("ready · work (main)\n", quiet, 20), true)).toBe(-1)
+  })
+  // `/plan` and `/review` queue a turn; the queued prompt can reach the event
+  // log after the pane has already read idle twice.
+  test("a slash command whose queued prompt lands after two idle reads waits for that turn", () => {
+    const nothingYet = { started: false, open: [], stored: false }
+    const queued = { started: true, open: ["main"], stored: true }
+    const reads = [
+      ...repeated(idlePane, nothingYet, 2),
+      ...repeated("  Generating (1s)\n", queued, 2),
+      ...repeated(idlePane, finished, 2),
+    ]
+    expect(settlesAt(reads, false)).toBe(5)
+  })
+  // `/goal status` stores a hidden note: proof the command was handled.
+  test("a slash command that stored a trace and started no turn settles on the second idle read", () => {
+    const noted = { started: false, open: [], stored: true }
+    expect(settlesAt(repeated(idlePane, noted, 3), false)).toBe(1)
+  })
+  // `/model …` changes a setting and may store nothing the record reads.
+  test("a slash command that leaves no trace settles after the quiet period", () => {
+    const quiet = { started: false, open: [], stored: false }
+    expect(settlesAt(repeated(idlePane, quiet, QUIET_READS + 2), false)).toBe(QUIET_READS - 1)
+  })
+  test("a busy read restarts the quiet period", () => {
+    const quiet = { started: false, open: [], stored: false }
+    const reads = [
+      ...repeated(idlePane, quiet, QUIET_READS - 1),
+      ["  Generating (1s)\n", quiet] as const,
+      ...repeated(idlePane, quiet, QUIET_READS),
+    ]
+    expect(settlesAt(reads, false)).toBe(2 * QUIET_READS - 1)
+  })
+  test("a slash command is told from a prompt by its leading slash", () => {
+    expect(sendAwaitsTurn("/model openai/gpt-5.6")).toBe(false)
+    expect(sendAwaitsTurn("  /goal status")).toBe(false)
+    expect(sendAwaitsTurn("also run typecheck")).toBe(true)
+    expect(sendAwaitsTurn("use the path a/b")).toBe(true)
   })
 })
 
@@ -250,10 +306,11 @@ describe("gamut open turns", () => {
     expect(openTurnSessions(db)).toEqual([])
   })
   test("the record says whether any turn has started", () => {
-    expect(runRecord(withEvents([]), 0)).toEqual({ started: false, open: [] })
+    expect(runRecord(withEvents([]), 0)).toEqual({ started: false, open: [], stored: false })
     expect(runRecord(withEvents([["s", "MessageReceived"]]), 0)).toEqual({
       started: true,
       open: ["s"],
+      stored: true,
     })
   })
   // `send` marks the newest event id before it types; the message it sends
@@ -264,9 +321,9 @@ describe("gamut open turns", () => {
       ["s", "MessageReceived"],
       ["s", "TurnCompleted"],
     ])
-    expect(runRecord(db, 2)).toEqual({ started: false, open: [] })
+    expect(runRecord(db, 2)).toEqual({ started: false, open: [], stored: false })
     insert(db, "s", "MessageReceived")
-    expect(runRecord(db, 2)).toEqual({ started: true, open: ["s"] })
+    expect(runRecord(db, 2)).toEqual({ started: true, open: ["s"], stored: true })
   })
   test("the send mark is the newest event id, zero before any event", () => {
     expect(latestEventId(withEvents([]))).toBe(0)
@@ -288,14 +345,15 @@ describe("gamut open turns", () => {
       ["parent", "TurnCompleted"],
       ["parent", "MessageReceived", "assistant"],
     ])
-    expect(runRecord(db, 4)).toEqual({ started: false, open: [] })
+    // The note is stored after the mark: proof the command was handled.
+    expect(runRecord(db, 4)).toEqual({ started: false, open: [], stored: true })
   })
   test("a stream that started after the send mark counts as a started turn", () => {
     const db = withEvents([
       ["s", "TurnCompleted"],
       ["s", "StreamStarted"],
     ])
-    expect(runRecord(db, 1)).toEqual({ started: true, open: ["s"] })
+    expect(runRecord(db, 1)).toEqual({ started: true, open: ["s"], stored: true })
   })
   test("a wake message after the last turn reopens the session", () => {
     const db = withEvents([

@@ -2,8 +2,6 @@
 
 Minimal agent harness. Effect-first. Small seams. One owner per concern.
 
-The resource evolution plan is in [`docs/malleability.md`](docs/malleability.md).
-
 ## Core Model
 
 `gent` is organized around six nouns:
@@ -37,10 +35,10 @@ updates this list in the same commit.
    `packages/extensions/src/index.ts`.
 4. **Schema-first transport contract.** Every RPC input and output is a
    Schema; thin adapters carry it. Receipts:
-   `packages/core/src/server/rpc.ts`, `packages/core/src/server/rpc.ts`.
+   `packages/core/src/server/rpc.ts`.
 5. **Event and projection commit together.** A session mutation writes its
    row and its events in one transaction, so a reader never sees one without
-   the other. Receipt: `transactWithEvent` in
+   the other. Receipt: `transactWithEvents` in
    `packages/core/src/server/server.ts`.
 6. **Tool calls replay from durable bindings.** A resumed turn re-delivers a
    tool result from `tool_call_bindings`; it never re-runs the tool.
@@ -67,14 +65,15 @@ updates this list in the same commit.
     `packages/core/src/runtime/model-context.ts`.
 11. **A model change is a durable user-role notice the loop writes.** The
     settings update only records the choice. At each step boundary the loop
-    compares the model the branch's last settled step ran on (its
-    `StreamEnded`) with the model this step resolves; when they differ it
+    compares the model the branch last ran on or was told it continues with
+    (its last `StreamEnded`, or the last model-change notice) with the model
+    this step resolves; when they differ it
     writes one `model-change` message, and that step reads it. The id names
     both models, so a replay after a further switch writes the right one. A
     turn under an agent or run-spec model override writes none; the turn after
     it notices the change back. An effort change, or a branch with no settled
     step, writes nothing. Receipts: `modelChangeNotice` in
-    `packages/core/src/runtime/model-context.ts`, `lastSettledModel` in
+    `packages/core/src/runtime/model-context.ts`, `lastKnownModel` in
     `packages/core/src/runtime/turn.ts`.
 12. **Tool guidance lives on the tool and follows the active tool list.**
     `promptGuidelines` are deduped per turn from the post-policy tools only.
@@ -257,7 +256,10 @@ version (mtime, size, inode), so Bun's module cache does not serve the old one.
 A directory extension's version is its index file's. Project trust comes from
 `isProjectExtensionDirectoryTrusted` (`runtime/config.ts`), the reader the TUI's
 client-extension loader calls too: it reads `trustedProjects` from the user
-config file as it is now, and a file that does not decode trusts no project. A
+config file as it is now, and a file that does not decode trusts no project.
+Launched from home, the project's `.gent` is the user's, so there is no project
+scope: `hasProjectScope` (`runtime/config.ts`) keeps the config read, the
+extension scan and the TUI loader from reading `~/.gent` a second time. A
 list that leaves the
 same extensions, such as one that names an unknown id, finds the profile
 already built. Finding or building the profile, its lease and making it
@@ -287,7 +289,10 @@ The production server uses one live profile owner:
   build into a child of the server scope, and `buildSessionProfile` stages the
   catalog from that context. An extension whose process resource fails to build
   is reported as failed at the `startup` phase; the rest of the profile stays
-  live. There is no reconciler, publication, or admission lease. Test roots
+  live. There is no reconciler, publication, or admission lease. Gent owns
+  resource identity, configuration and graph policy; Effect owns Context,
+  Layer, Scope and finalization; effect-encore owns durable actor commands and
+  recovery. Test roots
   (`createE2ELayer`) set `failOnExtensionFailure`, so a failed extension is a
   defect that names it; `allowFailedExtensions: true` keeps a failure-path
   test running. The harness loads every `extensionInputs`/`extensions` entry
@@ -340,9 +345,15 @@ Shape:
   registry, not live actors.
 - The delegate keeps one child registry per parent branch as a JSON file under
   `~/.gent/delegates/<branchId>.json`. `delegate.list` reads it; the delegate
-  reconciles it lazily on the parent's next turn and on every read, so a caller
-  that died between the child's receipt and delivery leaves a child the registry
-  still resolves, never a running one nobody delivers.
+  reconciles it when the parent's loop opens (`loopOpen`), on the parent's
+  first turn in the process, and on every read, so a caller that died between
+  the child's receipt and delivery leaves a child the registry still resolves,
+  never a running one nobody delivers. Reconcile re-sends the start of a child
+  with no receipt. The repeat admits nothing new, but a durable `turn` send
+  reads the target's state first, which opens its loop, so a child the
+  previous process stopped mid-turn resumes and its completion wakes the
+  parent. Without that, a restart left the child stuck and counting toward the
+  cap.
 - One writer settles a child's completion. The delegate's `turnAfter` hook on
   the child branch delivers every receipt as one idempotent follow-up message
   on the parent branch (metadata `customType: "child-completion"`, `wake` set
@@ -384,8 +395,16 @@ Shape:
   its `ToolCallSucceeded`/`ToolCallFailed` event from `reconcileToolProjections`
   when the result is persisted, before the turn reads the transcript for new
   model work. Clients replaying `ToolCallStarted` never keep a stale running
-  projection. Ambiguous side effects are not replayed; the exact binding replay
-  rules decide whether a native call runs again or fails.
+  projection. Ambiguous side effects are not replayed. When a turn resumes, a
+  pending call runs again only if its last run parked on an interaction: the
+  turn record marks it `parked` (an optional field on its pending entry) as
+  soon as the call parks, while its siblings may still run, so an answer given
+  before a restart is taken; the mark clears before the call runs again. A mark
+  or a clear that cannot be written fails the step. Any other pending call was cut
+  short while it ran; the model reads a failed result with reason
+  `Interrupted` and the call does not run again (a cell with a receipt still
+  settles from it first). The binding replay rules then decide whether a
+  parked call can run again or fails.
 - Narrow retry: `retryProviderCall` retries transient provider failures with
   bounded exponential backoff plus jitter, and only before observable output.
   The policy lives on the `ModelDriverContribution` (`retry: RetryPolicy`),
@@ -495,8 +514,8 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   branch (metadata `customType: "child-completion"`) with the outcome and a
   bounded preview, and the message wakes the parent. Nothing waits on a child.
   Lazy reconcile covers the crash window between the
-  receipt and the hook: the delegate reconciles its registry on the parent's
-  next turn and on every `delegate.list`, so a caller that died mid-op leaves a
+  receipt and the hook: the delegate reconciles its registry when the parent's
+  loop opens, on its first turn, and on every `delegate.list`, so a caller that died mid-op leaves a
   child the registry still resolves, never a running one nobody delivers.
 - The delegate ships three ordinary tools: `delegate.start`,
   `delegate.cancel`, `delegate.list`; messaging a child is `session.send`. A child's first message opens with `Task from your parent session <id>.` and says where its final reply goes, so the child does not take a bare instruction for an injection. `delegate.start` accepts RunSpec
@@ -523,7 +542,8 @@ Do not rebuild business logic from inspection events. They are receipts, not inp
   keeps its parent's depth.
 - Two shipped agents: `main`, the orchestrator, and `delegate`, registered by the delegate extension as the agent every child runs as. A child inherits nothing from its caller: its model and effort come from the `delegate` definition, reshaped by `agents.delegate` in `.gent/config.json`, and a call's RunSpec overrides (model, tools, prompt addendum) win over both. That config entry is where a pairing such as fable → opus or opus → sonnet is declared.
 - `/btw` (`@gent/btw`) forks the branch: `btw.fork` creates a child session with `historyBranchId` set to this branch, so the fork starts from this branch's context window and runs as the session's own agent with its tools — a parallel session, not a side channel. Nothing it does lands on the branch it forked from. The pane asks it through `btw.ask` and reads it through `btw.progress` (turns after the fork point plus the reply streaming now, folded from the fork's event stream by a process resource); `^o` opens the fork as the shell's session, which is `switchSession`, because the fork already is one. The open fork per branch is process state; the fork itself is durable and listed with every other child session.
-- Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` prompt section, and `turnAfter` on an answered turn clears those that fired before it started, so a failed or interrupted turn keeps them; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back on the branch's next turn (the `turnProjection` hook re-arms them under the branch file's lock, the lock a fire takes to drop its entry, so a fire that ends during a re-arm is not armed and fired again; past-due alarms fire at once). The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from the `wake.pending` request with their cadence and `(notify)` when the fire starts no turn; the model reads the same entries with the `wake.list` tool, in ISO times like the `wake` and `monitor` results (a tool and a request cannot share an id inside one extension). The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
+- Alarms and monitors (`@gent/wake`) live in `~/.gent/wakes/<branchId>.json` (`ctx.home` is the OS home; extensions join `.gent` themselves); timers are branch-scoped. `wake` fires at a time, and again every `everySeconds` when it repeats (the stored due time advances on each fire; ticks missed while the process was down fold into one fire); `monitor` polls a shell command on an interval until it exits 0 or its stdout matches `until`, or its deadline passes. Both write the entry, capture the session facade of their call, and fork work into the branch resource scope that queues a user-role `wake` message (`details: { outcome, note, firedAt }`; `fired` is an alarm, `matched`/`timed-out` a monitor). In `wake` mode (default) the line carries `wake: true` and starts a turn on an idle loop. In `notify` mode no line is queued (a queued follow-up always runs a turn on a branch with history): the fire stores a `notice` entry in the same file and pulses the tray; `turnProjection` (every step) reads the notices into a `# Notices` prompt section, and `turnAfter` on an answered turn clears those that fired before it started, so a failed or interrupted turn keeps them; `wake.cancel` dismisses one unread. A settled one-shot fire removes its entry; an interrupt (branch close, shutdown) leaves the row for the next re-arm; a repeat only ends on cancel. `wake.cancel` interrupts one timer by id, or every pending one on the branch, and drops the entries; the resource keeps fibers by id for that. Branch resources start without an `ExtensionContext`, so after a branch close or a server restart the stored entries get their timers back when the branch's loop opens (the `loopOpen` hook re-arms them under the branch file's lock, the lock a fire takes to drop its entry, so a fire that ends during a re-arm is not armed and fired again; past-due alarms fire at once, and a past-due `notify` alarm leaves its notice without a turn). Opening the session is enough; no message is needed. The TUI collapses a `wake` row to `◷ alarm fired · <note>` or `◉ monitor matched · <note>`, and a wake tray under the status line lists pending entries from the `wake.pending` request with their cadence and `(notify)` when the fire starts no turn; the model reads the same entries with the `wake.list` tool, in ISO times like the `wake` and `monitor` results (a tool and a request cannot share an id inside one extension). The status bar shows only `ctx N%`; the messages the projection omitted show on the live window in the `/thread` pane.
+- Background shell jobs (`@gent/exec-tools`, `bash` with `run_in_background`) keep one row each in the `background_bash_jobs` table and run in a process-scoped resource. A finished job queues its terminal notice (`bash:<toolCallId>:complete` or `:failure`), which wakes the branch. A job that cannot finish becomes `interrupted`: its fiber marks the row when it is stopped (server stop, or its resource closed), and a new process marks rows an earlier process left running. The process died with the job, so nothing is reattached. On `loopOpen` the extension queues one notice per interrupted job on the branch, "did not finish before the previous server stopped", under the `:failure` key; it starts a turn, and a later open finds the key taken. A session nobody opens is not told.
 - Persistent goals (`@gent/goal`) live in `~/.gent/goals/<branchId>.json`. After every uninterrupted turn while a goal is active, the goal `turnAfter` hook charges the turn's usage to the goal and queues a `goal-context` user message; a spent token budget flips the goal to `budget_limited` instead. Only the `goal` tool's `complete` action ends a goal. The TUI collapses `goal-context` rows to one line unless full detail is on.
 - Foreground runs persist a child session/branch and can be revisited with `read_session`. Private runs leave no session behind; they return text/usage/tool-call metadata only.
 - `TurnCompleted` carries the turn's token totals, summed over its model
@@ -760,7 +780,11 @@ directory: the loop resolves it once per branch with `sessionWorkingDirectory`
 build sets the compiled-host marker `__GENT_COMPILED__` explicitly.
 The actor section of `runtime/agent-loop.ts` allocates a child of the actor scope for each loop rebuild.
 It publishes the loop handle before it transfers scope ownership. Failure or
-interruption during construction closes that child immediately.
+interruption during construction closes that child immediately. A build that
+starts cleanly forks the extensions' `loopOpen` hooks into the loop scope, after
+the recovered turn (if any) started; closing the loop interrupts them. Loops are
+lazy: no startup pass rebuilds them, so a session nobody opens runs no
+`loopOpen` until a client or another loop reaches it (a snapshot is enough).
 The loop behavior in `runtime/agent-loop.ts` uses this supplied scope to build `CellExecution.Branch`
 and supplies the service to turn execution. Each branch owns a separate service and lazy
 worker. Closing the loop scope closes that worker. Source runs have no
@@ -1190,7 +1214,7 @@ There is no flat `Contribution[]` and no `_kind` discriminator. `ExtensionContri
 - **Resource** — `defineResource({ id, scope, layer })`. Start work runs in the layer build and disposal is a finalizer in it. Long-lived state has a stable identity and explicit `scope`; resources build in extension resolution order. `scope` is `"process"` (built once per profile, released when the profile scope closes) or `"branch"` (built per branch loop, released when the loop closes). Stateful extension logic is either a normal scoped service/resource or, for true actor protocols, an Effect Entity/RPC owner at the runtime boundary. See `packages/core/src/domain/extension.ts` and `buildResourceLayer` in `runtime/extension-host.ts`.
 - **Callable leaves** — `tool(...)` / `request(...)` smart constructors registered under the `tool` and `request` domains. `tool` = model-facing tool; `request` = typed extension RPC, optionally decorated with `slash: { trigger?, name, description, category?, keybind? }` to surface as a human slash command. Handlers receive input only. Host authority comes from the `ExtensionContext` facade (`Session`, `Interaction`, `FileLock`, `State`); files, paths, processes, and ids come from the Effect platform services (`FileSystem`, `Path`, `ChildProcessSpawner`, `Crypto`); extension-private authority comes from extension-owned Effect service Tags. The `FileLock` facet wraps the host-internal `FileLockService`, and the `State` facet publishes `ExtensionStateChanged` on `EventStore`, so shipped and external extensions share the same surface. See `packages/core/src/domain/capability.ts`; `runtime/extension-host.ts` compiles the model, RPC, and slash registries.
 - **Addressed session verbs** — `ExtensionContext.Session` reaches other branches through the same verbs the server uses: `create` (durable-once by `requestId`, optional `historyBranchId` copies the visible rows in, depth admitted by the host), `send` (one user message with a `delivery` mode: `"turn"` starts a turn on another branch with the loop `completion` modes, and the own branch refuses it and points at `"queue"`; `"queue"` is a follow-up keyed by `sourceId`; `"steer"` joins the running turn as an `Interject`), `stop` (writes a `Cancel` steer; `Interrupt` has no writer and only decodes), `events` (replay, then the `StreamSynchronized` marker, then live; `from: "now"` skips the replay and starts at the newest stored event), `delete` (cascade), and `dequeueFollowUp`. `send` and `stop` are a facade over the unchanged actor operations `SubmitDurable`, `QueueFollowUp`, and `Steer`, except that a `queue` or `steer` into the loop's own branch is admitted re-entrantly inside the caller: a client request's grant is read at admission, while the request provably runs, and a send from a context kept past it is an extension send; the raw `SteerCommand` stays on the RPC contract, not in the extension API. The bodies live in the `agent-loop.client` section of `packages/core/src/domain/agent-loop.ts`; The loop's `sessionControl` calls the queue bodies (`queueFollowUpOn`, `dequeueFollowUpOn`), and both `SessionRuntime` and `sessionControl` call `submitUserMessage` and `steerLoop`, so the facade and the RPC path cannot drift. The verbs are uniform: no extension, shipped or not, holds a grant another lacks. `AgentDefinition.maxModelAttempts` (and the RunSpec override) is the generic per-turn model-attempt budget, reserved durably per turn message id.
-- **Hooks** — `host.on("systemPrompt" | "turnProjection" | "turnAfter", handler)` registers the three runtime hooks; each kind is typed by `ExtensionHookSignatures`. Hooks, tools, and requests all cross one membrane: `provideExtensionLeaf(frame)` in `runtime/extension-host.ts` reads the run's `CurrentExtensionHostContext` and provides `ExtensionContext`; `turnProjection` receives the agent the turn dispatches (`TurnProjectionInput`). Hook handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. `turnAfter` carries `usage: { known, complete }`: the tokens of the steps that reported usable counts, and whether that is the whole turn (`TurnCompleted.usage` carries a total only when it is complete). See `packages/core/src/domain/extension.ts` and `runtime/extension-host.ts`.
+- **Hooks** — `host.on("systemPrompt" | "turnProjection" | "turnAfter" | "loopOpen", handler)` registers the four runtime hooks; each kind is typed by `ExtensionHookSignatures`. `loopOpen` takes no input and runs once each time a branch's loop is built in this process (the first operation after a restart, or after the loop closed), after the loop resumed any turn a restart cut short. It is where an extension repairs what a previous process left on the branch: re-arm timers, resume children, report lost work. It runs as the loop's own fiber, with the branch Resources and a non-client opener (it cannot ask). The profile and Resources are resolved under the side-mutation permit; the hooks then run without it, each on its own fiber, so a hook that never returns delays no turn and no other hook. A follow-up it queues on its own branch starts a turn like any other send, and the operation that opened the loop never waits on it. User extensions register it the same way. Hooks, tools, and requests all cross one membrane: `provideExtensionLeaf(frame)` in `runtime/extension-host.ts` reads the run's `CurrentExtensionHostContext` and provides `ExtensionContext`; `turnProjection` receives the agent the turn dispatches (`TurnProjectionInput`). Hook handlers receive event input only and yield `ExtensionContext` or extension-owned service Tags when they need authority. `turnAfter` carries `usage: { known, complete }`: the tokens of the steps that reported usable counts, and whether that is the whole turn (`TurnCompleted.usage` carries a total only when it is complete). See `packages/core/src/domain/extension.ts` and `runtime/extension-host.ts`.
 - **Driver** — the `modelDriver` domain takes a `ModelDriverContribution`. Model drivers provide LLM provider layers + auth and list their own catalog (`listModels(auth)`; core concatenates every driver's list and fetches nothing — the shipped drivers read models.dev through the catalog section of `packages/extensions/src/providers.ts`, cached on disk for a day). An agent's `driver` (or a `driverOverrides` config entry) names a model driver; a stored override that names a removed external (ACP) driver decodes as no override and logs one warning per config file. See `packages/core/src/domain/driver.ts`, `domain/agent.ts`, and `runtime/extension-host.ts`.
 
 Other notes:
