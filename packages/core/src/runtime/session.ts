@@ -5,29 +5,20 @@ import {
   Duration,
   Effect,
   Exit,
-  type FileSystem,
   Layer,
   Option,
-  type Path,
   Predicate,
   Ref,
   Schema,
-  type Scope,
   Stream,
 } from "effect"
 import { EventId, EventStore, EventStoreError, makeEventStore } from "../domain/event.js"
 import {
-  type AgentLoopQueueStorage,
   type BranchStorage,
   EventStorage,
   type EventStorageError,
-  type InteractionStorage,
-  type MessageStorage,
   RelationshipStorage,
-  type SessionOperationStorage,
   SessionStorage,
-  type ToolCallBindingStorage,
-  type TurnRecordStorage,
 } from "../storage/storage.js"
 import { omitUndefined } from "../domain/guards.js"
 import { DEFAULT_MAX_AGENT_RUN_DEPTH, SessionDepthLimitError } from "../domain/agent.js"
@@ -41,16 +32,12 @@ import {
   SessionId,
 } from "../domain/ids.js"
 import { Actor } from "effect-encore"
-import type { MessageStorage as ClusterMessageStorage, Sharding } from "effect/unstable/cluster"
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import type { SqlClient } from "effect/unstable/sql"
 import {
   isSpawnedSession,
   type QueueSnapshot,
   type SteerCommand as SteerCommandType,
 } from "../domain/message.js"
-import type { PromptSection } from "../domain/capability.js"
-import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "./agent-loop.js"
+import { AgentLoopSessionGovernance } from "./agent-loop.js"
 import {
   AgentLoopError,
   FollowUpQueueFull,
@@ -63,15 +50,8 @@ import {
   type AgentLoopClientServices,
   AgentLoop as AgentLoopActor,
 } from "../domain/agent-loop.js"
-import {
-  type ApprovalService,
-  type ExtensionRegistry,
-  resolveExistingSessionBranch,
-} from "./extension-host.js"
-import type { ModelRegistry, ModelResolver } from "./provider.js"
+import { resolveExistingSessionBranch } from "./extension-host.js"
 import { GentPlatform } from "./gent-platform.js"
-import type { ToolRunner } from "./tools.js"
-import type { ConfigService, RuntimeEnvironment } from "./config.js"
 import { CurrentWorkspaceId, type WorkspaceId } from "../server/workspace-rpc.js"
 
 // ── event-store-live ────────────────────────────────────────────────────────
@@ -300,34 +280,6 @@ const DrainQueuedMessagesPayload = Schema.Struct({
   requestId: RequestId,
 })
 type DrainQueuedMessagesPayload = typeof DrainQueuedMessagesPayload.Type
-
-type SessionRuntimeLayerRequirements =
-  | ApprovalService
-  | Sharding.Sharding
-  | ClusterMessageStorage.MessageStorage
-  | EventStorage
-  | EventStore
-  | ExtensionRegistry
-  | ModelRegistry
-  | GentPlatform
-  | RuntimeEnvironment
-  | SessionStorage
-  | SessionOperationStorage
-  | MessageStorage
-  | AgentLoopQueueStorage
-  | BranchStorage
-  | SqlClient.SqlClient
-  | ModelResolver
-  | ToolRunner
-  | ToolCallBindingStorage
-  | TurnRecordStorage
-  | InteractionStorage
-  | ConfigService
-  | AgentLoopSessionGovernance
-  | ChildProcessSpawner
-  | FileSystem.FileSystem
-  | Path.Path
-  | Scope.Scope
 
 export interface SessionRuntimeService {
   readonly sendUserMessage: (
@@ -580,22 +532,4 @@ export class SessionRuntime extends Context.Service<SessionRuntime, SessionRunti
   static readonly Client = Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(
     Layer.provideMerge(Actor.toLayer(AgentLoopActor)),
   )
-  /**
-   * The session runtime with the AgentLoop actor it drives. The actor client,
-   * control, and state stay in the context and in the type: a caller that
-   * builds this layer reaches the same actor the runtime uses.
-   */
-  static Live = (config: {
-    readonly baseSections: ReadonlyArray<PromptSection>
-  }): Layer.Layer<
-    SessionRuntime | Layer.Success<ReturnType<typeof AgentLoopLiveActor>>,
-    never,
-    SessionRuntimeLayerRequirements
-  > =>
-    Layer.effect(SessionRuntime, makeLiveSessionRuntime).pipe(
-      // Keep actor support services in the live context. `SessionRuntime`
-      // captures actor clients, but the AgentLoop entity manager must remain
-      // scoped for those clients to make progress.
-      Layer.provideMerge(AgentLoopLiveActor(config)),
-    )
 }

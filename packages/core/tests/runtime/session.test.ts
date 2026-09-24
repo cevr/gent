@@ -67,7 +67,7 @@ import {
   resolveExtensions,
   SessionProfileCache,
 } from "../../src/runtime/extension-host"
-import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import {
   ActorCommandId,
   BranchId,
@@ -119,8 +119,8 @@ const makeTestExtensions = (tools: ReadonlyArray<ToolCapability> = []) => {
     },
   ])
 }
-const sessionRuntimeLayers = (baseSections: Parameters<typeof SessionRuntime.Live>[0]) =>
-  SessionRuntime.Live(baseSections)
+const sessionRuntimeLayers = (config: Parameters<typeof AgentLoopLiveActor>[0]) =>
+  Layer.provideMerge(AgentLoopLiveActor(config), SessionRuntime.Client)
 const makeClusterRunnerLayer = <A>(storageLayer: ReturnType<typeof SqliteStorage.TestWithSql<A>>) =>
   Layer.provide(
     SingleRunner.layer({ runnerStorage: "memory" }),

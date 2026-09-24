@@ -157,7 +157,7 @@ import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/
 import { SingleRunner } from "effect/unstable/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
-import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 
 // ── ambient host context ─────────────────────────────────────────────────────
@@ -4618,7 +4618,10 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live({ baseSections: [] }), baseDeps)
+  const sessionRuntimeLayer = Layer.provide(
+    Layer.provideMerge(AgentLoopLiveActor({ baseSections: [] }), SessionRuntime.Client),
+    baseDeps,
+  )
   const sessionMutationsLayer = Layer.provide(
     SessionMutationsLive,
     Layer.mergeAll(baseDeps, sessionRuntimeLayer),

@@ -33,6 +33,7 @@ import {
 } from "../../src/domain/ids"
 import { DefaultWorkspaceId } from "../../src/server/workspace-rpc"
 import {
+  AgentLoopLiveActor,
   AgentLoopSessionGovernance,
   type AgentLoopState,
   buildInitialAgentLoopState,
@@ -4483,7 +4484,7 @@ const makeRuntimeLayer = (
   )
   const approvalLayer = ApprovalService.Live.pipe(Layer.provide(baseDeps))
   return Layer.provideMerge(
-    SessionRuntime.Live({ baseSections: [] }),
+    Layer.provideMerge(AgentLoopLiveActor({ baseSections: [] }), SessionRuntime.Client),
     Layer.mergeAll(baseDeps, approvalLayer, ProcessLocalToolReplay.Live),
   )
 }
