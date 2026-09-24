@@ -1625,20 +1625,29 @@ const inputShellRuns = (
 
 /**
  * Whether an `InputShell` run starts a shell that reads its input, with no
- * script of its own. A command that only a later reading of an unnamed
- * option finds (`sudo -s -u root`) does not stop the shell.
+ * script of its own. After an option the table does not name (other than
+ * the shell's own), the word the first reading takes as the command may be
+ * that option's value (`doas -a style -s`, `doas -s -a style`): the shell
+ * option may come after it, and only a script option stops the shell.
  */
 const inputShellStarts = (
   resolved: ResolvedCommand,
   run: typeof Run.cases.InputShell.Type,
 ): boolean => {
-  const parsed = parseWords(resolved.words, resolved.spec.valued, "leading")
+  const { valued } = resolved.spec
+  const leading = parseWords(resolved.words, valued, "leading")
+  const unsure = leading.options.some(
+    (option) => isUnsure(valued, option) && !isNamed(option, run.short, run.long),
+  )
+  let parsed = leading
+  if (unsure) parsed = parseWords(resolved.words, valued, "anywhere")
   const any = run.short === "" && run.long.length === 0
   if (!any && !hasShort(parsed, ...run.short) && !hasLong(parsed, ...run.long)) return false
   return !resolved.spec.runs.some((other) => {
     if (other._tag === "OptionScript") {
       return hasShort(parsed, ...other.short) || hasLong(parsed, ...other.long)
     }
+    if (unsure) return false
     return runCommands(resolved, other, "first").some((wrapped) => wrapped.length > 0)
   })
 }
@@ -1674,6 +1683,22 @@ interface Invocation {
   readonly placeholder: Option.Option<RegExp>
 }
 
+/**
+ * Whether `into` holds the invocation already. Readings of nested runners
+ * reach the same words many ways (`sudo -E sudo -E ls`); each is read once.
+ */
+const isCollected = (into: ReadonlyArray<Invocation>, found: Invocation) =>
+  into.some(
+    (invocation) =>
+      invocation.segment === found.segment &&
+      invocation.words[0] === found.words[0] &&
+      invocation.words.length === found.words.length &&
+      invocation.assignments[0] === found.assignments[0] &&
+      invocation.assignments.length === found.assignments.length &&
+      Option.getOrUndefined(invocation.placeholder)?.source ===
+        Option.getOrUndefined(found.placeholder)?.source,
+  )
+
 /** The commands `words` runs: the first after env assignments, and each command a run of its path starts. */
 const collectInvocations = (
   segment: ShellSegment,
@@ -1686,7 +1711,9 @@ const collectInvocations = (
   const command = words.slice(start)
   const assignments = words.slice(0, start)
   if (command.length === 0 && assignments.length === 0) return
-  into.push({ segment, words: command, assignments, placeholder })
+  const found: Invocation = { segment, words: command, assignments, placeholder }
+  if (isCollected(into, found)) return
+  into.push(found)
   const resolved = resolveCommand(command)
   for (const run of resolved.spec.runs) {
     let fed = placeholder
@@ -2651,12 +2678,18 @@ const inputNamesCommand = (
   command: ReadonlyArray<ShellWord>,
   isMarked: (text: string) => boolean,
   appends: boolean,
+  // Readings of nested runners reach the same words many ways: a command
+  // read once and found not to be named is not read again.
+  read = new Map<ShellWord, Set<number>>(),
 ): boolean => {
   let start = command.findIndex((word) => !ASSIGNMENT.test(word.text))
   if (start === -1) start = command.length
   const words = command.slice(start)
   const head = Option.fromUndefinedOr(words[0])
   if (Option.isNone(head) || isMarked(head.value.text)) return true
+  const lengths = read.get(head.value) ?? new Set<number>()
+  if (lengths.has(words.length)) return false
+  read.set(head.value, lengths.add(words.length))
   const resolved = resolveCommand(words)
   if (resolved.spec.runs.some((run) => inputFillsScript(resolved, run, isMarked, appends))) {
     return true
@@ -2666,7 +2699,7 @@ const inputNamesCommand = (
     return runCommands(resolved, run)
   })
   if (wrapped.length > 0) {
-    return wrapped.some((inner) => inputNamesCommand(inner, isMarked, appends))
+    return wrapped.some((inner) => inputNamesCommand(inner, isMarked, appends, read))
   }
   if (commandName(head.value.text) !== "git") return false
   if (resolved.spec.risks.length > 0) return true
@@ -2852,8 +2885,26 @@ const scriptInput = (segment: ShellSegment): Option.Option<ShellSegment> => {
   return Option.some(makeSegment(Option.none()))
 }
 
+/**
+ * The scripts one command line has read, by text, with the input each read
+ * (none, or its segment). Readings of nested runners build the same script
+ * many ways (`ssh -X h ssh -X h ls`); each is read once. A script read
+ * first at a deeper level asks where it nests too deep.
+ */
+type ViewedScripts = Map<string, Array<Option.Option<ShellSegment>>>
+
+const isSameInput = (seen: Option.Option<ShellSegment>, input: Option.Option<ShellSegment>) =>
+  Option.match(seen, {
+    onNone: () => Option.isNone(input),
+    onSome: (segment) => Option.exists(input, (other) => other === segment),
+  })
+
 /** The commands of `segments` and of the scripts they run, up to `maxDepth` levels deep. */
-const viewCommand = (segments: ReadonlyArray<ShellSegment>, maxDepth: number): CommandView => {
+const viewCommand = (
+  segments: ReadonlyArray<ShellSegment>,
+  maxDepth: number,
+  viewed: ViewedScripts = new Map(),
+): CommandView => {
   const invocations: Array<Invocation> = []
   const writes: Array<ShellWord> = []
   const unreadable: Array<string> = []
@@ -2869,7 +2920,11 @@ const viewCommand = (segments: ReadonlyArray<ShellSegment>, maxDepth: number): C
       if (maxDepth <= 0) continue
       for (const script of runs.scripts) {
         const input = scriptInput(invocation.segment)
-        const nested = viewCommand(parseShell(script, input), maxDepth - 1)
+        const key = `${script.dynamic}:${script.text}`
+        const inputs = viewed.get(key) ?? []
+        if (inputs.some((seen) => isSameInput(seen, input))) continue
+        viewed.set(key, [...inputs, input])
+        const nested = viewCommand(parseShell(script, input), maxDepth - 1, viewed)
         invocations.push(...nested.invocations)
         writes.push(...nested.writes)
         unreadable.push(...nested.unreadable)
@@ -3038,17 +3093,26 @@ const DOT_READS = new Set([
   ...["echo", "print", "quit", "exit"],
 ])
 
-const dotCommands = (text: string) =>
-  matchedNames(text, /(?:^|[;\n])\s*\.([A-Za-z_]\w*)/g).filter((name) => !DOT_READS.has(name))
+/**
+ * The dot-commands outside `DOT_READS`, and the SQL functions the SQLite
+ * shell adds that run a program or write a file: `edit()` runs `$EDITOR`,
+ * `writefile()` overwrites a file, `load_extension()` loads code.
+ */
+const dotCommands = (text: string) => [
+  ...matchedNames(text, /(?:^|[;\n])\s*\.([A-Za-z_]\w*)/g).filter((name) => !DOT_READS.has(name)),
+  ...matchedNames(text, /\b(edit|writefile|load_extension)\s*\(/gi),
+]
 
 const PSQL: SqlClient = {
   valued: options(
-    "cdfhLoOpPTUv",
-    "command dbname file host log-file output port pset username variable set",
+    "cdfhLoOpPTUvFR",
+    "command dbname file host log-file output port pset username variable set field-separator record-separator",
   ),
   names: options("dhpU", "dbname host port username"),
   nameOperands: 2,
-  sql: options("c", "command"),
+  // A variable's value reaches the input as written where `:name` is used,
+  // client commands included.
+  sql: options("cv", "command variable set"),
   output: options("o", "output"),
   commands: psqlCommands,
 }

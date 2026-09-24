@@ -1667,8 +1667,11 @@ describe("classifyBashCommand", () => {
       `echo x | parallel --gent-probe-unknown ${x} ${r}`,
       `ssh -Z ${x} host ${r}`,
       `sudo --gent-probe-unknown ${x} rm ${x}`,
-      // A command a later reading finds does not stop sudo's input shell.
+      // A command a later reading finds does not stop sudo's input shell,
+      // and the first reading's command may be an unnamed option's value.
       `echo '${r}' | sudo -s -u root`,
+      `echo '${r}' | doas -s -a passwd`,
+      `echo '${r}' | doas -a passwd -s`,
       // Shell mode runs the words as a script.
       `pnpm exec -c '${r}'`,
       `pnpm exec --shell-mode '${r}'`,
@@ -1715,6 +1718,36 @@ describe("classifyBashCommand", () => {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
   })
+
+  test("nested runners are read once per command they reach", () => {
+    // Each reading of each runner reaches the same words; before they were
+    // read once each, 20 nested runners overflowed the stack.
+    for (const command of [
+      `${"sudo -E ".repeat(40)}ls`,
+      `${"timeout -v 1 ".repeat(40)}ls`,
+      `cat /nonexistent/gent-probe-x | xargs ${"sudo -E ".repeat(40)}ls`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    expect(
+      classifyBashCommand(`${"sudo -E ".repeat(40)}rm -rf /nonexistent/gent-probe-x`).level,
+    ).toBe("destructive")
+  })
+
+  // Read once each, these take milliseconds; read once per reading, minutes.
+  test(
+    "the scripts nested runners' readings build are read once each",
+    () => {
+      for (const command of [
+        `echo a | ${"xargs -0 ".repeat(20)}ls`,
+        `${"ssh -X h ".repeat(40)}ls`,
+      ]) {
+        // Past the nesting limit a script asks.
+        expect(classifyBashCommand(command).level, command).toBe("destructive")
+      }
+    },
+    { timeout: 2_000 },
+  )
 
   test("fish's script options are read", () => {
     for (const command of [
@@ -1924,6 +1957,13 @@ describe("classifyBashCommand", () => {
       `mysql --pager='${r}' -e 'select 1'`,
       `mysql --tee=${x}.log -e 'select 1'`,
       `mysql -e 'pager ${r}'`,
+      // A psql variable reaches the input as written.
+      `echo ':x' | psql -v 'x=\\! ${r}'`,
+      `echo ':x' | psql --set 'x=\\! ${r}'`,
+      // SQL functions of the SQLite shell that run a program or write a file.
+      `sqlite3 ${x}.db "select edit('', '${r}')"`,
+      `sqlite3 ${x}.db "select writefile('${x}', '')"`,
+      `sqlite3 ${x}.db "select load_extension('${x}')"`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -1938,6 +1978,8 @@ describe("classifyBashCommand", () => {
       "psql -c '\\x' -c 'select 1'",
       "psql -c '\\timing on' -c 'select 1'",
       "psql -F '\\t' -c 'select 1'",
+      `psql -F , app "$PGUSER" -c 'select 1'`,
+      "psql -v n=1 -c 'select :n'",
       "mysql -e 'use app; select 1'",
       "mysql -e 'select 1\\G'",
       `mysql -e "select 'a\\nb'"`,
