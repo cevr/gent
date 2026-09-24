@@ -108,7 +108,7 @@ import {
 import type { ToolCall } from "./tool-renderers"
 import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useInputWatch, useScopedKeyboard } from "./terminal"
-import { useExtensionUI } from "./extensions/host"
+import { NOTICE_ROWS_BOUND, useExtensionUI } from "./extensions/host"
 import type { ActiveExtensionSession, NoticeRow } from "./extensions/client-facets"
 import type { ResolvedNoticeRows } from "./extensions/loader-boundary"
 
@@ -1629,8 +1629,8 @@ const compareSessionItems = (a: SessionItem, b: SessionItem): number => {
 
 interface NoticeRowItems {
   readonly items: ReadonlyMap<NoticeRow, SessionItem>
-  /** Every source answered its rows; one still deriving holds native history. */
-  readonly settled: boolean
+  /** The sources still deriving; while any is, native history holds. */
+  readonly pending: ReadonlyArray<ResolvedNoticeRows>
 }
 
 /**
@@ -1644,10 +1644,10 @@ export const noticeRowItems = (
   previous: ReadonlyMap<NoticeRow, SessionItem>,
 ): NoticeRowItems => {
   const next = new Map<NoticeRow, SessionItem>()
-  let settled = true
+  const pending: Array<ResolvedNoticeRows> = []
   for (const source of sources) {
     const rows = source.rows(session)
-    if (Option.isNone(rows)) settled = false
+    if (Option.isNone(rows)) pending.push(source)
     for (const row of Option.getOrElse(rows, () => [])) {
       next.set(
         row,
@@ -1663,7 +1663,7 @@ export const noticeRowItems = (
       )
     }
   }
-  return { items: next, settled }
+  return { items: next, pending }
 }
 
 // ── Build messages from raw ──
@@ -2922,8 +2922,32 @@ export function createSessionController(props: {
         { sessionId: props.sessionId, branchId: props.branchId },
         previous.items,
       ),
-    { items: new Map(), settled: true },
+    { items: new Map(), pending: [] },
   )
+  // A source that never answers would hold native history for good. Once the
+  // client extensions loaded, each one still deriving gets NOTICE_ROWS_BOUND
+  // to answer for this branch; one that has not by then fails, as an
+  // extension that did not load does, and stops holding history.
+  const boundedNoticeRows = new Map<string, Fiber.Fiber<void>>()
+  onCleanup(() => {
+    for (const fiber of boundedNoticeRows.values()) client.runtime.cast(Fiber.interrupt(fiber))
+  })
+  createEffect(() => {
+    if (!ext.loaded()) return
+    const session = { sessionId: props.sessionId, branchId: props.branchId }
+    for (const source of notices().pending) {
+      const key = `${session.sessionId}:${session.branchId}:${source.id}`
+      if (boundedNoticeRows.has(key)) continue
+      const bound = Effect.sleep(NOTICE_ROWS_BOUND).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            if (Option.isNone(source.rows(session))) ext.noticeRowsUnanswered(source)
+          }),
+        ),
+      )
+      boundedNoticeRows.set(key, client.runtime.fork(bound))
+    }
+  })
   const items = createMemo<SessionItem[]>(() => {
     const rows = notices().items
     if (rows.size === 0) return feed.items()
@@ -3262,7 +3286,7 @@ export function createSessionController(props: {
 
   return {
     items,
-    itemsSettled: () => notices().settled,
+    itemsSettled: () => notices().pending.length === 0,
     messages: feed.messages,
     forkMessages: () => {
       const overlay = uiState().overlay

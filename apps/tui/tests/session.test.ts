@@ -53,23 +53,21 @@ describe("notice rows", () => {
   const session = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
   const row: NoticeRow = { key: "1", createdAt: 5, glyph: "◌", color: "warning", text: "miss" }
 
-  test("a source still deriving holds the items unsettled; answered rows still merge", () => {
+  test("a source still deriving is pending; answered rows still merge", () => {
+    const deriving = { id: "deriving", extensionId: "ext", rows: () => Option.none() }
     const merged = noticeRowItems(
-      [
-        { id: "answered", rows: () => Option.some([row]) },
-        { id: "deriving", rows: () => Option.none() },
-      ],
+      [{ id: "answered", extensionId: "ext", rows: () => Option.some([row]) }, deriving],
       session,
       new Map(),
     )
-    expect(merged.settled).toBe(false)
+    expect(merged.pending).toEqual([deriving])
     expect([...merged.items.values()].map((item) => item.createdAt)).toEqual([5])
     const answered = noticeRowItems(
-      [{ id: "answered", rows: () => Option.some([row]) }],
+      [{ id: "answered", extensionId: "ext", rows: () => Option.some([row]) }],
       session,
       merged.items,
     )
-    expect(answered.settled).toBe(true)
+    expect(answered.pending).toEqual([])
     // The same row object keeps its transcript item.
     expect(answered.items.get(row)).toBe(merged.items.get(row))
   })

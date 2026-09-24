@@ -1,6 +1,19 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, it, test } from "effect-bun-test"
-import { Cause, Deferred, Effect, Exit, Option, Queue, Schema, Stream } from "effect"
+import {
+  Cause,
+  Clock,
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Queue,
+  Schema,
+  Stream,
+} from "effect"
+import { TestClock } from "effect/testing"
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import { SocketCloseError } from "effect/unstable/socket/Socket"
 import {
@@ -40,16 +53,17 @@ import {
 import { onMount } from "solid-js"
 import { ProviderAuthError } from "@gent/core/extensions/api"
 import { type ClientContextValue, useClient } from "../src/client"
-import { waitForFrame } from "./helpers-boundary"
+import { waitForFrame, waitUntilAdvancing } from "./helpers-boundary"
 import { useTerminalDimensions } from "../src/terminal"
 import { SyntaxStyle } from "@opentui/core"
 import { type Message, MessageList, type SessionItem } from "../src/message-list"
-import { useExtensionUI } from "../src/extensions/host"
+import { NOTICE_ROWS_BOUND, useExtensionUI } from "../src/extensions/host"
 import { builtinClientModules } from "../src/extensions/builtins"
 import {
   ClientContext,
   clientContributions,
   defineClientExtension,
+  noticeRowContribution,
 } from "../src/extensions/client-facets"
 
 // ── app bootstrap ───────────────────────────────────────────────────────────
@@ -668,6 +682,78 @@ function TerminalDimensionsProbe() {
   const dimensions = useTerminalDimensions()
   return <text>{`${dimensions().width}x${dimensions().height}`}</text>
 }
+
+describe("notice rows", () => {
+  // Native history waits for every notice-row source; one that never answers
+  // would hold it for good.
+  it.scopedLive("a source that never answers fails after the bound and leaves the rows", () =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make()
+      // Only the session view's casts read this clock: the bound sleeps on it.
+      const withClock = <R,>() => Context.makeUnsafe<R>(new Map([[Clock.Clock.key, clock]]))
+      const runtime: GentRuntime = {
+        ...createMockRuntime(),
+        cast: (effect) => {
+          Effect.runForkWith(withClock())(effect)
+        },
+        fork: (effect) => Effect.runForkWith(withClock())(effect),
+      }
+      const silent = defineClientExtension("@test/silent-notices", {
+        setup: Effect.succeed(noticeRowContribution({ id: "silent", rows: () => Option.none() })),
+      })
+      let ext = Option.none<ReturnType<typeof useExtensionUI>>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => (
+            <>
+              <App missingAuthProviders={[]} />
+              <ExtensionUIProbe onReady={(value) => (ext = Option.some(value))} />
+            </>
+          ),
+          {
+            client: createMockClient({
+              auth: { listProviders: () => Effect.succeed([]) },
+              branch: { getTree: () => Effect.succeed([]) },
+            }),
+            runtime,
+            builtins: [...builtinClientModules, silent],
+            initialSession: {
+              id: SessionId.make("session-silent"),
+              activeBranchId: BranchId.make("branch-silent"),
+              name: "Silent",
+              createdAt: dateFromMillis(0),
+              updatedAt: dateFromMillis(0),
+            },
+          },
+        ),
+      )
+      const loaded = () => Option.exists(ext, (value) => value.loaded())
+      yield* waitForFrame(setup, (frame) => frame.includes("ready ·") && loaded(), "loaded")
+      const sources = () =>
+        Option.match(ext, {
+          onNone: () => [],
+          onSome: (value) => value.noticeRows().map((source) => source.id),
+        })
+      const failed = () =>
+        Option.exists(ext, (value) =>
+          value.failures().some((failure) => failure.id === "@test/silent-notices"),
+        )
+      expect(sources()).toContain("silent")
+      // Inside the bound the source is still waited for.
+      yield* clock.adjust(Duration.subtract(NOTICE_ROWS_BOUND, Duration.millis(1)))
+      yield* Effect.promise(() => setup.renderOnce())
+      expect(failed()).toBe(false)
+      yield* waitUntilAdvancing(clock.adjust("1 second"), failed, "the source failed")
+      expect(sources()).not.toContain("silent")
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes('@test/silent-notices: notice rows "silent"'),
+        "the failure line",
+      )
+      setup.renderer.destroy()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
+})
 
 describe("App auth gate", () => {
   it.live("shares one terminal resize source across App and cleans it up", () =>

@@ -1,4 +1,4 @@
-import { Effect, Layer, ManagedRuntime, Option, Scope } from "effect"
+import { Duration, Effect, Layer, ManagedRuntime, Option, Scope } from "effect"
 import { BunFileSystem, BunServices } from "@effect/platform-bun"
 import {
   type AutocompleteContribution,
@@ -90,8 +90,17 @@ interface ExtensionUIContextValue {
   readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
   readonly interactionRenderers: Accessor<Map<string, InteractionRendererComponent>>
   readonly statusLabels: Accessor<ReadonlyArray<ResolvedStatusLabel>>
-  /** Extension transcript rows by notice id; the session view merges the rows of its branch. */
+  /**
+   * Extension transcript rows by notice id; the session view merges the rows
+   * of its branch. A source that never answered is not among them.
+   */
   readonly noticeRows: Accessor<ReadonlyArray<ResolvedNoticeRows>>
+  /**
+   * A source the session view waited `NOTICE_ROWS_BOUND` for that still
+   * derives: it leaves `noticeRows` and joins `failures`, as a contribution
+   * that did not load does.
+   */
+  readonly noticeRowsUnanswered: (source: ResolvedNoticeRows) => void
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
   /** Client extensions, or contributions, that did not load. */
   readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
@@ -114,6 +123,13 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   failures: [],
 }
 
+/**
+ * How long a notice-row source may keep deriving for a branch once the client
+ * extensions loaded. Native history waits for every source, so one that never
+ * answers would hold it for good; a load has its own bound.
+ */
+export const NOTICE_ROWS_BOUND = Duration.seconds(5)
+
 const ExtensionUIContext = createContext<ExtensionUIContextValue>()
 
 export function ExtensionUIProvider(props: {
@@ -133,6 +149,19 @@ export function ExtensionUIProvider(props: {
 
   const [resolved, setResolved] = createSignal<ResolvedTuiExtensions>(EMPTY_RESOLVED)
   const [loaded, setLoaded] = createSignal(false)
+  const [unansweredNoticeRows, setUnansweredNoticeRows] = createSignal<
+    ReadonlyArray<ResolvedNoticeRows>
+  >([])
+  const noticeRowsUnanswered = (source: ResolvedNoticeRows) =>
+    setUnansweredNoticeRows((current) => {
+      if (current.includes(source)) return current
+      return [...current, source]
+    })
+  const unansweredFailures = (): ReadonlyArray<ClientExtensionFailure> =>
+    unansweredNoticeRows().map((source) => ({
+      id: source.extensionId,
+      reason: `notice rows "${source.id}" did not answer within ${Duration.format(NOTICE_ROWS_BOUND)}`,
+    }))
   const [sessionCommands, setSessionCommands] = createSignal<ReadonlyArray<Command>>([])
   const [serverCommands, setServerCommands] = createSignal<ReadonlyArray<CommandSource>>([])
   const [dynamicAutocomplete, setDynamicAutocomplete] = createSignal<
@@ -339,9 +368,15 @@ export function ExtensionUIProvider(props: {
         setSessionCommands,
         interactionRenderers: () => resolved().interactionRenderers,
         statusLabels: () => resolved().statusLabels,
-        noticeRows: () => resolved().noticeRows,
+        noticeRows: () =>
+          resolved().noticeRows.filter((source) => !unansweredNoticeRows().includes(source)),
+        noticeRowsUnanswered,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
-        failures: () => [...resolved().failures, ...resolvedCommands().failures],
+        failures: () => [
+          ...resolved().failures,
+          ...resolvedCommands().failures,
+          ...unansweredFailures(),
+        ],
         setDynamicAutocomplete,
         setActivityProvider: (provider) => setActivityProvider(() => provider),
         setPaneOwner: (owner) => setPaneOwner(() => owner),

@@ -780,7 +780,9 @@ interface NoticeRowContribution {
    * The rows of one branch. Reactive: the transcript reads it again when it
    * changes. `None` while the source cannot yet say what its rows are: native
    * history commits nothing until every source answers, so a row is born with
-   * its final text and never lands behind rows scrollback already holds.
+   * its final text and never lands behind rows scrollback already holds. A
+   * source still `None` `NOTICE_ROWS_BOUND` after the extensions loaded is
+   * dropped and reported as a failure of its extension.
    */
   readonly rows: (session: ActiveExtensionSession) => Option.Option<ReadonlyArray<NoticeRow>>
 }
