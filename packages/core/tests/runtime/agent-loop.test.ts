@@ -3,6 +3,7 @@ import {
   Cause,
   Clock,
   Context,
+  DateTime,
   Deferred,
   Duration,
   Effect,
@@ -370,6 +371,65 @@ describe("session termination markers", () => {
       expect(workspaceATerminated).toBe(true)
       expect(workspaceBTerminated).toBe(false)
     }).pipe(Effect.provide(AgentLoopSessionGovernance.Live)),
+  )
+})
+
+// ── system prompt date ──────────────────────────────────────────────────────
+
+describe("system prompt date", () => {
+  it.scopedLive(
+    "a turn after local midnight tells the model the new date",
+    () =>
+      Effect.gen(function* () {
+        const systemTexts = yield* Ref.make<ReadonlyArray<string>>([])
+        const secondCall = yield* Deferred.make<void>()
+        const providerLayer = LanguageModelLayers.testStream((options) =>
+          Ref.updateAndGet(systemTexts, (all) => [
+            ...all,
+            Prompt.make(options.prompt)
+              .content.filter((message) => message.role === "system")
+              .map((message) => message.content)
+              .join("\n"),
+          ]).pipe(
+            Effect.tap((all) =>
+              Effect.when(Deferred.succeed(secondCall, void 0), Effect.succeed(all.length >= 2)),
+            ),
+            Effect.as(
+              Stream.fromIterable([
+                textDeltaPart("noted"),
+                finishPart({ finishReason: "stop" }),
+              ] satisfies LanguageModelStreamPart[]),
+            ),
+          ),
+        )
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+        })
+        const localDate = Effect.map(DateTime.now, (now) =>
+          DateTime.formatIsoDate(DateTime.setZone(now, DateTime.zoneMakeLocal())),
+        )
+        const today = yield* localDate
+        const firstCompleted = yield* client.session.events({ sessionId, branchId }).pipe(
+          Stream.filter(({ event }) => event._tag === "TurnCompleted"),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        )
+        yield* client.message.send({ sessionId, branchId, content: "first" })
+        yield* Fiber.join(firstCompleted)
+        // The process keeps running past local midnight.
+        yield* TestClock.adjust("1 day")
+        const tomorrow = yield* localDate
+        yield* client.message.send({ sessionId, branchId, content: "second" })
+        yield* Deferred.await(secondCall)
+        const [first, second] = yield* Ref.get(systemTexts)
+        expect(today).not.toBe(tomorrow)
+        expect(first).toContain(`Date: ${today}`)
+        expect(second).toContain(`Date: ${tomorrow}`)
+        expect(second).not.toContain(`Date: ${today}`)
+      }).pipe(Effect.provide(TestClock.layer()), Effect.timeout("8 seconds")),
+    10_000,
   )
 })
 

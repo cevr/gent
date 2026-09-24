@@ -32,22 +32,18 @@ export const compileSystemPrompt = (sections: ReadonlyArray<PromptSection>): str
     .join("\n\n")
 
 /**
- * The one section core writes: where the loop is running. Everything an agent *is* comes from extensions.
- *
- * The date is the user's local date with its time zone: a UTC date is a day
- * ahead for every evening west of Greenwich. It is the only value in the
- * section that changes, once a day.
+ * The section core writes once per profile: where the loop is running.
+ * Everything an agent *is* comes from extensions. Nothing in it changes while
+ * the profile lives; the date is `dateSection`, written per turn.
  */
 export function environmentSection(options: {
   cwd: string
   platform: string
   isGitRepo: boolean
-  now: DateTime.Zoned
   shell?: string
   osVersion?: string
 }): PromptSection {
-  const { cwd, platform, isGitRepo, now, shell, osVersion } = options
-  const date = `${DateTime.formatIsoDate(now)} (${DateTime.zoneToString(now.zone)})`
+  const { cwd, platform, isGitRepo, shell, osVersion } = options
   let platformDisplay = platform
   if (!Predicate.isUndefined(osVersion)) platformDisplay = `${platform} (${osVersion})`
   let shellDisplay = "unknown"
@@ -56,10 +52,23 @@ export function environmentSection(options: {
   if (isGitRepo) gitRepository = "yes"
   return {
     id: "environment",
-    content: `# Environment\n\nWorking directory: ${cwd}\nPlatform: ${platformDisplay}\nShell: ${shellDisplay}\nGit repository: ${gitRepository}\nDate: ${date}`,
+    content: `# Environment\n\nWorking directory: ${cwd}\nPlatform: ${platformDisplay}\nShell: ${shellDisplay}\nGit repository: ${gitRepository}`,
     priority: 60,
   }
 }
+
+/**
+ * Today's date, written per turn right after the environment section, so a
+ * process that runs past midnight tells the model the new date. It is the
+ * user's local date with its time zone: a UTC date is a day ahead for every
+ * evening west of Greenwich. It changes the system prompt, and with it the
+ * cached prefix, at most once a day.
+ */
+export const dateSection = (now: DateTime.Zoned): PromptSection => ({
+  id: "date",
+  content: `Date: ${DateTime.formatIsoDate(now)} (${DateTime.zoneToString(now.zone)})`,
+  priority: 61,
+})
 
 // ── capability ──────────────────────────────────────────────────────────────
 

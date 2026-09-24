@@ -16,6 +16,7 @@ import {
 } from "../domain/agent.js"
 import {
   compileSystemPrompt,
+  dateSection,
   getToolId,
   getToolMetadata,
   type PromptSection,
@@ -1293,9 +1294,11 @@ const resolveTurnContext = Effect.fn("TurnHelpers.resolveTurnContext")(function*
   const toolBindings = new Map([...hostToolBindings].filter(([name]) => selectedNames.has(name)))
 
   // Build the tool-aware prompt, then run it through the systemPrompt hooks,
-  // which receive the compiled `basePrompt`.
+  // which receive the compiled `basePrompt`. The date is read per turn: the
+  // base sections live as long as the profile, which can outlive midnight.
+  const today = DateTime.setZone(yield* DateTime.now, DateTime.zoneMakeLocal())
   const sections = buildTurnPromptSections(
-    params.baseSections,
+    [...params.baseSections, dateSection(today)],
     dispatchAgent,
     tools,
     extensionSections,

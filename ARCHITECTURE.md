@@ -306,7 +306,9 @@ Native source-mode approval, public repair, direct-command cleanup, and external
 callback limits have focused validation. Full gate and terminal/server E2E pass.
 See `plans/live-composition-review.md` for evidence and recovery limits.
 
-Core writes one base prompt section, the environment. Extensions add sections
+Core writes two prompt sections: the environment, once per profile, and the
+local date, per turn (a profile outlives midnight; the date changes the cached
+prefix at most once a day). Extensions add sections
 only from `turnProjection` hooks, which run each turn inside the extension
 service context.
 

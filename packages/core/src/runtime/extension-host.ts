@@ -1806,12 +1806,10 @@ export const loadRuntimeProfileDeclarations = (
     const isGitRepo = yield* fs
       .exists(path.join(canonicalCwd, ".git"))
       .pipe(Effect.catchEager(() => Effect.succeed(false)))
-    const now = DateTime.setZone(yield* DateTime.now, DateTime.zoneMakeLocal())
     const coreSections = [
       environmentSection({
         cwd: canonicalCwd,
         platform: inputs.platform,
-        now,
         shell: inputs.shell,
         osVersion: inputs.osVersion,
         isGitRepo,

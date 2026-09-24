@@ -11,6 +11,7 @@ import {
 } from "@gent/core/extensions/api"
 import {
   compileSystemPrompt,
+  dateSection,
   environmentSection,
   getToolMetadata,
   isToolCapability,
@@ -214,10 +215,9 @@ describe("environment section", () => {
     cwd: "/home/user/project",
     platform: "linux",
     isGitRepo: true,
-    now: newYorkEve,
   }
 
-  test("names the working directory, platform, git state, and date", () => {
+  test("names the working directory, platform, and git state", () => {
     const result = compileSystemPrompt([environmentSection(base)])
     expect(result).toContain("Working directory: /home/user/project")
     expect(result).toContain("Platform: linux")
@@ -226,7 +226,7 @@ describe("environment section", () => {
 
   // The model is told the user's date, not UTC's: from 20:00 EDT, UTC is already tomorrow.
   test("the date is the local date, with its time zone", () => {
-    expect(environmentSection(base).content).toContain("Date: 2025-12-31 (America/New_York)")
+    expect(dateSection(newYorkEve).content).toBe("Date: 2025-12-31 (America/New_York)")
   })
 
   test("shell and OS version appear when known", () => {
