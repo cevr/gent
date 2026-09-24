@@ -157,6 +157,15 @@ const promptTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
     })
   })
 
+/** The prompt's system text, where extension prompt sections land. */
+const systemText = (prompt: Prompt.Prompt): string =>
+  prompt.content
+    .flatMap((message) => {
+      if (message.role !== "system") return []
+      return [message.content]
+    })
+    .join("\n")
+
 const promptToolCallIds = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
   prompt.content.flatMap((message) => {
     if (message.role !== "assistant") return []
@@ -1017,6 +1026,94 @@ describe("a parent interrupt", () => {
       ),
     8_000,
   )
+
+  // The live run: an interrupt stopped three children, and the parent's next
+  // turn said "Tasks 4–6 are still running". The stop wakes nobody, so the
+  // next turn the user starts reads a notice, until a turn answers.
+  it.live(
+    "tells the parent's next turn which children it stopped, without starting a turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const childStreaming = yield* Deferred.make<void>()
+          const parentStreaming = yield* Deferred.make<void>()
+          const stalled = (text: string, opened: Deferred.Deferred<void>) =>
+            Stream.make(textDeltaPart(text)).pipe(
+              Stream.concat(Stream.fromEffect(Deferred.succeed(opened, void 0)).pipe(Stream.drain)),
+              Stream.concat(Stream.never),
+            )
+          const parentRequests: Array<{ readonly system: string; readonly last: string }> = []
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true)
+              return Effect.succeed(stalled("working", childStreaming))
+            parentRequests.push({ system: systemText(options.prompt), last: texts.at(-1) ?? "" })
+            if (parentRequests.length === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentRequests.length === 2)
+              return Effect.succeed(stalled("planning", parentStreaming))
+            return Effect.succeed(reply("ack"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate one task")
+          yield* Deferred.await(childStreaming)
+          yield* Deferred.await(parentStreaming)
+          const child = yield* childOf(harness)
+          yield* client.steer.command({
+            command: SteerCommand.make({
+              _tag: "Cancel",
+              sessionId,
+              branchId,
+              requestId: RequestId.make("interrupt-parent-for-stop-notice"),
+            }),
+          })
+          yield* waitFor(
+            harness.registryOf(branchId),
+            (entries) => entries[0]?.delivered === true,
+            3_000,
+            "the parent's interrupt settled the child's row",
+          )
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            3_000,
+            "the parent is idle",
+          )
+          // The stop started no turn: only the two requests of the interrupted turn ran.
+          expect(parentRequests).toHaveLength(2)
+
+          yield* sendPrompt(harness, "WHAT-IS-RUNNING")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" && messageTexts(current.messages).includes("ack"),
+            3_000,
+            "the parent answered the next prompt",
+          )
+          const next = parentRequests[2]
+          expect(next?.last).toBe("WHAT-IS-RUNNING")
+          expect(next?.system).toContain("# Stopped children")
+          expect(next?.system).toContain(childTask)
+          expect(next?.system).toContain(child.sessionId)
+
+          // The answered turn read the notice; the one after it does not see it again.
+          yield* sendPrompt(harness, "AND-NOW")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              current.runtime._tag === "Idle" &&
+              messageTexts(current.messages).filter((text) => text === "ack").length === 2,
+            3_000,
+            "the parent answered the prompt after",
+          )
+          expect(parentRequests).toHaveLength(4)
+          expect(parentRequests[3]?.system).not.toContain("# Stopped children")
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
 })
 
 // ── background starts ───────────────────────────────────────────────────────
@@ -1563,15 +1660,6 @@ const sessionMessages = <
       message.metadata?.details,
     ),
   )
-
-/** The system text of one model call. */
-const systemText = (prompt: Prompt.Prompt): string =>
-  prompt.content
-    .flatMap((message) => {
-      if (message.role !== "system") return []
-      return [message.content]
-    })
-    .join("\n")
 
 describe("turn-time reconcile", () => {
   it.live(

@@ -13,6 +13,7 @@
  */
 import {
   Cause,
+  Clock,
   Context,
   Effect,
   Layer,
@@ -23,6 +24,7 @@ import {
   Ref,
   Schema,
   Stream,
+  Struct,
 } from "effect"
 import {
   ActorCommandId,
@@ -136,6 +138,12 @@ export const DelegateEntry = Schema.Struct({
   /** The parent has the completion: the message is on the parent branch, or the parent stopped the child. */
   delivered: Schema.Boolean,
   usage: Schema.optionalKey(ChildUsage),
+  /**
+   * When the parent's interrupted turn stopped this child. The stop sends no
+   * message, so the parent's turns read it as a notice until one answers;
+   * that turn's end removes the key. Absent on older rows and once read.
+   */
+  stopNoticeAt: Schema.optionalKey(Schema.Finite),
 })
 export type DelegateEntry = typeof DelegateEntry.Type
 
@@ -837,17 +845,22 @@ const admitChild = Effect.fn("Delegate.admit")(function* (params: AdmitParams) {
 /**
  * Settle a running child's row as interrupted, then stop it. The row is
  * settled first so the child's own receipt finds it delivered and sends no
- * message: a parent that stopped its children is not woken by them.
+ * message: a parent that stopped its children is not woken by them. The row
+ * keeps a stop notice instead, which the parent's next turn reads.
  */
 const stopChild = (entry: DelegateEntry) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
+    const now = yield* Clock.currentTimeMillis
     yield* registry
       .at(ctx.branchId)
       .update((entries) => {
         const current = entries.find((row) => row.requestId === entry.requestId)
         if (Predicate.isUndefined(current) || current.delivered) return entries
-        return replaceEntry(entries, settled(current, { interrupted: true }))
+        return replaceEntry(entries, {
+          ...settled(current, { interrupted: true }),
+          stopNoticeAt: now,
+        })
       })
       .pipe(Effect.ignore)
     yield* ctx.Session.stop({
@@ -933,6 +946,65 @@ const onParentTurnAfter = Effect.fn("Delegate.parentTurnAfter")(function* (input
   if (running.length === 0) return
   yield* Effect.forEach(running, stopChild, { discard: true })
   yield* ctx.State.changed().pipe(Effect.ignore)
+})
+
+/** A stop notice names the task by its first line, cut here; the registry keeps the whole prompt. */
+const maximumNoticeTaskChars = 80
+
+const noticeTask = (prompt: string) => {
+  const chars = [...(prompt.trim().split("\n")[0] ?? "")]
+  if (chars.length <= maximumNoticeTaskChars) return chars.join("")
+  return `${chars.slice(0, maximumNoticeTaskChars - 1).join("")}…`
+}
+
+/**
+ * The children the parent's interrupt stopped, as one prompt section, the way
+ * `@gent/wake` shows a notify fire: the stop wakes nobody, and without this the
+ * parent's next turn believes they still run. Every step reads it; only an
+ * answered turn clears it.
+ */
+const stopNoticeSections = Effect.fn("Delegate.stopNotices")(function* () {
+  const stopped = (yield* registry.read()).filter((row) =>
+    Predicate.isNotUndefined(row.stopNoticeAt),
+  )
+  if (stopped.length === 0) return []
+  const lines = stopped.map(
+    (row) =>
+      `- "${noticeTask(row.prompt)}" · session ${row.sessionId} · requestId ${row.requestId}`,
+  )
+  return [
+    {
+      id: "delegate-stopped",
+      priority: 86,
+      content: `# Stopped children\n\nYour interrupted turn stopped these children before they finished. They are not running, and no completion will come from them. Start a new child for a task that still needs doing.\n\n${lines.join("\n")}`,
+    },
+  ]
+})
+
+/**
+ * Drops the stop notices an answered turn read: those written before it
+ * started. A turn that failed or was interrupted keeps them. Nothing to drop
+ * leaves the file unwritten.
+ */
+const clearReadStopNotices = Effect.fn("Delegate.clearStopNotices")(function* (input: {
+  readonly branchId: BranchId
+  readonly durationMs: number
+  readonly interrupted: boolean
+  readonly streamFailed: boolean
+}) {
+  if (input.interrupted || input.streamFailed) return
+  const now = yield* Clock.currentTimeMillis
+  const turnStartedAt = now - input.durationMs
+  const read = (row: DelegateEntry) =>
+    Predicate.isNotUndefined(row.stopNoticeAt) && row.stopNoticeAt <= turnStartedAt
+  yield* registry.at(input.branchId).update((entries) => {
+    // The same array back skips the write.
+    if (!entries.some(read)) return entries
+    return entries.map((row) => {
+      if (!read(row)) return row
+      return Struct.omit(row, ["stopNoticeAt"])
+    })
+  })
 })
 
 // ── tools ───────────────────────────────────────────────────────────────────
@@ -1128,11 +1200,13 @@ export const DelegateExtension = defineExtension({
     yield* host.register("agent", delegateAgent)
     yield* host.register("tool", StartChild, CancelChild, ListChildren)
     yield* host.register("resource", ReconciledBranchesResource)
-    // Every turn end is read twice: as a child's receipt for its parent, and
-    // as a parent's interrupt for its children.
+    // Every turn end is read three times: as a child's receipt for its
+    // parent, as a parent's interrupt for its children, and as a parent's
+    // answer that read its stop notices.
     yield* host.on("turnAfter", (input) =>
       onChildTurnAfter(input).pipe(
         Effect.andThen(onParentTurnAfter(input)),
+        Effect.andThen(clearReadStopNotices(input)),
         Effect.catchCause((cause) =>
           Effect.logWarning("delegate.completion.failed").pipe(
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
@@ -1163,8 +1237,17 @@ export const DelegateExtension = defineExtension({
             Effect.annotateLogs({ cause: Cause.pretty(cause) }),
           ),
         ),
-        Effect.as(childrenSection(agent)),
-        Effect.map((promptSections) => ({ promptSections })),
+        Effect.andThen(
+          stopNoticeSections().pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("delegate.stop-notices.read.failed").pipe(
+                Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+                Effect.as([]),
+              ),
+            ),
+          ),
+        ),
+        Effect.map((notices) => ({ promptSections: [...childrenSection(agent), ...notices] })),
       ),
     )
   }),
