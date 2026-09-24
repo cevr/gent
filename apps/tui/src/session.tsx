@@ -109,6 +109,8 @@ import type { ToolCall } from "./tool-renderers"
 import { useRenderer } from "@opentui/solid"
 import { type ScopedKeyboardEvent, useScopedKeyboard } from "./terminal"
 import { useExtensionUI } from "./extensions/host"
+import type { ActiveExtensionSession, NoticeRow } from "./extensions/client-facets"
+import type { ResolvedNoticeRows } from "./extensions/loader-boundary"
 
 // ── session labels ──────────────────────────────────────────────────────────
 
@@ -1603,6 +1605,7 @@ type SessionFeedClient = Pick<
   | "applySessionSnapshot"
   | "applySessionEvent"
   | "applyBufferedSessionEvent"
+  | "resetSessionEvents"
 >
 
 type SessionFeedStore = {
@@ -1614,6 +1617,54 @@ const isMessage = Predicate.or(
   Predicate.isTagged("regular-message"),
   Predicate.isTagged("interjection-message"),
 )
+
+/** Transcript order: by time; a message before an event row at the same time; event rows by seq. */
+const compareSessionItems = (a: SessionItem, b: SessionItem): number => {
+  if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
+  if (!isMessage(a) && !isMessage(b)) return a.seq - b.seq
+  if (a._tag === b._tag) return 0
+  if (isMessage(a)) return -1
+  return 1
+}
+
+interface NoticeRowItems {
+  readonly items: ReadonlyMap<NoticeRow, SessionItem>
+  /** Every source answered its rows; one still deriving holds native history. */
+  readonly settled: boolean
+}
+
+/**
+ * The client extensions' notice rows for one branch, merged into the feed's
+ * rows. Each row keeps its transcript item while the extension answers the
+ * same row object, so the transcript does not remount rows that did not change.
+ */
+export const noticeRowItems = (
+  sources: ReadonlyArray<ResolvedNoticeRows>,
+  session: ActiveExtensionSession,
+  previous: ReadonlyMap<NoticeRow, SessionItem>,
+): NoticeRowItems => {
+  const next = new Map<NoticeRow, SessionItem>()
+  let settled = true
+  for (const source of sources) {
+    const rows = source.rows(session)
+    if (Option.isNone(rows)) settled = false
+    for (const row of Option.getOrElse(rows, () => [])) {
+      next.set(
+        row,
+        previous.get(row) ?? {
+          _tag: "notice",
+          key: `${source.id}:${row.key}`,
+          glyph: row.glyph,
+          color: row.color,
+          text: row.text,
+          createdAt: row.createdAt,
+          seq: 0,
+        },
+      )
+    }
+  }
+  return { items: next, settled }
+}
 
 // ── Build messages from raw ──
 
@@ -2089,11 +2140,15 @@ export function useSessionFeed(
         // A notice leaves the turn running: a muted row, no retry settled.
         if (event.notice === true) {
           if (live) client.log.warn("sessionFeed.notice", { error: event.error, seq: eventSeq })
+          const seq = eventSeq++
           appendSessionEvent(setStore, {
             _tag: "notice",
+            key: `error:${stampedAt}:${seq}`,
+            glyph: "●",
+            color: "textMuted",
             text: event.error,
             createdAt: stampedAt,
-            seq: eventSeq++,
+            seq,
           })
           return
         }
@@ -2190,18 +2245,12 @@ export function useSessionFeed(
     streamMessageId = Option.none()
     eventSeq = 0
     processedEnvelopeIds = new Set()
+    client.resetSessionEvents()
   }
 
-  const items = createMemo((): SessionItem[] => {
-    const combined: SessionItem[] = [...store.messages, ...store.events]
-    return combined.sort((a, b) => {
-      if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
-      if (!isMessage(a) && !isMessage(b)) return a.seq - b.seq
-      if (a._tag === b._tag) return 0
-      if (isMessage(a)) return -1
-      return 1
-    })
-  })
+  const items = createMemo((): SessionItem[] =>
+    [...store.messages, ...store.events].sort(compareSessionItems),
+  )
 
   // Keyed subscription — re-runs only when sessionId:branchId identity changes
   const feedKey = createMemo(() => `${sessionId()}:${branchId()}`)
@@ -2511,6 +2560,8 @@ export function useSessionFeed(
 
 export interface SessionController {
   items: () => SessionItem[]
+  /** Every notice-row source answered: the items are final and may reach native history. */
+  itemsSettled: () => boolean
   messages: () => Message[]
   forkMessages: () => readonly DurableMessage[]
   queueState: () => QueueState
@@ -2855,7 +2906,20 @@ export function createSessionController(props: {
     () => !authGatePending() && !branchPickerOpen(),
   )
 
-  const items = createMemo<SessionItem[]>(() => feed.items())
+  const notices = createMemo<NoticeRowItems>(
+    (previous) =>
+      noticeRowItems(
+        ext.noticeRows(),
+        { sessionId: props.sessionId, branchId: props.branchId },
+        previous.items,
+      ),
+    { items: new Map(), settled: true },
+  )
+  const items = createMemo<SessionItem[]>(() => {
+    const rows = notices().items
+    if (rows.size === 0) return feed.items()
+    return [...feed.items(), ...rows.values()].sort(compareSessionItems)
+  })
   const promptSearch = createPromptSearchController({
     state: () => {
       const overlay = uiState().overlay
@@ -3157,6 +3221,7 @@ export function createSessionController(props: {
 
   return {
     items,
+    itemsSettled: () => notices().settled,
     messages: feed.messages,
     forkMessages: () => {
       const overlay = uiState().overlay

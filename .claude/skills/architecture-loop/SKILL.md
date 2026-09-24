@@ -26,7 +26,7 @@ The ledger is `plans/architecture-loop-<date>.md`. It is the single source of tr
 
 6. **Counsel.** One round per pass, from [`prompts/counsel.md`](prompts/counsel.md). Fix each defect with a test that is red first. One fix commit, then move on. Done when every defect has a commit or a written rejection.
 
-7. **Live check.** `bun run gamut up <preset>`, drive the changed behavior, then `bun run gamut status`. `status` prints the stored user messages and the session tree: the pane shows what rendered, `status` shows what happened. Done when `status` matches the intent, then `bun run gamut down`.
+7. **Live check.** After each merge, or a small batch of merges, run the gamut through the herdr CLI (`herdr pane`, never `herdr agent`). Write a prompt file whose task drives every ability the batch changed, and drive TUI keys the prompt cannot reach (`/btw`, `/model`, queued follow-ups, Esc, `!cmd`, `gamut restart` for resume) with `herdr pane send-text`. `bun run gamut up <preset> --prompt <file>`, `wait`, `read`, then `bun run gamut status`. `status` prints the stored user messages and the session tree: the pane shows what rendered, `status` shows what happened. Done when `status` matches the intent, then `bun run gamut down`.
 
 8. **Ledger rows.** Every finding gets a row: `done <hash>`, or `rejected: <receipt>`. Add rejected rows to [`rejected.md`](rejected.md) when a later pass could re-propose them.
 

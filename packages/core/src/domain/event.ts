@@ -116,6 +116,12 @@ export const AgentEvent = Schema.TaggedUnion({
     // replaying the same event log always sums to the same cost, even if the
     // upstream pricing registry later refreshes.
     costUsd: Schema.optional(Schema.Finite),
+    /**
+     * The catalog id `costUsd` was priced by. A driver override routes
+     * `provider/model` to `driver/model`, so it can differ from `model`; a
+     * client that prices part of the step reads this one.
+     */
+    pricedModel: Schema.optional(ModelId),
     interrupted: Schema.optional(Schema.Boolean),
     /** How the step ended; the step boundary the loop's policy matched on. */
     outcome: Schema.optional(StepOutcomeTag),

@@ -888,6 +888,7 @@ describe("FX transcript treatment", () => {
               return (
                 <NativeTranscript
                   items={items}
+                  settled
                   streaming={false}
                   footerHeight={3}
                   expanded={false}
@@ -977,6 +978,7 @@ describe("FX transcript treatment", () => {
               return (
                 <NativeTranscript
                   items={items}
+                  settled
                   streaming={false}
                   footerHeight={3}
                   expanded={false}
@@ -1013,6 +1015,74 @@ describe("FX transcript treatment", () => {
         )
         expect(savedText.join("")).not.toContain("RAW-GOAL-TEXT")
       }),
+  )
+
+  it.live("native history holds rows while a notice-row source is still deriving", () =>
+    Effect.gen(function* () {
+      const [settled, setSettled] = createSignal(false)
+      let extensionsLoaded = () => false
+      const savedText: string[] = []
+      const items: SessionItem[] = Array.from({ length: 8 }, (_, index) =>
+        userMessage(
+          "regular-message",
+          `unsettled-${index}`,
+          `unsettled ${index}\nsecond line\nthird line`,
+          "queued",
+        ),
+      )
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(
+          () => {
+            const renderer = useRenderer()
+            extensionsLoaded = useExtensionUI().loaded
+            const capture = (event: CliRendererExternalOutputEvent) => {
+              savedText.push(new TextDecoder().decode(event.snapshot.getRealCharBytes(false)))
+            }
+            renderer.on("external_output", capture)
+            onCleanup(() => renderer.off("external_output", capture))
+            return (
+              <NativeTranscript
+                items={items}
+                settled={settled()}
+                streaming={false}
+                footerHeight={3}
+                expanded={false}
+                disclosure="collapsed"
+                displayRevision={0}
+                overlayOpen={false}
+                renderItems={(visible) => (
+                  <MessageList
+                    items={visible}
+                    disclosure="collapsed"
+                    syntaxStyle={syntaxStyle}
+                    streaming={false}
+                  />
+                )}
+              >
+                <box />
+              </NativeTranscript>
+            )
+          },
+          { width: 60, height: 14 },
+        ),
+      )
+      yield* Effect.promise(() => setup.flush()).pipe(
+        Effect.repeat({ until: () => extensionsLoaded() }),
+        Effect.timeout("5 seconds"),
+      )
+      // The live view overflows, but a source that has not answered holds every commit.
+      for (let pass = 0; pass < 20; pass++) {
+        yield* Effect.promise(() => setup.flush())
+        yield* Effect.yieldNow
+      }
+      expect(savedText.join("")).toBe("")
+      setSettled(true)
+      yield* waitForFrame(
+        setup,
+        () => savedText.join("").includes("unsettled 0"),
+        "first row in scrollback",
+      )
+    }),
   )
 
   it.live("goal continuations collapse to one line until full detail is on", () =>
@@ -2377,6 +2447,7 @@ describe("transcript block spacing", () => {
             return (
               <NativeTranscript
                 items={history}
+                settled
                 streaming={false}
                 footerHeight={3}
                 expanded={false}
@@ -2596,6 +2667,7 @@ describe("native transcript markdown", () => {
             return (
               <NativeTranscript
                 items={items}
+                settled
                 streaming={false}
                 footerHeight={3}
                 expanded={false}
@@ -2702,6 +2774,7 @@ describe("native transcript footer room", () => {
                 <box flexDirection="column" flexGrow={1}>
                   <NativeTranscript
                     items={longHistory()}
+                    settled
                     streaming={false}
                     footerHeight={footer()}
                     expanded={false}
@@ -2760,6 +2833,7 @@ describe("native transcript mouse tracking", () => {
         renderWithProviders(() => (
           <NativeTranscript
             items={[]}
+            settled
             streaming={false}
             footerHeight={3}
             expanded={expanded()}
@@ -2880,6 +2954,7 @@ const transcript = (options: {
   return (
     <NativeTranscript
       items={options.items()}
+      settled
       streaming={false}
       footerHeight={3}
       expanded={false}
@@ -2982,6 +3057,7 @@ const transcriptCommit = (options: {
   return (
     <NativeTranscript
       items={options.items}
+      settled
       streaming={false}
       footerHeight={3}
       expanded={false}

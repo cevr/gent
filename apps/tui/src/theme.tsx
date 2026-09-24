@@ -59,6 +59,15 @@ interface ThemeColors {
 
 export type Theme = ThemeColors
 
+/** A theme color an extension names; the host draws it in the active theme. */
+export type NamedThemeColor = "warning" | "info" | "success" | "primary" | "text" | "textMuted"
+
+/** A named theme color or a resolved one, as the active theme draws it. */
+export const resolveThemeColor = (theme: Theme, color: RGBA | NamedThemeColor): RGBA => {
+  if (Predicate.isString(color)) return theme[color]
+  return color
+}
+
 type ThemeMode = "dark" | "light" | "system"
 
 type HexColor = `#${string}`

@@ -324,11 +324,34 @@ const createClientEventHub = (log: ClientLog) => {
     }
   }
 
+  /**
+   * What the feed has delivered since it opened on its branch. The feed opens
+   * without waiting for client extensions, so one that subscribes later is
+   * handed this history first, then the live envelopes.
+   */
+  let deliveredSessionEvents: Array<EventEnvelope> = []
+
+  const deliverSessionEvent = (cb: SessionEventCallback, envelope: EventEnvelope): void => {
+    const exit = Effect.runSyncExit(Effect.sync(() => cb(envelope)))
+    if (Exit.isFailure(exit)) {
+      log.warn("client.sessionEvent.subscriber.threw", {
+        tag: envelope.event._tag,
+        error: formatThrown(Cause.squash(exit.cause)),
+      })
+    }
+  }
+
   const onSessionEvent = (cb: SessionEventCallback): (() => void) => {
+    for (const envelope of deliveredSessionEvents) deliverSessionEvent(cb, envelope)
     sessionEventSubscribers.add(cb)
     return () => {
       sessionEventSubscribers.delete(cb)
     }
+  }
+
+  /** The feed opened on another branch: its history starts again. */
+  const resetSessionEvents = (): void => {
+    deliveredSessionEvents = []
   }
 
   const notifyExtensionStateChanged = (event: EventEnvelope["event"]): void => {
@@ -351,16 +374,8 @@ const createClientEventHub = (log: ClientLog) => {
   }
 
   const notifySessionEvent = (envelope: EventEnvelope): void => {
-    if (sessionEventSubscribers.size === 0) return
-    for (const cb of sessionEventSubscribers) {
-      const exit = Effect.runSyncExit(Effect.sync(() => cb(envelope)))
-      if (Exit.isFailure(exit)) {
-        log.warn("client.sessionEvent.subscriber.threw", {
-          tag: envelope.event._tag,
-          error: formatThrown(Cause.squash(exit.cause)),
-        })
-      }
-    }
+    deliveredSessionEvents.push(envelope)
+    for (const cb of sessionEventSubscribers) deliverSessionEvent(cb, envelope)
   }
 
   return {
@@ -368,6 +383,7 @@ const createClientEventHub = (log: ClientLog) => {
     onSessionEvent,
     notifyExtensionStateChanged,
     notifySessionEvent,
+    resetSessionEvents,
   }
 }
 
@@ -463,8 +479,13 @@ interface ClientTransportValue {
   onExtensionStateChanged: (
     cb: (pulse: { sessionId: SessionId; branchId: BranchId; extensionId: string }) => void,
   ) => () => void
-  /** Subscribe to every event for the active session/branch. */
+  /**
+   * Subscribe to every event for the active session/branch. A late subscriber
+   * first receives what the feed delivered since it opened on the branch.
+   */
   onSessionEvent: (cb: (envelope: EventEnvelope) => void) => () => void
+  /** The feed opened on another branch; the delivered history starts again. */
+  resetSessionEvents: () => void
   applySessionRuntime: (input: Pick<SessionSnapshot, "sessionId" | "branchId" | "runtime">) => void
   applySessionSnapshot: (snapshot: SessionSnapshot) => void
   applySessionEvent: (envelope: EventEnvelope) => void
@@ -573,6 +594,8 @@ interface ClientAgentValue {
   modelInfo: () => Model | undefined
   /** The models a registered driver can run, in registry order; empty until both load. */
   models: () => readonly Model[]
+  /** `models`, or `None` until the catalog's first load settles; a failed load settles empty. */
+  modelCatalog: () => Option.Option<ReadonlyArray<Model>>
 
   /** Show a local error. It leaves the turn as it is; the next turn start clears it. */
   setError: (error: string) => void
@@ -791,7 +814,7 @@ export function ClientProvider(props: ClientProviderProps) {
               const agentsByName: Record<string, AgentDefinition> = {}
               for (const agent of drivers.agents) agentsByName[agent.name] = agent
               const driverIds = drivers.drivers.map((driver) => driver.id)
-              setModelStore({ modelsById, agentsByName, driverIds })
+              setModelStore({ modelsById, agentsByName, driverIds, settled: true })
             }),
           ),
           Effect.catchEager((err) =>
@@ -800,6 +823,8 @@ export function ClientProvider(props: ClientProviderProps) {
               const error = formatError(err)
               log.error("model.list.failed", { error })
               setAgentStore({ error: Option.some(error) })
+              // A reader waiting for the catalog goes on with what it holds.
+              setModelStore({ settled: true })
             }),
           ),
         ),
@@ -915,10 +940,13 @@ export function ClientProvider(props: ClientProviderProps) {
     agentsByName: Record<string, AgentDefinition>
     /** Ids of the registered model drivers; a model needs one to run. */
     driverIds: readonly string[]
+    /** The first catalog load has answered, with the catalog or with a failure. */
+    settled: boolean
   }>({
     modelsById: {},
     agentsByName: {},
     driverIds: [],
+    settled: false,
   })
 
   createEffect(() => {
@@ -1148,6 +1176,7 @@ export function ClientProvider(props: ClientProviderProps) {
     setConnectionIssue,
     onExtensionStateChanged: eventHub.onExtensionStateChanged,
     onSessionEvent: eventHub.onSessionEvent,
+    resetSessionEvents: eventHub.resetSessionEvents,
     applySessionRuntime,
     applySessionSnapshot,
     applySessionEvent,
@@ -1378,6 +1407,10 @@ export function ClientProvider(props: ClientProviderProps) {
       )
     },
   }
+  const runnableModels = (): readonly Model[] =>
+    Object.values(modelStore.modelsById).filter((model) =>
+      modelStore.driverIds.includes(model.provider),
+    )
   const agentValue: ClientAgentValue = {
     agent: () => Option.getOrUndefined(agentStore.agent),
     cost: () => agentStore.cost,
@@ -1410,10 +1443,11 @@ export function ClientProvider(props: ClientProviderProps) {
     error: () => Option.getOrNull(agentStore.error),
     sessionMetrics,
     modelInfo: () => modelStore.modelsById[agentValue.model()],
-    models: () =>
-      Object.values(modelStore.modelsById).filter((model) =>
-        modelStore.driverIds.includes(model.provider),
-      ),
+    models: runnableModels,
+    modelCatalog: () => {
+      if (!modelStore.settled) return Option.none()
+      return Option.some(runnableModels())
+    },
     setErrorIn: (target, error) => {
       // The session in view shows it now. Either way it is held, so the
       // session's next snapshot shows it again over the status it writes.

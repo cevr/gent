@@ -2257,10 +2257,8 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         const usage = Option.fromUndefinedOr(collected.messageProjection.usage)
         // Priced by the catalog id, the same one the context window reads: a
         // driver override routes `provider/model` to `driver/model`.
-        const streamEndedCost = yield* computeStreamEndedCost({
-          modelId: params.resolved.modelDriver.contextModelId,
-          usage,
-        })
+        const pricedModel = params.resolved.modelDriver.contextModelId
+        const streamEndedCost = yield* computeStreamEndedCost({ modelId: pricedModel, usage })
         yield* publishEventOrDie(
           StreamEnded.make({
             messageId: params.messageId,
@@ -2270,6 +2268,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             usage: collected.messageProjection.usage,
             model: params.resolved.modelId,
             costUsd: Option.getOrUndefined(streamEndedCost),
+            pricedModel,
             outcome: outcome._tag,
           }),
         )

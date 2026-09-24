@@ -17,7 +17,7 @@ import {
 import { type Session as ClientSession, useClient } from "./client"
 import { formatDuration, randomId, truncate } from "./utils"
 import { createMemo, createSignal, ErrorBoundary, For, Show } from "solid-js"
-import { buildSyntaxStyle, ThemeProvider, useTheme } from "./theme"
+import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import { KeyboardScopeProvider, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import type { RGBA } from "@opentui/core"
 import { MessageList, NativeTranscript } from "./message-list"
@@ -596,18 +596,7 @@ export function Session(props: SessionProps) {
   })
 
   // Map semantic color names from extensions to resolved theme colors
-  const resolveColor = (color: StatusLabelColor): RGBA => {
-    if (!Predicate.isString(color)) return color
-    const colorMap = {
-      warning: theme.warning,
-      info: theme.info,
-      success: theme.success,
-      primary: theme.primary,
-      text: theme.text,
-      textMuted: theme.textMuted,
-    }
-    return colorMap[color]
-  }
+  const resolveColor = (color: StatusLabelColor): RGBA => resolveThemeColor(theme, color)
 
   /** Every extension status label, by priority, after the host's own. */
   const extensionLabels = (): StatusRowLabel[] =>
@@ -721,6 +710,7 @@ export function Session(props: SessionProps) {
         {/* Messages */}
         <NativeTranscript
           items={controller.items()}
+          settled={controller.itemsSettled()}
           streaming={controller.activity().phase !== "idle"}
           footerHeight={footerHeight()}
           expanded={controller.uiState().transcriptExpanded}
