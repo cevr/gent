@@ -10032,7 +10032,13 @@ describe("a tool call a restart cut short", () => {
         })
         expect(results).toHaveLength(1)
         expect(results[0]?.isFailure).toBe(true)
-        expect(results[0]?.result).toMatchObject({ reason: "Interrupted" })
+        // A sibling that finished in memory, or a call that never started,
+        // reads the same way, so the text claims only what is known.
+        expect(results[0]?.result).toMatchObject({
+          reason: "Interrupted",
+          error:
+            "No result was recorded before the server stopped: the tool may have run in part, in full, or not at all. It did not run again; check its effects before you retry it.",
+        })
       }).pipe(Effect.timeout("15 seconds")),
     20_000,
   )

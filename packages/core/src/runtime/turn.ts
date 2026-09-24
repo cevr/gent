@@ -2833,9 +2833,12 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
         (toolCall) => !known.value.knownResults.has(toolCall.id),
       )
       // Only a call that parked on an interaction runs again: its last run
-      // stopped at the ask. Any other unsettled call was cut short while it
-      // ran (the process stopped), and running it again could repeat what it
-      // already did. The model reads that it was interrupted instead.
+      // stopped at the ask. Any other unsettled call has no recorded result:
+      // it was cut short while it ran, it finished beside a parked sibling
+      // (step results are kept only in process memory until the whole step
+      // settles), or it never started (the step's concurrency cap). Running
+      // it again could repeat what it already did, so the model reads that
+      // no result was recorded instead.
       const cutShort = unsettledCalls.filter((toolCall) => !position.parkedCallIds.has(toolCall.id))
       for (const toolCall of cutShort) {
         recoveredResults.push(
@@ -2846,7 +2849,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
             providerExecuted: false,
             result: {
               error:
-                "The tool did not finish: the server stopped while it ran. It did not run again; check its effects before you retry it.",
+                "No result was recorded before the server stopped: the tool may have run in part, in full, or not at all. It did not run again; check its effects before you retry it.",
               reason: "Interrupted",
             },
           }),
