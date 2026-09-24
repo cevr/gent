@@ -28,7 +28,6 @@ import {
   formatToolInput,
   formatUsageStats,
   isAbsPath,
-  parseFileRefs,
   previewOutput,
   shortenPath,
   toolArgSummary,
@@ -127,72 +126,6 @@ describe("context window utilization", () => {
 })
 
 // ── file refs ───────────────────────────────────────────────────────────────
-
-describe("parseFileRefs", () => {
-  test("parses simple file reference", () => {
-    const refs = parseFileRefs("check @src/foo.ts for details")
-    expect(refs).toEqual([{ path: "src/foo.ts" }])
-  })
-
-  test("parses reference with single line number", () => {
-    const refs = parseFileRefs("see @src/foo.ts#42")
-    expect(refs).toEqual([{ path: "src/foo.ts", startLine: 42 }])
-  })
-
-  test("parses reference with line range", () => {
-    const refs = parseFileRefs("look at @src/foo.ts#10-20")
-    expect(refs).toEqual([{ path: "src/foo.ts", startLine: 10, endLine: 20 }])
-  })
-
-  test("parses multiple references", () => {
-    const refs = parseFileRefs("compare @src/a.ts#1-5 with @src/b.ts#10-15")
-    expect(refs).toEqual([
-      { path: "src/a.ts", startLine: 1, endLine: 5 },
-      { path: "src/b.ts", startLine: 10, endLine: 15 },
-    ])
-  })
-
-  test("parses references at start of text", () => {
-    const refs = parseFileRefs("@package.json needs update")
-    expect(refs).toEqual([{ path: "package.json" }])
-  })
-
-  test("parses references at end of text", () => {
-    const refs = parseFileRefs("update the file @README.md")
-    expect(refs).toEqual([{ path: "README.md" }])
-  })
-
-  test("handles paths with dashes and underscores", () => {
-    const refs = parseFileRefs("check @src/my-file_name.ts#5")
-    expect(refs).toEqual([{ path: "src/my-file_name.ts", startLine: 5 }])
-  })
-
-  test("handles deeply nested paths", () => {
-    const refs = parseFileRefs("@packages/core/src/utils/helpers.ts#100-200")
-    expect(refs).toEqual([
-      { path: "packages/core/src/utils/helpers.ts", startLine: 100, endLine: 200 },
-    ])
-  })
-
-  test("returns empty array for no references", () => {
-    const refs = parseFileRefs("no references here")
-    expect(refs).toEqual([])
-  })
-
-  test("handles reference followed by punctuation", () => {
-    const refs = parseFileRefs("See @src/foo.ts, @src/bar.ts.")
-    expect(refs).toHaveLength(2)
-    expect(refs[0]?.path).toBe("src/foo.ts,")
-    expect(refs[1]?.path).toBe("src/bar.ts.")
-  })
-
-  test("handles email-like patterns (should not match)", () => {
-    // @ in email context has different semantics
-    // Our pattern captures anything after @ until whitespace
-    const refs = parseFileRefs("contact user@example.com for help")
-    expect(refs).toEqual([{ path: "example.com" }])
-  })
-})
 
 describe("fileUrl", () => {
   test("converts absolute path to file:// URL", () => {
@@ -435,6 +368,19 @@ describe("expandFileRefs", () => {
       const result = yield* expandFileRefs("see @README.md for docs", testDir)
       expect(result).toContain("```README.md")
       expect(result).toContain("# Title")
+    }),
+  )
+
+  fileRefsTest("expands a nested path whose name holds dashes and underscores", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const testDir = yield* makeFixture
+      yield* fs.makeDirectory(`${testDir}/packages/core/src`, { recursive: true })
+      yield* fs.writeFileString(`${testDir}/packages/core/src/my-file_name.ts`, "one\ntwo\nthree\n")
+      const result = yield* expandFileRefs("check @packages/core/src/my-file_name.ts#2-3", testDir)
+      expect(result).toContain("```packages/core/src/my-file_name.ts:2-3")
+      expect(result).toContain("two\nthree")
+      expect(result).not.toContain("one")
     }),
   )
 })

@@ -35,6 +35,7 @@ import {
   textDeltaPart,
   textStep,
   toolCallPart,
+  turnRequestText,
   waitFor,
   ConfigService,
   RuntimeEnvironment,
@@ -157,14 +158,11 @@ const promptTexts = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
     })
   })
 
-/** The prompt's system text, where extension prompt sections land. */
-const systemText = (prompt: Prompt.Prompt): string =>
-  prompt.content
-    .flatMap((message) => {
-      if (message.role !== "system") return []
-      return [message.content]
-    })
-    .join("\n")
+/** The prompt's system text, where standing extension prompt sections land. */
+const systemText = (prompt: Prompt.Prompt): string => turnRequestText(prompt).systemPrompt
+
+/** The turn notices the runtime places after the conversation. */
+const noticeText = (prompt: Prompt.Prompt): string => turnRequestText(prompt).notices
 
 const promptToolCallIds = (prompt: Prompt.Prompt): ReadonlyArray<string> =>
   prompt.content.flatMap((message) => {
@@ -1042,12 +1040,20 @@ describe("a parent interrupt", () => {
               Stream.concat(Stream.fromEffect(Deferred.succeed(opened, void 0)).pipe(Stream.drain)),
               Stream.concat(Stream.never),
             )
-          const parentRequests: Array<{ readonly system: string; readonly last: string }> = []
+          const parentRequests: Array<{
+            readonly system: string
+            readonly notices: string
+            readonly last: string
+          }> = []
           const providerLayer = LanguageModelLayers.testStream((options) => {
             const texts = promptTexts(options.prompt)
             if (texts[0]?.endsWith(childTask) === true)
               return Effect.succeed(stalled("working", childStreaming))
-            parentRequests.push({ system: systemText(options.prompt), last: texts.at(-1) ?? "" })
+            parentRequests.push({
+              system: systemText(options.prompt),
+              notices: noticeText(options.prompt),
+              last: texts.at(-1) ?? "",
+            })
             if (parentRequests.length === 1) {
               return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
             }
@@ -1094,13 +1100,16 @@ describe("a parent interrupt", () => {
           )
           const next = parentRequests[2]
           expect(next?.last).toBe("WHAT-IS-RUNNING")
-          expect(next?.system).toContain("# Stopped children")
-          expect(next?.system).toContain(childTask)
-          expect(next?.system).toContain(child.sessionId)
+          // The notice rides after the conversation; the system prompt is the
+          // one the turns before it sent.
+          expect(next?.system).toBe(parentRequests[0]?.system)
+          expect(next?.notices).toContain("# Stopped children")
+          expect(next?.notices).toContain(childTask)
+          expect(next?.notices).toContain(child.sessionId)
           // The user's interrupt stopped them: the notice asks for a report, not a restart.
-          expect(next?.system).toContain("Tell the user which children stopped")
-          expect(next?.system).toContain("only when the user asks for it")
-          expect(next?.system).not.toContain("Start a new child")
+          expect(next?.notices).toContain("Tell the user which children stopped")
+          expect(next?.notices).toContain("only when the user asks for it")
+          expect(next?.notices).not.toContain("Start a new child")
 
           // The answered turn read the notice; the one after it does not see it again.
           yield* sendPrompt(harness, "AND-NOW")
@@ -1113,7 +1122,8 @@ describe("a parent interrupt", () => {
             "the parent answered the prompt after",
           )
           expect(parentRequests).toHaveLength(4)
-          expect(parentRequests[3]?.system).not.toContain("# Stopped children")
+          expect(parentRequests[3]?.notices).toBe("")
+          expect(parentRequests[3]?.system).toBe(parentRequests[0]?.system)
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
@@ -1122,10 +1132,10 @@ describe("a parent interrupt", () => {
   it.live("keeps the notice through a turn that never answers", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const systems: Array<{ readonly system: string; readonly last: string }> = []
+        const systems: Array<{ readonly notices: string; readonly last: string }> = []
         const providerLayer = LanguageModelLayers.testStream((options) => {
           const last = promptTexts(options.prompt).at(-1) ?? ""
-          systems.push({ system: systemText(options.prompt), last })
+          systems.push({ notices: noticeText(options.prompt), last })
           // Every request of the first turn gets an empty reply: it spends its
           // continuations and ends unanswered.
           if (last === "NEXT") return Effect.succeed(reply("ack"))
@@ -1137,12 +1147,12 @@ describe("a parent interrupt", () => {
         yield* sendPrompt(harness, "SILENT")
         const first = yield* turnEnd(harness, 1)
         expect(first).toMatchObject({ unanswered: true })
-        expect(systems[0]?.system).toContain(noticeLine(1))
+        expect(systems[0]?.notices).toContain(noticeLine(1))
 
         yield* sendPrompt(harness, "NEXT")
         yield* turnEnd(harness, 2)
         const next = systems.find((request) => request.last === "NEXT")
-        expect(next?.system).toContain(noticeLine(1))
+        expect(next?.notices).toContain(noticeLine(1))
       }).pipe(Effect.timeout("8 seconds")),
     ),
   )
@@ -1151,13 +1161,13 @@ describe("a parent interrupt", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const restores: Array<Effect.Effect<void>> = []
-        const systems: Array<{ readonly system: string; readonly last: string }> = []
+        const systems: Array<{ readonly notices: string; readonly last: string }> = []
         const providerLayer = LanguageModelLayers.testStream((options) =>
           Effect.gen(function* () {
             // The projection already ran: the registry reads again from here on.
             yield* Effect.all(restores.splice(0), { discard: true })
             const last = promptTexts(options.prompt).at(-1) ?? ""
-            systems.push({ system: systemText(options.prompt), last })
+            systems.push({ notices: noticeText(options.prompt), last })
             return reply("ack")
           }),
         )
@@ -1171,12 +1181,12 @@ describe("a parent interrupt", () => {
         restores.push(fs.writeFileString(file, valid).pipe(Effect.orDie))
         yield* sendPrompt(harness, "UNREAD")
         yield* turnEnd(harness, 1)
-        expect(systems[0]?.system).not.toContain("# Stopped children")
+        expect(systems[0]?.notices).not.toContain("# Stopped children")
 
         yield* sendPrompt(harness, "NEXT")
         yield* turnEnd(harness, 2)
         const next = systems.find((request) => request.last === "NEXT")
-        expect(next?.system).toContain(noticeLine(1))
+        expect(next?.notices).toContain(noticeLine(1))
       }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("8 seconds")),
     ),
   )
@@ -1186,7 +1196,7 @@ describe("a parent interrupt", () => {
       Effect.gen(function* () {
         const systems: Array<string> = []
         const providerLayer = LanguageModelLayers.testStream((options) => {
-          systems.push(systemText(options.prompt))
+          systems.push(noticeText(options.prompt))
           return Effect.succeed(reply("ack"))
         })
         const harness = yield* harnessWithHome(providerLayer)

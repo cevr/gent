@@ -67,6 +67,7 @@ export {
   type SelectListRow,
   ToolFrame,
   TrayFrame,
+  usePickerBodyRows,
   usePickerGeometry,
   UserRow,
   useSpinnerClock,

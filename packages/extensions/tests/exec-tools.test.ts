@@ -49,6 +49,7 @@ import {
   runToolWithCtx,
   testToolContext,
   type TestToolContext,
+  turnRequestText,
   SqliteStorage,
 } from "@gent/core/test-utils"
 import { shippedPreset } from "./helpers/test-preset.js"
@@ -3656,20 +3657,16 @@ describe("a background job the server stopped", () => {
           }),
         )
 
-        // A model that records each call's system prompt. A call listed in
-        // `failing` fails its stream, so that turn never answers.
+        // A model that records the turn notices each call carries after the
+        // conversation. A call listed in `failing` fails its stream, so that
+        // turn never answers.
         const recordingModel = (failing: ReadonlySet<number>) =>
           Effect.gen(function* () {
             const systems = yield* Ref.make<ReadonlyArray<string>>([])
             const providerLayer = LanguageModelLayers.testStream((options) =>
               Effect.gen(function* () {
-                const system = options.prompt.content
-                  .map((message) => {
-                    if (message.role === "system") return message.content
-                    return ""
-                  })
-                  .join("\n")
-                const call = (yield* Ref.updateAndGet(systems, (all) => [...all, system])).length
+                const { notices } = turnRequestText(options.prompt)
+                const call = (yield* Ref.updateAndGet(systems, (all) => [...all, notices])).length
                 if (failing.has(call)) {
                   return yield* AiError.make({
                     module: "Test",

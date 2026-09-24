@@ -43,15 +43,14 @@ import {
   latestAssistantText,
   type Message,
   makeRunSpec,
-  makeShownNotices,
   MessageId,
   RequestId,
   type RunSpec,
   RunSpecSchema,
   SessionId,
-  type ShownNotices,
   ToolCallId,
   tool,
+  type TurnAfterInput,
   type TurnUsage,
 } from "@gent/core/extensions/api"
 import { makeBranchStateStore } from "./branch-state-store.js"
@@ -969,30 +968,14 @@ const noticeTask = (prompt: string) => {
 const stopNoticeKey = (row: DelegateEntry) => `${row.requestId}@${row.stopNoticeAt}`
 
 /**
- * The stop notices each turn put in its prompt. Only these clear, and only
- * when the turn answered: a notice the turn never showed (its read failed, or
- * the cap left it out) stays for the next turn.
- */
-class ShownStopNotices extends Context.Service<ShownStopNotices, ShownNotices>()(
-  "@gent/extensions/src/delegate/ShownStopNotices",
-) {}
-
-const ShownStopNoticesResource = defineResource({
-  id: "@gent/delegate/shown-stop-notices",
-  scope: "process",
-  layer: Layer.effect(ShownStopNotices, makeShownNotices),
-})
-
-/**
- * The children the parent's interrupt stopped, as one prompt section, the way
+ * The children the parent's interrupt stopped, as one turn notice, the way
  * `@gent/wake` shows a notify fire: the stop wakes nobody, and without this the
  * parent's next turn believes they still run. A child is one line however
  * often it was stopped, the newest first, at most `maximumNoticeChildren`;
- * the rest are a count. Every step reads it and marks what it showed; an
- * answered turn clears exactly that.
+ * the rest are a count. Every step reads it; an answered turn clears exactly
+ * the rows it showed, and a row the cap left out stays for the next turn.
  */
-const stopNoticeSections = Effect.fn("Delegate.stopNotices")(function* () {
-  const ctx = yield* ExtensionContext
+const stopNotices = Effect.fn("Delegate.stopNotices")(function* () {
   const stopped = (yield* registry.read()).filter((row) =>
     Predicate.isNotUndefined(row.stopNoticeAt),
   )
@@ -1014,32 +997,25 @@ const stopNoticeSections = Effect.fn("Delegate.stopNotices")(function* () {
   if (unnamed > 0) {
     lines.push(`- and ${unnamed} more stopped children, named once you have read these.`)
   }
-  yield* (yield* ShownStopNotices).record(
-    { sessionId: ctx.sessionId, branchId: ctx.branchId },
-    named.flat().map(stopNoticeKey),
-  )
   return [
     {
       id: "delegate-stopped",
-      priority: 86,
+      keys: named.flat().map(stopNoticeKey),
       content: `# Stopped children\n\nThe user interrupted your turn, and that stopped these children before they finished. They are not running, and no completion will come from them. Tell the user which children stopped; start one again only when the user asks for it.\n\n${lines.join("\n")}`,
     },
   ]
 })
 
 /**
- * Drops the stop notices an answered turn showed. A turn that was
- * interrupted, failed, or never answered keeps them, and so does every notice
- * the turn did not show. Nothing to drop leaves the file unwritten.
+ * Drops the stop notices the turn read. The runtime hands back only what an
+ * answered turn showed: an interrupted, failed or unanswered turn keeps them,
+ * and so does every notice the turn did not show. Nothing to drop leaves the
+ * file unwritten.
  */
-const clearReadStopNotices = Effect.fn("Delegate.clearStopNotices")(function* (input: {
-  readonly sessionId: SessionId
-  readonly branchId: BranchId
-  readonly interrupted: boolean
-  readonly streamFailed: boolean
-  readonly unanswered: boolean
-}) {
-  const shown = yield* (yield* ShownStopNotices).takeRead(input)
+const clearReadStopNotices = Effect.fn("Delegate.clearStopNotices")(function* (
+  input: Pick<TurnAfterInput, "branchId" | "readNotices">,
+) {
+  const shown = input.readNotices
   if (shown.size === 0) return
   const read = (row: DelegateEntry) =>
     Predicate.isNotUndefined(row.stopNoticeAt) && shown.has(stopNoticeKey(row))
@@ -1245,7 +1221,7 @@ export const DelegateExtension = defineExtension({
     const host = yield* ExtensionHost
     yield* host.register("agent", delegateAgent)
     yield* host.register("tool", StartChild, CancelChild, ListChildren)
-    yield* host.register("resource", ReconciledBranchesResource, ShownStopNoticesResource)
+    yield* host.register("resource", ReconciledBranchesResource)
     // Every turn end is read three times: as a child's receipt for its
     // parent, as a parent's interrupt for its children, and as a parent's
     // answer that read its stop notices.
@@ -1284,7 +1260,7 @@ export const DelegateExtension = defineExtension({
           ),
         ),
         Effect.andThen(
-          stopNoticeSections().pipe(
+          stopNotices().pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("delegate.stop-notices.read.failed").pipe(
                 Effect.annotateLogs({ cause: Cause.pretty(cause) }),
@@ -1293,7 +1269,7 @@ export const DelegateExtension = defineExtension({
             ),
           ),
         ),
-        Effect.map((notices) => ({ promptSections: [...childrenSection(agent), ...notices] })),
+        Effect.map((notices) => ({ promptSections: childrenSection(agent), notices })),
       ),
     )
   }),

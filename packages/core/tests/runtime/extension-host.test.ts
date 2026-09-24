@@ -2782,27 +2782,30 @@ describe("runtime slots", () => {
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(
         slots
-          .emitTurnAfter({
-            sessionId: SessionId.make("test-session"),
-            branchId: BranchId.make("test-branch"),
-            durationMs: 10,
-            agentName: AgentName.make("cowork"),
-            interrupted: false,
-            streamFailed: false,
-            unanswered: false,
+          .emitTurnAfter(
+            {
+              sessionId: SessionId.make("test-session"),
+              branchId: BranchId.make("test-branch"),
+              durationMs: 10,
+              agentName: AgentName.make("cowork"),
+              interrupted: false,
+              streamFailed: false,
+              unanswered: false,
 
-            messageId: MessageId.make("turn-message"),
-            usage: {
-              known: {
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
-                costUsd: Option.none(),
+              messageId: MessageId.make("turn-message"),
+              usage: {
+                known: {
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  cacheReadTokens: 0,
+                  cacheWriteTokens: 0,
+                  costUsd: Option.none(),
+                },
+                complete: true,
               },
-              complete: true,
-            },
-          } satisfies TurnAfterInput)
+            } satisfies Omit<TurnAfterInput, "readNotices">,
+            new Map(),
+          )
           .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx)),
       )
       expect(Exit.isSuccess(exit)).toBe(true)
@@ -2827,27 +2830,30 @@ describe("runtime slots", () => {
       ])
 
       yield* slots
-        .emitTurnAfter({
-          sessionId: SessionId.make("test-session"),
-          branchId: BranchId.make("test-branch"),
-          durationMs: 10,
-          agentName: AgentName.make("cowork"),
-          interrupted: false,
-          streamFailed: false,
-          unanswered: false,
+        .emitTurnAfter(
+          {
+            sessionId: SessionId.make("test-session"),
+            branchId: BranchId.make("test-branch"),
+            durationMs: 10,
+            agentName: AgentName.make("cowork"),
+            interrupted: false,
+            streamFailed: false,
+            unanswered: false,
 
-          messageId: MessageId.make("turn-message"),
-          usage: {
-            known: {
-              inputTokens: 0,
-              outputTokens: 0,
-              cacheReadTokens: 0,
-              cacheWriteTokens: 0,
-              costUsd: Option.none(),
+            messageId: MessageId.make("turn-message"),
+            usage: {
+              known: {
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+                costUsd: Option.none(),
+              },
+              complete: true,
             },
-            complete: true,
-          },
-        } satisfies TurnAfterInput)
+          } satisfies Omit<TurnAfterInput, "readNotices">,
+          new Map(),
+        )
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubHostCtx))
 
       expect(yield* Ref.get(sawHostAuthority)).toBe(true)
@@ -2875,27 +2881,30 @@ describe("runtime slots", () => {
       const hostCtx: ExtensionHostContext = stubHostCtx
 
       yield* slots
-        .emitTurnAfter({
-          sessionId: SessionId.make("test-session"),
-          branchId: BranchId.make("test-branch"),
-          durationMs: 10,
-          agentName: AgentName.make("cowork"),
-          interrupted: false,
-          streamFailed: false,
-          unanswered: false,
+        .emitTurnAfter(
+          {
+            sessionId: SessionId.make("test-session"),
+            branchId: BranchId.make("test-branch"),
+            durationMs: 10,
+            agentName: AgentName.make("cowork"),
+            interrupted: false,
+            streamFailed: false,
+            unanswered: false,
 
-          messageId: MessageId.make("turn-message"),
-          usage: {
-            known: {
-              inputTokens: 0,
-              outputTokens: 0,
-              cacheReadTokens: 0,
-              cacheWriteTokens: 0,
-              costUsd: Option.none(),
+            messageId: MessageId.make("turn-message"),
+            usage: {
+              known: {
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+                costUsd: Option.none(),
+              },
+              complete: true,
             },
-            complete: true,
-          },
-        } satisfies TurnAfterInput)
+          } satisfies Omit<TurnAfterInput, "readNotices">,
+          new Map(),
+        )
         .pipe(
           Effect.provideService(CurrentExtensionHostContext, hostCtx),
           provideCurrentCapabilityContext(Context.make(HookCounter, counter)),
@@ -4422,7 +4431,7 @@ describe("buildResourceLayer lifecycle", () => {
 
 const stubCtx = testExtensionHostContext()
 
-const stubEvent: TurnAfterInput = {
+const stubEvent: Omit<TurnAfterInput, "readNotices"> = {
   sessionId: SessionId.make("019da5c0-0000-7000-0000-000000000001"),
   branchId: BranchId.make("019da5c0-0000-7001-0000-000000000001"),
   durationMs: 100,
@@ -4483,7 +4492,7 @@ describe("runtime hooks", () => {
 
       const exit = yield* Effect.exit(
         compiled
-          .emitTurnAfter(stubEvent)
+          .emitTurnAfter(stubEvent, new Map())
           .pipe(Effect.provideService(CurrentExtensionHostContext, stubCtx)),
       )
       expect(Exit.isSuccess(exit)).toBe(true)
@@ -4507,9 +4516,87 @@ describe("runtime hooks", () => {
       ])
 
       yield* compiled
-        .emitTurnAfter(stubEvent)
+        .emitTurnAfter(stubEvent, new Map())
         .pipe(Effect.provideService(CurrentExtensionHostContext, stubCtx))
       expect(calls).toEqual(["builtin", "user", "project"])
+    }))
+
+  test("each extension's turnAfter reads back only the notices its own projection showed", () =>
+    Effect.gen(function* () {
+      const read = new Map<string, ReadonlyArray<string>>()
+      const recordRead = (id: string) => [
+        hook("turnAfter", (input: TurnAfterInput) =>
+          Effect.sync(() => {
+            read.set(id, [...input.readNotices])
+          }),
+        ),
+      ]
+      const compiled = compileExtensionHooks([
+        extRuntimeHooks("shows", "builtin", { hooks: recordRead("shows") }),
+        extRuntimeHooks("quiet", "builtin", { hooks: recordRead("quiet") }),
+      ])
+      yield* compiled
+        .emitTurnAfter(stubEvent, new Map([[ExtensionId.make("shows"), new Set(["a", "b"])]]))
+        .pipe(Effect.provideService(CurrentExtensionHostContext, stubCtx))
+      expect(read.get("shows")).toEqual(["a", "b"])
+      expect(read.get("quiet")).toEqual([])
+    }))
+
+  test("a notice with no text is not shown, so no turn reads its keys", () =>
+    Effect.gen(function* () {
+      const compiled = compileExtensionHooks([
+        extRuntimeHooks("blank", "builtin", {
+          hooks: [
+            hook("turnProjection", () =>
+              Effect.succeed({
+                notices: [
+                  { id: "blank", content: "", keys: ["unseen"] },
+                  { id: "spaces", content: "  \n", keys: ["also-unseen"] },
+                  { id: "real", content: "# Real", keys: ["seen"] },
+                ],
+              }),
+            ),
+          ],
+        }),
+      ])
+      const projection = yield* compiled
+        .resolveTurnProjection({ agent: AgentDefinition.make({ name: AgentName.make("cowork") }) })
+        .pipe(Effect.provideService(CurrentExtensionHostContext, stubCtx))
+      expect(projection.notices.map(({ notice }) => notice.keys)).toEqual([["seen"]])
+    }))
+
+  test("a turn's notices keep their extension, and a later notice with the same id replaces one", () =>
+    Effect.gen(function* () {
+      const notices = (keys: ReadonlyArray<string>, content: string) => [
+        hook("turnProjection", () =>
+          Effect.succeed({ notices: [{ id: "shared", content, keys }] }),
+        ),
+      ]
+      const compiled = compileExtensionHooks([
+        extRuntimeHooks("first", "builtin", { hooks: notices(["x"], "from first") }),
+        extRuntimeHooks("second", "user", { hooks: notices(["y"], "from second") }),
+        extRuntimeHooks("own", "project", {
+          hooks: [
+            hook("turnProjection", () =>
+              Effect.succeed({ notices: [{ id: "own", content: "own", keys: ["z"] }] }),
+            ),
+          ],
+        }),
+      ])
+      const projection = yield* compiled
+        .resolveTurnProjection({ agent: AgentDefinition.make({ name: AgentName.make("cowork") }) })
+        .pipe(Effect.provideService(CurrentExtensionHostContext, stubCtx))
+      expect(projection.notices).toEqual([
+        {
+          extensionId: ExtensionId.make("second"),
+          notice: { id: "shared", content: "from second", keys: ["y"] },
+        },
+        {
+          extensionId: ExtensionId.make("own"),
+          notice: { id: "own", content: "own", keys: ["z"] },
+        },
+      ])
+      expect(projection.promptSections).toEqual([])
     }))
 })
 

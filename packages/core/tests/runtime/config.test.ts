@@ -6,6 +6,7 @@ import {
   FileSystem,
   Layer,
   Logger,
+  Option,
   PlatformError,
   Path,
   Predicate,
@@ -19,7 +20,6 @@ import {
   AgentName,
   DriverRef,
   ModelId,
-  resolveAgentDriver,
   RunSpecSchema,
 } from "../../src/domain/agent"
 import {
@@ -29,6 +29,7 @@ import {
   RuntimeEnvironment,
   UserConfig,
 } from "../../src/runtime/config"
+import { resolveSessionRoute } from "../../src/runtime/turn"
 import { test } from "bun:test"
 
 // ── user configuration ──────────────────────────────────────────────────────
@@ -1046,14 +1047,9 @@ describe("user configuration", () => {
 // ── driver override routing ─────────────────────────────────────────────────
 
 /**
- * Driver override routing — integration test that ConfigService.driverOverrides
- * actually flows into `resolveAgentDriver` at the agent loop's resolution
- * boundary.
- *
- * Drives `ConfigService.Test(...)` with overrides, calls
- * `resolveAgentDriver` directly with the merged config, asserts source +
- * driver. Catches breakage between `ConfigService` and the resolver
- * without spinning up the full agent loop.
+ * Driver override routing: `ConfigService.driverOverrides` flows into
+ * `resolveSessionRoute`, the one place a turn's driver is chosen. The
+ * precedence itself is tested in tests/runtime/turn.test.ts.
  */
 
 const cowork = AgentDefinition.make({ name: AgentName.make("cowork") })
@@ -1062,15 +1058,20 @@ const hardcoded = AgentDefinition.make({
   driver: DriverRef.make({ id: "anthropic-proxy" }),
 })
 
+/** The driver id a session running `agent` dispatches through under the config. */
+const routedDriver = (agent: AgentDefinition, config: UserConfig) =>
+  resolveSessionRoute({
+    agents: [agent],
+    admission: Option.some({ agent: agent.name }),
+    config,
+    session: { modelId: ModelId.make("anthropic/claude-sonnet-5") },
+  }).modelDriver.driverId
+
 describe("configured driver override routing", () => {
-  it.live("agent without hardcoded driver picks up config override (source: config)", () =>
+  it.live("an agent with no driver of its own routes through the config override", () =>
     Effect.gen(function* () {
       const cfg = yield* ConfigService
-      const { driverOverrides } = yield* cfg.get()
-      const result = resolveAgentDriver(cowork, driverOverrides)
-      expect(result.source).toBe("config")
-      expect(result.driver?._tag).toBe("Model")
-      expect(result.driver?.id).toBe("anthropic-proxy")
+      expect(routedDriver(cowork, yield* cfg.get())).toEqual(Option.some("anthropic-proxy"))
     }).pipe(
       Effect.provide(
         ConfigService.Test(
@@ -1084,19 +1085,16 @@ describe("configured driver override routing", () => {
     ),
   )
 
-  it.live("hardcoded agent.driver wins over config override (source: agent)", () =>
+  it.live("an agent's own driver wins over a config override", () =>
     Effect.gen(function* () {
       const cfg = yield* ConfigService
-      const { driverOverrides } = yield* cfg.get()
-      const result = resolveAgentDriver(hardcoded, driverOverrides)
-      expect(result.source).toBe("agent")
-      expect(result.driver?.id).toBe("anthropic-proxy")
+      expect(routedDriver(hardcoded, yield* cfg.get())).toEqual(Option.some("anthropic-proxy"))
     }).pipe(
       Effect.provide(
         ConfigService.Test(
           new UserConfig({
             driverOverrides: {
-              [AgentName.make("hardcoded")]: DriverRef.make({ id: "anthropic" }),
+              [AgentName.make("hardcoded")]: DriverRef.make({ id: "openai" }),
             },
           }),
         ),
@@ -1104,28 +1102,23 @@ describe("configured driver override routing", () => {
     ),
   )
 
-  it.live("no override returns source: default", () =>
+  it.live("no override routes through the model id's provider", () =>
     Effect.gen(function* () {
       const cfg = yield* ConfigService
-      const { driverOverrides } = yield* cfg.get()
-      const result = resolveAgentDriver(cowork, driverOverrides)
-      expect(result.source).toBe("default")
-      expect(result.driver).toBeUndefined()
+      expect(routedDriver(cowork, yield* cfg.get())).toEqual(Option.some("anthropic"))
     }).pipe(Effect.provide(ConfigService.Test())),
   )
 
-  it.live("clearing the override falls back to default on the next read", () =>
+  it.live("clearing the override routes through the provider on the next read", () =>
     Effect.gen(function* () {
       const cfg = yield* ConfigService
       yield* cfg.setDriverOverride(
         AgentName.make("cowork"),
         DriverRef.make({ id: "anthropic-proxy" }),
       )
-      const before = (yield* cfg.get()).driverOverrides
-      expect(resolveAgentDriver(cowork, before).source).toBe("config")
+      expect(routedDriver(cowork, yield* cfg.get())).toEqual(Option.some("anthropic-proxy"))
       yield* cfg.clearDriverOverride(AgentName.make("cowork"))
-      const after = (yield* cfg.get()).driverOverrides
-      expect(resolveAgentDriver(cowork, after).source).toBe("default")
+      expect(routedDriver(cowork, yield* cfg.get())).toEqual(Option.some("anthropic"))
     }).pipe(Effect.provide(ConfigService.Test())),
   )
 })

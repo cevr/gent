@@ -1,13 +1,4 @@
 import { type Context, DateTime, Effect, Option, Predicate, Schema } from "effect"
-import type { ToolCapability } from "./capability.js"
-import {
-  type AgentDefinition as AgentDefinitionType,
-  type AgentName as AgentNameType,
-  type DriverRef,
-  type EffectiveModelDriver,
-  type ModelId as ModelIdType,
-  type ReasoningEffort as ReasoningEffortType,
-} from "./agent.js"
 import type { AgentEvent } from "./event.js"
 import { Message, MessageMetadata, QueueSnapshot, SteerCommand } from "./message.js"
 import {
@@ -60,22 +51,6 @@ export const asAgentLoopError = (message: string) =>
 const RunningTurnFields = {
   message: Message,
   startedAtMs: Schema.Finite,
-}
-
-// ── Turn types (not persisted in machine state) ──
-
-export type ResolvedTurn = {
-  currentTurnAgent: AgentNameType
-  messages: ReadonlyArray<Message>
-  systemPrompt: string
-  modelId: ModelIdType
-  reasoning?: ReasoningEffortType
-  temperature?: number
-  tools?: ReadonlyArray<ToolCapability>
-  agent?: AgentDefinitionType
-  driver?: DriverRef
-  /** Derived once at resolution; the resolver, retry policy, and catalog lookup share it. */
-  modelDriver: EffectiveModelDriver
 }
 
 // ── Phase-tagged loop state (flat, actor-owned) ──

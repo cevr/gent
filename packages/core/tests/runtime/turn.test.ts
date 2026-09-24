@@ -18,10 +18,11 @@ import {
   makeActiveStreamHandle,
   persistMessageReceived,
   recordToolOutcome,
+  resolveSessionRoute,
   signalActiveStreamInterrupt,
 } from "../../src/runtime/turn"
 import { BranchId, MessageId, SessionId, ToolCallId } from "../../src/domain/ids"
-import { ModelId } from "../../src/domain/agent"
+import { AgentDefinition, AgentName, DriverRef, ModelId } from "../../src/domain/agent"
 import { ProviderError } from "../../src/domain/errors"
 import { finishPart, textDeltaPart, toolCallPart } from "../../src/runtime/provider"
 import {
@@ -215,6 +216,50 @@ describe("agent turn response collectors", () => {
       expect((yield* Ref.get(events)).map((event) => event._tag)).toContain("ErrorOccurred")
     }),
   )
+})
+
+// ── session route ───────────────────────────────────────────────────────────
+
+describe("session route driver", () => {
+  const modelId = ModelId.make("anthropic/claude-sonnet-5")
+  const routeOf = (agent: AgentDefinition, driverOverrides?: Readonly<Record<string, DriverRef>>) =>
+    resolveSessionRoute({
+      agents: [agent],
+      admission: Option.some({ agent: agent.name }),
+      config: { driverOverrides },
+      session: { modelId },
+    })
+
+  test("the agent's own driver wins over a config override", () => {
+    const agent = AgentDefinition.make({
+      name: AgentName.make("special"),
+      driver: DriverRef.make({ id: "anthropic-proxy" }),
+    })
+    const route = routeOf(agent, { special: DriverRef.make({ id: "openai-proxy" }) })
+    expect(route.modelDriver.driverId).toEqual(Option.some("anthropic-proxy"))
+    expect(route.modelDriver.contextModelId).toBe(ModelId.make("anthropic-proxy/claude-sonnet-5"))
+  })
+
+  test("a config override routes an agent that names no driver", () => {
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const route = routeOf(agent, { cowork: DriverRef.make({ id: "openai" }) })
+    expect(route.modelDriver.driverId).toEqual(Option.some("openai"))
+    expect(route.modelDriver.contextModelId).toBe(ModelId.make("openai/claude-sonnet-5"))
+  })
+
+  test("no driver and no override route through the model id's provider", () => {
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    for (const route of [routeOf(agent), routeOf(agent, {})]) {
+      expect(route.modelDriver.driverId).toEqual(Option.some("anthropic"))
+      expect(route.modelDriver.contextModelId).toBe(modelId)
+    }
+  })
+
+  test("an override for another agent does not route this one", () => {
+    const agent = AgentDefinition.make({ name: AgentName.make("cowork") })
+    const route = routeOf(agent, { deepwork: DriverRef.make({ id: "openai" }) })
+    expect(route.modelDriver.driverId).toEqual(Option.some("anthropic"))
+  })
 })
 
 // ── step outcome ────────────────────────────────────────────────────────────

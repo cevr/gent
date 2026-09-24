@@ -915,15 +915,11 @@ export function fileUrl(path: string): string {
 }
 
 /**
- * Parse file references from text
+ * The file references in `text`, with the span each was written at.
  * @example "@src/foo.ts" → { path: "src/foo.ts" }
  * @example "@src/foo.ts#10" → { path: "src/foo.ts", startLine: 10 }
  * @example "@src/foo.ts#10-20" → { path: "src/foo.ts", startLine: 10, endLine: 20 }
  */
-export function parseFileRefs(text: string): FileRef[] {
-  return matchFileRefs(text).map((match) => match.ref)
-}
-
 const matchFileRefs = (text: string): FileRefMatch[] => {
   const refs: FileRefMatch[] = []
   const pattern = new RegExp(FILE_REF_PATTERN.source, "g")
