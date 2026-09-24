@@ -116,7 +116,7 @@ import {
   type ProviderResolution,
 } from "../../src/domain/driver"
 import { Model as AiModel, LanguageModel } from "effect/unstable/ai"
-import { ModelRegistry, ModelResolver } from "../../src/runtime/provider"
+import { ModelRegistry } from "../../src/runtime/provider"
 import { LanguageModelLayers, textStep, waitFor } from "../../src/test-utils/language-model"
 import {
   AgentDefinition,
@@ -157,7 +157,7 @@ import { compileToolPolicy, noBranchTools, ToolRunner } from "../../src/runtime/
 import { SingleRunner } from "effect/unstable/cluster"
 import { AgentEvent, EventStore } from "../../src/domain/event"
 import { SessionMutationsLive } from "../../src/server/server"
-import { AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
+import { AgentLoopLiveActor, AgentLoopSessionGovernance } from "../../src/runtime/agent-loop"
 import { EventStoreLive, SessionRuntime } from "../../src/runtime/session"
 
 // ── ambient host context ─────────────────────────────────────────────────────
@@ -635,6 +635,32 @@ export default defineExtension({
         Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("6".repeat(64))),
       )
     }).pipe(Effect.provide(BunPlatformLive)),
+  )
+
+  // A branch's loop closes while one of its fibers resolves: the lease lands
+  // on a scope that is already closed, and is released at once.
+  it.scopedLive(
+    "a resolve whose caller scope already closed returns and releases its lease",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const launch = yield* fs.makeTempDirectoryScoped()
+        const home = yield* fs.makeTempDirectoryScoped()
+
+        yield* Effect.gen(function* () {
+          const cache = yield* SessionProfileCache
+          const closed = yield* Scope.make()
+          yield* Scope.close(closed, Exit.void)
+          const profile = yield* cache.resolve(launch).pipe(Scope.provide(closed))
+          // The place still works: the next resolve takes its lock.
+          const again = yield* Effect.scoped(cache.resolve(launch))
+          expect(again).toBe(profile)
+        }).pipe(
+          Effect.provide(makeCacheLayer({ cwd: launch, home, extensions: [] })),
+          Effect.provideService(CurrentWorkspaceId, WorkspaceId.make("5".repeat(64))),
+        )
+      }).pipe(Effect.provide(BunPlatformLive)),
+    5_000,
   )
 
   it.scopedLive("isolates profiles by workspace and reuses one per key", () =>
@@ -3135,6 +3161,39 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
     }).pipe(Effect.provide(fsLayer)),
   )
 
+  it.scopedLive("launched from home, the user extensions load once and only as user", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../../.."),
+        prefix: ".tmp-home-launch-",
+      })
+      const home = yield* fs.realPath(directory)
+      const userDir = path.join(home, ".gent/extensions")
+      yield* fs.makeDirectory(userDir, { recursive: true })
+      yield* fs.writeFileString(
+        path.join(userDir, "entry.ts"),
+        `import { Effect } from "effect";
+export default { manifest: { id: "home-user" }, setup: Effect.void };`,
+      )
+      const loadedAs = (result: Effect.Success<ReturnType<typeof discoverExtensions>>) =>
+        result.loaded.map((entry) => `${entry.scope}:${entry.extension.manifest.id}`)
+      // Untrusted (the default): no "not trusted" failure for the user's own files.
+      const untrusted = yield* discoverExtensions({ userDir, projectDir: userDir })
+      expect(loadedAs(untrusted)).toEqual(["user:home-user"])
+      expect(untrusted.failed).toEqual([])
+      // Trusted: still one copy, as user.
+      yield* fs.writeFileString(
+        path.join(userDir, "../config.json"),
+        encodeJson({ trustedProjects: [home] }),
+      )
+      const trusted = yield* discoverExtensions({ userDir, projectDir: userDir })
+      expect(loadedAs(trusted)).toEqual(["user:home-user"])
+      expect(trusted.failed).toEqual([])
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
   it.live("preserves the explicit loaded artifact identity", () =>
     Effect.gen(function* () {
       const artifactIdentity = LoadedArtifactIdentity.make("@gent/test-loader@artifact-1")
@@ -4571,7 +4630,7 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     storageLayer,
     clusterRunnerLayer,
     providerLayer,
-    ModelResolver.fromLanguageModel(providerLayer),
+    LanguageModelLayers.resolver(providerLayer),
     eventStoreLayer,
     recorderLayer,
     ExtensionRegistry.fromResolved(resolvedExtensions),
@@ -4585,7 +4644,10 @@ const makeMutationsLayer = (providerLayer: Layer.Layer<LanguageModel.LanguageMod
     SessionProfileCache.Test(),
     AgentLoopSessionGovernance.Live,
   )
-  const sessionRuntimeLayer = Layer.provide(SessionRuntime.Live({ baseSections: [] }), baseDeps)
+  const sessionRuntimeLayer = Layer.provide(
+    Layer.provideMerge(AgentLoopLiveActor({ baseSections: [] }), SessionRuntime.Client),
+    baseDeps,
+  )
   const sessionMutationsLayer = Layer.provide(
     SessionMutationsLive,
     Layer.mergeAll(baseDeps, sessionRuntimeLayer),

@@ -215,7 +215,7 @@
     },
     {
       // A test composes the layers its operation needs; that is the test norm.
-      "files": ["**/tests/**", "**/*.test.ts", "**/*.test.tsx"],
+      "files": ["**/tests/**", "**/integration/**", "**/*.test.ts", "**/*.test.tsx"],
       "rules": {
         "effect/noInlineProvide": "off",
         "typescript/no-non-null-assertion": "off",

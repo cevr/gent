@@ -490,6 +490,38 @@ export default { id: "trusted-client", setup: Effect.succeed([]) };
     }).pipe(Effect.provide(BunServices.layer)),
   )
 
+  it.scopedLive("launched from home, a trusted home imports its client files once, as user", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const home = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({
+          directory: path.resolve(import.meta.dir, "../.."),
+          prefix: ".tmp-client-home-launch-",
+        }),
+      )
+      const userDir = path.join(home, ".gent/extensions")
+      yield* fs.makeDirectory(userDir, { recursive: true })
+      const imports = path.join(home, "imports")
+      yield* fs.writeFileString(
+        path.join(userDir, "entry.client.ts"),
+        `
+import { appendFileSync } from "node:fs";
+import { Effect } from "effect";
+appendFileSync(${encode(imports)}, "x");
+export default { id: "home-client", setup: Effect.succeed({}) };
+`,
+      )
+      yield* fs.writeFileString(
+        path.join(userDir, "../config.json"),
+        encode({ trustedProjects: [home] }),
+      )
+      const result = yield* loadTuiExtensions({ userDir, projectDir: userDir, runtime })
+      expect(result.failures).toEqual([])
+      expect(yield* fs.readFileString(imports)).toBe("x")
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
   it.scopedLive("a contribution key outside the known buckets fails the extension by name", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

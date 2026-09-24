@@ -1,5 +1,5 @@
 /**
- * Defaults every gent test suite shares. Each package's `test` script
+ * Defaults every gent test suite shares. Every `test` and `test:e2e` script
  * preloads this file, so the suites agree on them.
  *
  * - Logs are off: a test asserts on results, and a warning a test provokes on

@@ -13,7 +13,6 @@
     "test": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../../packages/tooling/src/test-preload.ts --reporter=dots --parallel tests"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.124.0",
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",
     "@effect/ai-openai-compat": "catalog:",

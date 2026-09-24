@@ -6,5 +6,5 @@
     "jsxImportSource": "@opentui/solid",
     "resolveJsonModule": true
   },
-  "include": ["src", "src/themes/*.json", "tests", "integration"]
+  "include": ["src", "src/themes/*.json", "tests", "integration", "scripts"]
 }

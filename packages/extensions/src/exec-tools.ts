@@ -32,7 +32,7 @@ import {
   maximumModelToolResultChars,
   type SessionId,
   tool,
-  type ToolCallId,
+  ToolCallId,
 } from "@gent/core/extensions/api"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
@@ -109,8 +109,24 @@ interface BackgroundBashStorageService {
     key: BackgroundBashJobKeyFields,
     message: string,
   ) => Effect.Effect<void, BackgroundBashStorageError>
+  /**
+   * Marks a job interrupted when this process stops its fiber: the server
+   * stopped, or the resource that owns the job closed. A job that already
+   * settled keeps its outcome.
+   */
+  readonly markInterrupted: (
+    key: BackgroundBashJobKeyFields,
+  ) => Effect.Effect<void, BackgroundBashStorageError>
   /** Marks the running jobs an earlier server process started as interrupted. */
   readonly reconcileInterrupted: Effect.Effect<void, BackgroundBashStorageError>
+  /** The branch's jobs that did not finish, oldest first. */
+  readonly interruptedJobs: (branch: {
+    readonly sessionId: SessionId
+    readonly branchId: BranchId
+  }) => Effect.Effect<
+    ReadonlyArray<{ readonly toolCallId: ToolCallId; readonly command: string }>,
+    BackgroundBashStorageError
+  >
 }
 
 const mapError = (message: string) => (cause: unknown) =>
@@ -257,6 +273,41 @@ export class BackgroundBashStorage extends Context.Service<
               yield* markTerminal(key, "failed", message, Option.none())
             },
             Effect.mapError(mapError("Failed to mark background bash job failed")),
+          ),
+
+          markInterrupted: Effect.fn("BackgroundBashStorage.markInterrupted")(
+            function* (key) {
+              const completedAt = (yield* DateTime.nowAsDate).getTime()
+              yield* sql`
+                UPDATE background_bash_jobs
+                SET status = 'interrupted',
+                    completed_at = ${completedAt},
+                    message = 'Background command did not finish: the server stopped'
+                WHERE session_id = ${key.sessionId}
+                  AND branch_id = ${key.branchId}
+                  AND tool_call_id = ${key.toolCallId}
+                  AND status = 'running'
+              `
+            },
+            Effect.mapError(mapError("Failed to mark background bash job interrupted")),
+          ),
+
+          interruptedJobs: Effect.fn("BackgroundBashStorage.interruptedJobs")(
+            function* (branch) {
+              const rows = yield* sql<{ readonly tool_call_id: string; readonly command: string }>`
+                SELECT tool_call_id, command
+                FROM background_bash_jobs
+                WHERE session_id = ${branch.sessionId}
+                  AND branch_id = ${branch.branchId}
+                  AND status = 'interrupted'
+                ORDER BY started_at, tool_call_id
+              `
+              return rows.map((row) => ({
+                toolCallId: ToolCallId.make(row.tool_call_id),
+                command: row.command,
+              }))
+            },
+            Effect.mapError(mapError("Failed to read interrupted background bash jobs")),
           ),
 
           reconcileInterrupted: Effect.gen(function* () {
@@ -2937,6 +2988,13 @@ const SQL_DESTRUCTIVE =
 const SQL_FILE_COMMAND =
   /\\(?:i|ir|include|include_relative|\.)\s|(?:^|[;\n])\s*(?:source|\.read)\s/i
 
+/**
+ * A SQLite dot-command that writes the database from a file: `.restore`
+ * replaces the whole database, `.import` writes a file's rows into a table.
+ * The guard cannot see what either writes, so both ask (fail closed).
+ */
+const SQLITE_WRITE_COMMAND = /(?:^|[;\n])\s*\.(restore|import)\s/i
+
 /** `text`, and each text after a letter of its leading short option cluster (`-XcDELETE`). */
 const sqlTexts = (text: string): ReadonlyArray<string> => {
   const letters = /^-[A-Za-z]+/.exec(text)?.[0].length ?? 0
@@ -2946,7 +3004,8 @@ const sqlTexts = (text: string): ReadonlyArray<string> => {
 /**
  * A SQL client whose SQL the guard cannot see asks: a file it runs (`-f`,
  * `--file`, `-init`, a client file command, a `<` redirect) or input the
- * guard cannot read. Else it asks when its text holds a word of
+ * guard cannot read. A SQLite `.restore` or `.import` asks. Else it asks
+ * when its text holds a word of
  * `SQL_DESTRUCTIVE`: any argument, option values as written, or its
  * readable input.
  */
@@ -2960,6 +3019,12 @@ const sqlRisk: CommandRisk = ({ texts, parsed, invocation: { segment } }) => {
     input.unreadable.length > 0 ||
     sql.some((text) => SQL_FILE_COMMAND.test(text))
   if (fromFile) return destructive("SQL the guard cannot read: a file or unreadable input")
+  const sqliteWrite = Arr.findFirst(sql, (text) =>
+    Option.flatMap(Option.fromNullishOr(SQLITE_WRITE_COMMAND.exec(text)), ([, command]) =>
+      destructive(`SQLite .${(command ?? "").toLowerCase()} writes the database from a file`),
+    ),
+  )
+  if (Option.isSome(sqliteWrite)) return sqliteWrite
   return Arr.findFirst(sql, (text) =>
     Option.flatMap(Option.fromNullishOr(SQL_DESTRUCTIVE.exec(text)), ([, word, block]) =>
       destructive(`SQL ${(word ?? block ?? "").toUpperCase()}`),
@@ -3699,12 +3764,43 @@ const queueTerminalFollowUp = (target: BackgroundBashTarget, state: BackgroundBa
       })
       return
     }
+    // An interrupted job has no output: the process died with its server.
+    let content = `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``
+    if (state.status === "interrupted") {
+      content = `Background command did not finish before the previous server stopped:\n\`\`\`\n$ ${command}\n\`\`\`\nNo output was captured. Run it again if you still need it.`
+    }
     yield* queueBackgroundFollowUp({
       target,
       sourceId: `bash:${target.toolCallId}:failure`,
-      content: `Background command failed:\n\`\`\`\n$ ${command}\n${message}\n\`\`\``,
+      content,
     })
   })
+
+/**
+ * On a branch's loop open, one notice per background job on it that did not
+ * finish. It is the job's terminal notice, keyed like a failure, so it wakes
+ * the branch the way a completion does, and a later open or a repeated start
+ * of the same call finds the key taken and adds nothing.
+ */
+const noticeInterruptedJobs = Effect.gen(function* () {
+  const ctx = yield* ExtensionContext
+  const storage = yield* BackgroundBashStorage
+  const jobs = yield* storage.interruptedJobs({ sessionId: ctx.sessionId, branchId: ctx.branchId })
+  yield* Effect.forEach(
+    jobs,
+    (job) =>
+      queueTerminalFollowUp(
+        {
+          sessionId: ctx.sessionId,
+          branchId: ctx.branchId,
+          toolCallId: job.toolCallId,
+          Session: ctx.Session,
+        },
+        { status: "interrupted", command: job.command },
+      ),
+    { discard: true },
+  )
+})
 
 interface BackgroundBashSupervisorService {
   readonly start: (
@@ -3825,6 +3921,10 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
           Path.Path,
         )(fullContext)
         yield* runBackgroundJob(job, target).pipe(
+          // The server stopped or the resource closed: the row must not stay
+          // running under this process, where no reconcile would reach it.
+          // The notice waits for the branch's next loop open.
+          Effect.onInterrupt(() => storage.markInterrupted(keyFields).pipe(Effect.ignore)),
           Effect.catchTag("BashError", (e) => queueFailure(job, target, e.message)),
           Effect.catchCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.void
@@ -3838,7 +3938,10 @@ export const BackgroundBashSupervisorLive: Layer.Layer<
               >,
             ) => jobContext,
           ),
-          Effect.forkIn(scope),
+          // A fiber interrupted before its first step runs none of it, the
+          // interrupt mark included. Starting at once installs the mark
+          // before the claim is visible to anything that could stop it.
+          Effect.forkIn(scope, { startImmediately: true }),
         )
       }).pipe(gate.withPermits(1))
 
@@ -3986,6 +4089,15 @@ export const ExecToolsExtension = defineExtension({
         scope: "process",
         layer: BackgroundBashLayer,
       }),
+    )
+    yield* host.on("loopOpen", () =>
+      noticeInterruptedJobs.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("exec-tools.interrupted-notice.failed").pipe(
+            Effect.annotateLogs({ cause: Cause.pretty(cause) }),
+          ),
+        ),
+      ),
     )
   }),
 })
