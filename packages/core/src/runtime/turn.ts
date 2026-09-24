@@ -2711,7 +2711,7 @@ export const makeAgentLoopTurnExecution = (scope: AgentLoopTurnExecutionContext)
       }
       const pending = interactionSignal.value
       const outcome = interactionOutcome(pending)
-      return { step: 1, interaction: Option.some(outcome.outcome) }
+      return { step: pendingStep, interaction: Option.some(outcome.outcome) }
     })
 
     /**
