@@ -1721,11 +1721,12 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
 /**
  * Steering prose: what an agent is told to read before it changes the code.
  * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, a package's own
- * `AGENTS.md` or `CLAUDE.md`, and `docs/` but its dated research. The path
- * claims and the retired-surface rows both read exactly this set.
+ * `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, and the
+ * project skills under `.claude/skills/`. The path claims and the
+ * retired-surface rows both read exactly this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|\.claude\/skills\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 

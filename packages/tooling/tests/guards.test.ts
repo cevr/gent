@@ -1527,6 +1527,7 @@ describe("steering file paths", () => {
       "apps/tui/AGENTS.md",
       "packages/core/AGENTS.md",
       "docs/extensions.md",
+      ".claude/skills/architecture-loop/prior-art.md",
     ]) {
       expect(isSteeringFile(file)).toBe(true)
       expect(messagesOfSteeringPath(text, file)).toHaveLength(1)
