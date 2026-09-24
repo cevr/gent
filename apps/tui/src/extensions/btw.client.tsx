@@ -343,11 +343,12 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
       }),
       // The fork opened as the shell's session: the model read a header that
       // says whose history it holds; the reader sees the question they asked.
+      // This renderer draws only messages of the question type.
       messageRendererContribution(BTW_QUESTION_TYPE, (props) => (
         <UserRow
           {...props}
           header="btw · side question"
-          content={forkQuestionBody(props.content)}
+          content={forkQuestionBody({ text: props.content, customType: BTW_QUESTION_TYPE })}
         />
       )),
       widgetContribution({

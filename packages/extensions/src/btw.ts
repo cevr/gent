@@ -56,9 +56,18 @@ export const forkQuestionText = (parentSessionId: SessionId, question: string): 
     question,
   ].join("\n")
 
-/** The question without its header; a message that is not a fork question is returned whole. */
-export const forkQuestionBody = (text: string): string =>
-  Option.liftPredicate(text, (value) => value.startsWith(FORK_QUESTION_PREFIX)).pipe(
+/**
+ * The question without its header. The message's type says whether it has
+ * one, never its text: a message a person typed that starts with the same
+ * words is returned whole.
+ */
+export const forkQuestionBody = (message: {
+  readonly text: string
+  readonly customType?: string
+}): string => {
+  const text = message.text
+  if (message.customType !== BTW_QUESTION_TYPE) return text
+  return Option.liftPredicate(text, (value) => value.startsWith(FORK_QUESTION_PREFIX)).pipe(
     Option.flatMap((value) =>
       Option.liftPredicate(value.indexOf("\n\n"), (split) => split !== -1).pipe(
         Option.map((split) => value.slice(split + 2)),
@@ -66,6 +75,7 @@ export const forkQuestionBody = (text: string): string =>
     ),
     Option.getOrElse(() => text),
   )
+}
 
 /** One exchange on the fork; `answer` is the streamed text while the fork is replying. */
 const ForkTurn = Schema.Struct({
@@ -225,7 +235,11 @@ const forkTurns = (messages: ReadonlyArray<Message>, partial: string): ReadonlyA
   const turns: Array<ForkTurn> = []
   for (const message of messages) {
     if (isAskedTurn(message)) {
-      turns.push({ question: forkQuestionBody(textOf(message)), answer: "" })
+      const question = forkQuestionBody({
+        text: textOf(message),
+        ...Record.filter({ customType: message.metadata?.customType }, Predicate.isNotUndefined),
+      })
+      turns.push({ question, answer: "" })
       continue
     }
     const last = turns.at(-1)

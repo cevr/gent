@@ -14,7 +14,13 @@ import {
 import { AgentName, BranchId, ModelId, RequestId, SessionId } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { AgentEvent } from "@gent/core/protocol"
-import { BTW_EXTENSION_ID, ForkProgress, foldForkEvent, forkQuestionBody } from "../src/btw.js"
+import {
+  BTW_EXTENSION_ID,
+  BTW_QUESTION_TYPE,
+  ForkProgress,
+  foldForkEvent,
+  forkQuestionBody,
+} from "../src/btw.js"
 
 /**
  * `/btw` forks the branch into a parallel child session that carries the
@@ -32,6 +38,9 @@ const promptTexts = (options: ProviderOptions): ReadonlyArray<string> =>
 
 const lastText = (options: ProviderOptions): string =>
   Option.getOrElse(Option.fromUndefinedOr(promptTexts(options).at(-1)), () => "")
+
+/** A prompt text read as a question the pane sent; any other text comes back whole. */
+const asked = (text: string): string => forkQuestionBody({ text, customType: BTW_QUESTION_TYPE })
 
 type Harness = Effect.Success<ReturnType<typeof createRpcHarness>>
 
@@ -200,16 +209,16 @@ describe("btw forks", () => {
                 expect(options.tools.length).toBeGreaterThan(0)
                 const texts = promptTexts(options)
                 expect(texts.some((text) => text.includes("The codeword is pelican"))).toBe(true)
-                expect(forkQuestionBody(lastText(options))).toBe("What is the codeword?")
+                expect(asked(lastText(options))).toBe("What is the codeword?")
               },
             },
             {
               ...textStep("seven letters"),
               assertOptions: (options) => {
-                const texts = promptTexts(options).map(forkQuestionBody)
+                const texts = promptTexts(options).map(asked)
                 expect(texts).toContain("What is the codeword?")
                 expect(texts).toContain("pelican")
-                expect(forkQuestionBody(lastText(options))).toBe("How long is it?")
+                expect(asked(lastText(options))).toBe("How long is it?")
               },
             },
           ])
@@ -496,6 +505,24 @@ describe("btw forks", () => {
         const asked = yield* Effect.exit(pane.ask("  "))
         expect(Exit.isFailure(asked)).toBe(true)
       }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  // The header is stripped by the message's type, never by its text: a person
+  // who types the header's words into the fork opened as a session keeps them.
+  it.live("a message typed into the fork that starts like the header shows whole", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("sure")])
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        const pane = btw(harness)
+        const fork = yield* pane.fork("")
+        const typed = `A side question, asked in a fork of session ${harness.sessionId}. mine\n\nall of it`
+        yield* harness.client.message.send({ ...fork, content: typed })
+        const replied = yield* pane.replied(1)
+        expect(Option.map(replied, (view) => view.turns)).toEqual(
+          Option.some([{ question: typed, answer: "sure" }]),
+        )
+      }).pipe(Effect.timeout("6 seconds")),
     ),
   )
   it.live("a follow-up the fork cannot take leaves the fork askable, not replying", () =>
