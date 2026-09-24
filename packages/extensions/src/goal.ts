@@ -195,6 +195,7 @@ export const GoalRpc = defineRequests(GOAL_EXTENSION_ID, {
   Get: request({
     id: "goal.get",
     description: "Read the goal of the current branch",
+    answersDuringTurn: true,
     input: Schema.Struct({}),
     output: GoalSnapshot,
     execute: Effect.fn("GoalRpc.Get")(function* () {
@@ -430,25 +431,36 @@ const decideAfterTurn = (
 const continueGoal = (input: TurnAfterInput) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    const decision = yield* modifyGoal((current) =>
+    // Clients re-read the goal only when this turn end changed it.
+    const unchanged = (current: Option.Option<GoalState>) => ({
+      next: current,
+      result: { changed: false, decision: Option.none<GoalState>() },
+    })
+    const { changed, decision } = yield* modifyGoal((current) =>
       Effect.gen(function* () {
-        if (Option.isNone(current)) return { next: current, result: Option.none<GoalState>() }
+        if (Option.isNone(current)) return unchanged(current)
         const goal = current.value
         // The turn that completed the goal is charged once, however it ended;
         // nothing continues after it.
         if (goal.status === "complete" && goal.finalized !== true) {
           const finalized: GoalState = { ...chargeTurn(goal, input, yield* now), finalized: true }
-          return { next: Option.some(finalized), result: Option.none<GoalState>() }
+          return {
+            next: Option.some(finalized),
+            result: { changed: true, decision: Option.none<GoalState>() },
+          }
         }
-        if (goal.status !== "active") return { next: current, result: Option.none<GoalState>() }
+        if (goal.status !== "active") return unchanged(current)
         const decided = decideAfterTurn(goal, input, yield* now)
         return {
           next: Option.some(decided.next),
-          result: Option.liftPredicate(decided.next, () => decided.report),
+          result: {
+            changed: true,
+            decision: Option.liftPredicate(decided.next, () => decided.report),
+          },
         }
       }),
     )
-    yield* ctx.State.changed()
+    if (changed) yield* ctx.State.changed()
     if (Option.isNone(decision)) return
     const goal = decision.value
     if (goal.status === "paused") {

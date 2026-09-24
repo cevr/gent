@@ -58,7 +58,7 @@ import {
   effortAtOrAbove,
   EMPTY_CREDENTIAL_CELL,
   explainCredentialFailure,
-  freshCredentials,
+  authorizedClient,
   HttpResponseField,
   isTransientTokenStatus,
   makeCredentialCache,
@@ -66,7 +66,6 @@ import {
   postOAuthForm,
   apiKeyFrom,
   readOptionalEnv,
-  recoverUnauthorized,
   replaceHeldCredential,
   withHeaders,
 } from "./providers.js"
@@ -144,7 +143,6 @@ export class OAuthError extends Schema.TaggedError<OAuthError>()("OAuthError", {
     "missing-code",
     "state-mismatch",
     "callback-timeout",
-    "cancelled",
     "pkce-failed",
     "server-failed",
     "device-code-failed",
@@ -201,7 +199,6 @@ interface OpenAIAuthorizationFlow {
     readonly instructions: string
   }
   readonly callback: (manualInput?: string) => Effect.Effect<OpenAIOAuthTokens, OAuthError>
-  readonly cancel: Effect.Effect<void>
 }
 const generatePKCE: Effect.Effect<PkceCodes, OAuthError, Crypto.Crypto> = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto
@@ -519,8 +516,9 @@ const tokensToRefreshResult = (tokens: TokenResponse, now: number): OpenAIRefres
  *     and `callback(manualInput)` exchanges directly.
  *
  * Either way, `callback` returns the structured `OpenAIOAuthTokens` the
- * extension persists. `cancel` interrupts the deferred (used by the
- * 5-minute abandoned-flow timer in `buildOpenAIModelDriver`'s `authorize`).
+ * extension persists. The 5-minute abandoned-flow timer in
+ * `buildOpenAIModelDriver`'s `authorize` closes the flow's scope, which stops
+ * the redirect server.
  */
 const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.Scope> = Effect.gen(
   function* () {
@@ -575,11 +573,6 @@ const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.
         return tokensToOAuthResult(tokens, now)
       })
 
-    const cancel: Effect.Effect<void> = Deferred.fail(
-      deferred,
-      new OAuthError({ reason: "cancelled", message: "OAuth flow cancelled" }),
-    ).pipe(Effect.asVoid)
-
     return {
       authorization: {
         url: authUrl,
@@ -587,7 +580,6 @@ const authorizeOpenAI: Effect.Effect<OpenAIAuthorizationFlow, OAuthError, Scope.
         instructions: "Complete authorization in your browser. Paste the code if needed.",
       },
       callback,
-      cancel,
     } satisfies OpenAIAuthorizationFlow
   },
   // @effect-diagnostics-next-line strictEffectProvide:off OAuth authorization owns its crypto layer at the extension boundary
@@ -787,7 +779,6 @@ export const authorizeOpenAIDevice: Effect.Effect<
       instructions: `Open ${DEVICE_VERIFY_URL} and enter code: ${auth.user_code}`,
     },
     callback,
-    cancel: Effect.void,
   } satisfies OpenAIAuthorizationFlow
 })
 
@@ -1207,32 +1198,24 @@ const buildOauthHeaders = (
  *     response to the caller so user-facing recovery (re-run
  *     authorization from the auth picker) can kick in.
  */
-export const buildCodexTransformClient =
-  (
-    creds: CredentialCache<OpenAICredentials>,
-  ): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
-  (client) =>
-    client.pipe(
-      HttpClient.mapRequestEffect((req) =>
-        Effect.gen(function* () {
-          const fresh = yield* freshCredentials(creds, req)
-          let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
-          const url = new URL(req.url, "https://api.openai.com")
-          if (codexUrlMatches(url)) {
-            headers = Headers.set(
-              headers,
-              "openai-beta",
-              ensureBetaToken(Headers.get(headers, "openai-beta"), CODEX_BETA_TOKEN),
-            )
-            const withBody = rewriteCodexBody(withHeaders(req, headers))
-            if (req.url.startsWith("/")) return withBody
-            return HttpClientRequest.setUrl(withBody, new URL(CODEX_API_ENDPOINT))
-          }
-          return withHeaders(req, headers)
-        }),
-      ),
-      recoverUnauthorized(creds),
-    )
+export const buildCodexTransformClient = (
+  creds: CredentialCache<OpenAICredentials>,
+): ((client: HttpClient.HttpClient) => HttpClient.HttpClient) =>
+  authorizedClient(creds, (req, fresh) => {
+    let headers = buildOauthHeaders(req, fresh.access, fresh.accountId)
+    const url = new URL(req.url, "https://api.openai.com")
+    if (codexUrlMatches(url)) {
+      headers = Headers.set(
+        headers,
+        "openai-beta",
+        ensureBetaToken(Headers.get(headers, "openai-beta"), CODEX_BETA_TOKEN),
+      )
+      const withBody = rewriteCodexBody(withHeaders(req, headers))
+      if (req.url.startsWith("/")) return withBody
+      return HttpClientRequest.setUrl(withBody, new URL(CODEX_API_ENDPOINT))
+    }
+    return withHeaders(req, headers)
+  })
 
 // ── extension ───────────────────────────────────────────────────────────────
 

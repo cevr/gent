@@ -113,6 +113,13 @@ const encodeList = (items: ReadonlyArray<unknown>, inner: (item: unknown) => Enc
   return out
 }
 
+const ownProperty = (value: Schema.Json): PropertyDescriptor => ({
+  value,
+  writable: true,
+  enumerable: true,
+  configurable: true,
+})
+
 const encodeRecord = (
   entries: ReadonlyArray<readonly [string, unknown]>,
   // oxlint-disable-next-line effect/noUnknownParameters -- the realm-boundary codec inspects arbitrary JavaScript values and encodes JSON null and undefined
@@ -122,7 +129,8 @@ const encodeRecord = (
   for (const [key, item] of entries) {
     const encoded = inner(item)
     if (isOmitted(encoded)) return encoded
-    out[key] = encoded
+    // Assignment to an own `__proto__` key would set the prototype and drop the key.
+    Object.defineProperty(out, key, ownProperty(encoded))
   }
   if (Predicate.hasProperty(out, TAG)) return tagged("object", out)
   return out
@@ -223,12 +231,16 @@ const TAG_LITERAL = JSON.stringify(TAG)
  */
 export const snapshotReviverSource = `(function () {
   var TAG = ${TAG_LITERAL};
+  // defineProperty, not assignment: an own "__proto__" key stays a key.
+  var put = function (target, key, value) {
+    Object.defineProperty(target, key, { value: value, writable: true, enumerable: true, configurable: true });
+  };
   var revive = function (value) {
     if (value === null || typeof value !== "object") return value;
     if (Array.isArray(value)) return value.map(revive);
     if (typeof value[TAG] !== "string") {
       var out = {};
-      for (var key in value) out[key] = revive(value[key]);
+      for (var key in value) put(out, key, revive(value[key]));
       return out;
     }
     var kind = value[TAG];
@@ -242,7 +254,7 @@ export const snapshotReviverSource = `(function () {
       case "error": { var error = new Error(inner.message); error.name = inner.name; error.stack = inner.stack; return error; }
       case "map": return new Map(inner.map(function (pair) { return [revive(pair[0]), revive(pair[1])]; }));
       case "set": return new Set(inner.map(revive));
-      case "object": { var plain = {}; for (var name in inner) plain[name] = revive(inner[name]); return plain; }
+      case "object": { var plain = {}; for (var name in inner) put(plain, name, revive(inner[name])); return plain; }
       default: {
         var Ctor = globalThis[kind];
         if (kind === "BigInt64Array" || kind === "BigUint64Array") return Ctor.from(inner.map(BigInt));

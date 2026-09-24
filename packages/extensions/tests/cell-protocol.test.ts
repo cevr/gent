@@ -235,6 +235,26 @@ describe("cell namespace snapshot", () => {
     ])
   })
 
+  test("an own __proto__ key round-trips as a key, not as the prototype", () => {
+    const source = createContext({})
+    runInContext(
+      "var parsed = JSON.parse('{\"__proto__\": {\"x\": 1}, \"a\": 2}'); var wrapped = { '$gent': 'k', inner: parsed };",
+      source,
+    )
+    const snapshot = encodeSnapshot(new Map(Object.entries(source)))
+    expect(snapshot.omitted).toEqual([])
+    const target = createContext({})
+    restoreInto(target, snapshot.bindings)
+    const probe = runInContext(
+      [
+        "[Object.keys(parsed).join(','), parsed['__proto__'].x, Object.getPrototypeOf(parsed) === Object.prototype,",
+        " Object.keys(wrapped.inner).join(','), wrapped.inner['__proto__'].x]",
+      ].join(""),
+      target,
+    )
+    expect(probe).toEqual(["__proto__,a", 1, true, "__proto__,a", 1])
+  })
+
   test("functions, class instances, cycles, and oversized values are named, not dropped silently", () => {
     interface Loop {
       self?: Loop

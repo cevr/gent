@@ -157,12 +157,16 @@ const ReviewResult = Schema.Struct({
 
 const PromptResult = Schema.Union([PresentResult, ConfirmResult, ReviewResult])
 
-const slugify = (text: string): string =>
-  text
+/** A file-name slug; a title with no ASCII letter or digit falls back to `prompt`. */
+const slugify = (text: string): string => {
+  const slug = text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 40)
+  if (slug.length === 0) return "prompt"
+  return slug
+}
 
 const withTitle = (title: Option.Option<string>, content: string): string =>
   Option.match(title, {

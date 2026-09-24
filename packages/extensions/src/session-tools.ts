@@ -6,6 +6,7 @@ import {
   ExtensionHost,
   ExtensionId,
   headTailChars,
+  isSpawnedSession,
   type Message,
   messagePartsDisplayText,
   RequestId,
@@ -34,7 +35,8 @@ const ReadSessionParams = Schema.Struct({
   }),
   branchId: Schema.optionalKey(
     Schema.String.annotate({
-      description: "Target branch ID (defaults to first branch)",
+      description:
+        "Branch to mark as the target; the transcript shows every branch (defaults to the first branch)",
     }),
   ),
 })
@@ -107,6 +109,15 @@ export const ReadSessionTool = tool({
         ),
       )
 
+    const named = params.branchId
+    if (
+      Predicate.isNotUndefined(named) &&
+      !tree.branches.some((entry) => String(entry.branch.id) === named)
+    ) {
+      return yield* new ReadSessionError({
+        message: `Session ${params.sessionId} has no branch ${named}`,
+      })
+    }
     const targetBranchId = Option.fromNullishOr(params.branchId).pipe(
       Option.orElse(() =>
         Option.fromNullishOr(tree.branches[0]).pipe(Option.map((entry) => entry.branch.id)),
@@ -197,12 +208,15 @@ const SendSessionResult = Schema.Struct({
   relation: Schema.Literals(["parent", "child", "session"]),
 })
 
+type RelatedSession = Parameters<typeof isSpawnedSession>[0]
+
+/** Parent and child only across a spawn; a handoff continues its predecessor's thread. */
 const relationOf = (
-  sender: { readonly id: SessionId; readonly parentSessionId?: SessionId },
-  receiver: { readonly id: SessionId; readonly parentSessionId?: SessionId },
+  sender: RelatedSession,
+  receiver: RelatedSession,
 ): "parent" | "child" | "session" => {
-  if (sender.parentSessionId === receiver.id) return "parent"
-  if (receiver.parentSessionId === sender.id) return "child"
+  if (sender.parentSessionId === receiver.id && isSpawnedSession(sender)) return "parent"
+  if (receiver.parentSessionId === sender.id && isSpawnedSession(receiver)) return "child"
   return "session"
 }
 
@@ -369,7 +383,7 @@ const SESSIONS_SECTION = {
   priority: 14,
   content: `# Sessions
 
-- Sessions talk with session.send: correct a running child, answer a child's question, or ask your parent when you are blocked on a decision in a turn whose reply does not return to it (a child's task turn returns its reply as its completion). A message wakes an idle session.`,
+- Sessions talk with session.send: correct a running child, answer a child's question, or ask the session that spawned you when you are blocked on a decision in a turn whose reply does not return to it (a child's task turn returns its reply as its completion). A message wakes an idle session.`,
 }
 
 export const SessionToolsExtension = defineExtension({

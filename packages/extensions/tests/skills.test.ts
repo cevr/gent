@@ -29,7 +29,6 @@ const makeSkill = (
   name,
   description,
   filePath: `/test/${level}/${name}.md`,
-  content: `Content for ${name}`,
   level,
 })
 
@@ -76,7 +75,6 @@ Content here`
     expect(result).toEqual({
       name: "effect-v4",
       description: "Effect v4 patterns",
-      content: "Content here",
     })
   })
 
@@ -96,7 +94,6 @@ Content here`
     const result = parseSkillFile(content, "arch")
     expect(result.name).toBe("arch")
     expect(result.description).toBe("Effect-first patterns. Use when designing.")
-    expect(result.content).toBe("Body")
   })
 
   test("a literal block scalar description keeps its words on one prompt line", () => {
@@ -116,7 +113,6 @@ Content here`
     const result = parseSkillFile(content, "named-by-file.md")
     expect(result.name).toBe("named-by-file")
     expect(result.description).toBe("only desc")
-    expect(result.content).toBe("body")
   })
 
   test("a frontmatter with neither key describes the skill from its body", () => {
@@ -140,7 +136,6 @@ Content here`
     const content = "---\nname: [unclosed\n---\nbody"
     const result = parseSkillFile(content, "broken.md")
     expect(result.name).toBe("broken")
-    expect(result.content).toBe("body")
   })
 })
 
@@ -156,14 +151,12 @@ const testSkills: ReadonlyArray<SkillEntry> = [
     name: "effect-v4",
     description: "Effect v4 patterns",
     filePath: "/global/effect-v4.md",
-    content: "Use Effect.fn for tracing",
     level: "global",
   },
   {
     name: "react",
     description: "React component patterns",
     filePath: "/local/react.md",
-    content: "Use function components",
     level: "local",
   },
 ]
@@ -260,7 +253,45 @@ describe("SkillsExtension via RPC", () => {
           expect(Array.isArray(reply)).toBe(true)
           expect(reply).toHaveLength(2)
           expect(reply.map((s) => s.name)).toEqual(["effect-v4", "react"])
-          expect(reply[0]?.content).toBe("Use Effect.fn for tracing")
+          expect(reply[0]?.filePath).toBe("/global/effect-v4.md")
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "the skill list answers while a turn runs",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            { ...textStep("working"), gated: true },
+          ])
+          // The shipped extensions, so the session's agent can run a turn.
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+            layerOverrides: skillsLayerOverride,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "work" })
+          yield* controls.waitForCall(0)
+          const rawReply = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: ref(SkillsRpc.ListSkills).extensionId,
+              capabilityId: ref(SkillsRpc.ListSkills).capabilityId,
+              input: {},
+            })
+            .pipe(
+              Effect.timeoutOrElse({
+                duration: "2 seconds",
+                orElse: () => Effect.die(new Error("skills-list waited for the turn")),
+              }),
+            )
+          const reply = yield* Schema.decodeUnknownEffect(Schema.Array(SkillEntry))(rawReply)
+          expect(reply.map((s) => s.name)).toEqual(["effect-v4", "react"])
+          yield* controls.emitAll(0)
         }).pipe(Effect.timeout("8 seconds")),
       ),
     10_000,
@@ -359,8 +390,11 @@ describe("bundled skills", () => {
           const principles = (yield* skills.list).filter((skill) => skill.name === "principles")
           // Both levels stay listed, local first, so the model can address either.
           expect(principles.map((skill) => skill.level)).toEqual(["local", "global"])
-          expect(principles[0]?.content).toContain("LOCAL-PRINCIPLES")
-          expect(principles[1]?.content).toContain("GLOBAL-PRINCIPLES")
+          const texts = yield* Effect.forEach(principles, (skill) =>
+            fs.readFileString(skill.filePath),
+          )
+          expect(texts[0]).toContain("LOCAL-PRINCIPLES")
+          expect(texts[1]).toContain("GLOBAL-PRINCIPLES")
         }).pipe(Effect.provide(Skills.Live({ home, cwd })))
       }).pipe(Effect.provide(BunServices.layer)),
   )
