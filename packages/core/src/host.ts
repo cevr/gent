@@ -7,7 +7,7 @@
 export { GentPlatform, type RuntimeModuleSource, writeFileAtomic } from "./runtime/gent-platform.js"
 export { bindBunModules, BunPlatformLive } from "./runtime/gent-platform-bun.js"
 export {
-  hasProjectExtensionScope,
+  hasProjectScope,
   isProjectExtensionDirectoryTrusted,
   readDisabledExtensions,
 } from "./runtime/config.js"

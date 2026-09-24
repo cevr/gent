@@ -20,7 +20,7 @@ import {
 import {
   bindBunModules,
   extensionEntryModules,
-  hasProjectExtensionScope,
+  hasProjectScope,
   isProjectExtensionDirectoryTrusted,
   readDisabledExtensions,
   type RuntimeModuleSource,
@@ -140,7 +140,7 @@ const discoverTuiExtensions = (opts: {
   Effect.gen(function* () {
     const user = yield* discoverDir(opts.userDir, "user")
     // Launched from home, the project directory is the user's: one scope, read once.
-    if (!(yield* hasProjectExtensionScope(opts))) return user
+    if (!(yield* hasProjectScope({ user: opts.userDir, project: opts.projectDir }))) return user
     if (!(yield* isProjectExtensionDirectoryTrusted(opts))) return user
     const project = yield* discoverDir(opts.projectDir, "project")
     return [...user, ...project]
