@@ -501,8 +501,11 @@ export const compileExtensionHooks = (
         for (const slot of turnAfterSlots) yield* runHook(input, slot)
       }),
 
-    emitLoopOpen: Effect.gen(function* () {
-      for (const slot of loopOpenSlots) yield* runHook(void 0, slot)
+    // Each hook runs on its own: one that never returns holds up no other.
+    // The slots are fixed when the registry compiles, one per registration.
+    emitLoopOpen: Effect.forEach(loopOpenSlots, (slot) => runHook(void 0, slot), {
+      concurrency: Math.max(loopOpenSlots.length, 1),
+      discard: true,
     }),
   }
 }

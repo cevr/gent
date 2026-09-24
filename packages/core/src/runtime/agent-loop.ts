@@ -1754,18 +1754,19 @@ const makeAgentLoopBehavior = (
       }),
     )
 
-    // The `loopOpen` hooks, as the loop's own fiber. They run under the
-    // side-mutation permit, like an extension request: a follow-up they queue
-    // on this branch wakes it once the permit is free. No client opened the
-    // run, so a hook cannot ask. The profile and the branch Resources are
-    // resolved here, off the caller's path: the op that opened the loop never
-    // waits on them, and a profile that fails to resolve only logs.
+    // The `loopOpen` hooks, as the loop's own fiber. The profile and the
+    // branch Resources are resolved under the side-mutation permit, off the
+    // caller's path: the op that opened the loop never waits on them, and a
+    // profile that fails to resolve only logs. The hooks then run without the
+    // permit, which the turn worker needs: a hook that never returns delays
+    // no turn, and a follow-up a hook queues on this branch starts at once.
+    // No client opened the run, so a hook cannot ask.
     const runOpenHooks = Effect.forkIn(
       Effect.gen(function* () {
-        const profile = yield* resolveTurnProfile(
-          RunOpener.cases.Turn.make({ openedByClient: false }),
-        )
-        const context = yield* branchContext
+        const { profile, context } = yield* Effect.all({
+          profile: resolveTurnProfile(RunOpener.cases.Turn.make({ openedByClient: false })),
+          context: branchContext,
+        }).pipe(worker.withSideMutation)
         yield* profile.turnExtensionRegistry
           .getResolved()
           .extensionHooks.emitLoopOpen.pipe(
@@ -1774,7 +1775,6 @@ const makeAgentLoopBehavior = (
           )
       }).pipe(
         Effect.scoped,
-        worker.withSideMutation,
         Effect.catchCause((cause) =>
           Effect.logWarning("agent-loop.loop-open-hooks.failed").pipe(
             Effect.annotateLogs({ sessionId, branchId, error: Cause.pretty(cause) }),

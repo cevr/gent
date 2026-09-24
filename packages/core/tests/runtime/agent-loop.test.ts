@@ -3147,6 +3147,49 @@ describe("loop open hooks", () => {
       expect(yield* Ref.get(calls)).toBe(1)
     }).pipe(Effect.timeout("10 seconds")),
   )
+
+  it.scopedLive(
+    "a loopOpen hook that never returns delays no turn and no other hook",
+    () =>
+      Effect.gen(function* () {
+        const hanging = yield* Deferred.make<void>()
+        const later = yield* Deferred.make<void>()
+        const stuck = defineExtension({
+          // Sorts before the recording hook, so a sequential run would stop there.
+          id: "@gent/test-loop-open-a-hangs",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("loopOpen", () =>
+              Deferred.succeed(hanging, void 0).pipe(Effect.andThen(Effect.never)),
+            )
+          }),
+        })
+        const recording = defineExtension({
+          id: "@gent/test-loop-open-after-hang",
+          setup: Effect.gen(function* () {
+            const host = yield* ExtensionHost
+            yield* host.on("loopOpen", () => Deferred.succeed(later, void 0))
+          }),
+        })
+        const calls = yield* Ref.make(0)
+        const { client, sessionId, branchId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer: countingReply("not held up", calls),
+          extensionInputs: [...e2ePreset.extensionInputs, stuck, recording],
+        })
+        yield* client.message.send({ sessionId, branchId, content: "are you there?" })
+        yield* Deferred.await(hanging)
+        yield* Deferred.await(later)
+        yield* waitFor(
+          client.message.list({ branchId }),
+          (all) => hasAssistantText(all, "not held up"),
+          5_000,
+          "the turn answered while a loopOpen hook still ran",
+        )
+        expect(yield* Ref.get(calls)).toBe(1)
+      }).pipe(Effect.timeout("10 seconds")),
+    15_000,
+  )
 })
 
 // ── recovery race ───────────────────────────────────────────────────────────
