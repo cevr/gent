@@ -9,7 +9,7 @@
 import { Deferred, Effect } from "effect"
 import type { CliRenderer, ScrollbackSurface } from "@opentui/core"
 
-export interface SettleHold {
+interface SettleHold {
   /** Completes once the first commit waits inside `settle`. */
   readonly held: Effect.Effect<void>
   /** Lets that commit continue. */

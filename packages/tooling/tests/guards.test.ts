@@ -19,10 +19,10 @@ import {
   findSuppressionInventoryFindings,
   findTuiSessionIdentityReads,
   findUnadaptedSeams,
-  findUnadmittedChildSessionWriters,
   findUnconsumedExports,
   findUnenabledPluginRules,
   findUnmatchedOverrideGlobs,
+  findUnneededOverrideOffs,
   findUnusedCatalogEntries,
   findUnusedDependencies,
   findUnusedSuppressionApprovals,
@@ -248,146 +248,9 @@ describe("alias alternative-layer guard", () => {
   })
 })
 
-// ── child session depth ─────────────────────────────────────────────────────
-
-const childWriter = `
-yield* sessionStorage.createSession(
-  new Session({
-    id: sessionId,
-    parentSessionId: input.parentSessionId,
-    parentBranchId: input.parentBranchId,
-    createdAt: now,
-    updatedAt: now,
-  }),
-)
-`
-
-describe("child-session depth guard", () => {
-  test("flags a core writer that nests a session without the shared admission", () => {
-    const findings = findUnadmittedChildSessionWriters(
-      "packages/core/src/server/server.ts",
-      childWriter,
-    )
-    expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([
-      "packages/core/src/server/server.ts:3",
-    ])
-    expect(findings[0]?.message).toContain("admitChildSessionDepth")
-  })
-
-  test("accepts a writer once the file calls the shared admission", () => {
-    const findings = findUnadmittedChildSessionWriters(
-      "packages/core/src/server/server.ts",
-      `yield* admitChildSessionDepth(input.parentSessionId)\n${childWriter}`,
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("flags a writer in runtime/session.ts whose own declaration never admits", () => {
-    const text = [
-      "export const admitChildSessionDepth = Effect.fn(function* (parentSessionId) {",
-      "  yield* admitChildSessionDepth(parentSessionId)",
-      "})",
-      "",
-      "export const forkSession = Effect.fn(function* (input) {",
-      childWriter,
-      "})",
-    ].join("\n")
-    const findings = findUnadmittedChildSessionWriters("packages/core/src/runtime/session.ts", text)
-    expect(findings.map((finding) => finding.line)).toEqual([8])
-  })
-
-  test("an admission in an earlier declaration does not cover a later writer", () => {
-    const text = `export const admitted = Effect.fn(function* () {\n  yield* admitChildSessionDepth(id)\n})\n\nexport const unadmitted = Effect.fn(function* () {${childWriter}})`
-    const findings = findUnadmittedChildSessionWriters("packages/core/src/server/server.ts", text)
-    expect(findings).toHaveLength(1)
-  })
-
-  test("flags a writer that names parentSessionId by shorthand", () => {
-    for (const literal of [
-      "new Session({ id, parentSessionId, createdAt: now })",
-      "new Session({\n  id,\n  parentSessionId\n})",
-    ]) {
-      expect(
-        findUnadmittedChildSessionWriters("packages/core/src/server/server.ts", literal),
-      ).toHaveLength(1)
-    }
-  })
-
-  test("ignores a row that only names a longer field", () => {
-    const findings = findUnadmittedChildSessionWriters(
-      "packages/core/src/server/server.ts",
-      "new Session({ id, parentSessionIdHint: x })",
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("ignores a root session row", () => {
-    const findings = findUnadmittedChildSessionWriters(
-      "packages/core/src/server/server.ts",
-      "new Session({ id, name, createdAt: now, updatedAt: now })",
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("ignores storage readers, test fixtures, and files outside core", () => {
-    for (const file of [
-      "packages/core/src/storage/schema.ts",
-      "packages/core/src/test-utils/index.ts",
-      "packages/extensions/src/thread/thread.ts",
-      "apps/tui/tests/extensions/thread-view.client.test.tsx",
-    ]) {
-      expect(findUnadmittedChildSessionWriters(file, childWriter)).toEqual([])
-    }
-  })
-})
-
 // ── core feature independence ───────────────────────────────────────────────
 
-const CELL_IMPORT = 'import { CellExecution } from "../cell/cell-execution.js"'
-
 describe("core feature independence guard", () => {
-  test("flags a core file that imports a feature directory", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/agent-loop.ts",
-      CELL_IMPORT,
-    )
-    expect(findings.map((finding) => `${finding.file}:${finding.line}`)).toEqual([
-      "packages/core/src/runtime/agent-loop.ts:1",
-    ])
-    expect(findings[0]?.message).toContain("cell")
-  })
-
-  test("flags a type-only import, which still names the feature", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/session.ts",
-      'import type { DispatchingToolStorage } from "./cell/dispatching-tool-storage.js"',
-    )
-    expect(findings.length).toBe(1)
-  })
-
-  test("allows a feature to import itself", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/cell/cell-storage.ts",
-      'import { CellExecution } from "./cell-execution.js"',
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("ignores files outside core", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/extensions/src/some-extension.ts",
-      CELL_IMPORT,
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("ignores a mention that is not an import", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/tools.ts",
-      "// the cell feature dispatches inner tool calls",
-    )
-    expect(findings).toEqual([])
-  })
   test("flags core naming a table the cell owns", () => {
     const findings = findCoreFeatureIndependenceFindings(
       "packages/core/src/storage/schema.ts",
@@ -397,18 +260,10 @@ describe("core feature independence guard", () => {
     expect(findings[0]!.message).toContain("feature-migrations seam")
   })
 
-  test("lets the cell name its own tables", () => {
+  test("lets the cell extension name its own tables", () => {
     const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/cell/cell-storage.ts",
+      "packages/extensions/src/cell.ts",
       "    CREATE TABLE cell_executions (",
-    )
-    expect(findings).toEqual([])
-  })
-
-  test("lets a cell file import a sibling through the feature directory name", () => {
-    const findings = findCoreFeatureIndependenceFindings(
-      "packages/core/src/runtime/cell/cell-storage.ts",
-      'import { CellExecution } from "../cell/cell-execution.js"',
     )
     expect(findings).toEqual([])
   })
@@ -798,6 +653,73 @@ describe("an override must match a tracked file", () => {
       ["apps/tui/tests/deep/case.test.ts", "apps/tui/src/app.tsx"],
     )
     expect(findings).toEqual([])
+  })
+})
+
+describe('an override "off" must suppress a diagnostic', () => {
+  const configText = [
+    "{",
+    '  "overrides": [',
+    '    { "files": ["apps/tui/scripts/build.ts"],',
+    '      "rules": { "effect/noGlobals": "off", "gent/no-bun-outside-adapter": "off" } },',
+    '    { "files": ["**/tests/**"],',
+    '      "rules": {',
+    '        "typescript/no-explicit-any": "off"',
+    "      } }",
+    "  ]",
+    "}",
+  ].join("\n")
+  const config = {
+    overrides: [
+      {
+        files: ["apps/tui/scripts/build.ts"],
+        rules: { "effect/noGlobals": "off", "gent/no-bun-outside-adapter": "off" },
+      },
+      { files: ["**/tests/**"], rules: { "typescript/no-explicit-any": "off" } },
+    ],
+  }
+  const allHit = [
+    { file: "apps/tui/scripts/build.ts", code: "effect(noGlobals)" },
+    { file: "apps/tui/scripts/build.ts", code: "gent(no-bun-outside-adapter)" },
+    { file: "packages/core/tests/a.test.ts", code: "typescript(no-explicit-any)" },
+  ]
+
+  test("an off whose rule reports in the override's files is silent", () => {
+    expect(findUnneededOverrideOffs(CONFIG, configText, config, allHit)).toEqual([])
+  })
+
+  test("an off with no diagnostic is reported at its rule's line", () => {
+    const findings = findUnneededOverrideOffs(CONFIG, configText, config, allHit.slice(1))
+    expect(findings.map((finding) => [finding.line, finding.message])).toEqual([
+      [4, expect.stringContaining("turns off `effect/noGlobals`, which reports nothing")],
+    ])
+  })
+
+  test("a diagnostic in a file outside the override's globs does not count", () => {
+    const findings = findUnneededOverrideOffs(CONFIG, configText, config, [
+      ...allHit.slice(0, 2),
+      { file: "packages/core/src/a.ts", code: "typescript(no-explicit-any)" },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([7])
+  })
+
+  test("a diagnostic another override also turns off belongs to neither", () => {
+    const shared = {
+      overrides: [
+        ...config.overrides,
+        { files: ["packages/core/tests/**"], rules: { "typescript/no-explicit-any": "off" } },
+      ],
+    }
+    const findings = findUnneededOverrideOffs(CONFIG, configText, shared, allHit)
+    expect(findings.map((finding) => finding.message)).toEqual([
+      expect.stringContaining('"**/tests/**" turns off `typescript/no-explicit-any`'),
+      expect.stringContaining('"packages/core/tests/**" turns off `typescript/no-explicit-any`'),
+    ])
+  })
+
+  test("a rule an override sets to a severity is not an off", () => {
+    const enabling = { overrides: [{ files: ["**/tests/**"], rules: { "effect/noAs": "error" } }] }
+    expect(findUnneededOverrideOffs(CONFIG, configText, enabling, [])).toEqual([])
   })
 })
 
@@ -1334,6 +1256,10 @@ const RETIRED_PATHS: ReadonlyArray<string> = [
   "packages/sdk/src/server-registry.ts",
   "packages/sdk/src/worker-http.ts",
   "packages/core/src/server/server-root.ts",
+  "packages/core/src/cell.ts",
+  "packages/core/src/runtime/cell-execution.ts",
+  "packages/core/src/runtime/cell/cell-worker.ts",
+  "packages/core/src/cell/index.ts",
 ]
 
 describe("retired surface guard", () => {
@@ -1367,6 +1293,17 @@ describe("retired surface guard", () => {
     expect(rowsHit.size).toBe(RETIRED_SURFACES.length)
   })
 
+  test("a core path that only contains the letters of the cell feature is not reported", () => {
+    for (const file of [
+      "packages/core/src/runtime/cellular.ts",
+      "packages/core/src/domain/excellent.ts",
+      "packages/extensions/src/cell.ts",
+      "packages/core/tests/runtime/cell.test.ts",
+    ]) {
+      expect(findRetiredSurfaces(file, "")).toEqual([])
+    }
+  })
+
   test("a test file is reported only for the shipped-and-tests rows", () => {
     expect(
       findRetiredSurfaces(
@@ -1397,11 +1334,43 @@ describe("retired surface guard", () => {
     }
   })
 
-  test("a doc is not read for imports, and a doc's own path is no finding", () => {
+  test("a doc that shows a retired module's import is reported; a doc's own path is not", () => {
     expect(
-      findRetiredSurfaces("docs/extensions.md", 'import { x } from "./resource-graph.js"'),
-    ).toEqual([])
+      findRetiredSurfaces("docs/extensions.md", 'import { x } from "./resource-graph.js"').map(
+        (finding) => finding.line,
+      ),
+    ).toEqual([1])
     expect(findRetiredSurfaces("docs/server-root.md", "")).toEqual([])
+  })
+
+  test("a retired module is read on every import shape, a multi-line one included", () => {
+    const file = "packages/core/src/runtime/extension-host.ts"
+    const multiLine = [
+      "import {",
+      "  ResourceGraph,",
+      "  ResourceGraphLayer,",
+      '} from "./resource-graph"',
+    ]
+    expect(findRetiredSurfaces(file, multiLine.join("\n")).map((finding) => finding.line)).toEqual([
+      4,
+    ])
+    expect(
+      findRetiredSurfaces(
+        file,
+        'const m = yield* Effect.promise(() => import("../live-profile.js"))',
+      ),
+    ).toHaveLength(1)
+  })
+
+  test("a retired module name that is not a specifier's last segment is not a hit", () => {
+    const file = "packages/core/src/runtime/extension-host.ts"
+    for (const line of [
+      'import { x } from "./resource-graph-builder"',
+      'import { x } from "./resource-graph/index.js"',
+      "// the resource-graph module is gone",
+    ]) {
+      expect(findRetiredSurfaces(file, line)).toEqual([])
+    }
   })
 
   test("dated research, plans, the tooling tests and the guard source are not scanned", () => {
@@ -1527,12 +1496,18 @@ describe("steering file paths", () => {
       "apps/tui/AGENTS.md",
       "packages/core/AGENTS.md",
       "docs/extensions.md",
+      "testbeds/gamut/README.md",
       ".claude/skills/architecture-loop/prior-art.md",
     ]) {
       expect(isSteeringFile(file)).toBe(true)
       expect(messagesOfSteeringPath(text, file)).toHaveLength(1)
     }
-    for (const file of ["plans/some-plan.md", "docs/research/2026-09-06-x.md", "README.md"]) {
+    for (const file of [
+      "plans/some-plan.md",
+      "docs/research/2026-09-06-x.md",
+      "README.md",
+      "testbeds/gamut/fixture/README.md",
+    ]) {
       expect(isSteeringFile(file)).toBe(false)
       expect(messagesOfSteeringPath(text, file)).toEqual([])
     }
@@ -2046,6 +2021,67 @@ describe("the server app surface", () => {
         },
       ]),
     ).toEqual([])
+  })
+})
+
+describe("support module surface (test helpers, build scripts, testbed drivers)", () => {
+  const HELPER = "packages/core/tests/server/session-mutations.ts"
+
+  test("a helper export nothing names is reported", () => {
+    const findings = findingsFor([
+      { file: HELPER, text: `export const datePlusMillis = (millis: number) => millis\n` },
+    ])
+    expect(findings.map((finding) => finding.message)).toEqual([
+      expect.stringContaining("`datePlusMillis` is exported but no file outside"),
+    ])
+  })
+
+  test("a helper export only its own file reads drops the export keyword", () => {
+    const findings = findingsFor([
+      {
+        file: "apps/tui/tests/scrollback-hold-boundary.ts",
+        text: `export interface SettleHold {}\nexport const makeSettleHold = (): SettleHold => ({})\n`,
+      },
+      {
+        file: "apps/tui/tests/scrollback.test.ts",
+        text: `import { makeSettleHold } from "./scrollback-hold-boundary"\nvoid makeSettleHold\n`,
+      },
+    ])
+    expect(findings.map((finding) => finding.line)).toEqual([1])
+  })
+
+  test("a test file keeps a helper export alive", () => {
+    expect(
+      findingsFor([
+        { file: HELPER, text: `export const FIXED_NOW = 1\n` },
+        {
+          file: "packages/core/tests/server/session.test.ts",
+          text: `import { FIXED_NOW } from "./session-mutations"\nvoid FIXED_NOW\n`,
+        },
+      ]),
+    ).toEqual([])
+  })
+
+  test("the testbed driver, an integration helper and a build script are scanned", () => {
+    const files = [
+      "testbeds/gamut/gamut.ts",
+      "apps/tui/integration/helpers.ts",
+      "apps/tui/scripts/build.ts",
+    ]
+    expect(files.map((file) => declaredNames(file, `export const orphan = 1\n`))).toEqual(
+      files.map(() => ["orphan"]),
+    )
+  })
+
+  test("a test file, the testbed fixture app and the lint fixtures declare nothing", () => {
+    const files = [
+      "apps/tui/tests/extensions/builtins.test.ts",
+      "testbeds/gamut/fixture/src/ledger.ts",
+      "packages/tooling/fixtures/apps/tui/tests/helper.ts",
+    ]
+    expect(files.map((file) => declaredNames(file, `export const orphan = 1\n`))).toEqual(
+      files.map(() => []),
+    )
   })
 })
 

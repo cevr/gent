@@ -40,7 +40,7 @@ const BINARY = join(CHECKOUT, "apps/tui/bin/gent")
 // ── Presets ─────────────────────────────────────────────────────────────
 
 /** One model choice: which model, at which reasoning effort. */
-export interface Slot {
+interface Slot {
   readonly modelId: string
   readonly reasoningEffort: string
 }
@@ -52,7 +52,7 @@ export interface Slot {
  * roster block in `AGENTS.md`, which tells it what `overrides` to pass on a
  * `delegate.start` call that wants the second opinion.
  */
-export interface Preset {
+interface Preset {
   readonly orchestrator: Slot
   readonly worker: Slot
   readonly reviewer: Slot
@@ -458,6 +458,24 @@ const sessionTree = (
   return out
 }
 
+/**
+ * Stored `ExtensionStateChanged` events per extension id, most first: how
+ * often each extension told its client widgets to refetch during the run.
+ */
+export const extensionPulses = (
+  db: Database,
+): ReadonlyArray<{ readonly extension: string; readonly count: number }> =>
+  decodeRows(
+    Schema.Struct({ extension: Schema.String, count: Schema.Finite }),
+    db
+      .query(
+        `SELECT json_extract(event_json, '$.extensionId') AS extension, COUNT(*) AS count
+         FROM events WHERE event_tag = 'ExtensionStateChanged'
+         GROUP BY extension ORDER BY count DESC, extension`,
+      )
+      .all(),
+  )
+
 const status = async () => {
   const state = await readState()
   const dbPath = join(state.data, "data.db")
@@ -515,6 +533,10 @@ const status = async () => {
   for (const message of userMessages) {
     console.log(`  [${message.session_id.slice(-8)}] ${JSON.stringify(message.text)}`)
   }
+
+  const pulses = extensionPulses(db)
+  console.log(`\nextension pulses (stored ExtensionStateChanged, ${pulses.length} extensions):`)
+  for (const { extension, count } of pulses) console.log(`  ${extension}  ${count}`)
   db.close()
 
   console.log("\nbun test in the work dir:")
@@ -648,7 +670,7 @@ const isIdle = (paneText: string, record: RunRecord): boolean => {
 }
 
 /** Where a wait stands: idle reads in a row with and without proof the send was handled. */
-export interface WaitProgress {
+interface WaitProgress {
   readonly settledReads: number
   readonly quietReads: number
 }
@@ -800,7 +822,7 @@ const main = async (argv: ReadonlyArray<string>): Promise<void> => {
  * whose default print is a source frame and a stack; the reader needs the
  * exit code and what the command said.
  */
-export const failureLine = (error: unknown): string => {
+const failureLine = (error: unknown): string => {
   if (error instanceof $.ShellError) {
     const said = failureText(error.stdout.toString(), error.stderr.toString())
     return `gamut: a command failed (exit ${error.exitCode}): ${said}`

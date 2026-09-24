@@ -109,7 +109,7 @@ const ensureAgentLoopStorageParents = (input: {
         }),
     ),
   )
-export interface AgentLoopService {
+interface AgentLoopService {
   readonly runOnce: (input: {
     readonly sessionId: SessionId
     readonly branchId: BranchId
@@ -393,7 +393,7 @@ export const makeLayerWithEventStore = (
   eventStoreLayer: Layer.Layer<EventStore>,
 ) => actorTestRoot({ provider: providerLayer, eventStore: eventStoreLayer })
 /** A `waitFor` deadline expiring. Typed so a timeout fails its own test. */
-export class AgentLoopTestTimeout extends Schema.TaggedError<AgentLoopTestTimeout>()(
+class AgentLoopTestTimeout extends Schema.TaggedError<AgentLoopTestTimeout>()(
   "@gent/core/tests/runtime/agent-loop/AgentLoopTestTimeout",
   { description: Schema.String, timeoutMs: Schema.Finite },
 ) {}

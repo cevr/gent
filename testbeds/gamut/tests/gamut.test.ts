@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import {
   decodeState,
+  extensionPulses,
   failureText,
   isSettled,
   QUIET_READS,
@@ -412,5 +413,22 @@ describe("gamut status", () => {
     const coloured = "\u001b[0m\u001b[32m 17 pass\u001b[0m\n\u001b[0m\u001b[2m 0 fail\u001b[0m\n"
     expect(testSummary(coloured)).toBe("17 pass, 0 fail")
     expect(testSummary("no summary")).toBe("? pass, ? fail")
+  })
+
+  test("counts stored extension pulses per extension, most first", () => {
+    const db = new Database(":memory:")
+    db.run("CREATE TABLE events (id INTEGER PRIMARY KEY, event_tag TEXT, event_json TEXT)")
+    const pulse = (extensionId: string) =>
+      db.run("INSERT INTO events (event_tag, event_json) VALUES (?, ?)", [
+        "ExtensionStateChanged",
+        JSON.stringify({ _tag: "ExtensionStateChanged", extensionId }),
+      ])
+    expect(extensionPulses(db)).toEqual([])
+    for (const id of ["@gent/delegate", "@gent/btw", "@gent/btw", "@gent/btw"]) pulse(id)
+    db.run("INSERT INTO events (event_tag, event_json) VALUES ('StreamStarted', '{}')")
+    expect(extensionPulses(db)).toEqual([
+      { extension: "@gent/btw", count: 3 },
+      { extension: "@gent/delegate", count: 1 },
+    ])
   })
 })

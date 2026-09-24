@@ -1,9 +1,10 @@
 /**
  * Lint fixture verification.
  *
- * For each custom oxlint rule scaffolded in , runs `oxlint` against a
- * positive fixture (must error) and a negative fixture (must pass). Verifies
- * each rule actually fires on the cases its docstring claims.
+ * For each custom oxlint rule in `../src/gent-rules.ts`, runs `oxlint` against
+ * a positive fixture (must error) and a negative fixture (must pass). Verifies
+ * each rule actually fires on the cases its docstring claims. The root config
+ * is checked too: every override "off" must suppress a diagnostic.
  *
  * Fixtures + their dedicated `.oxlintrc.json` live in `../fixtures/`. The
  * fixtures-local config enables every rule under test as `error` so the test
@@ -23,11 +24,15 @@ import { BunServices } from "@effect/platform-bun"
 import { Effect, Exit, FileSystem, Option, Path, Schema } from "effect"
 import { describe as effectDescribe, it } from "effect-bun-test"
 import {
+  labeledDiagnostics,
+  lintWithoutOverrideOffs,
+  probeConfig,
   runOxlint,
   type Diagnostic,
   type OxlintReport,
   type OxlintRun,
 } from "../src/fixture-runner"
+import { findUnneededOverrideOffs } from "../src/guards"
 import gentRules, {
   isTest,
   isTestCode,
@@ -319,6 +324,18 @@ const CASES: ReadonlyArray<RuleCase> = [
     // Arrow body + function reference + the renamed import + a namespace import
     expectedCount: 4,
   },
+  {
+    // A child-session writer admits the depth in its own function, first.
+    rule: "gent/child-session-writer-admits",
+    invalid: "packages/core/src/server/child-session-writer-admits.invalid.ts",
+    valid: [
+      "packages/core/src/server/child-session-writer-admits.valid.ts",
+      "packages/core/src/storage/child-session-writer-admits.valid.ts",
+    ],
+    // no admission, a sibling's admission, a nested arrow, a method shorthand,
+    // and an admission after the write
+    expectedCount: 5,
+  },
 ]
 
 /** Each fixture file once: a run lints a path it is given once, however many cases name it. */
@@ -431,6 +448,86 @@ effectDescribe("custom lint rules", () => {
       expect(oxlintConfig).not.toContain("gent/all-errors-are-tagged")
     }).pipe(Effect.provide(BunServices.layer)),
   )
+
+  it.live(
+    'every override "off" in the root config suppresses a diagnostic',
+    () =>
+      Effect.gen(function* () {
+        const { configText, config, run } = yield* lintWithoutOverrideOffs()
+        const { labeled, unlabeled } = labeledDiagnostics(run.report)
+        // A run that lints nothing, or a report whose diagnostics name no rule,
+        // would make every "off" look unneeded.
+        expect(run.report.number_of_files, run.stderr).toBeGreaterThan(100)
+        expect(unlabeled, "diagnostics with no file or no rule id").toEqual([])
+        expect(
+          findUnneededOverrideOffs(".oxlintrc.json", configText, config, labeled).map(
+            (finding) => `${finding.file}:${finding.line}: ${finding.message}`,
+          ),
+        ).toEqual([])
+      }).pipe(Effect.scoped, Effect.timeout("60 seconds"), Effect.provide(BunServices.layer)),
+    70_000,
+  )
+})
+
+describe("the override probe", () => {
+  const diagnostic = (fields: Partial<Diagnostic>): Diagnostic => ({ message: "m", ...fields })
+  const report = (diagnostics: ReadonlyArray<Diagnostic>): OxlintReport => ({
+    diagnostics,
+    number_of_files: 1,
+  })
+
+  test("a diagnostic is labeled by its code, or by its rule id when it has no code", () => {
+    const { labeled, unlabeled } = labeledDiagnostics(
+      report([
+        diagnostic({ filename: "a.ts", code: "effect(noAs)" }),
+        diagnostic({ filename: "b.ts", rule_id: "effect(noGlobals)" }),
+      ]),
+    )
+    expect(labeled).toEqual([
+      { file: "a.ts", code: "effect(noAs)" },
+      { file: "b.ts", code: "effect(noGlobals)" },
+    ])
+    expect(unlabeled).toEqual([])
+  })
+
+  test("a diagnostic with no rule or no file is reported, not dropped", () => {
+    const { labeled, unlabeled } = labeledDiagnostics(
+      report([diagnostic({ filename: "a.ts" }), diagnostic({ code: "effect(noAs)" })]),
+    )
+    expect(labeled).toEqual([])
+    expect(unlabeled).toHaveLength(2)
+  })
+
+  test("the copy keeps every override key and removes only the offs", () => {
+    const copy = probeConfig(
+      {
+        jsPlugins: ["./plugin.ts", "effect-plugin"],
+        overrides: [
+          {
+            files: ["tests/**"],
+            rules: { "effect/noAs": "off", "effect/noGlobals": "error" },
+            env: { node: true },
+            plugins: ["node"],
+          },
+        ],
+        categories: { correctness: "error" },
+      },
+      "/repo",
+      (plugin) => `/resolved/${plugin}`,
+    )
+    expect(copy).toEqual({
+      jsPlugins: ["/repo/plugin.ts", "/resolved/effect-plugin"],
+      overrides: [
+        {
+          files: ["/repo/tests/**"],
+          rules: { "effect/noGlobals": "error" },
+          env: { node: true },
+          plugins: ["node"],
+        },
+      ],
+      categories: { correctness: "error" },
+    })
+  })
 })
 
 // ── what is a test ──────────────────────────────────────────────────────────

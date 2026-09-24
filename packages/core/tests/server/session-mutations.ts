@@ -25,8 +25,6 @@ import { createE2ELayer, createRpcClient } from "../../src/test-utils/harness"
 import { e2ePreset } from "../helpers/test-preset"
 
 export const FIXED_NOW = dateFromMillis(1_767_225_600_000)
-export const datePlusMillis = (date: Date, millis: number): Date =>
-  dateFromMillis(date.getTime() + millis)
 
 export const makeClient = (reply = "ok") =>
   Effect.gen(function* () {
@@ -186,7 +184,7 @@ export const sessionMutationsLayer = Layer.fresh(
   Layer.unwrap(Effect.sync(buildSessionMutationsLayer)),
 )
 
-export const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
+const sessionRuntimeProbeLayer = (terminated: Array<SessionId>) =>
   sessionRuntimeLayer({
     terminateSession: (sessionId) =>
       Effect.sync(() => {
