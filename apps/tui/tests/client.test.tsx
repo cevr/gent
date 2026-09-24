@@ -1563,6 +1563,67 @@ describe("ClientProvider errors", () => {
     }),
   )
 
+  // The feed skips the lifecycle events a snapshot covers, so a turn that
+  // started while the connection was down reaches the client only inside the
+  // snapshot. It is still a turn start, and it clears the error.
+  it.live("a turn that started during a disconnect drops the held error", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      const idle = snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 })
+      client.applySessionSnapshot(idle)
+      client.setErrorIn(FIRST, "send refused")
+      // The connection drops; a queued message starts the next turn meanwhile.
+      const running: SessionSnapshot["runtime"] = { _tag: "Running", queue: emptyQueueSnapshot() }
+      client.applySessionSnapshot({ ...idle, runtime: running })
+      expect(client.isStreaming()).toBe(true)
+      expect(client.error()).toBeNull()
+    }),
+  )
+
+  it.live("a snapshot of the turn the error was shown in keeps the error", () =>
+    Effect.gen(function* () {
+      let ctx = Option.none<ClientContextValue>()
+      yield* Effect.promise(() =>
+        renderWithProviders(() => <ClientProbe onReady={(value) => (ctx = Option.some(value))} />, {
+          initialSession: {
+            id: FIRST.sessionId,
+            activeBranchId: FIRST.branchId,
+            name: "First",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      const client = yield* requireClient(ctx)
+      const running: SessionSnapshot["runtime"] = { _tag: "Running", queue: emptyQueueSnapshot() }
+      const midTurn = { ...snapshotOf(FIRST, { costUsd: 0, lastInputTokens: 0 }), runtime: running }
+      client.applySessionSnapshot(midTurn)
+      client.setErrorIn(FIRST, "interject refused")
+      // The same turn still runs when the feed hydrates again.
+      client.applySessionSnapshot(midTurn)
+      expect(client.error()).toBe("interject refused")
+      // It ends while the connection is down; no new turn starts.
+      client.applySessionSnapshot({
+        ...midTurn,
+        runtime: { _tag: "Idle", queue: emptyQueueSnapshot() },
+        metrics: { ...midTurn.metrics, turns: midTurn.metrics.turns + 1 },
+      })
+      expect(client.error()).toBe("interject refused")
+    }),
+  )
+
   it.live("an error leaves the turn running; the next turn start clears it", () =>
     Effect.gen(function* () {
       let ctx = Option.none<ClientContextValue>()

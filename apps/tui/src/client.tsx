@@ -183,6 +183,12 @@ interface AgentState {
    * snapshot write it; an error on screen never does.
    */
   running: boolean
+  /**
+   * How many turns the branch in view has started: the snapshot's completed
+   * turns, plus the one it runs, plus each live start since. None until the
+   * branch's first snapshot lands.
+   */
+  turnsStarted: Option.Option<number>
   /** The error on screen. A turn start clears it. */
   error: Option.Option<string>
   cost: number
@@ -805,6 +811,7 @@ export function ClientProvider(props: ClientProviderProps) {
   const [agentStore, setAgentStore] = createStore<AgentState>({
     agent: initialAgent,
     running: false,
+    turnsStarted: Option.none(),
     error: Option.none(),
     cost: 0,
     resolvedModelId: Option.none(),
@@ -835,7 +842,17 @@ export function ClientProvider(props: ClientProviderProps) {
   // replaces it. A snapshot writes the error on screen, so every snapshot shows
   // the held error again: the one the reader returns to, the one just switched
   // to, and a feed that hydrates again after a reconnect.
-  const heldErrors = new Map<string, string>()
+  //
+  // A turn start clears it whether the start arrives live or inside a
+  // snapshot: the feed skips the lifecycle events a snapshot covers, so a turn
+  // that started while the connection was down shows only as a snapshot that
+  // counts more started turns than the error was shown against. An error held
+  // for a branch not in view has no count yet; its first snapshot sets it.
+  interface HeldError {
+    readonly error: string
+    readonly turnsStarted: Option.Option<number>
+  }
+  const heldErrors = new Map<string, HeldError>()
   const identityKey = (identity: SessionIdentity) =>
     `${identity.sessionId}\u0000${identity.branchId}`
   /** Write the error on screen for the session in view; it replaces that session's held error. */
@@ -845,8 +862,23 @@ export function ClientProvider(props: ClientProviderProps) {
   }
   /** Write whether a turn runs. A turn start clears the error on screen. */
   const setRunning = (running: boolean): void => {
-    if (running && !agentStore.running) showError(Option.none())
+    if (running && !agentStore.running) {
+      showError(Option.none())
+      setAgentStore({ turnsStarted: Option.map(agentStore.turnsStarted, (count) => count + 1) })
+    }
     setAgentStore({ running })
+  }
+  /** The held error a snapshot shows; one shown before a later turn started is dropped. */
+  const heldErrorFor = (snapshot: SessionSnapshot, turnsStarted: number): Option.Option<string> => {
+    const key = identityKey(snapshot)
+    const held = Option.fromUndefinedOr(heldErrors.get(key))
+    if (Option.isNone(held)) return Option.none()
+    if (Option.exists(held.value.turnsStarted, (shownAt) => turnsStarted > shownAt)) {
+      heldErrors.delete(key)
+      return Option.none()
+    }
+    heldErrors.set(key, { error: held.value.error, turnsStarted: Option.some(turnsStarted) })
+    return Option.some(held.value.error)
   }
 
   /**
@@ -866,6 +898,7 @@ export function ClientProvider(props: ClientProviderProps) {
     setAgentStore({
       agent: input.agent,
       running: false,
+      turnsStarted: Option.none(),
       error: Option.none(),
       cost: 0,
       resolvedModelId: Option.none(),
@@ -998,10 +1031,14 @@ export function ClientProvider(props: ClientProviderProps) {
     if (sessionChanged) {
       dispatchSession(SessionStateEvent.cases.Activated.make({ session: nextSession }))
     }
+    const running = snapshot.runtime._tag !== "Idle"
+    let turnsStarted = snapshot.metrics.turns
+    if (running) turnsStarted += 1
     setAgentStore({
       agent: Option.some(snapshot.agent),
-      running: snapshot.runtime._tag !== "Idle",
-      error: Option.fromUndefinedOr(heldErrors.get(identityKey(snapshot))),
+      running,
+      turnsStarted: Option.some(turnsStarted),
+      error: heldErrorFor(snapshot, turnsStarted),
       cost: snapshot.metrics.costUsd,
       resolvedModelId: Option.some(snapshot.resolvedModelId),
       resolvedReasoningLevel: Option.fromUndefinedOr(snapshot.resolvedReasoningLevel),
@@ -1380,10 +1417,13 @@ export function ClientProvider(props: ClientProviderProps) {
     setErrorIn: (target, error) => {
       // The session in view shows it now. Either way it is held, so the
       // session's next snapshot shows it again over the status it writes.
-      if (Option.exists(sessionOption(), (current) => sameIdentity(current, target))) {
-        agentValue.setError(error)
-      }
-      heldErrors.set(identityKey(target), error)
+      const inView = Option.exists(sessionOption(), (current) => sameIdentity(current, target))
+      if (inView) agentValue.setError(error)
+      // Shown against the turns the branch in view has started; a branch not
+      // in view gets its count from its first snapshot.
+      let turnsStarted = Option.none<number>()
+      if (inView) turnsStarted = agentStore.turnsStarted
+      heldErrors.set(identityKey(target), { error, turnsStarted })
     },
     setError: (error) => showError(Option.some(error)),
     notice,
