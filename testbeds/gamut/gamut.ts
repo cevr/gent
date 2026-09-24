@@ -301,6 +301,7 @@ const QUIT_PRESSES = 4
  * process is gone, and herdr writes into whatever is attached at that moment.
  */
 const quitTui = async (state: GamutState): Promise<void> => {
+  // A press sent after the TUI exited lands at an idle shell prompt: `restart` relaunches only after this returns.
   for (let press = 0; press < QUIT_PRESSES; press += 1) {
     await $`herdr pane send-text ${state.pane} ${CTRL_C}`.quiet().nothrow()
     await Bun.sleep(300)
