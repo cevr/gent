@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../tooling/src/test-preload.ts --max-concurrency=1 tests/e2e.test.ts tests/server-lifecycle.test.ts tests/scrollback.test.ts"
+    "test:e2e": "env -u FORCE_COLOR NO_COLOR=1 bun test --preload ../tooling/src/test-preload.ts --max-concurrency=1 tests"
   },
   "dependencies": {
     "@gent/core": "workspace:*",

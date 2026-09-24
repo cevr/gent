@@ -1721,11 +1721,12 @@ export const findRetiredSurfaces = (file: string, text: string): ReadonlyArray<F
 /**
  * Steering prose: what an agent is told to read before it changes the code.
  * The root `AGENTS.md`, `CLAUDE.md` and `ARCHITECTURE.md`, a package's own
- * `AGENTS.md` or `CLAUDE.md`, and `docs/` but its dated research. The path
- * claims and the retired-surface rows both read exactly this set.
+ * `AGENTS.md` or `CLAUDE.md`, `docs/` but its dated research, and the
+ * project skills under `.claude/skills/`. The path claims and the
+ * retired-surface rows both read exactly this set.
  */
 const STEERING_PROSE =
-  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md)$/
+  /^(?:(?:AGENTS|CLAUDE|ARCHITECTURE)\.md|(?:apps|packages)\/[^/]+\/(?:AGENTS|CLAUDE)\.md|docs\/(?!research\/).+\.md|\.claude\/skills\/.+\.md)$/
 
 export const isSteeringFile = (file: string): boolean => STEERING_PROSE.test(file)
 
@@ -3263,9 +3264,7 @@ export interface DependencyScope {
   readonly files: ReadonlyMap<string, string>
   /** The command lines that can run a dependency: package scripts, hooks, CI steps. */
   readonly commands: ReadonlyArray<string>
-  /** Peers the scope installs for other packages: the root provides every workspace's. */
-  readonly providedPeers: ReadonlySet<string>
-  /** Each declared dependency whose installed manifest could be read. */
+  /** Each declared dependency (peers included) whose installed manifest could be read. */
   readonly installed: ReadonlyMap<string, InstalledDependency>
 }
 
@@ -3352,65 +3351,100 @@ const typedPackage = (dependency: string): Option.Option<string> => {
   return Option.some(typed)
 }
 
-type DependencyField = "dependencies" | "devDependencies" | "optionalDependencies"
+type DependencyField =
+  | "dependencies"
+  | "devDependencies"
+  | "optionalDependencies"
+  | "peerDependencies"
 const DEPENDENCY_FIELDS: ReadonlyArray<DependencyField> = [
   "dependencies",
   "devDependencies",
   "optionalDependencies",
+  "peerDependencies",
 ]
+
+interface ScopeUse {
+  readonly declared: ReadonlyArray<{ readonly field: DependencyField; readonly name: string }>
+  readonly used: ReadonlySet<string>
+  /** The peers the scope needs installed: its used peers and every peer its used dependencies ask for. */
+  readonly peers: ReadonlySet<string>
+}
+
+/** The declared dependencies of one scope, the ones it uses, and the peers it needs. */
+const scopeUse = (scope: DependencyScope, providedPeers: ReadonlySet<string>): ScopeUse => {
+  const declared = DEPENDENCY_FIELDS.flatMap((field) =>
+    Object.keys(scope.packageJson[field] ?? {}).map((name) => ({ field, name })),
+  )
+  const named = namedPackages(scope)
+  const words = new Set(scope.commands.flatMap(commandWords))
+  const installed = (name: string) => Option.fromNullishOr(scope.installed.get(name))
+  const used = new Set(
+    declared
+      .map(({ name }) => name)
+      .filter(
+        (name) =>
+          named.has(name) ||
+          providedPeers.has(name) ||
+          Option.exists(installed(name), ({ bins }) => bins.some((bin) => words.has(bin))) ||
+          Option.exists(typedPackage(name), (typed) => named.has(typed)),
+      ),
+  )
+  const peers = new Set(
+    Object.keys(scope.packageJson.peerDependencies ?? {}).filter((name) => used.has(name)),
+  )
+  // A peer of a used dependency is used through it; follow the chain.
+  const frontier = [...used]
+  while (frontier.length > 0) {
+    const asked = Option.match(installed(frontier.pop() ?? ""), {
+      onNone: (): ReadonlyArray<string> => [],
+      onSome: (dependency) => dependency.peers,
+    })
+    for (const peer of asked) {
+      peers.add(peer)
+      if (used.has(peer)) continue
+      used.add(peer)
+      frontier.push(peer)
+    }
+  }
+  return { declared, used, peers }
+}
+
+const unusedFindings = (scope: DependencyScope, use: ScopeUse): ReadonlyArray<Finding> => {
+  const lines = scope.manifestText.split("\n")
+  return use.declared
+    .filter(({ name }) => !use.used.has(name))
+    .map(({ field, name }) => ({
+      file: scope.manifest,
+      line: lines.findIndex((line) => line.includes(`"${name}":`)) + 1 || 1,
+      message: `${field}["${name}"]: nothing in this package loads it, runs its command or names it in a config; drop it`,
+    }))
+}
 
 /**
  * A declared dependency nothing uses is dead weight that installs, resolves
  * and audits forever, and nothing else notices it (pass 3 dropped a set once,
- * pass 14 four more). A dependency is used when a file in its scope loads or
- * names it, a command runs one of its binaries, it types a used package
- * (`@types/x`), or it is a peer of a used dependency or of a workspace the
- * root installs for. `peerDependencies` are the consumer's contract, not a
- * use, so they are not checked.
+ * pass 14 four more, pass 15 a dead peer). A dependency is used when a file
+ * in its scope loads or names it, a command runs one of its binaries, it
+ * types a used package (`@types/x`), or it is a peer of a used dependency (a
+ * workspace dependency's peers included). Peers are checked the same way: a
+ * dead peer would keep the root's copy and its catalog entry alive. The root
+ * installs the peers the workspaces need (declared or asked for by a used
+ * dependency), and only those.
  */
-export const findUnusedDependencies = (
-  scopes: ReadonlyArray<DependencyScope>,
-): ReadonlyArray<Finding> =>
-  scopes.flatMap((scope) => {
-    const declared = DEPENDENCY_FIELDS.flatMap((field) =>
-      Object.keys(scope.packageJson[field] ?? {}).map((name) => ({ field, name })),
-    )
-    const named = namedPackages(scope)
-    const words = new Set(scope.commands.flatMap(commandWords))
-    const installed = (name: string) => Option.fromNullishOr(scope.installed.get(name))
-    const used = new Set(
-      declared
-        .map(({ name }) => name)
-        .filter(
-          (name) =>
-            named.has(name) ||
-            scope.providedPeers.has(name) ||
-            Option.exists(installed(name), ({ bins }) => bins.some((bin) => words.has(bin))) ||
-            Option.exists(typedPackage(name), (typed) => named.has(typed)),
-        ),
-    )
-    // A peer of a used dependency is used through it; follow the chain.
-    const frontier = [...used]
-    while (frontier.length > 0) {
-      const peers = Option.match(installed(frontier.pop() ?? ""), {
-        onNone: (): ReadonlyArray<string> => [],
-        onSome: (dependency) => dependency.peers,
-      })
-      for (const peer of peers) {
-        if (used.has(peer)) continue
-        used.add(peer)
-        frontier.push(peer)
-      }
-    }
-    const lines = scope.manifestText.split("\n")
-    return declared
-      .filter(({ name }) => !used.has(name))
-      .map(({ field, name }) => ({
-        file: scope.manifest,
-        line: lines.findIndex((line) => line.includes(`"${name}":`)) + 1 || 1,
-        message: `${field}["${name}"]: nothing in this package loads it, runs its command or names it in a config; drop it`,
-      }))
-  })
+export const findUnusedDependencies = (input: {
+  readonly root: DependencyScope
+  readonly workspaces: ReadonlyArray<DependencyScope>
+}): ReadonlyArray<Finding> => {
+  const workspaceUses = input.workspaces.map((scope) => ({
+    scope,
+    use: scopeUse(scope, new Set()),
+  }))
+  const providedPeers = new Set(workspaceUses.flatMap(({ use }) => [...use.peers]))
+  return [
+    ...unusedFindings(input.root, scopeUse(input.root, providedPeers)),
+    ...workspaceUses.flatMap(({ scope, use }) => unusedFindings(scope, use)),
+  ]
+}
 
 /** A catalog version no manifest takes with `"catalog:"` pins a package nothing installs. */
 export const findUnusedCatalogEntries = (
@@ -3419,7 +3453,7 @@ export const findUnusedCatalogEntries = (
 ): ReadonlyArray<Finding> => {
   const taken = new Set(
     [root.packageJson, ...manifests].flatMap((manifest) =>
-      [...DEPENDENCY_FIELDS.map((field) => manifest[field]), manifest.peerDependencies]
+      DEPENDENCY_FIELDS.map((field) => manifest[field])
         .flatMap((versions) => Object.entries(versions ?? {}))
         .filter(([, version]) => version.startsWith("catalog:"))
         .map(([name]) => name),
