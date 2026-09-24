@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "effect-bun-test"
 import {
+  Cause,
   Clock,
   DateTime,
   Deferred,
@@ -165,6 +166,11 @@ describe("wake", () => {
       expect(Exit.isFailure(garbage)).toBe(true)
       const tooFar = yield* Effect.exit(dueAtOf({ afterSeconds: 25 * 60 * 60 }, now))
       expect(Exit.isFailure(tooFar)).toBe(true)
+      const negative = yield* Effect.exit(dueAtOf({ afterSeconds: -5 }, now))
+      expect(Exit.isFailure(negative)).toBe(true)
+      const past = yield* Effect.exit(dueAtOf({ at: "1970-01-01T00:00:01Z" }, now))
+      expect(Exit.isFailure(past)).toBe(true)
+      expect(yield* dueAtOf({ afterSeconds: 0 }, now)).toBe(now)
       expect(wakeMessage({ _tag: "alarm", wakeId: "w1", dueAt: 1_200_000, note: "check CI" })).toBe(
         "Alarm w1 fired at 1970-01-01T00:20:00.000Z. check CI",
       )
@@ -1179,6 +1185,27 @@ describe("monitor command", () => {
         Effect.timeout("8 seconds"),
       ),
     10_000,
+  )
+  it.scopedLive("a negative timeout is refused, not timed out at once", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("wake-monitor-negative-")
+      const queued = yield* Ref.make<ReadonlyArray<string>>([])
+      const refused = yield* Effect.exit(
+        runToolWithCtx(
+          MonitorTool,
+          { command: "true", everySeconds: 1, timeoutSeconds: -5, note: "never" },
+          contextWith(home, queued, Option.none()),
+        ),
+      )
+      expect(Exit.isFailure(refused)).toBe(true)
+      if (Exit.isFailure(refused)) {
+        expect(Cause.pretty(refused.cause)).toContain("timeoutSeconds must not be negative")
+      }
+      expect(yield* Ref.get(queued)).toEqual([])
+    }).pipe(
+      Effect.provide(Layer.mergeAll(WakeAlarmsLive, BunServices.layer, TestClock.layer())),
+      Effect.timeout("8 seconds"),
+    ),
   )
 })
 

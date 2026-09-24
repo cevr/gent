@@ -669,6 +669,9 @@ export const dueAtOf = (
       new WakeError({ message: "Give afterSeconds (a number) or at (an ISO 8601 time)" }),
     )
   }
+  if (dueAt.value < now) {
+    return Effect.fail(new WakeError({ message: "An alarm cannot be in the past" }))
+  }
   if (dueAt.value - now > MAXIMUM_WAKE_DELAY_MS) {
     return Effect.fail(new WakeError({ message: "An alarm can be at most 24 hours away" }))
   }
@@ -820,6 +823,9 @@ export const MonitorTool = tool({
         () => DEFAULT_MONITOR_TIMEOUT_SECONDS,
       ),
     )
+    if (timeoutSeconds < 0) {
+      return yield* new WakeError({ message: "timeoutSeconds must not be negative" })
+    }
     if (params.command.trim().length === 0) {
       return yield* new WakeError({ message: "command is empty" })
     }
