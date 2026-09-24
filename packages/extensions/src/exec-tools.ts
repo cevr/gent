@@ -3338,11 +3338,14 @@ const SQL_OVERWRITES =
   /\b(update|merge|upsert|overwrite|outfile|dumpfile|lo_\w+|lowrite|pg_file_\w+|pg_terminate_backend|pg_promote|dblink\w*|or\s+replace)\b/i
 
 /**
- * The first statement of `text` that does not start as a read, by the word
- * that shows it. The text is split at `;` and new lines, and no quote is
- * read: a `;` in a string only makes more statements. A client command
- * (`\d`, `.tables`) is judged by the client's own list. `name=value` (a
- * psql variable) is its value, and one plain word there is data.
+ * Why `text` may write, as the reason the guard gives: the first statement
+ * that does not start as a read, as written (a comment `-- note`, or `b'`
+ * after the `;` of `'a;b'`), or the word that writes in one that does
+ * (`EXPLAIN ANALYZE UPDATE`). The text is split at `;` and new lines, and
+ * no quote is read: a `;` in a string only makes more statements. A client
+ * command (`\d`, `.tables`) is judged by the client's own list.
+ * `name=value` (a psql variable) is its value, and one plain word there is
+ * data.
  */
 const sqlWrite = (text: string): Option.Option<string> => {
   const variable = Option.fromNullishOr(/^[A-Za-z_]\w*=/.exec(text))
@@ -3354,8 +3357,13 @@ const sqlWrite = (text: string): Option.Option<string> => {
   return Arr.findFirst(sql.split(/[;\n]/), (statement) => {
     const start = /^[\s(]*([A-Za-z_]+|\S)/.exec(statement)?.[1]?.toLowerCase() ?? ""
     if (start === "" || start === "\\" || start === ".") return Option.none()
-    if (!SQL_READ_STARTS.has(start)) return Option.some(start)
-    return Option.map(Option.fromNullishOr(SQL_OVERWRITES.exec(statement)), ([word]) => word)
+    if (!SQL_READ_STARTS.has(start)) {
+      return Option.some(`SQL that does not start as a read: ${statement.trim()}`)
+    }
+    return Option.map(
+      Option.fromNullishOr(SQL_OVERWRITES.exec(statement)),
+      ([word]) => `SQL that writes: ${word.toUpperCase()}`,
+    )
   })
 }
 
@@ -3564,9 +3572,7 @@ const sqlRisk =
       ),
     )
     if (Option.isSome(trigger)) return trigger
-    return Option.flatMap(Arr.findFirst(commandTexts, sqlWrite), (word) =>
-      destructive(`SQL that writes: ${word.toUpperCase()}`),
-    )
+    return Option.flatMap(Arr.findFirst(commandTexts, sqlWrite), destructive)
   }
 
 /**

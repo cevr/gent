@@ -941,6 +941,15 @@ describe("classifyBashCommand", () => {
       "git reset --{hard,}",
       // An unquoted option value still splits.
       `cp -t $D ${x}`,
+      // `"$@"` as a named option's value is that value and every word after it.
+      `psql -d "$@"`,
+      `set -- db -c 'DROP TABLE t'; psql -d "$@" -c 'select 1'`,
+      `mysql -D "$@" -e 'select 1'`,
+      `crontab -u "$@"`,
+      `cp -t "$@" ${x}`,
+      // Option letters known only at run time: `-"$X"uroot` may be `-ruroot`.
+      `crontab -"$X"uroot`,
+      `cp -"$X"t/dir ${x}`,
       // Accepted over-asks: any dynamic operand may be a flag too.
       "kill $PID",
       "cp $a $b",
@@ -2156,6 +2165,20 @@ describe("classifyBashCommand", () => {
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
+    // The reason names the statement that does not start as a read, or the
+    // word that writes in one that does.
+    const reasons: ReadonlyArray<readonly [string, string]> = [
+      ["psql -c '-- note\nSELECT 1'", "SQL that does not start as a read: -- note"],
+      [`psql -c "SELECT 'a;b'"`, "SQL that does not start as a read: b'"],
+      [
+        "psql -c 'select 1; update gent_probe_x set a = 1'",
+        "SQL that does not start as a read: update gent_probe_x set a = 1",
+      ],
+      ["psql -c 'EXPLAIN ANALYZE UPDATE gent_probe_x SET a = 1'", "SQL that writes: UPDATE"],
+    ]
+    for (const [command, reason] of reasons) {
+      expect(classifyBashCommand(command).reason, command).toBe(reason)
+    }
   })
 
   test("SQL from a file or unreadable input, and SQL that builds and runs SQL, asks", () => {
@@ -2245,6 +2268,8 @@ describe("classifyBashCommand", () => {
       `psql -d "$(cat ${x})" -c 'select 1'`,
       `mysql -h "$H" -u "$U" -p"$P" -D "$DB" -e 'SHOW TABLES'`,
       `mysql -D "$DB" -e 'select 1'`,
+      // The SQLite VFS is a name, not SQL.
+      `sqlite3 -vfs "$V" ${x}.db 'select 1'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
