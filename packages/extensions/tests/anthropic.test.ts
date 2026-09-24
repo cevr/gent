@@ -24,6 +24,7 @@ import {
 import {
   Cause,
   Clock,
+  Context,
   FileSystem,
   Deferred,
   Effect,
@@ -42,6 +43,7 @@ import {
 import type * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient"
 import { BunCrypto, BunServices } from "@effect/platform-bun"
 import { TestClock } from "effect/testing"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
   testHostFacts,
   fakeFetchLayer,
@@ -1706,6 +1708,12 @@ const testPlatform = AnthropicPlatform.of({
   home: "/tmp/gent-test-home",
   env: {},
 })
+/** The driver's services as setup captures them: the running platform plus the Claude Code facts. */
+const driverServices = (platform: typeof testPlatform) =>
+  Effect.map(
+    Effect.context<FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner>(),
+    Context.add(AnthropicPlatform, platform),
+  )
 const buildAnthropicModelDriver = (
   ...args: Parameters<typeof buildAnthropicModelDriverLive> extends [
     infer CredentialCell,
@@ -1714,7 +1722,11 @@ const buildAnthropicModelDriver = (
   ]
     ? [CredentialCell, EnvApiKey]
     : never
-) => buildAnthropicModelDriverLive(...args, testPlatform, testCatalogSource())
+) =>
+  driverServices(testPlatform).pipe(
+    Effect.map((services) => buildAnthropicModelDriverLive(...args, services, testCatalogSource())),
+    Effect.provide(BunServices.layer),
+  )
 // The Claude Code path reads the keychain, never the gent store.
 const makeOAuthInfo = (): ProviderAuthInfo =>
   ProviderAuthInfo.cases.Oauth.make({
@@ -1891,7 +1903,7 @@ describe("Anthropic chronological context", () => {
             at: yield* Clock.currentTimeMillis,
             invalidated: false,
           })
-          const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+          const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
           const model = yield* driver.resolveModel("claude-opus-4-6", authInfo)
           for (const mode of ContextMode.literals) {
             const state = makeFakeFetchState()
@@ -1955,7 +1967,7 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
       // Pre-seed the cred Ref directly (test owns it). If
       // `makeOauthAnthropicLayer` regressed to allocating its own internal
       // Ref per call, the
@@ -1989,7 +2001,7 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
           at: yield* Clock.currentTimeMillis,
           invalidated: false,
         })
-        const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+        const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
         const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState = makeFakeFetchState()
         yield* runOne(model, fetchState)
@@ -2015,7 +2027,7 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
           at: yield* Clock.currentTimeMillis,
           invalidated: false,
         })
-        const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+        const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
         const model1 = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
         const fetchState1 = makeFakeFetchState()
         yield* runOne(model1, fetchState1)
@@ -2036,6 +2048,52 @@ describe("buildAnthropicModelDriver — OAuth path uses the external credential 
         yield* runOne(model2, fetchState2)
         expect(fetchState2.captured.at(-1)!.headers["authorization"]).toBe("Bearer second-token")
       }),
+  )
+})
+describe("buildAnthropicModelDriver — the host's platform", () => {
+  it.live("the Claude Code sign-in is read through the host's file system", () =>
+    Effect.gen(function* () {
+      // The file exists only in the host's file system, never on disk.
+      const home = "/nonexistent/gent-probe-anthropic"
+      const file = `${home}/.claude/.credentials.json`
+      const disk = yield* FileSystem.FileSystem
+      const hostFs: FileSystem.FileSystem = {
+        ...disk,
+        exists: (path) => {
+          if (path === file) return Effect.succeed(true)
+          return disk.exists(path)
+        },
+        readFileString: (path, encoding) => {
+          if (path !== file) return disk.readFileString(path, encoding)
+          return Effect.succeed(
+            encodeExternalJson({
+              claudeAiOauth: {
+                accessToken: "host-access",
+                refreshToken: "host-refresh",
+                expiresAt: FUTURE_MS,
+              },
+            }),
+          )
+        },
+      }
+      const services = Context.add(
+        yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
+        FileSystem.FileSystem,
+        hostFs,
+      )
+      const driver = buildAnthropicModelDriverLive(
+        yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL),
+        Option.none(),
+        services,
+        testCatalogSource(),
+      )
+      const fetchState = makeFakeFetchState()
+      const model = yield* driver
+        .resolveModel("claude-opus-4-6", makeOAuthInfo())
+        .pipe(Effect.provide(fakeFetchLayer(fetchState, () => anthropicHappyResponse())))
+      yield* runOne(model, fetchState)
+      expect(fetchState.captured.at(-1)?.headers["authorization"]).toBe("Bearer host-access")
+    }).pipe(Effect.scoped, Effect.provide(BunServices.layer), Effect.timeout("8 seconds")),
   )
 })
 describe("buildAnthropicModelDriver — refresh token order", () => {
@@ -2068,7 +2126,7 @@ describe("buildAnthropicModelDriver — refresh token order", () => {
       const driver = buildAnthropicModelDriverLive(
         credentialCellRef,
         Option.none(),
-        AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+        yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
         testCatalogSource(),
       )
       const fetchState = makeFakeFetchState()
@@ -2121,7 +2179,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       const driver = buildAnthropicModelDriverLive(
         credentialCellRef,
         Option.none(),
-        AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+        yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
         testCatalogSource(),
       )
       const fetchState = makeFakeFetchState()
@@ -2175,7 +2233,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       const driver = buildAnthropicModelDriverLive(
         credentialCellRef,
         Option.none(),
-        AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+        yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
         testCatalogSource(),
       )
       const newerSignIn = encodeExternalJson({
@@ -2241,7 +2299,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
       const driver = buildAnthropicModelDriverLive(
         credentialCellRef,
         Option.none(),
-        AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+        yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
         testCatalogSource(),
       )
       const fetchState = makeFakeFetchState()
@@ -2306,7 +2364,7 @@ describe("buildAnthropicModelDriver — refresh writes only the keychain", () =>
         const driver = buildAnthropicModelDriverLive(
           credentialCellRef,
           Option.none(),
-          AnthropicPlatform.of({ platform: "linux", home, env: {} }),
+          yield* driverServices(AnthropicPlatform.of({ platform: "linux", home, env: {} })),
           testCatalogSource(),
         )
         const fetchState = makeFakeFetchState()
@@ -2351,7 +2409,7 @@ describe("buildAnthropicModelDriver — credential order", () => {
           invalidated: false,
         },
       )
-      const driver = buildAnthropicModelDriver(credentialCellRef, Option.some("sk-env-key"))
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.some("sk-env-key"))
       const model = yield* driver.resolveModel("claude-opus-4-6", makeOAuthInfo())
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2364,7 +2422,7 @@ describe("buildAnthropicModelDriver — credential order", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, Option.some("sk-env-key"))
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.some("sk-env-key"))
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-stored"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2375,7 +2433,7 @@ describe("buildAnthropicModelDriver — credential order", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, Option.some("sk-env-key"))
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.some("sk-env-key"))
       const model = yield* driver.resolveModel("claude-opus-4-6")
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2407,7 +2465,7 @@ describe("buildAnthropicModelDriver — reasoning effort and thinking", () => {
           invalidated: false,
         },
       )
-      const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel(modelName, authInfo, hints)
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2677,7 +2735,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
           invalidated: false,
         },
       )
-      const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo)
       const state = makeFakeFetchState()
       yield* runCachingRequest(model, state, options, after)
@@ -2813,7 +2871,7 @@ describe("buildAnthropicModelDriver — thinking replay", () => {
           at: yield* Clock.currentTimeMillis,
           invalidated: false,
         })
-        const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+        const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
         const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo, {
           reasoning: "high",
         })
@@ -2875,7 +2933,7 @@ describe("buildAnthropicModelDriver — thinking replay", () => {
             at: yield* Clock.currentTimeMillis,
             invalidated: false,
           })
-          const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+          const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
           const model = yield* driver.resolveModel(modelName, authInfo, hints)
           const state = makeFakeFetchState()
           yield* LanguageModel.generateText({
@@ -2926,7 +2984,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)
@@ -2941,7 +2999,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
       Effect.gen(function* () {
         const credentialCellRef =
           yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-        const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+        const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
         const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
         const fetchState = makeFakeFetchState()
         yield* runOne(model, fetchState)
@@ -2957,7 +3015,7 @@ describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
     Effect.gen(function* () {
       const credentialCellRef =
         yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(EMPTY_CREDENTIAL_CELL)
-      const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+      const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-opus-4-6", makeApiAuthInfo("sk-test-1234"))
       const fetchState = makeFakeFetchState()
       yield* runOne(model, fetchState)

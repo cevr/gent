@@ -41,6 +41,7 @@ import {
   createDependencies,
   BunPlatformLive,
   ModelResolver,
+  resolveDataDir,
   ScriptedLanguageModel,
   StateLocation,
 } from "@gent/core/host"
@@ -56,13 +57,14 @@ import { GentLogLevel, GentObservability, LOG_DIR } from "./logger.js"
 // ── data-paths ──────────────────────────────────────────────────────────────
 
 /**
- * The one owner of where gent keeps its durable state on disk.
+ * The files gent keeps in its data directory.
  *
  * `GENT_DATA_DIR` names the directory holding `data.db`; without it the
- * directory is `<home>/.gent`. Every reader — the server that writes the
- * database, and the `doctor` and `storage reset` commands that inspect and
- * archive it — resolves through here, so an operator who redirects the
- * database does not get tools that look somewhere else.
+ * directory is `<home>/.gent` (core's `resolveDataDir` owns that rule). Every
+ * reader — the server that writes the database, and the `doctor` and
+ * `storage reset` commands that inspect and archive it — resolves through
+ * here, so an operator who redirects the database does not get tools that
+ * look somewhere else.
  */
 
 /** A malformed value is no value: the fallback under `home` still applies. */
@@ -99,15 +101,10 @@ const dataPathsIn = (dataDir: string): DataPaths => {
   }
 }
 
-/** The data directory `GENT_DATA_DIR` names, else `<home>/.gent`. */
-const resolveDataDir = (home: string): Effect.Effect<string> =>
-  Effect.map(optionalEnv("GENT_DATA_DIR"), (dataDir) =>
-    pathResolve(Option.getOrElse(dataDir, () => pathJoin(home, ".gent"))),
-  )
-
 /**
- * Resolve the paths from the environment. `home` names the fallback root; a
- * caller without one passes `HOME`.
+ * Resolve the paths from the environment through core's `resolveDataDir`,
+ * the rule the extensions' state files follow too. `home` names the fallback
+ * root; a caller without one passes `HOME`.
  */
 export const dataPaths = (home: string): Effect.Effect<DataPaths> =>
   Effect.map(resolveDataDir(home), dataPathsIn)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import {
   Cause,
+  ConfigProvider,
   Deferred,
   Effect,
   Exit,
@@ -308,6 +309,55 @@ describe("goal store", () => {
         yield* fs.readFileString(`${home}/.gent/goals/${branchId}.json`),
       )
       expect(Option.fromUndefinedOr(snapshot.goal?.status)).toEqual(Option.some("complete"))
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("a file removed while it is being read reads as no goal", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("goal-store-vanished-")
+      const fs = yield* FileSystem.FileSystem
+      // An empty write removes the file after a check would have seen it: every
+      // probe says the file is there, and the read finds nothing.
+      const vanishing: FileSystem.FileSystem = { ...fs, exists: () => Effect.succeed(true) }
+      const ctx = testToolContext({
+        sessionId: SessionId.make("goal-session"),
+        branchId: BranchId.make("goal-branch"),
+        toolCallId: ToolCallId.make("tc-goal"),
+        home,
+        State: { changed: () => Effect.void },
+      })
+      const read = yield* runToolWithCtx(GoalTool, { action: "get" }, ctx).pipe(
+        Effect.provideService(FileSystem.FileSystem, vanishing),
+      )
+      expect(read.goal).toBeUndefined()
+    }).pipe(Effect.provide(BunServices.layer)),
+  )
+
+  it.scopedLive("a run with its own data directory keeps branch state there, not in home", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectoryScoped("goal-store-home-")
+      const dataDir = yield* makeTempDirectoryScoped("goal-store-data-")
+      const branchId = BranchId.make("goal-branch")
+      const ctx = testToolContext({
+        sessionId: SessionId.make("goal-session"),
+        branchId,
+        toolCallId: ToolCallId.make("tc-goal"),
+        home,
+        State: { changed: () => Effect.void },
+      })
+      yield* runToolWithCtx(
+        GoalTool,
+        { action: "create", objective: "Write the pelican poem" },
+        ctx,
+      ).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({ env: { GENT_DATA_DIR: dataDir } }),
+        ),
+      )
+      const fs = yield* FileSystem.FileSystem
+      expect(yield* fs.readDirectory(`${dataDir}/goals`)).toEqual([`${branchId}.json`])
+      expect(yield* fs.exists(`${home}/.gent`)).toBe(false)
     }).pipe(Effect.provide(BunServices.layer)),
   )
 

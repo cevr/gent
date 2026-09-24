@@ -1,8 +1,11 @@
 /**
- * One JSON file per branch under `~/.gent/<directory>`.
+ * One JSON file per branch under `<data directory>/<directory>`: the directory
+ * `GENT_DATA_DIR` names, else `~/.gent`, resolved as the server resolves the
+ * database it sits beside.
  *
  * Every store that keeps branch state on disk has the same three needs: a
- * missing file reads as the empty value, a write replaces the file atomically
+ * missing file reads as the empty value (and writing the empty value removes
+ * the file), a write replaces the file atomically
  * so a reader never sees a half-written document, and a read-modify-write
  * cycle is serialized under the file lock across concurrent hooks. The
  * consumer binds only what differs: the directory, the codec, the empty value,
@@ -13,12 +16,17 @@
  * and writes its parent's record.
  */
 import { Effect, FileSystem, Option, Path, Schema } from "effect"
-import { type BranchId, ExtensionContext, writeFileAtomic } from "@gent/core/extensions/api"
+import {
+  type BranchId,
+  ExtensionContext,
+  resolveDataDir,
+  writeFileAtomic,
+} from "@gent/core/extensions/api"
 
 interface BranchStateStoreInput<A, E> {
   /** Span prefix, e.g. `GoalStore`. */
   readonly name: string
-  /** Directory under `~/.gent` that holds one `<branchId>.json` per branch. */
+  /** Directory under the data directory that holds one `<branchId>.json` per branch. */
   readonly directory: string
   readonly codec: Schema.Codec<A, string>
   /** What a missing file reads as. */
@@ -30,29 +38,51 @@ interface BranchStateStoreInput<A, E> {
 export const makeBranchStateStore = <A, E>(input: BranchStateStoreInput<A, E>) => {
   const decode = Schema.decodeUnknownEffect(input.codec)
   const encode = Schema.encodeSync(input.codec)
+  const emptyText = encode(input.empty)
 
   const bind = (branch: Option.Option<BranchId>) => {
     const location = Effect.gen(function* () {
       const ctx = yield* ExtensionContext
       const path = yield* Path.Path
-      const directory = path.join(ctx.home, ".gent", input.directory)
+      const directory = path.resolve(yield* resolveDataDir(ctx.home), input.directory)
       const branchId = Option.getOrElse(branch, () => ctx.branchId)
       return { directory, file: path.join(directory, `${branchId}.json`) }
     })
 
+    /**
+     * A missing file is the empty value. A plain read takes no lock, so an
+     * empty write can remove the file between the existence check and the
+     * read; that read's not-found is the empty value too. The check stays in
+     * front because most branches keep no file, and a failed read costs an
+     * error with its trace on every turn.
+     */
     const read = Effect.fn(`${input.name}.read`)(function* () {
       const fs = yield* FileSystem.FileSystem
       const { file } = yield* location
       if (!(yield* fs.exists(file))) return input.empty
-      const text = yield* fs.readFileString(file)
-      return yield* decode(text).pipe(Effect.mapError((cause) => input.invalid(file, cause)))
+      const text = yield* fs.readFileString(file).pipe(
+        Effect.asSome,
+        Effect.catchIf(
+          (error) => error.reason._tag === "NotFound",
+          () => Effect.succeed(Option.none<string>()),
+        ),
+      )
+      if (Option.isNone(text)) return input.empty
+      return yield* decode(text.value).pipe(Effect.mapError((cause) => input.invalid(file, cause)))
     })
 
+    /**
+     * A value that encodes as the empty value removes the file: a missing file
+     * reads back as that same value, so a branch with nothing pending keeps
+     * nothing on disk.
+     */
     const write = Effect.fn(`${input.name}.write`)(function* (value: A) {
       const fs = yield* FileSystem.FileSystem
       const { directory, file } = yield* location
+      const text = encode(value)
+      if (text === emptyText) return yield* fs.remove(file, { force: true })
       yield* fs.makeDirectory(directory, { recursive: true })
-      yield* writeFileAtomic(file, encode(value))
+      yield* writeFileAtomic(file, text)
     })
 
     /**

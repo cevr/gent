@@ -2038,7 +2038,6 @@ const approvedSuppressionEntries: ReadonlyArray<ApprovedSuppressionEntry> = [
     file: "packages/extensions/src/anthropic.ts",
     scope: "next-line",
     text: "strictEffectProvide:off",
-    count: 3,
   },
   {
     file: "packages/extensions/src/providers.ts",
