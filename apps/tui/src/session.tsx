@@ -2939,22 +2939,22 @@ export function createSessionController(props: {
   // A source that never answers would hold native history for good. Once the
   // client extensions loaded, history holds NOTICE_ROWS_BOUND for each source
   // still deriving for this branch, then stops holding for it. The source is
-  // not a failure: it stays, and a later answer draws its rows.
-  const noticeRowsHoldKey = (source: ResolvedNoticeRows) =>
-    `${props.sessionId}:${props.branchId}:${source.id}`
+  // not a failure: it stays, and a later answer draws its rows. The warning
+  // names only a source still deriving at the bound. The view remounts per
+  // session and branch, so a source id is a whole key.
   const noticeRowsHolds = new Map<string, Fiber.Fiber<void>>()
   const [releasedNoticeRows, setReleasedNoticeRows] = createSignal<ReadonlySet<string>>(new Set())
   onCleanup(() => {
     for (const fiber of noticeRowsHolds.values()) client.runtime.cast(Fiber.interrupt(fiber))
   })
+  const noticeRowsPending = (id: string) => notices().pending.some((source) => source.id === id)
   createEffect(() => {
     if (!ext.loaded()) return
     for (const source of notices().pending) {
-      const key = noticeRowsHoldKey(source)
-      if (noticeRowsHolds.has(key)) continue
+      if (noticeRowsHolds.has(source.id)) continue
       const release = Effect.sleep(NOTICE_ROWS_BOUND).pipe(
         Effect.andThen(
-          Effect.sync(() => setReleasedNoticeRows((current) => new Set([...current, key]))),
+          Effect.sync(() => setReleasedNoticeRows((current) => new Set([...current, source.id]))),
         ),
         Effect.andThen(
           Effect.logWarning("tui.notice-rows.bound").pipe(
@@ -2963,15 +2963,17 @@ export function createSessionController(props: {
               source: source.id,
               bound: Duration.format(NOTICE_ROWS_BOUND),
             }),
+            Effect.when(Effect.sync(() => noticeRowsPending(source.id))),
           ),
         ),
+        Effect.asVoid,
       )
-      noticeRowsHolds.set(key, client.runtime.fork(release))
+      noticeRowsHolds.set(source.id, client.runtime.fork(release))
     }
   })
   const noticeRowsSettled = () => {
     const released = releasedNoticeRows()
-    return notices().pending.every((source) => released.has(noticeRowsHoldKey(source)))
+    return notices().pending.every((source) => released.has(source.id))
   }
   const items = createMemo<SessionItem[]>(() => {
     const rows = notices().items
