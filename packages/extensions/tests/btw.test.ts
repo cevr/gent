@@ -431,4 +431,22 @@ describe("btw forks", () => {
       }).pipe(Effect.timeout("4 seconds")),
     ),
   )
+  it.live("a follow-up the fork cannot take leaves the fork askable, not replying", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([])
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        const pane = btw(harness)
+        const fork = yield* pane.fork("")
+        yield* harness.client.session.delete({ sessionId: fork.sessionId })
+        for (const attempt of ["First?", "Second?"]) {
+          const refused = yield* Effect.exit(pane.ask(attempt))
+          expect(Exit.isFailure(refused)).toBe(true)
+          if (Exit.isFailure(refused)) {
+            expect(Cause.pretty(refused.cause)).toContain("Cannot ask the fork")
+          }
+        }
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
 })

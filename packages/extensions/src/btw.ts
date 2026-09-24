@@ -272,15 +272,20 @@ const followFork = (parentBranchId: string, fork: { sessionId: SessionId; branch
     )
   })
 
-/** Admits the question on the fork's loop and marks the fork replying until its receipt arrives. */
+/**
+ * Admits the question on the fork's loop and marks the fork replying until its
+ * receipt arrives. A send the fork refuses leaves it not replying, so it stays askable.
+ */
 const sendToFork = (parentBranchId: string, fork: OpenFork, question: string) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const forks = yield* OpenForks
-    yield* forks.update(parentBranchId, (current) => {
-      if (current.sessionId !== fork.sessionId) return current
-      return { ...current, replying: true, error: Option.none() }
-    })
+    const markReplying = (replying: boolean) =>
+      forks.update(parentBranchId, (current) => {
+        if (current.sessionId !== fork.sessionId) return current
+        return { ...current, replying, error: Option.none() }
+      })
+    yield* markReplying(true)
     yield* ctx.Session.send({
       delivery: "turn",
       sessionId: fork.sessionId,
@@ -288,6 +293,7 @@ const sendToFork = (parentBranchId: string, fork: OpenFork, question: string) =>
       content: question,
       completion: "admission",
     }).pipe(
+      Effect.tapError(() => markReplying(false)),
       Effect.mapError(
         (error) => new ForkError({ message: `Cannot ask the fork: ${error.message}` }),
       ),

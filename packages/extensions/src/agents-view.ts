@@ -24,8 +24,10 @@ import {
 /**
  * Pure projection for the agents view.
  *
- * No TUI imports, no I/O, no Effect services — plain functions over plain
- * data, so the reconciliation can be tested without a terminal or a runtime.
+ * This section has no TUI imports, no I/O and no Effect services: plain
+ * functions over plain data, so the reconciliation can be tested without a
+ * terminal or a runtime. The `AgentActivity` service and the `ListAgents`
+ * request later in this file feed it.
  * This follows Prime's state layer, which is the half of its agents view worth
  * copying; its 2,124-line view class is not.
  *
