@@ -1,86 +1,66 @@
-import { copyFileSync, existsSync, mkdirSync, lstatSync, unlinkSync, symlinkSync } from "fs"
-import { dirname, join } from "path"
-import { fileURLToPath } from "url"
-import { randomUUID } from "node:crypto"
+import { BunRuntime, BunServices } from "@effect/platform-bun"
 import solidTransformPlugin from "@opentui/solid/bun-plugin"
-import * as os from "node:os"
+import { Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect"
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-const rootDir = join(__dirname, "..")
+class BuildError extends Schema.TaggedError<BuildError>()("BuildError", {
+  message: Schema.String,
+}) {}
 
-console.log("Building gent...")
+const build = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const crypto = yield* Crypto.Crypto
+  const rootDir = path.join(import.meta.dir, "..")
+  const binDir = path.join(rootDir, "bin")
 
-const binDir = join(rootDir, "bin")
-mkdirSync(binDir, { recursive: true })
+  yield* Effect.log("Building gent...")
+  yield* fs.makeDirectory(binDir, { recursive: true })
 
-console.log("Transforming Solid JSX, bundling, and compiling to binary...")
+  // Turbo builds the declared extensions dependency before packaging this app;
+  // the cell ships as a sibling binary the runtime resolves by name. Run this
+  // script through the root build (`bun run build`), or it packages whatever
+  // worker the last turbo build left.
+  const cellWorker = path.join(rootDir, "../../packages/extensions/dist/gent-cell")
+  if (!(yield* fs.exists(cellWorker))) {
+    return yield* new BuildError({
+      message: `No cell worker at ${cellWorker}. Run \`bun run build\` from the repo root: turbo builds @gent/extensions first.`,
+    })
+  }
+  yield* fs.copyFile(cellWorker, path.join(binDir, "gent-cell"))
 
-// Turbo builds the declared extensions dependency before packaging this app;
-// the cell ships as a sibling binary the runtime resolves by name. Run this
-// script through the root build (`bun run build`), or it packages whatever
-// worker the last turbo build left.
-const cellWorker = join(rootDir, "../../packages/extensions/dist/gent-cell")
-if (!existsSync(cellWorker)) {
-  console.error(
-    `No cell worker at ${cellWorker}. Run \`bun run build\` from the repo root: turbo builds @gent/extensions first.`,
+  yield* Effect.log("Transforming Solid JSX, bundling, and compiling to binary...")
+  const outfile = path.join(binDir, "gent")
+  const artifactId = yield* crypto.randomUUIDv4
+  const buildResult = yield* Effect.promise(() =>
+    Bun.build({
+      entrypoints: [path.join(rootDir, "src/main.tsx")],
+      target: "bun",
+      plugins: [solidTransformPlugin],
+      minify: false,
+      define: {
+        __GENT_COMPILED__: "true",
+        __GENT_BUILTIN_ARTIFACT_ID__: `"build:${artifactId}"`,
+      },
+      compile: {
+        target: "bun-darwin-arm64",
+        outfile,
+        autoloadBunfig: false,
+        // An extension resolves only the entries the loaders bind. Without this,
+        // an unbound package (`@gent/core/host`, a typo) is fetched from the npm
+        // registry at import time.
+        execArgv: ["--no-install"],
+      },
+    }),
   )
-  process.exit(1)
-}
-copyFileSync(cellWorker, join(binDir, "gent-cell"))
-
-const buildResult = await Bun.build({
-  entrypoints: [join(rootDir, "src/main.tsx")],
-  target: "bun",
-  plugins: [solidTransformPlugin],
-  minify: false,
-  define: {
-    __GENT_COMPILED__: "true",
-    __GENT_BUILTIN_ARTIFACT_ID__: JSON.stringify(`build:${randomUUID()}`),
-  },
-  compile: {
-    target: "bun-darwin-arm64",
-    outfile: join(binDir, "gent"),
-    autoloadBunfig: false,
-    // An extension resolves only the entries the loaders bind. Without this,
-    // an unbound package (`@gent/core/host`, a typo) is fetched from the npm
-    // registry at import time.
-    execArgv: ["--no-install"],
-  },
+  if (!buildResult.success) {
+    return yield* new BuildError({
+      message: ["Build failed:", ...buildResult.logs.map(String)].join("\n"),
+    })
+  }
+  yield* Effect.log(`Binary built: ${outfile}`)
 })
 
-if (!buildResult.success) {
-  console.error("Build failed:")
-  for (const log of buildResult.logs) {
-    console.error(log)
-  }
-  process.exit(1)
-}
-
-console.log(`✅ Binary built: ${join(binDir, "gent")}`)
-
-// Symlink to global bun bin.
-//
-// This is opt-in. `~/.bun/bin/gent` is a single global name, and every
-// checkout builds the same binary path, so an unconditional symlink hands the
-// user's `gent` to whichever checkout built last. A build in an isolated
-// worktree — or the one the pre-commit hook runs — would silently repoint the
-// binary another session is using. Set GENT_LINK=1 to claim the name.
-if (process.env["GENT_LINK"] === "1") {
-  const home = process.env["HOME"] ?? os.homedir()
-  const bunBin = join(home, ".bun", "bin", "gent")
-  try {
-    try {
-      lstatSync(bunBin)
-      unlinkSync(bunBin)
-    } catch {
-      // doesn't exist
-    }
-    symlinkSync(join(binDir, "gent"), bunBin)
-    console.log(`✅ Symlinked to: ${bunBin}`)
-  } catch (e) {
-    console.log(`⚠️  Could not symlink to ${bunBin}: ${e}`)
-  }
-} else {
-  console.log("↷ Skipped global symlink. Set GENT_LINK=1 to point ~/.bun/bin/gent here.")
-}
+// The layer runs the build once as it is built; the scope closes after it.
+BunRuntime.runMain(
+  Effect.scoped(Layer.build(Layer.effectDiscard(build).pipe(Layer.provide(BunServices.layer)))),
+)
