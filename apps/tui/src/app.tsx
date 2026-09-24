@@ -20,7 +20,7 @@ import { createMemo, createSignal, ErrorBoundary, For, Show } from "solid-js"
 import { buildSyntaxStyle, resolveThemeColor, ThemeProvider, useTheme } from "./theme"
 import { KeyboardScopeProvider, useScopedKeyboard, useTerminalDimensions } from "./terminal"
 import type { RGBA } from "@opentui/core"
-import { MessageList, NativeTranscript } from "./message-list"
+import { MessageList, NativeTranscript, splitFooterHeight } from "./message-list"
 import { Composer, ComposerFrame } from "./composer"
 import { CommandPalette, CommandProvider, useCommand } from "./commands"
 import {
@@ -745,9 +745,14 @@ export function Session(props: SessionProps) {
           />
         </NativeTranscript>
 
+        {/* The footer never outgrows the split-footer region: past it, the
+            last rows (a docked pane's newest lines, its ask line) fall below
+            the terminal. The trays give way first (`TrayFrame`), then a
+            docked pane's body (`PickerFrame`); the composer keeps its rows. */}
         <box
           flexDirection="column"
           flexShrink={0}
+          maxHeight={splitFooterHeight(dimensions().height, dimensions().height)}
           onSizeChange={function () {
             setFooterHeight(this.height)
           }}

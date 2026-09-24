@@ -1150,6 +1150,114 @@ describe("App auth gate", () => {
       setup.renderer.destroy()
     }).pipe(Effect.timeout("10 seconds")),
   )
+  // The live run: an alarm and three working children filled the trays, and
+  // the btw pane showed its question but not the fork's stored answer.
+  it.live("the btw pane keeps the fork's answer in view on a short terminal with full trays", () =>
+    Effect.gen(function* () {
+      const sessionId = SessionId.make("session-btw")
+      const branchId = BranchId.make("branch-btw")
+      const answer =
+        "**Task 5** looks hardest: adding the API integration test requires starting and stopping the HTTP server, importing the CSV fixture over HTTP, managing temporary database state, and verifying the monthly report response. The other tasks are isolated logic fixes or a small query refactor. ANSWER-TAIL"
+      const child = (n: number) => ({
+        sessionId: SessionId.make(`child-${n}`),
+        branchId: BranchId.make(`child-${n}-branch`),
+        section: "running" satisfies "running",
+        name: `delegate: task ${n}`,
+        live: true,
+        depth: 1,
+        parentSessionId: sessionId,
+        sideThread: false,
+        activity: "bash",
+      })
+      const running = { _tag: "Running" satisfies "Running", queue: emptyQueueSnapshot() }
+      const client = createMockClient({
+        auth: { listProviders: () => Effect.succeed([]) },
+        branch: { getTree: () => Effect.succeed([]) },
+        session: {
+          getSnapshot: () =>
+            Effect.succeed({
+              sessionId,
+              branchId,
+              messages: [],
+              lastEventId: nullValue,
+              reasoningLevel: absent,
+              agent: AgentName.make("main"),
+              runtime: running,
+              metrics: { turns: 1, durationMs: 0, costUsd: 0, lastInputTokens: 0 },
+            }),
+          watchRuntime: () => Stream.concat(Stream.make(running), Stream.never),
+        },
+        extension: {
+          request: (input: { capabilityId: string }) =>
+            Effect.sync(() => {
+              if (input.capabilityId === "list-agents") return { rows: [3, 4, 5, 6].map(child) }
+              if (input.capabilityId === "wake.pending") {
+                return {
+                  now: 0,
+                  entries: [{ _tag: "alarm", wakeId: "w1", dueAt: 120_000, note: "check tests" }],
+                }
+              }
+              if (input.capabilityId === "btw.ask") return { asked: true }
+              if (input.capabilityId === "btw.fork") {
+                return { sessionId: SessionId.make("fork"), branchId: BranchId.make("fork-b") }
+              }
+              if (input.capabilityId === "btw.progress") {
+                return {
+                  fork: {
+                    sessionId: SessionId.make("fork"),
+                    branchId: BranchId.make("fork-b"),
+                    name: "btw: which task is hardest?",
+                    turns: [{ question: "which task is hardest?", answer }],
+                    replying: false,
+                  },
+                }
+              }
+              return {}
+            }),
+        },
+      })
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <App missingAuthProviders={[]} />, {
+          client,
+          runtime: createMockRuntime(),
+          builtins: builtinClientModules,
+          height: 16,
+          initialSession: {
+            id: sessionId,
+            activeBranchId: branchId,
+            name: "Session BTW",
+            createdAt: dateFromMillis(0),
+            updatedAt: dateFromMillis(0),
+          },
+        }),
+      )
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("Generating") && frame.includes("+1 more working"),
+        "a running turn over full trays",
+      )
+      yield* Effect.promise(() => setup.mockInput.typeText("/btw which task is hardest?"))
+      setup.mockInput.pressEnter()
+      yield* waitForFrame(
+        setup,
+        (frame) => frame.includes("btw: which task is hardest?"),
+        "btw pane over full trays",
+      )
+      // The newest content, the answer's end, stays in view, and so does the
+      // rest of the pane: the footer never runs past the terminal's last row.
+      yield* waitForFrame(
+        setup,
+        (frame) =>
+          frame.includes("ANSWER-TAIL") && frame.includes("ask ›") && frame.includes("esc close"),
+        "the fork's answer, the ask line and the pane footer",
+      )
+      const frame = renderFrame(setup)
+      // The trays gave way first, each down to its first row.
+      expect(frame).toContain("alarm in now")
+      expect(frame).toContain("working · delegate: task 3")
+      expect(frame).not.toContain("+1 more working")
+    }).pipe(Effect.timeout("10 seconds")),
+  )
   it.live("an interjection steers a running turn while an error shows", () =>
     Effect.gen(function* () {
       const view = yield* mountRunningTurnWithError

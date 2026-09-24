@@ -218,6 +218,8 @@ function ChromePanelRoot(props: ChromePanelRootProps) {
 
 interface ChromePanelBodyProps {
   ref?: (el: ScrollBoxRenderable) => void
+  /** Hold the view on the last row as rows arrive, so a squeezed body shows the newest. */
+  stickToBottom?: boolean
   paddingLeft?: number
   paddingRight?: number
   children: JSX.Element
@@ -228,6 +230,8 @@ function ChromePanelBody(props: ChromePanelBodyProps) {
     <scrollbox
       ref={props.ref}
       flexGrow={1}
+      stickyScroll={props.stickToBottom === true}
+      stickyStart="bottom"
       verticalScrollbarOptions={{ visible: false }}
       horizontalScrollbarOptions={{ visible: false }}
       paddingLeft={props.paddingLeft ?? 1}
@@ -403,8 +407,18 @@ export function PickerFrame(props: {
   footer: JSX.Element
 }) {
   const { theme } = useTheme()
+  // The height is what the frame asks for. When the footer it docks in runs
+  // out of rows, the trays give way first (`TrayFrame`), then the frame's
+  // body, so it shrinks inside the terminal instead of running past its last
+  // row. It sets no minimum height: Yoga then stops shrinking the trays.
   return (
-    <box flexDirection="column" flexShrink={0} width="100%" height={props.height}>
+    <box
+      flexDirection="column"
+      flexShrink={1}
+      width="100%"
+      // A basis, not a height: OpenTUI turns shrinking off on a box whose height is set.
+      flexBasis={props.height}
+    >
       <box
         flexDirection="column"
         flexGrow={1}
@@ -421,6 +435,37 @@ export function PickerFrame(props: {
       <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>
         {props.footer}
       </text>
+    </box>
+  )
+}
+
+// ── tray frame ──────────────────────────────────────────────────────────────
+
+/**
+ * How much faster a tray gives way than a docked pane. Yoga shrinks each
+ * child by its `flexShrink` times its height, and a pane shrinks at 1, so a
+ * tray yields nearly all its rows before the pane loses one.
+ */
+const TRAY_SHRINK = 100
+
+/**
+ * TrayFrame — ambient rows under the status line: children that work on their
+ * own, wakes still pending. A tray is chrome about background work, so when
+ * the footer runs out of rows it gives way before the docked pane the reader
+ * opened, down to its first row. Each row is one `wrapMode="none"` line with
+ * `flexShrink={0}`, so a squeezed tray hides its last rows, never overlaps them.
+ */
+export function TrayFrame(props: { children: JSX.Element }) {
+  return (
+    <box
+      flexDirection="column"
+      flexShrink={TRAY_SHRINK}
+      minHeight={1}
+      overflow="hidden"
+      paddingLeft={1}
+      paddingRight={1}
+    >
+      {props.children}
     </box>
   )
 }

@@ -96,6 +96,14 @@ view. It draws `PickerFrame` like every other docked pane. The boot flow opens i
 has more than one branch; escape quits, because no branch was chosen yet. The
 command palette's "Branches" level switches branches after that.
 
+The footer (composer, trays, docked panes) never outgrows the split-footer
+region (`maxHeight` in `app.tsx`). When it runs out of rows, the trays give
+way first, each down to its first row (`TrayFrame`), then a docked pane's
+body (`PickerFrame` sets a `flexBasis`, not a `height`: OpenTUI turns
+shrinking off on a box whose height is set). A pane whose newest row matters
+passes `stickToBottom` to `ChromePanel.Body` and puts its gaps above a row,
+not under it.
+
 ## Compound Components
 
 StatusBar uses compound pattern - compose what you need:
