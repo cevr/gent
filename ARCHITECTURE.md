@@ -257,7 +257,10 @@ version (mtime, size, inode), so Bun's module cache does not serve the old one.
 A directory extension's version is its index file's. Project trust comes from
 `isProjectExtensionDirectoryTrusted` (`runtime/config.ts`), the reader the TUI's
 client-extension loader calls too: it reads `trustedProjects` from the user
-config file as it is now, and a file that does not decode trusts no project. A
+config file as it is now, and a file that does not decode trusts no project.
+Launched from home, the project's `.gent` is the user's, so there is no project
+scope: `hasProjectScope` (`runtime/config.ts`) keeps the config read, the
+extension scan and the TUI loader from reading `~/.gent` a second time. A
 list that leaves the
 same extensions, such as one that names an unknown id, finds the profile
 already built. Finding or building the profile, its lease and making it

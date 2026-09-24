@@ -3135,6 +3135,39 @@ export default { manifest: { id: "trusted-project" }, setup: Effect.void };`,
     }).pipe(Effect.provide(fsLayer)),
   )
 
+  it.scopedLive("launched from home, the user extensions load once and only as user", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fs.makeTempDirectoryScoped({
+        directory: path.resolve(import.meta.dir, "../../.."),
+        prefix: ".tmp-home-launch-",
+      })
+      const home = yield* fs.realPath(directory)
+      const userDir = path.join(home, ".gent/extensions")
+      yield* fs.makeDirectory(userDir, { recursive: true })
+      yield* fs.writeFileString(
+        path.join(userDir, "entry.ts"),
+        `import { Effect } from "effect";
+export default { manifest: { id: "home-user" }, setup: Effect.void };`,
+      )
+      const loadedAs = (result: Effect.Success<ReturnType<typeof discoverExtensions>>) =>
+        result.loaded.map((entry) => `${entry.scope}:${entry.extension.manifest.id}`)
+      // Untrusted (the default): no "not trusted" failure for the user's own files.
+      const untrusted = yield* discoverExtensions({ userDir, projectDir: userDir })
+      expect(loadedAs(untrusted)).toEqual(["user:home-user"])
+      expect(untrusted.failed).toEqual([])
+      // Trusted: still one copy, as user.
+      yield* fs.writeFileString(
+        path.join(userDir, "../config.json"),
+        encodeJson({ trustedProjects: [home] }),
+      )
+      const trusted = yield* discoverExtensions({ userDir, projectDir: userDir })
+      expect(loadedAs(trusted)).toEqual(["user:home-user"])
+      expect(trusted.failed).toEqual([])
+    }).pipe(Effect.provide(fsLayer)),
+  )
+
   it.live("preserves the explicit loaded artifact identity", () =>
     Effect.gen(function* () {
       const artifactIdentity = LoadedArtifactIdentity.make("@gent/test-loader@artifact-1")
