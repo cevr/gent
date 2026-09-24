@@ -1627,7 +1627,11 @@ const anthropicClientLayer = <R>(
             onSome: (payload) =>
               path.payload(applyRequestPlan(payload, plan)).pipe(
                 Effect.provideContext(pathContext),
-                Effect.map((body) => HttpClientRequest.bodyJsonUnsafe(request, body)),
+                Effect.map((body) => {
+                  const rewritten = HttpClientRequest.bodyJsonUnsafe(request, body)
+                  if (!bindsThinking(body)) return rewritten
+                  return withBeta(rewritten, THINKING_BINDING_BETA)
+                }),
               ),
           }),
       )
@@ -2035,11 +2039,52 @@ const anthropicRequest = (
  * thinking blocks with empty text, and that "`display` works in both modes".
  * `"summarized"` is already the default on the 4.6 models, so it changes
  * nothing there. `display` "is invalid with `thinking.type: "disabled"`".
+ *
+ * Adaptive thinking also sets `block_binding: { prefix_mismatch_behavior:
+ * "drop_block" }`. platform.claude.com/docs/en/build-with-claude/preserved-thinking
+ * (read 2026-09-23): on Claude Fable 5.1 and Claude Opus 5.5 a replayed thinking
+ * block "stays valid only while the top-level `system` prompt, the `tools`, and
+ * the messages before it are unchanged", and the default for a block that fails
+ * is a 400. The loop changes that prefix on its own: the Date line on a resumed
+ * session, a compacted window, a tool list that changes. With `drop_block` the
+ * API drops the failing blocks and answers, so a replay never turns a working
+ * request into a 400. "Models that don't run the prefix check accept the object
+ * and report only model-check drops, so one request body works across models."
+ * The field needs the `thinking-binding-controls-2026-08-01` beta.
  */
 const THINKING_CONFIG = {
-  adaptive: { type: "adaptive", display: "summarized" },
+  adaptive: {
+    type: "adaptive",
+    display: "summarized",
+    block_binding: { prefix_mismatch_behavior: "drop_block" },
+  },
   disabled: { type: "disabled" },
 } satisfies Record<"adaptive" | "disabled", JsonRecord>
+
+/** The beta that `thinking.block_binding` requires; sending the field without it is a 400. */
+const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+
+/** Whether the payload's thinking object carries `block_binding`. */
+const bindsThinking = (payload: JsonRecord): boolean => {
+  const thinking = payload["thinking"]
+  return isRecord(thinking) && "block_binding" in thinking
+}
+
+/** The request with `beta` added to its `anthropic-beta` list, other betas kept. */
+const withBeta = (
+  request: HttpClientRequest.HttpClientRequest,
+  beta: string,
+): HttpClientRequest.HttpClientRequest => {
+  const current = Option.getOrElse(
+    Option.fromUndefinedOr(request.headers["anthropic-beta"]),
+    () => "",
+  )
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+  if (current.includes(beta)) return request
+  return HttpClientRequest.setHeader(request, "anthropic-beta", [...current, beta].join(","))
+}
 
 /** The payload with the plan's effort and thinking; any `output_config` the SDK set is kept. */
 const applyRequestPlan = (payload: JsonRecord, plan: AnthropicRequestPlan): JsonRecord => {

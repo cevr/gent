@@ -2131,6 +2131,122 @@ describe("OpenAI reasoning replay", () => {
       }
     }),
   )
+
+  // Encrypted reasoning is bound to the model and to the organization that
+  // produced it (openai/codex#17541; the LiteLLM "Encrypted Content Failures"
+  // incident report: "Encrypted content organization_id did not match the
+  // target organization"). A sign-in to another account, or a switch between
+  // the ChatGPT sign-in and an API key, makes stored items undecryptable.
+  it.live(
+    "a reasoning item the account cannot decrypt is dropped and the request retried, and not sent again",
+    () =>
+      Effect.gen(function* () {
+        const rejection = encodeExternalJson({
+          error: {
+            message: "The encrypted content for item rs_1 could not be verified.",
+            type: "invalid_request_error",
+            code: "invalid_encrypted_content",
+          },
+        })
+        const responder = (req: { readonly body?: string }) => {
+          if (req.body?.includes("enc-1") === true) {
+            return { status: 400, body: rejection, headers: { "content-type": "application/json" } }
+          }
+          return openaiResponsesHappyResponse()
+        }
+        const reasoningSent = (state: FakeFetchState) =>
+          state.captured.map((req) => req.body?.includes('"rs_1"') === true)
+        const credentialCellRef = yield* SynchronizedRef.make<
+          CredentialCacheCell<OpenAICredentials>
+        >(
+          makeDurableCell({
+            access: "replay-token",
+            refresh: "r",
+            expires: FAR_FUTURE_MS,
+            accountId: Option.none(),
+          }),
+        )
+        for (const authInfo of [makeApiAuthInfo("sk-replay"), makeOAuthInfo()]) {
+          const driver = buildOpenAIModelDriver(
+            credentialCellRef,
+            noopCallbacks(),
+            Option.none(),
+            testCatalogSource(),
+          )
+          const generate = (state: FakeFetchState) =>
+            Effect.gen(function* () {
+              const model = yield* driver.resolveModel("gpt-5.4", authInfo, { reasoning: "high" })
+              return yield* LanguageModel.generateText({
+                prompt: conversation,
+                toolkit: Toolkit.make(ReadTool),
+                disableToolCallResolution: true,
+              }).pipe(
+                Effect.provide(Layer.provideMerge(model, fakeFetchLayer(state, responder))),
+                Effect.scoped,
+                Effect.orDie,
+              )
+            })
+          const first = makeFakeFetchState()
+          yield* generate(first)
+          expect(reasoningSent(first)).toEqual([true, false])
+          // The next step of the session leaves the rejected item out from the start.
+          const later = makeFakeFetchState()
+          yield* generate(later)
+          expect(reasoningSent(later)).toEqual([false])
+        }
+      }),
+  )
+
+  it.live("another 400 on a request with reasoning is not retried and keeps its message", () =>
+    Effect.gen(function* () {
+      const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<OpenAICredentials>>(
+        makeDurableCell({
+          access: "replay-token",
+          refresh: "r",
+          expires: FAR_FUTURE_MS,
+          accountId: Option.none(),
+        }),
+      )
+      const driver = buildOpenAIModelDriver(
+        credentialCellRef,
+        noopCallbacks(),
+        Option.none(),
+        testCatalogSource(),
+      )
+      const other = encodeExternalJson({
+        error: {
+          message: "Input exceeds the context window.",
+          type: "invalid_request_error",
+          param: "input",
+          code: "context_length_exceeded",
+        },
+      })
+      const state = makeFakeFetchState()
+      const model = yield* driver.resolveModel("gpt-5.4", makeApiAuthInfo("sk-replay"), {
+        reasoning: "high",
+      })
+      const exit = yield* LanguageModel.generateText({
+        prompt: conversation,
+        toolkit: Toolkit.make(ReadTool),
+        disableToolCallResolution: true,
+      }).pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            model,
+            fakeFetchLayer(state, () => ({
+              status: 400,
+              body: other,
+              headers: { "content-type": "application/json" },
+            })),
+          ),
+        ),
+        Effect.scoped,
+        Effect.exit,
+      )
+      expect(state.captured.length).toBe(1)
+      expect(Exit.isFailure(exit) && Cause.pretty(exit.cause).includes("context window")).toBe(true)
+    }),
+  )
 })
 
 describe("OpenAI reasoning hints", () => {

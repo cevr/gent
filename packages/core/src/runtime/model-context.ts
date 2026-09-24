@@ -71,6 +71,13 @@ const toUserMessage = (message: Message): Option.Option<Prompt.UserMessage> => {
  * (a thinking signature, encrypted reasoning). That state is valid only for
  * the model that produced it, so a message above the latest model-change
  * notice sends its reasoning as text alone, which the providers drop.
+ *
+ * The state has other bindings the loop cannot see, and each provider adapter
+ * keeps them from failing a request: Anthropic binds a signature to the
+ * system prompt, the tools and the earlier messages, and the adapter asks the
+ * API to drop a block that fails (`block_binding` in `anthropic.ts`); OpenAI
+ * binds encrypted reasoning to the organization, and the adapter retries once
+ * without the items the API could not decrypt (`openai.ts`).
  */
 type ReasoningReplay = "with-provider-state" | "text-only"
 

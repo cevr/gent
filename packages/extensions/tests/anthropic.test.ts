@@ -2683,6 +2683,82 @@ describe("buildAnthropicModelDriver — thinking replay", () => {
       }
     }),
   )
+
+  // platform.claude.com/docs/en/build-with-claude/preserved-thinking (read
+  // 2026-09-23): on Fable 5.1 and Opus 5.5 a signed block is bound to the
+  // system prompt, the tools, and every message before it, and the default
+  // for a changed prefix is a 400. A resumed session has a new Date line; a
+  // compacted window drops earlier messages. `drop_block` has the API drop
+  // those blocks and answer; models without the check accept the field.
+  it.live("a thinking request lets Anthropic drop a block bound to another prefix", () =>
+    Effect.gen(function* () {
+      const BoundRequest = Schema.fromJsonString(
+        Schema.Struct({
+          thinking: Schema.optional(
+            Schema.Struct({
+              type: Schema.String,
+              block_binding: Schema.optional(
+                Schema.Struct({ prefix_mismatch_behavior: Schema.String }),
+              ),
+            }),
+          ),
+        }),
+      )
+      const sent = (modelName: string, authInfo: ProviderAuthInfo, hints: ProviderHints) =>
+        Effect.gen(function* () {
+          const credentialCellRef = yield* SynchronizedRef.make<
+            CredentialCacheCell<ClaudeCredentials>
+          >({
+            _tag: "Durable",
+            creds: { accessToken: "sign-in-token", refreshToken: "r", expiresAt: FUTURE_MS },
+            at: yield* Clock.currentTimeMillis,
+            invalidated: false,
+          })
+          const driver = buildAnthropicModelDriver(credentialCellRef, Option.none())
+          const model = yield* driver.resolveModel(modelName, authInfo, hints)
+          const state = makeFakeFetchState()
+          yield* LanguageModel.generateText({
+            prompt: conversation,
+            toolkit: Toolkit.make(ReadTool),
+            disableToolCallResolution: true,
+          }).pipe(
+            Effect.provide(
+              Layer.provideMerge(
+                model,
+                fakeFetchLayer(state, () => anthropicHappyResponse()),
+              ),
+            ),
+            Effect.scoped,
+            Effect.orDie,
+          )
+          const request = Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)))
+          const body = yield* Schema.decodeEffect(BoundRequest)(
+            Option.getOrThrow(Option.fromUndefinedOr(request.body)),
+          )
+          const betas = Option.getOrElse(
+            Option.fromUndefinedOr(request.headers["anthropic-beta"]),
+            () => "",
+          ).split(",")
+          return {
+            binding: Option.fromUndefinedOr(body.thinking?.block_binding?.prefix_mismatch_behavior),
+            beta: betas.includes("thinking-binding-controls-2026-08-01"),
+          }
+        })
+      for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
+        for (const modelName of ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5"]) {
+          expect(yield* sent(modelName, authInfo, { reasoning: "high" })).toEqual({
+            binding: Option.some("drop_block"),
+            beta: true,
+          })
+        }
+        // Thinking turned off sends no thinking object to bind, and no beta.
+        expect(yield* sent("claude-sonnet-5", authInfo, { reasoning: "none" })).toEqual({
+          binding: Option.none(),
+          beta: false,
+        })
+      }
+    }),
+  )
 })
 describe("buildAnthropicModelDriver — API-key path is plain SDK", () => {
   it.live("API-key resolveModel layer sends x-api-key (no Bearer)", () =>
