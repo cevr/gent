@@ -2641,22 +2641,31 @@ export function createSessionController(props: {
     shutdownLog("exit.shutdown-signal")
     env.shutdown()
   }
-  // Escape twice within a second quits. The first press arms the quit (and
-  // clears a draft); a keybind, an interrupt, or any other use of escape
-  // disarms it.
+  // The same key twice within a second quits. Escape arms the quit (and clears
+  // a draft); ctrl+c arms it when it cancels a turn, so a second ctrl+c quits
+  // even when a new turn started in between (children that keep waking the
+  // session). The arm is per key: a ctrl+c then an escape is two gestures. A
+  // keybind, any other key between two ctrl+c presses, or any other use of
+  // either key disarms it.
   const QUIT_WINDOW_MS = 1_000
-  let quitArmedAt = Option.none<number>()
+  type QuitKey = "escape" | "interrupt"
+  let quitArmed = Option.none<{ readonly key: QuitKey; readonly at: number }>()
   const disarmQuit = () => {
-    quitArmedAt = Option.none()
+    quitArmed = Option.none()
   }
+  const armQuit = (key: QuitKey, at: number) => {
+    quitArmed = Option.some({ key, at })
+  }
+  const quitArmedFor = (key: QuitKey, now: number) =>
+    Option.exists(quitArmed, (armed) => armed.key === key && now - armed.at < QUIT_WINDOW_MS)
   const pressQuit = (first: () => void) => {
     const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
-    if (Option.exists(quitArmedAt, (at) => now - at < QUIT_WINDOW_MS)) {
+    if (quitArmedFor("escape", now)) {
       disarmQuit()
       exit()
       return
     }
-    quitArmedAt = Option.some(now)
+    armQuit("escape", now)
     first()
   }
   const history = usePromptHistory()
@@ -3140,7 +3149,17 @@ export function createSessionController(props: {
     return true
   }
 
+  /**
+   * ctrl+c undoes the nearest thing, then quits. A press that cancels a turn
+   * arms the quit, and a second press in the window quits whatever started
+   * since: a session that children keep waking has a new turn running at
+   * every press, and cancelling each one would never let the reader leave.
+   * Something nearer that appeared since (a draft, an expanded transcript)
+   * still comes first: the press clears it and never quits over it.
+   */
   const handleInterrupt = () => {
+    const now = DateTime.toEpochMillis(DateTime.nowUnsafe())
+    const second = quitArmedFor("interrupt", now)
     disarmQuit()
     if (overlayHoldsComposer(uiState().overlay)) {
       exit()
@@ -3154,52 +3173,66 @@ export function createSessionController(props: {
       onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
       return
     }
-    if (client.isStreaming()) {
+    if (client.isStreaming() && !second) {
       cancelTurn()
+      armQuit("interrupt", now)
       return
     }
     exit()
   }
 
+  // Escape steps back one layer: transcript, palette, disclosure, turn, then
+  // the draft; a second escape within the window quits.
+  const handleEscape = () => {
+    if (uiState().transcriptExpanded && !command.paletteOpen()) {
+      dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
+      disarmQuit()
+      return
+    }
+    if (command.paletteOpen()) {
+      command.closePalette()
+      disarmQuit()
+      return
+    }
+    if (uiState().disclosure !== "collapsed") {
+      dispatchSessionUi(SessionUiEvent.cases.CollapseDisclosure.make({}))
+      disarmQuit()
+      return
+    }
+
+    if (client.isStreaming()) {
+      cancelTurn()
+      disarmQuit()
+      return
+    }
+
+    pressQuit(() => {
+      if (interactionState().draft.length === 0) return
+      onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
+    })
+  }
+
   useScopedKeyboard((event) => {
+    // Any key between two ctrl+c presses is another gesture (a keybind, a
+    // transcript toggle, a typed character), so it disarms their quit.
+    // Escape keeps its own arm, which its branch below reads.
+    const interrupt = event.ctrl === true && event.name === "c"
+    if (!interrupt && Option.exists(quitArmed, (armed) => armed.key === "interrupt")) {
+      disarmQuit()
+    }
     // A keybind between two escapes is a different gesture, so it disarms the quit.
     if (command.handleKeybind(event, ext.commands())) {
       disarmQuit()
       return true
     }
-    if (event.ctrl === true && event.name === "c") {
+    if (interrupt) {
       handleInterrupt()
       return true
     }
     if (overlayHoldsComposer(uiState().overlay)) return false
 
     if (event.name === "escape") {
-      if (uiState().transcriptExpanded && !command.paletteOpen()) {
-        dispatchSessionUi(SessionUiEvent.cases.ToggleTranscript.make({}))
-        disarmQuit()
-        return true
-      }
-      if (command.paletteOpen()) {
-        command.closePalette()
-        disarmQuit()
-        return true
-      }
-      if (uiState().disclosure !== "collapsed") {
-        dispatchSessionUi(SessionUiEvent.cases.CollapseDisclosure.make({}))
-        disarmQuit()
-        return true
-      }
-
-      if (client.isStreaming()) {
-        cancelTurn()
-        disarmQuit()
-        return true
-      }
-
-      pressQuit(() => {
-        if (interactionState().draft.length === 0) return
-        onComposerInteraction(ComposerInteractionEvent.cases.ClearDraft.make({}))
-      })
+      handleEscape()
       return true
     }
 

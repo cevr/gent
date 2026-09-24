@@ -50,6 +50,7 @@ import {
 } from "@gent/core/protocol"
 import { e2ePreset } from "./helpers/test-preset"
 import { isToolResultFor } from "./helpers/tool-event.js"
+import * as AiError from "effect/unstable/ai/AiError"
 import type * as Prompt from "effect/unstable/ai/Prompt"
 
 // ── delegate harness ────────────────────────────────────────────────────────
@@ -281,6 +282,94 @@ describe("a child's completion", () => {
             delivered: true,
           })
           expect(entry?.completed).toEqual({})
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  // A parent that reads only "model stream failed" cannot tell a sign-in that
+  // will never work from a flake, and starts the same child again and again.
+  it.live(
+    "a child whose model stream failed hands its parent the error that ended it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reason = "CHILD-AUTH-PROBE: the keychain is locked"
+          const parentPrompts: Array<ReadonlyArray<string>> = []
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              return Effect.fail(
+                AiError.make({
+                  module: "ChildProvider",
+                  method: "streamText",
+                  reason: new AiError.AuthenticationError({ kind: "Unknown", description: reason }),
+                }),
+              )
+            }
+            parentCalls += 1
+            parentPrompts.push(texts)
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "delegate this task")
+          const snapshot = yield* afterCompletion(harness)
+          const [completion] = completionMessages(snapshot.messages)
+          const text = messageTexts(completionMessages(snapshot.messages)).join("")
+          expect(text).toContain("ended (model stream failed)")
+          expect(text).toContain(reason)
+          expect(completion?.metadata?.details).toMatchObject({
+            outcome: { streamFailed: true },
+            error: expect.stringContaining(reason),
+          })
+          // The parent's model reads the reason in the turn the completion woke.
+          expect(parentPrompts.at(-1)?.some((line) => line.includes(reason))).toBe(true)
+        }).pipe(Effect.timeout("10 seconds")),
+      ),
+    12_000,
+  )
+
+  it.live(
+    "a long error reaches the parent as one line of at most 1,000 characters",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reason = `CHILD-LONG-ERROR ${"word ".repeat(600)}`
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              return Effect.fail(
+                AiError.make({
+                  module: "ChildProvider",
+                  method: "streamText",
+                  reason: new AiError.AuthenticationError({ kind: "Unknown", description: reason }),
+                }),
+              )
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          yield* sendPrompt(harness, "delegate this task")
+          const snapshot = yield* afterCompletion(harness)
+          const [completion] = completionMessages(snapshot.messages)
+          const decoded = Schema.decodeUnknownOption(Schema.Struct({ error: Schema.String }))(
+            completion?.metadata?.details,
+          )
+          const error = Option.getOrThrow(Option.map(decoded, (details) => details.error))
+          expect(error).toContain("CHILD-LONG-ERROR")
+          expect(error.endsWith("…")).toBe(true)
+          expect([...error].length).toBe(1_000)
         }).pipe(Effect.timeout("10 seconds")),
       ),
     12_000,
@@ -787,6 +876,24 @@ describe("child completion message", () => {
 
   test("always warns that a receipt is not task success", () => {
     expect(childCompletion({})).toContain("Completion is a turn receipt, not task success")
+  })
+
+  test("puts the error a failed turn ended on in the header, not in the output", () => {
+    const rendered = describeChildCompletion({
+      requestId: RequestId.make("child-request"),
+      agentName: DELEGATE_AGENT_NAME,
+      sessionId: SessionId.make("child-session"),
+      branchId: BranchId.make("child-branch"),
+      outcome: { streamFailed: true },
+      text: "the child output",
+      error: "sign-in failed",
+    })
+    const [header = "", output = ""] = rendered.split("\n\n")
+    expect(header).toContain("Error: sign-in failed")
+    expect(output).toBe("the child output")
+    expect(Option.getOrThrow(readChildCompletionHeadline(rendered)).status).toBe(
+      "ended (model stream failed)",
+    )
   })
 })
 
@@ -1568,6 +1675,88 @@ describe("a failed completion delivery", () => {
           expect(completionMessages(snapshot.messages)).toHaveLength(1)
           const [entry] = yield* harness.registryOf(branchId)
           expect(entry?.delivered).toBe(true)
+        }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("12 seconds")),
+      ),
+    15_000,
+  )
+
+  it.live(
+    "a completion recovered on the parent's next turn still names the error its child ended on",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reason = "CHILD-AUTH-PROBE: recovered after a failed hook"
+          const gate = yield* Deferred.make<void>()
+          let parentCalls = 0
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options.prompt)
+            if (texts[0]?.endsWith(childTask) === true) {
+              return Deferred.await(gate).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    AiError.make({
+                      module: "ChildProvider",
+                      method: "streamText",
+                      reason: new AiError.AuthenticationError({
+                        kind: "Unknown",
+                        description: reason,
+                      }),
+                    }),
+                  ),
+                ),
+              )
+            }
+            parentCalls += 1
+            if (parentCalls === 1) {
+              return Effect.succeed(toolStep("delegate.start", { todo: childTask }, "start-1"))
+            }
+            if (parentCalls === 2) return Effect.succeed(reply("started, ending my turn"))
+            return Effect.succeed(reply("read it"))
+          })
+          const harness = yield* harnessWithHome(providerLayer)
+          const { client, sessionId, branchId } = harness
+          yield* sendPrompt(harness, "delegate this task")
+          const [row] = yield* waitFor(
+            harness.registryOf(branchId).pipe(Effect.orElseSucceed(() => [])),
+            (entries) => entries.length === 1 && entries[0]?.submitted === true,
+            5_000,
+            "the child is admitted",
+          )
+          if (Predicate.isUndefined(row)) return yield* Effect.die("no registry row")
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle",
+            5_000,
+            "the parent ended its turn",
+          )
+          // The child's hook cannot write the registry, so reconcile delivers.
+          const fs = yield* FileSystem.FileSystem
+          const file = `${harness.home}/.gent/delegates/${branchId}.json`
+          yield* fs.chmod(file, 0o000)
+          yield* Deferred.succeed(gate, void 0)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId: row.sessionId, branchId: row.branchId }),
+            (child) => child.runtime._tag === "Idle" && child.metrics.turns > 0,
+            5_000,
+            "the child's turn failed and its delivery failed",
+          )
+          yield* fs.chmod(file, 0o644)
+          const [stuck] = yield* harness.registryOf(branchId)
+          expect(stuck?.delivered).toBe(false)
+          yield* sendPrompt(harness, "anything new?")
+          const snapshot = yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) =>
+              completionMessages(current.messages).length === 1 && current.runtime._tag === "Idle",
+            8_000,
+            "the next parent turn delivered the completion",
+          )
+          const [completion] = completionMessages(snapshot.messages)
+          expect(messageTexts(completionMessages(snapshot.messages)).join("")).toContain(reason)
+          expect(completion?.metadata?.details).toMatchObject({
+            outcome: { streamFailed: true },
+            error: expect.stringContaining(reason),
+          })
         }).pipe(Effect.provide(BunFileSystem.layer), Effect.timeout("12 seconds")),
       ),
     15_000,

@@ -18,7 +18,16 @@ export {
   GoalSnapshot,
   remainingTokens,
 } from "./goal.js"
-export { BTW_EXTENSION_ID, BtwRpc, type ForkView as ForkViewType } from "./btw.js"
+// forkQuestionText, like childTaskText, has only a test reader here: it
+// writes the text forkQuestionBody reads.
+export {
+  BTW_EXTENSION_ID,
+  BTW_QUESTION_TYPE,
+  BtwRpc,
+  forkQuestionBody,
+  forkQuestionText,
+  type ForkView as ForkViewType,
+} from "./btw.js"
 export { AgentsViewRpc, type AgentRowEntry } from "./agents-view.js"
 export {
   WAKE_EXTENSION_ID,

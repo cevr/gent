@@ -172,8 +172,6 @@ const asDelegateError = (message: string) =>
 const startMessageId = (requestId: RequestId) => MessageId.make(`delegate-start:${requestId}`)
 
 type TurnCompleted = Extract<AgentEvent, { readonly _tag: "TurnCompleted" }>
-const isTurnCompleted = (event: AgentEvent): event is TurnCompleted =>
-  event._tag === "TurnCompleted"
 const isSynchronized = (event: AgentEvent) => event._tag === "StreamSynchronized"
 
 interface TurnTarget {
@@ -182,16 +180,39 @@ interface TurnTarget {
   readonly messageId: MessageId
 }
 
-/** The receipt of one turn, read from the child's durable history alone. */
-const turnReceipt = (target: TurnTarget) =>
+/** How one turn ended: its receipt, and the error the turn ended on, if any. */
+interface TurnEnd {
+  readonly receipt: TurnCompleted
+  /** The last `ErrorOccurred` after the previous receipt that is not a notice. */
+  readonly error: Option.Option<string>
+}
+
+/**
+ * The end of one turn, read from the child's durable history alone. The
+ * receipt names only that the stream failed; the error before it says why,
+ * and a parent that cannot tell a sign-in failure from a flake starts the
+ * same child again.
+ */
+const turnEnd = (target: TurnTarget) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
-    return yield* ctx.Session.events(target).pipe(
+    const folded = yield* ctx.Session.events(target).pipe(
       Stream.takeUntil(isSynchronized),
-      Stream.filter(isTurnCompleted),
-      Stream.filter((event) => event.messageId === target.messageId),
-      Stream.runLast,
+      Stream.runFold(
+        () => ({ error: Option.none<string>(), end: Option.none<TurnEnd>() }),
+        (state, event) => {
+          if (event._tag === "ErrorOccurred") {
+            if (event.notice === true) return state
+            return { ...state, error: Option.some(event.error) }
+          }
+          if (event._tag !== "TurnCompleted") return state
+          // Each receipt closes its turn: an error before it is not the next turn's.
+          if (event.messageId !== target.messageId) return { ...state, error: Option.none() }
+          return { error: Option.none(), end: Option.some({ receipt: event, error: state.error }) }
+        },
+      ),
     )
+    return folded.end
   })
 
 /**
@@ -311,6 +332,24 @@ const childCompletionSourceId = (requestId: RequestId) => `delegate-complete:${r
 /** Bounded preview inside the parent message; the full output lives on the child branch. */
 const maximumPreviewChars = 4_000
 
+/** The error a completion carries is one line, `…` included; the child's events keep it whole. */
+const maximumErrorChars = 1_000
+
+/**
+ * The error a turn that ended badly ended on, as one bounded line. A turn
+ * that completed carries none: an error it went on past is not its outcome.
+ */
+const completionError = (outcome: ChildOutcome, error: Option.Option<string>) =>
+  error.pipe(
+    Option.filter(() => failureNames(outcome).length > 0),
+    Option.map((text) => {
+      const chars = [...text.replace(/\s+/g, " ").trim()]
+      if (chars.length <= maximumErrorChars) return chars.join("")
+      return `${chars.slice(0, maximumErrorChars - 1).join("")}…`
+    }),
+    Option.filter((text) => text.length > 0),
+  )
+
 /**
  * The message a parent reads when a child finishes.
  *
@@ -318,7 +357,9 @@ const maximumPreviewChars = 4_000
  * not visible in the child's text: an interrupted turn, a failed model
  * stream, and a turn that spent its continuations without answering all
  * produce output a parent would otherwise read as a completed result. Each
- * flag the receipt carries is named here so the parent model sees it.
+ * flag the receipt carries is named here so the parent model sees it, with
+ * the error the turn ended on, so a failure that will repeat (a sign-in, a
+ * missing key) reads differently from a flake.
  */
 export const describeChildCompletion = (params: {
   readonly requestId: RequestId
@@ -327,11 +368,17 @@ export const describeChildCompletion = (params: {
   readonly branchId: BranchId
   readonly outcome: ChildOutcome
   readonly text: string
+  /** The bounded line `completionError` made. */
+  readonly error?: string
 }): string => {
   const status = childOutcomeWords(params.outcome)
   const preview = headTailChars(params.text, maximumPreviewChars)
   return [
     `Child agent "${params.agentName}" ${status}. requestId ${params.requestId}; session ${params.sessionId}; branch ${params.branchId}.`,
+    ...Option.match(Option.fromUndefinedOr(params.error), {
+      onNone: () => [],
+      onSome: (error) => [`Error: ${error}`],
+    }),
     "Completion is a turn receipt, not task success. Read the output before relying on it.",
     "",
     preview.text,
@@ -379,6 +426,8 @@ export const ChildCompletionDetails = Schema.Struct({
   agentName: Schema.optionalKey(AgentName),
   outcome: Schema.optionalKey(ChildOutcome),
   usage: Schema.optionalKey(ChildUsage),
+  /** The error a turn that ended badly ended on, one bounded line. Absent on older rows. */
+  error: Schema.optionalKey(Schema.String),
   /** The child's last calls, oldest first. `toolCount` counts every call. */
   tools: Schema.optionalKey(Schema.Array(ChildToolLine)),
   toolCount: Schema.optionalKey(Schema.Finite),
@@ -453,12 +502,14 @@ const deliverCompletion = (
   entry: DelegateEntry,
   outcome: ChildOutcome,
   usage: Option.Option<typeof ChildUsage.Type>,
+  turnError: Option.Option<string>,
 ) =>
   Effect.gen(function* () {
     const ctx = yield* ExtensionContext
     const messages = yield* childMessages(entry)
     const text = latestAssistantText(messages)
     const tools = childToolLines(messages)
+    const error = Option.getOrUndefined(completionError(outcome, turnError))
     const details: typeof ChildCompletionDetails.Type = {
       requestId: entry.requestId,
       sessionId: entry.sessionId,
@@ -466,6 +517,7 @@ const deliverCompletion = (
       agentName: entry.agentName,
       outcome,
       ...usageField(usage),
+      ...Record.filter({ error }, Predicate.isNotUndefined),
       tools: tools.slice(-MAX_COMPLETION_TOOLS),
       toolCount: tools.length,
     }
@@ -482,6 +534,7 @@ const deliverCompletion = (
         branchId: entry.branchId,
         outcome,
         text,
+        ...Record.filter({ error }, Predicate.isNotUndefined),
       }),
       metadata: { customType: CHILD_COMPLETION_TYPE, details },
     })
@@ -592,11 +645,11 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
           yield* submitStart(entry)
           next = replaceEntry(next, sent)
         }
-        const receipt = yield* turnReceipt({
+        const end = yield* turnEnd({
           ...entry,
           messageId: startMessageId(entry.requestId),
         })
-        if (Option.isNone(receipt)) {
+        if (Option.isNone(end)) {
           // No receipt yet: the child is running, or it was mid-turn when the
           // previous process stopped. The re-send carries the start's id, so
           // the loop admits nothing new, but it opens the child's loop, and
@@ -604,11 +657,13 @@ const reconcile = Effect.fn("Delegate.reconcile")(function* () {
           if (entry.submitted) yield* submitStart(entry)
           continue
         }
+        const { receipt, error } = end.value
         const delivered = yield* deliverCompletion(
           parent,
           sent,
-          outcomeOf(receipt.value),
-          usageOf(receiptTotal(receipt.value)),
+          outcomeOf(receipt),
+          usageOf(receiptTotal(receipt)),
+          error,
         )
         next = replaceEntry(next, delivered)
       }
@@ -831,10 +886,17 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
           startMessageId(row.requestId) === input.messageId,
       )
       if (Predicate.isUndefined(entry)) return { next: entries, result: false }
+      const outcome = outcomeOf(input)
+      // The hook runs after the receipt is stored, so the turn's error is in
+      // the child's events; a turn that completed has none to read.
+      let error = Option.none<string>()
+      if (failureNames(outcome).length > 0) {
+        error = Option.flatMap(yield* turnEnd(input), (end) => end.error)
+      }
       const marked = yield* deliverCompletion(
         parent,
         entry,
-        outcomeOf(input),
+        outcome,
         // The row shows a child's total, as its `TurnCompleted` receipt does:
         // a partial count would read as the whole spend.
         usageOf(
@@ -843,6 +905,7 @@ const onChildTurnAfter = Effect.fn("Delegate.turnAfter")(function* (input: {
             (usage) => usage.known,
           ),
         ),
+        error,
       )
       return { next: replaceEntry(entries, marked), result: true }
     }),

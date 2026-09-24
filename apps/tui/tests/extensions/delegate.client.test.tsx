@@ -270,6 +270,20 @@ describe("child-completion row", () => {
     }),
   )
 
+  it.live("draws the error a failed child ended on", () =>
+    Effect.gen(function* () {
+      const frame = yield* loadedFrame([
+        completion({
+          ...fullDetails,
+          outcome: { streamFailed: true },
+          error: "CHILD-ERROR: sign-in failed, the keychain is locked",
+        }),
+      ])
+      expect(frame).toContain("delegate ended (model stream failed)")
+      expect(frame).toContain("CHILD-ERROR: sign-in failed")
+    }),
+  )
+
   /** The three ids an older completion row carries, and nothing else. */
   const oldDetails = {
     requestId: "op-delegate",

@@ -2,7 +2,13 @@
 import { Effect, Option } from "effect"
 import { createSignal, For, Show } from "solid-js"
 import { ref } from "@gent/core/extensions/api"
-import { BTW_EXTENSION_ID, BtwRpc, type ForkViewType } from "@gent/extensions/client"
+import {
+  BTW_EXTENSION_ID,
+  BTW_QUESTION_TYPE,
+  BtwRpc,
+  forkQuestionBody,
+  type ForkViewType,
+} from "@gent/extensions/client"
 import {
   type ActiveExtensionSession,
   ChromePanel,
@@ -10,8 +16,10 @@ import {
   ClientContext,
   clientContributions,
   defineClientExtension,
+  messageRendererContribution,
   PickerFrame,
   sessionQuery,
+  UserRow,
   useScopedKeyboard,
   useTerminalDimensions,
   useTheme,
@@ -333,6 +341,16 @@ export default defineClientExtension(BTW_EXTENSION_ID, {
           if (args.trim().length > 0) controller.ask(args)
         },
       }),
+      // The fork opened as the shell's session: the model read a header that
+      // says whose history it holds; the reader sees the question they asked.
+      // This renderer draws only messages of the question type.
+      messageRendererContribution(BTW_QUESTION_TYPE, (props) => (
+        <UserRow
+          {...props}
+          header="btw · side question"
+          content={forkQuestionBody({ text: props.content, customType: BTW_QUESTION_TYPE })}
+        />
+      )),
       widgetContribution({
         id: BTW_PANE,
         slot: "below-input",

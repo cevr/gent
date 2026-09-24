@@ -14,7 +14,13 @@ import {
 import { AgentName, BranchId, ModelId, RequestId, SessionId } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { AgentEvent } from "@gent/core/protocol"
-import { BTW_EXTENSION_ID, ForkProgress, foldForkEvent } from "../src/btw.js"
+import {
+  BTW_EXTENSION_ID,
+  BTW_QUESTION_TYPE,
+  ForkProgress,
+  foldForkEvent,
+  forkQuestionBody,
+} from "../src/btw.js"
 
 /**
  * `/btw` forks the branch into a parallel child session that carries the
@@ -32,6 +38,9 @@ const promptTexts = (options: ProviderOptions): ReadonlyArray<string> =>
 
 const lastText = (options: ProviderOptions): string =>
   Option.getOrElse(Option.fromUndefinedOr(promptTexts(options).at(-1)), () => "")
+
+/** A prompt text read as a question the pane sent; any other text comes back whole. */
+const asked = (text: string): string => forkQuestionBody({ text, customType: BTW_QUESTION_TYPE })
 
 type Harness = Effect.Success<ReturnType<typeof createRpcHarness>>
 
@@ -200,16 +209,16 @@ describe("btw forks", () => {
                 expect(options.tools.length).toBeGreaterThan(0)
                 const texts = promptTexts(options)
                 expect(texts.some((text) => text.includes("The codeword is pelican"))).toBe(true)
-                expect(lastText(options)).toBe("What is the codeword?")
+                expect(asked(lastText(options))).toBe("What is the codeword?")
               },
             },
             {
               ...textStep("seven letters"),
               assertOptions: (options) => {
-                const texts = promptTexts(options)
+                const texts = promptTexts(options).map(asked)
                 expect(texts).toContain("What is the codeword?")
                 expect(texts).toContain("pelican")
-                expect(lastText(options)).toBe("How long is it?")
+                expect(asked(lastText(options))).toBe("How long is it?")
               },
             },
           ])
@@ -410,6 +419,73 @@ describe("btw forks", () => {
     15_000,
   )
 
+  // The fork copies the branch while its turn runs, so the session's
+  // unanswered request is in the fork's history. Told nothing, the fork's
+  // model took that request as its own and did the session's work beside it.
+  it.live(
+    "a fork opened mid-turn is told the session's unanswered request is not its work",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessionTurnStarted = yield* Deferred.make<void>()
+          const releaseSessionTurn = yield* Deferred.make<void>()
+          const forkPrompts = yield* Queue.unbounded<ReadonlyArray<string>>()
+          const task = "SESSION-TASK: fix every failing test in the README"
+          const question = "Which README task looks hardest?"
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options)
+            if (texts.length === 1) {
+              return Effect.succeed(
+                Stream.fromEffect(
+                  Deferred.succeed(sessionTurnStarted, void 0).pipe(
+                    Effect.andThen(Deferred.await(releaseSessionTurn)),
+                  ),
+                ).pipe(
+                  Stream.flatMap(() =>
+                    Stream.fromIterable([
+                      textDeltaPart("done"),
+                      finishPart({ finishReason: "stop" }),
+                    ]),
+                  ),
+                ),
+              )
+            }
+            return Queue.offer(forkPrompts, texts).pipe(
+              Effect.as(
+                Stream.fromIterable([
+                  textDeltaPart("the parser task"),
+                  finishPart({ finishReason: "stop" }),
+                ]),
+              ),
+            )
+          })
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const pane = btw(harness)
+          yield* harness.client.message.send({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+            content: task,
+          })
+          yield* Deferred.await(sessionTurnStarted)
+          yield* pane.fork(question)
+          const texts = yield* Queue.take(forkPrompts)
+          // The fork still sees the request, so it can answer about it.
+          expect(texts[0]).toBe(task)
+          const asked = texts.at(-1) ?? ""
+          expect(asked.endsWith(`\n\n${question}`)).toBe(true)
+          expect(asked).toContain(`fork of session ${harness.sessionId}`)
+          expect(asked).toContain("no answer above is that session's work, not yours")
+          // The pane shows the question the reader asked, not the frame.
+          const replied = yield* pane.replied(1)
+          expect(Option.map(replied, (fork) => fork.turns)).toEqual(
+            Option.some([{ question, answer: "the parser task" }]),
+          )
+          yield* Deferred.succeed(releaseSessionTurn, void 0)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
   it.live("an empty question forks without a model call; a new fork replaces the last", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -429,6 +505,24 @@ describe("btw forks", () => {
         const asked = yield* Effect.exit(pane.ask("  "))
         expect(Exit.isFailure(asked)).toBe(true)
       }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
+  // The header is stripped by the message's type, never by its text: a person
+  // who types the header's words into the fork opened as a session keeps them.
+  it.live("a message typed into the fork that starts like the header shows whole", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("sure")])
+        const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+        const pane = btw(harness)
+        const fork = yield* pane.fork("")
+        const typed = `A side question, asked in a fork of session ${harness.sessionId}. mine\n\nall of it`
+        yield* harness.client.message.send({ ...fork, content: typed })
+        const replied = yield* pane.replied(1)
+        expect(Option.map(replied, (view) => view.turns)).toEqual(
+          Option.some([{ question: typed, answer: "sure" }]),
+        )
+      }).pipe(Effect.timeout("6 seconds")),
     ),
   )
   it.live("a follow-up the fork cannot take leaves the fork askable, not replying", () =>

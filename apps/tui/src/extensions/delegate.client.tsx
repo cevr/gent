@@ -227,6 +227,10 @@ function ChildCompletionRow(props: MessageRowProps & { details: CompletionDetail
         <span style={{ fg: glyph().color }}>{glyph().mark}</span>{" "}
         {completionHeader(state(), props.details)}
       </text>
+      {/* The error tells a failure that will repeat (a sign-in) from a flake. */}
+      <Show when={props.details.error}>
+        {(error) => <text style={{ fg: theme.error }}>{error()}</text>}
+      </Show>
       <ChildToolTree details={props.details} />
       <Show when={answer().length > 0}>
         <text style={{ fg: theme.text }}>{answer()}</text>
