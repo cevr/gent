@@ -328,12 +328,6 @@ const createSessionResult = (operation: StoredCreateSessionResult): CreateSessio
   name: operation.name,
 })
 
-/** One setting after a change: left out keeps `stored`, `Some` sets, `None` clears. */
-const mergeSetting = <A>(
-  change: Option.Option<Option.Option<A>>,
-  stored: Option.Option<A>,
-): Option.Option<A> => Option.getOrElse(change, () => stored)
-
 const makeSessionMutationsService: Effect.Effect<
   SessionMutationsService,
   never,
@@ -925,17 +919,16 @@ const makeSessionMutationsService: Effect.Effect<
             return yield* new NotFoundError({ message: "Session not found" })
           }
           // Merged inside the transaction: a field the change leaves out keeps
-          // the stored value, whatever the caller last saw.
+          // the stored value, whatever the caller last saw; `Some` sets and
+          // `None` clears.
           const settings = {
             modelId: Option.getOrUndefined(
-              mergeSetting(
-                Option.fromUndefinedOr(input.modelId),
+              Option.getOrElse(Option.fromUndefinedOr(input.modelId), () =>
                 Option.fromUndefinedOr(session.modelId),
               ),
             ),
             reasoningLevel: Option.getOrUndefined(
-              mergeSetting(
-                Option.fromUndefinedOr(input.reasoningLevel),
+              Option.getOrElse(Option.fromUndefinedOr(input.reasoningLevel), () =>
                 Option.fromUndefinedOr(session.reasoningLevel),
               ),
             ),
@@ -1262,7 +1255,10 @@ const RpcHandlers = GentRpcs.toLayer(
         rpc("session.getSnapshot", getSessionSnapshot(input), () => input),
 
       "session.updateSettings": (input: UpdateSessionSettingsInput) =>
-        rpc("session.updateSettings", mutations.updateSettings(input), () => input),
+        rpc("session.updateSettings", mutations.updateSettings(input), (result) => ({
+          sessionId: input.sessionId,
+          ...result,
+        })),
 
       "session.events": ({ sessionId, branchId, after }: SubscribeEventsInput) => {
         const subscription = { sessionId, branchId, synchronize: true }

@@ -3478,6 +3478,40 @@ describe("extension command RPCs", () => {
       )
     }),
   )
+  it.live("the settings wide event records the stored settings, not the change", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { layer: providerLayer } = yield* LanguageModelLayers.sequence([textStep("ok")])
+        const wideEvents = MutableRef.make<Array<LogEvent>>([])
+        const minimumLogLevel = Layer.effectContext(
+          Effect.succeed(Context.make(MinimumLogLevel, "Info")),
+        )
+        const { client, sessionId } = yield* createRpcHarness({
+          ...e2ePreset,
+          providerLayer,
+          extensionInputs: [],
+          cwd: "/tmp/gent-settings-wide-event",
+          extraLayers: [WideEventLogger.Capture(wideEvents), minimumLogLevel],
+        })
+        yield* client.session.updateSettings({
+          sessionId,
+          modelId: Option.some(ModelId.make("anthropic/kept-model")),
+        })
+        // This change leaves the model out; the stored model is what the event names.
+        yield* client.session.updateSettings({ sessionId, reasoningLevel: Option.some("high") })
+        const settingsEvents = MutableRef.get(wideEvents).filter(
+          (event) =>
+            event.annotations["service"] === "rpc" &&
+            event.annotations["method"] === "session.updateSettings",
+        )
+        expect(settingsEvents).toHaveLength(2)
+        const last = settingsEvents[1]?.annotations
+        expect(last?.["sessionId"]).toBe(sessionId)
+        expect(last?.["modelId"]).toBe("anthropic/kept-model")
+        expect(last?.["reasoningLevel"]).toBe("high")
+      }).pipe(Effect.timeout("4 seconds")),
+    ),
+  )
   it.live("a turn emits one agent-loop wide event with its session envelope", () =>
     Effect.scoped(
       Effect.gen(function* () {
