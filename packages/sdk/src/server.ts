@@ -907,7 +907,6 @@ export type GentServer = Schema.Schema.Type<typeof GentServer>
 
 interface OwnedServerInternal {
   readonly handlerContext: Context.Context<BuiltRpcHandlers>
-  readonly port: number
   readonly serverId: string
 }
 
@@ -1094,7 +1093,6 @@ const buildOwnedServer = (
     })
     ownedInternals.set(server, {
       handlerContext: rpcHandlersContext,
-      port,
       serverId,
     })
 

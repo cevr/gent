@@ -25,7 +25,6 @@ import {
   type GentRpcClient,
   GentRpcs,
   makeNamespacedClient,
-  SessionRpcs,
   SlashCommandInfo,
 } from "../../src/server/rpc"
 import {
@@ -115,10 +114,9 @@ import { type LogEvent, WideEventLogger } from "effect-wide-event"
 // ── rpc contract schemas ────────────────────────────────────────────────────
 
 const decodeSuccess = (key: string, value: Readonly<Record<string, string>>): unknown => {
-  const group = SessionRpcs
-  const rpc = group.requests.get(key)
+  const rpc = GentRpcs.requests.get(key)
   if (Predicate.isUndefined(rpc)) return Effect.runSync(Effect.die(new Error(`Missing RPC ${key}`)))
-  return Schema.decodeUnknownSync(rpc.successSchema)(value)
+  return Schema.decodeSync(rpc.successSchema)(value)
 }
 
 describe("RPC contract schemas", () => {
