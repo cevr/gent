@@ -30,6 +30,7 @@ import {
   type CommandSource,
   loadExtensionUi,
   resolveCommands,
+  type ResolvedNoticeRows,
   type ResolvedStatusLabel,
   type ResolvedTuiExtensions,
   type ResolvedWidget,
@@ -89,6 +90,8 @@ interface ExtensionUIContextValue {
   readonly setSessionCommands: (commands: ReadonlyArray<Command>) => void
   readonly interactionRenderers: Accessor<Map<string, InteractionRendererComponent>>
   readonly statusLabels: Accessor<ReadonlyArray<ResolvedStatusLabel>>
+  /** Extension transcript rows by notice id; the session view merges the rows of its branch. */
+  readonly noticeRows: Accessor<ReadonlyArray<ResolvedNoticeRows>>
   readonly autocompleteItems: Accessor<ReadonlyArray<AutocompleteContribution>>
   /** Client extensions, or contributions, that did not load. */
   readonly failures: Accessor<ReadonlyArray<ClientExtensionFailure>>
@@ -106,6 +109,7 @@ const EMPTY_RESOLVED: ResolvedTuiExtensions = {
   commandSources: [],
   interactionRenderers: new Map(),
   statusLabels: [],
+  noticeRows: [],
   autocompleteItems: [],
   failures: [],
 }
@@ -158,6 +162,7 @@ export function ExtensionUIProvider(props: {
       currentSession: client.sessionIdentity,
       onExtensionStateChanged: (cb) => client.onExtensionStateChanged(cb),
       onSessionEvent: (cb) => client.onSessionEvent(cb),
+      modelCatalog: client.modelCatalog,
     },
     workspace: {
       cwd: workspace.cwd,
@@ -334,6 +339,7 @@ export function ExtensionUIProvider(props: {
         setSessionCommands,
         interactionRenderers: () => resolved().interactionRenderers,
         statusLabels: () => resolved().statusLabels,
+        noticeRows: () => resolved().noticeRows,
         autocompleteItems: () => [...resolved().autocompleteItems, ...dynamicAutocomplete()],
         failures: () => [...resolved().failures, ...resolvedCommands().failures],
         setDynamicAutocomplete,

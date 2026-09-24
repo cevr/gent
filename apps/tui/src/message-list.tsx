@@ -14,7 +14,7 @@ import {
   workingIconFrame,
 } from "./utils"
 import { DateTime, Effect, Fiber, Match, Option, Predicate, Schema } from "effect"
-import { useTheme } from "./theme"
+import { resolveThemeColor, useTheme } from "./theme"
 import {
   CollapsedRow,
   formatToolCallIdentity,
@@ -49,7 +49,7 @@ import {
   type ToolCall,
 } from "./tool-renderers"
 import { useExtensionUI } from "./extensions/host"
-import type { MessageRenderer, MessageRowProps } from "./extensions/client-facets"
+import type { MessageRenderer, MessageRowProps, StatusLabelColor } from "./extensions/client-facets"
 import {
   CONTEXT_WINDOW_MESSAGE_TYPE,
   type ImagePartProjection,
@@ -132,8 +132,16 @@ export type SessionEvent =
       seq: number
     }
   | {
-      /** An error the turn goes on past, such as a compaction fallback. */
+      /**
+       * A muted row the turn goes on past: an error such as a compaction
+       * fallback, or a row a client extension derives (`noticeRowContribution`).
+       */
       _tag: "notice"
+      /** Unique among the notice rows; the transcript keys the row on it. */
+      key: string
+      /** One glyph, drawn in `color`; the text after it is muted. */
+      glyph: string
+      color: StatusLabelColor
       text: string
       createdAt: number
       seq: number
@@ -206,6 +214,18 @@ function SessionEventIndicator(props: SessionEventIndicatorProps) {
       default:
         return theme.textMuted
     }
+  }
+
+  const event = props.event
+  if (event._tag === "notice") {
+    return (
+      <box marginTop={1}>
+        <text>
+          <span style={{ fg: resolveThemeColor(theme, event.color) }}>{`${event.glyph} `}</span>
+          <span style={{ fg: theme.textMuted }}>{event.text}</span>
+        </text>
+      </box>
+    )
   }
 
   return (
@@ -793,7 +813,7 @@ export const transcriptFingerprint = (item: SessionItem): string => {
   if (item._tag === "error")
     return encodeFingerprint([item._tag, item.createdAt, item.seq, item.error])
   if (item._tag === "notice")
-    return encodeFingerprint([item._tag, item.createdAt, item.seq, item.text])
+    return encodeFingerprint([item._tag, item.key, item.createdAt, item.glyph, item.text])
   if (item._tag === "retrying")
     return encodeFingerprint([
       item._tag,
@@ -830,6 +850,7 @@ interface TranscriptDisplayBoundary {
 
 const itemKey = (item: SessionItem): string => {
   if (isMessage(item)) return item.id
+  if (item._tag === "notice") return `notice:${item.key}`
   return `${item._tag}:${item.createdAt}:${item.seq}`
 }
 
@@ -937,6 +958,8 @@ export const splitFooterHeight = (terminalHeight: number, requestedHeight: numbe
 
 interface NativeTranscriptProps {
   items: SessionItem[]
+  /** The items are final: no source still derives rows that would land among them. */
+  settled: boolean
   streaming: boolean
   footerHeight: number
   expanded: boolean
@@ -1255,9 +1278,10 @@ export function NativeTranscript(props: NativeTranscriptProps) {
   })
 
   // Scrollback is immutable, so nothing commits until every client renderer
-  // has loaded; the live view draws the plain rows meanwhile.
+  // has loaded and every notice-row source has answered; the live view draws
+  // the rows it has meanwhile.
   createEffect(() => {
-    if (!ext.loaded()) return
+    if (!ext.loaded() || !props.settled) return
     if (!nativeOutputReady() || props.streaming || props.expanded || props.overlayOpen) return
     const items = displayedItems()
     const next = items.map((item) => transcriptFingerprint(item))

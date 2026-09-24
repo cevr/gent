@@ -303,6 +303,40 @@ describe("ClientProvider contract", () => {
       expect(seen).toBe(0)
     }).pipe(Effect.timeout("10 seconds")),
   )
+
+  it.live("a late session-event subscriber first receives what the feed delivered", () =>
+    Effect.gen(function* () {
+      let held = Option.none<ClientContextValue>()
+      const setup = yield* Effect.promise(() =>
+        renderWithProviders(() => <Probe onReady={(value) => (held = Option.some(value))} />),
+      )
+      yield* settle(setup)
+      const client = yield* requireValue(held, "consumer never mounted")
+      const envelope = (id: number) =>
+        EventEnvelope.make({
+          id: EventId.make(id),
+          createdAt: id,
+          event: AgentEvent.cases.StreamStarted.make({
+            sessionId: SessionId.make("late-session"),
+            branchId: BranchId.make("late-branch"),
+          }),
+        })
+      client.applyBufferedSessionEvent(envelope(1))
+      client.applySessionEvent(envelope(2))
+      const seen: Array<number> = []
+      const unsubscribe = client.onSessionEvent((delivered) => seen.push(delivered.id))
+      expect(seen).toEqual([1, 2])
+      client.applySessionEvent(envelope(3))
+      expect(seen).toEqual([1, 2, 3])
+      unsubscribe()
+      // The feed opened on another branch: a subscriber from now on starts empty.
+      client.resetSessionEvents()
+      const after: Array<number> = []
+      const unsubscribeAfter = client.onSessionEvent((delivered) => after.push(delivered.id))
+      expect(after).toEqual([])
+      unsubscribeAfter()
+    }).pipe(Effect.timeout("10 seconds")),
+  )
 })
 
 // ── client session metrics ──────────────────────────────────────────────────
@@ -1709,6 +1743,7 @@ describe("useSessionFeed", () => {
             setActive(makeSession(sessionId, branchId))
           },
           applySessionEvent: () => setActive(makeSession(sessionId, nextBranchId)),
+          resetSessionEvents: () => {},
           applyBufferedSessionEvent: () => {},
         } satisfies FeedClient
         useSessionFeed(
@@ -1865,6 +1900,7 @@ describe("useSessionFeed", () => {
           applySessionEvent: () => {
             appliedEvents += 1
           },
+          resetSessionEvents: () => {},
           applyBufferedSessionEvent: () => {},
         } satisfies FeedClient
 
@@ -1969,6 +2005,7 @@ describe("useSessionFeed", () => {
           applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: () => {},
+          resetSessionEvents: () => {},
           applyBufferedSessionEvent: () => {},
         } satisfies FeedClient
         feed = Option.some(
@@ -2102,6 +2139,7 @@ describe("useSessionFeed", () => {
           applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: () => {},
+          resetSessionEvents: () => {},
           applyBufferedSessionEvent: () => {},
         } satisfies FeedClient
         feed = Option.some(
@@ -2155,6 +2193,7 @@ describe("useSessionFeed", () => {
         applySessionRuntime: () => {},
         applySessionSnapshot: () => {},
         applySessionEvent: () => {},
+        resetSessionEvents: () => {},
         applyBufferedSessionEvent: () => {},
       } satisfies FeedClient
       feed = Option.some(
@@ -2421,6 +2460,7 @@ describe("useSessionFeed", () => {
             if (envelope.id === liveEvent.id)
               client.runtime.cast(Deferred.succeed(liveSeen, void 0))
           },
+          resetSessionEvents: () => {},
           applyBufferedSessionEvent: (envelope) => {
             bufferedTags.push(envelope.event._tag)
           },
@@ -2581,6 +2621,7 @@ describe("useSessionFeed", () => {
             applySessionEvent: () => {
               applied += 1
             },
+            resetSessionEvents: () => {},
             applyBufferedSessionEvent: () => {
               applied += 1
             },
@@ -2691,6 +2732,7 @@ describe("useSessionFeed", () => {
           applySessionEvent: () => {
             applied += 1
           },
+          resetSessionEvents: () => {},
           applyBufferedSessionEvent: () => {
             applied += 1
           },
@@ -2779,6 +2821,7 @@ describe("useSessionFeed", () => {
           applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: () => {},
+          resetSessionEvents: () => {},
           applyBufferedSessionEvent: () => {},
         } satisfies FeedClient
         feed = Option.some(
@@ -2867,6 +2910,7 @@ describe("useSessionFeed", () => {
           applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: () => {},
+          resetSessionEvents: () => {},
           applyBufferedSessionEvent: () => {},
         } satisfies FeedClient
         feed = Option.some(
@@ -2957,6 +3001,7 @@ describe("useSessionFeed", () => {
           applySessionRuntime: () => {},
           applySessionSnapshot: () => {},
           applySessionEvent: () => {},
+          resetSessionEvents: () => {},
           applyBufferedSessionEvent: () => {},
         } satisfies FeedClient
         feed = Option.some(

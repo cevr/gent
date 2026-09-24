@@ -467,6 +467,7 @@ function TestComposer(props: {
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
   const ext = useExtensionUI()
   const mockController = {
+    itemsSettled: () => true,
     items: () => [],
     messages: () => [],
     forkMessages: () => [],
@@ -1503,6 +1504,7 @@ function TestComposerGhost(props: {
   const [interactionState, setInteractionState] = createSignal(ComposerInteractionState.initial())
   const ext = useExtensionUI()
   const mockController = {
+    itemsSettled: () => true,
     items: () => [],
     messages: () => [],
     forkMessages: () => [],
@@ -1747,6 +1749,7 @@ function TestComposerSlashEnter(props: {
   // Enter would reach the plain submit path, testing the wrong seam.
   const ext = useExtensionUI()
   const mockController = {
+    itemsSettled: () => true,
     items: () => [],
     messages: () => [],
     forkMessages: () => [],
