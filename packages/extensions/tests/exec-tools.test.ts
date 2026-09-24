@@ -1734,9 +1734,13 @@ describe("classifyBashCommand", () => {
       `pnpm --gent-probe-unknown ${x} exec -c '${r}'`,
       // Input the guard cannot read names the command npm runs.
       `cat ${x} | xargs npm --loglevel silent exec --`,
+      // Accepted over-ask: runners and parents share one rule, so any later
+      // word after an unnamed option may be the subcommand.
+      "git --no-pager log --format=%H main stash",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
+    expect(classifyBashCommand("docker --debug run alpine push").level).toBe("external")
     for (const command of [
       "git --no-pager status",
       "git --no-pager log --oneline -5",

@@ -1557,42 +1557,31 @@ const isUnsure = (valued: ValueOptions, option: ParsedOption) => {
 }
 
 /**
- * Where the subcommand word after a parent's options may be, as indexes into
- * `args` (the words after the parent's last word), read from `from`. The
- * parent's table names only its options that take a value: an option it does
- * not name may take no value or one (`uv --cache-dir x run`), so both
- * readings go on. Each index is read once, so a run of such options stays
- * linear.
+ * Where a command or subcommand word may be after the leading options of
+ * `args`, read from `from`, beyond the usual reading's word, as indexes into
+ * `args`. A table names only the options that take a value. After an option
+ * it does not name, which word comes next is not known (`uv --cache-dir x
+ * run`, `timeout --gent-probe-unknown 5 x cmd`): each later word that is not
+ * an option may be it, and each is read.
  */
-const subcommandPositions = (
+const laterCommandWords = (
   args: ReadonlyArray<string>,
-  from: number,
   valued: ValueOptions,
-): ReadonlySet<number> => {
-  const found = new Set<number>()
-  const read = new Set<number>()
-  const pending = [from]
-  while (pending.length > 0) {
-    const index = pending.pop() ?? args.length
-    if (read.has(index)) continue
-    read.add(index)
-    const arg = args[index] ?? ""
-    if (arg === "--") {
-      found.add(index + 1)
-    } else if (!isOptionWord(arg, valued)) {
-      found.add(index)
-    } else {
-      const into: OptionsRead = { shorts: new Set(), longs: [], options: [] }
-      const next = readOption(args, index, valued, into)
-      pending.push(next)
-      const takesValue = Option.exists(
-        Arr.last(into.options),
-        (option) => Option.isNone(option.value) && isUnsure(valued, option),
-      )
-      if (takesValue) pending.push(next + 1)
-    }
-  }
-  return found
+  from: number,
+): ReadonlyArray<number> => {
+  const { options: read } = parseArguments(args.slice(from), valued, "leading")
+  return Option.match(
+    Arr.findFirst(read, (option) => isUnsure(valued, option)),
+    {
+      onNone: () => [],
+      // `at` counts from `args[from]`.
+      onSome: ({ at }) =>
+        args.flatMap((arg, index) => {
+          if (index <= from + at || isOptionWord(arg, valued)) return []
+          return [index]
+        }),
+    },
+  )
 }
 
 /** The path under `resolved` whose subcommand word is `words[next]`, when `COMMAND_SPECS` names it. */
@@ -1609,8 +1598,8 @@ const childCommand = (resolved: ResolvedCommand, next: number): Option.Option<Re
 /**
  * The readings of the command path under `resolved`. The first takes every
  * option the parent's table does not name to have no value, and stops at
- * the parent when the next word names no path. Each other position of the
- * subcommand word that names a path is a reading too
+ * the parent when the next word names no path. Each later word that may be
+ * the subcommand (`laterCommandWords`) and names a path is a reading too
  * (`npm --loglevel silent exec -- cmd`). An unnamed option alone adds none:
  * `git --no-pager status` has one reading.
  */
@@ -1623,9 +1612,8 @@ const readingsUnder = (resolved: ResolvedCommand): Arr.NonEmptyReadonlyArray<Res
   const { valued } = resolved.spec
   // `args[index]` is `rest[index + 1]`.
   const first = from + parseArguments(args.slice(from), valued, "leading").end
-  const others = [...subcommandPositions(args, from, valued)]
+  const others = laterCommandWords(args, valued, from)
     .filter((index) => index !== first)
-    .sort((a, b) => a - b)
     .flatMap((index) =>
       Option.match(childCommand(resolved, index + 1), {
         onNone: () => [],
@@ -1678,11 +1666,9 @@ const commandStart = (
 
 /**
  * Where the command of a `Command`, `Joined` or `Stdin` run may start, as
- * indexes into `words`. A runner's table names only its options that take a
- * value. After an option it does not name, which word is the command is not
- * known, so each later word that is not an option may be: each is read, and
- * the strongest risk wins. The first index is the reading that takes the
- * option to have no value.
+ * indexes into `words`: the reading that takes each option the runner's
+ * table does not name to have no value, then each word `laterCommandWords`
+ * finds. Each is read, and the strongest risk wins.
  */
 const commandStarts = (
   words: ReadonlyArray<ShellWord>,
@@ -1691,21 +1677,10 @@ const commandStarts = (
 ): ReadonlyArray<number> => {
   const start = commandStart(words, valued, run)
   if ((run.after ?? []).length > 0) return [start]
-  const { options: read } = parseWords(words, valued, "leading")
-  return Option.match(
-    Arr.findFirst(read, (option) => isUnsure(valued, option)),
-    {
-      onNone: () => [start],
-      onSome: ({ at }) => [
-        start,
-        // `at` counts from the word after the command path.
-        ...words.flatMap((word, index) => {
-          if (index <= at + 1 || index === start || isOptionWord(word.text, valued)) return []
-          return [index]
-        }),
-      ],
-    },
-  )
+  const args = words.slice(1).map((word) => word.text)
+  // `args[index]` is `words[index + 1]`.
+  const later = laterCommandWords(args, valued, 0).map((index) => index + 1)
+  return [start, ...later.filter((index) => index !== start)]
 }
 
 /**
