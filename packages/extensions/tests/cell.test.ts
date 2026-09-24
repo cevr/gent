@@ -1363,7 +1363,7 @@ describe("cell worker process", () => {
   )
 
   it.scopedLive(
-    "a lost worker is replaced as often as cells need; only failed launches count",
+    "a lost worker is replaced as often as cells need once each worker completed a cell",
     () =>
       Effect.gen(function* () {
         const kernel = yield* openCellKernel({
@@ -1373,13 +1373,44 @@ describe("cell worker process", () => {
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
         const run = (source: string) =>
           kernel.evaluate(source).pipe(Effect.provideService(CellOperationHost, host))
-        // More losses than the failed-launch limit: each worker launched, so none counts.
+        // More losses than the failed-launch limit: each worker completed a cell first.
         for (let lost = 0; lost < 5; lost++) {
+          expect((yield* run("1 + 1")).display).toBe("2")
           const crash = yield* run("process.exit(7)").pipe(Effect.flip)
           expect(crash._tag).toBe("CellKernelError")
           yield* kernel.reset
         }
         expect((yield* run("21 * 2")).display).toBe("42")
+        yield* kernel.close
+      }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
+    10000,
+  )
+
+  it.scopedLive(
+    "workers that launch and die in their first cell trip the failed-launch limit",
+    () =>
+      Effect.gen(function* () {
+        const kernel = yield* openCellKernel({
+          worker: yield* buildCellWorker,
+          cwd: packageDirectory,
+        })
+        const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
+        const crash = Effect.gen(function* () {
+          const error = yield* kernel
+            .evaluate("process.exit(7)")
+            .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)
+          if (error._tag !== "CellKernelError") return yield* Effect.die(error)
+          return error.reason
+        })
+        // Each worker reaches Ready, then dies before it completes a cell.
+        for (let launch = 0; launch < 2; launch++) {
+          expect(yield* crash).toBe("process")
+          yield* kernel.reset
+        }
+        expect(yield* crash).toBe("process")
+        const refused = yield* kernel.reset.pipe(Effect.flip)
+        expect(refused.reason).toBe("replacement-limit")
+        expect(refused.message).toContain("3 times in a row")
         yield* kernel.close
       }).pipe(Effect.timeout("8 seconds"), Effect.provide(platformLayer)),
     10000,
@@ -1397,6 +1428,11 @@ describe("cell worker process", () => {
           maximumFailedLaunches: 1,
         })
         const host = CellOperationHost.of({ call: () => Effect.succeed(true) })
+        // The first worker completes a cell, so its later death is not a failed launch.
+        const completed = yield* kernel
+          .evaluate("1")
+          .pipe(Effect.provideService(CellOperationHost, host))
+        expect(completed.display).toBe("1")
         const crash = yield* kernel
           .evaluate("process.exit(7)")
           .pipe(Effect.provideService(CellOperationHost, host), Effect.flip)

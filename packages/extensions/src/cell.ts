@@ -1087,10 +1087,11 @@ const DEFAULT_MAXIMUM_FAILED_LAUNCHES = 3
 /**
  * One worker at a time. Only explicit reset can replace a failed worker.
  *
- * `maximumFailedLaunches` stops a crash loop at launch: once that many
- * launches in a row never reached Ready, reset refuses. A worker lost after it
- * launched (a cancel, a timeout, a cell that exits) does not count, and a good
- * launch starts the count again.
+ * `maximumFailedLaunches` stops a crash loop: once that many launches in a row
+ * failed, reset refuses. A launch fails when the worker never reaches Ready, or
+ * when it dies (a process exit, a protocol fault) before it completes a cell.
+ * A worker the kernel stops (a timeout, a cancel) did not fail. Only a
+ * completed cell starts the count again.
  */
 export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   readonly worker: CellWorker
@@ -1149,6 +1150,8 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
   const permit = yield* Semaphore.make(1)
   const shutdown = yield* Deferred.make<never, CellKernelError>()
   let failedLaunches = 0
+  // The current worker has not completed a cell yet, so its death is a failed launch.
+  let unproven = true
   let sequence = 0
   // Catalog delta: the worker keeps the last catalog, so only a changed hash travels. A
   // replacement worker starts empty and receives the full catalog on its first cell.
@@ -1183,6 +1186,13 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     if (status !== "closed") status = "lost"
     yield* child.stop.pipe(Effect.ensuring(child.dispose))
   })
+  /** A worker that dies on its own before completing a cell is a failed launch. */
+  const countUnprovenDeath = (error: CellKernelError) =>
+    Effect.sync(() => {
+      if (unproven && (error.reason === "process" || error.reason === "protocol")) {
+        failedLaunches++
+      }
+    })
   const deadline = {
     duration: timeoutMs,
     orElse: () => failure("timeout", "Cell deadline exceeded; working state was lost"),
@@ -1308,6 +1318,9 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
           .pipe(Effect.mapError(processError))
         if (Option.isSome(catalog)) workerCatalogHash = Option.some(catalog.value.hash)
         const frame = yield* Deferred.await(result).pipe(Effect.raceFirst(watchdog))
+        // The worker answered a cell: it is not part of a crash loop.
+        unproven = false
+        failedLaunches = 0
         // The worker marks the end of the cell on its one output pipe before the frame;
         // the take resolves once that mark arrived, so the output is complete and ordered.
         return {
@@ -1315,7 +1328,10 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
           output: yield* child.takeOutput(outputToken).pipe(Effect.mapError(processError)),
         }
       }),
-    ).pipe(Effect.onError(() => discard().pipe(Effect.orDie)))
+    ).pipe(
+      Effect.tapError(countUnprovenDeath),
+      Effect.onError(() => discard().pipe(Effect.orDie)),
+    )
     // Prime-style result text: process output first, then the cell's own display.
     const withOutput = (display: string) =>
       [response.output.trimEnd(), display].filter((text) => text.length > 0).join("\n")
@@ -1349,6 +1365,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
     }).pipe(
       Effect.catchTag("CellProcessError", (error) => Effect.fail(processError(error))),
       Effect.timeoutOrElse(deadline),
+      Effect.tapError(countUnprovenDeath),
       Effect.onError(() => discard().pipe(Effect.orDie)),
     )
   })
@@ -1360,7 +1377,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
       if (failedLaunches >= maximumFailedLaunches) {
         return yield* failure(
           "replacement-limit",
-          `Cell worker failed to launch ${failedLaunches} times in a row`,
+          `Cell worker failed ${failedLaunches} times in a row before completing a cell`,
         )
       }
       return yield* Effect.uninterruptibleMask((restore) =>
@@ -1374,7 +1391,7 @@ export const openCellKernel = Effect.fn("CellKernel.open")(function* (input: {
             ),
             Effect.mapError(processError),
           )
-          failedLaunches = 0
+          unproven = true
           // close can run while the replacement is starting. Never restore a closed owner.
           if (isClosed()) return yield* failure("closed", "Cell kernel closed during replacement")
           status = "ready"
