@@ -35,6 +35,38 @@ export const BTW_EXTENSION_ID = ExtensionId.make("@gent/btw")
 const MAXIMUM_QUESTION_CHARS = 8000
 const FORK_NAME_CHARS = 60
 
+/** `metadata.customType` on a question the pane sends the fork. */
+export const BTW_QUESTION_TYPE = "btw-question"
+
+const FORK_QUESTION_PREFIX = "A side question, asked in a fork of session "
+
+/**
+ * The text the fork's model reads for a question. The fork copies the branch
+ * as it is, a request the session is still working on included, and a bare
+ * question under that request read as a second user message: the fork took
+ * the session's work as its own and did it beside the session, in the same
+ * working tree. The header says whose history it is and what is asked. The
+ * request stays, because the question is usually about it.
+ */
+export const forkQuestionText = (parentSessionId: SessionId, question: string): string =>
+  [
+    `${FORK_QUESTION_PREFIX}${parentSessionId}. That session keeps running on its own: the conversation above is its history, and a request with no answer above is that session's work, not yours. Do not continue it.`,
+    "Answer the question below. Change files, run long jobs, or start agents only when the question asks for that.",
+    "",
+    question,
+  ].join("\n")
+
+/** The question without its header; a message that is not a fork question is returned whole. */
+export const forkQuestionBody = (text: string): string =>
+  Option.liftPredicate(text, (value) => value.startsWith(FORK_QUESTION_PREFIX)).pipe(
+    Option.flatMap((value) =>
+      Option.liftPredicate(value.indexOf("\n\n"), (split) => split !== -1).pipe(
+        Option.map((split) => value.slice(split + 2)),
+      ),
+    ),
+    Option.getOrElse(() => text),
+  )
+
 /** One exchange on the fork; `answer` is the streamed text while the fork is replying. */
 const ForkTurn = Schema.Struct({
   question: Schema.String,
@@ -178,16 +210,22 @@ const textOf = (message: Message): string =>
     })
     .join("")
 
-/** A user turn the pane asked, not a message the runtime wrote for the model. */
-const isAskedTurn = (message: Message): boolean =>
-  message.role === "user" && Predicate.isUndefined(message.metadata?.customType)
+/**
+ * A user turn someone asked: a question the pane sent, or a message typed
+ * into the fork opened as a session. Not a message the runtime wrote.
+ */
+const isAskedTurn = (message: Message): boolean => {
+  if (message.role !== "user") return false
+  const customType = message.metadata?.customType
+  return Predicate.isUndefined(customType) || customType === BTW_QUESTION_TYPE
+}
 
 /** Pairs each asked question with the assistant text that followed it. */
 const forkTurns = (messages: ReadonlyArray<Message>, partial: string): ReadonlyArray<ForkTurn> => {
   const turns: Array<ForkTurn> = []
   for (const message of messages) {
     if (isAskedTurn(message)) {
-      turns.push({ question: textOf(message), answer: "" })
+      turns.push({ question: forkQuestionBody(textOf(message)), answer: "" })
       continue
     }
     const last = turns.at(-1)
@@ -286,12 +324,14 @@ const sendToFork = (parentBranchId: string, fork: OpenFork, question: string) =>
         return { ...current, replying, error: Option.none() }
       })
     yield* markReplying(true)
+    // The request runs in the session the fork was made from.
     yield* ctx.Session.send({
       delivery: "turn",
       sessionId: fork.sessionId,
       branchId: fork.branchId,
-      content: question,
+      content: forkQuestionText(ctx.sessionId, question),
       completion: "admission",
+      metadata: { customType: BTW_QUESTION_TYPE },
     }).pipe(
       Effect.tapError(() => markReplying(false)),
       Effect.mapError(

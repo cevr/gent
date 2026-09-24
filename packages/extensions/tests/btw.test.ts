@@ -14,7 +14,7 @@ import {
 import { AgentName, BranchId, ModelId, RequestId, SessionId } from "@gent/core/extensions/api"
 import { e2ePreset } from "./helpers/test-preset"
 import { AgentEvent } from "@gent/core/protocol"
-import { BTW_EXTENSION_ID, ForkProgress, foldForkEvent } from "../src/btw.js"
+import { BTW_EXTENSION_ID, ForkProgress, foldForkEvent, forkQuestionBody } from "../src/btw.js"
 
 /**
  * `/btw` forks the branch into a parallel child session that carries the
@@ -200,16 +200,16 @@ describe("btw forks", () => {
                 expect(options.tools.length).toBeGreaterThan(0)
                 const texts = promptTexts(options)
                 expect(texts.some((text) => text.includes("The codeword is pelican"))).toBe(true)
-                expect(lastText(options)).toBe("What is the codeword?")
+                expect(forkQuestionBody(lastText(options))).toBe("What is the codeword?")
               },
             },
             {
               ...textStep("seven letters"),
               assertOptions: (options) => {
-                const texts = promptTexts(options)
+                const texts = promptTexts(options).map(forkQuestionBody)
                 expect(texts).toContain("What is the codeword?")
                 expect(texts).toContain("pelican")
-                expect(lastText(options)).toBe("How long is it?")
+                expect(forkQuestionBody(lastText(options))).toBe("How long is it?")
               },
             },
           ])
@@ -408,6 +408,73 @@ describe("btw forks", () => {
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15_000,
+  )
+
+  // The fork copies the branch while its turn runs, so the session's
+  // unanswered request is in the fork's history. Told nothing, the fork's
+  // model took that request as its own and did the session's work beside it.
+  it.live(
+    "a fork opened mid-turn is told the session's unanswered request is not its work",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sessionTurnStarted = yield* Deferred.make<void>()
+          const releaseSessionTurn = yield* Deferred.make<void>()
+          const forkPrompts = yield* Queue.unbounded<ReadonlyArray<string>>()
+          const task = "SESSION-TASK: fix every failing test in the README"
+          const question = "Which README task looks hardest?"
+          const providerLayer = LanguageModelLayers.testStream((options) => {
+            const texts = promptTexts(options)
+            if (texts.length === 1) {
+              return Effect.succeed(
+                Stream.fromEffect(
+                  Deferred.succeed(sessionTurnStarted, void 0).pipe(
+                    Effect.andThen(Deferred.await(releaseSessionTurn)),
+                  ),
+                ).pipe(
+                  Stream.flatMap(() =>
+                    Stream.fromIterable([
+                      textDeltaPart("done"),
+                      finishPart({ finishReason: "stop" }),
+                    ]),
+                  ),
+                ),
+              )
+            }
+            return Queue.offer(forkPrompts, texts).pipe(
+              Effect.as(
+                Stream.fromIterable([
+                  textDeltaPart("the parser task"),
+                  finishPart({ finishReason: "stop" }),
+                ]),
+              ),
+            )
+          })
+          const harness = yield* createRpcHarness({ ...e2ePreset, providerLayer })
+          const pane = btw(harness)
+          yield* harness.client.message.send({
+            sessionId: harness.sessionId,
+            branchId: harness.branchId,
+            content: task,
+          })
+          yield* Deferred.await(sessionTurnStarted)
+          yield* pane.fork(question)
+          const texts = yield* Queue.take(forkPrompts)
+          // The fork still sees the request, so it can answer about it.
+          expect(texts[0]).toBe(task)
+          const asked = texts.at(-1) ?? ""
+          expect(asked.endsWith(`\n\n${question}`)).toBe(true)
+          expect(asked).toContain(`fork of session ${harness.sessionId}`)
+          expect(asked).toContain("no answer above is that session's work, not yours")
+          // The pane shows the question the reader asked, not the frame.
+          const replied = yield* pane.replied(1)
+          expect(Option.map(replied, (fork) => fork.turns)).toEqual(
+            Option.some([{ question, answer: "the parser task" }]),
+          )
+          yield* Deferred.succeed(releaseSessionTurn, void 0)
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
 
   it.live("an empty question forks without a model call; a new fork replaces the last", () =>

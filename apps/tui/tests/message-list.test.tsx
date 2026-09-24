@@ -38,7 +38,9 @@ import {
   EventId,
 } from "@gent/core/test-utils"
 import {
+  BTW_QUESTION_TYPE,
   CHILD_COMPLETION_TYPE,
+  forkQuestionText,
   type SessionMessageDetails,
   sessionMessageText,
 } from "@gent/extensions/client"
@@ -1086,6 +1088,27 @@ describe("FX transcript treatment", () => {
       expect(frame).not.toContain("(session 0199aabbccdd)")
       const expandedFrame = yield* renderLoaded([sent], true)
       expect(expandedFrame).toContain("Message from your parent")
+    }),
+  )
+
+  it.live("a btw question in a fork opened as the session shows the question, not its frame", () =>
+    Effect.gen(function* () {
+      const asked: ListMessage = {
+        ...userMessage(
+          "regular-message",
+          "btw-1",
+          forkQuestionText(SessionId.make("01a0ca0cb3e7"), "Which README task looks hardest?"),
+          "queued",
+        ),
+        pendingMode: absent,
+        metadata: { customType: BTW_QUESTION_TYPE },
+      }
+      const frame = yield* renderLoaded([asked])
+      expect(frame).toContain("btw · side question")
+      expect(frame).toContain("Which README task looks hardest?")
+      expect(frame).not.toContain("A side question, asked in a fork")
+      const expandedFrame = yield* renderLoaded([asked], true)
+      expect(expandedFrame).toContain("A side question, asked in a fork")
     }),
   )
 
