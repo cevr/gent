@@ -2978,17 +2978,24 @@ const dependencyScope = (overrides: Partial<DependencyScope>): DependencyScope =
   packageJson: {},
   files: new Map(),
   commands: [],
-  providedPeers: new Set(),
   installed: new Map(),
   ...overrides,
 })
+
+const emptyRoot = dependencyScope({ manifest: "package.json" })
 
 /** Installed manifests as the runner reads them. */
 const installedMap = (entries: ReadonlyArray<readonly [string, InstalledPackage]>) =>
   new Map(entries.map(([name, installed]) => [name, installedDependency(name, installed)]))
 
+const findingNames = (
+  findings: ReadonlyArray<{ readonly file: string; readonly message: string }>,
+) => findings.map((finding) => `${finding.file} ${finding.message.split(": ")[0] ?? ""}`)
+
 const unusedNames = (scope: DependencyScope): ReadonlyArray<string> =>
-  findUnusedDependencies([scope]).map((finding) => finding.message.split(": ")[0] ?? "")
+  findUnusedDependencies({ root: emptyRoot, workspaces: [scope] }).map(
+    (finding) => finding.message.split(": ")[0] ?? "",
+  )
 
 describe("a declared dependency must have a use", () => {
   test("a dependency no file loads is reported at its manifest line", () => {
@@ -3000,17 +3007,20 @@ describe("a declared dependency must have a use", () => {
       "  }",
       "}",
     ].join("\n")
-    const findings = findUnusedDependencies([
-      dependencyScope({
-        manifestText,
-        packageJson: {
-          dependencies: { "effect-encore": "catalog:", "effect-machine": "catalog:" },
-        },
-        files: new Map([
-          ["packages/core/src/a.ts", 'import { Entity } from "effect-encore/entity"'],
-        ]),
-      }),
-    ])
+    const findings = findUnusedDependencies({
+      root: emptyRoot,
+      workspaces: [
+        dependencyScope({
+          manifestText,
+          packageJson: {
+            dependencies: { "effect-encore": "catalog:", "effect-machine": "catalog:" },
+          },
+          files: new Map([
+            ["packages/core/src/a.ts", 'import { Entity } from "effect-encore/entity"'],
+          ]),
+        }),
+      ],
+    })
     expect(findings).toEqual([
       {
         file: "packages/core/package.json",
@@ -3145,16 +3155,45 @@ describe("a declared dependency must have a use", () => {
     expect(unusedNames(scope)).toEqual(['dependencies["loose"]'])
   })
 
-  test("the root installs the peers its workspaces ask for; peerDependencies themselves are not checked", () => {
+  test("a peer no file names is reported like any dependency", () => {
     const scope = dependencyScope({
+      packageJson: { peerDependencies: { effect: "catalog:", "@effect/sql-pg": "catalog:" } },
+      files: new Map([["packages/core/src/a.ts", 'import { Effect } from "effect"']]),
+    })
+    expect(unusedNames(scope)).toEqual(['peerDependencies["@effect/sql-pg"]'])
+  })
+
+  test("a peer is used through the peers of a workspace dependency", () => {
+    const scope = dependencyScope({
+      manifest: "packages/e2e/package.json",
+      packageJson: {
+        dependencies: { "@gent/core": "workspace:*" },
+        peerDependencies: { "@effect/platform-bun": "catalog:" },
+      },
+      files: new Map([["packages/e2e/tests/a.test.ts", 'import { x } from "@gent/core/host"']]),
+      installed: installedMap([
+        ["@gent/core", { peerDependencies: { "@effect/platform-bun": "catalog:" } }],
+      ]),
+    })
+    expect(unusedNames(scope)).toEqual([])
+  })
+
+  test("the root installs only the peers its workspaces use", () => {
+    const root = dependencyScope({
       manifest: "package.json",
       packageJson: {
-        devDependencies: { effect: "catalog:", orphan: "1" },
-        peerDependencies: { unused: "1" },
+        devDependencies: { effect: "catalog:", "@effect/sql-pg": "catalog:", orphan: "1" },
       },
-      providedPeers: new Set(["effect"]),
     })
-    expect(unusedNames(scope)).toEqual(['devDependencies["orphan"]'])
+    const core = dependencyScope({
+      packageJson: { peerDependencies: { effect: "catalog:", "@effect/sql-pg": "catalog:" } },
+      files: new Map([["packages/core/src/a.ts", 'import { Effect } from "effect"']]),
+    })
+    expect(findingNames(findUnusedDependencies({ root, workspaces: [core] }))).toEqual([
+      'package.json devDependencies["@effect/sql-pg"]',
+      'package.json devDependencies["orphan"]',
+      'packages/core/package.json peerDependencies["@effect/sql-pg"]',
+    ])
   })
 })
 
