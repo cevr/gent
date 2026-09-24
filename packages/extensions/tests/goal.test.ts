@@ -4,6 +4,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  Fiber,
   FileSystem,
   Option,
   PlatformError,
@@ -173,6 +174,93 @@ describe("goals", () => {
         }).pipe(Effect.timeout("12 seconds")),
       ),
     15_000,
+  )
+
+  it.live(
+    "a turn end with no goal does not pulse the goal widget",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer } = yield* LanguageModelLayers.sequence([
+            textStep("one"),
+            textStep("two"),
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          // The first turn's hook runs before the second turn ends.
+          const events = yield* client.session.events({ sessionId, branchId }).pipe(
+            Stream.map((envelope) => envelope.event),
+            Stream.filter(
+              (event) =>
+                event._tag === "TurnCompleted" ||
+                (event._tag === "ExtensionStateChanged" && event.extensionId === GOAL_EXTENSION_ID),
+            ),
+            Stream.takeUntil(
+              (() => {
+                let completed = 0
+                return (event: { readonly _tag: string }) =>
+                  event._tag === "TurnCompleted" && ++completed === 2
+              })(),
+            ),
+            Stream.runCollect,
+            Effect.forkScoped,
+          )
+          yield* client.message.send({ sessionId, branchId, content: "first" })
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle" && current.messages.length === 2,
+            5_000,
+            "first turn idle",
+          )
+          yield* client.message.send({ sessionId, branchId, content: "second" })
+          const seen = Array.from(yield* Fiber.join(events))
+          expect(seen.filter((event) => event._tag === "ExtensionStateChanged")).toEqual([])
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
+  )
+
+  it.live(
+    "the goal reads while a turn runs",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { layer: providerLayer, controls } = yield* LanguageModelLayers.sequence([
+            { ...textStep("working"), gated: true },
+          ])
+          const { client, sessionId, branchId } = yield* createRpcHarness({
+            ...e2ePreset,
+            providerLayer,
+          })
+          yield* client.message.send({ sessionId, branchId, content: "work" })
+          yield* controls.waitForCall(0)
+          const snapshot = yield* client.extension
+            .request({
+              sessionId,
+              branchId,
+              extensionId: GOAL_EXTENSION_ID,
+              capabilityId: "goal.get",
+              input: {},
+            })
+            .pipe(
+              Effect.timeoutOrElse({
+                duration: "2 seconds",
+                orElse: () => Effect.die(new Error("goal.get waited for the turn")),
+              }),
+            )
+          expect(yield* Schema.decodeUnknownEffect(GoalSnapshot)(snapshot)).toEqual({})
+          yield* controls.emitAll(0)
+          yield* waitFor(
+            client.session.getSnapshot({ sessionId, branchId }),
+            (current) => current.runtime._tag === "Idle" && current.messages.length === 2,
+            5_000,
+            "the turn ended",
+          )
+        }).pipe(Effect.timeout("8 seconds")),
+      ),
+    10_000,
   )
 })
 

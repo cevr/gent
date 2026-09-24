@@ -262,8 +262,10 @@ export default defineExtension({
 
 A request waits for the session's running turn: the turn holds the loop's
 mutation permit until it ends, and a request is a side mutation until it says
-otherwise. A request that only reads declares `readonly: true` and answers
-mid-turn; it must not change loop state.
+otherwise. A request that does not change this branch's loop state (its queue,
+follow-ups or messages) declares `answersDuringTurn: true` and answers mid-turn.
+Reads qualify, and so do writes outside the loop, such as another session or
+a process resource. Any request a client sends while the agent works needs it.
 
 Request handlers receive params only. Host authority comes from
 `yield* ExtensionContext`, and extension-owned services are ordinary Effect

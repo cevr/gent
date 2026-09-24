@@ -2818,9 +2818,11 @@ const buildAgentLoopActorHandlers = (config: {
               // cannot see a `scope: "branch"` service.
               Effect.provideContext(yield* handle.branchContext),
             )
-            // A read-only request answers while a turn runs; anything else is
-            // a side mutation and waits for the permit the turn holds.
-            if (rpcRegistry.isReadonly(operation.extensionId, capabilityId)) return yield* run
+            // A request that does not change this branch's loop state answers
+            // while a turn runs; anything else waits for the permit the turn holds.
+            if (rpcRegistry.answersDuringTurn(operation.extensionId, capabilityId)) {
+              return yield* run
+            }
             // A follow-up the request admitted wakes the loop from
             // `admitFollowUp`, which forks the drain in the actor scope.
             return yield* run.pipe(handle.withSideMutation)

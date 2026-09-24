@@ -83,22 +83,32 @@ export const makeFakeFetchState = (): FakeFetchState => ({ captured: [] })
  *
  * `responder` receives the captured request (same shape stored in
  * `state.captured`) so per-call response shaping is possible — e.g. 401
- * on first call, 200 on retry.
+ * on first call, 200 on retry. A responder that returns an Effect runs it
+ * before the response resolves, so a test can change the world while a
+ * request is in flight.
  */
 type FakeFetchFn = (
   input: globalThis.RequestInfo | globalThis.URL,
   init?: globalThis.RequestInit,
 ) => Promise<Response>
 
+interface FakeResponse {
+  status: number
+  headers?: Record<string, string>
+  body: string
+}
+
+type FakeResponder = (req: CapturedRequest) => FakeResponse | Effect.Effect<FakeResponse>
+
+const asEffect = (
+  answer: FakeResponse | Effect.Effect<FakeResponse>,
+): Effect.Effect<FakeResponse> => {
+  if (Effect.isEffect(answer)) return answer
+  return Effect.succeed(answer)
+}
+
 const makeFakeFetch =
-  (
-    state: FakeFetchState,
-    responder: (req: CapturedRequest) => {
-      status: number
-      headers?: Record<string, string>
-      body: string
-    },
-  ): FakeFetchFn =>
+  (state: FakeFetchState, responder: FakeResponder): FakeFetchFn =>
   (input: globalThis.RequestInfo | globalThis.URL, init?: globalThis.RequestInit) => {
     let url: string
     if (Predicate.isString(input)) url = input
@@ -134,14 +144,15 @@ const makeFakeFetch =
     }
     state.captured.push(captured)
 
-    const response = responder(captured)
     // oxlint-disable-next-line gent/no-runpromise-outside-boundary -- This adapter implements the Promise-based Fetch interface.
     return Effect.runPromise(
-      Effect.succeed(
-        new globalThis.Response(response.body, {
-          status: response.status,
-          headers: response.headers ?? { "content-type": "application/json" },
-        }),
+      Effect.map(
+        asEffect(responder(captured)),
+        (reply) =>
+          new globalThis.Response(reply.body, {
+            status: reply.status,
+            headers: reply.headers ?? { "content-type": "application/json" },
+          }),
       ),
     )
   }
@@ -152,11 +163,7 @@ const makeFakeFetch =
  */
 export const fakeFetchLayer = (
   state: FakeFetchState,
-  responder: (req: CapturedRequest) => {
-    status: number
-    headers?: Record<string, string>
-    body: string
-  },
+  responder: FakeResponder,
 ): Layer.Layer<never, never, never> =>
   Layer.succeed(
     FetchHttpClient.Fetch,

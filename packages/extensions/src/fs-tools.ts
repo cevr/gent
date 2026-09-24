@@ -980,8 +980,16 @@ function detectRedaction(oldString: string, newString: string): Option.Option<st
 
 // 3-tier fuzzy matching
 
+const unescapeChar = (char: string): string => {
+  if (char === "n") return "\n"
+  if (char === "t") return "\t"
+  if (char === "r") return "\r"
+  return char
+}
+
+/** One left-to-right pass, so `\\n` reads as a backslash and an n. */
 function unescapeStr(s: string): string {
-  return s.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r").replace(/\\\\/g, "\\")
+  return s.replace(/\\([ntr\\])/g, (_escape, char: string) => unescapeChar(char))
 }
 
 /** Look-alike characters the normalized match reads as ASCII. */
@@ -1759,7 +1767,7 @@ export const FilesRpc = defineRequests(FS_TOOLS_EXTENSION_ID, {
   List: request({
     id: "files-list",
     description: "List the session's files, relative to its cwd, sorted",
-    readonly: true,
+    answersDuringTurn: true,
     input: Schema.Struct({}),
     output: Schema.Array(Schema.String),
     execute: Effect.fn("FilesRpc.List")(function* () {

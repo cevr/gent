@@ -125,8 +125,6 @@ export const DelegateEntry = Schema.Struct({
   completed: Schema.optionalKey(ChildOutcome),
   /** The parent has the completion: the message is on the parent branch, or the parent stopped the child. */
   delivered: Schema.Boolean,
-  /** Written by earlier versions for a client view that is gone; kept so stored rows decode. */
-  preview: Schema.optionalKey(Schema.String),
   usage: Schema.optionalKey(ChildUsage),
 })
 export type DelegateEntry = typeof DelegateEntry.Type
@@ -1000,12 +998,10 @@ export const ListChildren = tool({
   }),
 })
 
-// ── client read model ───────────────────────────────────────────────────────
+// ── extension ───────────────────────────────────────────────────────────────
 
 /** The extension id a client matches state pulses against. */
 export const DELEGATE_EXTENSION_ID = ExtensionId.make("@gent/delegate")
-
-// ── extension ───────────────────────────────────────────────────────────────
 
 /**
  * How to work with children. A section, not tool guidelines: in a cell turn
