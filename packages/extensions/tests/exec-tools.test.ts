@@ -1642,23 +1642,41 @@ describe("classifyBashCommand", () => {
     }
   })
 
-  test("an option a runner's table does not know asks; its known options keep their reading", () => {
-    const r = "rm -rf /nonexistent/gent-probe-x"
+  // A runner's table names only its options that take a value. After an
+  // option it does not name, every later word may be the command: each is
+  // read, and the strongest risk wins.
+  test("after an option a runner's table does not name, every later word may be the command", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
     for (const command of [
       `parallel --nice 10 ${r}`,
-      "parallel --arg-sep @@ rm -rf @@ /nonexistent/gent-probe-x",
+      `parallel --arg-sep @@ rm -rf @@ ${x}`,
       `echo x | parallel --block 1M ${r}`,
       `echo x | parallel --rpl '{Z} $_="${r}"' {Z}`,
-      `/usr/bin/time -o /nonexistent/gent-probe-x ${r}`,
+      `/usr/bin/time -o ${x} ${r}`,
       `command time -f %e ${r}`,
       `env --argv0 x ${r}`,
-      // An exact flag name is that flag, not a prefix of a valued option (`--tagstring`).
+      // An abbreviated name may be another option: `--tag` is not `--tagstring`.
       `parallel --tag ${r} ::: a`,
-      // An unknown option asks even when the word after it runs nothing.
-      "timeout --gent-probe-unknown 5 ls",
-      "nohup --gent-probe-unknown ls",
-      "xargs --gent-probe-unknown echo",
-      "ssh -Z host ls",
+      // The unnamed option may take the word after it, or more.
+      `nohup --gent-probe-unknown ${x} ${r}`,
+      `timeout --gent-probe-unknown 5 ${x} ${r}`,
+      `uv run --gent-probe-unknown ${x} ${r}`,
+      `npx --gent-probe-unknown ${x} ${r}`,
+      `bunx --gent-probe-unknown ${x} ${r}`,
+      `echo ${x} | xargs --gent-probe-unknown ${x} rm -rf`,
+      `echo x | parallel --gent-probe-unknown ${x} ${r}`,
+      `ssh -Z ${x} host ${r}`,
+      `sudo --gent-probe-unknown ${x} rm ${x}`,
+      // A command a later reading finds does not stop sudo's input shell,
+      // and the first reading's command may be an unnamed option's value.
+      `echo '${r}' | sudo -s -u root`,
+      `echo '${r}' | doas -s -a passwd`,
+      `echo '${r}' | doas -a passwd -s`,
+      // Shell mode runs the words as a script.
+      `pnpm exec -c '${r}'`,
+      `pnpm exec --shell-mode '${r}'`,
+      `yarn exec '${r}'`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -1673,12 +1691,27 @@ describe("classifyBashCommand", () => {
       "sudo -E ls",
       "nice -10 ls",
       "timeout --preserve-status 5 bun test",
+      "timeout --gent-probe-unknown 5 ls",
+      "nohup --gent-probe-unknown ls",
       "xargs -0 -r echo",
+      "xargs --gent-probe-unknown echo",
       "setsid -f ls",
       "ssh -t host uptime",
+      "ssh -Z host ls",
       "watch -d ls",
       "npx -y prettier --check .",
+      "npx --prefix sub eslint .",
+      "npx --registry https://registry.example tsc",
+      "bunx --no-install tsc",
       "uv run --frozen pytest",
+      "uv run --directory sub pytest",
+      "uv run -p 3.12 pytest",
+      "uv run --no-group dev --offline --refresh pytest",
+      "uv run --index-url https://index.example pytest",
+      "ls | parallel --max-procs 2 wc -l",
+      "ls | parallel --resume --joblog j --halt-on-error 1 wc -l",
+      "pnpm exec -c 'tsc --noEmit'",
+      "yarn exec tsc",
       "strace -f -c ls",
       "flock -n /nonexistent/gent-probe-x/l ls",
       "caffeinate -i ls",
@@ -1686,6 +1719,64 @@ describe("classifyBashCommand", () => {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
   })
+
+  test("after a parent option its table does not name, the subcommand may follow its value", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `npm --loglevel silent exec -- ${r}`,
+      `npm --loglevel silent x -- ${r}`,
+      `uv --cache-dir ${x} run ${r}`,
+      `uv --cache-dir ${x} --offline run ${r}`,
+      `pnpm --gent-probe-unknown ${x} exec ${r}`,
+      // The subcommand's own risk, and the script it runs.
+      `gh --gent-probe-unknown ${x} repo delete o/r --yes`,
+      `pnpm --gent-probe-unknown ${x} exec -c '${r}'`,
+      // Input the guard cannot read names the command npm runs.
+      `cat ${x} | xargs npm --loglevel silent exec --`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      "git --no-pager status",
+      "git --no-pager log --oneline -5",
+      "git --no-pager diff main",
+      "npm --loglevel silent exec -- tsc",
+      `uv --cache-dir ${x} run pytest`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("nested runners are read once per command they reach", () => {
+    // Each reading of each runner reaches the same words; before they were
+    // read once each, 20 nested runners overflowed the stack.
+    for (const command of [
+      `${"sudo -E ".repeat(40)}ls`,
+      `${"timeout -v 1 ".repeat(40)}ls`,
+      `cat /nonexistent/gent-probe-x | xargs ${"sudo -E ".repeat(40)}ls`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+    expect(
+      classifyBashCommand(`${"sudo -E ".repeat(40)}rm -rf /nonexistent/gent-probe-x`).level,
+    ).toBe("destructive")
+  })
+
+  // Read once each, these take milliseconds; read once per reading, minutes.
+  test(
+    "the scripts nested runners' readings build are read once each",
+    () => {
+      for (const command of [
+        `echo a | ${"xargs -0 ".repeat(20)}ls`,
+        `${"ssh -X h ".repeat(40)}ls`,
+      ]) {
+        // Past the nesting limit a script asks.
+        expect(classifyBashCommand(command).level, command).toBe("destructive")
+      }
+    },
+    { timeout: 2_000 },
+  )
 
   test("fish's script options are read", () => {
     for (const command of [
@@ -1820,10 +1911,11 @@ describe("classifyBashCommand", () => {
       `mysql -e "SET @s=0x44454c455445; PREPARE q FROM @s; EXECUTE q"`,
       "psql -c 'EXECUTE p'",
       "psql -cEXECUTE",
-      `mysql -e "EXEC sp_executesql N'SELECT 1'"`,
       "psql -c 'DO $$ BEGIN PERFORM 1; END $$'",
       `psql -c "DO 'BEGIN PERFORM 1; END'"`,
       "psql -c \"DO E'BEGIN PERFORM 1; END'\"",
+      `psql -c "DO LANGUAGE plpgsql 'BEGIN PERFORM 1; END'"`,
+      "psql <<'EOF'\nSELECT 'DEL' || 'ETE FROM gent_probe_x' \\gexec\nEOF",
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("destructive")
     }
@@ -1833,6 +1925,109 @@ describe("classifyBashCommand", () => {
       "mysql -h localhost -u me -pfoo -e 'SHOW TABLES'",
       `sqlite3 -separator , ${db} 'select 1'`,
       "psql -c 'SELECT source FROM t'",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  test("SQL known only at run time asks; a quoted dynamic connection name does not", () => {
+    const x = "/nonexistent/gent-probe-x"
+    for (const command of [
+      `Q='DELETE FROM gent_probe_x'; psql -c "$Q"`,
+      `psql --command="$Q"`,
+      `psql -c "$(cat ${x}.sql)"`,
+      "psql -c `cat /nonexistent/gent-probe-x.sql`",
+      `psql -c "$(printf 'DEL%s FROM gent_probe_x' ETE)"`,
+      `psql -v q="$SQL" -c 'select :q'`,
+      `mysql -e "$SQL"`,
+      `mysql --init-command="$SQL" app`,
+      `sqlite3 ${x}.db "$SQL"`,
+      `sqlite3 -cmd "$SQL" ${x}.db`,
+      `duckdb -c "$SQL"`,
+      // An unquoted expansion splits into more words: a connection name
+      // may bring SQL options with it.
+      `ARGS='app -c DROP/**/TABLE/**/t'; psql -d $ARGS`,
+      "psql -d $ARGS",
+      "psql $ARGS",
+      "psql --host=$H --dbname=$DB -c 'select 1'",
+      "psql -d ${DB} -c 'select 1'",
+      `psql -d $(cat ${x}) -c 'select 1'`,
+      "psql -d `cat /nonexistent/gent-probe-x` -c 'select 1'",
+      "mysql -D $ARGS",
+      "mysql $ARGS",
+      "sqlite3 $ARGS",
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      `psql -h "$PGHOST" -U "$PGUSER" -d "$PGDATABASE" -c 'select 1'`,
+      `psql -d "$DB" -c 'select 1'`,
+      `psql "$DATABASE_URL" -c 'select 1'`,
+      `psql --host="$H" --dbname="$DB" -c 'select 1'`,
+      `psql -d "$(cat ${x})" -c 'select 1'`,
+      `mysql -h "$H" -u "$U" -p"$P" "$DB" -e 'SHOW TABLES'`,
+      `mysql -D "$DB" -e 'select 1'`,
+      `sqlite3 "$DB" 'select 1'`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("safe")
+    }
+  })
+
+  // Client commands outside a read-only list ask: they run a program,
+  // read or write a file, or run SQL built at run time.
+  test("a SQL client command outside the read-only list, or output to a program, asks", () => {
+    const x = "/nonexistent/gent-probe-x"
+    const r = `rm -rf ${x}`
+    for (const command of [
+      `sqlite3 ${x}.db '.shell ${r}'`,
+      `sqlite3 ${x}.db '.system ${r}'`,
+      `sqlite3 -cmd '.shell ${r}' ${x}.db`,
+      `duckdb -c '.shell ${r}'`,
+      `sqlite3 ${x}.db '.output |${r}' 'select 1'`,
+      `sqlite3 ${x}.db '.rea ${x}.sql'`,
+      `sqlite3 ${x}.db '.restore ${x}.bak'`,
+      `echo '.shell ${r}' | sqlite3 ${x}.db`,
+      `psql -c '\\! ${r}'`,
+      `psql -o '|${r}' -c 'select 1'`,
+      `psql --output=${x}.out -c 'select 1'`,
+      `psql -c "\\copy (select 1) to program '${r}'"`,
+      `psql -c "COPY (select 1) TO PROGRAM '${r}'"`,
+      `psql -c "select 'x' \\gexec"`,
+      `psql -c "select 'x' AS q \\gset"`,
+      `psql -c '\\echo \`${r}\`'`,
+      `mysql -e 'system ${r}'`,
+      `mysql -e 'select 1; SYSTEM ${r}'`,
+      `mysql -e '\\! ${r}'`,
+      `mysql --pager='${r}' -e 'select 1'`,
+      `mysql --tee=${x}.log -e 'select 1'`,
+      `mysql -e 'pager ${r}'`,
+      // A psql variable reaches the input as written.
+      `echo ':x' | psql -v 'x=\\! ${r}'`,
+      `echo ':x' | psql --set 'x=\\! ${r}'`,
+      // SQL functions of the SQLite shell that run a program or write a file.
+      `sqlite3 ${x}.db "select edit('', '${r}')"`,
+      `sqlite3 ${x}.db "select writefile('${x}', '')"`,
+      `sqlite3 ${x}.db "select load_extension('${x}')"`,
+    ]) {
+      expect(classifyBashCommand(command).level, command).toBe("destructive")
+    }
+    for (const command of [
+      `sqlite3 ${x}.db '.schema t'`,
+      `sqlite3 -header -column ${x}.db 'select 1'`,
+      `sqlite3 ${x}.db '.mode csv' '.headers on' 'select 1'`,
+      `echo '.tables' | sqlite3 ${x}.db`,
+      "psql -c '\\dt'",
+      "psql -c '\\d+ t'",
+      "psql -c '\\l'",
+      "psql -c '\\x' -c 'select 1'",
+      "psql -c '\\timing on' -c 'select 1'",
+      "psql -F '\\t' -c 'select 1'",
+      `psql -F , app "$PGUSER" -c 'select 1'`,
+      "psql -v n=1 -c 'select :n'",
+      "mysql -e 'use app; select 1'",
+      "mysql -e 'select 1\\G'",
+      `mysql -e "select 'a\\nb'"`,
+      `psql -c 'select 1' > ${x}.out`,
     ]) {
       expect(classifyBashCommand(command).level, command).toBe("safe")
     }
