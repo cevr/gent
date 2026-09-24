@@ -1,7 +1,6 @@
 // oxlint-disable-next-line typescript/triple-slash-reference -- Downstream source consumers need this ambient Bun text-asset declaration without a runtime import.
 /// <reference path="./skills/markdown.d.ts" />
 import {
-  Config,
   Context,
   Crypto,
   Effect,
@@ -389,30 +388,11 @@ export function parseSkillFile(content: string, filename: string) {
 // Format skills for system prompt
 
 /**
- * How the turn prompt lists skills. `full` gives each skill its description
- * and absolute file path. `compact` names each skills directory once and
- * gives each skill its name and first sentence; the file path follows from
- * the directory. The listing is sent on every request, so `compact` trades
- * detail for input tokens. Set with `GENT_SKILLS_LISTING`; `full` is the
- * default. ARCHITECTURE.md names the measurement that decides the default.
+ * The turn prompt lists skills compactly: each skills directory once, and
+ * each skill by name and lead sentence. The file path follows from the
+ * directory; the model reads the full text on demand. The listing is sent on
+ * every request, so it gives names and paths up front and content on read.
  */
-const SkillsListing = Schema.Literals(["full", "compact"])
-type SkillsListing = typeof SkillsListing.Type
-
-const skillsListingFlag = Config.schema(SkillsListing, "GENT_SKILLS_LISTING").pipe(
-  Config.withDefault<SkillsListing>("full"),
-)
-
-/** The listing the flag asks for. A value the flag does not know keeps the full listing. */
-const readSkillsListing = skillsListingFlag.pipe(
-  Effect.catch((error) =>
-    Effect.logWarning("skills: GENT_SKILLS_LISTING is not full or compact; listing in full").pipe(
-      Effect.annotateLogs({ error: String(error) }),
-      Effect.as<SkillsListing>("full"),
-    ),
-  ),
-)
-
 const quoted = Schema.encodeSync(Schema.fromJsonString(Schema.String))
 
 const COMPACT_DESCRIPTION_CHARS = 110
@@ -451,7 +431,7 @@ const skillLocation = (skill: SkillEntry) => {
   }
 }
 
-const formatCompactList = (list: ReadonlyArray<SkillEntry>): string => {
+const formatList = (list: ReadonlyArray<SkillEntry>): string => {
   const byDirectory = new Map<string, Array<string>>()
   for (const skill of list) {
     const { directory, file } = skillLocation(skill)
@@ -467,33 +447,13 @@ const formatCompactList = (list: ReadonlyArray<SkillEntry>): string => {
   ).join("\n")
 }
 
-const formatFullList = (list: ReadonlyArray<SkillEntry>): string =>
-  list
-    .map(
-      (s) =>
-        `- **${s.name}** ($${s.name}:${s.level}): ${s.description}\n  File: ${quoted(s.filePath)}`,
-    )
-    .join("\n")
+const READ_RULE = `Each skill's file is <directory>/<name>/SKILL.md unless another file is named in parentheses. Read it with the read tool or from a cell when its name or description matches the task.`
 
-const READ_FULL = `Read a listed file with the read tool or from a cell when its name or description matches the task.`
-
-const READ_COMPACT = `Each skill's file is <directory>/<name>/SKILL.md unless another file is named in parentheses. Read it with the read tool or from a cell when its name or description matches the task.`
-
-export const formatSkillsForPrompt = (
-  skills: ReadonlyArray<SkillEntry>,
-  listing: SkillsListing = "full",
-): string => {
+export const formatSkillsForPrompt = (skills: ReadonlyArray<SkillEntry>): string => {
   if (skills.length === 0) return ""
 
   const globalSkills = skills.filter((s) => s.level === "global")
   const localSkills = skills.filter((s) => s.level === "local")
-
-  let formatList = formatFullList
-  let readRule = READ_FULL
-  if (listing === "compact") {
-    formatList = formatCompactList
-    readRule = READ_COMPACT
-  }
 
   const sections: string[] = []
 
@@ -507,7 +467,7 @@ export const formatSkillsForPrompt = (
   return `<available_skills>
 ${sections.join("\n\n")}
 
-${readRule} Paths are on the session server. Resolve relative references from that file’s directory.
+${READ_RULE} Paths are on the session server. Resolve relative references from that file’s directory.
 When you see \`$skill-name\`, read the local skill first, or the global skill if no local skill exists. Use \`$skill:local\` or \`$skill:global\` to select that level explicitly. Report missing skills or files; do not silently substitute a different scope.
 </available_skills>`
 }
@@ -557,15 +517,12 @@ export const SkillsExtension = defineExtension({
         layer: Skills.Live({ cwd: host.cwd, home: host.home }),
       }),
     )
-    const listing = yield* readSkillsListing
     yield* host.on("turnProjection", () =>
       Effect.gen(function* () {
         const service = yield* Skills
         const skills = yield* service.list
         return {
-          promptSections: [
-            { id: "skills", priority: 80, content: formatSkillsForPrompt(skills, listing) },
-          ],
+          promptSections: [{ id: "skills", priority: 80, content: formatSkillsForPrompt(skills) }],
         }
       }),
     )

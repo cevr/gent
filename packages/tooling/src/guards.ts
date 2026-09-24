@@ -1096,7 +1096,6 @@ const EXTERNALLY_SET: ReadonlyMap<string, string> = new Map([
   ["GENT_AUTH_DIRECTORY", "the operator names the auth directory"],
   ["GENT_PERSISTENCE_MODE", "the launcher picks sqlite or memory"],
   ["GENT_PROVIDER_MODE", "the launcher picks the live or scripted provider"],
-  ["GENT_SKILLS_LISTING", "the owner sets compact by hand to trial the short skills listing"],
 ])
 
 /**
