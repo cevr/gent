@@ -153,8 +153,8 @@ import { CurrentWorkspaceId } from "../server/workspace-rpc.js"
  *
  * Encore actor handlers run per (entityType, entityId) where entityId
  * is `(sessionId, branchId)`. This governance lives ABOVE the per-
- * entity scope so the same `terminatedSessionsRef` Set is consulted
- * by every entity instance for the session.
+ * entity scope so every entity instance for the session reads the same
+ * terminated set.
  *
  * @module
  */

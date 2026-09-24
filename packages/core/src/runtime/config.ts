@@ -120,7 +120,7 @@ export class UserConfig extends Schema.Class<UserConfig>("UserConfig")({
    * `DriverRef`. Project config shadows user config key-by-key — see
    * `mergeConfigs`.
    *
-   * Used by `resolveAgentDriver` (domain/agent.ts) to route an agent
+   * Read by `resolveSessionRoute` (runtime/turn.ts) to route an agent
    * through another model driver without editing its definition. E.g.
    * `{ main: { _tag: "Model", id: "openai" } }` sends `main`'s model name
    * to the OpenAI driver.

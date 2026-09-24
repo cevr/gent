@@ -62,8 +62,6 @@ export {
 export {
   type GentExtension,
   LoadedArtifactIdentity,
-  makeShownNotices,
-  type ShownNotices,
   type SystemPromptInput,
   type TurnAfterInput,
   type TurnUsage,

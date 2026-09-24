@@ -226,12 +226,14 @@ interface ChromePanelBodyProps {
 }
 
 function ChromePanelBody(props: ChromePanelBodyProps) {
+  const sticky = () => props.stickToBottom === true
+  const stickyStart = () => Option.filter(Option.some<"bottom">("bottom"), sticky)
   return (
     <scrollbox
       ref={props.ref}
       flexGrow={1}
-      stickyScroll={props.stickToBottom === true}
-      stickyStart="bottom"
+      stickyScroll={sticky()}
+      stickyStart={Option.getOrUndefined(stickyStart())}
       verticalScrollbarOptions={{ visible: false }}
       horizontalScrollbarOptions={{ visible: false }}
       paddingLeft={props.paddingLeft ?? 1}
@@ -402,7 +404,7 @@ export const usePickerGeometry = (): PickerGeometry => {
 // ── docked panes ────────────────────────────────────────────────────────────
 
 /**
- * Which docked panes are open. The footer that holds them provides it; a
+ * Which docked panes are open. `DockProvider` wraps the whole app; a
  * `PickerFrame` counts itself while it is mounted, and a `TrayFrame` hides
  * while any is open. Without a provider nothing is counted and trays show.
  */
@@ -414,7 +416,7 @@ interface DockState {
 
 const DockContext = createContext<Option.Option<DockState>>(Option.none())
 
-/** The footer's dock: the panes the reader opened win its rows over the trays. */
+/** The app's dock: the panes the reader opened win the footer's rows over the trays. */
 export function DockProvider(props: { children: JSX.Element }) {
   const [panes, setPanes] = createSignal(0)
   const dock: DockState = {
@@ -426,6 +428,19 @@ export function DockProvider(props: { children: JSX.Element }) {
   }
   return <DockContext.Provider value={Option.some(dock)}>{props.children}</DockContext.Provider>
 }
+
+/**
+ * The rows a `PickerFrame` body has between its title and its bottom rule,
+ * once the frame is measured. A pane whose fixed lines can outnumber them
+ * drops its optional lines against this count.
+ */
+const PickerBodyRowsContext = createContext<() => Option.Option<number>>(() => Option.none())
+
+export const usePickerBodyRows = (): (() => Option.Option<number>) =>
+  useContext(PickerBodyRowsContext)
+
+/** Two rules, the title and one body row: below this the title gives way. */
+const PICKER_ROWS_WITH_TITLE = 4
 
 export function PickerFrame(props: {
   height: number
@@ -440,8 +455,20 @@ export function PickerFrame(props: {
   // The height is what the frame asks for. When the footer it docks in runs
   // out of rows, the trays are already hidden (`TrayFrame`) and the frame is
   // the one box that gives way, in whole rows. Squeezed, it drops its key
-  // hint before its body's last row: the rows the reader opened it for win.
-  const [squeezed, setSqueezed] = createSignal(false)
+  // hint, then its title, before its body's last row: the rows the reader
+  // opened it for win. A change of either the measured or the requested
+  // height re-decides it. The body reads the rows it has from
+  // `usePickerBodyRows`, so a pane can drop its own optional lines to fit.
+  const [measured, setMeasured] = createSignal(Option.none<number>())
+  const squeezed = () => Option.exists(measured(), (rows) => rows < props.height)
+  const titled = () => !Option.exists(measured(), (rows) => rows < PICKER_ROWS_WITH_TITLE)
+  const bodyRows = () =>
+    Option.map(measured(), (rows) => {
+      let chrome = 2
+      if (titled()) chrome += 1
+      if (!squeezed()) chrome += 1
+      return Math.max(0, rows - chrome)
+    })
   return (
     <box
       flexDirection="column"
@@ -450,7 +477,7 @@ export function PickerFrame(props: {
       // A basis, not a height: OpenTUI turns shrinking off on a box whose height is set.
       flexBasis={props.height}
       onSizeChange={function () {
-        setSqueezed(this.height < props.height)
+        setMeasured(Option.some(this.height))
       }}
     >
       <box
@@ -459,12 +486,16 @@ export function PickerFrame(props: {
         border={["top", "bottom"]}
         borderColor={theme.border}
       >
-        <box height={1} flexShrink={0} overflow="hidden">
-          <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
-            {props.title}
-          </text>
-        </box>
-        {props.children}
+        <Show when={titled()}>
+          <box height={1} flexShrink={0} overflow="hidden">
+            <text wrapMode="none" truncate style={{ fg: theme.textMuted }}>
+              {props.title}
+            </text>
+          </box>
+        </Show>
+        <PickerBodyRowsContext.Provider value={bodyRows}>
+          {props.children}
+        </PickerBodyRowsContext.Provider>
       </box>
       <Show when={!squeezed()}>
         <text height={1} flexShrink={0} wrapMode="none" truncate style={{ fg: theme.textMuted }}>

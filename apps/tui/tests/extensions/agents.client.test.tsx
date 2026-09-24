@@ -2,7 +2,7 @@
 import { describe, expect, it } from "effect-bun-test"
 import { Clock, Deferred, Effect, Option } from "effect"
 import { TestClock } from "effect/testing"
-import { createSignal } from "solid-js"
+import { createSignal, Show } from "solid-js"
 import { BranchId, dateFromMillis, Session, SessionId } from "@gent/core/protocol"
 import { type AgentRowEntry, DELEGATE_EXTENSION_ID } from "@gent/extensions/client"
 import {
@@ -13,7 +13,7 @@ import {
   trayLines,
 } from "../../src/extensions/agents.client"
 import type { ExtensionAgentDetail } from "../../src/extensions/client-facets"
-import { usePickerGeometry } from "../../src/ui"
+import { DockProvider, PickerFrame, usePickerGeometry } from "../../src/ui"
 import { renderFrame, renderWithProviders } from "../render-harness-boundary"
 import { waitForFrame, waitUntil, waitUntilAdvancing } from "../helpers-boundary"
 import {
@@ -1285,27 +1285,36 @@ describe("Subagent tray", () => {
       const [open, setOpen] = createSignal(false)
       const refreshes: Array<string> = []
 
+      // As in the app: the dock wraps the footer, and the open agents pane
+      // mounts a `PickerFrame` in it.
       const setup = yield* Effect.promise(() =>
         renderWithProviders(() => (
-          <SubagentTray
-            controller={{
-              rows: () => rows,
-              current: () =>
-                Option.some({
-                  sessionId: SessionId.make("root"),
-                  branchId: BranchId.make("root-branch"),
-                }),
-              error: () => Option.none(),
-              loading: () => false,
-              refresh: (query) => {
-                refreshes.push(query)
-              },
-              reload: () => {},
-              detail: () => Option.none(),
-              select: () => {},
-              open,
-            }}
-          />
+          <DockProvider>
+            <SubagentTray
+              controller={{
+                rows: () => rows,
+                current: () =>
+                  Option.some({
+                    sessionId: SessionId.make("root"),
+                    branchId: BranchId.make("root-branch"),
+                  }),
+                error: () => Option.none(),
+                loading: () => false,
+                refresh: (query) => {
+                  refreshes.push(query)
+                },
+                reload: () => {},
+                detail: () => Option.none(),
+                select: () => {},
+                open,
+              }}
+            />
+            <Show when={open()}>
+              <PickerFrame height={3} title="PANE" footer="">
+                <box />
+              </PickerFrame>
+            </Show>
+          </DockProvider>
         )),
       )
 

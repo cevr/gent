@@ -50,6 +50,7 @@ import {
   type FakeFetchState,
   makeFakeFetchState,
   oneGenerate,
+  turnNoticesText,
 } from "@gent/core/test-utils"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
@@ -2686,9 +2687,11 @@ const runCachingRequest = (
   model: Layer.Layer<LanguageModel.LanguageModel>,
   state: FakeFetchState,
   options: Prompt.ProviderOptions,
+  /** Messages the runtime sends after the conversation. */
+  after: ReadonlyArray<Prompt.Message> = [],
 ) =>
   LanguageModel.generateText({
-    prompt: cachingConversation(options),
+    prompt: Prompt.fromMessages([...cachingConversation(options).content, ...after]),
     toolkit: Toolkit.make(ReadTool),
     disableToolCallResolution: true,
   }).pipe(
@@ -2718,7 +2721,11 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
   const callerMarker: Prompt.ProviderOptions = {
     anthropic: { cacheControl: { type: "ephemeral" } },
   }
-  const sentFor = (authInfo: ProviderAuthInfo, options: Prompt.ProviderOptions = {}) =>
+  const sentFor = (
+    authInfo: ProviderAuthInfo,
+    options: Prompt.ProviderOptions = {},
+    after: ReadonlyArray<Prompt.Message> = [],
+  ) =>
     Effect.gen(function* () {
       const credentialCellRef = yield* SynchronizedRef.make<CredentialCacheCell<ClaudeCredentials>>(
         {
@@ -2731,7 +2738,7 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
       const driver = yield* buildAnthropicModelDriver(credentialCellRef, Option.none())
       const model = yield* driver.resolveModel("claude-sonnet-4-6", authInfo)
       const state = makeFakeFetchState()
-      yield* runCachingRequest(model, state, options)
+      yield* runCachingRequest(model, state, options, after)
       return yield* Schema.decodeEffect(CachedRequest)(
         Option.getOrThrow(Option.fromUndefinedOr(state.captured.at(-1)?.body)),
       )
@@ -2762,6 +2769,35 @@ describe("buildAnthropicModelDriver — prompt caching", () => {
       expect((request.tools ?? []).some(isMarked)).toBe(false)
       expect(markerCount(request)).toBe(2)
     }),
+  )
+
+  // A turn notice rides after the conversation as a later system message.
+  // It changes from turn to turn: a marker on it would cache bytes no later
+  // request sends, and the next step would miss the conversation.
+  it.live(
+    "a turn notice after the conversation takes no marker; the tail stays on the conversation",
+    () =>
+      Effect.gen(function* () {
+        const notice = Prompt.makeMessage("system", {
+          content: Option.getOrThrow(
+            turnNoticesText([{ id: "stopped", content: "# Stopped children\n\n- one", keys: [] }]),
+          ),
+        })
+        for (const authInfo of [makeApiAuthInfo("sk-test"), makeOAuthInfo()]) {
+          const plain = yield* sentFor(authInfo)
+          const noticed = yield* sentFor(authInfo, {}, [notice])
+          const update = noticed.messages.at(-1)?.content ?? []
+          expect(update.map((block) => block.text)).toEqual([
+            "<host-context-update>\nHost status for this turn, not a message from the user.\n\n# Stopped children\n\n- one\n</host-context-update>",
+          ])
+          expect(update.some(isMarked)).toBe(false)
+          // The last stored message carries the tail marker, as without the notice.
+          expect(lastMarked(noticed.messages.at(-2)?.content ?? [])).toBe(true)
+          expect(noticed.messages.slice(0, -1)).toEqual([...plain.messages])
+          expect(noticed.system).toEqual(plain.system)
+          expect(markerCount(noticed)).toBe(2)
+        }
+      }),
   )
 
   // Anthropic answers 400 above four markers.

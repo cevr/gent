@@ -911,7 +911,7 @@ const makeSessionMutationsService: Effect.Effect<
 
     updateSettings: Effect.fn("SessionMutations.updateSettings")(function* (input) {
       // The model-change notice is a branch write; the loop owns it and
-      // writes it at the next step boundary (turn.ts `noticeModelChange`).
+      // writes it at the next step boundary (`modelChangeNotice`, written by turn.ts).
       return yield* transactWithEvents(
         Effect.gen(function* () {
           const session = yield* sessionStorage.getSession(input.sessionId)
@@ -1034,10 +1034,9 @@ export const getSessionSnapshot = Effect.fn("SessionQueries.getSessionSnapshot")
     session,
   })
 
-  // Extension state is no longer hydrated through the session snapshot —
-  // clients call the extension's typed `client.extension.request(...)` on
-  // mount and subscribe to `ExtensionStateChanged` events for refetch
-  // signals. The privileged out-of-band UI snapshot channel is gone.
+  // The snapshot carries no extension state: clients call the extension's
+  // typed `client.extension.request(...)` on mount and refetch on
+  // `ExtensionStateChanged` events.
 
   return new SessionSnapshot({
     sessionId: input.sessionId,
