@@ -32,6 +32,7 @@ import * as OpenTuiSolidEntry from "@opentui/solid"
 import * as SolidEntry from "solid-js"
 import * as SolidStoreEntry from "solid-js/store"
 import {
+  type ActiveExtensionSession,
   type AnyExtensionClientModule,
   type AutocompleteContribution,
   type AutocompleteItem,
@@ -41,6 +42,7 @@ import {
   type ClientRuntimeServices,
   type InteractionRendererComponent,
   type MessageRenderer,
+  type NoticeRow,
   type WidgetComponent,
   type WidgetSlot,
   unknownContributionKey,
@@ -186,6 +188,12 @@ export interface ResolvedStatusLabel {
   readonly produce: () => ReadonlyArray<StatusLabelItem>
 }
 
+/** One extension's transcript rows, under the notice id it won. */
+export interface ResolvedNoticeRows {
+  readonly id: string
+  readonly rows: (session: ActiveExtensionSession) => Option.Option<ReadonlyArray<NoticeRow>>
+}
+
 export interface ResolvedTuiExtensions {
   readonly renderers: Map<string, ToolRenderer>
   /** Keyed by `metadata.customType`, matched exactly. */
@@ -195,6 +203,7 @@ export interface ResolvedTuiExtensions {
   readonly commandSources: ReadonlyArray<CommandSource>
   readonly interactionRenderers: Map<string, InteractionRendererComponent>
   readonly statusLabels: ReadonlyArray<ResolvedStatusLabel>
+  readonly noticeRows: ReadonlyArray<ResolvedNoticeRows>
   readonly autocompleteItems: ReadonlyArray<AutocompleteContribution>
   readonly failures: ReadonlyArray<ClientExtensionFailure>
 }
@@ -419,6 +428,13 @@ export const resolveTuiExtensions = (
       name: contribution.id,
     })),
   )
+  const noticeRows = resolveKeyed(sorted, failures, "notice row", (contributions) =>
+    itemsOrEmpty(contributions.noticeRows).map((contribution) => ({
+      key: contribution.id,
+      value: { id: contribution.id, rows: contribution.rows },
+      name: contribution.id,
+    })),
+  )
   const interactionRenderers = resolveKeyed(
     sorted,
     failures,
@@ -447,6 +463,7 @@ export const resolveTuiExtensions = (
         produce: contribution.produce,
       })),
     ),
+    noticeRows: [...noticeRows.values()],
     autocompleteItems: collected((contributions) => contributions.autocomplete),
     failures,
   }

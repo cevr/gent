@@ -25,9 +25,12 @@ import {
   transitionSessionUi,
   writeEntries,
   mergeRefused,
+  noticeRowItems,
 } from "../src/session"
-import type { AutocompleteContribution } from "../src/extensions/client-facets"
+import type { AutocompleteContribution, NoticeRow } from "../src/extensions/client-facets"
 import {
+  BranchId,
+  SessionId,
   MessageId,
   Model,
   type ModelContextMetrics,
@@ -45,6 +48,32 @@ const testContributions: AutocompleteContribution[] = [
   { prefix: "@", title: "Files", items: () => [] },
   { prefix: "/", title: "Commands", items: () => [] },
 ]
+
+describe("notice rows", () => {
+  const session = { sessionId: SessionId.make("s"), branchId: BranchId.make("b") }
+  const row: NoticeRow = { key: "1", createdAt: 5, glyph: "◌", color: "warning", text: "miss" }
+
+  test("a source still deriving holds the items unsettled; answered rows still merge", () => {
+    const merged = noticeRowItems(
+      [
+        { id: "answered", rows: () => Option.some([row]) },
+        { id: "deriving", rows: () => Option.none() },
+      ],
+      session,
+      new Map(),
+    )
+    expect(merged.settled).toBe(false)
+    expect([...merged.items.values()].map((item) => item.createdAt)).toEqual([5])
+    const answered = noticeRowItems(
+      [{ id: "answered", rows: () => Option.some([row]) }],
+      session,
+      merged.items,
+    )
+    expect(answered.settled).toBe(true)
+    // The same row object keeps its transcript item.
+    expect(answered.items.get(row)).toBe(merged.items.get(row))
+  })
+})
 
 describe("refused submissions", () => {
   const empty = { entries: [], shown: "" }

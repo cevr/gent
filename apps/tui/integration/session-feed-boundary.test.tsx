@@ -197,11 +197,15 @@ describe("session feed boundary", () => {
       const sessionId = SessionId.make("session-test")
       const branchId = BranchId.make("branch-test")
       const interrupted: Array<Effect.Effect<unknown, unknown, unknown>> = []
+      let forks = 0
       const runtime = (() => {
         const base = createMockRuntime()
         const mock: GentRuntime = {
           ...base,
-          fork: () => base.fork(Effect.never),
+          fork: () => {
+            forks += 1
+            return base.fork(Effect.never)
+          },
           cast: (effect) => {
             interrupted.push(effect)
             base.cast(effect)
@@ -231,6 +235,8 @@ describe("session feed boundary", () => {
           },
         ),
       )
+      // The feed opens once the client extensions have loaded.
+      yield* waitForFrame(setup, () => forks > 0, "feed opened")
       const castCountBeforeDestroy = interrupted.length
       destroyRenderSetup(setup)
       expect(interrupted.length).toBeGreaterThan(castCountBeforeDestroy)

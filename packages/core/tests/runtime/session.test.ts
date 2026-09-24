@@ -901,6 +901,10 @@ describe("session metrics", () => {
       expect(streamEndeds).toHaveLength(1)
       // The context window already reads `test/priced`; the price must too.
       expect(streamEndeds[0]?.costUsd).toBeGreaterThan(0)
+      // The event names the model it ran and the model it was priced by, so a
+      // client that prices part of the step uses the runtime's answer.
+      expect(streamEndeds[0]?.model).toBe(ModelId.make("proxy/priced"))
+      expect(streamEndeds[0]?.pricedModel).toBe(ModelId.make("test/priced"))
     }),
   )
   it.live("a turn with one step that reports no usage leaves the receipt's usage absent", () =>
